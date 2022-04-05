@@ -1,0 +1,5 @@
+.git
+.flake8
+.gitignore
+.pre-commit-config.yaml
+*.md

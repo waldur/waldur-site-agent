@@ -11,18 +11,8 @@ UNITS = {
     "T": 2 ** 40,
 }
 
-MAPPING = {
-    "cpu_usage": "nc_cpu_usage",
-    "gpu_usage": "nc_gpu_usage",
-    "ram_usage": "nc_ram_usage",
-}
-
 SLURM_ALLOCATION_REGEX = "a-zA-Z0-9-_"
 SLURM_ALLOCATION_NAME_MAX_LEN = 34
-
-FIELD_NAMES = MAPPING.keys()
-
-QUOTA_NAMES = MAPPING.values()
 
 
 def month_start(date):
@@ -35,7 +25,7 @@ def month_end(date):
 
 
 def format_current_month():
-    today = datetime.now()
+    today = datetime.datetime.now()
     start = month_start(today).strftime("%Y-%m-%d")
     end = month_end(today).strftime("%Y-%m-%d")
     return start, end

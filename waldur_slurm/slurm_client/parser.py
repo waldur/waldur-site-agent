@@ -2,7 +2,7 @@ import datetime
 import logging
 from functools import cached_property
 
-from . import utils, structures
+from . import structures, utils
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,7 @@ class SlurmReportLine:
     def node(self):
         return self.parse_field("node")
 
+    @cached_property
     def quotas(self):
         return structures.Quotas(
             self.cpu * self.duration,
