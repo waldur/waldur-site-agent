@@ -16,7 +16,7 @@ class BaseClient(metaclass=abc.ABCMeta):
             self.command_prefix = []
 
     def execute_command(self, command):
-        final_command = self.command_prefix.append(" ".join(command))
+        final_command = self.command_prefix + command
         try:
             logger.debug("Executing command: %s", " ".join(final_command))
             return subprocess.check_output(  # noqa: S603

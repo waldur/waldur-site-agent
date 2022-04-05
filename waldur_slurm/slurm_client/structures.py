@@ -6,10 +6,19 @@ Association = collections.namedtuple("Association", ["account", "user", "value"]
 
 
 @dataclass
+class Allocation:
+    name: str = ""
+    uuid: str = ""
+    backend_id: str = ""
+    project_uuid: str = ""
+    customer_uuid: str = ""
+
+
+@dataclass
 class Quotas:
-    cpu: int = 0
-    gpu: int = 0
-    ram: int = 0
+    cpu: float = 0.0
+    gpu: float = 0.0
+    ram: float = 0.0
 
     def __add__(self, other):
         return Quotas(
