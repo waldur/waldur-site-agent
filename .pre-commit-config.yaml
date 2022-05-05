@@ -8,16 +8,16 @@ repos:
     rev: 5.9.3
     hooks:
       - id: isort
-        files: ^waldur_slurm/
+        files: ^waldur_slurm/|^tests/
         args: ["--profile", "black"]
   - repo: https://github.com/psf/black
     rev: 21.9b0
     hooks:
       - id: black
-        files: ^waldur_slurm/
+        files: ^waldur_slurm/|^tests/
         language_version: python3.8
   - repo: https://github.com/pycqa/flake8
     rev: 4.0.1
     hooks:
       - id: flake8
-        files: ^waldur_slurm/
+        files: ^waldur_slurm/|^tests/

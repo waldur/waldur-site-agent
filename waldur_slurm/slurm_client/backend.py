@@ -1,5 +1,3 @@
-import dataclasses
-import logging
 import operator
 import re
 from functools import reduce
@@ -14,12 +12,11 @@ from . import (
     SLURM_DEFAULT_LIMITS,
     SLURM_DEPLOYMENT_TYPE,
     SLURM_PROJECT_PREFIX,
+    logger,
 )
 from .client import SlurmClient
 from .exceptions import BackendError, SlurmError
 from .structures import Allocation, Quotas
-
-logger = logging.getLogger(__name__)
 
 
 class SlurmBackend:
@@ -32,15 +29,12 @@ class SlurmBackend:
         report = {}
         for account in self.client.list_accounts():
             try:
-                logger.debug("About to pull allocation %s", account.name)
+                logger.info("About to pull allocation %s", account.name)
                 users, usage, limits = self.pull_allocation(account.name)
-                for user, user_usage in usage.items():
-                    usage[user] = dataclasses.asdict(user_usage)
                 report[account.name] = {
                     "users": users,
                     "usage": usage,
-                    "limits": limits
-                    and dataclasses.asdict(limits),  # limits can be None
+                    "limits": limits,  # limits can be None
                 }
             except Exception as e:
                 logger.error("Error while pulling allocation [%s]: %s", account.name, e)

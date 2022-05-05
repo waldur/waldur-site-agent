@@ -1,0 +1,23 @@
+include:
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/stages.yml"
+
+Test SLURM to Waldur sync:
+  image: registry.hpc.ut.ee/mirror/library/python:3.8
+  stage: test
+  interruptible: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - source tests/test_slurm_to_waldur/.env.rc
+    - pip install -r requirements-dev.txt
+    - pytest --junitxml=report.xml --cov=waldur_slurm/ tests/
+    - coverage xml
+    - coverage report
+  coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+      cobertura: coverage.xml
