@@ -1,10 +1,7 @@
 import datetime
-import logging
 from functools import cached_property
 
 from . import structures, utils
-
-logger = logging.getLogger(__name__)
 
 
 def parse_duration(value):

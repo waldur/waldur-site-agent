@@ -1,10 +1,8 @@
 import abc
-import logging
 import subprocess  # noqa: S404
 
+from . import logger
 from .exceptions import SlurmError
-
-logger = logging.getLogger(__name__)
 
 
 class BaseClient(metaclass=abc.ABCMeta):
@@ -12,7 +10,6 @@ class BaseClient(metaclass=abc.ABCMeta):
         if slurm_deployment_type == "docker":
             self.command_prefix = ["docker", "exec", "slurmctld"]
         else:
-            # TODO come up with a solution for native deployment of SLURM
             self.command_prefix = []
 
     def execute_command(self, command):

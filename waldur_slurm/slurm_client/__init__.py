@@ -1,8 +1,14 @@
 import logging
 import os
+import sys
 from enum import Enum
 
+handler = logging.StreamHandler(sys.stdout)
 logger = logging.getLogger(__name__)
+formatter = logging.Formatter("[%(levelname)s] [%(asctime)s] %(message)s")
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 SLURM_DEPLOYMENT_TYPE = os.environ.get("SLURM_DEPLOYMENT_TYPE", "docker")
 

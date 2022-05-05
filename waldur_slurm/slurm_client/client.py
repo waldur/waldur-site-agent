@@ -1,10 +1,7 @@
-import logging
 import re
+
+from . import base, structures, utils
 from .parser import SlurmAssociationLine, SlurmReportLine
-
-from . import utils, base, structures
-
-logger = logging.getLogger(__name__)
 
 
 class SlurmClient(base.BaseClient):
@@ -96,6 +93,7 @@ class SlurmClient(base.BaseClient):
             ]
         )
 
+    # TODO: consider 'sshare' or 'sreport' utils
     def get_usage_report(self, accounts):
         month_start, month_end = utils.format_current_month()
 
