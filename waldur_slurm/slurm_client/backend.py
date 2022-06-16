@@ -1,7 +1,7 @@
 import operator
 import re
 from functools import reduce
-from typing import List
+from typing import Set
 
 from . import (
     SLURM_ALLOCATION_NAME_MAX_LEN,
@@ -29,7 +29,7 @@ class SlurmBackend:
         report = {}
         for account in self.client.list_accounts():
             try:
-                logger.info("About to pull allocation %s", account.name)
+                logger.info("Pulling allocation %s", account.name)
                 users, usage, limits = self.pull_allocation(account.name)
                 report[account.name] = {
                     "users": users,
@@ -107,15 +107,14 @@ class SlurmBackend:
     def get_customer_name(self, name: str):
         return "%s%s" % (SLURM_CUSTOMER_PREFIX, name)
 
-    def set_resource_limits(self, allocation: Allocation, limits: dict):
-        # TODO: add default limits configuration
-        # (https://opennode.atlassian.net/browse/WAL-3037)
+    def set_allocation_limits(self, allocation: Allocation, limits_dict: dict):
         limits = Quotas(
-            cpu=limits["CPU"],
-            gpu=limits["GPU"],
-            ram=limits["RAM"],
+            cpu=limits_dict["CPU"],
+            gpu=limits_dict["GPU"],
+            ram=limits_dict["RAM"],
         )
         self.client.set_resource_limits(allocation.backend_id, limits)
+        return limits
 
     def delete_customer(self, customer_backend_id):
         self.client.delete_account(customer_backend_id)
@@ -126,12 +125,14 @@ class SlurmBackend:
     def delete_allocation(
         self,
         allocation: Allocation,
-        project_backend_id,  # customer_backend_id
     ):
         account = allocation.backend_id
+        project_account = self.get_project_name(allocation.project_uuid)
 
         if not account.strip():
             raise BackendError("Empty backend_id for allocation: %s" % allocation)
+
+        existing_users = self.client.list_account_users(account)
 
         if self.client.get_account(account):
             self.client.delete_account(account)
@@ -141,47 +142,60 @@ class SlurmBackend:
                 [
                     account
                     for account in self.client.list_accounts()
-                    if account.organization == project_backend_id
-                    and account.name != project_backend_id
+                    if account.organization == project_account
+                    and account.name != project_account
                 ]
             )
             == 0
         ):
-            self.delete_project(project_backend_id)
+            self.delete_project(project_account)
 
         # TODO: delete customer if it hasn't any associated allocations
-        # if (
-        #     self.get_allocation_queryset()
-        #     .filter(project__customer=project.customer)
-        #     .count()
-        #     == 0
-        # ):
-        #     self.delete_customer(customer_backend_id)
+
+        return existing_users
 
     def create_allocation(
         self,
         allocation: Allocation,
         customer_name: str,
         project_name: str,
-        usernames: List[str],
-        freeipa_usernames: List[str] = None,
+        usernames: Set[str],
     ):
-        customer_account = self.get_customer_name(customer_name)
-        project_account = self.get_project_name(project_name)
+        customer_account = self.get_customer_name(allocation.customer_uuid)
+        project_account = self.get_project_name(allocation.project_uuid)
         allocation_account = self.get_allocation_name(allocation)
 
         if not self.client.get_account(customer_account):
-            self.client.create_account(customer_account, customer_name, customer_name)
+            logger.info(
+                "Creating SLURM account for customer %s (backend id = %s)",
+                customer_name,
+                customer_account,
+            )
+            self.client.create_account(
+                name=customer_account,
+                description=customer_name,
+                organization=customer_account,
+            )
 
         if not self.client.get_account(project_account):
-            self.client.create_account(
-                project_account,
+            logger.info(
+                "Creating SLURM account for project %s (backend id = %s)",
                 project_name,
                 project_account,
+            )
+            self.client.create_account(
+                name=project_account,
+                description=project_name,
+                organization=project_account,
                 parent_name=customer_account,
             )
 
         if not self.client.get_account(allocation_account):
+            logger.info(
+                "Creating SLURM account for allocation %s (backend id = %s)",
+                allocation.name,
+                allocation_account,
+            )
             self.client.create_account(
                 name=allocation_account,
                 description=allocation.name,
@@ -189,47 +203,68 @@ class SlurmBackend:
             )
         allocation.backend_id = allocation_account
 
-        self.set_resource_limits(allocation, SLURM_DEFAULT_LIMITS)
-        return self.sync_users(allocation, usernames, freeipa_usernames)
+        limits = self.set_allocation_limits(allocation, SLURM_DEFAULT_LIMITS)
+        added_users = self.add_users_to_account(allocation, usernames)
+        return added_users, limits, allocation_account
 
     def sync_users(
         self,
         allocation: Allocation,
-        usernames_unfiltered: List[str],
-        freeipa_usernames: dict = None,
+        usernames: Set[str],
+        all_freeipa_usernames: Set[str],
     ):
-        created_associations = []
-        removed_associations = []
-        if freeipa_usernames:
-            freeipa_usernames = [username.lower() for username in freeipa_usernames]
-            usernames = list(set(usernames_unfiltered) & set(freeipa_usernames))
-        else:
-            usernames = usernames_unfiltered
-        for username in usernames:
-            succeeded = self.add_user(allocation, username)
-            if succeeded:
-                created_associations.append(username)
+        created_associations = self.add_users_to_account(allocation, usernames)
 
         all_backend_usernames = self.client.list_account_users(allocation.backend_id)
-        if freeipa_usernames:
-            backend_usernames = [
-                username
-                for username in freeipa_usernames
-                if username in all_backend_usernames
-            ]
-        else:
-            backend_usernames = all_backend_usernames
+        backend_usernames = {
+            username
+            for username in all_backend_usernames
+            if username in all_freeipa_usernames
+        }
+        stale_usernames = backend_usernames - usernames
 
-        stale_usernames = set(backend_usernames) - set(usernames)
-
-        for username in stale_usernames:
-            succeeded = self.delete_user(allocation, username)
-            if succeeded:
-                removed_associations.append(username)
+        removed_associations = self.remove_users_from_account(
+            allocation, stale_usernames
+        )
 
         return created_associations, removed_associations
 
+    def add_users_to_account(self, allocation: Allocation, usernames: Set[str]):
+        created_associations = []
+        for username in usernames:
+            try:
+                succeeded = self.add_user(allocation, username)
+                if succeeded:
+                    created_associations.append(username)
+            except BackendError as e:
+                logger.exception(
+                    "Unable to add user %s to account %s, details: %s",
+                    username,
+                    allocation.backend_id,
+                    e,
+                )
+        return created_associations
+
+    def remove_users_from_account(self, allocation: Allocation, usernames: Set[str]):
+        removed_associations = []
+        for username in usernames:
+            try:
+                succeeded = self.remove_user(allocation, username)
+                if succeeded:
+                    removed_associations.append(username)
+            except BackendError as e:
+                logger.exception(
+                    "Unable to remove user %s from account %s, details: %s",
+                    username,
+                    allocation.backend_id,
+                    e,
+                )
+        return removed_associations
+
     def add_user(self, allocation: Allocation, username: str):
+        """
+        Add association between user and SLURM account if it doesn't exists.
+        """
         account = allocation.backend_id
 
         if not account.strip():
@@ -244,7 +279,7 @@ class SlurmBackend:
                 return False
         return True
 
-    def delete_user(self, allocation, username):
+    def remove_user(self, allocation, username):
         """
         Delete association between user and SLURM account if it exists.
         """
