@@ -1,17 +1,17 @@
 import os
-from asyncio.log import logger
 from enum import Enum
 
 from waldur_client import WaldurClient
 
+from waldur_slurm.slurm_client import logger
 from waldur_slurm.slurm_client.backend import SlurmBackend
 
 
-# PUSH stands for sync from SLURM cluster to Waldur
-# PULL stands for sync from Waldur to SLURM cluster
+# "pull" stands for sync from Waldur to SLURM cluster
+# "push" stands for sync from SLURM cluster to Waldur
 class WaldurSyncDirection(Enum):
-    PULL = "PULL"
-    PUSH = "PUSH"
+    PULL = "pull"
+    PUSH = "push"
 
 
 WALDUR_API_URL = os.environ["WALDUR_API_URL"]
@@ -31,6 +31,12 @@ if WALDUR_SYNC_DIRECTION not in [
         WaldurSyncDirection.PULL.value,
         WaldurSyncDirection.PUSH.value,
     )
+    exit(1)
+
+WALDUR_OFFERING_UUID = os.environ.get("WALDUR_OFFERING_UUID")
+
+if not WALDUR_OFFERING_UUID and WALDUR_SYNC_DIRECTION == WaldurSyncDirection.PULL.value:
+    logger.error("WALDUR_OFFERING_UUID is empty")
     exit(1)
 
 waldur_rest_client = WaldurClient(WALDUR_API_URL, WALDUR_API_TOKEN)

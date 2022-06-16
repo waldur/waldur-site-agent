@@ -112,9 +112,9 @@ def submit_usages_for_allocation(allocation_waldur: dict, usages: Dict[str, Quot
                     )
             else:
                 users = waldur_rest_client.list_users({"username": username})
-                if len(users) < 1:
+                if len(users) == 0:
                     logger.error(
-                        "There is no user with username %s in Waldur", username
+                        "There are no users with username %s in Waldur", username
                     )
                     continue
 
@@ -169,9 +169,10 @@ def sync_data_from_slurm_to_waldur(allocation_report):
             waldur_allocations = waldur_rest_client.list_slurm_allocations(
                 {"backend_id": allocation_backend_id}
             )
-            if len(waldur_allocations) < 1:
-                logger.error(
-                    "There are no allocation in Waldur with backend_id '%s'",
+            if len(waldur_allocations) == 0:
+                logger.warning(
+                    "There are no allocations in Waldur with backend_id '%s',"
+                    "skipping sync",
                     allocation_backend_id,
                 )
                 continue
