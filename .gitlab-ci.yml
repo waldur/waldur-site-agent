@@ -1,6 +1,8 @@
 include:
   - project: "waldur/waldur-pipelines"
     file: "/templates/stages.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/release/build-and-push-docker-image.yml"
 
 .Test template:
   image: registry.hpc.ut.ee/mirror/library/python:3.8
