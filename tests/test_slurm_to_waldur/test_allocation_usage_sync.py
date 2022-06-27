@@ -75,7 +75,10 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         sync_data_from_slurm_to_waldur(allocations)
 
         waldur_client.list_slurm_allocations.assert_called_once_with(
-            {"backend_id": "test-allocation-01"}
+            {
+                "backend_id": "test-allocation-01",
+                "offering_uuid": "1a6ae60417e04088b90a5aa395209ecc",
+            }
         )
         waldur_client.list_slurm_associations.assert_called_once_with(
             {"allocation_uuid": self.allocation_waldur["uuid"]}
@@ -145,7 +148,10 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         sync_data_from_slurm_to_waldur(allocations)
 
         waldur_client.list_slurm_allocations.assert_called_once_with(
-            {"backend_id": "test-allocation-01"}
+            {
+                "backend_id": "test-allocation-01",
+                "offering_uuid": "1a6ae60417e04088b90a5aa395209ecc",
+            }
         )
         waldur_client.list_slurm_associations.assert_called_once_with(
             {"allocation_uuid": self.allocation_waldur["uuid"]}

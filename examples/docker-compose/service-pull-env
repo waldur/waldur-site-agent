@@ -1,0 +1,5 @@
+WALDUR_SYNC_DIRECTION=pull # The setup for service-pull
+WALDUR_API_URL=http://waldur.example.com/api/ # Waldur API URL
+WALDUR_API_TOKEN=9e1132b9616ebfe943ddf632ca32bbb7e1109a32 # Token of a service provider in Waldur
+WALDUR_OFFERING_UUID=e21a0f0030b447deb63bedf69db6742e # UUID of SLURM offering in Waldur
+SLURM_DEFAULT_ACCOUNT=root # Default account for SLURM

@@ -33,3 +33,25 @@ Test Waldur to SLURM sync:
   extends: .Test template
   variables:
     TESTS_DIR: "tests/test_waldur_to_slurm"
+
+Upload docs:
+  image:
+    name: registry.hpc.ut.ee/mirror/alpine/git:v2.30.2
+    entrypoint: [""]
+  stage: deploy
+  interruptible: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "schedule"'
+  script:
+    - cd /tmp/
+    - git clone "https://gitlab-ci-token:$GITLAB_TOKEN@$CI_SERVER_HOST/waldur/waldur-docs.git"
+    - git config --global user.name "$GITLAB_USER_NAME"
+    - git config --global user.email "$GITLAB_USER_EMAIL"
+    - cd waldur-docs/
+    - ls docs/waldur-slurm-serivce || mkdir -d docs/waldur-slurm-serivce
+    - cp -v $CI_PROJECT_DIR/README.md docs/waldur-slurm-serivce
+    - cp -rv $CI_PROJECT_DIR/examples/ docs/waldur-slurm-serivce
+    - git add docs/waldur-slurm-serivce
+    - git commit -m 'Update Waldur SLURM Service docs' || exit 0
+    - git branch new-slurm-service-docs
+    - git push --set-upstream origin new-slurm-service-docs:master
