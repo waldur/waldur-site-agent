@@ -1,0 +1,16 @@
+version: '3'
+
+services:
+  slurm_service_pull:
+    image: opennode/waldur-slurm-service:latest
+    env_file:
+      service-pull-env
+    volumes: # Add this if SLURM cluster deployed in Docker
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  slurm_service_push:
+    image: opennode/waldur-slurm-service:latest
+    env_file:
+      service-push-env
+    volumes: # Add this if SLURM cluster deployed in Docker
+      - /var/run/docker.sock:/var/run/docker.sock

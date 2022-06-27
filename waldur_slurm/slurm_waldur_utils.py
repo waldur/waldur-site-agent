@@ -8,7 +8,7 @@ from waldur_slurm.slurm_client import logger
 from waldur_slurm.slurm_client.exceptions import BackendError
 from waldur_slurm.slurm_client.structures import Quotas
 
-from . import slurm_backend, waldur_rest_client
+from . import WALDUR_OFFERING_UUID, slurm_backend, waldur_rest_client
 
 
 def is_usage_increased(user_usage_slurm: dict, user_usage_waldur: dict):
@@ -167,7 +167,10 @@ def sync_data_from_slurm_to_waldur(allocation_report):
             limits: Quotas = allocation_data["limits"]
 
             waldur_allocations = waldur_rest_client.list_slurm_allocations(
-                {"backend_id": allocation_backend_id}
+                {
+                    "backend_id": allocation_backend_id,
+                    "offering_uuid": WALDUR_OFFERING_UUID,
+                }
             )
             if len(waldur_allocations) == 0:
                 logger.warning(
