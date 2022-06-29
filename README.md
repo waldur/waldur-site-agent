@@ -34,6 +34,7 @@ The application supports the following environmental variables (required ones fo
 - `SLURM_DEFAULT_GPU_LIMIT` - GPU resource limit for allocation if not specified by Waldur. Default is `400`.
 - `SLURM_DEFAULT_RAM_LIMIT` - RAM resource limit for allocation if not specified by Waldur. Default is `100000 * 2 ** 10`.
 - `SLURM_DEFAULT_ACCOUNT` - default account name existing in SLURM cluster for creation of new accounts. Default is `waldur`.
+- `SLURM_CONTAINER_NAME` - name of a headnode SLURM container; must be set if SLURM_DEPLOYMENT_TYPE is docker.
 
 ## Deployment
 
@@ -49,6 +50,7 @@ WALDUR_API_URL=http://waldur.example.com/api/ # Waldur API URL
 WALDUR_API_TOKEN=9e1132b9616ebfe943ddf632ca32bbb7e1109a32 # Token of a service provider in Waldur
 WALDUR_OFFERING_UUID=e21a0f0030b447deb63bedf69db6742e # UUID of SLURM offering in Waldur
 SLURM_DEFAULT_ACCOUNT=root # Default account for SLURM
+SLURM_CONTAINER_NAME=slurmctld # Name of SLURM namenode container
 ```
 
 The example of .env-file for service-push:
@@ -58,6 +60,7 @@ WALDUR_SYNC_DIRECTION=push # The setup for service-push
 WALDUR_API_URL=http://waldur.example.com/api/ # Waldur API URL
 WALDUR_API_TOKEN=9e1132b9616ebfe943ddf632ca32bbb7e1109a32 # Token of a service provider in Waldur
 WALDUR_OFFERING_UUID=e21a0f0030b447deb63bedf69db6742e # UUID of SLURM offering in Waldur
+SLURM_CONTAINER_NAME=slurmctld # Name of SLURM namenode container
 ```
 
 The current revision of the project supports only Docker-based deployment. You can find the Docker Compose configuration for testing in `examples/docker-compose/` folder.
