@@ -17,8 +17,6 @@ class WaldurSyncDirection(Enum):
 WALDUR_API_URL = os.environ["WALDUR_API_URL"]
 WALDUR_API_TOKEN = os.environ["WALDUR_API_TOKEN"]
 
-# TODO: add support for this option to Dockerfile
-
 WALDUR_SYNC_DIRECTION = os.environ["WALDUR_SYNC_DIRECTION"]
 
 if WALDUR_SYNC_DIRECTION not in [

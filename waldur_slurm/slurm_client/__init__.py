@@ -50,3 +50,5 @@ SLURM_DEFAULT_LIMITS = {
 }
 
 SLURM_DEFAULT_ACCOUNT = os.environ.get("SLURM_DEFAULT_ACCOUNT", "waldur")
+
+SLURM_CONTAINER_NAME = os.environ.get('SLURM_CONTAINER_NAME', 'slurmctld')

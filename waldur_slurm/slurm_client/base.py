@@ -1,14 +1,17 @@
 import abc
+from curses import noecho
 import subprocess  # noqa: S404
 
-from . import logger
-from .exceptions import SlurmError
+from . import logger, SLURM_CONTAINER_NAME
+from .exceptions import ConfigurationError, SlurmError
 
 
 class BaseClient(metaclass=abc.ABCMeta):
     def __init__(self, slurm_deployment_type):
         if slurm_deployment_type == "docker":
-            self.command_prefix = ["docker", "exec", "slurmctld"]
+            if SLURM_CONTAINER_NAME is None:
+                raise ConfigurationError('SLURM_CONTAINER_NAME must have correct value in case of docker-based SLURM')
+            self.command_prefix = ["docker", "exec", SLURM_CONTAINER_NAME]
         else:
             self.command_prefix = []
 
