@@ -3,8 +3,8 @@ import uuid
 from unittest import mock
 
 from freezegun import freeze_time
+from waldur_client import ComponentUsage
 
-from waldur_slurm.slurm_client.structures import Quotas
 from waldur_slurm.slurm_waldur_utils import sync_data_from_slurm_to_waldur
 
 
@@ -16,22 +16,22 @@ class TestSlurmToWaldurSync(unittest.TestCase):
             "test-allocation-01": {
                 "users": ["user-01"],
                 "usage": {
-                    "user-01": Quotas(
-                        cpu=10,
-                        gpu=20,
-                        ram=30,
-                    ),
-                    "TOTAL_ACCOUNT_USAGE": Quotas(
-                        cpu=10,
-                        gpu=20,
-                        ram=30,
-                    ),
+                    "user-01": {
+                        "cpu": 10,
+                        "gpu": 20,
+                        "ram": 30,
+                    },
+                    "TOTAL_ACCOUNT_USAGE": {
+                        "cpu": 10,
+                        "gpu": 20,
+                        "ram": 30,
+                    },
                 },
-                "limits": Quotas(
-                    cpu=100,
-                    gpu=200,
-                    ram=300,
-                ),
+                "limits": {
+                    "cpu": 100,
+                    "gpu": 200,
+                    "ram": 300,
+                },
             }
         }
 
@@ -65,12 +65,17 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         allocation_data = allocations["test-allocation-01"]
         waldur_client.list_slurm_allocations.return_value = [self.allocation_waldur]
         waldur_client.list_slurm_associations.return_value = []
-        waldur_client.list_slurm_allocation_user_usage.return_value = []
-        waldur_client.list_users.return_value = [
-            {
-                "uuid": self.waldur_user_uuid,
-            }
+        plan_period_uuid = uuid.uuid4().hex
+        waldur_client.marketplace_resource_get_plan_periods.return_value = [
+            {"uuid": plan_period_uuid}
         ]
+        waldur_client._get_offering.return_value = {
+            "components": [
+                {"type": "cpu"},
+                {"type": "gpu"},
+                {"type": "ram"},
+            ]
+        }
 
         sync_data_from_slurm_to_waldur(allocations)
 
@@ -90,32 +95,15 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         waldur_client.delete_slurm_association.assert_not_called()
         limits = allocation_data["limits"]
         waldur_client.set_slurm_allocation_limits.assert_called_once_with(
-            self.allocation_waldur["marketplace_resource_uuid"],
-            limits.cpu,
-            limits.gpu,
-            limits.ram,
+            self.allocation_waldur["marketplace_resource_uuid"], limits
         )
-        self.assertEqual(2, waldur_client.set_slurm_allocation_usage.call_count)
-        waldur_client.set_slurm_allocation_usage.assert_called_with(
-            self.allocation_waldur["marketplace_resource_uuid"],
-            "TOTAL_ACCOUNT_USAGE",
-            1,
-            2022,
-            allocation_data["usage"]["TOTAL_ACCOUNT_USAGE"].cpu,
-            allocation_data["usage"]["TOTAL_ACCOUNT_USAGE"].gpu,
-            allocation_data["usage"]["TOTAL_ACCOUNT_USAGE"].ram,
-            None,
-        )
-        waldur_client.list_users.assert_called_once_with(
-            {"username": allocation_data["users"][0]}
-        )
-        waldur_client.list_slurm_allocation_user_usage.assert_called_once_with(
-            {
-                "allocation_uuid": self.allocation_waldur["uuid"],
-                "user_uuid": self.waldur_user_uuid,
-                "month": 1,
-                "year": 2022,
-            }
+        waldur_client.create_component_usages.assert_called_once_with(
+            plan_period_uuid,
+            [
+                ComponentUsage("cpu", 10),
+                ComponentUsage("gpu", 20),
+                ComponentUsage("ram", 30),
+            ],
         )
 
     def test_association_deletion(self, waldur_client: mock.Mock):
@@ -132,17 +120,9 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         allocations = self.allocation_report_slurm
         allocation_data = allocations["test-allocation-01"]
         waldur_client.list_slurm_allocations.return_value = [self.allocation_waldur]
-        waldur_client.list_slurm_allocation_user_usage.return_value = [
-            self.waldur_user_usage
-        ]
         waldur_client.list_slurm_associations.return_value = [
             {"username": "user-01"},
             {"username": "user-02"},
-        ]
-        waldur_client.list_users.return_value = [
-            {
-                "uuid": self.waldur_user_uuid,
-            }
         ]
 
         sync_data_from_slurm_to_waldur(allocations)
@@ -162,21 +142,7 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         )
         limits = allocation_data["limits"]
         waldur_client.set_slurm_allocation_limits.assert_called_once_with(
-            self.allocation_waldur["marketplace_resource_uuid"],
-            limits.cpu,
-            limits.gpu,
-            limits.ram,
+            self.allocation_waldur["marketplace_resource_uuid"], limits
         )
 
         waldur_client.set_slurm_allocation_usage.assert_not_called()
-        waldur_client.list_users.assert_called_once_with(
-            {"username": allocation_data["users"][0]}
-        )
-        waldur_client.list_slurm_allocation_user_usage.assert_called_once_with(
-            {
-                "allocation_uuid": self.allocation_waldur["uuid"],
-                "user_uuid": self.waldur_user_uuid,
-                "month": 1,
-                "year": 2022,
-            }
-        )

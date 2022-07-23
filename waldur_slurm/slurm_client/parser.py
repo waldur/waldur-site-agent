@@ -1,7 +1,7 @@
 import datetime
 from functools import cached_property
 
-from . import structures, utils
+from . import utils
 
 
 def parse_duration(value):
@@ -65,30 +65,6 @@ class SlurmReportLine:
         return self._parts[3]
 
     @cached_property
-    def cpu(self):
-        return self.parse_field("cpu")
-
-    @cached_property
-    def gpu(self):
-        return self.parse_field("gres/gpu")
-
-    @cached_property
-    def ram(self):
-        return self.parse_field("mem") // 2 ** 20  # Convert from Bytes to MB
-
-    @cached_property
-    def node(self):
-        return self.parse_field("node")
-
-    @cached_property
-    def quotas(self):
-        return structures.Quotas(
-            self.cpu * self.duration,
-            self.gpu * self.duration,
-            self.ram * self.duration,
-        )
-
-    @cached_property
     def duration(self):
         return parse_duration(self._parts[2])
 
@@ -102,14 +78,19 @@ class SlurmReportLine:
             return 0
         return utils.parse_int(self._resources[field])
 
+    def tres_usage(self):
+        usage = {}
+        for resource in self._resources():
+            usage_raw = self.parse_field(resource)
+            usage[resource] = usage_raw * self.duration
+        if "mem" in usage:
+            usage["ram"] = usage.pop("mem") // 2**20  # Convert from Bytes to MB
+        return usage
+
 
 class SlurmAssociationLine(SlurmReportLine):
     @cached_property
     def user(self):
-        return None
-
-    @cached_property
-    def node(self):
         return None
 
     @cached_property
@@ -123,5 +104,7 @@ class SlurmAssociationLine(SlurmReportLine):
             return dict(pair.split("=") for pair in pairs)
 
     @cached_property
-    def resource_limits(self):
-        return self._resources
+    def tres_limits(self):
+        resources = self._resources
+        if resources:
+            return {tres: utils.parse_int(limit) for tres, limit in resources.items()}

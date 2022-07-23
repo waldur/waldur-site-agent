@@ -75,7 +75,7 @@ def process_order_for_creation(order_item: dict):
     }
     common_utils.add_users_to_allocation(allocation_waldur, added_users)
     waldur_rest_client.set_slurm_allocation_limits(
-        resource_uuid, limits.cpu, limits.gpu, limits.ram
+        resource_uuid, limits
     )
 
     waldur_rest_client.marketplace_order_item_set_state_done(order_item["uuid"])
@@ -142,7 +142,7 @@ def sync_data_from_waldur_to_slurm():
     )
 
     if len(order_items) == 0:
-        logger.info("There are no approved order_items")
+        logger.info("There are no approved order items")
         return
 
     for order_item in order_items:
