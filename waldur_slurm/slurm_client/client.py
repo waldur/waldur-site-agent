@@ -3,12 +3,21 @@ import re
 from . import base, structures, utils
 from .parser import SlurmAssociationLine, SlurmReportLine
 
+# Some of the standard TRES should be ignored (https://slurm.schedmd.com/tres.html)
+STANDARD_TRES = {"energy", "node", "billing", "fs", "vmem", "pages"}
+
 
 class SlurmClient(base.BaseClient):
     """
     This class implements Python client for SLURM.
     See also: https://slurm.schedmd.com/sacctmgr.html
     """
+
+    def list_tres(self):
+        output = self._execute_command(["list", "tres", "format=type"])
+        all_tres = set(output.splitlines())
+        tres = all_tres - STANDARD_TRES
+        return list(tres)
 
     def list_accounts(self):
         output = self._execute_command(["list", "account"])
@@ -53,12 +62,9 @@ class SlurmClient(base.BaseClient):
 
         return self._execute_command(["remove", "account", "where", "name=%s" % name])
 
-    def set_resource_limits(self, account, quotas):
-        quota = "GrpTRESMins=cpu=%d,gres/gpu=%d,mem=%d" % (
-            quotas.cpu,
-            quotas.gpu,
-            quotas.ram,
-        )
+    def set_resource_limits(self, account, limits_dict):
+        limits_str = ",".join([f"{key}={value}" for key, value in limits_dict.items()])
+        quota = f"GrpTRESMins={limits_str}"
         return self._execute_command(["modify", "account", account, "set", quota])
 
     def get_association(self, user, account):

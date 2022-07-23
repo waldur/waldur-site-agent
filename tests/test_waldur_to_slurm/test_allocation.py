@@ -2,7 +2,7 @@ import unittest
 import uuid
 from unittest import mock
 
-from waldur_slurm.slurm_client.structures import Account, Quotas
+from waldur_slurm.slurm_client.structures import Account
 from waldur_slurm.waldur_slurm_utils import sync_data_from_waldur_to_slurm
 
 
@@ -125,15 +125,15 @@ class TestAllocationUpdateLimits(unittest.TestCase):
             "customer_name": "Test customer",
             "resource_uuid": self.resource_uuid,
             "limits": {
-                "CPU": 101,
-                "GPU": 201,
-                "RAM": 301,
+                "cpu": 101,
+                "gpu": 201,
+                "ram": 301,
             },
             "attributes": {
                 "old_limits": {
-                    "CPU": 100,
-                    "GPU": 200,
-                    "RAM": 300,
+                    "cpu": 100,
+                    "gpu": 200,
+                    "ram": 300,
                 }
             },
         }
@@ -152,9 +152,9 @@ class TestAllocationUpdateLimits(unittest.TestCase):
 
         slurm_client.set_resource_limits.assert_called_once_with(
             self.waldur_allocation["backend_id"],
-            Quotas(
-                cpu=101,
-                gpu=201,
-                ram=301,
-            ),
+            {
+                "cpu": 101,
+                "gpu": 201,
+                "ram": 301,
+            },
         )

@@ -4,7 +4,7 @@ from . import logger, waldur_rest_client
 
 
 def drop_users_from_allocation(allocation_waldur: dict, usernames: str):
-    logger.info("Stale usernames: %s", usernames)
+    logger.info("Stale usernames: %s", " ,".join(usernames))
     for username in usernames:
         try:
             waldur_rest_client.delete_slurm_association(
@@ -20,8 +20,8 @@ def drop_users_from_allocation(allocation_waldur: dict, usernames: str):
             logger.error("User %s can not be dropped due to: %s", username, e)
 
 
-def add_users_to_allocation(allocation_waldur: dict, usernames: str):
-    logger.info("New usernames: %s", usernames)
+def add_users_to_allocation(allocation_waldur: dict, usernames: set):
+    logger.info("New usernames: %s", " ,".join(usernames))
     for username in usernames:
         try:
             waldur_rest_client.create_slurm_association(

@@ -1,29 +1,29 @@
-import operator
 import re
-from functools import reduce
 from typing import Set
 
 from . import (
     SLURM_ALLOCATION_NAME_MAX_LEN,
     SLURM_ALLOCATION_PREFIX,
     SLURM_ALLOCATION_REGEX,
+    SLURM_CONTAINER_NAME,
     SLURM_CUSTOMER_PREFIX,
     SLURM_DEFAULT_ACCOUNT,
     SLURM_DEFAULT_LIMITS,
     SLURM_DEPLOYMENT_TYPE,
     SLURM_PROJECT_PREFIX,
     logger,
+    utils,
 )
 from .client import SlurmClient
 from .exceptions import BackendError, SlurmError
-from .structures import Allocation, Quotas
+from .structures import Allocation
 
 
 class SlurmBackend:
     def __init__(
         self,
     ):
-        self.client = SlurmClient(SLURM_DEPLOYMENT_TYPE)
+        self.client = SlurmClient(SLURM_DEPLOYMENT_TYPE, SLURM_CONTAINER_NAME)
 
     def pull_allocations(self):
         report = {}
@@ -40,54 +40,62 @@ class SlurmBackend:
                 logger.error("Error while pulling allocation [%s]: %s", account.name, e)
         return report
 
-    def ping(self, raise_exception=False):
-        try:
-            self.client.list_accounts()
-        except SlurmError as e:
-            if raise_exception:
-                raise BackendError(e)
-            return False
-        else:
-            return True
-
     def pull_allocation(self, account: str):
         users = self.client.list_account_users(account)
 
         report = self.get_usage_report([account])
         usage = report.get(account)
         if not usage:
-            usage = {"TOTAL_ACCOUNT_USAGE": Quotas()}
+            empty_usage = {tres: 0.00 for tres in self.client.list_tres()}
+            usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
-        limits: Quotas = self.get_allocation_limits(account)
+        limits: dict = self.get_allocation_limits(account)
         return users, usage, limits
 
     def get_usage_report(self, accounts):
+        """
+        Example output:
+        {
+            "account_name": {
+                "TOTAL_ACCOUNT_USAGE": {
+                    'cpu': 1,
+                    'gpu': 2,
+                    'ram': 3,
+                },
+                "user1": {
+                    'cpu': 1,
+                    'gpu': 2,
+                    'ram': 3,
+                },
+            }
+        }
+        """
         report = {}
         lines = self.client.get_usage_report(accounts)
 
         for line in lines:
-            report.setdefault(line.account, {}).setdefault(line.user, Quotas())
-            report[line.account][line.user] += line.quotas
+            report.setdefault(line.account, {}).setdefault(line.user, {})
+            tres_usage = line.tres_usage()
+            user_usage_old = report[line.account][line.user]
+            user_usage_new = utils.sum_dicts([user_usage_old, tres_usage])
+            report[line.account][line.user] = user_usage_new
 
-        for usage in report.values():
-            for user_usage in usage.values():
-                user_usage.cpu = round(user_usage.cpu, 2)
-                user_usage.gpu = round(user_usage.gpu, 2)
-                user_usage.ram = round(user_usage.ram, 2)
-            quotas = usage.values()
-            total = reduce(operator.add, quotas)
-            usage["TOTAL_ACCOUNT_USAGE"] = total
+        for account_usage in report.values():
+            usages_per_user = account_usage.values()
+            total = utils.sum_dicts(usages_per_user)
+            account_usage["TOTAL_ACCOUNT_USAGE"] = total
 
         return report
 
     def get_allocation_limits(self, account: str):
         lines = self.client.get_resource_limits(account)
         correct_lines = [
-            association for association in lines if association.resource_limits
+            association.tres_limits for association in lines if association.tres_limits
         ]
         if len(correct_lines) > 0:
-            line = correct_lines[0]
-            limits = Quotas(cpu=line.cpu, gpu=line.gpu, ram=line.ram)
+            limits = {
+                tres_name: round(limit) for tres_name, limit in correct_lines[0].items()
+            }
             return limits
 
     def get_allocation_name(self, allocation: Allocation):
@@ -108,13 +116,7 @@ class SlurmBackend:
         return "%s%s" % (SLURM_CUSTOMER_PREFIX, name)
 
     def set_allocation_limits(self, allocation: Allocation, limits_dict: dict):
-        limits = Quotas(
-            cpu=limits_dict["CPU"],
-            gpu=limits_dict["GPU"],
-            ram=limits_dict["RAM"],
-        )
-        self.client.set_resource_limits(allocation.backend_id, limits)
-        return limits
+        self.client.set_resource_limits(allocation.backend_id, limits_dict)
 
     def delete_customer(self, customer_backend_id):
         self.client.delete_account(customer_backend_id)
@@ -203,7 +205,8 @@ class SlurmBackend:
             )
         allocation.backend_id = allocation_account
 
-        limits = self.set_allocation_limits(allocation, SLURM_DEFAULT_LIMITS)
+        limits = SLURM_DEFAULT_LIMITS
+        self.set_allocation_limits(allocation, limits)
         added_users = self.add_users_to_account(allocation, usernames)
         return added_users, limits, allocation_account
 
