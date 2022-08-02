@@ -3,6 +3,8 @@ import os
 import sys
 from enum import Enum
 
+import yaml
+
 handler = logging.StreamHandler(sys.stdout)
 logger = logging.getLogger(__name__)
 formatter = logging.Formatter("[%(levelname)s] [%(asctime)s] %(message)s")
@@ -37,17 +39,10 @@ SLURM_CUSTOMER_PREFIX = os.environ.get("SLURM_CUSTOMER_PREFIX", "hpc_")
 SLURM_PROJECT_PREFIX = os.environ.get("SLURM_PROJECT_PREFIX", "hpc_")
 SLURM_ALLOCATION_PREFIX = os.environ.get("SLURM_ALLOCATION_PREFIX", "hpc_")
 
-SLURM_DEFAULT_LIMITS = {
-    "cpu": os.environ.get(
-        "SLURM_DEFAULT_CPU_LIMIT", 16000
-    ),  # Measured unit is CPU-minutes
-    "gres/gpu": os.environ.get(
-        "SLURM_DEFAULT_GPU_LIMIT", 400
-    ),  # Measured unit is GPU-minutes
-    "ram": os.environ.get(
-        "SLURM_DEFAULT_RAM_LIMIT", 100000 * 2**10
-    ),  # Measured unit is MB-h
-}
+with open("config-components.yaml", "r") as stream:
+    tres_config = yaml.safe_load(stream)
+    SLURM_TRES = tres_config
+
 
 SLURM_DEFAULT_ACCOUNT = os.environ.get("SLURM_DEFAULT_ACCOUNT", "waldur")
 

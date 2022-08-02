@@ -2,13 +2,15 @@ import calendar
 import datetime
 import re
 
+from . import SLURM_TRES
+
 UNIT_PATTERN = re.compile(r"(\d+)([KMGTP]?)")
 
 UNITS = {
-    "K": 2 ** 10,
-    "M": 2 ** 20,
-    "G": 2 ** 30,
-    "T": 2 ** 40,
+    "K": 2**10,
+    "M": 2**20,
+    "G": 2**30,
+    "T": 2**40,
 }
 
 SLURM_ALLOCATION_REGEX = "a-zA-Z0-9-_"
@@ -50,3 +52,11 @@ def parse_int(value):
     else:
         factor = 1
     return factor * value
+
+
+def get_tres_list():
+    return SLURM_TRES.keys()
+
+
+def get_tres_limits():
+    return {tres: data["limit"] for tres, data in SLURM_TRES.items()}
