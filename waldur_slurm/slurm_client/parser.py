@@ -78,13 +78,17 @@ class SlurmReportLine:
             return 0
         return utils.parse_int(self._resources[field])
 
+    @cached_property
     def tres_usage(self):
         usage = {}
+        tres_list = utils.get_tres_list()
         for resource in self._resources():
+            if resource not in tres_list:
+                continue
             usage_raw = self.parse_field(resource)
             usage[resource] = usage_raw * self.duration
         if "mem" in usage:
-            usage["ram"] = usage.pop("mem") // 2**20  # Convert from Bytes to MB
+            usage["mem"] = usage["mem"] // 2**20  # Convert from Bytes to MB
         return usage
 
 
@@ -107,4 +111,8 @@ class SlurmAssociationLine(SlurmReportLine):
     def tres_limits(self):
         resources = self._resources
         if resources:
-            return {tres: utils.parse_int(limit) for tres, limit in resources.items()}
+            return {
+                tres: utils.parse_int(limit)
+                for tres, limit in resources.items()
+                if tres in utils.get_tres_list()
+            }

@@ -33,7 +33,7 @@ if WALDUR_SYNC_DIRECTION not in [
 
 WALDUR_OFFERING_UUID = os.environ.get("WALDUR_OFFERING_UUID")
 
-if not WALDUR_OFFERING_UUID and WALDUR_SYNC_DIRECTION == WaldurSyncDirection.PULL.value:
+if not WALDUR_OFFERING_UUID:
     logger.error("WALDUR_OFFERING_UUID is empty")
     exit(1)
 

@@ -1,5 +1,5 @@
 import re
-from typing import Set
+from typing import Dict, Set
 
 from . import (
     SLURM_ALLOCATION_NAME_MAX_LEN,
@@ -8,7 +8,6 @@ from . import (
     SLURM_CONTAINER_NAME,
     SLURM_CUSTOMER_PREFIX,
     SLURM_DEFAULT_ACCOUNT,
-    SLURM_DEFAULT_LIMITS,
     SLURM_DEPLOYMENT_TYPE,
     SLURM_PROJECT_PREFIX,
     logger,
@@ -46,7 +45,7 @@ class SlurmBackend:
         report = self.get_usage_report([account])
         usage = report.get(account)
         if not usage:
-            empty_usage = {tres: 0.00 for tres in self.client.list_tres()}
+            empty_usage = {tres: 0.00 for tres in utils.get_tres_list()}
             usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         limits: dict = self.get_allocation_limits(account)
@@ -59,13 +58,13 @@ class SlurmBackend:
             "account_name": {
                 "TOTAL_ACCOUNT_USAGE": {
                     'cpu': 1,
-                    'gpu': 2,
-                    'ram': 3,
+                    'gres/gpu': 2,
+                    'mem': 3,
                 },
                 "user1": {
                     'cpu': 1,
-                    'gpu': 2,
-                    'ram': 3,
+                    'gres/gpu': 2,
+                    'mem': 3,
                 },
             }
         }
@@ -115,7 +114,9 @@ class SlurmBackend:
     def get_customer_name(self, name: str):
         return "%s%s" % (SLURM_CUSTOMER_PREFIX, name)
 
-    def set_allocation_limits(self, allocation: Allocation, limits_dict: dict):
+    def set_allocation_limits(
+        self, allocation: Allocation, limits_dict: Dict[str, int]
+    ):
         self.client.set_resource_limits(allocation.backend_id, limits_dict)
 
     def delete_customer(self, customer_backend_id):
@@ -205,7 +206,7 @@ class SlurmBackend:
             )
         allocation.backend_id = allocation_account
 
-        limits = SLURM_DEFAULT_LIMITS
+        limits = utils.get_tres_limits()
         self.set_allocation_limits(allocation, limits)
         added_users = self.add_users_to_account(allocation, usernames)
         return added_users, limits, allocation_account

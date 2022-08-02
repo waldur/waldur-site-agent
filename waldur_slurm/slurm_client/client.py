@@ -3,21 +3,12 @@ import re
 from . import base, structures, utils
 from .parser import SlurmAssociationLine, SlurmReportLine
 
-# Some of the standard TRES should be ignored (https://slurm.schedmd.com/tres.html)
-STANDARD_TRES = {"energy", "node", "billing", "fs", "vmem", "pages"}
-
 
 class SlurmClient(base.BaseClient):
     """
     This class implements Python client for SLURM.
     See also: https://slurm.schedmd.com/sacctmgr.html
     """
-
-    def list_tres(self):
-        output = self._execute_command(["list", "tres", "format=type"])
-        all_tres = set(output.splitlines())
-        tres = all_tres - STANDARD_TRES
-        return list(tres)
 
     def list_accounts(self):
         output = self._execute_command(["list", "account"])

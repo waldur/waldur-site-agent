@@ -127,13 +127,13 @@ class TestAllocationUpdateLimits(unittest.TestCase):
             "limits": {
                 "cpu": 101,
                 "gpu": 201,
-                "ram": 301,
+                "mem": 301,
             },
             "attributes": {
                 "old_limits": {
                     "cpu": 100,
                     "gpu": 200,
-                    "ram": 300,
+                    "mem": 300,
                 }
             },
         }
@@ -155,6 +155,6 @@ class TestAllocationUpdateLimits(unittest.TestCase):
             {
                 "cpu": 101,
                 "gpu": 201,
-                "ram": 301,
+                "mem": 301,
             },
         )

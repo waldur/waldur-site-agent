@@ -1,2 +1,3 @@
 git+https://github.com/waldur/python-waldur-client
 requests==2.27.1
+PyYAML==6.0
