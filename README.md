@@ -32,6 +32,7 @@ The application supports the following environmental variables (required ones fo
 - `SLURM_ALLOCATION_NAME_MAX_LEN` - maximum length of account name created by the application.
 - `SLURM_DEFAULT_ACCOUNT` - default account name existing in SLURM cluster for creation of new accounts. Default is `waldur`.
 - `SLURM_CONTAINER_NAME` - name of a headnode SLURM container; must be set if SLURM_DEPLOYMENT_TYPE is docker.
+- `WALDUR_SLURM_USERNAME_SOURCE` - source of SLURM username in Waldur. It can be either `freeipa` or `local`, default is `local`.
 
 ## Deployment
 
