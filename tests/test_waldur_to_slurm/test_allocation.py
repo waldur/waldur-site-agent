@@ -44,12 +44,6 @@ class TestAllocationCreation(unittest.TestCase):
                 "full_name": "Test User",
             },
         ]
-        waldur_client.list_freeipa_profiles.return_value = [
-            {
-                "user_uuid": user_uuid,
-                "username": "hpc_test_user_01",
-            },
-        ]
 
         slurm_client.get_account.return_value = None
         slurm_client._execute_command.return_value = ""

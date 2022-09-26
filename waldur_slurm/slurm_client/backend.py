@@ -215,15 +215,13 @@ class SlurmBackend:
         self,
         allocation: Allocation,
         usernames: Set[str],
-        all_freeipa_usernames: Set[str],
+        all_usernames: Set[str],
     ):
         created_associations = self.add_users_to_account(allocation, usernames)
 
         all_backend_usernames = self.client.list_account_users(allocation.backend_id)
         backend_usernames = {
-            username
-            for username in all_backend_usernames
-            if username in all_freeipa_usernames
+            username for username in all_backend_usernames if username in all_usernames
         }
         stale_usernames = backend_usernames - usernames
 

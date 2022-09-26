@@ -7,7 +7,33 @@ from waldur_slurm.slurm_client import logger
 from waldur_slurm.slurm_client.exceptions import BackendError
 from waldur_slurm.slurm_client.structures import Allocation
 
-from . import WALDUR_OFFERING_UUID, common_utils, slurm_backend, waldur_rest_client
+from . import (
+    WALDUR_OFFERING_UUID,
+    WALDUR_SLURM_USERNAME_SOURCE,
+    WaldurSlurmUsernameSource,
+    common_utils,
+    slurm_backend,
+    waldur_rest_client,
+)
+
+
+def fetch_usernames_registered_in_freeipa(team):
+    usernames = set()
+    all_freeipa_profiles = waldur_rest_client.list_freeipa_profiles()
+    user_profile_mapping = {
+        profile["user_uuid"]: profile["username"] for profile in all_freeipa_profiles
+    }
+    for user in team:
+        freeipa_username = user_profile_mapping.get(user["uuid"])
+        if freeipa_username:
+            usernames.add(freeipa_username)
+        else:
+            logger.warning(
+                "The user %s (%s) doesn't have any FreeIPA profiles," "skipping.",
+                user["username"],
+                user["full_name"],
+            )
+    return usernames
 
 
 def process_order_for_creation(order_item: dict):
@@ -42,27 +68,19 @@ def process_order_for_creation(order_item: dict):
     )
 
     team = waldur_rest_client.marketplace_resource_get_team(resource_uuid)
-    all_freeipa_profiles = waldur_rest_client.list_freeipa_profiles()
-    user_profile_mapping = {
-        profile["user_uuid"]: profile["username"] for profile in all_freeipa_profiles
+    username_fetching_function = {
+        WaldurSlurmUsernameSource.LOCAL: lambda team: [
+            user["username"] for user in team
+        ],
+        WaldurSlurmUsernameSource.FREEIPA: fetch_usernames_registered_in_freeipa,
     }
-    account_freeipa_usernames = set()
-    for user in team:
-        freeipa_username = user_profile_mapping.get(user["uuid"])
-        if freeipa_username:
-            account_freeipa_usernames.add(freeipa_username)
-        else:
-            logger.warning(
-                "The user %s (%s) doesn't have any FreeIPA profiles," "skipping.",
-                user["username"],
-                user["full_name"],
-            )
+    usernames = username_fetching_function[WALDUR_SLURM_USERNAME_SOURCE](team)
 
     added_users, limits, backend_id = slurm_backend.create_allocation(
         allocation,
         project_name=order_item["project_name"],
         customer_name=order_item["customer_name"],
-        usernames=account_freeipa_usernames,
+        usernames=usernames,
     )
 
     waldur_rest_client.marketplace_resource_set_backend_id(resource_uuid, backend_id)
@@ -74,9 +92,7 @@ def process_order_for_creation(order_item: dict):
         "backend_id": allocation.backend_id,
     }
     common_utils.add_users_to_allocation(allocation_waldur, added_users)
-    waldur_rest_client.set_slurm_allocation_limits(
-        resource_uuid, limits
-    )
+    waldur_rest_client.set_slurm_allocation_limits(resource_uuid, limits)
 
     waldur_rest_client.marketplace_order_item_set_state_done(order_item["uuid"])
     waldur_rest_client.set_slurm_allocation_state(
