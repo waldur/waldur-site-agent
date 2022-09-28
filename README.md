@@ -25,6 +25,7 @@ The application supports the following environmental variables (required ones fo
 - **`WALDUR_API_TOKEN`** - token for access to Mastermind API.
 - **`WALDUR_SYNC_DIRECTION`** - accepts two values: `push` and `pull`. If `pull`, then application sends data from SLURM cluster to Waldur, vice versa if `push`.
 - **`WALDUR_OFFERING_UUID`** - UUID of corresponding offering in Waldur.
+- `REQUESTS_VERIFY_SSL` - flag for SSL verification for Waldur client, default is `true`.
 - `SLURM_DEPLOYMENT_TYPE` - type of SLURM deployment. accepts two values: `docker` and `native`, default is `docker`.
 - `SLURM_CUSTOMER_PREFIX` - prefix used for customer's accounts, default is `hpc_`.
 - `SLURM_PROJECT_PREFIX` - prefix used for project's accounts, default is `hpc_`.
