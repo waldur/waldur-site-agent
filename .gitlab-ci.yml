@@ -6,6 +6,9 @@ include:
   - project: "waldur/waldur-pipelines"
     file: "/templates/release/python-module-release.yml"
 
+before_script:
+  - source tests/test_slurm_to_waldur/.env.rc
+
 .Test template:
   image: registry.hpc.ut.ee/mirror/library/python:3.8
   stage: test
