@@ -26,7 +26,7 @@ setup(
     long_description_content_type="text/markdown",
     install_requires=install_requires,
     tests_require=tests_requires,
-    package_dir={"": "waldur_slurm"},
+    packages=['waldur_slurm', 'waldur_slurm.slurm_client'],
     classifiers=[
         "Intended Audience :: Developers",
         "License :: OSI Approved :: MIT License",
