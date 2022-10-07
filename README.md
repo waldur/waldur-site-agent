@@ -39,7 +39,9 @@ The application supports the following environmental variables (required ones fo
 
 ### Test environment
 
-In order to test the service, a user should deploy 2 separate instances of the service. The first one (called service-pull) is for fetching data from Waldur with further processing and the second one (called service-push) is for sending data from SLURM cluster to Waldur. Both instances must be configured with environment variables from e.g. .env-file.g
+In order to test the service, a user should deploy 2 separate instances of the service.
+The first one (called service-pull) is for fetching data from Waldur with further processing and the second one (called service-push) is for sending data from SLURM cluster to Waldur.
+Both instances must be configured with environment variables from e.g. .env-file.
 
 The example of .env-file for service-pull:
 
@@ -62,13 +64,34 @@ WALDUR_OFFERING_UUID=e21a0f0030b447deb63bedf69db6742e # UUID of SLURM offering i
 SLURM_CONTAINER_NAME=slurmctld # Name of SLURM namenode container
 ```
 
-The current revision of the project supports only Docker-based deployment. You can find the Docker Compose configuration for testing in `examples/docker-compose/` folder.
+### Docker-based deployment
+
+You can find the Docker Compose configuration for testing in `examples/docker-compose/` folder.
 
 In order to test it, you need to execute following commands in your terminal app:
 
 ```bash
 cd examples/docker-compose
 docker-compose up -d
+```
+
+### Native deployment
+
+If your SLURM cluster doesn't run in Docker, you need to deploy the service natively using Python module.
+The agent requires `sacct` and `sacctmgr` to be available, so it should run on a headnode of the SLURM cluster.
+You can install, configure and start the `service-pull` and `service-push` processes on the with the commands below.
+**Note**: the `config-components.yaml` file should be in the same directory where module starts.
+
+```bash
+pip install waldur-slurm-agent
+# Service pull
+source service-pull-env.rc
+nohup python3 -m waldur_slurm.main > service-pull.out &
+
+# after this:
+# Service push
+source service-push-env.rc
+nohup python3 -m waldur_slurm.main > service-push.out &
 ```
 
 ### TRES configuration
