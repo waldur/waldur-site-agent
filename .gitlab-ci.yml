@@ -2,7 +2,7 @@ include:
   - project: "waldur/waldur-pipelines"
     file: "/templates/stages.yml"
   - project: "waldur/waldur-pipelines"
-    file: "/templates/release/build-and-push-docker-image.yml"
+    file: "/templates/release/publish.yml"
   - project: "waldur/waldur-pipelines"
     file: "/templates/release/python-module-release.yml"
 
