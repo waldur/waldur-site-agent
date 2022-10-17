@@ -3,7 +3,7 @@
 from setuptools import setup
 
 install_requires = [
-    "python-waldur-client==0.1.2",
+    "python-waldur-client>=0.1.3",
     "requests==2.27.1",
     "PyYAML==6.0",
 
