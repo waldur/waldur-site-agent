@@ -47,6 +47,7 @@ def process_order_for_creation(order_item: dict):
     resource_uuid = order_item["marketplace_resource_uuid"]
     resource_name = order_item["resource_name"]
     waldur_allocation_uuid = order_item["resource_uuid"]
+    resource = waldur_rest_client.get_marketplace_resource(resource_uuid)
 
     if not is_uuid(resource_uuid):
         logger.error("Unexpected resource UUID format, skipping the order")
@@ -63,9 +64,14 @@ def process_order_for_creation(order_item: dict):
         customer_uuid=order_item["customer_uuid"],
     )
 
-    waldur_rest_client.set_slurm_allocation_state(
-        resource_uuid, SlurmAllocationState.CREATING
-    )
+    if resource["state"] != "Creating":
+        logger.info(
+            "Setting allocation state to CREATING (current state is %s)",
+            resource["state"],
+        )
+        waldur_rest_client.set_slurm_allocation_state(
+            resource_uuid, SlurmAllocationState.CREATING
+        )
 
     team = waldur_rest_client.marketplace_resource_get_team(resource_uuid)
     username_fetching_function = {
