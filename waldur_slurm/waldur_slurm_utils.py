@@ -66,7 +66,8 @@ def process_order_for_creation(order_item: dict):
 
     if resource["state"] != "Creating":
         logger.info(
-            "Setting allocation state to CREATING (current state is %s)",
+            "Setting resource state (%s) to CREATING (current state is %s)",
+            resource['uuid'],
             resource["state"],
         )
         waldur_rest_client.set_slurm_allocation_state(
