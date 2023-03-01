@@ -5,5 +5,6 @@ class SlurmError(Exception):
 class BackendError(Exception):
     pass
 
+
 class ConfigurationError(Exception):
     pass
