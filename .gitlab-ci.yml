@@ -6,11 +6,7 @@ include:
   - project: "waldur/waldur-pipelines"
     file: "/templates/release/python-module-release.yml"
 
-before_script:
-  - source tests/test_slurm_to_waldur/.env.rc
-
 .Test template:
-  image: registry.hpc.ut.ee/mirror/library/python:3.8
   stage: test
   interruptible: true
   rules:
@@ -31,15 +27,100 @@ before_script:
     - coverage xml
     - coverage report
 
-Test SLURM to Waldur sync:
+.Run linters template:
+  stage: test
+  interruptible: true
+  rules:
+    # Skip tests if specified
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    # If tagged release
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+    # If event is related to a created merge request
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - pip install pre-commit
+    - pre-commit run --all
+
+.Test SLURM to Waldur sync template:
   extends: .Test template
   variables:
     TESTS_DIR: "tests/test_slurm_to_waldur"
 
-Test Waldur to SLURM sync:
+.Test Waldur to SLURM sync template:
   extends: .Test template
   variables:
     TESTS_DIR: "tests/test_waldur_to_slurm"
+
+Run python v3.8 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.8"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.8' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+Run python v3.9 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.9' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+Run python v3.10 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.10' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+Run python v3.11 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.11' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+Run python v3.8 tests (Waldur to SLURM):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.8"
+  extends: .Test Waldur to SLURM sync template
+
+Run python v3.9 tests (Waldur to SLURM):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Test Waldur to SLURM sync template
+
+Run python v3.10 tests (Waldur to SLURM):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Test Waldur to SLURM sync template
+
+Run python v3.11 tests (Waldur to SLURM):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Test Waldur to SLURM sync template
+
+Run python v3.8 tests (SLURM to Waldur):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.8"
+  extends: .Test SLURM to Waldur sync template
+
+Run python v3.9 tests (SLURM to Waldur):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Test SLURM to Waldur sync template
+
+Run python v3.10 tests (SLURM to Waldur):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Test SLURM to Waldur sync template
+
+Run python v3.11 tests (SLURM to Waldur):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Test SLURM to Waldur sync template
 
 Upload docs:
   image:
