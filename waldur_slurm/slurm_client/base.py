@@ -9,7 +9,9 @@ class BaseClient(metaclass=abc.ABCMeta):
     def __init__(self, slurm_deployment_type, slurm_container_name=None):
         if slurm_deployment_type == "docker":
             if slurm_container_name is None:
-                raise ConfigurationError('Missing name of headnode container for docker-based SLURM')
+                raise ConfigurationError(
+                    "Missing name of headnode container for docker-based SLURM"
+                )
             self.command_prefix = ["docker", "exec", slurm_container_name]
         else:
             self.command_prefix = []
