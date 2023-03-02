@@ -67,7 +67,7 @@ def process_order_for_creation(order_item: dict):
     if resource["state"] != "Creating":
         logger.info(
             "Setting resource state (%s) to CREATING (current state is %s)",
-            resource['uuid'],
+            resource["uuid"],
             resource["state"],
         )
         waldur_rest_client.set_slurm_allocation_state(
@@ -108,6 +108,7 @@ def process_order_for_creation(order_item: dict):
 
 
 def process_order_for_limits_update(order_item: dict):
+    logger.info("Updating limits for %s", order_item["resource_name"])
     resource_uuid = order_item["marketplace_resource_uuid"]
     allocation_uuid = order_item["resource_uuid"]
 
@@ -142,6 +143,7 @@ def process_order_for_limits_update(order_item: dict):
 
 
 def process_order_for_termination(order_item: dict):
+    logger.info("Terminating allocation %s", order_item["resource_name"])
     allocation_uuid = order_item["resource_uuid"]
 
     allocation_waldur = waldur_rest_client.get_slurm_allocation(allocation_uuid)
@@ -153,6 +155,7 @@ def process_order_for_termination(order_item: dict):
     slurm_backend.delete_allocation(allocation)
 
     waldur_rest_client.marketplace_order_item_set_state_done(order_item["uuid"])
+    logger.info("Allocation has been terminated successfully")
 
 
 def sync_data_from_waldur_to_slurm():
