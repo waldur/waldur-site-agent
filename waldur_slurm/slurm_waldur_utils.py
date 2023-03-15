@@ -107,6 +107,7 @@ def sync_data_from_slurm_to_waldur(allocation_report, waldur_offering):
             allocation_waldur_uuid = marketplace_resource["resource_uuid"]
 
             # Sync users
+            # TODO: make use of OfferingUser model
             marketplace_resource_uuid = marketplace_resource["uuid"]
             associations = waldur_rest_client.list_slurm_associations(
                 {"allocation_uuid": allocation_waldur_uuid}
