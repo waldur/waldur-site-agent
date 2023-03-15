@@ -37,16 +37,29 @@ def fetch_usernames_registered_in_freeipa(team):
 
 
 def process_order_for_creation(order_item: dict):
-    if "marketplace_resource_uuid" not in order_item:
-        logger.error(
-            "The order item %s (%s) does not have a connected resource, skipping it.",
-            order_item["uuid"],
-            order_item["attributes"]["name"],
-        )
-        return
+    # Wait until resource is created
+    attempts = 0
+    while "marketplace_resource_uuid" not in order_item:
+        if attempts > 4:
+            logger.error("Order item processing timed out")
+            return
+
+        if order_item["status"] != "executing":
+            logger.error("Order item has unexpected status %s", order_item["status"])
+            return
+
+        logger.info("Waiting for resource creation...")
+        sleep(5)
+
+        order_item = waldur_rest_client.get_order_item(order_item["uuid"])
+        attempts += 1
+
     resource_uuid = order_item["marketplace_resource_uuid"]
     resource_name = order_item["resource_name"]
     waldur_allocation_uuid = order_item["resource_uuid"]
+
+    logger.info("Creating allocation %s", resource_name)
+
     resource = waldur_rest_client.get_marketplace_resource(resource_uuid)
 
     if not is_uuid(resource_uuid):
@@ -163,16 +176,26 @@ def sync_data_from_waldur_to_slurm():
     order_items = waldur_rest_client.list_order_items(
         {
             "offering_uuid": WALDUR_OFFERING_UUID,
-            "state": "executing",
+            "state": "pending",
         }
     )
 
     if len(order_items) == 0:
-        logger.info("There are no approved order items")
+        logger.info("There are no pending order items")
         return
 
     for order_item in order_items:
         try:
+            logger.info(
+                "Processing order item %s (%s)",
+                order_item["attributes"].get("name", "N/A"),
+                order_item["uuid"],
+            )
+            waldur_rest_client.marketplace_order_item_approve(order_item["uuid"])
+
+            logger.info("Refreshing the order item")
+            order_item = waldur_rest_client.get_order_item(order_item["uuid"])
+
             if order_item["type"] == "Create":
                 process_order_for_creation(order_item)
 

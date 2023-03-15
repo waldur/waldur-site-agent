@@ -12,17 +12,17 @@ class TestAllocationCreation(unittest.TestCase):
     def setUp(self) -> None:
         self.allocation_uuid = uuid.uuid4().hex
         self.project_uuid = uuid.uuid4().hex
-        self.waldur_order = {
-            "uuid": uuid.uuid4().hex,
+        self.order_item_uuid = uuid.uuid4().hex
+        self.waldur_order_item = {
+            "uuid": self.order_item_uuid,
             "type": "Create",
-            "resource_name": "test-allocation-01",
-            "resource_uuid": self.allocation_uuid,
             "project_uuid": self.project_uuid,
             "customer_uuid": uuid.uuid4().hex,
             "offering_uuid": uuid.uuid4().hex,
-            "marketplace_resource_uuid": uuid.uuid4().hex,
             "project_name": "Test project",
             "customer_name": "Test customer",
+            "state": "pending",
+            "attributes": {"name": "sample_resource"},
         }
 
     def test_association_and_usage_creation(
@@ -31,7 +31,18 @@ class TestAllocationCreation(unittest.TestCase):
         user_uuid = uuid.uuid4()
         allocation_account = f"hpc_{self.allocation_uuid[:5]}_test-allocation-01"[:34]
         project_account = f"hpc_{self.project_uuid}"
-        waldur_client.list_order_items.return_value = [self.waldur_order]
+        waldur_client.list_order_items.return_value = [self.waldur_order_item]
+        updated_order_item = self.waldur_order_item.copy()
+
+        updated_order_item.update(
+            {
+                "marketplace_resource_uuid": uuid.uuid4().hex,
+                "resource_name": "test-allocation-01",
+                "resource_uuid": self.allocation_uuid,
+            }
+        )
+        waldur_client.get_order_item.return_value = updated_order_item
+
         waldur_client.marketplace_resource_get_team.return_value = [
             {
                 "uuid": user_uuid,
@@ -50,6 +61,10 @@ class TestAllocationCreation(unittest.TestCase):
 
         sync_data_from_waldur_to_slurm()
 
+        waldur_client.marketplace_order_item_approve.assert_called_once_with(
+            self.order_item_uuid
+        )
+
         self.assertEqual(3, slurm_client.create_account.call_count)
 
         slurm_client.create_account.assert_called_with(
@@ -66,7 +81,7 @@ class TestAllocationTermination(unittest.TestCase):
         self.marketplace_resource_uuid = uuid.uuid4().hex
         self.resource_uuid = uuid.uuid4().hex
         self.project_uuid = uuid.uuid4().hex
-        self.waldur_order = {
+        self.waldur_order_item = {
             "uuid": uuid.uuid4().hex,
             "type": "Terminate",
             "resource_name": "test-allocation-01",
@@ -77,14 +92,16 @@ class TestAllocationTermination(unittest.TestCase):
             "project_name": "Test project",
             "customer_name": "Test customer",
             "resource_uuid": self.resource_uuid,
+            "attributes": {"name": "test-allocation-01"},
         }
         self.waldur_allocation = {
             "backend_id": f"hpc_{self.resource_uuid[:5]}_test-allocation-01"[:34]
         }
 
     def test_account_deletion(self, waldur_client: mock.Mock, slurm_client: mock.Mock):
-        waldur_client.list_order_items.return_value = [self.waldur_order]
+        waldur_client.list_order_items.return_value = [self.waldur_order_item]
         waldur_client.get_slurm_allocation.return_value = self.waldur_allocation
+        waldur_client.get_order_item.return_value = self.waldur_order_item
 
         slurm_client.get_account.return_value = Account(
             name="test-allocation-01",
@@ -107,7 +124,7 @@ class TestAllocationUpdateLimits(unittest.TestCase):
         self.marketplace_resource_uuid = uuid.uuid4().hex
         self.resource_uuid = uuid.uuid4().hex
         self.project_uuid = uuid.uuid4().hex
-        self.waldur_order = {
+        self.waldur_order_item = {
             "uuid": uuid.uuid4().hex,
             "type": "Update",
             "resource_name": "test-allocation-01",
@@ -128,7 +145,8 @@ class TestAllocationUpdateLimits(unittest.TestCase):
                     "cpu": 100,
                     "gpu": 200,
                     "mem": 300,
-                }
+                },
+                "name": "test-allocation-01",
             },
         }
         self.waldur_allocation = {
@@ -139,8 +157,9 @@ class TestAllocationUpdateLimits(unittest.TestCase):
     def test_allocation_limits_update(
         self, waldur_client: mock.Mock, slurm_client: mock.Mock
     ):
-        waldur_client.list_order_items.return_value = [self.waldur_order]
+        waldur_client.list_order_items.return_value = [self.waldur_order_item]
         waldur_client.get_slurm_allocation.return_value = self.waldur_allocation
+        waldur_client.get_order_item.return_value = self.waldur_order_item
 
         sync_data_from_waldur_to_slurm()
 
