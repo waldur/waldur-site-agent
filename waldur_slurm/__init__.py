@@ -14,13 +14,6 @@ class WaldurSyncDirection(Enum):
     PUSH = "push"
 
 
-# "local" stands for getting a username from local Waldur user account
-# "freeipa" stands for getting a username from FreeIPA user profile
-class WaldurSlurmUsernameSource:
-    LOCAL = "local"
-    FREEIPA = "freeipa"
-
-
 WALDUR_API_URL = os.environ["WALDUR_API_URL"]
 WALDUR_API_TOKEN = os.environ["WALDUR_API_TOKEN"]
 
@@ -42,18 +35,6 @@ WALDUR_OFFERING_UUID = os.environ.get("WALDUR_OFFERING_UUID")
 
 if not WALDUR_OFFERING_UUID:
     logger.error("WALDUR_OFFERING_UUID is empty")
-    exit(1)
-
-WALDUR_SLURM_USERNAME_SOURCE = os.environ.get("WALDUR_SLURM_USERNAME_SOURCE", "local")
-
-if WALDUR_SLURM_USERNAME_SOURCE not in [
-    WaldurSlurmUsernameSource.LOCAL,
-    WaldurSlurmUsernameSource.FREEIPA,
-]:
-    logger.error(
-        "WALDUR_SLURM_USERNAME_SOURCE has invalid value: %s",
-        WALDUR_SLURM_USERNAME_SOURCE,
-    )
     exit(1)
 
 waldur_rest_client = WaldurClient(WALDUR_API_URL, WALDUR_API_TOKEN)
