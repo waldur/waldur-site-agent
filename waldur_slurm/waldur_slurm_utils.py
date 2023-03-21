@@ -4,62 +4,20 @@ from time import sleep
 from waldur_client import SlurmAllocationState, WaldurClientException, is_uuid
 
 from waldur_slurm.slurm_client import logger
+from waldur_slurm.slurm_client import utils as slurm_utils
 from waldur_slurm.slurm_client.exceptions import BackendError
 from waldur_slurm.slurm_client.structures import Allocation
 
-from . import (
-    WALDUR_OFFERING_UUID,
-    WALDUR_SLURM_USERNAME_SOURCE,
-    WaldurSlurmUsernameSource,
-    common_utils,
-    slurm_backend,
-    waldur_rest_client,
-)
+from . import WALDUR_OFFERING_UUID, common_utils, slurm_backend, waldur_rest_client
 
 
-def fetch_usernames_registered_in_freeipa(team):
-    usernames = set()
-    all_freeipa_profiles = waldur_rest_client.list_freeipa_profiles()
-    user_profile_mapping = {
-        profile["user_uuid"]: profile["username"] for profile in all_freeipa_profiles
-    }
-    for user in team:
-        freeipa_username = user_profile_mapping.get(user["uuid"])
-        if freeipa_username:
-            usernames.add(freeipa_username)
-        else:
-            logger.warning(
-                "The user %s (%s) doesn't have any FreeIPA profiles," "skipping.",
-                user["username"],
-                user["full_name"],
-            )
-    return usernames
-
-
-def process_order_for_creation(order_item: dict):
-    # Wait until resource is created
-    attempts = 0
-    while "marketplace_resource_uuid" not in order_item:
-        if attempts > 4:
-            logger.error("Order item processing timed out")
-            return
-
-        if order_item["status"] != "executing":
-            logger.error("Order item has unexpected status %s", order_item["status"])
-            return
-
-        logger.info("Waiting for resource creation...")
-        sleep(5)
-
-        order_item = waldur_rest_client.get_order_item(order_item["uuid"])
-        attempts += 1
-
+def create_allocation(order_item):
     resource_uuid = order_item["marketplace_resource_uuid"]
     resource_name = order_item["resource_name"]
     waldur_allocation_uuid = order_item["resource_uuid"]
+    allocation_limits = slurm_utils.get_tres_limits()
 
     logger.info("Creating allocation %s", resource_name)
-
     resource = waldur_rest_client.get_marketplace_resource(resource_uuid)
 
     if not is_uuid(resource_uuid):
@@ -73,6 +31,7 @@ def process_order_for_creation(order_item: dict):
     allocation = Allocation(
         name=order_item["resource_name"],
         uuid=waldur_allocation_uuid,
+        marketplace_uuid=resource_uuid,
         project_uuid=order_item["project_uuid"],
         customer_uuid=order_item["customer_uuid"],
     )
@@ -84,40 +43,90 @@ def process_order_for_creation(order_item: dict):
             resource["state"],
         )
         waldur_rest_client.set_slurm_allocation_state(
-            resource_uuid, SlurmAllocationState.CREATING
+            allocation.marketplace_uuid, SlurmAllocationState.CREATING
         )
 
-    team = waldur_rest_client.marketplace_resource_get_team(resource_uuid)
-    username_fetching_function = {
-        WaldurSlurmUsernameSource.LOCAL: lambda team: [
-            user["username"] for user in team
-        ],
-        WaldurSlurmUsernameSource.FREEIPA: fetch_usernames_registered_in_freeipa,
-    }
-    usernames = username_fetching_function[WALDUR_SLURM_USERNAME_SOURCE](team)
-
-    added_users, limits, backend_id = slurm_backend.create_allocation(
+    logger.info("Creating account in SLURM cluster")
+    slurm_backend.create_allocation(
         allocation,
         project_name=order_item["project_name"],
         customer_name=order_item["customer_name"],
-        usernames=usernames,
+        limits=allocation_limits,
     )
 
-    waldur_rest_client.marketplace_resource_set_backend_id(resource_uuid, backend_id)
-    waldur_rest_client.set_slurm_allocation_backend_id(resource_uuid, backend_id)
+    logger.info("Updating allocation metadata in Waldur")
+    waldur_rest_client.marketplace_resource_set_backend_id(
+        allocation.marketplace_uuid, allocation.backend_id
+    )
+    waldur_rest_client.set_slurm_allocation_backend_id(
+        allocation.marketplace_uuid, allocation.backend_id
+    )
 
-    allocation_waldur = {
-        "marketplace_resource_uuid": resource_uuid,
-        "name": resource_name,
-        "backend_id": allocation.backend_id,
-    }
-    common_utils.add_users_to_allocation(allocation_waldur, added_users)
-    waldur_rest_client.set_slurm_allocation_limits(resource_uuid, limits)
+    logger.info("Updating allocation limits in Waldur")
+    waldur_rest_client.set_slurm_allocation_limits(
+        allocation.marketplace_uuid, allocation_limits
+    )
 
+    logger.info("Updating order item state")
     waldur_rest_client.marketplace_order_item_set_state_done(order_item["uuid"])
+
+    logger.info("Updating Waldur allocation state")
     waldur_rest_client.set_slurm_allocation_state(
-        resource_uuid, SlurmAllocationState.OK
+        allocation.marketplace_uuid, SlurmAllocationState.OK
     )
+
+    return allocation
+
+
+def add_users_to_allocation(resource_uuid, allocation: Allocation):
+    logger.info("Adding users to account in SLURM cluster")
+
+    logger.info("Fetching Waldur resource team")
+    team = waldur_rest_client.marketplace_resource_get_team(resource_uuid)
+    user_uuids = {user["uuid"] for user in team}
+
+    logger.info("Fetching Waldur offering users")
+    offering_users_all = waldur_rest_client.list_remote_offering_users(
+        {"offering_uuid": WALDUR_OFFERING_UUID}
+    )
+    offering_usernames = [
+        offering_user["username"]
+        for offering_user in offering_users_all
+        if offering_user["user_uuid"] in user_uuids
+    ]
+
+    logger.info("Adding usernames to account in SLURM cluster")
+    added_users = slurm_backend.add_users_to_account(allocation, offering_usernames)
+
+    common_utils.add_users_to_allocation(allocation, added_users)
+
+
+def process_order_for_creation(order_item: dict):
+    # Wait until resource is created
+    attempts = 0
+    while "marketplace_resource_uuid" not in order_item:
+        if attempts > 4:
+            logger.error("Order item processing timed out")
+            return
+
+        if order_item["state"] != "executing":
+            logger.error("Order item has unexpected state %s", order_item["state"])
+            return
+
+        logger.info("Waiting for resource creation...")
+        sleep(5)
+
+        order_item = waldur_rest_client.get_order_item(order_item["uuid"])
+        attempts += 1
+
+    resource_uuid = order_item["marketplace_resource_uuid"]
+
+    allocation: Allocation = create_allocation(order_item)
+
+    if allocation is None:
+        return
+
+    add_users_to_allocation(resource_uuid, allocation)
 
 
 def process_order_for_limits_update(order_item: dict):
@@ -176,25 +185,30 @@ def sync_data_from_waldur_to_slurm():
     order_items = waldur_rest_client.list_order_items(
         {
             "offering_uuid": WALDUR_OFFERING_UUID,
-            "state": "pending",
+            "state": ["pending", "executing"],
         }
     )
 
     if len(order_items) == 0:
-        logger.info("There are no pending order items")
+        logger.info("There are no pending or executing order items")
         return
 
     for order_item in order_items:
         try:
             logger.info(
-                "Processing order item %s (%s)",
+                "Processing order item %s (%s) with state %s",
                 order_item["attributes"].get("name", "N/A"),
                 order_item["uuid"],
+                order_item["state"],
             )
-            waldur_rest_client.marketplace_order_item_approve(order_item["uuid"])
 
-            logger.info("Refreshing the order item")
-            order_item = waldur_rest_client.get_order_item(order_item["uuid"])
+            if order_item["state"] == "executing":
+                logger.info("Order item is executing already, no need for approval")
+            else:
+                logger.info("Approving order item")
+                waldur_rest_client.marketplace_order_item_approve(order_item["uuid"])
+                logger.info("Refreshing the order item")
+                order_item = waldur_rest_client.get_order_item(order_item["uuid"])
 
             if order_item["type"] == "Create":
                 process_order_for_creation(order_item)
@@ -223,8 +237,11 @@ def sync_data_from_waldur_to_slurm():
                 error_traceback=traceback.format_exc(),
             )
 
+        print("-" * 30)
+
 
 def waldur_slurm_sync():
+    common_utils.create_offering_components()
     while True:
         logger.info("Pulling data from Waldur to SLURM cluster")
         try:

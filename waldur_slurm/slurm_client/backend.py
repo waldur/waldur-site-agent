@@ -162,7 +162,7 @@ class SlurmBackend:
         allocation: Allocation,
         customer_name: str,
         project_name: str,
-        usernames: Set[str],
+        limits: dict,
     ):
         customer_account = self.get_customer_name(allocation.customer_uuid)
         project_account = self.get_project_name(allocation.project_uuid)
@@ -193,23 +193,30 @@ class SlurmBackend:
                 parent_name=customer_account,
             )
 
-        if not self.client.get_account(allocation_account):
+        if self.client.get_account(allocation_account) is not None:
             logger.info(
-                "Creating SLURM account for allocation %s (backend id = %s)",
-                allocation.name,
+                "The account %s already exists in the cluster, skipping creation",
                 allocation_account,
             )
-            self.client.create_account(
-                name=allocation_account,
-                description=allocation.name,
-                organization=project_account,
-            )
+            return
+
+        logger.info(
+            "Creating SLURM account for allocation %s (backend id = %s)",
+            allocation.name,
+            allocation_account,
+        )
+        self.client.create_account(
+            name=allocation_account,
+            description=allocation.name,
+            organization=project_account,
+        )
+
         allocation.backend_id = allocation_account
 
-        limits = utils.get_tres_limits()
+        logger.info("Setting limits: %s", limits)
         self.set_allocation_limits(allocation, limits)
-        added_users = self.add_users_to_account(allocation, usernames)
-        return added_users, limits, allocation_account
+
+        return allocation_account
 
     def sync_users(
         self,

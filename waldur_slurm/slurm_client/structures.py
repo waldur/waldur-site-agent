@@ -9,6 +9,7 @@ Association = collections.namedtuple("Association", ["account", "user", "value"]
 class Allocation:
     name: str = ""
     uuid: str = ""
+    marketplace_uuid: str = ""
     backend_id: str = ""
     project_uuid: str = ""
     customer_uuid: str = ""

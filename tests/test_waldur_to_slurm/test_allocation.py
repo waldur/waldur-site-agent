@@ -93,6 +93,7 @@ class TestAllocationTermination(unittest.TestCase):
             "customer_name": "Test customer",
             "resource_uuid": self.resource_uuid,
             "attributes": {"name": "test-allocation-01"},
+            "state": "executing",
         }
         self.waldur_allocation = {
             "backend_id": f"hpc_{self.resource_uuid[:5]}_test-allocation-01"[:34]
@@ -148,6 +149,7 @@ class TestAllocationUpdateLimits(unittest.TestCase):
                 },
                 "name": "test-allocation-01",
             },
+            "state": "executing",
         }
         self.waldur_allocation = {
             "name": "alloc",
