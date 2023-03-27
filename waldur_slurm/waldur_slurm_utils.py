@@ -237,10 +237,11 @@ def sync_data_from_waldur_to_slurm():
                 error_traceback=traceback.format_exc(),
             )
 
-        print("-" * 30)
+        logger.info("-" * 30)
 
 
 def waldur_slurm_sync():
+    logger.info("Synching data from Waldur to SLURM cluster")
     common_utils.create_offering_components()
     while True:
         logger.info("Pulling data from Waldur to SLURM cluster")
@@ -248,5 +249,5 @@ def waldur_slurm_sync():
             sync_data_from_waldur_to_slurm()
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
-        print("/" * 30)
+        logger.info("/" * 30)
         sleep(2 * 60)  # Once per 2 minutes

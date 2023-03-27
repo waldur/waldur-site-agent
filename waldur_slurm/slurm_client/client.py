@@ -16,6 +16,10 @@ class SlurmClient(base.BaseClient):
             self._parse_account(line) for line in output.splitlines() if "|" in line
         ]
 
+    def list_tres(self):
+        output = self._execute_command(["list", "tres"])
+        return [line.split("|")[0] for line in output.splitlines() if "|" in line]
+
     def get_account(self, name):
         output = self._execute_command(["show", "account", name])
         lines = [line for line in output.splitlines() if "|" in line]
@@ -155,8 +159,12 @@ class SlurmClient(base.BaseClient):
             value=value,
         )
 
-    def _execute_command(self, command, command_name="sacctmgr", immediate=True):
-        account_command = [command_name, "--parsable2", "--noheader"]
+    def _execute_command(
+        self, command, command_name="sacctmgr", immediate=True, parsable=True
+    ):
+        account_command = [command_name]
+        if parsable:
+            account_command.extend(["--parsable2", "--noheader"])
         if immediate:
             account_command.append("--immediate")
         account_command.extend(command)
