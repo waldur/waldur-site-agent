@@ -1,16 +1,37 @@
 import logging
 import os
 import sys
+import types
 from enum import Enum
 
 import yaml
 
-handler = logging.StreamHandler(sys.stdout)
+
+def log_newline(self, how_many_lines=1):
+    self.removeHandler(self.console_handler)
+    self.addHandler(self.blank_handler)
+    for i in range(how_many_lines):
+        self.info("")
+
+    self.removeHandler(self.blank_handler)
+    self.addHandler(self.console_handler)
+
+
+console_handler = logging.StreamHandler(sys.stdout)
 logger = logging.getLogger(__name__)
 formatter = logging.Formatter("[%(levelname)s] [%(asctime)s] %(message)s")
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+console_handler.setFormatter(formatter)
+
+blank_handler = logging.StreamHandler(sys.stdout)
+blank_handler.setLevel(logging.INFO)
+blank_handler.setFormatter(logging.Formatter(fmt=""))
+
+logger.addHandler(console_handler)
 logger.setLevel(logging.INFO)
+
+logger.console_handler = console_handler
+logger.blank_handler = blank_handler
+logger.newline = types.MethodType(log_newline, logger)
 
 SLURM_DEPLOYMENT_TYPE = os.environ.get("SLURM_DEPLOYMENT_TYPE", "docker")
 

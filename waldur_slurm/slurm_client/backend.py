@@ -24,6 +24,20 @@ class SlurmBackend:
     ):
         self.client = SlurmClient(SLURM_DEPLOYMENT_TYPE, SLURM_CONTAINER_NAME)
 
+    def ping(self, raise_exception=False):
+        try:
+            self.client.list_accounts()
+        except SlurmError as err:
+            if raise_exception:
+                raise err
+            logger.info("Error: %s", err)
+            return False
+        else:
+            return True
+
+    def list_tres(self):
+        return self.client.list_tres()
+
     def pull_allocations(self):
         report = {}
         for account in self.client.list_accounts():

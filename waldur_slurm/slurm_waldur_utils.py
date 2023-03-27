@@ -81,7 +81,7 @@ def sync_data_from_slurm_to_waldur(allocation_report):
     waldur_offering = waldur_rest_client._get_offering(WALDUR_OFFERING_UUID)
     # Push SLURM data to Mastermind using REST client
     for allocation_backend_id, allocation_data in allocation_report.items():
-        print("-" * 30)
+        logger.info("-" * 30)
         try:
             logger.info("Processing %s", allocation_backend_id)
             usernames: List[str] = allocation_data["users"]
@@ -143,6 +143,7 @@ def sync_data_from_slurm_to_waldur(allocation_report):
 
 
 def slurm_waldur_sync():
+    logger.info("Synching data from SLURM cluster to Waldur")
     common_utils.create_offering_components()
     while True:
         try:
@@ -151,5 +152,5 @@ def slurm_waldur_sync():
             sync_data_from_slurm_to_waldur(allocation_report)
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
-        print("/" * 30)
+        logger.info("/" * 30)
         sleep(60 * 60)  # Once per hour
