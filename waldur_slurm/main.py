@@ -28,7 +28,7 @@ if __name__ == "__main__":
     if args.diagnostics:
         diagnostics_status = common_utils.diagnostics()
         if not diagnostics_status:
-            logger("Diagnostics failed")
+            logger.error("Diagnostics failed")
             exit(1)
         exit(0)
 
