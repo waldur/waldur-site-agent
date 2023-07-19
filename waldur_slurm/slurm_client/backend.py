@@ -319,3 +319,14 @@ class SlurmBackend:
                 logger.error("Unable to delete association in Slurm: %s", err)
                 return False
         return True
+
+    def create_user_homedirs(self, usernames: Set[str]):
+        logger.info("Creating homedirs for users")
+        for username in usernames:
+            try:
+                self.client.create_linux_user_homedir(username)
+                logger.info("Homedir for user %s has been created", username)
+            except SlurmError as err:
+                logger.error(
+                    "Unable to create user homedir for %s, reason: %s", username, err
+                )

@@ -34,6 +34,7 @@ The application supports the following environmental variables (required ones fo
 - `SLURM_DEFAULT_ACCOUNT` - default account name existing in SLURM cluster for creation of new accounts. Default is `waldur`.
 - `SLURM_CONTAINER_NAME` - name of a headnode SLURM container; must be set if SLURM_DEPLOYMENT_TYPE is docker.
 - `SENTRY_DSN` - Data Source Name for Sentry (more info [here](https://docs.sentry.io/product/sentry-basics/dsn-explainer/))
+- `ENABLE_USER_HOMEDIR_ACCOUNT_CREATION` - whether to create home directories for users related to accounts
 
 ## Deployment
 
