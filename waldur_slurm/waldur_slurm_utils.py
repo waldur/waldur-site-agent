@@ -8,7 +8,13 @@ from waldur_slurm.slurm_client import utils as slurm_utils
 from waldur_slurm.slurm_client.exceptions import BackendError
 from waldur_slurm.slurm_client.structures import Allocation
 
-from . import WALDUR_OFFERING_UUID, common_utils, slurm_backend, waldur_rest_client
+from . import (
+    ENABLE_USER_HOMEDIR_ACCOUNT_CREATION,
+    WALDUR_OFFERING_UUID,
+    common_utils,
+    slurm_backend,
+    waldur_rest_client,
+)
 
 
 def create_allocation(order_item):
@@ -97,6 +103,8 @@ def add_users_to_allocation(resource_uuid, allocation: Allocation):
 
     logger.info("Adding usernames to account in SLURM cluster")
     added_users = slurm_backend.add_users_to_account(allocation, offering_usernames)
+    if ENABLE_USER_HOMEDIR_ACCOUNT_CREATION:
+        slurm_backend.create_user_homedirs(added_users)
 
     common_utils.add_users_to_allocation(allocation, added_users)
 

@@ -37,6 +37,15 @@ if not WALDUR_OFFERING_UUID:
     logger.error("WALDUR_OFFERING_UUID is empty")
     exit(1)
 
+ENABLE_USER_HOMEDIR_ACCOUNT_CREATION = os.environ.get(
+    "ENABLE_USER_HOMEDIR_ACCOUNT_CREATION", "false"
+)
+
+ENABLE_USER_HOMEDIR_ACCOUNT_CREATION = ENABLE_USER_HOMEDIR_ACCOUNT_CREATION.lower() in [
+    "yes",
+    "true",
+]
+
 waldur_rest_client = WaldurClient(WALDUR_API_URL, WALDUR_API_TOKEN)
 
 slurm_backend = SlurmBackend()
