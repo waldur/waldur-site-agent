@@ -5,7 +5,7 @@ from setuptools import setup
 install_requires = [
     "python-waldur-client>=0.2.1",
     "requests==2.27.1",
-    "PyYAML==6.0",
+    "PyYAML==6.0.1",
 
 ]
 
