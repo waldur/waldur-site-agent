@@ -60,7 +60,11 @@ SLURM_CUSTOMER_PREFIX = os.environ.get("SLURM_CUSTOMER_PREFIX", "hpc_")
 SLURM_PROJECT_PREFIX = os.environ.get("SLURM_PROJECT_PREFIX", "hpc_")
 SLURM_ALLOCATION_PREFIX = os.environ.get("SLURM_ALLOCATION_PREFIX", "hpc_")
 
-with open("config-components.yaml", "r") as stream:
+SLURM_TRES_CONFIG_PATH = os.environ.get(
+    "SLURM_TRES_CONFIG_PATH", "config-components.yaml"
+)
+
+with open(SLURM_TRES_CONFIG_PATH, "r") as stream:
     tres_config = yaml.safe_load(stream)
     SLURM_TRES = tres_config
 
