@@ -26,6 +26,7 @@ The application supports the following environmental variables (required ones fo
 - **`WALDUR_SYNC_DIRECTION`** - accepts two values: `push` and `pull`. If `pull`, then application sends data from SLURM cluster to Waldur, vice versa if `push`.
 - **`WALDUR_OFFERING_UUID`** - UUID of corresponding offering in Waldur.
 - `REQUESTS_VERIFY_SSL` - flag for SSL verification for Waldur client, default is `true`.
+- `SLURM_TRES_CONFIG_PATH` - a path to the SLURM TRES configuration, default is `./config-components.yaml`.
 - `SLURM_DEPLOYMENT_TYPE` - type of SLURM deployment. accepts two values: `docker` and `native`, default is `docker`.
 - `SLURM_CUSTOMER_PREFIX` - prefix used for customer's accounts, default is `hpc_`.
 - `SLURM_PROJECT_PREFIX` - prefix used for project's accounts, default is `hpc_`.
@@ -76,23 +77,40 @@ cd examples/docker-compose
 docker-compose up -d
 ```
 
-### Native deployment
+### Systemd deployment
 
-If your SLURM cluster doesn't run in Docker, you need to deploy the service natively using Python module.
-The agent requires `sacct` and `sacctmgr` to be available, so it should run on a headnode of the SLURM cluster.
-You can install, configure and start the `service-pull` and `service-push` processes on the with the commands below.
-**Note**: the `config-components.yaml` file should be in the same directory where module starts.
+If your SLURM cluster doesn't run in Docker, you need to deploy the a systemd service starting using Python module.
+The agent requires `sacct` and `sacctmgr` to be accessible on a machine, so it should run on a headnode of the SLURM cluster.
+Firstly, install the waldur-slurm-agent:
 
 ```bash
 pip install waldur-slurm-agent
-# Service pull
-source service-pull-env.rc
-nohup python3 -m waldur_slurm.main > service-pull.out &
+```
 
-# after this:
-# Service push
-source service-push-env.rc
-nohup python3 -m waldur_slurm.main > service-push.out &
+Secondly, put systemd unit, environment and and TRES config files to the corresponding locations.
+Don't forget to modify Waldur-related values the env files.
+
+```bash
+# For pulling service
+systemd-conf/service-pull/waldur-slurm-service-pull.service -> /etc/systemd/system/
+waldur-slurm-service-pull.env -> /etc/waldur-slurm-service/pull.env
+config-components.yaml -> /etc/waldur-slurm-service/tres.yaml # you can use a different path and set SLURM_TRES_CONFIG_PATH to it
+
+
+# For pushing service
+systemd-conf/service-push/waldur-slurm-service-push.service -> /etc/systemd/system/
+waldur-slurm-service-push.env -> /etc/waldur-slurm-service/push.env
+config-components.yaml -> /etc/waldur-slurm-service/tres.yaml # you can use a different path and set SLURM_TRES_CONFIG_PATH to it
+```
+
+After the preparation, run the following to apply the changes.
+
+```bash
+systemctl daemon-reload
+systemctl start waldur-slurm-service-pull
+systemctl enable waldur-slurm-service-pull # to start after reboot
+systemctl start waldur-slurm-service-push
+systemctl enable waldur-slurm-service-push # to start after reboot
 ```
 
 ### TRES configuration
