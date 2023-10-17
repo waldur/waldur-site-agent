@@ -1,0 +1,10 @@
+[Unit]
+Description=Waldur SLURM integration service (sync from Waldur instance to SLURM cluster)
+
+[Service]
+User=root
+Group=root
+ExecStart=python3 -m waldur_slurm.main
+EnvironmentFile=/etc/waldur-slurm-service/push.env
+StandardOutput=file:/var/log/waldur-slurm-service-push.log
+StandardError=file:/var/log/waldur-slurm-service-push-error.log
