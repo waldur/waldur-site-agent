@@ -1,5 +1,5 @@
 [Unit]
-Description=Waldur SLURM integration service (sync from SLURM cluster to Waldur instance)
+Description=Waldur SLURM integration service pulling data from Waldur instance to SLURM cluster
 
 [Service]
 User=root
