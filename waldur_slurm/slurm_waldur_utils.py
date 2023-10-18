@@ -152,5 +152,4 @@ def slurm_waldur_sync():
             sync_data_from_slurm_to_waldur(allocation_report)
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
-        logger.info("/" * 30)
         sleep(60 * 60)  # Once per hour

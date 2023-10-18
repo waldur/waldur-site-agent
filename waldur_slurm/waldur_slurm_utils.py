@@ -257,5 +257,4 @@ def waldur_slurm_sync():
             sync_data_from_waldur_to_slurm()
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
-        logger.info("/" * 30)
         sleep(2 * 60)  # Once per 2 minutes
