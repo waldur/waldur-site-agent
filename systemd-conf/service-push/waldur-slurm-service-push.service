@@ -6,5 +6,5 @@ User=root
 Group=root
 ExecStart=python3 -m waldur_slurm.main
 EnvironmentFile=/etc/waldur-slurm-service/push.env
-StandardOutput=file:/var/log/waldur-slurm-service-push.log
-StandardError=file:/var/log/waldur-slurm-service-push-error.log
+StandardOutput=append:/var/log/waldur-slurm-service-push.log
+StandardError=append:/var/log/waldur-slurm-service-push-error.log
