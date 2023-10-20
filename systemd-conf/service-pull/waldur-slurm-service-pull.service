@@ -8,3 +8,6 @@ ExecStart=python3 -m waldur_slurm.main
 EnvironmentFile=/etc/waldur-slurm-service/pull.env
 StandardOutput=append:/var/log/waldur-slurm-service-pull.log
 StandardError=append:/var/log/waldur-slurm-service-pull-error.log
+
+[Install]
+WantedBy=multi-user.target
