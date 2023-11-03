@@ -140,10 +140,12 @@ Upload docs:
     - git config --global user.name "$GITLAB_USER_NAME"
     - git config --global user.email "$GITLAB_USER_EMAIL"
     - cd waldur-docs/
-    - ls docs/integrations/waldur-slurm-service
-    - cp -v $CI_PROJECT_DIR/README.md docs/integrations/waldur-slurm-service
-    - cp -rv $CI_PROJECT_DIR/examples/ docs/integrations/waldur-slurm-service
-    - git add docs/integrations/waldur-slurm-service
+    - ls docs/admin-guide/providers/
+    - cp -v $CI_PROJECT_DIR/README.md docs/admin-guide/providers/remote-slurm.md
+    - mkdir docs/admin-guide/providers/examples || true
+    - cp -rv $CI_PROJECT_DIR/examples/* docs/admin-guide/providers/examples/
+    - cp -rv $CI_PROJECT_DIR/img/* docs/admin-guide/providers/img/
+    - git add docs/admin-guide/providers/
     - git commit -m 'Update Waldur SLURM Service docs' || exit 0
     - git branch new-slurm-service-docs
     - git push --set-upstream origin new-slurm-service-docs:master
