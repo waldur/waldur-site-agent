@@ -119,3 +119,16 @@ To setup TRES-related info, the service uses the corresponding configuration fil
 A key is a type of TRES (with optional name if type is gres) and the value contains limit, measured unit, type of accounting and label.
 The service sends this data to Waldur each time when it is restarted.
 If a user wants to change this information, a custom config file should be mounted into a container.
+
+## Service provider configuration
+
+The services require existing offering in Waldur.
+As a service provider owner, you should create an offering in the marketplace:
+
+- Go to `Provider` section on the left tab -> `Add new offering` button
+- Input a name, choose a category, select `SLURM remote allocation` from the drop-down list on the bottom and click `Create` button
+
+![offering-uuid](img/remote-slurm-offering.png)
+
+- Open the offering page and create a plan in the `Accounting` section: click `Add plan` and input the necessary details
+- Go to `Integration` section, click `Show integration steps` and ensure they are completed within your SLURM cluster.
