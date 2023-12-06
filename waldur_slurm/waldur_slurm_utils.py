@@ -17,10 +17,10 @@ from . import (
 )
 
 
-def create_allocation(order_item):
-    resource_uuid = order_item["marketplace_resource_uuid"]
-    resource_name = order_item["resource_name"]
-    waldur_allocation_uuid = order_item["resource_uuid"]
+def create_allocation(order):
+    resource_uuid = order["marketplace_resource_uuid"]
+    resource_name = order["resource_name"]
+    waldur_allocation_uuid = order["resource_uuid"]
     allocation_limits = slurm_utils.get_tres_limits()
 
     logger.info("Creating allocation %s", resource_name)
@@ -35,11 +35,11 @@ def create_allocation(order_item):
         return
 
     allocation = Allocation(
-        name=order_item["resource_name"],
+        name=order["resource_name"],
         uuid=waldur_allocation_uuid,
         marketplace_uuid=resource_uuid,
-        project_uuid=order_item["project_uuid"],
-        customer_uuid=order_item["customer_uuid"],
+        project_uuid=order["project_uuid"],
+        customer_uuid=order["customer_uuid"],
     )
 
     if resource["state"] != "Creating":
@@ -55,8 +55,8 @@ def create_allocation(order_item):
     logger.info("Creating account in SLURM cluster")
     slurm_backend.create_allocation(
         allocation,
-        project_name=order_item["project_name"],
-        customer_name=order_item["customer_name"],
+        project_name=order["project_name"],
+        customer_name=order["customer_name"],
         limits=allocation_limits,
     )
 
@@ -73,8 +73,8 @@ def create_allocation(order_item):
         allocation.marketplace_uuid, allocation_limits
     )
 
-    logger.info("Updating order item state")
-    waldur_rest_client.marketplace_order_item_set_state_done(order_item["uuid"])
+    logger.info("Updating order state")
+    waldur_rest_client.marketplace_order_set_state_done(order["uuid"])
 
     logger.info("Updating Waldur allocation state")
     waldur_rest_client.set_slurm_allocation_state(
@@ -109,27 +109,27 @@ def add_users_to_allocation(resource_uuid, allocation: Allocation):
     common_utils.add_users_to_allocation(allocation, added_users)
 
 
-def process_order_for_creation(order_item: dict):
+def process_order_for_creation(order: dict):
     # Wait until resource is created
     attempts = 0
-    while "marketplace_resource_uuid" not in order_item:
+    while "marketplace_resource_uuid" not in order:
         if attempts > 4:
-            logger.error("Order item processing timed out")
+            logger.error("order processing timed out")
             return
 
-        if order_item["state"] != "executing":
-            logger.error("Order item has unexpected state %s", order_item["state"])
+        if order["state"] != "executing":
+            logger.error("order has unexpected state %s", order["state"])
             return
 
         logger.info("Waiting for resource creation...")
         sleep(5)
 
-        order_item = waldur_rest_client.get_order_item(order_item["uuid"])
+        order = waldur_rest_client.get_order(order["uuid"])
         attempts += 1
 
-    resource_uuid = order_item["marketplace_resource_uuid"]
+    resource_uuid = order["marketplace_resource_uuid"]
 
-    allocation: Allocation = create_allocation(order_item)
+    allocation: Allocation = create_allocation(order)
 
     if allocation is None:
         return
@@ -137,28 +137,27 @@ def process_order_for_creation(order_item: dict):
     add_users_to_allocation(resource_uuid, allocation)
 
 
-def process_order_for_limits_update(order_item: dict):
-    logger.info("Updating limits for %s", order_item["resource_name"])
-    resource_uuid = order_item["marketplace_resource_uuid"]
-    allocation_uuid = order_item["resource_uuid"]
+def process_order_for_limits_update(order: dict):
+    logger.info("Updating limits for %s", order["resource_name"])
+    resource_uuid = order["marketplace_resource_uuid"]
+    allocation_uuid = order["resource_uuid"]
 
     allocation_waldur = waldur_rest_client.get_slurm_allocation(allocation_uuid)
     allocation = Allocation(
         backend_id=allocation_waldur["backend_id"],
-        project_uuid=order_item["project_uuid"],
-        customer_uuid=order_item["customer_uuid"],
+        project_uuid=order["project_uuid"],
+        customer_uuid=order["customer_uuid"],
     )
 
     waldur_rest_client.set_slurm_allocation_state(
         resource_uuid, SlurmAllocationState.UPDATING
     )
 
-    limits = order_item["limits"]
+    limits = order["limits"]
     if not limits:
         logger.error(
-            "Order item %s (allocation %s) with type"
-            + "Update does not include new limits",
-            order_item["uuid"],
+            "order %s (allocation %s) with type" + "Update does not include new limits",
+            order["uuid"],
             allocation_waldur["name"],
         )
 
@@ -167,80 +166,80 @@ def process_order_for_limits_update(order_item: dict):
     logger.info(
         "The limits for %s were updated successfully from %s to %s",
         allocation_waldur["name"],
-        order_item["attributes"]["old_limits"],
+        order["attributes"]["old_limits"],
         limits,
     )
 
 
-def process_order_for_termination(order_item: dict):
-    logger.info("Terminating allocation %s", order_item["resource_name"])
-    allocation_uuid = order_item["resource_uuid"]
+def process_order_for_termination(order: dict):
+    logger.info("Terminating allocation %s", order["resource_name"])
+    allocation_uuid = order["resource_uuid"]
 
     allocation_waldur = waldur_rest_client.get_slurm_allocation(allocation_uuid)
     allocation = Allocation(
         backend_id=allocation_waldur["backend_id"],
-        project_uuid=order_item["project_uuid"],
-        customer_uuid=order_item["customer_uuid"],
+        project_uuid=order["project_uuid"],
+        customer_uuid=order["customer_uuid"],
     )
     slurm_backend.delete_allocation(allocation)
 
-    waldur_rest_client.marketplace_order_item_set_state_done(order_item["uuid"])
+    waldur_rest_client.marketplace_order_set_state_done(order["uuid"])
     logger.info("Allocation has been terminated successfully")
 
 
 def sync_data_from_waldur_to_slurm():
     # Pull data form Mastermind using REST client
-    order_items = waldur_rest_client.list_order_items(
+    orders = waldur_rest_client.list_orders(
         {
             "offering_uuid": WALDUR_OFFERING_UUID,
             "state": ["pending", "executing"],
         }
     )
 
-    if len(order_items) == 0:
-        logger.info("There are no pending or executing order items")
+    if len(orders) == 0:
+        logger.info("There are no pending or executing orders")
         return
 
-    for order_item in order_items:
+    for order in orders:
         try:
             logger.info(
-                "Processing order item %s (%s) with state %s",
-                order_item["attributes"].get("name", "N/A"),
-                order_item["uuid"],
-                order_item["state"],
+                "Processing order %s (%s) with state %s",
+                order["attributes"].get("name", "N/A"),
+                order["uuid"],
+                order["state"],
             )
 
-            if order_item["state"] == "executing":
-                logger.info("Order item is executing already, no need for approval")
+            if order["state"] == "executing":
+                logger.info("Order is executing already, no need for approval")
             else:
-                logger.info("Approving order item")
-                waldur_rest_client.marketplace_order_item_approve(order_item["uuid"])
-                logger.info("Refreshing the order item")
-                order_item = waldur_rest_client.get_order_item(order_item["uuid"])
+                logger.info("Approving order")
+                waldur_rest_client.marketplace_order_approve_by_provider(order["uuid"])
+                logger.info("Refreshing the order")
+                order = waldur_rest_client.get_order(order["uuid"])
 
-            if order_item["type"] == "Create":
-                process_order_for_creation(order_item)
+            if order["type"] == "Create":
+                process_order_for_creation(order)
 
-            if order_item["type"] == "Update":
-                process_order_for_limits_update(order_item)
+            if order["type"] == "Update":
+                process_order_for_limits_update(order)
 
-            if order_item["type"] == "Terminate":
-                process_order_for_termination(order_item)
+            if order["type"] == "Terminate":
+                process_order_for_termination(order)
 
         except WaldurClientException as e:
             logger.exception(
                 "Waldur REST client error while processing order %s: %s",
-                order_item["uuid"],
+                order["uuid"],
                 e,
             )
         except BackendError as e:
             logger.exception(
                 "Waldur SLURM client error while processing order %s: %s",
-                order_item["uuid"],
+                order["uuid"],
                 e,
             )
-            waldur_rest_client.marketplace_order_item_set_state_erred(
-                order_item["uuid"],
+            waldur_rest_client.marketplace_order_set_state_erred(
+                order["uuid"],
                 error_message=str(e),
                 error_traceback=traceback.format_exc(),
             )

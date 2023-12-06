@@ -168,24 +168,24 @@ def diagnostics():
 
     logger.newline()
     try:
-        order_items = waldur_rest_client.list_order_items(
+        orders = waldur_rest_client.list_orders(
             {
                 "offering_uuid": WALDUR_OFFERING_UUID,
                 "state": ["pending", "executing"],
             }
         )
-        logger.info("Active order items:")
+        logger.info("Active orders:")
         format_string = "{:<10} {:<10} {:<10}"
         headers = ["Project", "Type", "State"]
         logger.info(format_string.format(*headers))
-        for order_item in order_items:
+        for order in orders:
             logger.info(
                 format_string.format(
-                    order_item["project_name"], order_item["type"], order_item["state"]
+                    order["project_name"], order["type"], order["state"]
                 )
             )
     except WaldurClientException as err:
-        logger.error("Unable to fetch order items, reason: %s", err)
+        logger.error("Unable to fetch orders, reason: %s", err)
 
     logger.newline()
     logger.info("-" * 10 + "DIAGNOSTICS END" + "-" * 10)
