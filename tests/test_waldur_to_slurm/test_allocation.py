@@ -21,7 +21,7 @@ class TestAllocationCreation(unittest.TestCase):
             "offering_uuid": uuid.uuid4().hex,
             "project_name": "Test project",
             "customer_name": "Test customer",
-            "state": "pending",
+            "state": "pending-provider",
             "attributes": {"name": "sample_resource"},
         }
 
