@@ -171,7 +171,7 @@ def diagnostics():
         orders = waldur_rest_client.list_orders(
             {
                 "offering_uuid": WALDUR_OFFERING_UUID,
-                "state": ["pending", "executing"],
+                "state": ["pending-provider", "executing"],
             }
         )
         logger.info("Active orders:")
