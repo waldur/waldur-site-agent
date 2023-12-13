@@ -62,21 +62,19 @@ def add_users_to_allocation(allocation: Allocation, usernames: set):
 
 
 def create_offering_components():
-    components = [
-        OfferingComponent(
+    logger.info(
+        "Updating offering components data for the following tres: %s",
+        ", ".join(SLURM_TRES.keys()),
+    )
+    for tres_type, tres_info in SLURM_TRES.items():
+        component = OfferingComponent(
             billing_type=tres_info["accounting_type"],
             type=tres_type,
             name=tres_info["label"],
             measured_unit=tres_info["measured_unit"],
             limit_amount=tres_info["limit"],
         )
-        for tres_type, tres_info in SLURM_TRES.items()
-    ]
-    logger.info(
-        "Updating offering components data for the following tres: %s",
-        ", ".join(SLURM_TRES.keys()),
-    )
-    waldur_rest_client.update_offering_components(WALDUR_OFFERING_UUID, components)
+        waldur_rest_client.create_offering_component(WALDUR_OFFERING_UUID, component)
 
 
 def diagnostics():
