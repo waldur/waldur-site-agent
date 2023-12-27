@@ -113,6 +113,17 @@ systemctl start waldur-slurm-service-push
 systemctl enable waldur-slurm-service-push # to start after reboot
 ```
 
+#### Older systemd versions
+
+If you want to deploy the services on a machine with systemd revision older than 240, you should use files with legacy configuration:
+
+```bash
+# For pulling service
+cp systemd-conf/service-pull/waldur-slurm-service-pull-legacy.service /etc/systemd/system/
+# For pushing service
+cp systemd-conf/service-push/waldur-slurm-service-push-legacy.service /etc/systemd/system/
+```
+
 ### TRES configuration
 
 To setup TRES-related info, the service uses the corresponding configuration file `config-components.yaml` in the root directory. Each entry of the file incudes key-value-formatted data.
