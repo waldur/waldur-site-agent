@@ -144,7 +144,6 @@ def sync_data_from_slurm_to_waldur(allocation_report):
 
 def slurm_waldur_sync():
     logger.info("Synching data from SLURM cluster to Waldur")
-    common_utils.create_offering_components()
     while True:
         try:
             logger.info("Fetching data from SLURM cluster")

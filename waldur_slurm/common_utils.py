@@ -63,7 +63,7 @@ def add_users_to_allocation(allocation: Allocation, usernames: set):
 
 def create_offering_components():
     logger.info(
-        "Updating offering components data for the following tres: %s",
+        "Creating offering components data for the following TRES: %s",
         ", ".join(SLURM_TRES.keys()),
     )
     for tres_type, tres_info in SLURM_TRES.items():
