@@ -249,7 +249,6 @@ def sync_data_from_waldur_to_slurm():
 
 def waldur_slurm_sync():
     logger.info("Synching data from Waldur to SLURM cluster")
-    common_utils.create_offering_components()
     while True:
         logger.info("Pulling data from Waldur to SLURM cluster")
         try:

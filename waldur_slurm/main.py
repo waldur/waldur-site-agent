@@ -19,6 +19,12 @@ def init_argparse():
         help="Run diagnostics only",
         action="store_true",
     )
+    parser.add_argument(
+        "--load-components",
+        dest="load_components",
+        help="Load TRES as offering components to Waldur backend",
+        action="store_true",
+    )
     return parser
 
 
@@ -30,6 +36,10 @@ if __name__ == "__main__":
         if not diagnostics_status:
             logger.error("Diagnostics failed")
             exit(1)
+        exit(0)
+
+    if args.load_components:
+        common_utils.create_offering_components()
         exit(0)
 
     logger.info("Running agent in %s mode", WALDUR_SYNC_DIRECTION)
