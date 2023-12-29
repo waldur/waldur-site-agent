@@ -50,7 +50,9 @@ class SlurmBackend:
                     "limits": limits,  # limits can be None
                 }
             except Exception as e:
-                logger.error("Error while pulling allocation [%s]: %s", account.name, e)
+                logger.exception(
+                    "Error while pulling allocation [%s]: %s", account.name, e
+                )
         return report
 
     def pull_allocation(self, account: str):
@@ -298,7 +300,7 @@ class SlurmBackend:
             try:
                 self.client.create_association(username, account, SLURM_DEFAULT_ACCOUNT)
             except SlurmError as err:
-                logger.error("Unable to create association in Slurm: %s", err)
+                logger.exception("Unable to create association in Slurm: %s", err)
                 return False
         return True
 
@@ -316,7 +318,7 @@ class SlurmBackend:
             try:
                 self.client.delete_association(username, account)
             except SlurmError as err:
-                logger.error("Unable to delete association in Slurm: %s", err)
+                logger.exception("Unable to delete association in Slurm: %s", err)
                 return False
         return True
 
@@ -327,6 +329,8 @@ class SlurmBackend:
                 self.client.create_linux_user_homedir(username)
                 logger.info("Homedir for user %s has been created", username)
             except SlurmError as err:
-                logger.error(
-                    "Unable to create user homedir for %s, reason: %s", username, err
+                logger.exception(
+                    "Unable to create user homedir for %s, reason: %s",
+                    username,
+                    err,
                 )
