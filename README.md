@@ -95,7 +95,7 @@ Don't forget to modify Waldur-related values the env files.
 cp systemd-conf/service-pull/waldur-slurm-service-pull.service /etc/systemd/system/
 mkdir /etc/waldur-slurm-service/
 cp systemd-conf/service-pull/waldur-slurm-service-pull.env /etc/waldur-slurm-service/pull.env
-cp ./config-components.yaml /etc/waldur-slurm-service/tres.yaml # you can use a different path and set SLURM_TRES_CONFIG_PATH to it
+cp ./config-components.yaml.example /etc/waldur-slurm-service/tres.yaml # you can use a different path and set SLURM_TRES_CONFIG_PATH to it
 
 
 # For pushing service
