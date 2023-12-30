@@ -60,3 +60,15 @@ def get_tres_list():
 
 def get_tres_limits():
     return {tres: data["limit"] for tres, data in SLURM_TRES.items()}
+
+
+def sum_dicts(dict_list):
+    result_dict = {}
+
+    # Iterate through each dictionary in the list
+    for curr_dict in dict_list:
+        # Sum values for each key in the current dictionary
+        for key, value in curr_dict.items():
+            result_dict[key] = result_dict.get(key, 0) + value
+
+    return result_dict

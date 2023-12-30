@@ -89,10 +89,13 @@ class SlurmBackend:
         lines = self.client.get_usage_report(accounts)
 
         for line in lines:
+            logger.info(
+                "Processing usage for %s account and %s user", line.account, line.user
+            )
             report.setdefault(line.account, {}).setdefault(line.user, {})
-            tres_usage = line.tres_usage()
-            user_usage_old = report[line.account][line.user]
-            user_usage_new = utils.sum_dicts([user_usage_old, tres_usage])
+            tres_usage = line.tres_usage
+            user_usage_existing = report[line.account][line.user]
+            user_usage_new = utils.sum_dicts([user_usage_existing, tres_usage])
             report[line.account][line.user] = user_usage_new
 
         for account_usage in report.values():
