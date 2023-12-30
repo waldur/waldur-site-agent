@@ -22,6 +22,7 @@ include:
         path: coverage.xml
   script:
     - source ${TESTS_DIR}/.env.rc
+    - cp ./config-components.yaml.example ./config-components.yaml
     - pip install -r requirements-dev.txt
     - pytest --junitxml=report.xml --cov=waldur_slurm/ $TESTS_DIR
     - coverage xml
