@@ -82,7 +82,7 @@ class SlurmReportLine:
     def tres_usage(self):
         usage = {}
         tres_list = utils.get_tres_list()
-        for resource in self._resources():
+        for resource in self._resources:
             if resource not in tres_list:
                 continue
             usage_raw = self.parse_field(resource)
