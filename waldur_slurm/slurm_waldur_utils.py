@@ -1,7 +1,7 @@
 from time import sleep
 from typing import Dict, List
 
-from waldur_client import ComponentUsage, WaldurClientException
+from waldur_client import ComponentUsage, SlurmAllocationState, WaldurClientException
 
 from waldur_slurm import common_utils
 from waldur_slurm.slurm_client import logger
@@ -142,12 +142,49 @@ def sync_data_from_slurm_to_waldur(allocation_report):
             )
 
 
+def mark_missing_allocations_as_erred(missing_allocations: List[str]):
+    logger.info("Marking allocations missing in SLURM cluster as ERRED")
+    for allocation_info in missing_allocations:
+        logger.info("Marking %s allocation as ERRED", allocation_info)
+        try:
+            waldur_rest_client.set_slurm_allocation_state(
+                allocation_info["uuid"], SlurmAllocationState.ERRED
+            )
+        except WaldurClientException as e:
+            logger.exception(
+                "Waldur REST client error while marking allocation %s: %s",
+                allocation_info["backend_id"],
+                e,
+            )
+
+
 def slurm_waldur_sync():
     logger.info("Synching data from SLURM cluster to Waldur")
     while True:
         try:
             logger.info("Fetching data from SLURM cluster")
-            allocation_report = slurm_backend.pull_allocations()
+            waldur_allocations = waldur_rest_client.filter_marketplace_resources(
+                {
+                    "offering_uuid": WALDUR_OFFERING_UUID,
+                    "state": "OK",
+                    "field": ["backend_id", "uuid"],
+                }
+            )
+            waldur_allocation_backend_ids = [
+                allocation_data["backend_id"] for allocation_data in waldur_allocations
+            ]
+            allocation_report = slurm_backend.pull_allocations(
+                waldur_allocation_backend_ids
+            )
+
+            # Allocations existing in Waldur but missing in SLURM cluster
+            missing_allocations = [
+                account_info
+                for account_info in waldur_allocations
+                if account_info["backend_id"] not in set(allocation_report.keys())
+            ]
+            mark_missing_allocations_as_erred(missing_allocations)
+
             sync_data_from_slurm_to_waldur(allocation_report)
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)

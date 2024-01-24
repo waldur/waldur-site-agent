@@ -114,7 +114,7 @@ def process_order_for_creation(order: dict):
     attempts = 0
     while "marketplace_resource_uuid" not in order:
         if attempts > 4:
-            logger.error("order processing timed out")
+            logger.error("Order processing timed out")
             return
 
         if order["state"] != "executing":
@@ -122,6 +122,24 @@ def process_order_for_creation(order: dict):
             return
 
         logger.info("Waiting for resource creation...")
+        sleep(5)
+
+        order = waldur_rest_client.get_order(order["uuid"])
+        attempts += 1
+
+    # TODO: drop this cycle...
+    # TODO: after removal of waldur_slurm.Allocation model from Mastermind
+
+    while order["resource_uuid"] is None:
+        if attempts > 4:
+            logger.error("Order processing timed out")
+            return
+
+        if order["state"] != "executing":
+            logger.error("order has unexpected state %s", order["state"])
+            return
+
+        logger.info("Waiting for Waldur allocation creation...")
         sleep(5)
 
         order = waldur_rest_client.get_order(order["uuid"])

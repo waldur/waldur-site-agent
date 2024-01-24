@@ -1,5 +1,5 @@
 import re
-from typing import Dict, Set
+from typing import Dict, List, Set
 
 from . import (
     SLURM_ALLOCATION_NAME_MAX_LEN,
@@ -38,24 +38,27 @@ class SlurmBackend:
     def list_tres(self):
         return self.client.list_tres()
 
-    def pull_allocations(self):
+    def pull_allocations(self, account_names: List[str]):
         report = {}
-        for account in self.client.list_accounts():
+        for account_name in account_names:
             try:
-                logger.info("Pulling allocation %s", account.name)
-                users, usage, limits = self.pull_allocation(account.name)
-                report[account.name] = {
-                    "users": users,
-                    "usage": usage,
-                    "limits": limits,  # limits can be None
-                }
+                account_report = self.pull_allocation(account_name)
+                if account_report is not None:
+                    report[account_name] = account_report
             except Exception as e:
                 logger.exception(
-                    "Error while pulling allocation [%s]: %s", account.name, e
+                    "Error while pulling allocation [%s]: %s", account_name, e
                 )
         return report
 
     def pull_allocation(self, account: str):
+        logger.info("Pulling allocation %s", account)
+        account_info = self.client.get_account(account)
+
+        if account_info is None:
+            logger.warning("There is no %s account in the SLURM cluster", account)
+            return None
+
         users = self.client.list_account_users(account)
 
         report = self.get_usage_report([account])
@@ -65,7 +68,7 @@ class SlurmBackend:
             usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         limits: dict = self.get_allocation_limits(account)
-        return users, usage, limits
+        return {"users": users, "usage": usage, "limits": limits}  # limits can be None
 
     def get_usage_report(self, accounts):
         """
@@ -138,11 +141,12 @@ class SlurmBackend:
     ):
         self.client.set_resource_limits(allocation.backend_id, limits_dict)
 
-    def delete_customer(self, customer_backend_id):
-        self.client.delete_account(customer_backend_id)
-
-    def delete_project(self, project_backend_id):
-        self.client.delete_account(project_backend_id)
+    def delete_account_safely(self, account: str):
+        if self.client.get_account(account):
+            logger.info("Deleting account %s from SLURM cluster")
+            self.client.delete_account(account)
+        else:
+            logger.warning("There is no account %s in SLURM cluster")
 
     def delete_allocation(
         self,
@@ -156,8 +160,7 @@ class SlurmBackend:
 
         existing_users = self.client.list_account_users(account)
 
-        if self.client.get_account(account):
-            self.client.delete_account(account)
+        self.delete_account_safely(account)
 
         if (
             len(
@@ -170,7 +173,7 @@ class SlurmBackend:
             )
             == 0
         ):
-            self.delete_project(project_account)
+            self.delete_account_safely(project_account)
 
         # TODO: delete customer if it hasn't any associated allocations
 
