@@ -10,8 +10,11 @@ class SlurmClient(base.BaseClient):
     See also: https://slurm.schedmd.com/sacctmgr.html
     """
 
-    def list_accounts(self):
-        output = self._execute_command(["list", "account"])
+    def list_accounts(self, accounts=None):
+        command = ["list", "account"]
+        if accounts is not None:
+            command.append(",".join(accounts))
+        output = self._execute_command(command)
         return [
             self._parse_account(line) for line in output.splitlines() if "|" in line
         ]
