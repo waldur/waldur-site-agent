@@ -58,6 +58,7 @@ include:
 Publish python module tagged release:
   before_script:
     - source tests/test_waldur_to_slurm/.env.rc
+    - cp ./config-components.yaml.example ./config-components.yaml
 
 Run python v3.8 linters:
   image: "registry.hpc.ut.ee/mirror/library/python:3.8"
