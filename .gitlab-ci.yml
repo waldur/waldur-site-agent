@@ -24,6 +24,7 @@ include:
     - source ${TESTS_DIR}/.env.rc
     - cp ./config-components.yaml.example ./config-components.yaml
     - pip install -r requirements-dev.txt
+    - pip install .
     - pytest --junitxml=report.xml --cov=waldur_slurm/ $TESTS_DIR
     - coverage xml
     - coverage report
