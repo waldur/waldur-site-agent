@@ -1,11 +1,10 @@
 import argparse
-from importlib.metadata import version
 
 from waldur_slurm import common_utils, logger
 from waldur_slurm.slurm_waldur_utils import slurm_waldur_sync
 from waldur_slurm.waldur_slurm_utils import waldur_slurm_sync
 
-from . import WALDUR_SYNC_DIRECTION, WaldurSyncDirection
+from . import WALDUR_SYNC_DIRECTION, WaldurSyncDirection, waldur_slurm_agent_version
 
 
 def init_argparse():
@@ -33,7 +32,7 @@ if __name__ == "__main__":
     parser = init_argparse()
     args = parser.parse_args()
 
-    logger.info("Waldur SLURM Agent version: %s", version("waldur-slurm-agent"))
+    logger.info("Waldur SLURM Agent version: %s", waldur_slurm_agent_version)
 
     if args.diagnostics:
         diagnostics_status = common_utils.diagnostics()

@@ -1,5 +1,6 @@
 import os
 from enum import Enum
+from importlib.metadata import version
 
 from waldur_client import WaldurClient
 
@@ -45,8 +46,16 @@ ENABLE_USER_HOMEDIR_ACCOUNT_CREATION = ENABLE_USER_HOMEDIR_ACCOUNT_CREATION.lowe
     "yes",
     "true",
 ]
+waldur_slurm_agent_version = version("waldur-slurm-agent")
 
-waldur_rest_client = WaldurClient(WALDUR_API_URL, WALDUR_API_TOKEN)
+user_agent_dict = {
+    "pull": f"waldur-slurm-service-pull/{waldur_slurm_agent_version}",
+    "push": f"waldur-slurm-service-push/{waldur_slurm_agent_version}",
+}
+
+user_agent = user_agent_dict.get(WALDUR_SYNC_DIRECTION)
+
+waldur_rest_client = WaldurClient(WALDUR_API_URL, WALDUR_API_TOKEN, user_agent)
 
 slurm_backend = SlurmBackend()
 
