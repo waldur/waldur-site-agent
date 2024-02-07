@@ -24,18 +24,15 @@ class TestSlurmToWaldurSync(unittest.TestCase):
                 "usage": {
                     "user-01": {
                         "cpu": 10,
-                        "gpu": 20,
                         "mem": 30,
                     },
                     "TOTAL_ACCOUNT_USAGE": {
                         "cpu": 10,
-                        "gpu": 20,
                         "mem": 30,
                     },
                 },
                 "limits": {
                     "cpu": 100,
-                    "gpu": 200,
                     "mem": 300,
                 },
             }
@@ -55,7 +52,6 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         self.waldur_offering = {
             "components": [
                 {"type": "cpu"},
-                {"type": "gpu"},
                 {"type": "mem"},
             ]
         }
@@ -81,7 +77,6 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         waldur_client._get_offering.return_value = {
             "components": [
                 {"type": "cpu"},
-                {"type": "gpu"},
                 {"type": "mem"},
             ]
         }
@@ -116,7 +111,6 @@ class TestSlurmToWaldurSync(unittest.TestCase):
             self.plan_period_uuid,
             [
                 ComponentUsage("cpu", 10),
-                ComponentUsage("gpu", 20),
                 ComponentUsage("mem", 30),
             ],
         )
