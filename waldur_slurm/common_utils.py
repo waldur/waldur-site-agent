@@ -139,7 +139,9 @@ def diagnostics():
     logger.newline()
 
     try:
-        offering_data = waldur_rest_client._get_offering(WALDUR_OFFERING_UUID)
+        offering_data = waldur_rest_client.get_marketplace_provider_offering(
+            WALDUR_OFFERING_UUID
+        )
         logger.info("Offering uuid: %s", offering_data["uuid"])
         logger.info("Offering name: %s", offering_data["name"])
         logger.info("Offering org: %s", offering_data["customer_name"])

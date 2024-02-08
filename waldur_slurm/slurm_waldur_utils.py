@@ -1,11 +1,11 @@
 from time import sleep
 from typing import Dict, List
 
-import yaml
 from waldur_client import ComponentUsage, SlurmAllocationState, WaldurClientException
 
 from waldur_slurm import common_utils
-from waldur_slurm.slurm_client import SLURM_TRES, logger
+from waldur_slurm.slurm_client import logger
+from waldur_slurm.slurm_client import utils as slurm_utils
 from waldur_slurm.slurm_client.exceptions import BackendError
 from waldur_slurm.slurm_client.structures import Allocation
 
@@ -119,13 +119,7 @@ def sync_data_from_slurm_to_waldur(allocation_report):
 
             # Submit limits
             if limits is not None:
-                limits_info = {
-                    SLURM_TRES[key]["label"]: " ".join(
-                        [str(value), SLURM_TRES[key]["measured_unit"]]
-                    )
-                    for key, value in limits.items()
-                }
-                limits_str = yaml.dump(limits_info)
+                limits_str = slurm_utils.prettify_limits(limits)
                 logger.info("Setting limits to \n%s", limits_str)
 
                 waldur_rest_client.set_slurm_allocation_limits(

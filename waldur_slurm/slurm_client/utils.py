@@ -1,6 +1,9 @@
 import calendar
 import datetime
 import re
+from typing import Dict
+
+import yaml
 
 from . import SLURM_TRES
 
@@ -59,7 +62,11 @@ def get_tres_list():
 
 
 def get_tres_limits():
-    return {tres: data["limit"] for tres, data in SLURM_TRES.items()}
+    return {
+        tres: data["limit"]
+        for tres, data in SLURM_TRES.items()
+        if data["accounting_type"] == "usage"
+    }
 
 
 def sum_dicts(dict_list):
@@ -72,3 +79,13 @@ def sum_dicts(dict_list):
             result_dict[key] = result_dict.get(key, 0) + value
 
     return result_dict
+
+
+def prettify_limits(limits: Dict[str, int]):
+    limits_info = {
+        SLURM_TRES[key]["label"]: " ".join(
+            [str(value), SLURM_TRES[key]["measured_unit"]]
+        )
+        for key, value in limits.items()
+    }
+    return yaml.dump(limits_info)

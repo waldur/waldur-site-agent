@@ -23,6 +23,13 @@ def create_allocation(order):
     waldur_allocation_uuid = order["resource_uuid"]
     allocation_limits = slurm_utils.get_tres_limits()
 
+    limit_based_components = set(slurm_utils.get_tres_list()) - set(
+        allocation_limits.keys()
+    )
+
+    for component_key in limit_based_components:
+        allocation_limits[component_key] = order["limits"][component_key]
+
     logger.info("Creating allocation %s", resource_name)
     resource = waldur_rest_client.get_marketplace_resource(resource_uuid)
 
