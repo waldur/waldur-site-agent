@@ -235,7 +235,8 @@ class SlurmBackend:
 
         allocation.backend_id = allocation_account
 
-        logger.info("Setting limits: %s", limits)
+        limits_str = utils.prettify_limits(limits)
+        logger.info("Setting limits to: \n%s", limits_str)
         self.set_allocation_limits(allocation, limits)
 
         return allocation_account
