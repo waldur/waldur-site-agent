@@ -34,8 +34,9 @@ The application supports the following environmental variables (required ones fo
 - `SLURM_ALLOCATION_NAME_MAX_LEN` - maximum length of account name created by the application.
 - `SLURM_DEFAULT_ACCOUNT` - default account name existing in SLURM cluster for creation of new accounts. Default is `waldur`.
 - `SLURM_CONTAINER_NAME` - name of a headnode SLURM container; must be set if SLURM_DEPLOYMENT_TYPE is docker.
-- `SENTRY_DSN` - Data Source Name for Sentry (more info [here](https://docs.sentry.io/product/sentry-basics/dsn-explainer/))
-- `ENABLE_USER_HOMEDIR_ACCOUNT_CREATION` - whether to create home directories for users related to accounts
+- `ENABLE_USER_HOMEDIR_ACCOUNT_CREATION` - whether to create home directories for users related to accounts.
+- `SENTRY_DSN` - Data Source Name for Sentry (more info [here](https://docs.sentry.io/product/sentry-basics/dsn-explainer/)).
+- `SENTRY_ENVIRONMENT` - name of the Sentry environment.
 
 ## Deployment
 
@@ -128,11 +129,7 @@ cp systemd-conf/service-push/waldur-slurm-service-push-legacy.service /etc/syste
 
 To setup TRES-related info, the service uses the corresponding configuration file configured by `SLURM_TRES_CONFIG_PATH` environment variable (`config-components.yaml` by default). Each entry of the file incudes key-value-formatted data.
 A key is a type of TRES (with optional name if type is `gres`) and the value contains limit, measured unit, type of accounting and label.
-The service sends this data to Waldur when you run it with `--load-components`:
-
-```bash
-python3 -m waldur_slurm.main --load-components
-```
+The script `waldur_slurm_diagnostics` sends this data to Waldur:
 
 If a user wants to change this information, a custom config file should be mounted into a container and set `SLURM_TRES_CONFIG_PATH` value to a correct location.
 
