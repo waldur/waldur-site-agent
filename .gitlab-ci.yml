@@ -23,8 +23,9 @@ include:
   script:
     - source ${TESTS_DIR}/.env.rc
     - cp ./config-components.yaml.example ./config-components.yaml
-    - pip install -r requirements-dev.txt
-    - pip install .
+    - pip install poetry
+    - poetry config virtualenvs.create false
+    - poetry install
     - pytest --junitxml=report.xml --cov=waldur_slurm/ $TESTS_DIR
     - coverage xml
     - coverage report
@@ -57,18 +58,14 @@ include:
     TESTS_DIR: "tests/test_waldur_to_slurm"
 
 Publish python module tagged release:
+  image: python:3.9-alpine
   before_script:
     - source tests/test_waldur_to_slurm/.env.rc
     - cp ./config-components.yaml.example ./config-components.yaml
-
-Run python v3.8 linters:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.8"
-  extends: .Run linters template
-  before_script:
-    - |
-      echo 'default_language_version:' >> .pre-commit-config.yaml
-      echo '  python: python3.8' >> .pre-commit-config.yaml
-    - cat .pre-commit-config.yaml
+  script:
+    - pip install poetry
+    - poetry config http-basic.pypi $PYPI_USERNAME $PYPI_PASSWORD
+    - poetry publish --build
 
 Run python v3.9 linters:
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"
@@ -97,10 +94,6 @@ Run python v3.11 linters:
       echo '  python: python3.11' >> .pre-commit-config.yaml
     - cat .pre-commit-config.yaml
 
-Run python v3.8 tests (Waldur to SLURM):
-  image: "registry.hpc.ut.ee/mirror/library/python:3.8"
-  extends: .Test Waldur to SLURM sync template
-
 Run python v3.9 tests (Waldur to SLURM):
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"
   extends: .Test Waldur to SLURM sync template
@@ -112,10 +105,6 @@ Run python v3.10 tests (Waldur to SLURM):
 Run python v3.11 tests (Waldur to SLURM):
   image: "registry.hpc.ut.ee/mirror/library/python:3.11"
   extends: .Test Waldur to SLURM sync template
-
-Run python v3.8 tests (SLURM to Waldur):
-  image: "registry.hpc.ut.ee/mirror/library/python:3.8"
-  extends: .Test SLURM to Waldur sync template
 
 Run python v3.9 tests (SLURM to Waldur):
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"

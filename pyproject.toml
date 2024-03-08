@@ -1,0 +1,40 @@
+[tool.poetry]
+name = "waldur-slurm-agent"
+version = "0.1.0"
+description = "SLURM integration module for Waldur."
+authors = ["OpenNode Team <info@opennodecloud.com>"]
+license = "MIT"
+homepage = "https://waldur.com"
+documentation = "https://docs.waldur.com"
+readme = "README.md"
+classifiers=[
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+packages = [
+    {include = "waldur_slurm"}
+]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+python-waldur-client = "0.2.10"
+requests = "2.27.1"
+pyyaml = "6.0.1"
+sentry-sdk = "1.14.0"
+
+
+[tool.poetry.group.dev.dependencies]
+freezegun = "0.3.4"
+coverage = "6.3.2"
+pytest = "7.1.2"
+pytest-cov = "3.0.0"
+
+[tool.poetry.scripts]
+waldur_slurm_agent = 'waldur_slurm.main:main'
+waldur_slurm_diagnostics = 'waldur_slurm.common_utils:diagnostics'
+waldur_slurm_load_components = 'waldur_slurm.common_utils:create_offering_components'
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

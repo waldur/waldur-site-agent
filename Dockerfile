@@ -5,12 +5,14 @@ ENV PYTHONUNBUFFERED=1
 
 RUN apk add --update --no-cache python3 &&\
     python3 -m ensurepip &&\
-    pip3 install --no-cache --upgrade pip setuptools
+    pip3 install --no-cache --upgrade pip setuptools poetry
+
+RUN ln -s /usr/bin/python3.9 /usr/bin/python
 
 COPY . /usr/src/waldur_slurm/
 
 WORKDIR /usr/src/waldur_slurm/
 
-RUN pip3 install -r requirements.txt --no-cache-dir
+RUN poetry config virtualenvs.create false && poetry install --only main
 
 CMD [ "python3", "-m", "waldur_slurm.main" ]
