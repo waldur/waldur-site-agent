@@ -9,7 +9,12 @@ from waldur_slurm.slurm_client import utils as slurm_utils
 from waldur_slurm.slurm_client.exceptions import BackendError
 from waldur_slurm.slurm_client.structures import Allocation
 
-from . import WALDUR_OFFERING_UUID, slurm_backend, waldur_rest_client
+from . import (
+    ENABLE_USER_HOMEDIR_ACCOUNT_CREATION,
+    WALDUR_OFFERING_UUID,
+    slurm_backend,
+    waldur_rest_client,
+)
 
 
 def submit_total_usage_for_allocation(
@@ -48,6 +53,8 @@ def submit_total_usage_for_allocation(
 
 def sync_allocation_users(allocation: Allocation, usernames: List[str]):
     logger.info("Syncing associations")
+    # Source of truth - associations in a SLURM cluster
+    # The service fetches associations from the cluster and pushes them to Waldur
     associations = waldur_rest_client.list_slurm_associations(
         {"allocation_uuid": allocation.uuid}
     )
@@ -61,6 +68,7 @@ def sync_allocation_users(allocation: Allocation, usernames: List[str]):
     common_utils.add_users_to_allocation(allocation, new_usernames)
 
     # Offering users sync
+    # The service fetches offering users from Waldur and pushes them to the cluster
     logger.info("Creating associations for offering users")
     offering_users = waldur_rest_client.list_remote_offering_users(
         {
@@ -75,7 +83,12 @@ def sync_allocation_users(allocation: Allocation, usernames: List[str]):
     ]
 
     common_utils.add_users_to_allocation(allocation, offering_user_usernames)
-    slurm_backend.add_users_to_account(allocation, offering_user_usernames)
+    added_users = slurm_backend.add_users_to_account(
+        allocation, offering_user_usernames
+    )
+
+    if ENABLE_USER_HOMEDIR_ACCOUNT_CREATION:
+        slurm_backend.create_user_homedirs(added_users)
 
 
 def sync_data_from_slurm_to_waldur(allocation_report):
