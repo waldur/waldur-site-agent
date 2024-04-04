@@ -16,6 +16,7 @@ from waldur_slurm.slurm_client.exceptions import SlurmError
 from waldur_slurm.slurm_client.structures import Allocation
 
 from . import (
+    ENABLE_USER_HOMEDIR_ACCOUNT_CREATION,
     WALDUR_API_URL,
     WALDUR_OFFERING_UUID,
     WALDUR_SYNC_DIRECTION,
@@ -190,3 +191,18 @@ def diagnostics():
     logger.newline()
     logger.info("-" * 10 + "DIAGNOSTICS END" + "-" * 10)
     return True
+
+
+def create_homedirs_for_offering_users():
+    offering_users = waldur_rest_client.list_remote_offering_users(
+        {
+            "offering_uuid": WALDUR_OFFERING_UUID,
+        }
+    )
+
+    offering_user_usernames = [
+        offering_user["username"] for offering_user in offering_users
+    ]
+
+    if ENABLE_USER_HOMEDIR_ACCOUNT_CREATION:
+        slurm_backend.create_user_homedirs(offering_user_usernames)
