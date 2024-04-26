@@ -38,6 +38,30 @@ The application supports the following environmental variables (required ones fo
 - `SENTRY_DSN` - Data Source Name for Sentry (more info [here](https://docs.sentry.io/product/sentry-basics/dsn-explainer/)).
 - `SENTRY_ENVIRONMENT` - name of the Sentry environment.
 
+Alternatively, the agent can serve several offerings. For this:
+
+1. Create a config file for offerings with the following format:
+
+  ```yaml
+  offerings:
+  - name: example-offering-01
+    waldur_api_url: https://waldur1.exmaple.com/api/
+    waldur_api_token: <token1>
+    waldur_offering_uuid: <uuid1>
+  - name: example-offering-02
+    waldur_api_url: https://waldur2.exmaple.com/api/
+    waldur_api_token: <token2>
+    waldur_offering_uuid: <uuid2>
+  ```
+
+2. Add a variable `WALDUR_CONFIG_FILE_PATH` to the environment, for example:
+
+   ```bash
+   export WALDUR_CONFIG_FILE_PATH=/etc/waldur-slurm/offerings.yaml
+   ```
+
+**NB**: Environment variables take precedence over the config file, so if you define `WALDUR_API_URL`, `WALDUR_API_TOKEN` and `WALDUR_OFFERING_UUID`, the file is ignored.
+
 ## Deployment
 
 ### Test environment

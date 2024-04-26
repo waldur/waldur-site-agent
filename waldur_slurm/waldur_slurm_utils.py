@@ -1,7 +1,12 @@
 import traceback
 from time import sleep
 
-from waldur_client import SlurmAllocationState, WaldurClientException, is_uuid
+from waldur_client import (
+    SlurmAllocationState,
+    WaldurClient,
+    WaldurClientException,
+    is_uuid,
+)
 
 from waldur_slurm.slurm_client import logger
 from waldur_slurm.slurm_client import utils as slurm_utils
@@ -10,14 +15,14 @@ from waldur_slurm.slurm_client.structures import Allocation
 
 from . import (
     ENABLE_USER_HOMEDIR_ACCOUNT_CREATION,
-    WALDUR_OFFERING_UUID,
+    USER_AGENT,
+    WALDUR_OFFERINGS,
     common_utils,
     slurm_backend,
-    waldur_rest_client,
 )
 
 
-def create_allocation(order):
+def create_allocation(waldur_rest_client: WaldurClient, order):
     resource_uuid = order["marketplace_resource_uuid"]
     resource_name = order["resource_name"]
     waldur_allocation_uuid = order["resource_uuid"]
@@ -91,7 +96,12 @@ def create_allocation(order):
     return allocation
 
 
-def add_users_to_allocation(resource_uuid, allocation: Allocation):
+def add_users_to_allocation(
+    waldur_rest_client: WaldurClient,
+    resource_uuid,
+    allocation: Allocation,
+    offering_uuid,
+):
     logger.info("Adding users to account in SLURM cluster")
 
     logger.info("Fetching Waldur resource team")
@@ -100,7 +110,7 @@ def add_users_to_allocation(resource_uuid, allocation: Allocation):
 
     logger.info("Fetching Waldur offering users")
     offering_users_all = waldur_rest_client.list_remote_offering_users(
-        {"offering_uuid": WALDUR_OFFERING_UUID}
+        {"offering_uuid": offering_uuid}
     )
     offering_usernames = [
         offering_user["username"]
@@ -113,10 +123,10 @@ def add_users_to_allocation(resource_uuid, allocation: Allocation):
     if ENABLE_USER_HOMEDIR_ACCOUNT_CREATION:
         slurm_backend.create_user_homedirs(added_users)
 
-    common_utils.add_users_to_allocation(allocation, added_users)
+    common_utils.add_users_to_allocation(waldur_rest_client, allocation, added_users)
 
 
-def process_order_for_creation(order: dict):
+def process_order_for_creation(waldur_rest_client: WaldurClient, order: dict):
     # Wait until resource is created
     attempts = 0
     while "marketplace_resource_uuid" not in order:
@@ -154,15 +164,17 @@ def process_order_for_creation(order: dict):
 
     resource_uuid = order["marketplace_resource_uuid"]
 
-    allocation: Allocation = create_allocation(order)
+    allocation: Allocation = create_allocation(waldur_rest_client, order)
 
     if allocation is None:
         return
 
-    add_users_to_allocation(resource_uuid, allocation)
+    add_users_to_allocation(
+        waldur_rest_client, resource_uuid, allocation, order["offering_uuid"]
+    )
 
 
-def process_order_for_limits_update(order: dict):
+def process_order_for_limits_update(waldur_rest_client: WaldurClient, order: dict):
     logger.info("Updating limits for %s", order["resource_name"])
     resource_uuid = order["marketplace_resource_uuid"]
     allocation_uuid = order["resource_uuid"]
@@ -196,7 +208,7 @@ def process_order_for_limits_update(order: dict):
     )
 
 
-def process_order_for_termination(order: dict):
+def process_order_for_termination(waldur_rest_client: WaldurClient, order: dict):
     logger.info("Terminating allocation %s", order["resource_name"])
     allocation_uuid = order["resource_uuid"]
 
@@ -212,11 +224,16 @@ def process_order_for_termination(order: dict):
     logger.info("Allocation has been terminated successfully")
 
 
-def sync_data_from_waldur_to_slurm():
+def process_offering(offering):
     # Pull data form Mastermind using REST client
+    logger.info("Processing offering %s (%s)", offering["name"], offering["uuid"])
+    waldur_rest_client = WaldurClient(
+        offering["api_url"], offering["api_token"], USER_AGENT
+    )
+
     orders = waldur_rest_client.list_orders(
         {
-            "offering_uuid": WALDUR_OFFERING_UUID,
+            "offering_uuid": offering["uuid"],
             "state": ["pending-provider", "executing"],
         }
     )
@@ -237,19 +254,19 @@ def sync_data_from_waldur_to_slurm():
             if order["state"] == "executing":
                 logger.info("Order is executing already, no need for approval")
             else:
-                logger.info("Approving order")
+                logger.info("Approving the order")
                 waldur_rest_client.marketplace_order_approve_by_provider(order["uuid"])
                 logger.info("Refreshing the order")
                 order = waldur_rest_client.get_order(order["uuid"])
 
             if order["type"] == "Create":
-                process_order_for_creation(order)
+                process_order_for_creation(waldur_rest_client, order)
 
             if order["type"] == "Update":
-                process_order_for_limits_update(order)
+                process_order_for_limits_update(waldur_rest_client, order)
 
             if order["type"] == "Terminate":
-                process_order_for_termination(order)
+                process_order_for_termination(waldur_rest_client, order)
 
         except WaldurClientException as e:
             logger.exception(
@@ -269,7 +286,13 @@ def sync_data_from_waldur_to_slurm():
                 error_traceback=traceback.format_exc(),
             )
 
-        logger.info("-" * 30)
+
+def process_offerings():
+    for offering in WALDUR_OFFERINGS:
+        try:
+            process_offering(offering)
+        except Exception as e:
+            logger.exception("The application crashed due to the error: %s", e)
 
 
 def waldur_slurm_sync():
@@ -277,7 +300,7 @@ def waldur_slurm_sync():
     while True:
         logger.info("Pulling data from Waldur to SLURM cluster")
         try:
-            sync_data_from_waldur_to_slurm()
+            process_offerings()
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
         sleep(2 * 60)  # Once per 2 minutes

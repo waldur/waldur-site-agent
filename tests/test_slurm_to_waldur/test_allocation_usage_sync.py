@@ -11,11 +11,11 @@ from waldur_slurm.slurm_waldur_utils import sync_data_from_slurm_to_waldur
 waldur_client = mock.Mock()
 slurm_backend = mock.Mock()
 
+OFFERING_UUID = "1a6ae60417e04088b90a5aa395209ecc"
+
 
 @freeze_time("2022-01-01")
-@mock.patch.object(waldur_slurm.slurm_waldur_utils, "waldur_rest_client", waldur_client)
 @mock.patch.object(waldur_slurm.slurm_waldur_utils, "slurm_backend", slurm_backend)
-@mock.patch.object(waldur_slurm.common_utils, "waldur_rest_client", waldur_client)
 class TestSlurmToWaldurSync(unittest.TestCase):
     def setUp(self) -> None:
         self.allocation_report_slurm = {
@@ -83,12 +83,12 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         offering_users = [{"username": "user-02"}]
         waldur_client.list_remote_offering_users.return_value = offering_users
 
-        sync_data_from_slurm_to_waldur(allocations)
+        sync_data_from_slurm_to_waldur(waldur_client, OFFERING_UUID, allocations)
 
         waldur_client.filter_marketplace_resources.assert_called_once_with(
             {
                 "backend_id": "test-allocation-01",
-                "offering_uuid": "1a6ae60417e04088b90a5aa395209ecc",
+                "offering_uuid": OFFERING_UUID,
                 "state": "OK",
             }
         )
@@ -127,12 +127,12 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         ]
         waldur_client.list_remote_offering_users.return_value = []
 
-        sync_data_from_slurm_to_waldur(allocations)
+        sync_data_from_slurm_to_waldur(waldur_client, OFFERING_UUID, allocations)
 
         waldur_client.filter_marketplace_resources.assert_called_once_with(
             {
                 "backend_id": "test-allocation-01",
-                "offering_uuid": "1a6ae60417e04088b90a5aa395209ecc",
+                "offering_uuid": OFFERING_UUID,
                 "state": "OK",
             }
         )

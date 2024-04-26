@@ -143,7 +143,7 @@ class SlurmBackend:
 
     def delete_account_safely(self, account: str):
         if self.client.get_account(account):
-            logger.info("Deleting account %s from SLURM cluster")
+            logger.info("Deleting account %s from SLURM cluster", account)
             self.client.delete_account(account)
         else:
             logger.warning("There is no account %s in SLURM cluster")
