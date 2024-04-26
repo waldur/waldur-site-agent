@@ -3,11 +3,11 @@ import uuid
 from unittest import mock
 
 from waldur_slurm.slurm_client.structures import Account
-from waldur_slurm.waldur_slurm_utils import sync_data_from_waldur_to_slurm
+from waldur_slurm.waldur_slurm_utils import process_offerings
 
 
 @mock.patch("waldur_slurm.waldur_slurm_utils.slurm_backend.client")
-@mock.patch("waldur_slurm.waldur_slurm_utils.waldur_rest_client")
+@mock.patch("waldur_slurm.waldur_slurm_utils.WaldurClient", autospec=True)
 class TestAllocationCreation(unittest.TestCase):
     def setUp(self) -> None:
         self.allocation_uuid = uuid.uuid4().hex
@@ -26,11 +26,12 @@ class TestAllocationCreation(unittest.TestCase):
         }
 
     def test_association_and_usage_creation(
-        self, waldur_client: mock.Mock, slurm_client: mock.Mock
+        self, waldur_client_class: mock.Mock, slurm_client: mock.Mock
     ):
         user_uuid = uuid.uuid4()
         allocation_account = f"hpc_{self.allocation_uuid[:5]}_test-allocation-01"[:34]
         project_account = f"hpc_{self.project_uuid}"
+        waldur_client = waldur_client_class.return_value
         waldur_client.list_orders.return_value = [self.waldur_order]
         updated_order = self.waldur_order.copy()
 
@@ -59,7 +60,7 @@ class TestAllocationCreation(unittest.TestCase):
         slurm_client.get_account.return_value = None
         slurm_client._execute_command.return_value = ""
 
-        sync_data_from_waldur_to_slurm()
+        process_offerings()
 
         waldur_client.marketplace_order_approve_by_provider.assert_called_once_with(
             self.order_uuid
@@ -75,7 +76,7 @@ class TestAllocationCreation(unittest.TestCase):
 
 
 @mock.patch("waldur_slurm.waldur_slurm_utils.slurm_backend.client")
-@mock.patch("waldur_slurm.waldur_slurm_utils.waldur_rest_client")
+@mock.patch("waldur_slurm.waldur_slurm_utils.WaldurClient", autospec=True)
 class TestAllocationTermination(unittest.TestCase):
     def setUp(self) -> None:
         self.marketplace_resource_uuid = uuid.uuid4().hex
@@ -99,7 +100,10 @@ class TestAllocationTermination(unittest.TestCase):
             "backend_id": f"hpc_{self.resource_uuid[:5]}_test-allocation-01"[:34]
         }
 
-    def test_account_deletion(self, waldur_client: mock.Mock, slurm_client: mock.Mock):
+    def test_account_deletion(
+        self, waldur_client_class: mock.Mock, slurm_client: mock.Mock
+    ):
+        waldur_client = waldur_client_class.return_value
         waldur_client.list_orders.return_value = [self.waldur_order]
         waldur_client.get_slurm_allocation.return_value = self.waldur_allocation
         waldur_client.get_order.return_value = self.waldur_order
@@ -112,14 +116,14 @@ class TestAllocationTermination(unittest.TestCase):
         slurm_client.list_accounts.return_value = []
         slurm_client._execute_command.return_value = ""
 
-        sync_data_from_waldur_to_slurm()
+        process_offerings()
 
         # The method was called twice: for project account and for allocation account
         self.assertEqual(2, slurm_client.delete_account.call_count)
 
 
 @mock.patch("waldur_slurm.waldur_slurm_utils.slurm_backend.client")
-@mock.patch("waldur_slurm.waldur_slurm_utils.waldur_rest_client")
+@mock.patch("waldur_slurm.waldur_slurm_utils.WaldurClient", autospec=True)
 class TestAllocationUpdateLimits(unittest.TestCase):
     def setUp(self) -> None:
         self.marketplace_resource_uuid = uuid.uuid4().hex
@@ -157,13 +161,14 @@ class TestAllocationUpdateLimits(unittest.TestCase):
         }
 
     def test_allocation_limits_update(
-        self, waldur_client: mock.Mock, slurm_client: mock.Mock
+        self, waldur_client_class: mock.Mock, slurm_client: mock.Mock
     ):
+        waldur_client = waldur_client_class.return_value
         waldur_client.list_orders.return_value = [self.waldur_order]
         waldur_client.get_slurm_allocation.return_value = self.waldur_allocation
         waldur_client.get_order.return_value = self.waldur_order
 
-        sync_data_from_waldur_to_slurm()
+        process_offerings()
 
         slurm_client.set_resource_limits.assert_called_once_with(
             self.waldur_allocation["backend_id"],

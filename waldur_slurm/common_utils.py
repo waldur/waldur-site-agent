@@ -1,6 +1,6 @@
 import pprint
 
-from waldur_client import OfferingComponent, WaldurClientException
+from waldur_client import OfferingComponent, WaldurClient, WaldurClientException
 
 from waldur_slurm.slurm_client import (
     SLURM_ALLOCATION_NAME_MAX_LEN,
@@ -17,18 +17,19 @@ from waldur_slurm.slurm_client.structures import Allocation
 
 from . import (
     ENABLE_USER_HOMEDIR_ACCOUNT_CREATION,
-    WALDUR_API_URL,
-    WALDUR_OFFERING_UUID,
+    USER_AGENT,
+    WALDUR_OFFERINGS,
     WALDUR_SYNC_DIRECTION,
     WaldurSyncDirection,
     logger,
     sentry_dsn,
     slurm_backend,
-    waldur_rest_client,
 )
 
 
-def drop_users_from_allocation(allocation: Allocation, usernames: str):
+def drop_users_from_allocation(
+    waldur_rest_client: WaldurClient, allocation: Allocation, usernames: str
+):
     logger.info("Stale usernames: %s", " ,".join(usernames))
     for username in usernames:
         try:
@@ -45,7 +46,9 @@ def drop_users_from_allocation(allocation: Allocation, usernames: str):
             logger.error("User %s can not be dropped due to: %s", username, e)
 
 
-def add_users_to_allocation(allocation: Allocation, usernames: set):
+def add_users_to_allocation(
+    waldur_rest_client: WaldurClient, allocation: Allocation, usernames: set
+):
     logger.info("New usernames to add to Waldur allocation: %s", " ,".join(usernames))
     for username in usernames:
         try:
@@ -63,32 +66,114 @@ def add_users_to_allocation(allocation: Allocation, usernames: set):
 
 
 def create_offering_components():
-    logger.info(
-        "Creating offering components data for the following TRES: %s",
-        ", ".join(SLURM_TRES.keys()),
-    )
-    for tres_type, tres_info in SLURM_TRES.items():
-        component = OfferingComponent(
-            billing_type=tres_info["accounting_type"],
-            type=tres_type,
-            name=tres_info["label"],
-            measured_unit=tres_info["measured_unit"],
-            limit_amount=tres_info["limit"],
+    for offering in WALDUR_OFFERINGS:
+        offering_name = offering["name"]
+        offering_uuid = offering["uuid"]
+        offering_api_url = offering["api_url"]
+        offering_api_token = offering["api_token"]
+
+        logger.info("Processing %s offering", offering_name)
+        waldur_rest_client = WaldurClient(
+            offering_api_url, offering_api_token, USER_AGENT
         )
-        waldur_rest_client.create_offering_component(WALDUR_OFFERING_UUID, component)
+
+        logger.info(
+            "Creating offering components data for the following TRES: %s",
+            ", ".join(SLURM_TRES.keys()),
+        )
+        for tres_type, tres_info in SLURM_TRES.items():
+            component = OfferingComponent(
+                billing_type=tres_info["accounting_type"],
+                type=tres_type,
+                name=tres_info["label"],
+                measured_unit=tres_info["measured_unit"],
+                limit_amount=tres_info["limit"],
+            )
+            try:
+                waldur_rest_client.create_offering_component(offering_uuid, component)
+            except Exception as e:
+                logger.info(
+                    "Unable to create a component %s for offering %s (%s):",
+                    tres_info["label"],
+                    offering_name,
+                    offering_uuid,
+                )
+                logger.exception(e)
 
 
 def diagnostics():
     logger.info("-" * 10 + "DIAGNOSTICS START" + "-" * 10)
     logger.info("Provided settings:")
     format_string = "{:<30} = {:<10}"
-
-    logger.info(format_string.format("WALDUR_API_URL", WALDUR_API_URL))
     logger.info(format_string.format("WALDUR_SYNC_DIRECTION", WALDUR_SYNC_DIRECTION))
-    logger.info(format_string.format("WALDUR_OFFERING_UUID", WALDUR_OFFERING_UUID))
-    logger.info(format_string.format("SENTRY_DSN", str(sentry_dsn)))
-    logger.newline()
 
+    for offering in WALDUR_OFFERINGS:
+        format_string = "{:<30} = {:<10}"
+        offering_uuid = offering["uuid"]
+        offering_name = offering["name"]
+        offering_api_url = offering["api_url"]
+        offering_api_token = offering["api_token"]
+
+        logger.info(format_string.format("Offering name", offering_name))
+        logger.info(format_string.format("Offering UUID", offering_uuid))
+        logger.info(format_string.format("Waldur API URL", offering_api_url))
+        logger.info(format_string.format("SENTRY_DSN", str(sentry_dsn)))
+
+        waldur_rest_client = WaldurClient(
+            offering_api_url, offering_api_token, USER_AGENT
+        )
+
+        try:
+            offering_data = waldur_rest_client.get_marketplace_provider_offering(
+                offering_uuid
+            )
+            logger.info("Offering uuid: %s", offering_data["uuid"])
+            logger.info("Offering name: %s", offering_data["name"])
+            logger.info("Offering org: %s", offering_data["customer_name"])
+            logger.info("Offering state: %s", offering_data["state"])
+
+            logger.info("Offering components:")
+            format_string = "{:<10} {:<10} {:<10} {:<10}"
+            headers = ["Type", "Name", "Unit", "Limit"]
+            logger.info(format_string.format(*headers))
+            components = [
+                [
+                    component["type"],
+                    component["name"],
+                    component["measured_unit"],
+                    component["limit_amount"],
+                ]
+                for component in offering_data["components"]
+            ]
+            for component in components:
+                logger.info(format_string.format(*component))
+
+            logger.newline()
+        except WaldurClientException as err:
+            logger.error("Unable to fetch offering data, reason: %s", err)
+
+        logger.newline()
+        try:
+            orders = waldur_rest_client.list_orders(
+                {
+                    "offering_uuid": offering_uuid,
+                    "state": ["pending-provider", "executing"],
+                }
+            )
+            logger.info("Active orders:")
+            format_string = "{:<10} {:<10} {:<10}"
+            headers = ["Project", "Type", "State"]
+            logger.info(format_string.format(*headers))
+            for order in orders:
+                logger.info(
+                    format_string.format(
+                        order["project_name"], order["type"], order["state"]
+                    )
+                )
+        except WaldurClientException as err:
+            logger.error("Unable to fetch orders, reason: %s", err)
+
+    format_string = "{:<30} = {:<10}"
     logger.info(format_string.format("SLURM_DEPLOYMENT_TYPE", SLURM_DEPLOYMENT_TYPE))
     logger.info(
         format_string.format(
@@ -139,70 +224,37 @@ def diagnostics():
     logger.info('Default parent account "%s" is in place', SLURM_DEFAULT_ACCOUNT)
     logger.newline()
 
-    try:
-        offering_data = waldur_rest_client.get_marketplace_provider_offering(
-            WALDUR_OFFERING_UUID
-        )
-        logger.info("Offering uuid: %s", offering_data["uuid"])
-        logger.info("Offering name: %s", offering_data["name"])
-        logger.info("Offering org: %s", offering_data["customer_name"])
-        logger.info("Offering state: %s", offering_data["state"])
-        logger.newline()
-
-        logger.info("Offering components:")
-        format_string = "{:<10} {:<10} {:<10} {:<10}"
-        headers = ["Type", "Name", "Unit", "Limit"]
-        logger.info(format_string.format(*headers))
-        components = [
-            [
-                component["type"],
-                component["name"],
-                component["measured_unit"],
-                component["limit_amount"],
-            ]
-            for component in offering_data["components"]
-        ]
-        for component in components:
-            logger.info(format_string.format(*component))
-    except WaldurClientException as err:
-        logger.error("Unable to fetch offering data, reason: %s", err)
-
-    logger.newline()
-    try:
-        orders = waldur_rest_client.list_orders(
-            {
-                "offering_uuid": WALDUR_OFFERING_UUID,
-                "state": ["pending-provider", "executing"],
-            }
-        )
-        logger.info("Active orders:")
-        format_string = "{:<10} {:<10} {:<10}"
-        headers = ["Project", "Type", "State"]
-        logger.info(format_string.format(*headers))
-        for order in orders:
-            logger.info(
-                format_string.format(
-                    order["project_name"], order["type"], order["state"]
-                )
-            )
-    except WaldurClientException as err:
-        logger.error("Unable to fetch orders, reason: %s", err)
-
-    logger.newline()
     logger.info("-" * 10 + "DIAGNOSTICS END" + "-" * 10)
     return True
 
 
 def create_homedirs_for_offering_users():
-    offering_users = waldur_rest_client.list_remote_offering_users(
-        {
-            "offering_uuid": WALDUR_OFFERING_UUID,
-        }
-    )
+    if not ENABLE_USER_HOMEDIR_ACCOUNT_CREATION:
+        logger.warning(
+            "ENABLE_USER_HOMEDIR_ACCOUNT_CREATION disabled, skipping processing"
+        )
+        return
 
-    offering_user_usernames = [
-        offering_user["username"] for offering_user in offering_users
-    ]
+    for offering in WALDUR_OFFERINGS:
+        offering_name = offering["name"]
+        offering_uuid = offering["uuid"]
+        offering_api_url = offering["api_url"]
+        offering_api_token = offering["api_token"]
 
-    if ENABLE_USER_HOMEDIR_ACCOUNT_CREATION:
+        logger.info("Creating homedirs for %s offering users", offering_name)
+
+        waldur_rest_client = WaldurClient(
+            offering_api_url, offering_api_token, USER_AGENT
+        )
+
+        offering_users = waldur_rest_client.list_remote_offering_users(
+            {
+                "offering_uuid": offering_uuid,
+            }
+        )
+
+        offering_user_usernames = [
+            offering_user["username"] for offering_user in offering_users
+        ]
+
         slurm_backend.create_user_homedirs(offering_user_usernames)
