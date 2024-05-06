@@ -2,12 +2,12 @@ import unittest
 import uuid
 from unittest import mock
 
-from waldur_slurm.slurm_client.structures import Account
-from waldur_slurm.waldur_slurm_utils import process_offerings
+from waldur_site_agent.slurm_client.structures import Account
+from waldur_site_agent.waldur_slurm_utils import process_offerings
 
 
-@mock.patch("waldur_slurm.waldur_slurm_utils.slurm_backend.client")
-@mock.patch("waldur_slurm.waldur_slurm_utils.WaldurClient", autospec=True)
+@mock.patch("waldur_site_agent.waldur_slurm_utils.slurm_backend.client")
+@mock.patch("waldur_site_agent.waldur_slurm_utils.WaldurClient", autospec=True)
 class TestAllocationCreation(unittest.TestCase):
     def setUp(self) -> None:
         self.allocation_uuid = uuid.uuid4().hex
@@ -75,8 +75,8 @@ class TestAllocationCreation(unittest.TestCase):
         )
 
 
-@mock.patch("waldur_slurm.waldur_slurm_utils.slurm_backend.client")
-@mock.patch("waldur_slurm.waldur_slurm_utils.WaldurClient", autospec=True)
+@mock.patch("waldur_site_agent.waldur_slurm_utils.slurm_backend.client")
+@mock.patch("waldur_site_agent.waldur_slurm_utils.WaldurClient", autospec=True)
 class TestAllocationTermination(unittest.TestCase):
     def setUp(self) -> None:
         self.marketplace_resource_uuid = uuid.uuid4().hex
@@ -122,8 +122,8 @@ class TestAllocationTermination(unittest.TestCase):
         self.assertEqual(2, slurm_client.delete_account.call_count)
 
 
-@mock.patch("waldur_slurm.waldur_slurm_utils.slurm_backend.client")
-@mock.patch("waldur_slurm.waldur_slurm_utils.WaldurClient", autospec=True)
+@mock.patch("waldur_site_agent.waldur_slurm_utils.slurm_backend.client")
+@mock.patch("waldur_site_agent.waldur_slurm_utils.WaldurClient", autospec=True)
 class TestAllocationUpdateLimits(unittest.TestCase):
     def setUp(self) -> None:
         self.marketplace_resource_uuid = uuid.uuid4().hex

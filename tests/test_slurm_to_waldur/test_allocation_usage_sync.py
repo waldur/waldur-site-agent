@@ -5,8 +5,8 @@ from unittest import mock
 from freezegun import freeze_time
 from waldur_client import ComponentUsage
 
-import waldur_slurm
-from waldur_slurm.slurm_waldur_utils import sync_data_from_slurm_to_waldur
+import waldur_site_agent
+from waldur_site_agent.slurm_waldur_utils import sync_data_from_slurm_to_waldur
 
 waldur_client = mock.Mock()
 slurm_backend = mock.Mock()
@@ -15,7 +15,7 @@ OFFERING_UUID = "1a6ae60417e04088b90a5aa395209ecc"
 
 
 @freeze_time("2022-01-01")
-@mock.patch.object(waldur_slurm.slurm_waldur_utils, "slurm_backend", slurm_backend)
+@mock.patch.object(waldur_site_agent.slurm_waldur_utils, "slurm_backend", slurm_backend)
 class TestSlurmToWaldurSync(unittest.TestCase):
     def setUp(self) -> None:
         self.allocation_report_slurm = {

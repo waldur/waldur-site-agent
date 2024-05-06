@@ -8,11 +8,11 @@ from waldur_client import (
     WaldurClientException,
 )
 
-from waldur_slurm import common_utils
-from waldur_slurm.slurm_client import logger
-from waldur_slurm.slurm_client import utils as slurm_utils
-from waldur_slurm.slurm_client.exceptions import BackendError
-from waldur_slurm.slurm_client.structures import Allocation
+from waldur_site_agent import common_utils
+from waldur_site_agent.slurm_client import logger
+from waldur_site_agent.slurm_client import utils as slurm_utils
+from waldur_site_agent.slurm_client.exceptions import BackendError
+from waldur_site_agent.slurm_client.structures import Allocation
 
 from . import (
     ENABLE_USER_HOMEDIR_ACCOUNT_CREATION,

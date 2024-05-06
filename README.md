@@ -1,21 +1,30 @@
-# Waldur SLURM Integration Service
+# Agent for Service Provider Integration
 
-Service for Mastermind integration with SLURM cluster. The main purpose of the service is data syncronization between Waldur instance and SLURM cluster. The application uses order-related information from Waldur to manage accounts in SLURM and accounting-related info from SLURM to update usage data in Waldur.
+Agent for Mastermind integration with a provider's site.
+The main purpose of the agent is data syncronization between Waldur instance and an application (for example SLURM or MOAB cluster).
+The application uses order-related information from Waldur to manage accounts in the site and
+accounting-related info from the site to update usage data in Waldur.
+For now, the agent supports only SLURM cluster as a site.
 
 ## Architecture
 
-This is a stateless application, which should be deployed on a machine having access to SLURM cluster data. The service consists of two sub-applications:
+This is a stateless application, which is deployed on a machine having access to SLURM cluster data.
+The agent consists of two sub-applications:
 
-- service-pull, which fetches data from Waldur and updates a state of a SLURM cluster correspondingly (e.g. creation of SLURM accounts ordered in Waldur)
-- service-push, which sends data from SLURM cluster to Waldur (e.g. update of resource usages)
+- agent-pull, which fetches data from Waldur and updates a state of a SLURM cluster correspondingly (e.g. creation of SLURM accounts ordered in Waldur);
+- agent-push, which sends data from SLURM cluster to Waldur (e.g. update of resource usages).
 
 ### Integration with Waldur
 
-For this, the service uses [Waldur client](https://github.com/waldur/python-waldur-client) based on Python and REST communication with [Waldur backend](https://github.com/waldur/waldur-mastermind). Service-pull application pulls orders data created for a specific offering linked to SLURM cluster and creates/updates/removes SLURM accounts based on the data. Service-push fetches data of usage, limits and associations from SLURM cluster and pushes it to Waldur.
+For this, the agent uses [Waldur client](https://github.com/waldur/python-waldur-client) based on Python and REST communication with [Waldur backend](https://github.com/waldur/waldur-mastermind). `Agent-pull` application pulls data of orders created for a specific offering linked to the site and creates/updates/removes SLURM accounts based on this info. `Agent-push` fetches data of usage, limits and associations from the site and pushes it to Waldur.
 
-### Integration with SLURM cluster
+### Integration with the site
 
-For this, service uses uses SLURM command line utilities (e.g. `sacct` and `sacctmgr`). The access to the binaries can be either direct or using docker client. In the latter case, the service is required to have access to `docker` binary and to docker socket (e.g. `/var/run/docker.sock`).
+#### SLURM cluster
+
+For this, the agent uses SLURM command line utilities (e.g. `sacct` and `sacctmgr`).
+The access to the binaries can be either direct or using docker client.
+In the latter case, the agent is required to have access to `docker` binary and to docker socket (e.g. `/var/run/docker.sock`).
 
 ## Setup
 
@@ -57,7 +66,7 @@ Alternatively, the agent can serve several offerings. For this:
 2. Add a variable `WALDUR_CONFIG_FILE_PATH` to the environment, for example:
 
    ```bash
-   export WALDUR_CONFIG_FILE_PATH=/etc/waldur-slurm/offerings.yaml
+   export WALDUR_CONFIG_FILE_PATH=/etc/waldur-site-agent/offerings.yaml
    ```
 
 **NB**: Environment variables take precedence over the config file, so if you define `WALDUR_API_URL`, `WALDUR_API_TOKEN` and `WALDUR_OFFERING_UUID`, the file is ignored.
@@ -66,14 +75,14 @@ Alternatively, the agent can serve several offerings. For this:
 
 ### Test environment
 
-In order to test the service, a user should deploy 2 separate instances of the service.
-The first one (called service-pull) is for fetching data from Waldur with further processing and the second one (called service-push) is for sending data from SLURM cluster to Waldur.
-Both instances must be configured with environment variables from e.g. .env-file.
+In order to test the agent, a user should deploy 2 separate instances of it.
+The first one (called agent-pull) is for fetching data from Waldur with further processing and the second one (called agent-push) is for sending data from SLURM cluster to Waldur.
+Both instances must be configured with environment variables (from e.g. .env-file), file for computing components and an optional file for multiple offerings.
 
-The example of .env-file for service-pull:
+The example of `.env-file` for agent-pull:
 
 ```env
-WALDUR_SYNC_DIRECTION=pull # The setup for service-pull
+WALDUR_SYNC_DIRECTION=pull # The setup for agent-pull
 WALDUR_API_URL=http://waldur.example.com/api/ # Waldur API URL
 WALDUR_API_TOKEN=9e1132b9616ebfe943ddf632ca32bbb7e1109a32 # Token of a service provider in Waldur
 WALDUR_OFFERING_UUID=e21a0f0030b447deb63bedf69db6742e # UUID of SLURM offering in Waldur
@@ -81,10 +90,10 @@ SLURM_DEFAULT_ACCOUNT=root # Default account for SLURM
 SLURM_CONTAINER_NAME=slurmctld # Name of SLURM namenode container
 ```
 
-The example of .env-file for service-push:
+The example of .env-file for agent-push:
 
 ```env
-WALDUR_SYNC_DIRECTION=push # The setup for service-push
+WALDUR_SYNC_DIRECTION=push # The setup for agent-push
 WALDUR_API_URL=http://waldur.example.com/api/ # Waldur API URL
 WALDUR_API_TOKEN=9e1132b9616ebfe943ddf632ca32bbb7e1109a32 # Token of a service provider in Waldur
 WALDUR_OFFERING_UUID=e21a0f0030b447deb63bedf69db6742e # UUID of SLURM offering in Waldur
@@ -93,7 +102,11 @@ SLURM_CONTAINER_NAME=slurmctld # Name of SLURM namenode container
 
 ### Docker-based deployment
 
-You can find the Docker Compose configuration for testing in `examples/docker-compose/` folder.
+You can find the Docker Compose configuration for testing in [examples/docker-compose/](examples/docker-compose/) folder:
+
+- [docker-compose.yml](examples/docker-compose/docker-compose.yml)
+- [agent-pull](examples/docker-compose/waldur-agent-pull-env)
+- [agent-push](examples/docker-compose/waldur-agent-push-env)
 
 In order to test it, you need to execute following commands in your terminal app:
 
@@ -104,62 +117,88 @@ docker-compose up -d
 
 ### Systemd deployment
 
-If your SLURM cluster doesn't run in Docker, you need to deploy the a systemd service starting using Python module.
+In case of native deployment, you need to setup and run the a systemd service executing Python module.
+
+#### SLURM cluster
+
 The agent requires `sacct` and `sacctmgr` to be accessible on a machine, so it should run on a headnode of the SLURM cluster.
-Firstly, install the waldur-slurm-agent:
+Firstly, install the waldur-site-agent:
 
 ```bash
-pip install waldur-slurm-agent
+pip install waldur-site-agent
 ```
 
 Secondly, put systemd unit, environment and and TRES config files to the corresponding locations.
 Don't forget to modify Waldur-related values the env files.
 
+##### agent-pull files for a SLURM cluster
+
+- `systemd unit`: [waldur-site-agent-pull.service](systemd-conf/agent-pull/waldur-site-agent-pull.service)
+- `example .env`: [waldur-site-agent-pull.env](systemd-conf/agent-pull/waldur-site-agent-pull.env)
+
+##### agent-push files for a SLURM cluster
+
+- `systemd unit`: [waldur-site-agent-push.service](systemd-conf/agent-push/waldur-site-agent-push.service)
+- `example .env`: [waldur-site-agent-push.env](systemd-conf/agent-push/waldur-site-agent-push.env)
+
+#### Common files
+
+- [example of a file for config components](https://github.com/waldur/waldur-site-agent/blob/main/config-components.yaml.example)
+
 ```bash
-# For pulling service
-cp systemd-conf/service-pull/waldur-slurm-service-pull.service /etc/systemd/system/
-mkdir /etc/waldur-slurm-service/
-cp systemd-conf/service-pull/waldur-slurm-service-pull.env /etc/waldur-slurm-service/pull.env
-cp ./config-components.yaml.example /etc/waldur-slurm-service/tres.yaml # you can use a different path and set SLURM_TRES_CONFIG_PATH to it
+# For agent-pull
+cp systemd-conf/agent-pull/waldur-site-agent-pull.service /etc/systemd/system/
+mkdir /etc/waldur-site-agent/
+cp systemd-conf/agent-pull/waldur-site-agent-pull.env /etc/waldur-site-agent/pull.env
+cp ./config-components.yaml.example /etc/waldur-site-agent/tres.yaml # you can use a different path and set SLURM_TRES_CONFIG_PATH to it
 
 
-# For pushing service
-cp systemd-conf/service-push/waldur-slurm-service-push.service /etc/systemd/system/
-cp systemd-conf/service-push/waldur-slurm-service-push.env /etc/waldur-slurm-service/push.env
+# For agent-push
+cp systemd-conf/agent-push/waldur-site-agent-push.service /etc/systemd/system/
+cp systemd-conf/agent-push/waldur-site-agent-push.env /etc/waldur-site-agent/push.env
 ```
 
-After the preparation, run the following to apply the changes.
+After these preparation steps, run the following script to apply the changes.
 
 ```bash
 systemctl daemon-reload
-systemctl start waldur-slurm-service-pull
-systemctl enable waldur-slurm-service-pull # to start after reboot
-systemctl start waldur-slurm-service-push
-systemctl enable waldur-slurm-service-push # to start after reboot
+systemctl start waldur-site-agent-pull
+systemctl enable waldur-site-agent-pull # to start after reboot
+systemctl start waldur-site-agent-push
+systemctl enable waldur-site-agent-push # to start after reboot
 ```
 
 #### Older systemd versions
 
-If you want to deploy the services on a machine with systemd revision older than 240, you should use files with legacy configuration:
+If you want to deploy the agents on a machine with systemd revision older than 240, you should use files with legacy configuration:
+
+- systemd legacy unit file for agent-pull: [waldur-site-agent-pull-legacy.service](systemd-conf/agent-pull/waldur-site-agent-pull-legacy.service)
+- systemd legacy unit file for agent-push: [waldur-site-agent-push-legacy.service](systemd-conf/agent-push/waldur-site-agent-push-legacy.service)
 
 ```bash
-# For pulling service
-cp systemd-conf/service-pull/waldur-slurm-service-pull-legacy.service /etc/systemd/system/waldur-slurm-service-pull.service
-# For pushing service
-cp systemd-conf/service-push/waldur-slurm-service-push-legacy.service /etc/systemd/system/waldur-slurm-service-push.service
+# For pulling agent
+cp systemd-conf/agent-pull/waldur-site-agent-pull-legacy.service /etc/systemd/system/waldur-site-agent-pull.service
+# For pushing agent
+cp systemd-conf/agent-push/waldur-site-agent-push-legacy.service /etc/systemd/system/waldur-site-agent-push.service
 ```
 
 ### TRES configuration
 
-To setup TRES-related info, the service uses the corresponding configuration file configured by `SLURM_TRES_CONFIG_PATH` environment variable (`config-components.yaml` by default). Each entry of the file incudes key-value-formatted data.
+To setup TRES-related info, the agent uses the corresponding configuration file configured by `SLURM_TRES_CONFIG_PATH` environment variable (`config-components.yaml` by default). Each entry of the file incudes key-value-formatted data.
 A key is a type of TRES (with optional name if type is `gres`) and the value contains limit, measured unit, type of accounting and label.
-The script `waldur_slurm_diagnostics` sends this data to Waldur:
+The script `waldur_slurm_load_components` sends this data to Waldur:
 
-If a user wants to change this information, a custom config file should be mounted into a container and set `SLURM_TRES_CONFIG_PATH` value to a correct location.
+```bash
+waldur_slurm_load_components
+```
+
+If a user wants to change this information, a path of a custom config file should be set for `SLURM_TRES_CONFIG_PATH` variable.
 
 ## Service provider configuration
 
-The services require existing offering in Waldur.
+### SLURM cluster
+
+The agents require existing offering data in Waldur.
 As a service provider owner, you should create an offering in the marketplace:
 
 - Go to `Provider` section on the left tab -> `Add new offering` button

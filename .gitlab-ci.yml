@@ -26,7 +26,7 @@ include:
     - pip install poetry
     - poetry config virtualenvs.create false
     - poetry install
-    - pytest --junitxml=report.xml --cov=waldur_slurm/ $TESTS_DIR
+    - pytest --junitxml=report.xml --cov=waldur_site_agent/ $TESTS_DIR
     - coverage xml
     - coverage report
 
@@ -141,6 +141,6 @@ Upload docs:
     - cp -rv $CI_PROJECT_DIR/examples/* docs/admin-guide/providers/examples/
     - cp -rv $CI_PROJECT_DIR/img/* docs/admin-guide/providers/img/
     - git add docs/admin-guide/providers/
-    - git commit -m 'Update Waldur SLURM Service docs' || exit 0
-    - git branch new-slurm-service-docs
-    - git push --set-upstream origin new-slurm-service-docs:master
+    - git commit -m 'Update Waldur Site Agent docs' || exit 0
+    - git branch new-site-agent-docs
+    - git push --set-upstream origin new-site-agent-docs:master

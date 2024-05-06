@@ -9,10 +9,10 @@ RUN apk add --update --no-cache python3 &&\
 
 RUN ln -s /usr/bin/python3.9 /usr/bin/python
 
-COPY . /usr/src/waldur_slurm/
+COPY . /usr/src/waldur_site_agent/
 
-WORKDIR /usr/src/waldur_slurm/
+WORKDIR /usr/src/waldur_site_agent/
 
 RUN poetry config virtualenvs.create false && poetry install --only main
 
-CMD [ "python3", "-m", "waldur_slurm.main" ]
+CMD [ "python3", "-m", "waldur_site_agent.main" ]

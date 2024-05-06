@@ -1,16 +1,16 @@
 version: '3'
 
 services:
-  slurm_service_pull:
-    image: opennode/waldur-slurm-service:latest
+  waldur_site_agent_pull:
+    image: opennode/waldur-site-agent:latest
     env_file:
-      service-pull-env
+      waldur-agent-pull-env
     volumes: # Add this if SLURM cluster deployed in Docker
       - /var/run/docker.sock:/var/run/docker.sock
 
-  slurm_service_push:
-    image: opennode/waldur-slurm-service:latest
+  waldur_site_agent_push:
+    image: opennode/waldur-site-agent:latest
     env_file:
-      service-push-env
+      waldur-agent-push-env
     volumes: # Add this if SLURM cluster deployed in Docker
       - /var/run/docker.sock:/var/run/docker.sock

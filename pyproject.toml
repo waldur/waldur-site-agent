@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "waldur-slurm-agent"
+name = "waldur-site-agent"
 version = "0.1.0"
-description = "SLURM integration module for Waldur."
+description = "Agent for integrating service provider's site with Waldur Mastermind."
 authors = ["OpenNode Team <info@opennodecloud.com>"]
 license = "MIT"
 homepage = "https://waldur.com"
@@ -13,7 +13,7 @@ classifiers=[
     "Operating System :: OS Independent",
 ]
 packages = [
-    {include = "waldur_slurm"}
+    {include = "waldur_site_agent"}
 ]
 
 [tool.poetry.dependencies]
@@ -31,10 +31,10 @@ pytest = "7.1.2"
 pytest-cov = "3.0.0"
 
 [tool.poetry.scripts]
-waldur_slurm_agent = 'waldur_slurm.main:main'
-waldur_slurm_diagnostics = 'waldur_slurm.common_utils:diagnostics'
-waldur_slurm_load_components = 'waldur_slurm.common_utils:create_offering_components'
-waldur_slurm_create_homedirs = 'waldur_slurm.common_utils:create_homedirs_for_offering_users'
+waldur_site_agent = 'waldur_site_agent.main:main'
+waldur_slurm_diagnostics = 'waldur_site_agent.common_utils:diagnostics'
+waldur_slurm_load_components = 'waldur_site_agent.common_utils:create_offering_components'
+waldur_slurm_create_homedirs = 'waldur_site_agent.common_utils:create_homedirs_for_offering_users'
 
 [build-system]
 requires = ["poetry-core"]
