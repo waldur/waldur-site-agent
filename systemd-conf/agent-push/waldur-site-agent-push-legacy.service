@@ -1,0 +1,13 @@
+[Unit]
+Description=Waldur SLURM integration service pushing data from SLURM cluster to Waldur instance
+
+[Service]
+User=root
+Group=root
+ExecStart=python3 -m waldur_site_agent.main
+EnvironmentFile=/etc/waldur-site-agent/push.env
+StandardOutput=append:/var/log/waldur-site-agent-push.log
+StandardError=append:/var/log/waldur-site-agent-push-error.log
+
+[Install]
+WantedBy=multi-user.target

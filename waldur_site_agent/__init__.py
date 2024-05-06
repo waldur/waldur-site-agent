@@ -4,8 +4,8 @@ from importlib.metadata import version
 
 import yaml
 
-from waldur_slurm.slurm_client import logger
-from waldur_slurm.slurm_client.backend import SlurmBackend
+from waldur_site_agent.slurm_client import logger
+from waldur_site_agent.slurm_client.backend import SlurmBackend
 
 
 # "pull" stands for sync from Waldur to SLURM cluster
@@ -76,11 +76,11 @@ ENABLE_USER_HOMEDIR_ACCOUNT_CREATION = ENABLE_USER_HOMEDIR_ACCOUNT_CREATION.lowe
     "yes",
     "true",
 ]
-waldur_slurm_agent_version = version("waldur-slurm-agent")
+waldur_site_agent_version = version("waldur-site-agent")
 
 user_agent_dict = {
-    "pull": f"waldur-slurm-service-pull/{waldur_slurm_agent_version}",
-    "push": f"waldur-slurm-service-push/{waldur_slurm_agent_version}",
+    "pull": f"waldur-site-agent-pull/{waldur_site_agent_version}",
+    "push": f"waldur-site-agent-push/{waldur_site_agent_version}",
 }
 
 USER_AGENT = user_agent_dict.get(WALDUR_SYNC_DIRECTION)

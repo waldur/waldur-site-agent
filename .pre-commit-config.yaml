@@ -8,15 +8,15 @@ repos:
     rev: 5.12.0
     hooks:
       - id: isort
-        files: ^waldur_slurm/|^tests/
+        files: ^waldur_site_agent/|^tests/
         args: ["--profile", "black"]
   - repo: https://github.com/psf/black
     rev: 22.3.0
     hooks:
       - id: black
-        files: ^waldur_slurm/|^tests/
+        files: ^waldur_site_agent/|^tests/
   - repo: https://github.com/pycqa/flake8
     rev: 4.0.1
     hooks:
       - id: flake8
-        files: ^waldur_slurm/|^tests/
+        files: ^waldur_site_agent/|^tests/

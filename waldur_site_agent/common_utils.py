@@ -2,7 +2,7 @@ import pprint
 
 from waldur_client import OfferingComponent, WaldurClient, WaldurClientException
 
-from waldur_slurm.slurm_client import (
+from waldur_site_agent.slurm_client import (
     SLURM_ALLOCATION_NAME_MAX_LEN,
     SLURM_ALLOCATION_PREFIX,
     SLURM_CONTAINER_NAME,
@@ -12,8 +12,8 @@ from waldur_slurm.slurm_client import (
     SLURM_PROJECT_PREFIX,
     SLURM_TRES,
 )
-from waldur_slurm.slurm_client.exceptions import SlurmError
-from waldur_slurm.slurm_client.structures import Allocation
+from waldur_site_agent.slurm_client.exceptions import SlurmError
+from waldur_site_agent.slurm_client.structures import Allocation
 
 from . import (
     ENABLE_USER_HOMEDIR_ACCOUNT_CREATION,
