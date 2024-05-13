@@ -51,17 +51,17 @@ Alternatively, the agent can serve several offerings. For this:
 
 1. Create a config file for offerings with the following format:
 
-  ```yaml
-  offerings:
-  - name: example-offering-01
-    waldur_api_url: https://waldur1.exmaple.com/api/
-    waldur_api_token: <token1>
-    waldur_offering_uuid: <uuid1>
-  - name: example-offering-02
-    waldur_api_url: https://waldur2.exmaple.com/api/
-    waldur_api_token: <token2>
-    waldur_offering_uuid: <uuid2>
-  ```
+    ```yaml
+    offerings:
+    - name: example-offering-01
+      waldur_api_url: https://waldur1.exmaple.com/api/
+      waldur_api_token: <token1>
+      waldur_offering_uuid: <uuid1>
+    - name: example-offering-02
+      waldur_api_url: https://waldur2.exmaple.com/api/
+      waldur_api_token: <token2>
+      waldur_offering_uuid: <uuid2>
+    ```
 
 2. Add a variable `WALDUR_CONFIG_FILE_PATH` to the environment, for example:
 
@@ -119,7 +119,7 @@ docker-compose up -d
 
 In case of native deployment, you need to setup and run the a systemd service executing Python module.
 
-#### SLURM cluster
+#### SLURM agent
 
 The agent requires `sacct` and `sacctmgr` to be accessible on a machine, so it should run on a headnode of the SLURM cluster.
 Firstly, install the waldur-site-agent:
@@ -131,12 +131,12 @@ pip install waldur-site-agent
 Secondly, put systemd unit, environment and and TRES config files to the corresponding locations.
 Don't forget to modify Waldur-related values the env files.
 
-##### agent-pull files for a SLURM cluster
+##### agent-pull files for a SLURM agent
 
 - `systemd unit`: [waldur-site-agent-pull.service](systemd-conf/agent-pull/waldur-site-agent-pull.service)
 - `example .env`: [waldur-site-agent-pull.env](systemd-conf/agent-pull/waldur-site-agent-pull.env)
 
-##### agent-push files for a SLURM cluster
+##### agent-push files for a SLURM agent
 
 - `systemd unit`: [waldur-site-agent-push.service](systemd-conf/agent-push/waldur-site-agent-push.service)
 - `example .env`: [waldur-site-agent-push.env](systemd-conf/agent-push/waldur-site-agent-push.env)
@@ -196,7 +196,7 @@ If a user wants to change this information, a path of a custom config file shoul
 
 ## Service provider configuration
 
-### SLURM cluster
+### SLURM
 
 The agents require existing offering data in Waldur.
 As a service provider owner, you should create an offering in the marketplace:
