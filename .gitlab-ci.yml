@@ -139,7 +139,8 @@ Upload docs:
     - cp -v $CI_PROJECT_DIR/README.md docs/admin-guide/providers/remote-slurm.md
     - mkdir docs/admin-guide/providers/examples || true
     - cp -rv $CI_PROJECT_DIR/examples/* docs/admin-guide/providers/examples/
-    - cp -rv $CI_PROJECT_DIR/systemd-conf/* mkdir docs/admin-guide/providers/systemd-conf/
+    - mkdir docs/admin-guide/providers/systemd-conf/ || true
+    - cp -rv $CI_PROJECT_DIR/systemd-conf/* docs/admin-guide/providers/systemd-conf/
     - cp -rv $CI_PROJECT_DIR/img/* docs/admin-guide/providers/img/
     - git add docs/admin-guide/providers/
     - git commit -m 'Update Waldur Site Agent docs' || exit 0
