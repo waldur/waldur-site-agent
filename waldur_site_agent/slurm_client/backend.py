@@ -146,7 +146,7 @@ class SlurmBackend:
             logger.info("Deleting account %s from SLURM cluster", account)
             self.client.delete_account(account)
         else:
-            logger.warning("There is no account %s in SLURM cluster")
+            logger.warning("There is no account %s in SLURM cluster", account)
 
     def delete_allocation(
         self,
@@ -175,7 +175,7 @@ class SlurmBackend:
         ):
             self.delete_account_safely(project_account)
 
-        # TODO: delete customer if it hasn't any associated allocations
+        # TODO: delete customer if it doesn't have any associated allocations
 
         return existing_users
 
