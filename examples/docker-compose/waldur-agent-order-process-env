@@ -1,6 +1,0 @@
-WALDUR_SITE_AGENT_MODE=order_process # The setup for `agent-order-process`
-WALDUR_API_URL=http://waldur.example.com/api/ # Waldur API URL
-WALDUR_API_TOKEN=changeme # Token of a service provider in Waldur
-WALDUR_OFFERING_UUID=changeme # UUID of SLURM offering in Waldur
-SLURM_DEFAULT_ACCOUNT=root # Default account for SLURM
-SLURM_CONTAINER_NAME=slurmctld # Name of SLURM namenode container
