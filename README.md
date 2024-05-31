@@ -36,9 +36,6 @@ and associations from a backend and pushes it to Waldur.
 #### SLURM cluster
 
 For this, the agent uses SLURM command line utilities (e.g. `sacct` and `sacctmgr`).
-The access to the binaries can be either direct or using docker client.
-In the latter case, the agent is required to have access
-to `docker` binary and to docker socket (e.g. `/var/run/docker.sock`).
 
 ## Setup
 
@@ -57,8 +54,6 @@ The application supports the following environmental variables
   for Waldur client, default is `true`.
 - `SLURM_TRES_CONFIG_PATH` - a path to the SLURM TRES
   configuration, default is `./config-components.yaml`.
-- `SLURM_DEPLOYMENT_TYPE` - type of SLURM deployment.
-  accepts two values: `docker` and `native`, default is `docker`.
 - `SLURM_CUSTOMER_PREFIX` - prefix used for customer's accounts, default is `hpc_`.
 - `SLURM_PROJECT_PREFIX` - prefix used for project's accounts, default is `hpc_`.
 - `SLURM_ALLOCATION_PREFIX` - prefix used for allocation's accounts, default is `hpc_`.
@@ -66,8 +61,6 @@ The application supports the following environmental variables
   created by the application.
 - `SLURM_DEFAULT_ACCOUNT` - default account name existing
   in SLURM cluster for creation of new accounts. Default is `waldur`.
-- `SLURM_CONTAINER_NAME` - name of a headnode SLURM container;
-  must be set if SLURM_DEPLOYMENT_TYPE is docker.
 - `ENABLE_USER_HOMEDIR_ACCOUNT_CREATION` - whether to create
   home directories for users related to accounts.
 - `SENTRY_DSN` - Data Source Name for Sentry
@@ -124,24 +117,6 @@ WALDUR_API_URL=http://waldur.example.com/api/ # Waldur API URL
 WALDUR_API_TOKEN=changeme # Token of a service provider in Waldur
 WALDUR_OFFERING_UUID=changeme # UUID of SLURM offering in Waldur
 SLURM_DEFAULT_ACCOUNT=root # Default account for SLURM
-SLURM_CONTAINER_NAME=slurmctld # Name of SLURM namenode container
-```
-
-### Docker-based deployment
-
-You can find the Docker Compose configuration for testing in
-[examples/docker-compose/](examples/docker-compose/) folder:
-
-- [docker-compose.yml](examples/docker-compose/docker-compose.yml)
-- [agent-order-process](examples/docker-compose/waldur-agent-order-process-env)
-- [agent-report](examples/docker-compose/waldur-agent-report-env)
-- [agent-membership-sync](examples/docker-compose/waldur-agent-membership-sync-env)
-
-In order to test it, you need to execute following commands in your terminal app:
-
-```bash
-cd examples/docker-compose
-docker-compose up -d
 ```
 
 ### Systemd deployment

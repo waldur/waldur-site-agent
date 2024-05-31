@@ -15,10 +15,8 @@ from waldur_site_agent.backends.exceptions import BackendError
 
 from . import (
     SLURM_ALLOCATION_PREFIX,
-    SLURM_CONTAINER_NAME,
     SLURM_CUSTOMER_PREFIX,
     SLURM_DEFAULT_ACCOUNT,
-    SLURM_DEPLOYMENT_TYPE,
     SLURM_PROJECT_PREFIX,
     SLURM_TRES,
 )
@@ -120,7 +118,6 @@ def diagnostics() -> bool:
     """Runs diagnostics for SLURM cluster."""
     slurm_backend = SlurmBackend()
     format_string = "{:<30} = {:<10}"
-    logger.info(format_string.format("SLURM_DEPLOYMENT_TYPE", SLURM_DEPLOYMENT_TYPE))
     logger.info(
         format_string.format("SLURM_ALLOCATION_NAME_MAX_LEN", SLURM_ALLOCATION_NAME_MAX_LEN)
     )
@@ -128,7 +125,6 @@ def diagnostics() -> bool:
     logger.info(format_string.format("SLURM_PROJECT_PREFIX", SLURM_PROJECT_PREFIX))
     logger.info(format_string.format("SLURM_ALLOCATION_PREFIX", SLURM_ALLOCATION_PREFIX))
     logger.info(format_string.format("SLURM_DEFAULT_ACCOUNT", SLURM_DEFAULT_ACCOUNT))
-    logger.info(format_string.format("SLURM_CONTAINER_NAME", SLURM_CONTAINER_NAME))
     logger.info("")
 
     logger.info("SLURM tres config file content:\n%s\n", pprint.pformat(SLURM_TRES))

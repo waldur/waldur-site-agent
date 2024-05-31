@@ -11,6 +11,7 @@ from waldur_site_agent.backends import (
     ENABLE_USER_HOMEDIR_ACCOUNT_CREATION,
     BackendType,
     backend,
+    logger,
 )
 from waldur_site_agent.backends import (
     structures as common_structures,
@@ -21,13 +22,10 @@ from . import (
     SLURM_ALLOCATION_NAME_MAX_LEN,
     SLURM_ALLOCATION_PREFIX,
     SLURM_ALLOCATION_REGEX,
-    SLURM_CONTAINER_NAME,
     SLURM_CUSTOMER_PREFIX,
     SLURM_DEFAULT_ACCOUNT,
-    SLURM_DEPLOYMENT_TYPE,
     SLURM_PROJECT_PREFIX,
     SLURM_TRES,
-    logger,
     utils,
 )
 from .client import SlurmClient
@@ -42,7 +40,7 @@ class SlurmBackend(backend.BaseBackend):
         """Inits backend-related data and creates a corresponding client."""
         super().__init__()
         self.backend_type = BackendType.SLURM.value
-        self.client = SlurmClient(SLURM_DEPLOYMENT_TYPE, SLURM_CONTAINER_NAME)
+        self.client = SlurmClient()
 
     def ping(self, raise_exception: bool = False) -> bool:
         """Checks if the SLURM cluster is online."""

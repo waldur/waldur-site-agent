@@ -1,4 +1,3 @@
-# The application requires a docker client and git
 FROM python:3.12-alpine
 
 ENV PYTHONUNBUFFERED=1

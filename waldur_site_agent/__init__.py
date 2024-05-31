@@ -80,7 +80,7 @@ if WALDUR_SITE_AGENT_MODE not in [
     AgentMode.MEMBERSHIP_SYNC.value,
 ]:
     logger.error(
-        "SLURM_DEPLOYMENT_TYPE has invalid value: %s. " "Possible values are %s, %s and %s",
+        "WALDUR_SITE_AGENT_MODE has invalid value: %s. " "Possible values are %s, %s and %s",
         WALDUR_SITE_AGENT_MODE,
         AgentMode.ORDER_PROCESS.value,
         AgentMode.REPORT.value,
