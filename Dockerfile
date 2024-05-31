@@ -1,13 +1,9 @@
 # The application requires a docker client and git
-FROM docker:20.10.14-git
+FROM python:3.12-alpine
 
 ENV PYTHONUNBUFFERED=1
 
-RUN apk add --update --no-cache python3 &&\
-    python3 -m ensurepip &&\
-    pip3 install --no-cache --upgrade pip setuptools poetry
-
-RUN ln -s /usr/bin/python3.9 /usr/bin/python
+RUN pip install --no-cache --upgrade pip setuptools poetry
 
 COPY . /usr/src/waldur_site_agent/
 
