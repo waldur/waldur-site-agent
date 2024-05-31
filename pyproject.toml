@@ -22,6 +22,9 @@ python-waldur-client = "^0.3.0"
 requests = "2.32.3"
 pyyaml = "6.0.1"
 sentry-sdk = "2.3.1"
+poethepoet = "^0.26.1"
+types-pyyaml = "^6.0.12.20240311"
+
 
 
 [tool.poetry.group.dev.dependencies]
@@ -29,10 +32,76 @@ freezegun = "0.3.4"
 coverage = "6.3.2"
 pytest = "7.1.2"
 pytest-cov = "3.0.0"
+ruff = "^0.4.4"
+
+[tool.poe.tasks]
+pre.cmd = "pre-commit run --all-files"
+pre.help = "Run pre-commit checks"
+mypy.cmd = "mypy py_maker/**/*.py tests/**/*.py --strict"
+mypy.help = "Run mypy checks"
+format.cmd = "ruff format ."
+format.help = "Format code with Ruff"
+ruff.cmd = "ruff check waldur_site_agent --fix"
+ruff.help = "Run Ruff checks"
+markdown.cmd = "pymarkdown scan -r py_maker/**/[!CHANGELOG,!.github/]*.md docs/**/*.md"
+markdown.help = "Run markdown checks"
+
+[tool.ruff]
+line-length = 100
+lint.select = ["ALL"]
+lint.ignore = [
+  "ANN101",
+  "PGH003",
+  "FBT002",
+  "FBT003",
+  "B006",
+  "PLR0913",
+  "C901",
+  "SLF001",
+  "BLE001",
+  "DTZ007",
+  "PERF203",
+  "FBT001",
+  "EM102",
+  'TRY003',
+  'PLW2901',
+  'TD002',
+  'TD003',
+  'FIX002',
+  'S603',
+  'DTZ001',
+  'DTZ005'
+] # These rules are ignored
+lint.extend-ignore = [
+  "COM812",
+  "ISC001",
+] # these are ignored for ruff formatting
+
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "double"
+
+[tool.ruff.lint.pep8-naming]
+classmethod-decorators = ["pydantic.validator", "pydantic.root_validator"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**/*.py" = [
+  "S101",   # we can (and MUST!) use 'assert' in test files.
+  "ANN001", # annotations for fixtures are sometimes a pain for test files
+]
+
+[tool.ruff.lint.isort]
+known-first-party = []
+
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
 
 [tool.poetry.scripts]
 waldur_site_agent = 'waldur_site_agent.main:main'
-waldur_slurm_diagnostics = 'waldur_site_agent.common_utils:diagnostics'
+waldur_site_diagnostics = 'waldur_site_agent.common_utils:diagnostics'
 waldur_slurm_load_components = 'waldur_site_agent.common_utils:create_offering_components'
 waldur_slurm_create_homedirs = 'waldur_site_agent.common_utils:create_homedirs_for_offering_users'
 

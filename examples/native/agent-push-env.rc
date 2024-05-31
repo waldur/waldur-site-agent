@@ -1,5 +1,0 @@
-export WALDUR_SYNC_DIRECTION=push # The setup for service-push
-export WALDUR_API_URL=http://waldur.example.com/api/ # Waldur API URL
-export WALDUR_API_TOKEN=9e1132b9616ebfe943ddf632ca32bbb7e1109a32 # Token of a service provider in Waldur
-export WALDUR_OFFERING_UUID=e21a0f0030b447deb63bedf69db6742e # UUID of SLURM offering in Waldur
-export SLURM_CONTAINER_NAME=slurmctld # Name of SLURM namenode container

@@ -1,0 +1,11 @@
+[Unit]
+Description=Waldur site agent processing orders from Waldur
+
+[Service]
+User=root
+Group=root
+ExecStart=python3 -m waldur_site_agent.main
+EnvironmentFile=/etc/waldur-site-agent/agent-order-process.env
+
+[Install]
+WantedBy=multi-user.target

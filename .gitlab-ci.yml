@@ -47,15 +47,15 @@ include:
     - pip install pre-commit
     - pre-commit run --all
 
-.Test SLURM to Waldur sync template:
+.Test reporting template:
   extends: .Test template
   variables:
-    TESTS_DIR: "tests/test_slurm_to_waldur"
+    TESTS_DIR: "tests/test_reporting"
 
-.Test Waldur to SLURM sync template:
+.Test order processing template:
   extends: .Test template
   variables:
-    TESTS_DIR: "tests/test_waldur_to_slurm"
+    TESTS_DIR: "tests/test_order_processing"
 
 Publish python module tagged release:
   image: python:3.9-alpine
@@ -97,29 +97,29 @@ Run python v3.11 linters:
       echo '  python: python3.11' >> .pre-commit-config.yaml
     - cat .pre-commit-config.yaml
 
-Run python v3.9 tests (Waldur to SLURM):
+Run python v3.9 tests (order processing):
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Test Waldur to SLURM sync template
+  extends: .Test order processing template
 
-Run python v3.10 tests (Waldur to SLURM):
+Run python v3.10 tests (order processing):
   image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Test Waldur to SLURM sync template
+  extends: .Test order processing template
 
-Run python v3.11 tests (Waldur to SLURM):
+Run python v3.11 tests (order processing):
   image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Test Waldur to SLURM sync template
+  extends: .Test order processing template
 
-Run python v3.9 tests (SLURM to Waldur):
+Run python v3.9 tests (reporting):
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Test SLURM to Waldur sync template
+  extends: .Test reporting template
 
-Run python v3.10 tests (SLURM to Waldur):
+Run python v3.10 tests (reporting):
   image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Test SLURM to Waldur sync template
+  extends: .Test reporting template
 
-Run python v3.11 tests (SLURM to Waldur):
+Run python v3.11 tests (reporting):
   image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Test SLURM to Waldur sync template
+  extends: .Test reporting template
 
 Test docker build:
   stage: test

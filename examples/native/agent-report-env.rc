@@ -1,0 +1,6 @@
+export WALDUR_SYNC_DIRECTION=report # The setup for agent-report
+export WALDUR_API_URL=http://waldur.example.com/api/ # Waldur API URL
+export WALDUR_API_TOKEN=changeme # Token of a service provider in Waldur
+export WALDUR_OFFERING_UUID=changeme # UUID of SLURM offering in Waldur
+export SLURM_DEFAULT_ACCOUNT=root # Default account for SLURM
+export SLURM_CONTAINER_NAME=slurmctld # Name of SLURM namenode container
