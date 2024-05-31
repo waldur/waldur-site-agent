@@ -1,10 +1,12 @@
 cpu: # Type of tres with possible 'gres/' prefix
-  limit: 16000 # SLURM measured unit is CPU-minutes
+  limit: 10 # Amount of measured units for Waldur (SLURM measured unit is CPU-minutes)
   measured_unit: 'k-Hours' # Waldur measured unit for accounting
-  accounting_type: usage # Can be usage or limit
+  unit_factor: 60000 # Factor for conversion from measured unit to SLURM units (60 * 1000)
+  accounting_type: limit # Can be usage or limit
   label: CPU # A label for a component in Waldur
 mem:
-  limit: 102400000 # SLURM measured unit is MB-h
+  limit: 10 # Amount of measured units for Waldur (SLURM measured unit is MB-minutes)
   measured_unit: 'gb-Hours' # Waldur measured unit for accounting
+  unit_factor: 61440 # Unit factor for conversion from measured unit to SLURM units (60 * 1024)
   accounting_type: usage # Can be usage or limit
   label: RAM # A label for a component in Waldur

@@ -1,0 +1,125 @@
+import unittest
+import uuid
+from unittest import mock
+
+from freezegun import freeze_time
+
+from waldur_site_agent import Offering, common_utils
+from waldur_site_agent.agent_membership_sync import OfferingMembershipProcessor
+from waldur_site_agent.backends import BackendType
+from waldur_site_agent.backends.structures import Resource
+
+waldur_client_mock = mock.Mock()
+slurm_backend_mock = mock.Mock()
+
+OFFERING_UUID = "1a6ae60417e04088b90a5aa395209ecc"
+allocation_slurm = Resource(
+    backend_id="test-allocation-01",
+    backend_type=BackendType.SLURM.value,
+    users=["user-01"],
+    usage={
+        "user-01": {
+            "cpu": 10,
+            "mem": 30,
+        },
+        "TOTAL_ACCOUNT_USAGE": {
+            "cpu": 10,
+            "mem": 30,
+        },
+    },
+    limits={
+        "cpu": 100,
+        "mem": 300,
+    },
+)
+
+
+@freeze_time("2022-01-01")
+@mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
+@mock.patch.object(common_utils.SlurmBackend, "_pull_allocation", return_value=allocation_slurm)
+class TestSlurmToWaldurSync(unittest.TestCase):
+    def setUp(self) -> None:
+        self.waldur_resource = {
+            "uuid": "waldur-resource-uuid",
+            "name": "test-alloc-01",
+            "backend_id": "test-allocation-01",
+            "resource_uuid": uuid.uuid4().hex,
+        }
+        self.waldur_user_uuid = uuid.uuid4()
+        self.plan_period_uuid = uuid.uuid4().hex
+        self.offering = Offering(
+            name="Test offering",
+            api_url="https://api.example.com/api/",
+            api_token="token",
+            uuid=OFFERING_UUID,
+            backend_type=BackendType.SLURM.value,
+        )
+
+    @mock.patch.object(common_utils.SlurmBackend, "add_users_to_resource")
+    def test_association_create(
+        self, add_users_to_resource_mock, _, waldur_client_class: mock.Mock
+    ):
+        user_uuid = uuid.uuid4().hex
+        processor = OfferingMembershipProcessor(self.offering)
+
+        waldur_client = waldur_client_class.return_value
+        waldur_client.filter_marketplace_resources.return_value = [self.waldur_resource]
+        waldur_client.list_slurm_associations.return_value = []
+        waldur_client.marketplace_resource_get_team.return_value = [
+            {
+                "uuid": user_uuid,
+                "username": "test-user-02",
+                "full_name": "Test User02",
+            },
+        ]
+
+        offering_users = [{"username": "user-02", "user_uuid": user_uuid}]
+        waldur_client.list_remote_offering_users.return_value = offering_users
+
+        processor.process_offering()
+
+        waldur_client.filter_marketplace_resources.assert_called_once_with(
+            {
+                "offering_uuid": OFFERING_UUID,
+                "state": "OK",
+                "field": ["backend_id", "uuid", "name", "resource_uuid"],
+            }
+        )
+        waldur_client.list_slurm_associations.assert_called_once_with(
+            {"allocation_uuid": self.waldur_resource["resource_uuid"]}
+        )
+        waldur_client.delete_slurm_association.assert_not_called()
+        self.assertEqual(2, waldur_client.create_slurm_association.call_count)
+        calls = [
+            mock.call(self.waldur_resource["uuid"], allocation_slurm.users[0]),
+            mock.call(self.waldur_resource["uuid"], offering_users[0]["username"]),
+        ]
+        waldur_client.create_slurm_association.assert_has_calls(calls, any_order=False)
+        add_users_to_resource_mock.assert_called_once()
+
+    def test_association_delete(self, _: mock.Mock, waldur_client_class: mock.Mock):
+        processor = OfferingMembershipProcessor(self.offering)
+        waldur_client = waldur_client_class.return_value
+        waldur_client.filter_marketplace_resources.return_value = [self.waldur_resource]
+        waldur_client.list_slurm_associations.return_value = [
+            {"username": "user-01"},
+            {"username": "user-02"},
+        ]
+        waldur_client.list_remote_offering_users.return_value = []
+
+        processor.process_offering()
+
+        waldur_client.filter_marketplace_resources.assert_called_once_with(
+            {
+                "offering_uuid": OFFERING_UUID,
+                "state": "OK",
+                "field": ["backend_id", "uuid", "name", "resource_uuid"],
+            }
+        )
+        waldur_client.list_slurm_associations.assert_called_once_with(
+            {"allocation_uuid": self.waldur_resource["resource_uuid"]}
+        )
+        waldur_client.create_slurm_association.assert_not_called()
+        waldur_client.delete_slurm_association.assert_called_once_with(
+            self.waldur_resource["uuid"], "user-02"
+        )

@@ -1,16 +1,23 @@
 version: '3'
 
 services:
-  waldur_site_agent_pull:
+  waldur_site_agent_order_process:
     image: opennode/waldur-site-agent:latest
     env_file:
-      waldur-agent-pull-env
+      waldur-agent-order-process-env
     volumes: # Add this if SLURM cluster deployed in Docker
       - /var/run/docker.sock:/var/run/docker.sock
 
-  waldur_site_agent_push:
+  waldur_site_agent_report:
     image: opennode/waldur-site-agent:latest
     env_file:
-      waldur-agent-push-env
+      waldur-agent-report-env
+    volumes: # Add this if SLURM cluster deployed in Docker
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  waldur_site_agent_membership_sync:
+    image: opennode/waldur-site-agent:latest
+    env_file:
+      waldur-agent-membership-sync-env
     volumes: # Add this if SLURM cluster deployed in Docker
       - /var/run/docker.sock:/var/run/docker.sock
