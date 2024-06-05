@@ -9,17 +9,9 @@ from typing import Dict, List, Tuple
 import yaml
 from waldur_client import OfferingComponent, WaldurClient
 
-from waldur_site_agent import WALDUR_SITE_AGENT_MODE, AgentMode
 from waldur_site_agent.backends import logger
 from waldur_site_agent.backends.exceptions import BackendError
 
-from . import (
-    SLURM_ALLOCATION_PREFIX,
-    SLURM_CUSTOMER_PREFIX,
-    SLURM_DEFAULT_ACCOUNT,
-    SLURM_PROJECT_PREFIX,
-    SLURM_TRES,
-)
 from .backend import SlurmBackend
 
 UNIT_PATTERN = re.compile(r"(\d+)([KMGTP]?)")
@@ -74,20 +66,15 @@ def parse_int(value: str) -> int:
     return factor * value_
 
 
-def get_tres_list() -> List[str]:
-    """Returns list of TRES."""
-    return SLURM_TRES.keys()
-
-
-def get_slurm_tres_limits() -> Dict[str, int]:
-    """Returns dictionary of limits for usage-based TRES from config file.
+def get_slurm_tres_limits(slurm_tres: Dict) -> Dict[str, int]:
+    """Returns dictionary of limits for usage-based TRES.
 
     The limits converted to SLURM-readable values.
     I.e. CPU-minutes, MB-minutes.
     """
     return {
         tres: data["limit"] * data["unit_factor"]
-        for tres, data in SLURM_TRES.items()
+        for tres, data in slurm_tres.items()
         if data["accounting_type"] == "usage"
     }
 
@@ -105,46 +92,42 @@ def sum_dicts(dict_list: List[Dict]) -> Dict[str, int]:
     return result_dict
 
 
-def prettify_limits(limits: Dict[str, int]) -> str:
+def prettify_limits(limits: Dict[str, int], slurm_tres: Dict) -> str:
     """Makes limits human-readable."""
     limits_info = {
-        SLURM_TRES[key]["label"]: f"{value} {SLURM_TRES[key]['measured_unit']}"
+        slurm_tres[key]["label"]: f"{value} {slurm_tres[key]['measured_unit']}"
         for key, value in limits.items()
     }
     return yaml.dump(limits_info)
 
 
-def diagnostics() -> bool:
+def diagnostics(slurm_backend: SlurmBackend) -> bool:
     """Runs diagnostics for SLURM cluster."""
-    slurm_backend = SlurmBackend()
+    default_account_name = slurm_backend.slurm_settings["default_account"]
+
     format_string = "{:<30} = {:<10}"
     logger.info(
-        format_string.format("SLURM_ALLOCATION_NAME_MAX_LEN", SLURM_ALLOCATION_NAME_MAX_LEN)
+        format_string.format(
+            "SLURM allocation name max len", slurm_backend.slurm_settings["allocation_name_max_len"]
+        )
     )
-    logger.info(format_string.format("SLURM_CUSTOMER_PREFIX", SLURM_CUSTOMER_PREFIX))
-    logger.info(format_string.format("SLURM_PROJECT_PREFIX", SLURM_PROJECT_PREFIX))
-    logger.info(format_string.format("SLURM_ALLOCATION_PREFIX", SLURM_ALLOCATION_PREFIX))
-    logger.info(format_string.format("SLURM_DEFAULT_ACCOUNT", SLURM_DEFAULT_ACCOUNT))
+    logger.info(
+        format_string.format(
+            "SLURM customer prefix", slurm_backend.slurm_settings["customer_prefix"]
+        )
+    )
+    logger.info(
+        format_string.format("SLURM project prefix", slurm_backend.slurm_settings["project_prefix"])
+    )
+    logger.info(
+        format_string.format(
+            "SLURM allocation prefix", slurm_backend.slurm_settings["allocation_prefix"]
+        )
+    )
+    logger.info(format_string.format("SLURM default account", default_account_name))
     logger.info("")
 
-    logger.info("SLURM tres config file content:\n%s\n", pprint.pformat(SLURM_TRES))
-
-    if AgentMode.ORDER_PROCESS.value == WALDUR_SITE_AGENT_MODE:
-        logger.info(
-            "Agent is running in %s mode - "
-            "pulling orders from Waldur and creating resources in backend",
-            AgentMode.ORDER_PROCESS.name,
-        )
-    if AgentMode.REPORT.value == WALDUR_SITE_AGENT_MODE:
-        logger.info(
-            "Agent is running in %s mode - pushing usage data to Waldur",
-            AgentMode.REPORT.name,
-        )
-    if AgentMode.MEMBERSHIP_SYNC.value == WALDUR_SITE_AGENT_MODE:
-        logger.info(
-            "Agent is running in %s mode - pushing membership data to Waldur",
-            AgentMode.MEMBERSHIP_SYNC.name,
-        )
+    logger.info("SLURM tres components:\n%s\n", pprint.pformat(slurm_backend.slurm_tres))
 
     try:
         slurm_version_info = slurm_backend.client._execute_command(
@@ -164,37 +147,64 @@ def diagnostics() -> bool:
     tres = slurm_backend.list_components()
     logger.info("Available tres in the cluster: %s", ",".join(tres))
 
-    default_account = slurm_backend.client.get_account(SLURM_DEFAULT_ACCOUNT)
+    default_account = slurm_backend.client.get_account(default_account_name)
     if default_account is None:
         logger.error("There is no account %s in the cluster", default_account)
         return False
-    logger.info('Default parent account "%s" is in place', SLURM_DEFAULT_ACCOUNT)
+    logger.info('Default parent account "%s" is in place', default_account_name)
     logger.info("")
 
     return True
 
 
 def create_offering_components(
-    waldur_rest_client: WaldurClient, offering_uuid: str, offering_name: str
+    waldur_rest_client: WaldurClient, offering_uuid: str, offering_name: str, slurm_tres: Dict
 ) -> None:
     """Creates offering components for SLURM in Waldur."""
     logger.info(
         "Creating offering components data for the following TRES: %s",
-        ", ".join(SLURM_TRES.keys()),
+        ", ".join(slurm_tres.keys()),
     )
-    for tres_type, tres_info in SLURM_TRES.items():
-        component = OfferingComponent(
-            billing_type=tres_info["accounting_type"],
-            type=tres_type,
-            name=tres_info["label"],
-            measured_unit=tres_info["measured_unit"],
-            limit_amount=tres_info["limit"],
-        )
+    waldur_offering = waldur_rest_client.get_marketplace_public_offering(offering_uuid)
+    waldur_offering_components = {
+        component["type"]: component for component in waldur_offering["components"]
+    }
+    for tres_type, tres_info in slurm_tres.items():
         try:
-            waldur_rest_client.create_offering_component(offering_uuid, component)
+            component = OfferingComponent(
+                billing_type=tres_info["accounting_type"],
+                type=tres_type,
+                name=tres_info["label"],
+                measured_unit=tres_info["measured_unit"],
+                limit_amount=tres_info["limit"],
+            )
+            if tres_type in waldur_offering_components:
+                if tres_info["accounting_type"] == "usage":
+                    existing_component = waldur_offering_components[tres_type]
+                    logger.info(
+                        "Offering component %s already exists, updating limit from %s to %s %s.",
+                        tres_type,
+                        existing_component["limit_amount"],
+                        tres_info["limit"],
+                        tres_info["measured_unit"],
+                    )
+                    component.uuid = existing_component["uuid"]
+                    waldur_rest_client.update_offering_component(offering_uuid, component)
+                else:
+                    logger.info(
+                        "Offering component %s already exists, skipping creation.", tres_type
+                    )
+            else:
+                logger.info(
+                    "Creating offering component %s with limit %s %s.",
+                    tres_type,
+                    tres_info["limit"],
+                    tres_info["measured_unit"],
+                )
+                waldur_rest_client.create_offering_component(offering_uuid, component)
         except Exception as e:
             logger.info(
-                "Unable to create a component %s for offering %s (%s):",
+                "Unable to create or update a component %s for offering %s (%s):",
                 tres_info["label"],
                 offering_name,
                 offering_uuid,
@@ -202,13 +212,13 @@ def create_offering_components(
             logger.exception(e)
 
 
-def convert_slurm_units_to_waldur_ones(units: Dict, to_int: bool = False) -> Dict:
+def convert_slurm_units_to_waldur_ones(slurm_tres: Dict, units: Dict, to_int: bool = False) -> Dict:
     """Converts SLURM computing units to Waldur ones."""
     converted_units = {}
 
     for tres_name, value in units.items():
         converted_value = value
-        converted_value = converted_value / SLURM_TRES[tres_name].get("unit_factor", 1)
+        converted_value = converted_value / slurm_tres[tres_name].get("unit_factor", 1)
 
         if to_int:
             converted_units[tres_name] = int(converted_value)

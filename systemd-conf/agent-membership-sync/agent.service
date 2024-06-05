@@ -4,8 +4,7 @@ Description=Waldur site agent syncing membership with Waldur
 [Service]
 User=root
 Group=root
-ExecStart=python3 -m waldur_site_agent.main
-EnvironmentFile=/etc/waldur-site-agent/agent-membership-sync.env
+ExecStart=waldur_site_agent -m membership_sync -c /etc/waldur/waldur-site-agent-config.yaml
 
 [Install]
 WantedBy=multi-user.target

@@ -4,7 +4,8 @@ from unittest import mock
 
 from freezegun import freeze_time
 
-from waldur_site_agent import Offering, common_utils
+from waldur_site_agent import common_utils
+from tests.fixtures import OFFERING
 from waldur_site_agent.agent_membership_sync import OfferingMembershipProcessor
 from waldur_site_agent.backends import BackendType
 from waldur_site_agent.backends.structures import Resource
@@ -12,7 +13,7 @@ from waldur_site_agent.backends.structures import Resource
 waldur_client_mock = mock.Mock()
 slurm_backend_mock = mock.Mock()
 
-OFFERING_UUID = "1a6ae60417e04088b90a5aa395209ecc"
+OFFERING_UUID = "d629d5e45567425da9cdbdc1af67b32c"
 allocation_slurm = Resource(
     backend_id="test-allocation-01",
     backend_type=BackendType.SLURM.value,
@@ -47,13 +48,7 @@ class TestSlurmToWaldurSync(unittest.TestCase):
         }
         self.waldur_user_uuid = uuid.uuid4()
         self.plan_period_uuid = uuid.uuid4().hex
-        self.offering = Offering(
-            name="Test offering",
-            api_url="https://api.example.com/api/",
-            api_token="token",
-            uuid=OFFERING_UUID,
-            backend_type=BackendType.SLURM.value,
-        )
+        self.offering = OFFERING
 
     @mock.patch.object(common_utils.SlurmBackend, "add_users_to_resource")
     def test_association_create(
@@ -80,7 +75,7 @@ class TestSlurmToWaldurSync(unittest.TestCase):
 
         waldur_client.filter_marketplace_resources.assert_called_once_with(
             {
-                "offering_uuid": OFFERING_UUID,
+                "offering_uuid": self.offering.uuid,
                 "state": "OK",
                 "field": ["backend_id", "uuid", "name", "resource_uuid"],
             }
@@ -111,7 +106,7 @@ class TestSlurmToWaldurSync(unittest.TestCase):
 
         waldur_client.filter_marketplace_resources.assert_called_once_with(
             {
-                "offering_uuid": OFFERING_UUID,
+                "offering_uuid": self.offering.uuid,
                 "state": "OK",
                 "field": ["backend_id", "uuid", "name", "resource_uuid"],
             }

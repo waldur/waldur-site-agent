@@ -5,7 +5,8 @@ from unittest import mock
 from freezegun import freeze_time
 from waldur_client import ComponentUsage
 
-from waldur_site_agent import Offering, common_utils
+from waldur_site_agent import common_utils
+from tests.fixtures import OFFERING
 from waldur_site_agent.agent_report import OfferingReportProcessor
 from waldur_site_agent.backends import BackendType
 from waldur_site_agent.backends.structures import Resource
@@ -13,7 +14,6 @@ from waldur_site_agent.backends.structures import Resource
 waldur_client_mock = mock.Mock()
 slurm_backend_mock = mock.Mock()
 
-OFFERING_UUID = "1a6ae60417e04088b90a5aa395209ecc"
 allocation_slurm = Resource(
     backend_id="test-allocation-01",
     backend_type=BackendType.SLURM.value,
@@ -52,18 +52,12 @@ class TestSlurmReporting(unittest.TestCase):
                 {"type": "mem"},
             ]
         }
+        self.offering = OFFERING
 
         self.plan_period_uuid = uuid.uuid4().hex
 
     def test_usage_reporting(self, _, waldur_client_class: mock.Mock):
-        offering = Offering(
-            name="Test offering",
-            api_url="https://api.example.com/api/",
-            api_token="token",
-            uuid=OFFERING_UUID,
-            backend_type=BackendType.SLURM.value,
-        )
-        processor = OfferingReportProcessor(offering)
+        processor = OfferingReportProcessor(self.offering)
         waldur_client = waldur_client_class.return_value
 
         waldur_client.marketplace_resource_get_plan_periods.return_value = [
@@ -80,13 +74,10 @@ class TestSlurmReporting(unittest.TestCase):
 
         waldur_client.filter_marketplace_resources.assert_called_once_with(
             {
-                "offering_uuid": OFFERING_UUID,
+                "offering_uuid": self.offering.uuid,
                 "state": "OK",
                 "field": ["backend_id", "uuid", "name"],
             }
-        )
-        waldur_client.set_slurm_allocation_limits.assert_called_once_with(
-            self.waldur_resource["uuid"], allocation_slurm.limits
         )
         waldur_client.create_component_usages.assert_called_once_with(
             self.plan_period_uuid,

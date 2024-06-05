@@ -4,7 +4,7 @@ import abc
 
 from waldur_client import WaldurClient
 
-from waldur_site_agent import USER_AGENT, Offering, common_utils
+from waldur_site_agent import Offering, common_utils
 from waldur_site_agent.backends import BackendType
 from waldur_site_agent.backends.exceptions import BackendError
 
@@ -12,11 +12,11 @@ from waldur_site_agent.backends.exceptions import BackendError
 class OfferingBaseProcessor(abc.ABC):
     """Abstract class for an offering processing."""
 
-    def __init__(self, offering: Offering) -> None:
+    def __init__(self, offering: Offering, user_agent: str = "") -> None:
         """Constructor."""
         self.offering: Offering = offering
         self.waldur_rest_client: WaldurClient = WaldurClient(
-            offering.api_url, offering.api_token, USER_AGENT
+            offering.api_url, offering.api_token, user_agent
         )
         self.resource_backend = common_utils.get_backend_for_offering(offering)
         if self.resource_backend.backend_type == BackendType.UNKNOWN.value:

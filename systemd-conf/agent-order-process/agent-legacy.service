@@ -4,8 +4,7 @@ Description=Waldur site agent processing orders from Waldur
 [Service]
 User=root
 Group=root
-ExecStart=python3 -m waldur_site_agent.main
-EnvironmentFile=/etc/waldur-site-agent/agent-order-process.env.env
+ExecStart=waldur_site_agent -m order_process -c /etc/waldur/waldur-site-agent-config.yaml
 StandardOutput=append:/var/log/waldur-site-agent-order-process.log
 StandardError=append:/var/log/waldur-site-agent-order-process-error.log
 

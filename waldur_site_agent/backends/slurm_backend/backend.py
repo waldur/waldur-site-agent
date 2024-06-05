@@ -8,7 +8,6 @@ from typing import Dict, List, Set
 from waldur_client import is_uuid
 
 from waldur_site_agent.backends import (
-    ENABLE_USER_HOMEDIR_ACCOUNT_CREATION,
     BackendType,
     backend,
     logger,
@@ -19,13 +18,7 @@ from waldur_site_agent.backends import (
 from waldur_site_agent.backends.exceptions import BackendError
 
 from . import (
-    SLURM_ALLOCATION_NAME_MAX_LEN,
-    SLURM_ALLOCATION_PREFIX,
     SLURM_ALLOCATION_REGEX,
-    SLURM_CUSTOMER_PREFIX,
-    SLURM_DEFAULT_ACCOUNT,
-    SLURM_PROJECT_PREFIX,
-    SLURM_TRES,
     utils,
 )
 from .client import SlurmClient
@@ -34,13 +27,13 @@ from .client import SlurmClient
 class SlurmBackend(backend.BaseBackend):
     """Main class for management of SLURM resources."""
 
-    def __init__(
-        self,
-    ) -> None:
+    def __init__(self, slurm_settings: Dict, slurm_tres: Dict[str, Dict]) -> None:
         """Inits backend-related data and creates a corresponding client."""
         super().__init__()
         self.backend_type = BackendType.SLURM.value
-        self.client = SlurmClient()
+        self.slurm_settings = slurm_settings
+        self.slurm_tres = slurm_tres
+        self.client = SlurmClient(slurm_tres)
 
     def ping(self, raise_exception: bool = False) -> bool:
         """Checks if the SLURM cluster is online."""
@@ -116,13 +109,15 @@ class SlurmBackend(backend.BaseBackend):
 
         project_name = waldur_resource["project_name"]
         customer_name = waldur_resource["customer_name"]
-        allocation_limits = utils.get_slurm_tres_limits()
+        allocation_limits = utils.get_slurm_tres_limits(self.slurm_tres)
 
-        limit_based_components = set(utils.get_tres_list()) - set(allocation_limits.keys())
+        tres_list = set(self.slurm_tres.keys())
+        limit_based_components = tres_list - set(allocation_limits.keys())
 
         for component_key in limit_based_components:
             allocation_limits[component_key] = (
-                waldur_resource["limits"][component_key] * SLURM_TRES[component_key]["unit_factor"]
+                waldur_resource["limits"][component_key]
+                * self.slurm_tres[component_key]["unit_factor"]
             )
 
         customer_account = self._get_customer_name(waldur_resource["customer_uuid"])
@@ -173,16 +168,17 @@ class SlurmBackend(backend.BaseBackend):
 
         # Convert limits (for correct logging only)
         converted_limits = {
-            key: value // SLURM_TRES[key]["unit_factor"] for key, value in allocation_limits.items()
+            key: value // self.slurm_tres[key]["unit_factor"]
+            for key, value in allocation_limits.items()
         }
 
-        limits_str = utils.prettify_limits(converted_limits)
+        limits_str = utils.prettify_limits(converted_limits, self.slurm_tres)
         logger.info("Setting SLURM allocation limits to: \n%s", limits_str)
         self._set_allocation_limits(allocation_account, allocation_limits)
 
         # Keep only limit-based components for Waldur resource
         waldur_resource_limits = {
-            key: value // SLURM_TRES[key]["unit_factor"]
+            key: value // self.slurm_tres[key]["unit_factor"]
             for key, value in allocation_limits.items()
             if key in limit_based_components
         }
@@ -211,7 +207,7 @@ class SlurmBackend(backend.BaseBackend):
                     e,
                 )
 
-        if ENABLE_USER_HOMEDIR_ACCOUNT_CREATION:
+        if self.slurm_settings.get("enable_user_homedir_account_creation", True):
             self._create_user_homedirs(added_users)
 
         return added_users
@@ -241,7 +237,9 @@ class SlurmBackend(backend.BaseBackend):
         if not self.client.get_association(username, account):
             logger.info("Creating association between %s and %s", username, account)
             try:
-                self.client.create_association(username, account, SLURM_DEFAULT_ACCOUNT)
+                self.client.create_association(
+                    username, account, self.slurm_settings["default_account"]
+                )
             except BackendError as err:
                 logger.exception("Unable to create association in Slurm: %s", err)
                 return False
@@ -289,13 +287,15 @@ class SlurmBackend(backend.BaseBackend):
         report = self._get_usage_report([account])
         usage = report.get(account)
         if not usage:
-            empty_usage = {tres: 0 for tres in utils.get_tres_list()}
+            empty_usage = {tres: 0 for tres in self.slurm_tres}
             usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         # Convert SLURM units to Waldur ones
         usage_converted = {}
         for usage_account, usage_dict in usage.items():
-            converted_usage_dict = utils.convert_slurm_units_to_waldur_ones(usage_dict)
+            converted_usage_dict = utils.convert_slurm_units_to_waldur_ones(
+                self.slurm_tres, usage_dict
+            )
             usage_converted[usage_account] = converted_usage_dict
 
         limits: dict = self._get_allocation_limits(account)  # limits can be empty dict
@@ -358,33 +358,35 @@ class SlurmBackend(backend.BaseBackend):
         if len(correct_lines) == 0:
             return {}
 
-        return utils.convert_slurm_units_to_waldur_ones(correct_lines[0], to_int=True)
+        return utils.convert_slurm_units_to_waldur_ones(
+            self.slurm_tres, correct_lines[0], to_int=True
+        )
 
     def _get_allocation_name(self, allocation_name: str, allocation_uuid: str) -> str:
         name = allocation_name
-        prefix = SLURM_ALLOCATION_PREFIX
+        prefix = self.slurm_settings["allocation_prefix"]
         hexpart = allocation_uuid[:5]
 
         raw_name = f"{prefix}{hexpart}_{name}"
         incorrect_symbols_regex = rf"[^{SLURM_ALLOCATION_REGEX}]+"
         sanitized_name = re.sub(incorrect_symbols_regex, "", raw_name)
-        result_name = sanitized_name[:SLURM_ALLOCATION_NAME_MAX_LEN]
+        result_name = sanitized_name[: self.slurm_settings["allocation_name_max_len"]]
         return result_name.lower()
 
     def _get_project_name(self, name: str) -> str:
-        return f"{SLURM_PROJECT_PREFIX}{name}"
+        return f"{self.slurm_settings['project_prefix']}{name}"
 
     def _get_customer_name(self, name: str) -> str:
-        return f"{SLURM_CUSTOMER_PREFIX}{name}"
+        return f"{self.slurm_settings['customer_prefix']}{name}"
 
     def set_resource_limits(self, resource_backend_id: str, limits: Dict[str, int]) -> None:
         """Sets limits for the SLURM allocation."""
         # Convert limits
         converted_limits = {
-            key: value * SLURM_TRES[key]["unit_factor"] for key, value in limits.items()
+            key: value * self.slurm_tres[key]["unit_factor"] for key, value in limits.items()
         }
 
-        usage_based_limits = utils.get_slurm_tres_limits()
+        usage_based_limits = utils.get_slurm_tres_limits(self.slurm_tres)
         missing_usage_based_limits = set(usage_based_limits.keys()) - set(converted_limits.keys())
         converted_limits.update(
             {
