@@ -61,8 +61,6 @@ include:
 
 Publish python module tagged release:
   image: python:3.9-alpine
-  before_script:
-    - cp ./config-components.yaml.example ./config-components.yaml
   script:
     - pip install poetry
     - poetry config http-basic.pypi $PYPI_USERNAME $PYPI_PASSWORD
