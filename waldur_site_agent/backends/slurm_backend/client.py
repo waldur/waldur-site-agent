@@ -15,6 +15,10 @@ class SlurmClient(base.BaseClient):
     See also: https://slurm.schedmd.com/sacctmgr.html
     """
 
+    def __init__(self, slurm_tres: Dict) -> None:
+        """Inits SLURM-related data."""
+        self.slurm_tres = slurm_tres
+
     def list_accounts(self, accounts: Optional[List[str]] = None) -> List[structures.Account]:
         """Returns a list of accounts for the specified account names."""
         command = ["list", "account"]
@@ -135,7 +139,9 @@ class SlurmClient(base.BaseClient):
             "--format=Account,ReqTRES,Elapsed,User",
         ]
         output = self._execute_command(args, "sacct", immediate=False)
-        return [SlurmReportLine(line) for line in output.splitlines() if "|" in line]
+        return [
+            SlurmReportLine(line, self.slurm_tres) for line in output.splitlines() if "|" in line
+        ]
 
     def get_resource_limits(self, account: str) -> List[SlurmAssociationLine]:
         """Returns limits for the account."""
@@ -147,7 +153,11 @@ class SlurmClient(base.BaseClient):
             f"accounts={account}",
         ]
         output = self._execute_command(args, immediate=False)
-        return [SlurmAssociationLine(line) for line in output.splitlines() if "|" in line]
+        return [
+            SlurmAssociationLine(line, self.slurm_tres)
+            for line in output.splitlines()
+            if "|" in line
+        ]
 
     def list_account_users(self, account: str) -> List[str]:
         """Returns list of users lined to the account."""

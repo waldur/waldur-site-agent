@@ -11,11 +11,10 @@ from waldur_client import (
 
 from waldur_site_agent.backends import BackendType, logger
 from waldur_site_agent.backends.exceptions import BackendError
-from waldur_site_agent.backends.slurm_backend import utils as slurm_utils
 from waldur_site_agent.backends.structures import Resource
 from waldur_site_agent.processors import OfferingBaseProcessor
 
-from . import WALDUR_OFFERINGS, Offering
+from . import Offering, WaldurAgentConfiguration
 
 
 class OfferingReportProcessor(OfferingBaseProcessor):
@@ -23,10 +22,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
     Processes related resource and reports computing data to Waldur.
     """
-
-    def __init__(self, offering: Offering) -> None:
-        """Constructor."""
-        super().__init__(offering)
 
     def _mark_missing_waldur_resources_as_erred(self, missing_allocations: List[Resource]) -> None:
         """Marks resources existing in SLURM, but missing in Waldur as ERRED."""
@@ -137,16 +132,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             try:
                 logger.info("Processing %s", resource_backend_id)
                 usages: Dict[str, Dict[str, float]] = backend_resource.usage
-                limits: Dict[str, int] = backend_resource.limits
-
-                # Submit limits
-                if limits is not None:
-                    limits_str = slurm_utils.prettify_limits(limits)
-                    logger.info("Setting limits to \n%s", limits_str)
-
-                    self.waldur_rest_client.set_slurm_allocation_limits(
-                        backend_resource.marketplace_uuid, limits
-                    )
 
                 # Submit usage
                 total_usage = usages["TOTAL_ACCOUNT_USAGE"]
@@ -169,23 +154,23 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 )
 
 
-def process_offerings() -> None:
+def process_offerings(waldur_offerings: List[Offering], user_agent: str = "") -> None:
     """Processes list of offerings."""
-    logger.info("Number of offerings to process: %s", len(WALDUR_OFFERINGS))
-    for offering in WALDUR_OFFERINGS:
+    logger.info("Number of offerings to process: %s", len(waldur_offerings))
+    for offering in waldur_offerings:
         try:
-            processor = OfferingReportProcessor(offering)
+            processor = OfferingReportProcessor(offering, user_agent)
             processor.process_offering()
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
 
 
-def start() -> None:
+def start(configuration: WaldurAgentConfiguration) -> None:
     """Starts the main loop for offering processing."""
     logger.info("Synching data to Waldur")
     while True:
         try:
-            process_offerings()
+            process_offerings(configuration.waldur_offerings, configuration.waldur_user_agent)
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
         sleep(60 * 60)  # Once per hour

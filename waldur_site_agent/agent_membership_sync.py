@@ -1,7 +1,7 @@
 """Agent responsible for membership control."""
 
 from time import sleep
-from typing import Dict, Set
+from typing import Dict, List, Set
 
 from waldur_client import (
     WaldurClientException,
@@ -13,7 +13,7 @@ from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.structures import Resource
 from waldur_site_agent.processors import OfferingBaseProcessor
 
-from . import WALDUR_OFFERINGS, Offering
+from . import Offering, WaldurAgentConfiguration
 
 
 class OfferingMembershipProcessor(OfferingBaseProcessor):
@@ -21,10 +21,6 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
     Processes related resources and reports membership data to Waldur.
     """
-
-    def __init__(self, offering: Offering) -> None:
-        """Constructor."""
-        super().__init__(offering)
 
     def process_offering(self) -> None:
         """Processes offering and reports resources usage to Waldur."""
@@ -143,23 +139,23 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 )
 
 
-def process_offerings() -> None:
+def process_offerings(waldur_offerings: List[Offering], user_agent: str = "") -> None:
     """Processes list of offerings."""
-    logger.info("Number of offerings to process: %s", len(WALDUR_OFFERINGS))
-    for offering in WALDUR_OFFERINGS:
+    logger.info("Number of offerings to process: %s", len(waldur_offerings))
+    for offering in waldur_offerings:
         try:
-            processor = OfferingMembershipProcessor(offering)
+            processor = OfferingMembershipProcessor(offering, user_agent)
             processor.process_offering()
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
 
 
-def start() -> None:
+def start(configuration: WaldurAgentConfiguration) -> None:
     """Starts the main loop for offering processing."""
     logger.info("Synching data to Waldur")
     while True:
         try:
-            process_offerings()
+            process_offerings(configuration.waldur_offerings, configuration.waldur_user_agent)
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
         sleep(60 * 60)  # Once per hour

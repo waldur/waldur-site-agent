@@ -2,8 +2,6 @@ include:
   - project: "waldur/waldur-pipelines"
     file: "/templates/stages.yml"
   - project: "waldur/waldur-pipelines"
-    file: "/templates/release/publish.yml"
-  - project: "waldur/waldur-pipelines"
     file: "/templates/release/python-module-release.yml"
 
 .Test template:
@@ -21,8 +19,7 @@ include:
         coverage_format: cobertura
         path: coverage.xml
   script:
-    - source ${TESTS_DIR}/.env.rc
-    - cp ./config-components.yaml.example ./config-components.yaml
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
     - pip install poetry
     - poetry config virtualenvs.create false
     - poetry install
@@ -57,10 +54,14 @@ include:
   variables:
     TESTS_DIR: "tests/test_order_processing"
 
+.Test membership sync template:
+  extends: .Test template
+  variables:
+    TESTS_DIR: "tests/test_membreship_sync"
+
 Publish python module tagged release:
   image: python:3.9-alpine
   before_script:
-    - source tests/test_waldur_to_slurm/.env.rc
     - cp ./config-components.yaml.example ./config-components.yaml
   script:
     - pip install poetry
@@ -121,35 +122,17 @@ Run python v3.11 tests (reporting):
   image: "registry.hpc.ut.ee/mirror/library/python:3.11"
   extends: .Test reporting template
 
-Test docker build:
-  stage: test
-  image:
-    name: gcr.io/kaniko-project/executor:debug
-    entrypoint: [""]
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-  variables:
-    DOCKER_REGISTRY: 'registry.hpc.ut.ee/mirror/'
-  before_script:
-    - echo "[+] Test build"
-  script:
-    - AUTH=$(echo -n "${WALDUR_DOCKER_HUB_USER}:${WALDUR_DOCKER_HUB_PASSWORD}" | base64)
-    - |
-      cat << EOF > /kaniko/.docker/config.json
-      {
-        "auths": {
-          "https://index.docker.io/v1/": {
-            "auth": "${AUTH}"
-          }
-        }
-      }
-      EOF
-    - /kaniko/executor
-      --context "${CI_PROJECT_DIR}"
-      --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
-      --build-arg DOCKER_REGISTRY=$DOCKER_REGISTRY
-      --destination "opennode/$CI_PROJECT_NAME:$CI_COMMIT_SHA"
-      --no-push
+Run python v3.9 tests (membership sync):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Test membership sync template
+
+Run python v3.10 tests (membership sync):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Test membership sync template
+
+Run python v3.11 tests (membership sync):
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Test membership sync template
 
 Upload docs:
   image:

@@ -53,9 +53,10 @@ def parse_duration(value: str) -> float:
 class SlurmReportLine:
     """Class for SLURM report line parsing."""
 
-    def __init__(self, line: str) -> None:
+    def __init__(self, line: str, slurm_tres: Dict) -> None:
         """Inits parts field from the specified line."""
         self._parts = line.split("|")
+        self.slurm_tres = slurm_tres
 
     @cached_property
     def account(self) -> str:
@@ -87,9 +88,9 @@ class SlurmReportLine:
     def tres_usage(self) -> Dict:
         """TRES usage for the line."""
         usage = {}
-        tres_list = utils.get_tres_list()
+        slurm_tres_set = set(self.slurm_tres.keys())
         for resource in self._resources:
-            if resource not in tres_list:
+            if resource not in slurm_tres_set:
                 continue
             usage_raw = self.parse_field(resource)
             usage[resource] = usage_raw * self.duration
@@ -123,9 +124,10 @@ class SlurmAssociationLine(SlurmReportLine):
         """TRES limits in the line."""
         resources = self._resources
         limits = {}
+        slurm_tres_set = set(self.slurm_tres.keys())
 
         for tres, limit in resources.items():
-            if tres not in utils.get_tres_list():
+            if tres not in slurm_tres_set:
                 continue
             if tres == "mem":
                 limits[tres] = utils.parse_int(limit) // 2**20  # Convert from Bytes to MB

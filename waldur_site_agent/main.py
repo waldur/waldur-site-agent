@@ -1,26 +1,24 @@
 """Main application module."""
 
-from waldur_site_agent import (
-    agent_membership_sync,
-    agent_order_process,
-    agent_report,
-    logger,
-)
+from waldur_site_agent.backends import logger
 
-from . import WALDUR_SITE_AGENT_MODE, AgentMode, waldur_site_agent_version
+from . import AgentMode, agent_membership_sync, agent_order_process, agent_report, common_utils
 
 
 def main() -> None:
     """Entrypoint for the application."""
-    logger.info("Waldur site Agent version: %s, site: SLURM", waldur_site_agent_version)
+    configuration = common_utils.init_configuration()
+    logger.info(
+        "Waldur site Agent version: %s, site: SLURM", configuration.waldur_site_agent_version
+    )
 
-    logger.info("Running agent in %s mode", WALDUR_SITE_AGENT_MODE)
-    if AgentMode.ORDER_PROCESS.value == WALDUR_SITE_AGENT_MODE:
-        agent_order_process.start()
-    if AgentMode.REPORT.value == WALDUR_SITE_AGENT_MODE:
-        agent_report.start()
-    if AgentMode.MEMBERSHIP_SYNC.value == WALDUR_SITE_AGENT_MODE:
-        agent_membership_sync.start()
+    logger.info("Running agent in %s mode", configuration.waldur_site_agent_mode)
+    if AgentMode.ORDER_PROCESS.value == configuration.waldur_site_agent_mode:
+        agent_order_process.start(configuration)
+    if AgentMode.REPORT.value == configuration.waldur_site_agent_mode:
+        agent_report.start(configuration)
+    if AgentMode.MEMBERSHIP_SYNC.value == configuration.waldur_site_agent_mode:
+        agent_membership_sync.start(configuration)
 
 
 if __name__ == "__main__":

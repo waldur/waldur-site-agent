@@ -4,6 +4,7 @@ from unittest import mock
 
 from waldur_site_agent.agent_order_process import process_offerings
 from waldur_site_agent.backends.slurm_backend.structures import Account
+from tests.fixtures import OFFERING
 
 
 @mock.patch(
@@ -86,7 +87,7 @@ class TestAllocationCreation(unittest.TestCase):
         slurm_client.get_account.return_value = None
         slurm_client._execute_command.return_value = ""
 
-        process_offerings()
+        process_offerings([OFFERING])
 
         waldur_client.marketplace_order_approve_by_provider.assert_called_once_with(self.order_uuid)
 
@@ -98,7 +99,7 @@ class TestAllocationCreation(unittest.TestCase):
             organization=project_account,
         )
         slurm_client.create_association.assert_called_with(
-            offering_user_username, allocation_account, "waldur"
+            offering_user_username, allocation_account, "root"
         )
 
 
@@ -147,7 +148,7 @@ class TestAllocationTermination(unittest.TestCase):
         slurm_client.list_accounts.return_value = []
         slurm_client._execute_command.return_value = ""
 
-        process_offerings()
+        process_offerings([OFFERING])
 
         # The method was called twice: for project account and for allocation account
         self.assertEqual(2, slurm_client.delete_account.call_count)
@@ -212,7 +213,7 @@ class TestAllocationUpdateLimits(unittest.TestCase):
         waldur_client.get_order.return_value = self.waldur_order
         waldur_client.get_marketplace_resource.return_value = self.waldur_resource
 
-        process_offerings()
+        process_offerings([OFFERING])
 
         slurm_client = slurm_client_class.return_value
         slurm_client.set_resource_limits.assert_called_once_with(

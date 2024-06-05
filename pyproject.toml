@@ -18,7 +18,7 @@ packages = [
 
 [tool.poetry.dependencies]
 python = "^3.9"
-python-waldur-client = "^0.3.0"
+python-waldur-client = "^0.3.2"
 requests = "2.32.3"
 pyyaml = "6.0.1"
 sentry-sdk = "2.3.1"
@@ -70,7 +70,8 @@ lint.ignore = [
   'FIX002',
   'S603',
   'DTZ001',
-  'DTZ005'
+  'DTZ005',
+  "PLR0915"
 ] # These rules are ignored
 lint.extend-ignore = [
   "COM812",
@@ -102,7 +103,7 @@ keep-runtime-typing = true
 [tool.poetry.scripts]
 waldur_site_agent = 'waldur_site_agent.main:main'
 waldur_site_diagnostics = 'waldur_site_agent.common_utils:diagnostics'
-waldur_slurm_load_components = 'waldur_site_agent.common_utils:create_offering_components'
+waldur_site_load_components = 'waldur_site_agent.common_utils:create_offering_components'
 waldur_slurm_create_homedirs = 'waldur_site_agent.common_utils:create_homedirs_for_offering_users'
 
 [build-system]
