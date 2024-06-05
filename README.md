@@ -165,28 +165,40 @@ cp systemd-conf/agent-membership-sync/agent-legacy.service /etc/systemd/system/w
 
 ## Provider config file reference
 
-- `sentry_dsn`: Data Source Name for Sentry (more info: [link](https://docs.sentry.io/product/sentry-basics/dsn-explainer/)).
-- `offerings`: settings for offerings
-  - `name`: offering name
-  - `waldur_api_url`:  URL of Waldur API (e.g. `http://localhost:8081/api/`).
-  - `waldur_api_token`: Token to access the Waldur API.
-  - `waldur_offering_uuid`: UUID of the offering in Waldur.
-  - `backend_type`: type of backend, for now only `slurm` is supported
-  - `backend_settings`: backend-specific settings
-    - `default_account`: Default account name in SLURM cluster for new accounts creation.
-    - `customer_prefix`: Prefix for customer's accounts.
-    - `project_prefix`: Prefix for project's accounts.
-    - `allocation_prefix`: Prefix used for allocation's accounts.
-    - `allocation_name_max_len`: Maximum length of account name created by the agent.
-    - `enable_user_homedir_account_creation`: Whether to create home directories
-      for users associated to accounts.
-  - `backend_components`: Computing components on backend with accounting data
-    - `component_type`: Type of the component, for example `cpu`
-      - `limit`: Amount of measured units for Waldur (SLURM measured unit is CPU-minutes)
-      - `measured_unit`: Waldur measured unit for accounting,
-        for example `k-Hours` for CPU
-      - `unit_factor`: Factor for conversion from measured unit to backend ones.
-        For example 60000 (60 * 1000) for CPU in SLURM,
-        which uses cpu-minutes for accounting
-      - `accounting_type`: Can be either `usage` or `limit`
-      - `label`: A label for the component in Waldur
+```yaml
+sentry_dsn: "" # Data Source Name for Sentry (more info https://docs.sentry.io/product/sentry-basics/dsn-explainer/).
+offerings: # Settings for offerings
+  - name: "Example Offering" # offering name
+    waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
+    waldur_api_token: "" # Token to access the Waldur API.
+    waldur_offering_uuid: "" # UUID of the offering in Waldur.
+    backend_type: "slurm" # type of backend, for now only `slurm` is supported
+    backend_settings: # backend-specific settings
+      default_account: "root" # Default parent account name in SLURM cluster
+        # for new ones
+      customer_prefix: "hpc_" # Prefix for customer's accounts.
+      project_prefix: "hpc_" # Prefix for project's accounts.
+      allocation_prefix: "hpc_" # Prefix used for allocation's accounts.
+      allocation_name_max_len: 34 # Maximum length of account name
+        # created by the agent.
+      enable_user_homedir_account_creation: true # Whether to create home directories
+        # for users associated to accounts.
+    backend_components: # Computing components on backend with accounting data
+      cpu: # Type of the component, for example `cpu`
+        limit: 10 # Amount of measured units for Waldur (SLURM measured unit is CPU-minutes)
+        measured_unit: "k-Hours" # Waldur measured unit for accounting.
+          # For example `k-Hours` for CPU
+        unit_factor: 60000 # Factor for conversion from measured unit
+          # to backend ones.
+          # For example 60000 (60 * 1000) for CPU in SLURM,
+          # which uses cpu-minutes for accounting
+        accounting_type: "usage" # Can be either `usage` or `limit`
+        label: "CPU" # A label for the component in Waldur
+      mem:
+        limit: 10 # Amount of measured units for Waldur (SLURM measured unit is MB-minutes)
+        measured_unit: 'gb-Hours' # Waldur measured unit for accounting
+        unit_factor: 61440 # Unit factor for conversion from measured unit
+          # to SLURM units (60 * 1024)
+        accounting_type: usage # Can be usage or limit
+        label: RAM # A label for a component in Waldur
+```
