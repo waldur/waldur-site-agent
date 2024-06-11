@@ -4,6 +4,8 @@ import logging
 import sys
 from enum import Enum
 
+ACCOUNT_NAME_REGEX = "a-zA-Z0-9-_"
+
 
 class BackendType(Enum):
     """Enum for backend types."""

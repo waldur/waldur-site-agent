@@ -1,6 +1,6 @@
 sentry_dsn: "" # Data Source Name for Sentry (more info https://docs.sentry.io/product/sentry-basics/dsn-explainer/).
 offerings: # Settings for offerings
-  - name: "Example Offering" # offering name
+  - name: "Example SLURM Offering" # offering name
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
     waldur_api_token: "" # Token to access the Waldur API.
     waldur_offering_uuid: "" # UUID of the offering in Waldur.
@@ -33,3 +33,20 @@ offerings: # Settings for offerings
           # to SLURM units (60 * 1024)
         accounting_type: usage # Can be usage or limit
         label: RAM # A label for a component in Waldur
+  - name: "Example MOAB Offering"
+    waldur_api_url: "http://localhost:8081/api/"
+    waldur_api_token: ""
+    waldur_offering_uuid: ""
+    backend_type: "moab"
+    backend_settings:
+      default_account: root
+      customer_prefix: "hpc_mt_"
+      project_prefix: "hpc_mt_"
+      allocation_prefix: "hpc_mt_"
+      allocation_name_max_len: 34
+      enable_user_homedir_account_creation: true
+    backend_components: # For MOAB backend, only "deposit" is supported
+      deposit:
+        measured_unit: 'EUR'
+        accounting_type: limit
+        label: Deposit (EUR)

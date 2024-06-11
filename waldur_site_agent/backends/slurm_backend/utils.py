@@ -1,13 +1,8 @@
 """Utils for SLURM backend."""
 
-import calendar
-import datetime
 import pprint
 import re
-from typing import Dict, List, Tuple
-
-import yaml
-from waldur_client import OfferingComponent, WaldurClient
+from typing import Dict
 
 from waldur_site_agent.backends import logger
 from waldur_site_agent.backends.exceptions import BackendError
@@ -25,25 +20,6 @@ UNITS: Dict[str, int] = {
 
 SLURM_ALLOCATION_REGEX = "a-zA-Z0-9-_"
 SLURM_ALLOCATION_NAME_MAX_LEN = 34
-
-
-def month_start(date: datetime.datetime) -> datetime.datetime:
-    """Returns first day of a month for the date."""
-    return datetime.datetime(day=1, month=date.month, year=date.year)
-
-
-def month_end(date: datetime.datetime) -> datetime.date:
-    """Returns last day of a month for the date."""
-    days_in_month = calendar.monthrange(date.year, date.month)[1]
-    return datetime.date(month=date.month, year=date.year, day=days_in_month)
-
-
-def format_current_month() -> Tuple[str, str]:
-    """Returns strings for start and end date of the current month."""
-    today = datetime.datetime.now()
-    start = month_start(today).strftime("%Y-%m-%d")
-    end = month_end(today).strftime("%Y-%m-%d")
-    return start, end
 
 
 def sanitize_allocation_name(name: str) -> str:
@@ -66,68 +42,36 @@ def parse_int(value: str) -> int:
     return factor * value_
 
 
-def get_slurm_tres_limits(slurm_tres: Dict) -> Dict[str, int]:
-    """Returns dictionary of limits for usage-based TRES.
-
-    The limits converted to SLURM-readable values.
-    I.e. CPU-minutes, MB-minutes.
-    """
-    return {
-        tres: data["limit"] * data["unit_factor"]
-        for tres, data in slurm_tres.items()
-        if data["accounting_type"] == "usage"
-    }
-
-
-def sum_dicts(dict_list: List[Dict]) -> Dict[str, int]:
-    """Sums dictionaries by keys."""
-    result_dict: Dict[str, int] = {}
-
-    # Iterate through each dictionary in the list
-    for curr_dict in dict_list:
-        # Sum values for each key in the current dictionary
-        for key, value in curr_dict.items():
-            result_dict[key] = result_dict.get(key, 0) + value
-
-    return result_dict
-
-
-def prettify_limits(limits: Dict[str, int], slurm_tres: Dict) -> str:
-    """Makes limits human-readable."""
-    limits_info = {
-        slurm_tres[key]["label"]: f"{value} {slurm_tres[key]['measured_unit']}"
-        for key, value in limits.items()
-    }
-    return yaml.dump(limits_info)
-
-
 def diagnostics(slurm_backend: SlurmBackend) -> bool:
     """Runs diagnostics for SLURM cluster."""
-    default_account_name = slurm_backend.slurm_settings["default_account"]
+    default_account_name = slurm_backend.backend_settings["default_account"]
 
     format_string = "{:<30} = {:<10}"
     logger.info(
         format_string.format(
-            "SLURM allocation name max len", slurm_backend.slurm_settings["allocation_name_max_len"]
+            "SLURM allocation name max len",
+            slurm_backend.backend_settings["allocation_name_max_len"],
         )
     )
     logger.info(
         format_string.format(
-            "SLURM customer prefix", slurm_backend.slurm_settings["customer_prefix"]
+            "SLURM customer prefix", slurm_backend.backend_settings["customer_prefix"]
         )
     )
     logger.info(
-        format_string.format("SLURM project prefix", slurm_backend.slurm_settings["project_prefix"])
+        format_string.format(
+            "SLURM project prefix", slurm_backend.backend_settings["project_prefix"]
+        )
     )
     logger.info(
         format_string.format(
-            "SLURM allocation prefix", slurm_backend.slurm_settings["allocation_prefix"]
+            "SLURM allocation prefix", slurm_backend.backend_settings["allocation_prefix"]
         )
     )
     logger.info(format_string.format("SLURM default account", default_account_name))
     logger.info("")
 
-    logger.info("SLURM tres components:\n%s\n", pprint.pformat(slurm_backend.slurm_tres))
+    logger.info("SLURM tres components:\n%s\n", pprint.pformat(slurm_backend.backend_components))
 
     try:
         slurm_version_info = slurm_backend.client._execute_command(
@@ -155,61 +99,6 @@ def diagnostics(slurm_backend: SlurmBackend) -> bool:
     logger.info("")
 
     return True
-
-
-def create_offering_components(
-    waldur_rest_client: WaldurClient, offering_uuid: str, offering_name: str, slurm_tres: Dict
-) -> None:
-    """Creates offering components for SLURM in Waldur."""
-    logger.info(
-        "Creating offering components data for the following TRES: %s",
-        ", ".join(slurm_tres.keys()),
-    )
-    waldur_offering = waldur_rest_client.get_marketplace_public_offering(offering_uuid)
-    waldur_offering_components = {
-        component["type"]: component for component in waldur_offering["components"]
-    }
-    for tres_type, tres_info in slurm_tres.items():
-        try:
-            component = OfferingComponent(
-                billing_type=tres_info["accounting_type"],
-                type=tres_type,
-                name=tres_info["label"],
-                measured_unit=tres_info["measured_unit"],
-                limit_amount=tres_info["limit"],
-            )
-            if tres_type in waldur_offering_components:
-                if tres_info["accounting_type"] == "usage":
-                    existing_component = waldur_offering_components[tres_type]
-                    logger.info(
-                        "Offering component %s already exists, updating limit from %s to %s %s.",
-                        tres_type,
-                        existing_component["limit_amount"],
-                        tres_info["limit"],
-                        tres_info["measured_unit"],
-                    )
-                    component.uuid = existing_component["uuid"]
-                    waldur_rest_client.update_offering_component(offering_uuid, component)
-                else:
-                    logger.info(
-                        "Offering component %s already exists, skipping creation.", tres_type
-                    )
-            else:
-                logger.info(
-                    "Creating offering component %s with limit %s %s.",
-                    tres_type,
-                    tres_info["limit"],
-                    tres_info["measured_unit"],
-                )
-                waldur_rest_client.create_offering_component(offering_uuid, component)
-        except Exception as e:
-            logger.info(
-                "Unable to create or update a component %s for offering %s (%s):",
-                tres_info["label"],
-                offering_name,
-                offering_uuid,
-            )
-            logger.exception(e)
 
 
 def convert_slurm_units_to_waldur_ones(slurm_tres: Dict, units: Dict, to_int: bool = False) -> Dict:

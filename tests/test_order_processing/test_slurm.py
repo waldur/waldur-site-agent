@@ -3,7 +3,8 @@ import uuid
 from unittest import mock
 
 from waldur_site_agent.agent_order_process import process_offerings
-from waldur_site_agent.backends.slurm_backend.structures import Account
+from waldur_site_agent.backends.structures import Account
+from waldur_site_agent import MARKETPLACE_SLURM_OFFERING_TYPE
 from tests.fixtures import OFFERING
 
 
@@ -12,7 +13,7 @@ from tests.fixtures import OFFERING
     autospec=True,
 )
 @mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
-class TestAllocationCreation(unittest.TestCase):
+class CreationOrderTest(unittest.TestCase):
     def setUp(self) -> None:
         self.allocation_uuid = uuid.uuid4().hex
         self.project_uuid = uuid.uuid4().hex
@@ -24,6 +25,7 @@ class TestAllocationCreation(unittest.TestCase):
             "type": "Create",
             "state": "pending-provider",
             "attributes": {"name": "sample_resource"},
+            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
         }
         self.waldur_resource = {
             "uuid": self.resource_uuid,
@@ -35,6 +37,7 @@ class TestAllocationCreation(unittest.TestCase):
             "customer_name": "Test customer",
             "limits": {"cpu": 10},
             "state": "Creating",
+            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
         }
 
     def test_allocation_creation(
@@ -108,7 +111,7 @@ class TestAllocationCreation(unittest.TestCase):
     autospec=True,
 )
 @mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
-class TestAllocationTermination(unittest.TestCase):
+class TerminationOrderTest(unittest.TestCase):
     def setUp(self) -> None:
         self.marketplace_resource_uuid = uuid.uuid4().hex
         self.resource_uuid = uuid.uuid4().hex
@@ -126,6 +129,7 @@ class TestAllocationTermination(unittest.TestCase):
             "resource_uuid": self.resource_uuid,
             "attributes": {"name": "test-allocation-01"},
             "state": "executing",
+            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
         }
         self.waldur_allocation = {
             "backend_id": f"hpc_{self.resource_uuid[:5]}_test-allocation-01"[:34]
@@ -159,7 +163,7 @@ class TestAllocationTermination(unittest.TestCase):
     autospec=True,
 )
 @mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
-class TestAllocationUpdateLimits(unittest.TestCase):
+class UpdateOrderTest(unittest.TestCase):
     def setUp(self) -> None:
         self.marketplace_resource_uuid = uuid.uuid4().hex
         self.resource_uuid = uuid.uuid4().hex
@@ -182,6 +186,7 @@ class TestAllocationUpdateLimits(unittest.TestCase):
                 "name": "test-allocation-01",
             },
             "state": "executing",
+            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
         }
         self.waldur_resource = {
             "uuid": self.marketplace_resource_uuid,
@@ -198,6 +203,7 @@ class TestAllocationUpdateLimits(unittest.TestCase):
             },
             "state": "Updating",
             "backend_id": self.backend_id,
+            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
         }
         self.waldur_allocation = {
             "name": "test-allocation-01",

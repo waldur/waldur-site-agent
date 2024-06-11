@@ -5,6 +5,24 @@ from typing import Dict, List
 
 
 @dataclass
+class Account:
+    """Account model for SLURM and MOAB."""
+
+    name: str = ""
+    description: str = ""
+    organization: str = ""
+
+
+@dataclass
+class Association:
+    """Association between a user and an account in SLURM or MOAB."""
+
+    account: str = ""
+    user: str = ""
+    value: int = 0
+
+
+@dataclass
 class Resource:
     """Common resource structure."""
 

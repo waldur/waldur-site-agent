@@ -103,7 +103,7 @@ keep-runtime-typing = true
 [tool.poetry.scripts]
 waldur_site_agent = 'waldur_site_agent.main:main'
 waldur_site_diagnostics = 'waldur_site_agent.common_utils:diagnostics'
-waldur_site_load_components = 'waldur_site_agent.common_utils:create_offering_components'
+waldur_site_load_components = 'waldur_site_agent.common_utils:load_offering_components'
 waldur_slurm_create_homedirs = 'waldur_site_agent.common_utils:create_homedirs_for_offering_users'
 
 [build-system]

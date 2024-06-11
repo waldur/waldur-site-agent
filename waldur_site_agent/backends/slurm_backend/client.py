@@ -5,7 +5,10 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
-from . import base, structures, utils
+from waldur_site_agent.backends import base
+from waldur_site_agent.backends import utils as backend_utils
+from waldur_site_agent.backends.structures import Account, Association
+
 from .parser import SlurmAssociationLine, SlurmReportLine
 
 
@@ -19,11 +22,9 @@ class SlurmClient(base.BaseClient):
         """Inits SLURM-related data."""
         self.slurm_tres = slurm_tres
 
-    def list_accounts(self, accounts: Optional[List[str]] = None) -> List[structures.Account]:
-        """Returns a list of accounts for the specified account names."""
+    def list_accounts(self) -> List[Account]:
+        """Returns a list of accounts in the SLURM cluster."""
         command = ["list", "account"]
-        if accounts is not None:
-            command.append(",".join(accounts))
         output = self._execute_command(command)
         return [self._parse_account(line) for line in output.splitlines() if "|" in line]
 
@@ -32,7 +33,7 @@ class SlurmClient(base.BaseClient):
         output = self._execute_command(["list", "tres"])
         return [line.split("|")[0] for line in output.splitlines() if "|" in line]
 
-    def get_account(self, name: str) -> structures.Account | None:
+    def get_account(self, name: str) -> Account | None:
         """Returns Account object from cluster based on the account name."""
         output = self._execute_command(["show", "account", name])
         lines = [line for line in output.splitlines() if "|" in line]
@@ -76,13 +77,13 @@ class SlurmClient(base.BaseClient):
 
         return self._execute_command(["remove", "account", "where", f"name={name}"])
 
-    def set_resource_limits(self, account: str, limits_dict: Dict[str, int]) -> str:
+    def set_resource_limits(self, account: str, limits_dict: Dict[str, int]) -> str | None:
         """Sets the limits for the account with the specified name."""
         limits_str = ",".join([f"{key}={value}" for key, value in limits_dict.items()])
         quota = f"GrpTRESMins={limits_str}"
         return self._execute_command(["modify", "account", account, "set", quota])
 
-    def get_association(self, user: str, account: str) -> structures.Association | None:
+    def get_association(self, user: str, account: str) -> Association | None:
         """Returns associations between the user and the account if exists."""
         output = self._execute_command(
             [
@@ -98,7 +99,9 @@ class SlurmClient(base.BaseClient):
             return None
         return self._parse_association(lines[0])
 
-    def create_association(self, username: str, account: str, default_account: str = "") -> str:
+    def create_association(
+        self, username: str, account: str, default_account: Optional[str] = ""
+    ) -> str:
         """Creates association between the account and the user in SLURM cluster."""
         return self._execute_command(
             [
@@ -123,10 +126,9 @@ class SlurmClient(base.BaseClient):
             ]
         )
 
-    # TODO: consider 'sshare' or 'sreport' utils
-    def get_usage_report(self, accounts: List[str]) -> List[SlurmReportLine]:
+    def get_usage_report(self, accounts: List[str]) -> List:
         """Generates per-user usage report for the accounts."""
-        month_start, month_end = utils.format_current_month()
+        month_start, month_end = backend_utils.format_current_month()
 
         args = [
             "--noconvert",
@@ -182,20 +184,20 @@ class SlurmClient(base.BaseClient):
             parsable=False,
         )
 
-    def _parse_account(self, line: str) -> structures.Account:
+    def _parse_account(self, line: str) -> Account:
         parts = line.split("|")
-        return structures.Account(
+        return Account(
             name=parts[0],
             description=parts[1],
             organization=parts[2],
         )
 
-    def _parse_association(self, line: str) -> structures.Association:
+    def _parse_association(self, line: str) -> Association:
         parts = line.split("|")
         value = parts[9]
         match = re.match(r"cpu=(\d+)", value)
         value_ = int(match.group(1)) if match else 0
-        return structures.Association(
+        return Association(
             account=parts[1],
             user=parts[2],
             value=value_,

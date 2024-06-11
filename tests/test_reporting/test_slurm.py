@@ -5,7 +5,7 @@ from unittest import mock
 from freezegun import freeze_time
 from waldur_client import ComponentUsage
 
-from waldur_site_agent import common_utils
+from waldur_site_agent import common_utils, MARKETPLACE_SLURM_OFFERING_TYPE
 from tests.fixtures import OFFERING
 from waldur_site_agent.agent_report import OfferingReportProcessor
 from waldur_site_agent.backends import BackendType
@@ -38,12 +38,13 @@ allocation_slurm = Resource(
 @freeze_time("2022-01-01")
 @mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
 @mock.patch.object(common_utils.SlurmBackend, "_pull_allocation", return_value=allocation_slurm)
-class TestSlurmReporting(unittest.TestCase):
+class ReportingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.waldur_resource = {
             "uuid": "waldur-resource-uuid",
             "name": "test-alloc-01",
             "backend_id": "test-allocation-01",
+            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
         }
         self.waldur_user_uuid = uuid.uuid4()
         self.waldur_offering = {
@@ -76,7 +77,7 @@ class TestSlurmReporting(unittest.TestCase):
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
-                "field": ["backend_id", "uuid", "name"],
+                "field": ["backend_id", "uuid", "name", "offering_type"],
             }
         )
         waldur_client.create_component_usages.assert_called_once_with(

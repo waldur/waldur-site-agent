@@ -9,12 +9,12 @@ from waldur_client import (
     WaldurClientException,
 )
 
-from waldur_site_agent.backends import BackendType, logger
+from waldur_site_agent.backends import logger
 from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.structures import Resource
 from waldur_site_agent.processors import OfferingBaseProcessor
 
-from . import Offering, WaldurAgentConfiguration
+from . import MARKETPLACE_SLURM_OFFERING_TYPE, Offering, WaldurAgentConfiguration
 
 
 class OfferingReportProcessor(OfferingBaseProcessor):
@@ -51,9 +51,15 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
-                "field": ["backend_id", "uuid", "name"],
+                "field": ["backend_id", "uuid", "name", "offering_type"],
             }
         )
+
+        if len(waldur_resources) == 0:
+            logger.info("No resources to process")
+            return
+
+        offering_type = waldur_resources[0].get("offering_type", "")
 
         waldur_resources_info = [
             Resource(
@@ -68,7 +74,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         resource_report = self.resource_backend.pull_resources(waldur_resources_info)
 
         # TODO: make generic
-        if self.offering.backend_type == BackendType.SLURM.value:
+        if offering_type == MARKETPLACE_SLURM_OFFERING_TYPE:
             # Allocations existing in Waldur but missing in SLURM cluster
             missing_resources = [
                 Resource(
@@ -125,7 +131,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
     ) -> None:
         """Processes usage report for the resource."""
         waldur_offering = self.waldur_rest_client._get_offering(self.offering.uuid)
-        # Push data to Mastermind using REST client
 
         # TODO: this part is not generic yet, rather SLURM-specific
         for resource_backend_id, backend_resource in resource_report.items():

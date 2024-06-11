@@ -12,7 +12,7 @@ from waldur_client import (
     is_uuid,
 )
 
-from waldur_site_agent.backends import BackendType, logger
+from waldur_site_agent.backends import logger
 from waldur_site_agent.processors import OfferingBaseProcessor
 
 if TYPE_CHECKING:
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 from waldur_site_agent.backends.exceptions import BackendError
 
-from . import Offering, WaldurAgentConfiguration, common_utils
+from . import MARKETPLACE_SLURM_OFFERING_TYPE, Offering, WaldurAgentConfiguration, common_utils
 
 
 class OfferingOrderProcessor(OfferingBaseProcessor):
@@ -74,6 +74,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 if order["type"] == "Terminate":
                     self._process_terminate_order(order)
 
+                # TODO: no need for update of orders for marketplace SLURM offerings
                 logger.info("Marking order as done")
                 self.waldur_rest_client.marketplace_order_set_state_done(order["uuid"])
 
@@ -112,7 +113,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         # TODO: figure out how to generalize it
         if (
             waldur_resource["state"] != "Creating"
-            and self.offering.backend_type == BackendType.SLURM.value
+            and waldur_resource["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE
         ):
             logger.info(
                 "Setting SLURM allocation state (%s) to CREATING (current state is %s)",
@@ -133,7 +134,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             resource_uuid, backend_resource.backend_id
         )
 
-        if self.resource_backend.backend_type == BackendType.SLURM.value:
+        if waldur_resource["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
             logger.info("Setting SLURM allocation backend ID")
             self.waldur_rest_client.set_slurm_allocation_backend_id(
                 waldur_resource["uuid"], backend_resource.backend_id
@@ -164,7 +165,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         offering_usernames: Set[str] = {
             offering_user["username"]
             for offering_user in offering_users_all
-            if offering_user["user_uuid"] in user_uuids
+            if offering_user["user_uuid"] in user_uuids and offering_user["username"] != ""
         }
 
         logger.info("Adding usernames to resource in backend")
@@ -195,23 +196,24 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             order = self.waldur_rest_client.get_order(order["uuid"])
             attempts += 1
 
-        # TODO: drop this cycle...
-        # TODO: after removal of waldur_slurm.Allocation model from Mastermind
-        attempts = 0
-        while order["resource_uuid"] is None:
-            if attempts > max_attempts:
-                logger.error("Order processing timed out")
-                return
+        if order["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
+            # TODO: drop this cycle
+            # after removal of waldur_slurm.Allocation model from Mastermind
+            attempts = 0
+            while order["resource_uuid"] is None:
+                if attempts > max_attempts:
+                    logger.error("Order processing timed out")
+                    return
 
-            if order["state"] != "executing":
-                logger.error("order has unexpected state %s", order["state"])
-                return
+                if order["state"] != "executing":
+                    logger.error("order has unexpected state %s", order["state"])
+                    return
 
-            logger.info("Waiting for Waldur allocation creation...")
-            sleep(5)
+                logger.info("Waiting for Waldur allocation creation...")
+                sleep(5)
 
-            order = self.waldur_rest_client.get_order(order["uuid"])
-            attempts += 1
+                order = self.waldur_rest_client.get_order(order["uuid"])
+                attempts += 1
 
         waldur_resource = self.waldur_rest_client.get_marketplace_resource(
             order["marketplace_resource_uuid"]
@@ -221,7 +223,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             msg = "Unable to create a resource"
             raise BackendError(msg)
 
-        if self.offering.backend_type == BackendType.SLURM.value:
+        if order["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
             logger.info("Updating Waldur resource scope state")
             self.waldur_rest_client.set_slurm_allocation_state(
                 waldur_resource["uuid"], SlurmAllocationState.OK
@@ -236,7 +238,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         resource_uuid = order["marketplace_resource_uuid"]
         waldur_resource = self.waldur_rest_client.get_marketplace_resource(resource_uuid)
 
-        if self.offering.backend_type == BackendType.SLURM.value:
+        if order["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
             self.waldur_rest_client.set_slurm_allocation_state(
                 resource_uuid, SlurmAllocationState.UPDATING
             )
@@ -257,7 +259,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits)
 
-        if self.offering.backend_type == BackendType.SLURM.value:
+        if order["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
             logger.info("Updating Waldur resource scope state")
             self.waldur_rest_client.set_slurm_allocation_state(
                 resource_uuid, SlurmAllocationState.OK
