@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from enum import Enum
 
+MARKETPLACE_SLURM_OFFERING_TYPE = "Marketplace.Slurm"
+
 
 @dataclass
 class Offering:

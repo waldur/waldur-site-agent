@@ -1,18 +1,18 @@
 # Agent for Service Provider Integration
 
 Agent for Mastermind integration with a provider's site.
-The main purpose of the agent is data syncronization between Waldur instance
+The main purpose of the agent is data syncronization between Waldur
 and an application (for example SLURM or MOAB cluster).
 The agent uses order-related information
 from Waldur to manage accounts in the site and
-accounting-related info from the site to update usage data in Waldur.
-For now, the agent supports only SLURM cluster as a site.
+accounting-related info from the site (backend) to update usage data in Waldur.
+For now, the agent supports only SLURM and MOAB clusters as a site.
 
 ## Architecture
 
-This is a stateless application, which is deployed
-on a machine having access to SLURM cluster data.
-The agent consists of three sub-applications:
+Agent is a stateless application, which is deployed
+on a machine having access to a backend data.
+It consists of three sub-applications:
 
 - `agent-order-process`, which fetches ordering data from Waldur and updates
   a state of a backend correspondingly;
@@ -39,6 +39,11 @@ a backend and syncronizes it with remote ones.
 The agent relies on SLURM command line utilities (e.g. `sacct` and `sacctmgr`)
 and should run on a headnode of the SLURM cluster.
 
+#### MOAB cluster
+
+The agent relies on MOAB command line utilities (e.g. `mam-list-accounts` and `mam-create-account`)
+and should run on a headnode of the MOAB cluster as a root user.
+
 ## Agent configuration
 
 The application supports the following CLI arguments:
@@ -58,6 +63,9 @@ Using it, the agent can serve several offerings
 and setup backend-related data, for example computing component settings.
 File [example](./examples/waldur-site-agent-config.yaml.example) and [reference](#provider-config-file-reference).
 
+**NB:** for MOAB, the only acceptable component is `deposit`.
+All other specified components are ignored by the agent.
+
 ## Deployment
 
 A user should deploy 3 separate instances of the agent.
@@ -73,7 +81,7 @@ start the systemd services.
 
 ### Prerequisite: offering configuration in Waldur
 
-#### SLURM
+#### SLURM and MOAB
 
 The agents require existing offering data in Waldur.
 As a service provider owner, you should create an offering in the marketplace:
@@ -88,7 +96,7 @@ As a service provider owner, you should create an offering in the marketplace:
 - Open the offering page and create a plan in the `Accounting`
   section: click `Add plan` and input the necessary details
 - Go to `Integration` section, click `Show integration steps`
-  and ensure they are completed within your SLURM cluster.
+  and ensure they are completed within your SLURM/MOAB cluster.
 
 ### Setup
 
@@ -168,11 +176,11 @@ cp systemd-conf/agent-membership-sync/agent-legacy.service /etc/systemd/system/w
 ```yaml
 sentry_dsn: "" # Data Source Name for Sentry (more info https://docs.sentry.io/product/sentry-basics/dsn-explainer/).
 offerings: # Settings for offerings
-  - name: "Example Offering" # offering name
+  - name: "Example SLURM Offering" # offering name
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
     waldur_api_token: "" # Token to access the Waldur API.
     waldur_offering_uuid: "" # UUID of the offering in Waldur.
-    backend_type: "slurm" # type of backend, for now only `slurm` is supported
+    backend_type: "slurm" # type of backend, for now only `slurm` and `moab` is supported
     backend_settings: # backend-specific settings
       default_account: "root" # Default parent account name in SLURM cluster
         # for new ones
@@ -185,7 +193,6 @@ offerings: # Settings for offerings
         # for users associated to accounts.
     backend_components: # Computing components on backend with accounting data
       cpu: # Type of the component, for example `cpu`
-        limit: 10 # Amount of measured units for Waldur (SLURM measured unit is CPU-minutes)
         measured_unit: "k-Hours" # Waldur measured unit for accounting.
           # For example `k-Hours` for CPU
         unit_factor: 60000 # Factor for conversion from measured unit
@@ -201,4 +208,21 @@ offerings: # Settings for offerings
           # to SLURM units (60 * 1024)
         accounting_type: usage # Can be usage or limit
         label: RAM # A label for a component in Waldur
+  - name: "Example MOAB Offering"
+    waldur_api_url: "http://localhost:8081/api/"
+    waldur_api_token: ""
+    waldur_offering_uuid: ""
+    backend_type: "moab"
+    backend_settings:
+      default_account: root
+      customer_prefix: "hpc_mt_"
+      project_prefix: "hpc_mt_"
+      allocation_prefix: "hpc_mt_"
+      allocation_name_max_len: 34
+      enable_user_homedir_account_creation: true
+    backend_components:
+      deposit: # For MOAB backend, only "deposit" is supported
+        measured_unit: 'EUR'
+        accounting_type: limit
+        label: Deposit (EUR)
 ```

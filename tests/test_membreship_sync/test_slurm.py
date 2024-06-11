@@ -4,7 +4,7 @@ from unittest import mock
 
 from freezegun import freeze_time
 
-from waldur_site_agent import common_utils
+from waldur_site_agent import common_utils, MARKETPLACE_SLURM_OFFERING_TYPE
 from tests.fixtures import OFFERING
 from waldur_site_agent.agent_membership_sync import OfferingMembershipProcessor
 from waldur_site_agent.backends import BackendType
@@ -38,13 +38,14 @@ allocation_slurm = Resource(
 @freeze_time("2022-01-01")
 @mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
 @mock.patch.object(common_utils.SlurmBackend, "_pull_allocation", return_value=allocation_slurm)
-class TestSlurmToWaldurSync(unittest.TestCase):
+class MembershipSyncTest(unittest.TestCase):
     def setUp(self) -> None:
         self.waldur_resource = {
             "uuid": "waldur-resource-uuid",
             "name": "test-alloc-01",
             "backend_id": "test-allocation-01",
             "resource_uuid": uuid.uuid4().hex,
+            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
         }
         self.waldur_user_uuid = uuid.uuid4()
         self.plan_period_uuid = uuid.uuid4().hex
@@ -77,7 +78,7 @@ class TestSlurmToWaldurSync(unittest.TestCase):
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
-                "field": ["backend_id", "uuid", "name", "resource_uuid"],
+                "field": ["backend_id", "uuid", "name", "resource_uuid", "offering_type"],
             }
         )
         waldur_client.list_slurm_associations.assert_called_once_with(
@@ -108,7 +109,7 @@ class TestSlurmToWaldurSync(unittest.TestCase):
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
-                "field": ["backend_id", "uuid", "name", "resource_uuid"],
+                "field": ["backend_id", "uuid", "name", "resource_uuid", "offering_type"],
             }
         )
         waldur_client.list_slurm_associations.assert_called_once_with(

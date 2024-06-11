@@ -8,12 +8,12 @@ from waldur_client import (
 )
 
 from waldur_site_agent import common_utils
-from waldur_site_agent.backends import BackendType, logger
+from waldur_site_agent.backends import logger
 from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.structures import Resource
 from waldur_site_agent.processors import OfferingBaseProcessor
 
-from . import Offering, WaldurAgentConfiguration
+from . import MARKETPLACE_SLURM_OFFERING_TYPE, Offering, WaldurAgentConfiguration
 
 
 class OfferingMembershipProcessor(OfferingBaseProcessor):
@@ -34,9 +34,15 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
-                "field": ["backend_id", "uuid", "name", "resource_uuid"],
+                "field": ["backend_id", "uuid", "name", "resource_uuid", "offering_type"],
             }
         )
+
+        if len(waldur_resources) == 0:
+            logger.info("No resources to process")
+            return
+
+        offering_type = waldur_resources[0].get("offering_type", "")
 
         waldur_resources_info = [
             Resource(
@@ -51,7 +57,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         resource_report = self.resource_backend.pull_resources(waldur_resources_info)
 
-        self._process_resources(resource_report)
+        self._process_resources(resource_report, offering_type)
 
     def _sync_slurm_resource_users(
         self,
@@ -61,6 +67,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         # This method is currently implemented for SLURM backend only
         logger.info("Syncing user list for resource %s", backend_resource.name)
         usernames = backend_resource.users
+        logger.info("Syncing backend and Waldur associations")
 
         # Source of truth - associations in a SLURM cluster
         # The service fetches associations from the cluster and pushes them to Waldur
@@ -82,7 +89,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         # Offering users sync
         # The service fetches offering users from Waldur and pushes them to the cluster
-        logger.info("Fetching Waldur resource team")
+        logger.info("Synching offering users")
         team = self.waldur_rest_client.marketplace_resource_get_team(
             backend_resource.marketplace_uuid
         )
@@ -113,17 +120,17 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     def _process_resources(
         self,
         resource_report: Dict[str, Resource],
+        offering_type: str,
     ) -> None:
-        """Processes usage report for the resource."""
+        """Sync membership data for the resource."""
         # Push data to Mastermind using REST client
 
-        # TODO: this part is not generic yet, rather SLURM-specific
         for resource_backend_id, backend_resource in resource_report.items():
             logger.info("-" * 30)
             try:
                 logger.info("Processing %s", resource_backend_id)
                 # Sync users
-                if backend_resource.backend_type == BackendType.SLURM.value:
+                if offering_type == MARKETPLACE_SLURM_OFFERING_TYPE:
                     self._sync_slurm_resource_users(backend_resource)
             except WaldurClientException as e:
                 logger.exception(

@@ -3,16 +3,17 @@
 import argparse
 from importlib.metadata import version
 from pathlib import Path
-from typing import Set
+from typing import Dict, Set
 
 import yaml
-from waldur_client import WaldurClient, WaldurClientException
+from waldur_client import OfferingComponent, WaldurClient, WaldurClientException
 
 from waldur_site_agent.backends import (
     BackendType,
     logger,
 )
 from waldur_site_agent.backends.backend import BaseBackend, UnknownBackend
+from waldur_site_agent.backends.moab_backend.backend import MoabBackend
 from waldur_site_agent.backends.slurm_backend import utils as slurm_utils
 from waldur_site_agent.backends.slurm_backend.backend import SlurmBackend
 from waldur_site_agent.backends.structures import Resource
@@ -101,12 +102,12 @@ def get_backend_for_offering(offering: Offering) -> BaseBackend:
         resource_backend = SlurmBackend(offering.backend_settings, offering.backend_components)
     elif offering.backend_type in {
         BackendType.MOAB.value,
-        BackendType.CUSTOM.value,
     }:
-        return resource_backend
+        resource_backend = MoabBackend(offering.backend_settings, offering.backend_components)
+    elif offering.backend_type == BackendType.CUSTOM.value:
+        resource_backend = UnknownBackend()
     else:
         logger.error("Unknown backend type: %s", offering.backend_type)
-        return UnknownBackend()
 
     return resource_backend
 
@@ -117,7 +118,7 @@ def delete_associations_from_waldur_allocation(
     usernames: Set[str],
 ) -> None:
     """Deletes a SLURM association for the specified resource and username in Waldur."""
-    logger.info("Stale usernames: %s", " ,".join(usernames))
+    logger.info("Stale usernames to drop from Waldur allocation: %s", " ,".join(usernames))
     for username in usernames:
         try:
             waldur_rest_client.delete_slurm_association(backend_resource.marketplace_uuid, username)
@@ -151,7 +152,7 @@ def create_associations_for_waldur_allocation(
             logger.error("User %s can not be added due to: %s", username, e)
 
 
-def create_offering_components() -> None:
+def load_offering_components() -> None:
     """Creates offering components in Waldur based on data from the config file."""
     configuration = init_configuration()
     for offering in configuration.waldur_offerings:
@@ -160,10 +161,74 @@ def create_offering_components() -> None:
             offering.api_url, offering.api_token, configuration.waldur_user_agent
         )
 
-        if offering.backend_type == BackendType.SLURM.value:
-            slurm_utils.create_offering_components(
-                waldur_rest_client, offering.uuid, offering.name, offering.backend_components
+        load_components_to_waldur(
+            waldur_rest_client, offering.uuid, offering.name, offering.backend_components
+        )
+
+
+def load_components_to_waldur(
+    waldur_rest_client: WaldurClient, offering_uuid: str, offering_name: str, components: Dict
+) -> None:
+    """Creates offering components in Waldur."""
+    logger.info(
+        "Creating offering components data for the following resources: %s",
+        ", ".join(components.keys()),
+    )
+    waldur_offering = waldur_rest_client.get_marketplace_public_offering(offering_uuid)
+    waldur_offering_components = {
+        component["type"]: component for component in waldur_offering["components"]
+    }
+    for component_type, component_info in components.items():
+        try:
+            limit_amount = component_info.get("limit")
+            accounting_type = component_info["accounting_type"]
+            label = component_info["label"]
+            if limit_amount is None and accounting_type == "usage":
+                logger.error(
+                    "Usage-based components must have limit field defined, skipping %s component",
+                    label,
+                )
+                continue
+
+            component = OfferingComponent(
+                billing_type=accounting_type,
+                type=component_type,
+                name=label,
+                measured_unit=component_info["measured_unit"],
+                limit_amount=component_info["limit"],
             )
+            if component_type in waldur_offering_components:
+                if component_info["accounting_type"] == "usage":
+                    existing_component = waldur_offering_components[component_type]
+                    logger.info(
+                        "Offering component %s already exists, updating limit from %s to %s %s.",
+                        component_type,
+                        existing_component["limit_amount"],
+                        component_info["limit"],
+                        component_info["measured_unit"],
+                    )
+                    component.uuid = existing_component["uuid"]
+                    waldur_rest_client.update_offering_component(offering_uuid, component)
+                else:
+                    logger.info(
+                        "Offering component %s already exists, skipping creation.", component_type
+                    )
+            else:
+                logger.info(
+                    "Creating offering component %s with limit %s %s.",
+                    component_type,
+                    component_info["limit"],
+                    component_info["measured_unit"],
+                )
+                waldur_rest_client.create_offering_component(offering_uuid, component)
+        except Exception as e:
+            logger.info(
+                "Unable to create or update a component %s for offering %s (%s):",
+                component_info["label"],
+                offering_name,
+                offering_uuid,
+            )
+            logger.exception(e)
 
 
 def diagnostics() -> bool:
