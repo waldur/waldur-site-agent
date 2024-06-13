@@ -1,4 +1,4 @@
-# Agent for Service Provider Integration
+# Waldur Site Agent
 
 Agent for Mastermind integration with a provider's site.
 The main purpose of the agent is data syncronization between Waldur
