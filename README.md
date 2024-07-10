@@ -116,7 +116,7 @@ Please use the `waldur_site_load_components` command
 to load computing components into Waldur.
 
 ```bash
-waldur_site_load_components
+waldur_site_load_components -c /etc/waldur/waldur-site-agent-config.yaml
 ```
 
 Thirdly, put systemd unit
