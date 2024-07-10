@@ -31,7 +31,7 @@ offerings: # Settings for offerings
         measured_unit: 'gb-Hours' # Waldur measured unit for accounting
         unit_factor: 61440 # Unit factor for conversion from measured unit
           # to SLURM units (60 * 1024)
-        accounting_type: usage # Can be usage or limit
+        accounting_type: "usage" # Can be usage or limit
         label: RAM # A label for a component in Waldur
   - name: "Example MOAB Offering"
     waldur_api_url: "http://localhost:8081/api/"
