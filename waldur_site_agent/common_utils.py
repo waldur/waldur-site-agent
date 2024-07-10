@@ -195,7 +195,7 @@ def load_components_to_waldur(
                 type=component_type,
                 name=label,
                 measured_unit=component_info["measured_unit"],
-                limit_amount=component_info["limit"],
+                limit_amount=limit_amount,
             )
             if component_type in waldur_offering_components:
                 if component_info["accounting_type"] == "usage":
