@@ -165,4 +165,4 @@ def start(configuration: WaldurAgentConfiguration) -> None:
             process_offerings(configuration.waldur_offerings, configuration.waldur_user_agent)
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
-        sleep(60 * 60)  # Once per hour
+        sleep(60 * 3)  # Once every 3 minutes
