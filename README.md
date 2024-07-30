@@ -52,8 +52,14 @@ The application supports the following CLI arguments:
   `order_process`, `report` and `membership_sync`; default is `order_process`.
 - `-c`, `--config-file` - path to the config file with provider settings.
 
-Optional environment variables for dependencies:
+Optional environment variables:
 
+- `WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES` - trigger period for `order_process`
+  mode in minutes (default is 5);
+- `WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES` - trigger period for `report`
+  mode in minutes (default is 30);
+- `WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES` - trigger period for `membership_sync`
+  mode in minutes (default is 5).
 - `REQUESTS_VERIFY_SSL` - flag for SSL verification
   for Waldur client, default is `true`.
 - `SENTRY_ENVIRONMENT` - name of the Sentry environment.

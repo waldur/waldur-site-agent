@@ -13,7 +13,12 @@ from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.structures import Resource
 from waldur_site_agent.processors import OfferingBaseProcessor
 
-from . import MARKETPLACE_SLURM_OFFERING_TYPE, Offering, WaldurAgentConfiguration
+from . import (
+    MARKETPLACE_SLURM_OFFERING_TYPE,
+    WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES,
+    Offering,
+    WaldurAgentConfiguration,
+)
 
 
 class OfferingMembershipProcessor(OfferingBaseProcessor):
@@ -165,4 +170,4 @@ def start(configuration: WaldurAgentConfiguration) -> None:
             process_offerings(configuration.waldur_offerings, configuration.waldur_user_agent)
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
-        sleep(60 * 3)  # Once every 3 minutes
+        sleep(WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES * 60)
