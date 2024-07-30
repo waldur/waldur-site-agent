@@ -20,7 +20,13 @@ if TYPE_CHECKING:
 
 from waldur_site_agent.backends.exceptions import BackendError
 
-from . import MARKETPLACE_SLURM_OFFERING_TYPE, Offering, WaldurAgentConfiguration, common_utils
+from . import (
+    MARKETPLACE_SLURM_OFFERING_TYPE,
+    WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES,
+    Offering,
+    WaldurAgentConfiguration,
+    common_utils,
+)
 
 
 class OfferingOrderProcessor(OfferingBaseProcessor):
@@ -308,4 +314,4 @@ def start(configuration: WaldurAgentConfiguration) -> None:
             process_offerings(configuration.waldur_offerings, configuration.waldur_user_agent)
         except Exception as e:
             logger.exception("The application crashed due to the error: %s", e)
-        sleep(2 * 60)  # Once per 2 minutes
+        sleep(WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES * 60)

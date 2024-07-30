@@ -1,9 +1,19 @@
 """Init file for the main module."""
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 
 MARKETPLACE_SLURM_OFFERING_TYPE = "Marketplace.Slurm"
+WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES = int(
+    os.environ.get("WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES", "5")
+)
+WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES = int(
+    os.environ.get("WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES", "30")
+)
+WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES = int(
+    os.environ.get("WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES", "5")
+)
 
 
 @dataclass
