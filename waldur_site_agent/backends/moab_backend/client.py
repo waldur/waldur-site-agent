@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from waldur_site_agent.backends import base, logger
+from waldur_site_agent.backends import base, exceptions, logger
 from waldur_site_agent.backends import utils as backend_utils
 from waldur_site_agent.backends.structures import Account, Association
 
@@ -29,6 +29,20 @@ class MoabClient(base.BaseClient):
         parts = line.split("|")
         return Account(name=parts[0], description=parts[1], organization=parts[2])
 
+    def _get_fund_id(self, account: str) -> Optional[int]:
+        command_fund = f"mam-list-funds --raw --quiet -a {account} --show Id"
+        fund_output = self.execute_command(command_fund.split())
+        fund_data = fund_output.splitlines()
+
+        if len(fund_data) == 0:
+            logger.warning("No funds were found for account %s", account)
+            return None
+
+        # Assuming an account has only one fund
+        fund_id_str = fund_data[0].strip()
+
+        return int(fund_id_str)
+
     def get_account(self, name: str) -> Account | None:
         """Get MOAB account info."""
         command = (
@@ -45,13 +59,28 @@ class MoabClient(base.BaseClient):
     ) -> str:
         """Create account in MOAB."""
         del parent_name
-        command = f'mam-create-account -a {name} -d "{description}" -o {organization}'
-        return self.execute_command(command.split())
+        command_account = f'mam-create-account -a {name} -d "{description}" -o {organization}'
+        self.execute_command(command_account.split())
+
+        logger.info("Creating fund for the account")
+        command_fund = f"mam-create-fund -a {name}"
+        return self.execute_command(command_fund.split())
 
     def delete_account(self, name: str) -> str:
         """Delete account from MOAB."""
-        command = "mam-delete-account -a %s" % name
-        return self.execute_command(command.split())
+        command_account = "mam-delete-account -a %s" % name
+        self.execute_command(command_account.split())
+
+        fund_id = self._get_fund_id(name)
+
+        if fund_id is None:
+            logger.warning("Skipping fund deletion.")
+            return ""
+
+        logger.info("Deleting the account fund %s", fund_id)
+
+        command_fund = f"mam-delete-fund -f {fund_id}"
+        return self.execute_command(command_fund.split())
 
     def set_resource_limits(self, account: str, limits_dict: Dict[str, int]) -> str | None:
         """Set the limits for the account with the specified name."""
@@ -61,8 +90,16 @@ class MoabClient(base.BaseClient):
                 "package is not created for the related service settings."
             )
             return None
-        command = f"mam-deposit -a {account} -z {limits_dict['deposit']} --create-fund True"
-        return self.execute_command(command.split())
+
+        fund_id = self._get_fund_id(account)
+
+        if fund_id is None:
+            raise exceptions.BackendError(
+                "The account %s does not have a linked fund, unable to set a deposit" % account
+            )
+
+        command_deposit = f"mam-deposit -a {account} -z {limits_dict['deposit']} -f {fund_id}"
+        return self.execute_command(command_deposit.split())
 
     def get_association(self, user: str, account: str) -> Association | None:
         """Get association between user and account."""
@@ -107,7 +144,7 @@ class MoabClient(base.BaseClient):
         return report_lines
 
     def list_account_users(self, account: str) -> List[str]:
-        """Returns list of users lined to the account."""
+        """Returns list of users linked to the account."""
         # TODO: make use of -A flag (fetch only active users)
         command = f"mam-list-users -a {account} --raw --show Name,DefaultAccount --quiet"
         output = self.execute_command(command.split())

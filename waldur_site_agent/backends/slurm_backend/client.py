@@ -162,7 +162,7 @@ class SlurmClient(base.BaseClient):
         ]
 
     def list_account_users(self, account: str) -> List[str]:
-        """Returns list of users lined to the account."""
+        """Returns list of users linked to the account."""
         args = [
             "list",
             "associations",
