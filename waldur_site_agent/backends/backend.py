@@ -110,7 +110,7 @@ class BaseBackend(ABC):
 
     def _delete_account_safely(self, account: str) -> None:
         if self.client.get_account(account):
-            logger.info("Deleting account %s from %s", account, self.backend_type)
+            logger.info("Deleting the account %s from %s", account, self.backend_type)
             self.client.delete_account(account)
         else:
             logger.warning("No account %s is in %s", account, self.backend_type)
