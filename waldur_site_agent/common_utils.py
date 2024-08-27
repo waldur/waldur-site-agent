@@ -348,6 +348,7 @@ def create_homedirs_for_offering_users() -> None:
         offering_users = waldur_rest_client.list_remote_offering_users(
             {
                 "offering_uuid": offering.uuid,
+                "is_restricted": False,
             }
         )
 
