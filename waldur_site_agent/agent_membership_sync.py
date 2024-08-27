@@ -104,6 +104,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         offering_users = self.waldur_rest_client.list_remote_offering_users(
             {
                 "offering_uuid": self.offering.uuid,
+                "is_restricted": False,
             }
         )
 

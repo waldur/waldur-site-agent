@@ -166,7 +166,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         logger.info("Fetching Waldur offering users")
         offering_users_all = self.waldur_rest_client.list_remote_offering_users(
-            {"offering_uuid": self.offering.uuid}
+            {"offering_uuid": self.offering.uuid, "is_restricted": False}
         )
         offering_usernames: Set[str] = {
             offering_user["username"]
