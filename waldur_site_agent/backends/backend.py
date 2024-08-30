@@ -1,6 +1,5 @@
 """Generic backend classes."""
 
-import re
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -9,7 +8,7 @@ from waldur_client import is_uuid
 from waldur_site_agent.backends.base import BaseClient, UnknownClient
 from waldur_site_agent.backends.exceptions import BackendError
 
-from . import ACCOUNT_NAME_REGEX, BackendType, logger, structures, utils
+from . import BackendType, logger, structures, utils
 
 UNKNOWN_BACKEND_TYPE = "unknown"
 
@@ -93,8 +92,8 @@ class BaseBackend(ABC):
 
         self._delete_account_safely(account)
 
-        if "project_uuid" in kwargs:
-            project_account = self._get_project_name(kwargs["project_uuid"])
+        if "project_slug" in kwargs:
+            project_account = self._get_project_name(kwargs["project_slug"])
             if (
                 len(
                     [
@@ -129,12 +128,12 @@ class BaseBackend(ABC):
         project_name = waldur_resource["project_name"]
         customer_name = waldur_resource["customer_name"]
 
-        project_account = self._get_project_name(waldur_resource["project_uuid"])
-        allocation_account = self._get_allocation_name(resource_name, waldur_allocation_uuid)
+        project_account = self._get_project_name(waldur_resource["project_slug"])
+        allocation_account = self._get_allocation_name(waldur_resource["slug"])
 
         customer_account = None
         if self.backend_type == BackendType.SLURM.value:
-            customer_account = self._get_customer_name(waldur_resource["customer_uuid"])
+            customer_account = self._get_customer_name(waldur_resource["customer_slug"])
             if not self.client.get_account(customer_account):
                 logger.info(
                     "Creating SLURM account for customer %s (backend id = %s)",
@@ -242,25 +241,15 @@ class BaseBackend(ABC):
         """Set limits for the resource on the backend."""
         self.client.set_resource_limits(resource_backend_id, limits)
 
-    def _get_allocation_name(
-        self, allocation_name: str, allocation_uuid: str, prefix: str = ""
-    ) -> str:
-        name = allocation_name
+    def _get_allocation_name(self, allocation_slug: str, prefix: str = "") -> str:
         prefix = self.backend_settings.get("allocation_prefix", "")
-        hexpart = allocation_uuid[:5]
+        return f"{prefix}{allocation_slug}".lower()
 
-        raw_name = f"{prefix}{hexpart}_{name}"
-        incorrect_symbols_regex = rf"[^{ACCOUNT_NAME_REGEX}]+"
-        sanitized_name = re.sub(incorrect_symbols_regex, "", raw_name)
-        name_max_len = self.backend_settings.get("allocation_name_max_len", 34)
-        result_name = sanitized_name[:name_max_len]
-        return result_name.lower()
+    def _get_project_name(self, slug: str) -> str:
+        return f"{self.backend_settings.get('project_prefix', '')}{slug}"
 
-    def _get_project_name(self, name: str) -> str:
-        return f"{self.backend_settings.get('project_prefix', '')}{name}"
-
-    def _get_customer_name(self, name: str) -> str:
-        return f"{self.backend_settings.get('customer_prefix', '')}{name}"
+    def _get_customer_name(self, slug: str) -> str:
+        return f"{self.backend_settings.get('customer_prefix', '')}{slug}"
 
 
 class UnknownBackend(BaseBackend):

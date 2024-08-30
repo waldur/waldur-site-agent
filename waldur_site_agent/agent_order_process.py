@@ -109,6 +109,15 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     ) -> Resource | None:
         resource_uuid = waldur_resource["uuid"]
         resource_name = waldur_resource["name"]
+        resource_project_uuid = waldur_resource["project_uuid"]
+        resource_customer_uuid = waldur_resource["customer_uuid"]
+
+        waldur_project = self.waldur_rest_client._get_project(resource_project_uuid)
+        waldur_customer = self.waldur_rest_client.get_customer(
+            resource_customer_uuid, {"field": "slug"}
+        )
+        waldur_project_slug = waldur_project["slug"]
+        waldur_customer_slug = waldur_customer["slug"]
 
         logger.info("Creating resource %s", resource_name)
 
@@ -130,6 +139,8 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 resource_uuid, SlurmAllocationState.CREATING
             )
 
+        waldur_resource["project_slug"] = waldur_project_slug
+        waldur_resource["customer_slug"] = waldur_customer_slug
         backend_resource = self.resource_backend.create_resource(waldur_resource)
         if backend_resource.backend_id == "":
             msg = f"Unable to create a backend resource for offering {self.offering}"
@@ -283,13 +294,14 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         resource_uuid = order["marketplace_resource_uuid"]
 
         waldur_resource = self.waldur_rest_client.get_marketplace_resource(resource_uuid)
+        waldur_project = self.waldur_rest_client._get_project(waldur_resource["project_uuid"])
 
         resource_backend = common_utils.get_backend_for_offering(self.offering)
         if resource_backend is None:
             return
 
         resource_backend.delete_resource(
-            waldur_resource["backend_id"], project_uuid=order["project_uuid"]
+            waldur_resource["backend_id"], project_slug=waldur_project["slug"]
         )
 
         logger.info("Allocation has been terminated successfully")
