@@ -37,16 +37,19 @@ class CreationOrderTest(unittest.TestCase):
             "customer_name": "Test customer",
             "limits": {"cpu": 10},
             "state": "Creating",
+            "slug": "sample-resource-1",
             "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
         }
+        self.waldur_project = {"slug": "project-1"}
+        self.waldur_customer = {"slug": "customer-1"}
 
     def test_allocation_creation(
         self, waldur_client_class: mock.Mock, slurm_client_class: mock.Mock
     ):
         user_uuid = uuid.uuid4().hex
         offering_user_username = "test-offering-user-01"
-        allocation_account = f"hpc_{self.allocation_uuid[:5]}_test-allocation-01"[:34]
-        project_account = f"hpc_{self.project_uuid}"
+        allocation_account = "hpc_sample-resource-1"
+        project_account = f"hpc_project-1"
         waldur_client = waldur_client_class.return_value
         waldur_client.list_orders.return_value = [self.waldur_order]
         updated_order = self.waldur_order.copy()
@@ -84,6 +87,8 @@ class CreationOrderTest(unittest.TestCase):
             {"username": "test-offering-user-01", "user_uuid": user_uuid}
         ]
         waldur_client.get_marketplace_resource.return_value = updated_resource
+        waldur_client._get_project.return_value = self.waldur_project
+        waldur_client.get_customer.return_value = self.waldur_customer
 
         slurm_client = slurm_client_class.return_value
         slurm_client.get_association.return_value = None
