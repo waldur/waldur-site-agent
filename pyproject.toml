@@ -18,7 +18,7 @@ packages = [
 
 [tool.poetry.dependencies]
 python = "^3.9"
-python-waldur-client = "^0.3.2"
+python-waldur-client = "^0.3.6"
 requests = "2.32.3"
 pyyaml = "6.0.1"
 sentry-sdk = "2.3.1"
@@ -71,7 +71,8 @@ lint.ignore = [
   'S603',
   'DTZ001',
   'DTZ005',
-  "PLR0915"
+  "PLR0915",
+  "PLR0912"
 ] # These rules are ignored
 lint.extend-ignore = [
   "COM812",
