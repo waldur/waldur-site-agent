@@ -174,7 +174,7 @@ def load_components_to_waldur(
         "Creating offering components data for the following resources: %s",
         ", ".join(components.keys()),
     )
-    waldur_offering = waldur_rest_client.get_marketplace_provider_offering(offering_uuid)
+    waldur_offering = waldur_rest_client.get_marketplace_public_offering(offering_uuid)
     waldur_offering_components = {
         component["type"]: component for component in waldur_offering["components"]
     }
