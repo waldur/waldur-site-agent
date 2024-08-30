@@ -43,6 +43,8 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             self.offering.uuid,
         )
 
+        self._print_current_user()
+
         orders = self.waldur_rest_client.list_orders(
             {
                 "offering_uuid": self.offering.uuid,
