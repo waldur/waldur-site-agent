@@ -1,5 +1,6 @@
 """Agent responsible for usage and limits reporting."""
 
+import datetime
 from time import sleep
 from typing import Dict, List
 
@@ -9,7 +10,7 @@ from waldur_client import (
     WaldurClientException,
 )
 
-from waldur_site_agent.backends import logger
+from waldur_site_agent.backends import logger, utils
 from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.structures import Resource
 from waldur_site_agent.processors import OfferingBaseProcessor
@@ -131,12 +132,50 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         ]
         self.waldur_rest_client.create_component_usages(plan_period["uuid"], usage_objects)
 
+    def _submit_user_usage_for_resource(
+        self,
+        username: str,
+        user_usage: Dict[str, float],
+        waldur_component_usages: List[Dict],
+    ) -> None:
+        """Reports per-user usage for a backend resource to Waldur."""
+        logger.info("Setting usages for %s", username)
+        component_usage_types = [
+            component_usage["type"] for component_usage in waldur_component_usages
+        ]
+        missing_components = set(user_usage) - set(component_usage_types)
+
+        if missing_components:
+            logger.warning(
+                "The following components are not found in Waldur: %s",
+                ", ".join(missing_components),
+            )
+
+        offering_users = self.waldur_rest_client.list_remote_offering_users(
+            {"username": username, "query": self.offering.uuid}
+        )
+        offering_user_uuid = None
+
+        if len(offering_users) > 0:
+            offering_user_uuid = offering_users[0]["uuid"]
+
+        for component_usage in waldur_component_usages:
+            component_type = component_usage["type"]
+            usage = user_usage[component_type]
+            logger.info(
+                "Submitting usage for username %s: %s -> %s", username, component_type, usage
+            )
+            self.waldur_rest_client.create_component_user_usage(
+                component_usage["uuid"], usage, username, offering_user_uuid
+            )
+
     def _process_resources(
         self,
         resource_report: Dict[str, Resource],
     ) -> None:
         """Processes usage report for the resource."""
         waldur_offering = self.waldur_rest_client._get_offering(self.offering.uuid)
+        month_start = utils.month_start(datetime.datetime.now()).date()
 
         # TODO: this part is not generic yet, rather SLURM-specific
         for resource_backend_id, backend_resource in resource_report.items():
@@ -145,12 +184,27 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 usages: Dict[str, Dict[str, float]] = backend_resource.usage
 
                 # Submit usage
-                total_usage = usages["TOTAL_ACCOUNT_USAGE"]
+                total_usage = usages.pop("TOTAL_ACCOUNT_USAGE")
                 self._submit_total_usage_for_resource(
                     backend_resource,
                     total_usage,
                     waldur_offering["components"],
                 )
+
+                # Skip the following actions is the dict is empty
+                if not usages:
+                    return
+
+                waldur_component_usages = self.waldur_rest_client.list_component_usages(
+                    backend_resource.marketplace_uuid, date_after=month_start
+                )
+
+                logger.info("Setting per-user usages")
+                for username, user_usage in usages.items():
+                    self._submit_user_usage_for_resource(
+                        username, user_usage, waldur_component_usages
+                    )
+
             except WaldurClientException as e:
                 logger.exception(
                     "Waldur REST client error while processing allocation %s: %s",

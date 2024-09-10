@@ -71,6 +71,19 @@ class ReportingTest(unittest.TestCase):
                 {"type": "mem"},
             ]
         }
+        waldur_client.list_remote_offering_users.return_value = [
+            {"uuid": "5B0DB04C6FED40A5AB6D511C0E2282C9"}
+        ]
+        waldur_client.list_component_usages.return_value = [
+            {
+                "uuid": "23565BD44E5D433F88C1028A2E7AB5F6",
+                "type": "cpu",
+            },
+            {
+                "uuid": "ABFCD77BDE254F7485F839397968A12D",
+                "type": "mem",
+            },
+        ]
         processor.process_offering()
 
         waldur_client.filter_marketplace_resources.assert_called_once_with(
@@ -87,3 +100,4 @@ class ReportingTest(unittest.TestCase):
                 ComponentUsage("mem", 30),
             ],
         )
+        self.assertEqual(2, waldur_client.create_component_user_usage.call_count)

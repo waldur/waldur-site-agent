@@ -366,7 +366,7 @@ def print_current_user(current_user: Dict) -> None:
     """Print provided user's info."""
     logger.info("Current user username: %s", current_user["username"])
     logger.info("Current user full name: %s", current_user["full_name"])
-    logger.info("Current user is staff: %s", current_user["is_staff"])
+    logger.info("Current user is staff: %s", current_user.get("is_staff", False))
     logger.info("List of permissions:")
     for permission in current_user["permissions"]:
         logger.info("Role name: %s", permission["role_name"])
