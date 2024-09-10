@@ -93,6 +93,11 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     order["uuid"],
                     e,
                 )
+                self.waldur_rest_client.marketplace_order_set_state_erred(
+                    order["uuid"],
+                    error_message=str(e),
+                    error_traceback=traceback.format_exc(),
+                )
             except BackendError as e:
                 logger.exception(
                     "Waldur SLURM client error while processing order %s: %s",
