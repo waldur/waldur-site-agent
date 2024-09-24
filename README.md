@@ -197,6 +197,7 @@ offerings: # Settings for offerings
         # created by the agent.
       enable_user_homedir_account_creation: true # Whether to create home directories
         # for users associated to accounts.
+      homedir_umask: "0700" # A umask for created homedirs
     backend_components: # Computing components on backend with accounting data
       cpu: # Type of the component, for example `cpu`
         measured_unit: "k-Hours" # Waldur measured unit for accounting.

@@ -68,12 +68,15 @@ class SlurmBackend(backend.BaseBackend):
 
         return allocation_limits, waldur_resource_limits
 
-    def add_users_to_resource(self, resource_backend_id: str, user_ids: Set[str]) -> Set[str]:
+    def add_users_to_resource(
+        self, resource_backend_id: str, user_ids: Set[str], **kwargs: dict
+    ) -> Set[str]:
         """Add specified users to the allocations on the SLURM cluster."""
         added_users = super().add_users_to_resource(resource_backend_id, user_ids)
 
         if self.backend_settings.get("enable_user_homedir_account_creation", True):
-            self._create_user_homedirs(added_users)
+            umask: str = str(kwargs.get("homedir_umask", "0700"))
+            self._create_user_homedirs(added_users, umask=umask)
 
         return added_users
 
@@ -108,11 +111,11 @@ class SlurmBackend(backend.BaseBackend):
                 return False
         return True
 
-    def _create_user_homedirs(self, usernames: Set[str]) -> None:
+    def _create_user_homedirs(self, usernames: Set[str], umask: str = "0700") -> None:
         logger.info("Creating homedirs for users")
         for username in usernames:
             try:
-                self.client.create_linux_user_homedir(username)
+                self.client.create_linux_user_homedir(username, umask)
                 logger.info("Homedir for user %s has been created", username)
             except BackendError as err:
                 logger.exception(

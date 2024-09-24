@@ -202,8 +202,11 @@ class BaseBackend(ABC):
     ) -> Tuple[Dict[str, int], Dict[str, int]]:
         """Collect limits for backend and waldur separately."""
 
-    def add_users_to_resource(self, resource_backend_id: str, user_ids: Set[str]) -> Set[str]:
+    def add_users_to_resource(
+        self, resource_backend_id: str, user_ids: Set[str], **kwargs: dict
+    ) -> Set[str]:
         """Add specified users to the resource on the backend."""
+        del kwargs
         added_users = set()
         for username in user_ids:
             try:
@@ -280,8 +283,11 @@ class UnknownBackend(BaseBackend):
         """Placeholder."""
         return structures.Resource()
 
-    def add_users_to_resource(self, _: str, user_ids: Set[str]) -> Set[str]:
+    def add_users_to_resource(
+        self, resource_backend_id: str, user_ids: Set[str], **kwargs: dict
+    ) -> Set[str]:
         """Placeholder."""
+        del kwargs, resource_backend_id
         return user_ids
 
     def set_resource_limits(self, _: str, limits: Dict[str, int]) -> None:

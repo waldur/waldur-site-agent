@@ -358,8 +358,9 @@ def create_homedirs_for_offering_users() -> None:
         offering_user_usernames: Set[str] = {
             offering_user["username"] for offering_user in offering_users
         }
+        umask = offering.backend_settings.get("homedir_umask", "0700")
         slurm_backend = SlurmBackend(offering.backend_settings, offering.backend_components)
-        slurm_backend._create_user_homedirs(offering_user_usernames)
+        slurm_backend._create_user_homedirs(offering_user_usernames, umask)
 
 
 def print_current_user(current_user: Dict) -> None:

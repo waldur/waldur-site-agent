@@ -194,7 +194,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         logger.info("Adding usernames to resource in backend")
         added_users = self.resource_backend.add_users_to_resource(
-            backend_resource.backend_id, offering_usernames
+            backend_resource.backend_id,
+            offering_usernames,
+            homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
 
         common_utils.create_associations_for_waldur_allocation(

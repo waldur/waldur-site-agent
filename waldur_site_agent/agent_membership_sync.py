@@ -40,7 +40,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
-                "field": ["backend_id", "uuid", "name", "resource_uuid", "offering_type"],
+                "field": [
+                    "backend_id",
+                    "uuid",
+                    "name",
+                    "resource_uuid",
+                    "offering_type",
+                ],
             }
         )
 
@@ -121,7 +127,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         )
 
         self.resource_backend.add_users_to_resource(
-            backend_resource.backend_id, offering_user_usernames
+            backend_resource.backend_id,
+            offering_user_usernames,
+            homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
 
     def _process_resources(

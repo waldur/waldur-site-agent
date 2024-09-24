@@ -175,11 +175,11 @@ class SlurmClient(base.BaseClient):
             line.split("|")[1] for line in output.splitlines() if "|" in line and line[-1] != "|"
         ]
 
-    def create_linux_user_homedir(self, username: str) -> str:
+    def create_linux_user_homedir(self, username: str, umask: str = "") -> str:
         """Creates homedir for the user in Linux system."""
         return self._execute_command(
             command_name="/sbin/mkhomedir_helper",
-            command=[username],
+            command=[username, umask],
             immediate=False,
             parsable=False,
         )
