@@ -18,15 +18,6 @@ UNITS: Dict[str, int] = {
     "T": 2**40,
 }
 
-SLURM_ALLOCATION_REGEX = "a-zA-Z0-9-_"
-SLURM_ALLOCATION_NAME_MAX_LEN = 34
-
-
-def sanitize_allocation_name(name: str) -> str:
-    """Formats allocation name respecting configured regex."""
-    incorrect_symbols_regex = rf"[^{SLURM_ALLOCATION_REGEX}]+"
-    return re.sub(incorrect_symbols_regex, "", name)
-
 
 def parse_int(value: str) -> int:
     """Converts human-readable integers to machine-readable ones.
@@ -47,12 +38,6 @@ def diagnostics(slurm_backend: SlurmBackend) -> bool:
     default_account_name = slurm_backend.backend_settings["default_account"]
 
     format_string = "{:<30} = {:<10}"
-    logger.info(
-        format_string.format(
-            "SLURM allocation name max len",
-            slurm_backend.backend_settings["allocation_name_max_len"],
-        )
-    )
     logger.info(
         format_string.format(
             "SLURM customer prefix", slurm_backend.backend_settings["customer_prefix"]
