@@ -11,7 +11,6 @@ OFFERING = Offering(
         "customer_prefix": "hpc_",
         "project_prefix": "hpc_",
         "allocation_prefix": "hpc_",
-        "allocation_name_max_len": 34,
         "enable_user_homedir_account_creation": True,
     },
     backend_components={

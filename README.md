@@ -193,7 +193,6 @@ offerings: # Settings for offerings
       customer_prefix: "hpc_" # Prefix for customer's accounts.
       project_prefix: "hpc_" # Prefix for project's accounts.
       allocation_prefix: "hpc_" # Prefix used for allocation's accounts.
-      allocation_name_max_len: 34 # Maximum length of account name
         # created by the agent.
       enable_user_homedir_account_creation: true # Whether to create home directories
         # for users associated to accounts.
@@ -225,7 +224,6 @@ offerings: # Settings for offerings
       customer_prefix: "hpc_mt_"
       project_prefix: "hpc_mt_"
       allocation_prefix: "hpc_mt_"
-      allocation_name_max_len: 34
       enable_user_homedir_account_creation: true
     backend_components:
       deposit: # For MOAB backend, only "deposit" is supported
