@@ -26,6 +26,8 @@ class CreationOrderTest(unittest.TestCase):
             "state": "pending-provider",
             "attributes": {"name": "sample_resource"},
             "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "project_slug": "project-1",
+            "customer_slug": "customer-1",
         }
         self.waldur_resource = {
             "uuid": self.resource_uuid,
@@ -40,8 +42,6 @@ class CreationOrderTest(unittest.TestCase):
             "slug": "sample-resource-1",
             "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
         }
-        self.waldur_project = {"slug": "project-1"}
-        self.waldur_customer = {"slug": "customer-1"}
 
     def test_allocation_creation(
         self, waldur_client_class: mock.Mock, slurm_client_class: mock.Mock
@@ -87,8 +87,6 @@ class CreationOrderTest(unittest.TestCase):
             {"username": "test-offering-user-01", "user_uuid": user_uuid}
         ]
         waldur_client.get_marketplace_resource.return_value = updated_resource
-        waldur_client._get_project.return_value = self.waldur_project
-        waldur_client.get_customer.return_value = self.waldur_customer
 
         slurm_client = slurm_client_class.return_value
         slurm_client.get_association.return_value = None
@@ -135,6 +133,8 @@ class TerminationOrderTest(unittest.TestCase):
             "attributes": {"name": "test-allocation-01"},
             "state": "executing",
             "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "project_slug": "project-1",
+            "customer_slug": "customer-1",
         }
         self.waldur_allocation = {
             "backend_id": f"hpc_{self.resource_uuid[:5]}_test-allocation-01"[:34]
