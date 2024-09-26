@@ -31,7 +31,18 @@ class SlurmClient(base.BaseClient):
     def list_tres(self) -> List[str]:
         """Returns a list of TRES available in cluster."""
         output = self._execute_command(["list", "tres"])
-        return [line.split("|")[0] for line in output.splitlines() if "|" in line]
+        tres_list = []
+        for line in output.splitlines():
+            if "|" not in line:
+                continue
+            fields = line.split("|")
+            component_type = fields[0]
+            component_name = fields[1]
+            if component_name:
+                tres_list.append(f"{component_type}/{component_name}")
+            else:
+                tres_list.append(component_type)
+        return tres_list
 
     def get_account(self, name: str) -> Account | None:
         """Returns Account object from cluster based on the account name."""
