@@ -167,7 +167,7 @@ class SlurmBackend(backend.BaseBackend):
                 )
                 report_converted[account][username] = converted_usage_dict
 
-        return report
+        return report_converted
 
     def _get_allocation_limits(self, account: str) -> Dict[str, int]:
         """Return limits converted to Waldur-readable values."""
