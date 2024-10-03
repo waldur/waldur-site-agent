@@ -3,8 +3,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Set, Tuple
 
-from waldur_client import is_uuid
-
 from waldur_site_agent.backends.base import BaseClient, UnknownClient
 from waldur_site_agent.backends.exceptions import BackendError
 
@@ -119,17 +117,11 @@ class BaseBackend(ABC):
         logger.info("Creating account in the backend")
         resource_uuid = waldur_resource["uuid"]
         resource_name = waldur_resource["name"]
-        waldur_allocation_uuid = waldur_resource["resource_uuid"]
-
-        if not is_uuid(waldur_allocation_uuid):
-            logger.error("Unexpected allocation UUID format, skipping the order")
-            return structures.Resource(backend_id="")
-
+        account_name = waldur_resource["slug"]
         project_name = waldur_resource["project_name"]
         customer_name = waldur_resource["customer_name"]
 
         project_account = self._get_project_name(waldur_resource["project_slug"])
-        allocation_account = self._get_allocation_name(waldur_resource["slug"])
 
         customer_account = None
         if self.backend_type == BackendType.SLURM.value:
@@ -159,21 +151,46 @@ class BaseBackend(ABC):
                 parent_name=customer_account,
             )
 
-        if self.client.get_account(allocation_account) is not None:
-            logger.info(
-                "The account %s already exists in the cluster, skipping creation",
-                allocation_account,
-            )
-        else:
-            logger.info(
-                "Creating an account for allocation %s (backend id = %s)",
-                resource_name,
-                allocation_account,
-            )
-            self.client.create_account(
-                name=allocation_account,
-                description=resource_name,
-                organization=project_account,
+        max_retries = 1
+        account_name_generation_policy = waldur_resource["offering_plugin_options"].get(
+            "account_name_generation_policy"
+        )
+        if account_name_generation_policy == "project_slug":
+            account_name = waldur_resource["project_slug"] + "-0"
+            max_retries = 10
+
+        retries = 0
+        allocation_account = self._get_allocation_name(account_name)
+        while retries < max_retries:
+            if self.client.get_account(allocation_account) is not None:
+                logger.info(
+                    "The account %s already exists in the cluster",
+                    allocation_account,
+                )
+                if account_name_generation_policy == "project_slug":
+                    # Constructing the new account name with incremented counter
+                    prefix = allocation_account[:-1]
+                    # The last char is guaranteed to be a valid integer
+                    counter = int(allocation_account[-1]) + 1
+                    allocation_account = prefix + str(counter)
+            else:
+                logger.info(
+                    "Creating an account for allocation %s (backend id = %s)",
+                    resource_name,
+                    allocation_account,
+                )
+                self.client.create_account(
+                    name=allocation_account,
+                    description=resource_name,
+                    organization=project_account,
+                )
+                break
+            retries += 1
+
+        if retries == max_retries:
+            raise BackendError(
+                f"Unable to create an allocation: {allocation_account} "
+                "already exists in the cluster"
             )
 
         allocation_limits, waldur_resource_limits = self._collect_limits(waldur_resource)

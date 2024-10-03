@@ -41,15 +41,11 @@ class CreationOrderTest(unittest.TestCase):
             "state": "Creating",
             "slug": "sample-resource-1",
             "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "offering_plugin_options": {},
         }
 
-    def test_allocation_creation(
-        self, waldur_client_class: mock.Mock, slurm_client_class: mock.Mock
-    ):
+    def setup_waldur_client_mock(self, waldur_client_class):
         user_uuid = uuid.uuid4().hex
-        offering_user_username = "test-offering-user-01"
-        allocation_account = "hpc_sample-resource-1"
-        project_account = f"hpc_project-1"
         waldur_client = waldur_client_class.return_value
         waldur_client.list_orders.return_value = [self.waldur_order]
         updated_order = self.waldur_order.copy()
@@ -88,9 +84,52 @@ class CreationOrderTest(unittest.TestCase):
         ]
         waldur_client.get_marketplace_resource.return_value = updated_resource
 
+        return waldur_client
+
+    def test_allocation_creation(
+        self, waldur_client_class: mock.Mock, slurm_client_class: mock.Mock
+    ):
+        offering_user_username = "test-offering-user-01"
+        allocation_account = "hpc_sample-resource-1"
+        project_account = f"hpc_project-1"
+
+        waldur_client = self.setup_waldur_client_mock(waldur_client_class)
+
         slurm_client = slurm_client_class.return_value
         slurm_client.get_association.return_value = None
         slurm_client.get_account.return_value = None
+        slurm_client._execute_command.return_value = ""
+
+        process_offerings([OFFERING])
+
+        waldur_client.marketplace_order_approve_by_provider.assert_called_once_with(self.order_uuid)
+
+        self.assertEqual(3, slurm_client.create_account.call_count)
+
+        slurm_client.create_account.assert_called_with(
+            name=allocation_account,
+            description="test-allocation-01",
+            organization=project_account,
+        )
+        slurm_client.create_association.assert_called_with(
+            offering_user_username, allocation_account, "root"
+        )
+
+    def test_allocation_creation_with_project_slug(
+        self, waldur_client_class: mock.Mock, slurm_client_class: mock.Mock
+    ):
+        self.waldur_resource["offering_plugin_options"] = {
+            "account_name_generation_policy": "project_slug"
+        }
+        offering_user_username = "test-offering-user-01"
+        project_account = f"hpc_project-1"
+        allocation_account = f"{project_account}-1"
+
+        waldur_client = self.setup_waldur_client_mock(waldur_client_class)
+
+        slurm_client = slurm_client_class.return_value
+        slurm_client.get_association.return_value = None
+        slurm_client.get_account.side_effect = [None, None, "account", None]
         slurm_client._execute_command.return_value = ""
 
         process_offerings([OFFERING])

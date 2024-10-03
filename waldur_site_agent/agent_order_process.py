@@ -89,7 +89,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 logger.info("The order has been successfully processed")
             except WaldurClientException as e:
                 logger.exception(
-                    "Waldur REST client error while processing order %s: %s",
+                    "Error while processing order %s: %s",
                     order["uuid"],
                     e,
                 )
@@ -100,7 +100,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 )
             except BackendError as e:
                 logger.exception(
-                    "Waldur SLURM client error while processing order %s: %s",
+                    "Error while processing order %s: %s",
                     order["uuid"],
                     e,
                 )
