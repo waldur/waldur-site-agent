@@ -143,7 +143,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             raise BackendError(msg)
 
         logger.info("Updating resource metadata in Waldur")
-        self.waldur_rest_client.marketplace_resource_set_backend_id(
+        self.waldur_rest_client.marketplace_provider_resource_set_backend_id(
             resource_uuid, backend_resource.backend_id
         )
 
@@ -166,7 +166,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     ) -> None:
         logger.info("Adding users to resource")
         logger.info("Fetching Waldur resource team")
-        team = self.waldur_rest_client.marketplace_resource_get_team(
+        team = self.waldur_rest_client.marketplace_provider_resource_get_team(
             backend_resource.marketplace_uuid
         )
         user_uuids = {user["uuid"] for user in team}

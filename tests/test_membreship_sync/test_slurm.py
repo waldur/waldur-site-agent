@@ -61,7 +61,7 @@ class MembershipSyncTest(unittest.TestCase):
         waldur_client = waldur_client_class.return_value
         waldur_client.filter_marketplace_resources.return_value = [self.waldur_resource]
         waldur_client.list_slurm_associations.return_value = []
-        waldur_client.marketplace_resource_get_team.return_value = [
+        waldur_client.marketplace_provider_resource_get_team.return_value = [
             {
                 "uuid": user_uuid,
                 "username": "test-user-02",

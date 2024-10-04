@@ -102,7 +102,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         # Offering users sync
         # The service fetches offering users from Waldur and pushes them to the cluster
         logger.info("Synching offering users")
-        team = self.waldur_rest_client.marketplace_resource_get_team(
+        team = self.waldur_rest_client.marketplace_provider_resource_get_team(
             backend_resource.marketplace_uuid
         )
         user_uuids = {user["uuid"] for user in team}
