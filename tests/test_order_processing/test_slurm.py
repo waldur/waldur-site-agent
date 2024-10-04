@@ -67,7 +67,7 @@ class CreationOrderTest(unittest.TestCase):
         )
         waldur_client.get_order.return_value = updated_order
 
-        waldur_client.marketplace_provider_resource_get_team.return_value = [
+        waldur_client.marketplace_resource_get_team.return_value = [
             {
                 "uuid": user_uuid,
                 "username": "test-user-01",
