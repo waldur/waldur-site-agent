@@ -32,5 +32,6 @@ class Resource:
     marketplace_scope_uuid: str = ""
     backend_id: str = ""
     limits: Dict = field(default_factory=dict)
+    restrict_member_access: bool = False
     users: List[str] = field(default_factory=list)
     usage: Dict = field(default_factory=dict)

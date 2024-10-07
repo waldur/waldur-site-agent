@@ -118,7 +118,7 @@ def delete_associations_from_waldur_allocation(
     usernames: Set[str],
 ) -> None:
     """Deletes a SLURM association for the specified resource and username in Waldur."""
-    logger.info("Stale usernames to drop from Waldur allocation: %s", " ,".join(usernames))
+    logger.info("Usernames to drop from Waldur allocation: %s", " ,".join(usernames))
     for username in usernames:
         try:
             waldur_rest_client.delete_slurm_association(backend_resource.marketplace_uuid, username)

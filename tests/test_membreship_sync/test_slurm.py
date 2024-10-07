@@ -78,7 +78,14 @@ class MembershipSyncTest(unittest.TestCase):
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
-                "field": ["backend_id", "uuid", "name", "resource_uuid", "offering_type"],
+                "field": [
+                    "backend_id",
+                    "uuid",
+                    "name",
+                    "resource_uuid",
+                    "offering_type",
+                    "restrict_member_access",
+                ],
             }
         )
         waldur_client.list_slurm_associations.assert_called_once_with(
@@ -109,7 +116,14 @@ class MembershipSyncTest(unittest.TestCase):
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
-                "field": ["backend_id", "uuid", "name", "resource_uuid", "offering_type"],
+                "field": [
+                    "backend_id",
+                    "uuid",
+                    "name",
+                    "resource_uuid",
+                    "offering_type",
+                    "restrict_member_access",
+                ],
             }
         )
         waldur_client.list_slurm_associations.assert_called_once_with(
