@@ -46,6 +46,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     "name",
                     "resource_uuid",
                     "offering_type",
+                    "restrict_member_access",
                 ],
             }
         )
@@ -63,6 +64,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 marketplace_uuid=resource_data["uuid"],
                 backend_type=self.offering.backend_type,
                 marketplace_scope_uuid=resource_data["resource_uuid"],
+                restrict_member_access=resource_data.get("restrict_member_access", False),
             )
             for resource_data in waldur_resources
         ]
@@ -88,6 +90,20 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         )
         remote_usernames = {association["username"] for association in associations}
         local_usernames = set(usernames)
+
+        if backend_resource.restrict_member_access:
+            # The idea is to remove the existing associations in both sides
+            # and avoid creation of new associations
+            logger.info("Resource restricted for members, removing all the common associations")
+            common_usernames = local_usernames & remote_usernames
+
+            common_utils.delete_associations_from_waldur_allocation(
+                self.waldur_rest_client, backend_resource, common_usernames
+            )
+            self.resource_backend.remove_users_from_account(
+                backend_resource.backend_id, common_usernames
+            )
+            return
 
         stale_usernames: Set[str] = remote_usernames - local_usernames
         common_utils.delete_associations_from_waldur_allocation(
@@ -115,7 +131,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             }
         )
 
-        offering_user_usernames: Set[str] = {
+        new_offering_user_usernames: Set[str] = {
             offering_user["username"]
             for offering_user in offering_users
             if offering_user["username"] not in local_usernames
@@ -123,12 +139,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         }
 
         common_utils.create_associations_for_waldur_allocation(
-            self.waldur_rest_client, backend_resource, offering_user_usernames
+            self.waldur_rest_client, backend_resource, new_offering_user_usernames
         )
 
         self.resource_backend.add_users_to_resource(
             backend_resource.backend_id,
-            offering_user_usernames,
+            new_offering_user_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
 

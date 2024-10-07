@@ -42,6 +42,7 @@ class BaseBackend(ABC):
                     resource.name = resource_info.name
                     resource.marketplace_uuid = resource_info.marketplace_uuid
                     resource.marketplace_scope_uuid = resource_info.marketplace_scope_uuid
+                    resource.restrict_member_access = resource_info.restrict_member_access
                     report[backend_id] = resource
             except Exception as e:
                 logger.exception("Error while pulling allocation [%s]: %s", backend_id, e)
@@ -254,6 +255,38 @@ class BaseBackend(ABC):
                 )
             except BackendError as err:
                 logger.exception("Unable to create association on backend: %s", err)
+                return False
+        return True
+
+    def remove_users_from_account(self, resource_backend_id: str, usernames: Set[str]) -> List[str]:
+        """Remove specified users from the resource on the backend."""
+        removed_users = []
+        for username in usernames:
+            try:
+                succeeded = self._remove_user(resource_backend_id, username)
+                if succeeded:
+                    removed_users.append(username)
+            except BackendError as e:
+                logger.exception(
+                    "Unable to remove user %s from account %s, details: %s",
+                    username,
+                    resource_backend_id,
+                    e,
+                )
+        return removed_users
+
+    def _remove_user(self, account: str, username: str) -> bool:
+        """Delete association between user and an account if it exists."""
+        if not account.strip():
+            message = "Empty account name"
+            raise BackendError(message)
+
+        if self.client.get_association(username, account):
+            logger.info("Deleting association between %s and %s", username, account)
+            try:
+                self.client.delete_association(username, account)
+            except BackendError as err:
+                logger.exception("Unable to delete association in the backend: %s", err)
                 return False
         return True
 

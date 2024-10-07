@@ -80,37 +80,6 @@ class SlurmBackend(backend.BaseBackend):
 
         return added_users
 
-    def _remove_users_from_account(self, account: str, usernames: Set[str]) -> List[str]:
-        removed_associations = []
-        for username in usernames:
-            try:
-                succeeded = self._remove_user(account, username)
-                if succeeded:
-                    removed_associations.append(username)
-            except BackendError as e:
-                logger.exception(
-                    "Unable to remove user %s from account %s, details: %s",
-                    username,
-                    account,
-                    e,
-                )
-        return removed_associations
-
-    def _remove_user(self, account: str, username: str) -> bool:
-        """Delete association between user and SLURM account if it exists."""
-        if not account.strip():
-            message = "Empty backend_id for allocation"
-            raise BackendError(message)
-
-        if self.client.get_association(username, account):
-            logger.info("Deleting association between %s and %s", username, account)
-            try:
-                self.client.delete_association(username, account)
-            except BackendError as err:
-                logger.exception("Unable to delete association in Slurm: %s", err)
-                return False
-        return True
-
     def _create_user_homedirs(self, usernames: Set[str], umask: str = "0700") -> None:
         logger.info("Creating homedirs for users")
         for username in usernames:
