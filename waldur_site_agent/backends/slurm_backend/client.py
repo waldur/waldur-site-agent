@@ -94,6 +94,10 @@ class SlurmClient(base.BaseClient):
         quota = f"GrpTRESMins={limits_str}"
         return self._execute_command(["modify", "account", account, "set", quota])
 
+    def set_account_qos(self, account: str, qos: str) -> None:
+        """Set the specified QoS for the account."""
+        self._execute_command(["modify", "account", account, "set", f"qos={qos}"])
+
     def get_association(self, user: str, account: str) -> Association | None:
         """Returns associations between the user and the account if exists."""
         output = self._execute_command(

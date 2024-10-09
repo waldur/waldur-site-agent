@@ -43,6 +43,7 @@ class BaseBackend(ABC):
                     resource.marketplace_uuid = resource_info.marketplace_uuid
                     resource.marketplace_scope_uuid = resource_info.marketplace_scope_uuid
                     resource.restrict_member_access = resource_info.restrict_member_access
+                    resource.requested_downscaling = resource_info.requested_downscaling
                     report[backend_id] = resource
             except Exception as e:
                 logger.exception("Error while pulling allocation [%s]: %s", backend_id, e)
@@ -215,6 +216,10 @@ class BaseBackend(ABC):
         )
 
     @abstractmethod
+    def downscale_resource(self, account: str) -> bool:
+        """Downscale the account on the backend."""
+
+    @abstractmethod
     def _collect_limits(
         self, waldur_resource: Dict[str, Dict]
     ) -> Tuple[Dict[str, int], Dict[str, int]]:
@@ -332,6 +337,11 @@ class UnknownBackend(BaseBackend):
     def create_resource(self, _: Dict) -> structures.Resource:
         """Placeholder."""
         return structures.Resource()
+
+    def downscale_resource(self, account: str) -> bool:
+        """Placeholder."""
+        del account
+        return False
 
     def add_users_to_resource(
         self, resource_backend_id: str, user_ids: Set[str], **kwargs: dict
