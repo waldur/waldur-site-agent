@@ -47,6 +47,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     "resource_uuid",
                     "offering_type",
                     "restrict_member_access",
+                    "requested_downscaling",
                 ],
             }
         )
@@ -65,6 +66,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 backend_type=self.offering.backend_type,
                 marketplace_scope_uuid=resource_data["resource_uuid"],
                 restrict_member_access=resource_data.get("restrict_member_access", False),
+                requested_downscaling=resource_data.get("requested_downscaling", False),
             )
             for resource_data in waldur_resources
         ]
@@ -163,6 +165,16 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 # Sync users
                 if offering_type == MARKETPLACE_SLURM_OFFERING_TYPE:
                     self._sync_slurm_resource_users(backend_resource)
+                if backend_resource.requested_downscaling:
+                    logger.info("The resource downscaling is requested, processing it")
+                    downscaling_done = self.resource_backend.downscale_resource(
+                        backend_resource.backend_id
+                    )
+                    if downscaling_done:
+                        logger.info("Dowscaling is successful, reporting to Waldur")
+                        self.waldur_rest_client.marketplace_provider_resource_complete_downscaling_request(
+                            backend_resource.marketplace_uuid
+                        )
             except WaldurClientException as e:
                 logger.exception(
                     "Waldur REST client error while processing allocation %s: %s",

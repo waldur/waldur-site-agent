@@ -80,6 +80,20 @@ class SlurmBackend(backend.BaseBackend):
 
         return added_users
 
+    def downscale_resource(self, account: str) -> bool:
+        """Downscale the resource QoS respecting the backend settings."""
+        qos_downscaled = self.backend_settings.get("qos_downscaled")
+        if not qos_downscaled:
+            logger.error(
+                "The QoS for dowscaling has incorrect value %s, skipping operation",
+                qos_downscaled,
+            )
+            return False
+
+        logger.info("Setting %s QoS for the SLURM account", qos_downscaled)
+        self.client.set_account_qos(account, qos_downscaled)
+        return True
+
     def _create_user_homedirs(self, usernames: Set[str], umask: str = "0700") -> None:
         logger.info("Creating homedirs for users")
         for username in usernames:
