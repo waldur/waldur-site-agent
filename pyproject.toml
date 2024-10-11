@@ -7,14 +7,12 @@ license = "MIT"
 homepage = "https://waldur.com"
 documentation = "https://docs.waldur.com"
 readme = "README.md"
-classifiers=[
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+classifiers = [
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
 ]
-packages = [
-    {include = "waldur_site_agent"}
-]
+packages = [{ include = "waldur_site_agent" }]
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -24,8 +22,6 @@ pyyaml = "6.0.1"
 sentry-sdk = "2.3.1"
 poethepoet = "^0.26.1"
 types-pyyaml = "^6.0.12.20240311"
-
-
 
 [tool.poetry.group.dev.dependencies]
 freezegun = "0.3.4"
@@ -72,7 +68,7 @@ lint.ignore = [
   'DTZ001',
   'DTZ005',
   "PLR0915",
-  "PLR0912"
+  "PLR0912",
 ] # These rules are ignored
 lint.extend-ignore = [
   "COM812",
@@ -110,3 +106,6 @@ waldur_slurm_create_homedirs = 'waldur_site_agent.common_utils:create_homedirs_f
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+addopts = "--cov=waldur_site_agent/"

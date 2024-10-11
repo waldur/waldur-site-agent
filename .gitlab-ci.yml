@@ -2,72 +2,11 @@ include:
   - project: "waldur/waldur-pipelines"
     file: "/templates/stages.yml"
   - project: "waldur/waldur-pipelines"
+    file: "/templates/test/python-linters.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/python-tests.yml"
+  - project: "waldur/waldur-pipelines"
     file: "/templates/release/python-module-release.yml"
-
-.Test template:
-  stage: test
-  interruptible: true
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-  coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
-  artifacts:
-    when: always
-    reports:
-      junit: report.xml
-      coverage_report:
-        coverage_format: cobertura
-        path: coverage.xml
-  script:
-    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-    - pip install poetry
-    - poetry config virtualenvs.create false
-    - poetry install
-    - pytest --junitxml=report.xml --cov=waldur_site_agent/ $TESTS_DIR
-    - coverage xml
-    - coverage report
-
-.Run linters template:
-  stage: test
-  interruptible: true
-  rules:
-    # Skip tests if specified
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    # If tagged release
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
-    # If event is related to a created merge request
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-  script:
-    - pip install pre-commit
-    - pre-commit run --all
-
-.Test reporting template:
-  extends: .Test template
-  variables:
-    TESTS_DIR: "tests/test_reporting"
-
-.Test order processing template:
-  extends: .Test template
-  variables:
-    TESTS_DIR: "tests/test_order_processing"
-
-.Test membership sync template:
-  extends: .Test template
-  variables:
-    TESTS_DIR: "tests/test_membreship_sync"
-
-Publish python module tagged release:
-  image: python:3.9-alpine
-  script:
-    - pip install poetry
-    - poetry config http-basic.pypi $PYPI_USERNAME $PYPI_PASSWORD
-    - poetry config virtualenvs.create false
-    - sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" pyproject.toml
-    - head pyproject.toml
-    - poetry publish --build
 
 Run python v3.9 linters:
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"
@@ -96,41 +35,49 @@ Run python v3.11 linters:
       echo '  python: python3.11' >> .pre-commit-config.yaml
     - cat .pre-commit-config.yaml
 
-Run python v3.9 tests (order processing):
+Run python v3.12 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.12' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+Run python v3.13 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.13' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+.Test template:
+  extends: .Run tests template
+  before_script:
+  - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+
+
+Run python v3.9 tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Test order processing template
+  extends: .Test template
 
-Run python v3.10 tests (order processing):
+Run python v3.10 tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Test order processing template
+  extends: .Test template
 
-Run python v3.11 tests (order processing):
+Run python v3.11 tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Test order processing template
+  extends: .Test template
 
-Run python v3.9 tests (reporting):
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Test reporting template
+Run python v3.12 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Test template
 
-Run python v3.10 tests (reporting):
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Test reporting template
-
-Run python v3.11 tests (reporting):
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Test reporting template
-
-Run python v3.9 tests (membership sync):
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Test membership sync template
-
-Run python v3.10 tests (membership sync):
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Test membership sync template
-
-Run python v3.11 tests (membership sync):
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Test membership sync template
+Run python v3.13 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Test template
 
 Upload docs:
   image:
