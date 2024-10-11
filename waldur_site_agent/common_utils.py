@@ -207,7 +207,7 @@ def load_components_to_waldur(
                         component_info["limit"],
                         component_info["measured_unit"],
                     )
-                    component.uuid = existing_component["uuid"]
+                    component["uuid"] = existing_component["uuid"]
                     waldur_rest_client.update_offering_component(offering_uuid, component)
                 else:
                     logger.info(

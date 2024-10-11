@@ -367,16 +367,18 @@ six = ">=1.5"
 
 [[package]]
 name = "python-waldur-client"
-version = "0.4.6"
+version = "0.4.7"
 description = "REST client for the Waldur API."
 optional = false
-python-versions = "*"
+python-versions = ">=3.9"
 files = [
-    {file = "python-waldur-client-0.4.6.tar.gz", hash = "sha256:3a7c73ae1f1e384f3feb3617d4a9e873e24d3b2ce2b5798b0df08be2c0dc23aa"},
+    {file = "python_waldur_client-0.4.7-py3-none-any.whl", hash = "sha256:473dc843320e908fefc8b81a974514669a0a7c9f561dd6f6a8becd08cb543291"},
+    {file = "python_waldur_client-0.4.7.tar.gz", hash = "sha256:8242654e0becfb3b9d4b2f5a9bfa8113fa70789bbf4543d9eeec4ba06ccec9dc"},
 ]
 
 [package.dependencies]
 requests = ">=2.6.0"
+typing-extensions = ">=4.12.2,<5.0.0"
 
 [[package]]
 name = "pyyaml"
@@ -569,6 +571,17 @@ files = [
 ]
 
 [[package]]
+name = "typing-extensions"
+version = "4.12.2"
+description = "Backported and Experimental Type Hints for Python 3.8+"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "typing_extensions-4.12.2-py3-none-any.whl", hash = "sha256:04e5ca0351e0f3f85c6853954072df659d0d13fac324d0072316b67d7794700d"},
+    {file = "typing_extensions-4.12.2.tar.gz", hash = "sha256:1a7ead55c7e559dd4dee8856e3a88b41225abfe1ce8df57b7c13915fe121ffb8"},
+]
+
+[[package]]
 name = "urllib3"
 version = "2.2.1"
 description = "HTTP library with thread-safe connection pooling, file post, and more."
@@ -588,4 +601,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "15b20621a4d983b6f5649230e2a4eec6b0a0807c9224f75ad77b7c496c366c28"
+content-hash = "d2296e237593cad9f8a84af5b8857531cc1aa3e74606826d0cd2154ed02d043d"
