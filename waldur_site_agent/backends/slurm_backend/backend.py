@@ -90,8 +90,29 @@ class SlurmBackend(backend.BaseBackend):
             )
             return False
 
+        qos_paused = self.backend_settings.get("qos_paused")
+        current_qos = self.client.get_current_account_qos(account)
+
+        if qos_paused is not None and current_qos == qos_paused:
+            logger.warning("The account is paused, no need for downscaling")
+            return True
+
         logger.info("Setting %s QoS for the SLURM account", qos_downscaled)
         self.client.set_account_qos(account, qos_downscaled)
+        return True
+
+    def pause_resource(self, account: str) -> bool:
+        """Set the resource QoS to a paused one respecting the backend settings."""
+        qos_paused = self.backend_settings.get("qos_paused")
+        if not qos_paused:
+            logger.error(
+                "The QoS for pausing has incorrect value %s, skipping operation",
+                qos_paused,
+            )
+            return False
+
+        logger.info("Setting %s QoS for the SLURM account", qos_paused)
+        self.client.set_account_qos(account, qos_paused)
         return True
 
     def _create_user_homedirs(self, usernames: Set[str], umask: str = "0700") -> None:

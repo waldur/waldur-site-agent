@@ -230,7 +230,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 order = self.waldur_rest_client.get_order(order["uuid"])
                 attempts += 1
 
-        waldur_resource = self.waldur_rest_client.get_marketplace_resource(
+        waldur_resource = self.waldur_rest_client.get_marketplace_provider_resource(
             order["marketplace_resource_uuid"]
         )
 
@@ -255,7 +255,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     def _process_update_order(self, order: dict) -> None:
         logger.info("Updating limits for %s", order["resource_name"])
         resource_uuid = order["marketplace_resource_uuid"]
-        waldur_resource = self.waldur_rest_client.get_marketplace_resource(resource_uuid)
+        waldur_resource = self.waldur_rest_client.get_marketplace_provider_resource(resource_uuid)
 
         if order["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
             self.waldur_rest_client.set_slurm_allocation_state(
@@ -295,7 +295,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         logger.info("Terminating resource %s", order["resource_name"])
         resource_uuid = order["marketplace_resource_uuid"]
 
-        waldur_resource = self.waldur_rest_client.get_marketplace_resource(resource_uuid)
+        waldur_resource = self.waldur_rest_client.get_marketplace_provider_resource(resource_uuid)
         project_slug = order["project_slug"]
 
         resource_backend = common_utils.get_backend_for_offering(self.offering)

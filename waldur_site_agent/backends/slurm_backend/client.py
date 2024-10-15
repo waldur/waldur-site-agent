@@ -199,6 +199,22 @@ class SlurmClient(base.BaseClient):
             parsable=False,
         )
 
+    def get_current_account_qos(self, account: str) -> str:
+        """Returns a name of the current QoS of the account."""
+        args = [
+            "list",
+            "associations",
+            "format=account,qos",
+            "where",
+            f"account={account}",
+        ]
+        output = self._execute_command(args)
+        qos_options = [
+            line.split("|")[1] for line in output.splitlines() if "|" in line and line[-1] != "|"
+        ]
+
+        return qos_options[0] if len(qos_options) > 0 else ""
+
     def _parse_account(self, line: str) -> Account:
         parts = line.split("|")
         return Account(

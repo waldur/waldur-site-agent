@@ -36,7 +36,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         )
         self._print_current_user()
 
-        waldur_resources = self.waldur_rest_client.filter_marketplace_resources(
+        waldur_resources = self.waldur_rest_client.filter_marketplace_provider_resources(
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
@@ -48,6 +48,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     "offering_type",
                     "restrict_member_access",
                     "requested_downscaling",
+                    "requested_pausing",
                 ],
             }
         )
@@ -67,6 +68,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 marketplace_scope_uuid=resource_data["resource_uuid"],
                 restrict_member_access=resource_data.get("restrict_member_access", False),
                 requested_downscaling=resource_data.get("requested_downscaling", False),
+                requested_pausing=resource_data.get("requested_pausing", False),
             )
             for resource_data in waldur_resources
         ]
@@ -165,6 +167,14 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 # Sync users
                 if offering_type == MARKETPLACE_SLURM_OFFERING_TYPE:
                     self._sync_slurm_resource_users(backend_resource)
+                if backend_resource.requested_pausing:
+                    logger.info("The resource pausing is requested, processing it")
+                    pausing_done = self.resource_backend.pause_resource(backend_resource.backend_id)
+                    if pausing_done:
+                        logger.info("Pausing is successful, reporting to Waldur")
+                        self.waldur_rest_client.marketplace_provider_resource_complete_pausing_request(
+                            backend_resource.marketplace_uuid
+                        )
                 if backend_resource.requested_downscaling:
                     logger.info("The resource downscaling is requested, processing it")
                     downscaling_done = self.resource_backend.downscale_resource(

@@ -64,7 +64,7 @@ class ReportingTest(unittest.TestCase):
         waldur_client.marketplace_resource_get_plan_periods.return_value = [
             {"uuid": self.plan_period_uuid}
         ]
-        waldur_client.filter_marketplace_resources.return_value = [self.waldur_resource]
+        waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
         waldur_client._get_offering.return_value = {
             "components": [
                 {"type": "cpu"},
@@ -86,7 +86,7 @@ class ReportingTest(unittest.TestCase):
         ]
         processor.process_offering()
 
-        waldur_client.filter_marketplace_resources.assert_called_once_with(
+        waldur_client.filter_marketplace_provider_resources.assert_called_once_with(
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
@@ -96,8 +96,8 @@ class ReportingTest(unittest.TestCase):
         waldur_client.create_component_usages.assert_called_once_with(
             self.plan_period_uuid,
             [
-                ComponentUsage("cpu", 10),
-                ComponentUsage("mem", 30),
+                ComponentUsage(type="cpu", amount=10),
+                ComponentUsage(type="mem", amount=30),
             ],
         )
         self.assertEqual(2, waldur_client.create_component_user_usage.call_count)

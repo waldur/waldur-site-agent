@@ -54,7 +54,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         )
         self._print_current_user()
 
-        waldur_resources = self.waldur_rest_client.filter_marketplace_resources(
+        waldur_resources = self.waldur_rest_client.filter_marketplace_provider_resources(
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
