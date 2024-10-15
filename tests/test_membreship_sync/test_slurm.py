@@ -60,7 +60,7 @@ class MembershipSyncTest(unittest.TestCase):
         processor = OfferingMembershipProcessor(self.offering)
 
         waldur_client = waldur_client_class.return_value
-        waldur_client.filter_marketplace_resources.return_value = [self.waldur_resource]
+        waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
         waldur_client.list_slurm_associations.return_value = []
         waldur_client.marketplace_provider_resource_get_team.return_value = [
             {
@@ -75,7 +75,7 @@ class MembershipSyncTest(unittest.TestCase):
 
         processor.process_offering()
 
-        waldur_client.filter_marketplace_resources.assert_called_once_with(
+        waldur_client.filter_marketplace_provider_resources.assert_called_once_with(
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
@@ -87,6 +87,7 @@ class MembershipSyncTest(unittest.TestCase):
                     "offering_type",
                     "restrict_member_access",
                     "requested_downscaling",
+                    "requested_pausing",
                 ],
             }
         )
@@ -105,7 +106,7 @@ class MembershipSyncTest(unittest.TestCase):
     def test_association_delete(self, _: mock.Mock, waldur_client_class: mock.Mock):
         processor = OfferingMembershipProcessor(self.offering)
         waldur_client = waldur_client_class.return_value
-        waldur_client.filter_marketplace_resources.return_value = [self.waldur_resource]
+        waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
         waldur_client.list_slurm_associations.return_value = [
             {"username": "user-01"},
             {"username": "user-02"},
@@ -114,7 +115,7 @@ class MembershipSyncTest(unittest.TestCase):
 
         processor.process_offering()
 
-        waldur_client.filter_marketplace_resources.assert_called_once_with(
+        waldur_client.filter_marketplace_provider_resources.assert_called_once_with(
             {
                 "offering_uuid": self.offering.uuid,
                 "state": "OK",
@@ -126,6 +127,7 @@ class MembershipSyncTest(unittest.TestCase):
                     "offering_type",
                     "restrict_member_access",
                     "requested_downscaling",
+                    "requested_pausing",
                 ],
             }
         )
@@ -145,7 +147,7 @@ class MembershipSyncTest(unittest.TestCase):
         processor = OfferingMembershipProcessor(self.offering)
 
         waldur_client = waldur_client_class.return_value
-        waldur_client.filter_marketplace_resources.return_value = [self.waldur_resource]
+        waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
 
         processor.process_offering()
 

@@ -82,7 +82,7 @@ class CreationOrderTest(unittest.TestCase):
         waldur_client.list_remote_offering_users.return_value = [
             {"username": "test-offering-user-01", "user_uuid": user_uuid}
         ]
-        waldur_client.get_marketplace_resource.return_value = updated_resource
+        waldur_client.get_marketplace_provider_resource.return_value = updated_resource
 
         return waldur_client
 
@@ -91,7 +91,7 @@ class CreationOrderTest(unittest.TestCase):
     ):
         offering_user_username = "test-offering-user-01"
         allocation_account = "hpc_sample-resource-1"
-        project_account = f"hpc_project-1"
+        project_account = "hpc_project-1"
 
         waldur_client = self.setup_waldur_client_mock(waldur_client_class)
 
@@ -261,7 +261,7 @@ class UpdateOrderTest(unittest.TestCase):
         waldur_client.list_orders.return_value = [self.waldur_order]
         waldur_client.get_slurm_allocation.return_value = self.waldur_allocation
         waldur_client.get_order.return_value = self.waldur_order
-        waldur_client.get_marketplace_resource.return_value = self.waldur_resource
+        waldur_client.get_marketplace_provider_resource.return_value = self.waldur_resource
 
         process_offerings([OFFERING])
 

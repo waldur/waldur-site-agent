@@ -13,6 +13,7 @@ offerings: # Settings for offerings
       allocation_prefix: "hpc_" # Prefix used for allocation's accounts.
         # created by the agent.
       qos_downscaled: "limited" # The qos set to an account after downscaling
+      qos_paused: "paused" # The qos set to an account after pausing
       enable_user_homedir_account_creation: true # Whether to create home directories
         # for users associated to accounts.
       homedir_umask: "0700" # A umask for created homedirs
