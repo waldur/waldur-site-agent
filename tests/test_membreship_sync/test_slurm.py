@@ -38,6 +38,7 @@ allocation_slurm = Resource(
 @freeze_time("2022-01-01")
 @mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
 @mock.patch.object(common_utils.SlurmBackend, "_pull_allocation", return_value=allocation_slurm)
+@mock.patch.object(common_utils.SlurmBackend, "restore_resource", return_value=None)
 class MembershipSyncTest(unittest.TestCase):
     def setUp(self) -> None:
         self.waldur_resource = {
@@ -54,8 +55,13 @@ class MembershipSyncTest(unittest.TestCase):
 
     @mock.patch.object(common_utils.SlurmBackend, "add_users_to_resource")
     def test_association_create(
-        self, add_users_to_resource_mock, _, waldur_client_class: mock.Mock
+        self,
+        add_users_to_resource_mock,
+        restore_resource_mock,
+        pull_allocation_mock,
+        waldur_client_class: mock.Mock,
     ):
+        del restore_resource_mock, pull_allocation_mock
         user_uuid = uuid.uuid4().hex
         processor = OfferingMembershipProcessor(self.offering)
 
@@ -103,7 +109,10 @@ class MembershipSyncTest(unittest.TestCase):
         waldur_client.create_slurm_association.assert_has_calls(calls, any_order=False)
         add_users_to_resource_mock.assert_called_once()
 
-    def test_association_delete(self, _: mock.Mock, waldur_client_class: mock.Mock):
+    def test_association_delete(
+        self, restore_resource_mock, pull_allocation_mock: mock.Mock, waldur_client_class: mock.Mock
+    ):
+        del restore_resource_mock, pull_allocation_mock
         processor = OfferingMembershipProcessor(self.offering)
         waldur_client = waldur_client_class.return_value
         waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
@@ -141,8 +150,13 @@ class MembershipSyncTest(unittest.TestCase):
 
     @mock.patch.object(common_utils.SlurmBackend, "downscale_resource")
     def test_qos_downscaling(
-        self, downscale_resource_mock, _: mock.Mock, waldur_client_class: mock.Mock
+        self,
+        downscale_resource_mock,
+        restore_resource_mock,
+        pull_allocation_mock,
+        waldur_client_class: mock.Mock,
     ):
+        del restore_resource_mock, pull_allocation_mock
         self.waldur_resource["downscaled"] = True
         processor = OfferingMembershipProcessor(self.offering)
 
