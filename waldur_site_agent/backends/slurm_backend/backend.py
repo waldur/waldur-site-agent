@@ -105,6 +105,7 @@ class SlurmBackend(backend.BaseBackend):
 
         logger.info("Setting %s QoS for the SLURM account", qos_downscaled)
         self.client.set_account_qos(account, qos_downscaled)
+        logger.info("The new QoS successfully set")
         return True
 
     def pause_resource(self, account: str) -> bool:
@@ -127,6 +128,35 @@ class SlurmBackend(backend.BaseBackend):
 
         logger.info("Setting %s QoS for the SLURM account", qos_paused)
         self.client.set_account_qos(account, qos_paused)
+        logger.info("The new QoS successfully set")
+        return True
+
+    def restore_resource(self, account: str) -> bool:
+        """Unset the resource QoS."""
+        current_qos = self.client.get_current_account_qos(account)
+
+        if current_qos in [None, ""]:
+            logger.info("The account does not have an active QoS set, skipping reset")
+            return False
+
+        logger.info("The current QoS is %s", current_qos)
+
+        qos_paused = self.backend_settings.get("qos_paused")
+        qos_downscaled = self.backend_settings.get("qos_downscaled")
+
+        if current_qos not in (qos_paused, qos_downscaled):
+            logger.info(
+                "The current QoS does not match either downscaled (%s) or paused (%s)",
+                qos_downscaled,
+                qos_paused,
+            )
+            return False
+
+        logger.info("Unset %s QoS", current_qos)
+        self.client.unset_account_qos(account, current_qos)
+        new_qos = self.client.get_current_account_qos(account)
+        logger.info("The new QoS is %s", new_qos)
+
         return True
 
     def _create_user_homedirs(self, usernames: Set[str], umask: str = "0700") -> None:

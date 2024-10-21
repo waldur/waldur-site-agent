@@ -225,6 +225,10 @@ class BaseBackend(ABC):
         """Pause the account on the backend."""
 
     @abstractmethod
+    def restore_resource(self, account: str) -> bool:
+        """Restore the account after downscaling or pausing."""
+
+    @abstractmethod
     def _collect_limits(
         self, waldur_resource: Dict[str, Dict]
     ) -> Tuple[Dict[str, int], Dict[str, int]]:
@@ -349,6 +353,11 @@ class UnknownBackend(BaseBackend):
         return False
 
     def pause_resource(self, account: str) -> bool:
+        """Placeholder."""
+        del account
+        return False
+
+    def restore_resource(self, account: str) -> bool:
         """Placeholder."""
         del account
         return False

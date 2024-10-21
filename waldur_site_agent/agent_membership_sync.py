@@ -173,6 +173,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 elif backend_resource.downscaled:
                     logger.info("The resource downscaling is requested, processing it")
                     self.resource_backend.downscale_resource(backend_resource.backend_id)
+                else:
+                    logger.info("The resource is not downscaled or paused")
+                    self.resource_backend.restore_resource(backend_resource.backend_id)
             except WaldurClientException as e:
                 logger.exception(
                     "Waldur REST client error while processing allocation %s: %s",
