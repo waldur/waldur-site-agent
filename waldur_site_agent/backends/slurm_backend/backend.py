@@ -93,8 +93,14 @@ class SlurmBackend(backend.BaseBackend):
         qos_paused = self.backend_settings.get("qos_paused")
         current_qos = self.client.get_current_account_qos(account)
 
+        logger.info("Current QoS: %s", current_qos)
+
         if qos_paused is not None and current_qos == qos_paused:
-            logger.warning("The account is paused, no need for downscaling")
+            logger.info("The account is paused, no need for downscaling")
+            return True
+
+        if current_qos == qos_downscaled:
+            logger.info("The account is already downscaled")
             return True
 
         logger.info("Setting %s QoS for the SLURM account", qos_downscaled)
@@ -110,6 +116,14 @@ class SlurmBackend(backend.BaseBackend):
                 qos_paused,
             )
             return False
+
+        current_qos = self.client.get_current_account_qos(account)
+
+        logger.info("Current QoS: %s", current_qos)
+
+        if current_qos == qos_paused:
+            logger.info("The account is already paused")
+            return True
 
         logger.info("Setting %s QoS for the SLURM account", qos_paused)
         self.client.set_account_qos(account, qos_paused)

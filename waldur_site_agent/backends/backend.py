@@ -43,8 +43,8 @@ class BaseBackend(ABC):
                     resource.marketplace_uuid = resource_info.marketplace_uuid
                     resource.marketplace_scope_uuid = resource_info.marketplace_scope_uuid
                     resource.restrict_member_access = resource_info.restrict_member_access
-                    resource.requested_downscaling = resource_info.requested_downscaling
-                    resource.requested_pausing = resource_info.requested_pausing
+                    resource.downscaled = resource_info.downscaled
+                    resource.paused = resource_info.paused
                     report[backend_id] = resource
             except Exception as e:
                 logger.exception("Error while pulling allocation [%s]: %s", backend_id, e)
