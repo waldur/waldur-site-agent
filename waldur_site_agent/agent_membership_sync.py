@@ -47,8 +47,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     "resource_uuid",
                     "offering_type",
                     "restrict_member_access",
-                    "requested_downscaling",
-                    "requested_pausing",
+                    "downscaled",
+                    "paused",
                 ],
             }
         )
@@ -67,8 +67,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 backend_type=self.offering.backend_type,
                 marketplace_scope_uuid=resource_data["resource_uuid"],
                 restrict_member_access=resource_data.get("restrict_member_access", False),
-                requested_downscaling=resource_data.get("requested_downscaling", False),
-                requested_pausing=resource_data.get("requested_pausing", False),
+                downscaled=resource_data.get("downscaled", False),
+                paused=resource_data.get("paused", False),
             )
             for resource_data in waldur_resources
         ]
@@ -167,24 +167,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 # Sync users
                 if offering_type == MARKETPLACE_SLURM_OFFERING_TYPE:
                     self._sync_slurm_resource_users(backend_resource)
-                if backend_resource.requested_pausing:
+                if backend_resource.paused:
                     logger.info("The resource pausing is requested, processing it")
-                    pausing_done = self.resource_backend.pause_resource(backend_resource.backend_id)
-                    if pausing_done:
-                        logger.info("Pausing is successful, reporting to Waldur")
-                        self.waldur_rest_client.marketplace_provider_resource_complete_pausing_request(
-                            backend_resource.marketplace_uuid
-                        )
-                if backend_resource.requested_downscaling:
+                    self.resource_backend.pause_resource(backend_resource.backend_id)
+                elif backend_resource.downscaled:
                     logger.info("The resource downscaling is requested, processing it")
-                    downscaling_done = self.resource_backend.downscale_resource(
-                        backend_resource.backend_id
-                    )
-                    if downscaling_done:
-                        logger.info("Dowscaling is successful, reporting to Waldur")
-                        self.waldur_rest_client.marketplace_provider_resource_complete_downscaling_request(
-                            backend_resource.marketplace_uuid
-                        )
+                    self.resource_backend.downscale_resource(backend_resource.backend_id)
             except WaldurClientException as e:
                 logger.exception(
                     "Waldur REST client error while processing allocation %s: %s",

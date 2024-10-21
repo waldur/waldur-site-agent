@@ -46,7 +46,7 @@ class MembershipSyncTest(unittest.TestCase):
             "backend_id": "test-allocation-01",
             "resource_uuid": uuid.uuid4().hex,
             "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
-            "requested_downscaling": False,
+            "downscaled": False,
         }
         self.waldur_user_uuid = uuid.uuid4()
         self.plan_period_uuid = uuid.uuid4().hex
@@ -86,8 +86,8 @@ class MembershipSyncTest(unittest.TestCase):
                     "resource_uuid",
                     "offering_type",
                     "restrict_member_access",
-                    "requested_downscaling",
-                    "requested_pausing",
+                    "downscaled",
+                    "paused",
                 ],
             }
         )
@@ -126,8 +126,8 @@ class MembershipSyncTest(unittest.TestCase):
                     "resource_uuid",
                     "offering_type",
                     "restrict_member_access",
-                    "requested_downscaling",
-                    "requested_pausing",
+                    "downscaled",
+                    "paused",
                 ],
             }
         )
@@ -143,7 +143,7 @@ class MembershipSyncTest(unittest.TestCase):
     def test_qos_downscaling(
         self, downscale_resource_mock, _: mock.Mock, waldur_client_class: mock.Mock
     ):
-        self.waldur_resource["requested_downscaling"] = True
+        self.waldur_resource["downscaled"] = True
         processor = OfferingMembershipProcessor(self.offering)
 
         waldur_client = waldur_client_class.return_value
@@ -151,5 +151,4 @@ class MembershipSyncTest(unittest.TestCase):
 
         processor.process_offering()
 
-        waldur_client.marketplace_provider_resource_complete_downscaling_request.assert_called_once()
         downscale_resource_mock.assert_called_once()

@@ -33,7 +33,7 @@ class Resource:
     backend_id: str = ""
     limits: Dict = field(default_factory=dict)
     restrict_member_access: bool = False
-    requested_downscaling: bool = False
-    requested_pausing: bool = False
+    downscaled: bool = False
+    paused: bool = False
     users: List[str] = field(default_factory=list)
     usage: Dict = field(default_factory=dict)
