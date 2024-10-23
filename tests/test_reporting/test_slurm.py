@@ -61,7 +61,7 @@ class ReportingTest(unittest.TestCase):
         processor = OfferingReportProcessor(self.offering)
         waldur_client = waldur_client_class.return_value
 
-        waldur_client.marketplace_resource_get_plan_periods.return_value = [
+        waldur_client.marketplace_provider_resource_get_plan_periods.return_value = [
             {"uuid": self.plan_period_uuid}
         ]
         waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]

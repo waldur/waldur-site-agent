@@ -106,7 +106,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         """Reports total usage for a backend resource to Waldur."""
         logger.info("Setting usages: %s", total_usage)
         resource_uuid = backend_resource.marketplace_uuid
-        plan_periods = self.waldur_rest_client.marketplace_resource_get_plan_periods(resource_uuid)
+        plan_periods = self.waldur_rest_client.marketplace_provider_resource_get_plan_periods(
+            resource_uuid
+        )
 
         if len(plan_periods) == 0:
             logger.warning(
