@@ -176,6 +176,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 else:
                     logger.info("The resource is not downscaled or paused")
                     self.resource_backend.restore_resource(backend_resource.backend_id)
+                resource_metadata = self.resource_backend.get_resource_metadata(
+                    backend_resource.backend_id
+                )
+                self.waldur_rest_client.marketplace_provider_resource_set_backend_metadata(
+                    backend_resource.marketplace_uuid, resource_metadata
+                )
             except WaldurClientException as e:
                 logger.exception(
                     "Waldur REST client error while processing allocation %s: %s",

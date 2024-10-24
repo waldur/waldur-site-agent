@@ -229,6 +229,10 @@ class BaseBackend(ABC):
         """Restore the account after downscaling or pausing."""
 
     @abstractmethod
+    def get_resource_metadata(self, _: str) -> dict:
+        """Get backend-specific resource metadata."""
+
+    @abstractmethod
     def _collect_limits(
         self, waldur_resource: Dict[str, Dict]
     ) -> Tuple[Dict[str, int], Dict[str, int]]:
@@ -361,6 +365,10 @@ class UnknownBackend(BaseBackend):
         """Placeholder."""
         del account
         return False
+
+    def get_resource_metadata(self, _: str) -> dict:
+        """Placeholder."""
+        return {}
 
     def add_users_to_resource(
         self, resource_backend_id: str, user_ids: Set[str], **kwargs: dict

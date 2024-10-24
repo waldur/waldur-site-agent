@@ -33,6 +33,7 @@ allocation_slurm = Resource(
         "mem": 300,
     },
 )
+current_qos = {"qos": "abc"}
 
 
 @freeze_time("2022-01-01")
@@ -54,8 +55,10 @@ class MembershipSyncTest(unittest.TestCase):
         self.offering = OFFERING
 
     @mock.patch.object(common_utils.SlurmBackend, "add_users_to_resource")
+    @mock.patch.object(common_utils.SlurmBackend, "get_resource_metadata", return_value=current_qos)
     def test_association_create(
         self,
+        get_resource_metadata_mock,
         add_users_to_resource_mock,
         restore_resource_mock,
         pull_allocation_mock,
@@ -109,8 +112,18 @@ class MembershipSyncTest(unittest.TestCase):
         waldur_client.create_slurm_association.assert_has_calls(calls, any_order=False)
         add_users_to_resource_mock.assert_called_once()
 
+        get_resource_metadata_mock.assert_called_once()
+        waldur_client.marketplace_provider_resource_set_backend_metadata.assert_called_once_with(
+            self.waldur_resource["uuid"], current_qos
+        )
+
+    @mock.patch.object(common_utils.SlurmBackend, "get_resource_metadata", return_value=current_qos)
     def test_association_delete(
-        self, restore_resource_mock, pull_allocation_mock: mock.Mock, waldur_client_class: mock.Mock
+        self,
+        get_resource_metadata_mock,
+        restore_resource_mock,
+        pull_allocation_mock: mock.Mock,
+        waldur_client_class: mock.Mock,
     ):
         del restore_resource_mock, pull_allocation_mock
         processor = OfferingMembershipProcessor(self.offering)
@@ -148,9 +161,16 @@ class MembershipSyncTest(unittest.TestCase):
             self.waldur_resource["uuid"], "user-02"
         )
 
+        get_resource_metadata_mock.assert_called_once()
+        waldur_client.marketplace_provider_resource_set_backend_metadata.assert_called_once_with(
+            self.waldur_resource["uuid"], current_qos
+        )
+
     @mock.patch.object(common_utils.SlurmBackend, "downscale_resource")
+    @mock.patch.object(common_utils.SlurmBackend, "get_resource_metadata", return_value=current_qos)
     def test_qos_downscaling(
         self,
+        get_resource_metadata_mock,
         downscale_resource_mock,
         restore_resource_mock,
         pull_allocation_mock,
@@ -166,3 +186,8 @@ class MembershipSyncTest(unittest.TestCase):
         processor.process_offering()
 
         downscale_resource_mock.assert_called_once()
+
+        get_resource_metadata_mock.assert_called_once()
+        waldur_client.marketplace_provider_resource_set_backend_metadata.assert_called_once_with(
+            self.waldur_resource["uuid"], current_qos
+        )
