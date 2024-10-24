@@ -367,13 +367,13 @@ six = ">=1.5"
 
 [[package]]
 name = "python-waldur-client"
-version = "0.5.1"
+version = "0.5.2"
 description = "REST client for the Waldur API."
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "python_waldur_client-0.5.1-py3-none-any.whl", hash = "sha256:2fbb4cd4325d2f4570a0f7d128b7175804311b559c5c5c328bd9ea2c2a3993c0"},
-    {file = "python_waldur_client-0.5.1.tar.gz", hash = "sha256:b9424f115d1d501ddcfe27d6c775ad98835f9546346f154c210d27abe9c4ff7e"},
+    {file = "python_waldur_client-0.5.2-py3-none-any.whl", hash = "sha256:e7a682a6143d9f7d91578007f77eb96624ee2b38eb4e0587c080eddd087985cd"},
+    {file = "python_waldur_client-0.5.2.tar.gz", hash = "sha256:2a1ff6a00fbcc8ea349c5eebe635e76144d64348887ba8b1bec98bf8bc4e26f4"},
 ]
 
 [package.dependencies]
@@ -601,4 +601,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "0d313a2dadbe2a875a0571a7b01c57cd4b5fe5794ba0b79e620b4fdc181dc4df"
+content-hash = "062bc6c5a64f5a474bd79abb72073ff5d027fd1ea3e90f5272c8a3ed3dbfee4b"

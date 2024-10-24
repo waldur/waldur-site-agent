@@ -73,6 +73,10 @@ class MoabBackend(BaseBackend):
         del account
         return False
 
+    def get_resource_metadata(self, _: str) -> dict:
+        """Temporary placeholder."""
+        return {}
+
     def _collect_limits(
         self, waldur_resource: Dict[str, Dict]
     ) -> Tuple[Dict[str, int], Dict[str, int]]:

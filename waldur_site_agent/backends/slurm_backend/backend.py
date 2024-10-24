@@ -159,6 +159,11 @@ class SlurmBackend(backend.BaseBackend):
 
         return True
 
+    def get_resource_metadata(self, account: str) -> dict:
+        """Return backend metadata for the SLURM account (QoS only for now)."""
+        current_qos = self.client.get_current_account_qos(account)
+        return {"qos": current_qos}
+
     def _create_user_homedirs(self, usernames: Set[str], umask: str = "0700") -> None:
         logger.info("Creating homedirs for users")
         for username in usernames:
