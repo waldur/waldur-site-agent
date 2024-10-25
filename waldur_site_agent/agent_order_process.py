@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Dict, List, Set
 
 from waldur_client import (
     SlurmAllocationState,
-    WaldurClientException,
     is_uuid,
 )
 
@@ -87,18 +86,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 self.waldur_rest_client.marketplace_order_set_state_done(order["uuid"])
 
                 logger.info("The order has been successfully processed")
-            except WaldurClientException as e:
-                logger.exception(
-                    "Error while processing order %s: %s",
-                    order["uuid"],
-                    e,
-                )
-                self.waldur_rest_client.marketplace_order_set_state_erred(
-                    order["uuid"],
-                    error_message=str(e),
-                    error_traceback=traceback.format_exc(),
-                )
-            except BackendError as e:
+            except Exception as e:
                 logger.exception(
                     "Error while processing order %s: %s",
                     order["uuid"],
