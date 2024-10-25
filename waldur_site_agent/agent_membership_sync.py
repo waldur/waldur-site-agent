@@ -167,15 +167,36 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 # Sync users
                 if offering_type == MARKETPLACE_SLURM_OFFERING_TYPE:
                     self._sync_slurm_resource_users(backend_resource)
+
                 if backend_resource.paused:
                     logger.info("The resource pausing is requested, processing it")
-                    self.resource_backend.pause_resource(backend_resource.backend_id)
+                    pausing_done = self.resource_backend.pause_resource(backend_resource.backend_id)
+                    if pausing_done:
+                        logger.info("The pausing is successfully completed")
+                    else:
+                        logger.warning("The pausing is not done")
                 elif backend_resource.downscaled:
                     logger.info("The resource downscaling is requested, processing it")
-                    self.resource_backend.downscale_resource(backend_resource.backend_id)
+                    downscaling_done = self.resource_backend.downscale_resource(
+                        backend_resource.backend_id
+                    )
+                    if downscaling_done:
+                        logger.info("The downscaling is successfully completed")
+                    else:
+                        logger.warning("The downscaling is not done")
                 else:
-                    logger.info("The resource is not downscaled or paused")
-                    self.resource_backend.restore_resource(backend_resource.backend_id)
+                    logger.info(
+                        "The resource is not downscaled or paused, "
+                        "resetting the QoS to the default one"
+                    )
+                    restoring_done = self.resource_backend.restore_resource(
+                        backend_resource.backend_id
+                    )
+                    if restoring_done:
+                        logger.info("The restoring is successfully completed")
+                    else:
+                        logger.warning("The restoring is not done")
+
                 resource_metadata = self.resource_backend.get_resource_metadata(
                     backend_resource.backend_id
                 )
