@@ -1,17 +1,15 @@
 """Agent responsible for usage and limits reporting."""
 
 import datetime
+import traceback
 from time import sleep
 from typing import Dict, List
 
 from waldur_client import (
     ComponentUsage,
-    SlurmAllocationState,
-    WaldurClientException,
 )
 
 from waldur_site_agent.backends import logger, utils
-from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.structures import Resource
 from waldur_site_agent.processors import OfferingBaseProcessor
 
@@ -20,6 +18,7 @@ from . import (
     WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES,
     Offering,
     WaldurAgentConfiguration,
+    common_utils,
 )
 
 
@@ -28,22 +27,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
     Processes related resource and reports computing data to Waldur.
     """
-
-    def _mark_missing_waldur_resources_as_erred(self, missing_allocations: List[Resource]) -> None:
-        """Marks resources existing in SLURM, but missing in Waldur as ERRED."""
-        logger.info("Marking allocations missing in SLURM cluster as ERRED")
-        for allocation_info in missing_allocations:
-            logger.info("Marking %s allocation as ERRED", allocation_info)
-            try:
-                self.waldur_rest_client.set_slurm_allocation_state(
-                    allocation_info.marketplace_uuid, SlurmAllocationState.ERRED
-                )
-            except WaldurClientException as e:
-                logger.exception(
-                    "Waldur REST client error while marking allocation %s: %s",
-                    allocation_info.backend_id,
-                    e,
-                )
 
     def process_offering(self) -> None:
         """Processes offering and reports resources usage to Waldur."""
@@ -93,7 +76,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             ]
             logger.info("Number of missing resources %s", len(missing_resources))
             if len(missing_resources) > 0:
-                self._mark_missing_waldur_resources_as_erred(missing_resources)
+                common_utils.mark_waldur_resources_as_erred(
+                    self.waldur_rest_client,
+                    missing_resources,
+                    {"error_message": "The resource is missing on the backend"},
+                )
 
         self._process_resources(resource_report)
 
@@ -206,18 +193,20 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     self._submit_user_usage_for_resource(
                         username, user_usage, waldur_component_usages
                     )
-
-            except WaldurClientException as e:
+            except Exception as e:
                 logger.exception(
                     "Waldur REST client error while processing allocation %s: %s",
                     resource_backend_id,
                     e,
                 )
-            except BackendError as e:
-                logger.exception(
-                    "Waldur SLURM client error while processing allocation %s: %s",
-                    resource_backend_id,
-                    e,
+                error_traceback = traceback.format_exc()
+                common_utils.mark_waldur_resources_as_erred(
+                    self.waldur_rest_client,
+                    [backend_resource],
+                    error_details={
+                        "error_message": str(e),
+                        "error_traceback": error_traceback,
+                    },
                 )
 
 

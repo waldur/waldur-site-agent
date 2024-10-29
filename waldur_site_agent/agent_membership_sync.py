@@ -1,15 +1,11 @@
 """Agent responsible for membership control."""
 
+import traceback
 from time import sleep
 from typing import Dict, List, Set
 
-from waldur_client import (
-    WaldurClientException,
-)
-
 from waldur_site_agent import common_utils
 from waldur_site_agent.backends import logger
-from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.structures import Resource
 from waldur_site_agent.processors import OfferingBaseProcessor
 
@@ -203,17 +199,20 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 self.waldur_rest_client.marketplace_provider_resource_set_backend_metadata(
                     backend_resource.marketplace_uuid, resource_metadata
                 )
-            except WaldurClientException as e:
+            except Exception as e:
                 logger.exception(
                     "Waldur REST client error while processing allocation %s: %s",
                     resource_backend_id,
                     e,
                 )
-            except BackendError as e:
-                logger.exception(
-                    "Waldur SLURM client error while processing allocation %s: %s",
-                    resource_backend_id,
-                    e,
+                error_traceback = traceback.format_exc()
+                common_utils.mark_waldur_resources_as_erred(
+                    self.waldur_rest_client,
+                    [backend_resource],
+                    error_details={
+                        "error_message": str(e),
+                        "error_traceback": error_traceback,
+                    },
                 )
 
 
