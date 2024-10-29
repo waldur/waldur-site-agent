@@ -3,7 +3,7 @@
 import argparse
 from importlib.metadata import version
 from pathlib import Path
-from typing import Dict, Set
+from typing import Dict, List, Set
 
 import yaml
 from waldur_client import OfferingComponent, WaldurClient, WaldurClientException
@@ -152,6 +152,27 @@ def create_associations_for_waldur_allocation(
             logger.error("User %s can not be added due to: %s", username, e)
 
 
+def mark_waldur_resources_as_erred(
+    waldur_rest_client: WaldurClient,
+    resources: List[Resource],
+    error_details: Dict[str, str],
+) -> None:
+    """Marks resources in Waldur as ERRED."""
+    logger.info("Marking Waldur resources as ERRED")
+    for resource in resources:
+        logger.info("Marking %s resource as ERRED", resource)
+        try:
+            waldur_rest_client.marketplace_provider_resource_set_as_erred(
+                resource.marketplace_uuid, error_details
+            )
+        except WaldurClientException as e:
+            logger.exception(
+                "Waldur REST client error while setting resource state to Erred %s: %s",
+                resource.backend_id,
+                e,
+            )
+
+
 def load_offering_components() -> None:
     """Creates offering components in Waldur based on data from the config file."""
     configuration = init_configuration()
@@ -162,12 +183,18 @@ def load_offering_components() -> None:
         )
 
         load_components_to_waldur(
-            waldur_rest_client, offering.uuid, offering.name, offering.backend_components
+            waldur_rest_client,
+            offering.uuid,
+            offering.name,
+            offering.backend_components,
         )
 
 
 def load_components_to_waldur(
-    waldur_rest_client: WaldurClient, offering_uuid: str, offering_name: str, components: Dict
+    waldur_rest_client: WaldurClient,
+    offering_uuid: str,
+    offering_name: str,
+    components: Dict,
 ) -> None:
     """Creates offering components in Waldur."""
     logger.info(
@@ -211,7 +238,8 @@ def load_components_to_waldur(
                     waldur_rest_client.update_offering_component(offering_uuid, component)
                 else:
                     logger.info(
-                        "Offering component %s already exists, skipping creation.", component_type
+                        "Offering component %s already exists, skipping creation.",
+                        component_type,
                     )
             else:
                 logger.info(
