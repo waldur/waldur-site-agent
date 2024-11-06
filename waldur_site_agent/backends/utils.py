@@ -35,7 +35,7 @@ def get_usage_based_limits(resource_limits: Dict) -> Dict[str, int]:
     return {
         tres: data["limit"] * data.get("unit_factor", 1)
         for tres, data in resource_limits.items()
-        if data["accounting_type"] == "usage"
+        if data["accounting_type"] == "usage" and data.get("limit") is not None
     }
 
 

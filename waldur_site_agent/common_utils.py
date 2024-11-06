@@ -190,6 +190,28 @@ def load_offering_components() -> None:
         )
 
 
+def extend_backend_components(offering: Offering, waldur_offering_components: List[dict]) -> None:
+    """Pulls offering component data from Waldur and populates it to the local configuration."""
+    logger.info("Loading Waldur components to the local config")
+    remote_components = {item["type"]: item for item in waldur_offering_components}
+    missing_component_types = set(remote_components.keys()) - set(
+        offering.backend_components.keys()
+    )
+
+    logger.info("Component types to add: %s", ", ".join(missing_component_types))
+    for missing_component_type in missing_component_types:
+        logger.info("Loading %s", missing_component_type)
+        remote_component_info = remote_components[missing_component_type]
+        component_info = {
+            "limit": remote_component_info["limit_amount"],
+            "measured_unit": remote_component_info["measured_unit"],
+            "unit_factor": remote_component_info["unit_factor"] or 1,
+            "accounting_type": remote_component_info["billing_type"],
+            "label": remote_component_info["name"],
+        }
+        offering.backend_components[missing_component_type] = component_info
+
+
 def load_components_to_waldur(
     waldur_rest_client: WaldurClient,
     offering_uuid: str,
