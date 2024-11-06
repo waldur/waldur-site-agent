@@ -37,6 +37,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         )
         self._print_current_user()
 
+        waldur_offering = self.waldur_rest_client._get_offering(self.offering.uuid)
+        common_utils.extend_backend_components(self.offering, waldur_offering["components"])
+
         waldur_resources = self.waldur_rest_client.filter_marketplace_provider_resources(
             {
                 "offering_uuid": self.offering.uuid,
