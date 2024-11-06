@@ -180,9 +180,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     waldur_offering["components"],
                 )
 
-                # Skip the following actions is the dict is empty
+                # Skip the following actions if the dict is empty
                 if not usages:
-                    return
+                    continue
 
                 waldur_component_usages = self.waldur_rest_client.list_component_usages(
                     backend_resource.marketplace_uuid, date_after=month_start
