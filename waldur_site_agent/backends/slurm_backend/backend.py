@@ -136,6 +136,10 @@ class SlurmBackend(backend.BaseBackend):
 
         logger.info("The current QoS is %s", current_qos)
 
+        if current_qos == "normal":
+            logger.info("The account already has normal QoS")
+            return False
+
         qos_paused = self.backend_settings.get("qos_paused")
         qos_downscaled = self.backend_settings.get("qos_downscaled")
 

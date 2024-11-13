@@ -20,6 +20,8 @@ from waldur_site_agent.backends.structures import Resource
 
 from . import AgentMode, Offering, WaldurAgentConfiguration
 
+RESOURCE_ERRED_STATE = "Erred"
+
 
 def init_configuration() -> WaldurAgentConfiguration:
     """Loads configuration from CLI and config file to the dataclass."""

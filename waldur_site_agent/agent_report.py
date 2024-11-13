@@ -43,8 +43,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_resources = self.waldur_rest_client.filter_marketplace_provider_resources(
             {
                 "offering_uuid": self.offering.uuid,
-                "state": "OK",
-                "field": ["backend_id", "uuid", "name", "offering_type"],
+                "state": ["OK", common_utils.RESOURCE_ERRED_STATE],
+                "field": ["backend_id", "uuid", "name", "offering_type", "state"],
             }
         )
 
@@ -60,6 +60,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 backend_id=resource_data["backend_id"],
                 marketplace_uuid=resource_data["uuid"],
                 backend_type=self.offering.backend_type,
+                state=resource_data["state"],
             )
             for resource_data in waldur_resources
         ]
@@ -76,6 +77,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 )
                 for resource_info in waldur_resources
                 if resource_info["backend_id"] not in set(resource_report.keys())
+                and resource_info["state"] != common_utils.RESOURCE_ERRED_STATE
             ]
             logger.info("Number of missing resources %s", len(missing_resources))
             if len(missing_resources) > 0:
@@ -155,7 +157,10 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             component_type = component_usage["type"]
             usage = user_usage[component_type]
             logger.info(
-                "Submitting usage for username %s: %s -> %s", username, component_type, usage
+                "Submitting usage for username %s: %s -> %s",
+                username,
+                component_type,
+                usage,
             )
             self.waldur_rest_client.create_component_user_usage(
                 component_usage["uuid"], usage, username, offering_user_uuid
@@ -174,6 +179,12 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             try:
                 logger.info("Processing %s", resource_backend_id)
                 usages: Dict[str, Dict[str, float]] = backend_resource.usage
+
+                # Set resource state OK if it is erred
+                if backend_resource.state == common_utils.RESOURCE_ERRED_STATE:
+                    self.waldur_rest_client.marketplace_provider_resource_set_as_ok(
+                        backend_resource.marketplace_uuid
+                    )
 
                 # Submit usage
                 total_usage = usages.pop("TOTAL_ACCOUNT_USAGE")
