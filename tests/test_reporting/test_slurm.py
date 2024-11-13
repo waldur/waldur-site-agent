@@ -45,6 +45,7 @@ class ReportingTest(unittest.TestCase):
             "name": "test-alloc-01",
             "backend_id": "test-allocation-01",
             "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "state": "OK",
         }
         self.waldur_user_uuid = uuid.uuid4()
         self.waldur_offering = {
@@ -89,8 +90,8 @@ class ReportingTest(unittest.TestCase):
         waldur_client.filter_marketplace_provider_resources.assert_called_once_with(
             {
                 "offering_uuid": self.offering.uuid,
-                "state": "OK",
-                "field": ["backend_id", "uuid", "name", "offering_type"],
+                "state": ["OK", "Erred"],
+                "field": ["backend_id", "uuid", "name", "offering_type", "state"],
             }
         )
         waldur_client.create_component_usages.assert_called_once_with(

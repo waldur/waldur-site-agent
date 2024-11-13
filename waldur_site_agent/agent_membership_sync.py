@@ -124,9 +124,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         team = self.waldur_rest_client.marketplace_provider_resource_get_team(
             backend_resource.marketplace_uuid
         )
-        user_uuids = {user["uuid"] for user in team}
+        team_user_uuids = {user["uuid"] for user in team}
 
-        logger.info("Creating associations for offering users")
+        logger.info("Processing associations for offering users")
         offering_users = self.waldur_rest_client.list_remote_offering_users(
             {
                 "offering_uuid": self.offering.uuid,
@@ -138,7 +138,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             offering_user["username"]
             for offering_user in offering_users
             if offering_user["username"] not in local_usernames
-            and offering_user["user_uuid"] in user_uuids
+            and offering_user["user_uuid"] in team_user_uuids
         }
 
         common_utils.create_associations_for_waldur_allocation(
@@ -149,6 +149,22 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             backend_resource.backend_id,
             new_offering_user_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
+        )
+
+        stale_offering_user_usernames: Set[str] = {
+            offering_user["username"]
+            for offering_user in offering_users
+            if offering_user["username"] in local_usernames
+            and offering_user["user_uuid"] not in team_user_uuids
+        }
+
+        common_utils.delete_associations_from_waldur_allocation(
+            self.waldur_rest_client, backend_resource, stale_offering_user_usernames
+        )
+
+        self.resource_backend.remove_users_from_account(
+            backend_resource.backend_id,
+            stale_offering_user_usernames,
         )
 
     def _process_resources(
@@ -194,7 +210,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     if restoring_done:
                         logger.info("The restoring is successfully completed")
                     else:
-                        logger.warning("The restoring is not done")
+                        logger.info("The restoring skipped")
 
                 resource_metadata = self.resource_backend.get_resource_metadata(
                     backend_resource.backend_id

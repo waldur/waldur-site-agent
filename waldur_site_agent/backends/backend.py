@@ -45,6 +45,7 @@ class BaseBackend(ABC):
                     resource.restrict_member_access = resource_info.restrict_member_access
                     resource.downscaled = resource_info.downscaled
                     resource.paused = resource_info.paused
+                    resource.state = resource_info.state
                     report[backend_id] = resource
             except Exception as e:
                 logger.exception("Error while pulling allocation [%s]: %s", backend_id, e)
@@ -243,6 +244,9 @@ class BaseBackend(ABC):
     ) -> Set[str]:
         """Add specified users to the resource on the backend."""
         del kwargs
+        logger.info(
+            "Adding users to account %s on backend: %s", resource_backend_id, " ,".join(user_ids)
+        )
         added_users = set()
         for username in user_ids:
             try:
@@ -278,6 +282,11 @@ class BaseBackend(ABC):
 
     def remove_users_from_account(self, resource_backend_id: str, usernames: Set[str]) -> List[str]:
         """Remove specified users from the resource on the backend."""
+        logger.info(
+            "Removing users from account %s on backend: %s",
+            resource_backend_id,
+            " ,".join(usernames),
+        )
         removed_users = []
         for username in usernames:
             try:
