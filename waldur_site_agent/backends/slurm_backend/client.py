@@ -219,6 +219,22 @@ class SlurmClient(base.BaseClient):
 
         return qos_options[0] if len(qos_options) > 0 else ""
 
+    def cancel_active_user_jobs(self, account: str, user: str) -> None:
+        """Cancel jobs for the account and user."""
+        args = [f"-u={user}", f"-A={account}", "-f"]
+        self._execute_command(args, command_name="scancel")
+
+    def list_active_user_jobs(self, account: str, user: str) -> List[str]:
+        """List active jobs for the account and user."""
+        args = [
+            "-a",
+            f"--account={account}",
+            f"--user={user}",
+            "--format=JobID,JobName,Partition,Account,User,State,Elapsed,Timelimit,NodeList",
+        ]
+        output = self._execute_command(args, command_name="sacct")
+        return [line.split("|")[0] for line in output.splitlines() if "|" in line]
+
     def _parse_account(self, line: str) -> Account:
         parts = line.split("|")
         return Account(
