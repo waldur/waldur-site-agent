@@ -17,7 +17,7 @@ OFFERING_UUID = "d629d5e45567425da9cdbdc1af67b32c"
 allocation_slurm = Resource(
     backend_id="test-allocation-01",
     backend_type=BackendType.SLURM.value,
-    users=["user-01"],
+    users=["user-01", "user-03"],
     usage={
         "user-01": {
             "cpu": 10,
@@ -70,7 +70,6 @@ class MembershipSyncTest(unittest.TestCase):
 
         waldur_client = waldur_client_class.return_value
         waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
-        waldur_client.list_slurm_associations.return_value = []
         waldur_client.marketplace_provider_resource_get_team.return_value = [
             {
                 "uuid": user_uuid,
@@ -100,16 +99,10 @@ class MembershipSyncTest(unittest.TestCase):
                 ],
             }
         )
-        waldur_client.list_slurm_associations.assert_called_once_with(
-            {"allocation_uuid": self.waldur_resource["resource_uuid"]}
-        )
         waldur_client.delete_slurm_association.assert_not_called()
-        self.assertEqual(2, waldur_client.create_slurm_association.call_count)
-        calls = [
-            mock.call(self.waldur_resource["uuid"], allocation_slurm.users[0]),
-            mock.call(self.waldur_resource["uuid"], offering_users[0]["username"]),
-        ]
-        waldur_client.create_slurm_association.assert_has_calls(calls, any_order=False)
+        waldur_client.create_slurm_association.assert_called_once_with(
+            self.waldur_resource["uuid"], offering_users[0]["username"]
+        )
         add_users_to_resource_mock.assert_called_once()
 
         get_resource_metadata_mock.assert_called_once()
@@ -117,10 +110,16 @@ class MembershipSyncTest(unittest.TestCase):
             self.waldur_resource["uuid"], current_qos
         )
 
+    @mock.patch.object(common_utils.SlurmBackend, "cancel_active_jobs_for_account_user")
+    @mock.patch.object(common_utils.SlurmBackend, "list_active_user_jobs", return_value=["123"])
     @mock.patch.object(common_utils.SlurmBackend, "get_resource_metadata", return_value=current_qos)
+    @mock.patch("waldur_site_agent.backends.slurm_backend.backend.SlurmClient", autospec=True)
     def test_association_delete(
         self,
+        slurm_client_class,
         get_resource_metadata_mock,
+        list_active_user_jobs_mock,
+        cancel_active_jobs_for_account_user_mock,
         restore_resource_mock,
         pull_allocation_mock: mock.Mock,
         waldur_client_class: mock.Mock,
@@ -129,11 +128,14 @@ class MembershipSyncTest(unittest.TestCase):
         processor = OfferingMembershipProcessor(self.offering)
         waldur_client = waldur_client_class.return_value
         waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
-        waldur_client.list_slurm_associations.return_value = [
-            {"username": "user-01"},
-            {"username": "user-02"},
+        waldur_client.marketplace_provider_resource_get_team.return_value = []
+        waldur_client.list_remote_offering_users.return_value = [
+            {"username": "user-03", "user_uuid": "3D83D488E39D47CB8F620D055888950E"}
         ]
-        waldur_client.list_remote_offering_users.return_value = []
+
+        slurm_client = slurm_client_class.return_value
+        slurm_client.get_association.return_value = "exists"
+        slurm_client.delete_association.return_value = "done"
 
         processor.process_offering()
 
@@ -153,12 +155,15 @@ class MembershipSyncTest(unittest.TestCase):
                 ],
             }
         )
-        waldur_client.list_slurm_associations.assert_called_once_with(
-            {"allocation_uuid": self.waldur_resource["resource_uuid"]}
-        )
         waldur_client.create_slurm_association.assert_not_called()
+
         waldur_client.delete_slurm_association.assert_called_once_with(
-            self.waldur_resource["uuid"], "user-02"
+            self.waldur_resource["uuid"], "user-03"
+        )
+
+        list_active_user_jobs_mock.assert_called_once()
+        cancel_active_jobs_for_account_user_mock.assert_called_once_with(
+            allocation_slurm.backend_id, "user-03"
         )
 
         get_resource_metadata_mock.assert_called_once()

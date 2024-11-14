@@ -84,49 +84,18 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         # This method is currently implemented for SLURM backend only
         logger.info("Syncing user list for resource %s", backend_resource.name)
         usernames = backend_resource.users
-        logger.info("Syncing backend and Waldur associations")
-
-        # Source of truth - associations in a SLURM cluster
-        # The service fetches associations from the cluster and pushes them to Waldur
-        associations = self.waldur_rest_client.list_slurm_associations(
-            {"allocation_uuid": backend_resource.marketplace_scope_uuid}
-        )
-        remote_usernames = {association["username"] for association in associations}
         local_usernames = set(usernames)
-
-        if backend_resource.restrict_member_access:
-            # The idea is to remove the existing associations in both sides
-            # and avoid creation of new associations
-            logger.info("Resource restricted for members, removing all the common associations")
-            common_usernames = local_usernames & remote_usernames
-
-            common_utils.delete_associations_from_waldur_allocation(
-                self.waldur_rest_client, backend_resource, common_usernames
-            )
-            self.resource_backend.remove_users_from_account(
-                backend_resource.backend_id, common_usernames
-            )
-            return
-
-        stale_usernames: Set[str] = remote_usernames - local_usernames
-        common_utils.delete_associations_from_waldur_allocation(
-            self.waldur_rest_client, backend_resource, stale_usernames
-        )
-
-        new_usernames = local_usernames - remote_usernames
-        common_utils.create_associations_for_waldur_allocation(
-            self.waldur_rest_client, backend_resource, new_usernames
-        )
+        logger.info("The usernames from the backend: %s", ", ".join(local_usernames))
 
         # Offering users sync
         # The service fetches offering users from Waldur and pushes them to the cluster
+        # If an offering user is not in the team anymore, it will be removed from the backend
         logger.info("Synching offering users")
         team = self.waldur_rest_client.marketplace_provider_resource_get_team(
             backend_resource.marketplace_uuid
         )
         team_user_uuids = {user["uuid"] for user in team}
 
-        logger.info("Processing associations for offering users")
         offering_users = self.waldur_rest_client.list_remote_offering_users(
             {
                 "offering_uuid": self.offering.uuid,
@@ -134,11 +103,37 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             }
         )
 
+        if backend_resource.restrict_member_access:
+            # The idea is to remove the existing associations in both sides
+            # and avoid creation of new associations
+            logger.info("Resource restricted for members, removing all the existing associations")
+            existing_offering_user_usernames: Set[str] = {
+                offering_user["username"]
+                for offering_user in offering_users
+                if offering_user["username"] in local_usernames
+                and offering_user["user_uuid"] in team_user_uuids
+            }
+
+            common_utils.delete_associations_from_waldur_allocation(
+                self.waldur_rest_client, backend_resource, existing_offering_user_usernames
+            )
+            self.resource_backend.remove_users_from_account(
+                backend_resource.backend_id, existing_offering_user_usernames
+            )
+            return
+
         new_offering_user_usernames: Set[str] = {
             offering_user["username"]
             for offering_user in offering_users
             if offering_user["username"] not in local_usernames
             and offering_user["user_uuid"] in team_user_uuids
+        }
+
+        stale_offering_user_usernames: Set[str] = {
+            offering_user["username"]
+            for offering_user in offering_users
+            if offering_user["username"] in local_usernames
+            and offering_user["user_uuid"] not in team_user_uuids
         }
 
         common_utils.create_associations_for_waldur_allocation(
@@ -150,13 +145,6 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             new_offering_user_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
-
-        stale_offering_user_usernames: Set[str] = {
-            offering_user["username"]
-            for offering_user in offering_users
-            if offering_user["username"] in local_usernames
-            and offering_user["user_uuid"] not in team_user_uuids
-        }
 
         common_utils.delete_associations_from_waldur_allocation(
             self.waldur_rest_client, backend_resource, stale_offering_user_usernames

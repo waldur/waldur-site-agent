@@ -302,6 +302,9 @@ class BaseBackend(ABC):
                 )
         return removed_users
 
+    def _pre_delete_user_actions(self, account: str, username: str) -> None:
+        del account, username
+
     def _remove_user(self, account: str, username: str) -> bool:
         """Delete association between user and an account if it exists."""
         if not account.strip():
@@ -311,6 +314,7 @@ class BaseBackend(ABC):
         if self.client.get_association(username, account):
             logger.info("Deleting association between %s and %s", username, account)
             try:
+                self._pre_delete_user_actions(account, username)
                 self.client.delete_association(username, account)
             except BackendError as err:
                 logger.exception("Unable to delete association in the backend: %s", err)

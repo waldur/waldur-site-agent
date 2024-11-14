@@ -221,6 +221,27 @@ class SlurmBackend(backend.BaseBackend):
 
         return report_converted
 
+    def list_active_user_jobs(self, account: str, user: str) -> List[str]:
+        """List active jobs for account and user."""
+        logger.info("Listing jobs for account %s and user %s", account, user)
+        return self.client.list_active_user_jobs(account, user)
+
+    def cancel_active_jobs_for_account_user(self, account: str, user: str) -> None:
+        """Cancel account the active jobs for the specified account and user."""
+        logger.info("Cancelling jobs for the account %s and user %s", account, user)
+        self.client.cancel_active_user_jobs(account, user)
+
+    def _pre_delete_user_actions(self, account: str, username: str) -> None:
+        job_ids = self.list_active_user_jobs(account, username)
+        if len(job_ids) > 0:
+            logger.info(
+                "The active jobs for account %s and user %s: %s",
+                account,
+                username,
+                ", ".join(job_ids),
+            )
+            self.cancel_active_jobs_for_account_user(account, username)
+
     def _get_allocation_limits(self, account: str) -> Dict[str, int]:
         """Return limits converted to Waldur-readable values."""
         lines = self.client.get_resource_limits(account)
