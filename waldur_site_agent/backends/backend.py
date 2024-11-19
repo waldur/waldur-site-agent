@@ -200,14 +200,17 @@ class BaseBackend(ABC):
         allocation_limits, waldur_resource_limits = self._collect_limits(waldur_resource)
 
         # Convert limits (for correct logging only)
-        converted_limits = {
-            key: value // self.backend_components[key].get("unit_factor", 1)
-            for key, value in allocation_limits.items()
-        }
+        if allocation_limits:
+            converted_limits = {
+                key: value // self.backend_components[key].get("unit_factor", 1)
+                for key, value in allocation_limits.items()
+            }
 
-        limits_str = utils.prettify_limits(converted_limits, self.backend_components)
-        logger.info("Setting allocation limits to: \n%s", limits_str)
-        self.client.set_resource_limits(allocation_account, allocation_limits)
+            limits_str = utils.prettify_limits(converted_limits, self.backend_components)
+            logger.info("Setting allocation limits to: \n%s", limits_str)
+            self.client.set_resource_limits(allocation_account, allocation_limits)
+        else:
+            logger.info("Skipping setting of limits")
 
         return structures.Resource(
             backend_type=self.backend_type,

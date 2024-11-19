@@ -267,7 +267,8 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 waldur_resource["name"],
             )
 
-        resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits)
+        if new_limits:
+            resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits)
 
         if order["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
             logger.info("Updating Waldur resource scope state")
