@@ -127,8 +127,10 @@ class SlurmBackend(backend.BaseBackend):
         return True
 
     def restore_resource(self, account: str) -> bool:
-        """Unset the resource QoS."""
+        """Restore resource QoS to the default one."""
         current_qos = self.client.get_current_account_qos(account)
+
+        default_qos = self.backend_settings.get("qos_default", "normal")
 
         if current_qos in [None, ""]:
             logger.info("The account does not have an active QoS set, skipping reset")
@@ -136,23 +138,12 @@ class SlurmBackend(backend.BaseBackend):
 
         logger.info("The current QoS is %s", current_qos)
 
-        if current_qos == "normal":
-            logger.info("The account already has normal QoS")
+        if current_qos == default_qos:
+            logger.info("The account already has the default QoS (%s)", default_qos)
             return False
 
-        qos_paused = self.backend_settings.get("qos_paused")
-        qos_downscaled = self.backend_settings.get("qos_downscaled")
-
-        if current_qos not in (qos_paused, qos_downscaled):
-            logger.info(
-                "The current QoS does not match either downscaled (%s) or paused (%s)",
-                qos_downscaled,
-                qos_paused,
-            )
-            return False
-
-        logger.info("Unset %s QoS", current_qos)
-        self.client.unset_account_qos(account, current_qos)
+        logger.info("Setting %s QoS", default_qos)
+        self.client.set_account_qos(account, default_qos)
         new_qos = self.client.get_current_account_qos(account)
         logger.info("The new QoS is %s", new_qos)
 

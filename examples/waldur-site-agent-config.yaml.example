@@ -12,8 +12,9 @@ offerings: # Settings for offerings
       project_prefix: "hpc_" # Prefix for project's accounts.
       allocation_prefix: "hpc_" # Prefix used for allocation's accounts.
         # created by the agent.
-      qos_downscaled: "limited" # The qos set to an account after downscaling
-      qos_paused: "paused" # The qos set to an account after pausing
+      qos_downscaled: "limited" # The QoS set to an account after downscaling
+      qos_paused: "paused" # The QoS set to an account after pausing
+      qos_default: "normal" # The default QoS for account in the SLURM cluster
       enable_user_homedir_account_creation: true # Whether to create home directories
         # for users associated to accounts.
       homedir_umask: "0700" # A umask for created homedirs
