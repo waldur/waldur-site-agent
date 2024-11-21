@@ -116,7 +116,8 @@ As a service provider owner, you should create an offering in the marketplace:
 **Note**: You will need to set the offering UUID in the agent config file.
 For this, you can copy the UUID from the `Integration -> Credentials`
 section on the same page:
-[offering-uuid](img/offering-uuid.png)
+
+![offering-uuid](img/offering-uuid.png)
 
 ### Setup
 
