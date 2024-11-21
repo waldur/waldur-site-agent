@@ -198,7 +198,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     if restoring_done:
                         logger.info("The restoring is successfully completed")
                     else:
-                        logger.info("The restoring skipped")
+                        logger.info("The restoring is skipped")
 
                 resource_metadata = self.resource_backend.get_resource_metadata(
                     backend_resource.backend_id
