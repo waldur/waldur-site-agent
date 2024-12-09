@@ -7,6 +7,10 @@ include:
     file: "/templates/test/python-tests.yml"
   - project: "waldur/waldur-pipelines"
     file: "/templates/release/python-module-release.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/sbom/generate-python-codebase-sbom.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/sbom/upload-sboms-to-docs.yml"
 
 Run python v3.9 linters:
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"
@@ -78,6 +82,20 @@ Run python v3.12 tests:
 Run python v3.13 tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.13"
   extends: .Test template
+
+Generate Codebase SBOM:
+  extends: .Generate Codebase SBOM template
+  variables:
+    PROJECT_NAME: "waldur-site-agent"
+
+Upload Source SBOM:
+  extends: .Upload SBOM template
+  needs:
+    - Generate Codebase SBOM
+  variables:
+    PROJECT_NAME: "waldur-site-agent"
+    SBOM_TYPE: "source"
+    SBOM_DIR: "source"
 
 Upload docs:
   image:
