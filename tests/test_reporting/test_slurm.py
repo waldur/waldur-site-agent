@@ -5,8 +5,8 @@ from unittest import mock
 from freezegun import freeze_time
 from waldur_client import ComponentUsage
 
-from waldur_site_agent import common_utils, MARKETPLACE_SLURM_OFFERING_TYPE
 from tests.fixtures import OFFERING
+from waldur_site_agent import MARKETPLACE_SLURM_OFFERING_TYPE, common_utils
 from waldur_site_agent.agent_report import OfferingReportProcessor
 from waldur_site_agent.backends import BackendType
 from waldur_site_agent.backends.structures import Resource

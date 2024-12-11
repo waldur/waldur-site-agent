@@ -22,6 +22,11 @@ class OfferingBaseProcessor(abc.ABC):
         if self.resource_backend.backend_type == BackendType.UNKNOWN.value:
             raise BackendError(f"Unable to create backend for {self.offering}")
 
+        self._print_current_user()
+
+        waldur_offering = self.waldur_rest_client._get_offering(self.offering.uuid)
+        common_utils.extend_backend_components(self.offering, waldur_offering["components"])
+
     def _print_current_user(self) -> None:
         current_user = self.waldur_rest_client.get_current_user()
         common_utils.print_current_user(current_user)

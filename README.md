@@ -201,6 +201,8 @@ offerings: # Settings for offerings
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
     waldur_api_token: "" # Token to access the Waldur API.
     waldur_offering_uuid: "" # UUID of the offering in Waldur.
+    mqtt_enabled: true # MQTT feature toggler
+    websocket_use_tls: true # Whether to use TLS for websocket connection
     backend_type: "slurm" # type of backend, for now only `slurm` and `moab` is supported
     backend_settings: # backend-specific settings
       default_account: "root" # Default parent account name in SLURM cluster

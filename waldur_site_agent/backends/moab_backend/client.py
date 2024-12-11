@@ -45,9 +45,7 @@ class MoabClient(base.BaseClient):
 
     def get_account(self, name: str) -> Account | None:
         """Get MOAB account info."""
-        command = (
-            "mam-list-accounts --raw --quiet --show Name,Description,Organization -a %s" % name
-        )
+        command = f"mam-list-accounts --raw --quiet --show Name,Description,Organization -a {name}"
         output = self.execute_command(command.split())
         lines = [line for line in output.splitlines() if "|" in line]
         if len(lines) == 0:
@@ -68,7 +66,7 @@ class MoabClient(base.BaseClient):
 
     def delete_account(self, name: str) -> str:
         """Delete account from MOAB."""
-        command_account = "mam-delete-account -a %s" % name
+        command_account = f"mam-delete-account -a {name}"
         self.execute_command(command_account.split())
 
         fund_id = self._get_fund_id(name)
@@ -95,7 +93,7 @@ class MoabClient(base.BaseClient):
 
         if fund_id is None:
             raise exceptions.BackendError(
-                "The account %s does not have a linked fund, unable to set a deposit" % account
+                f"The account {account} does not have a linked fund, unable to set a deposit"
             )
 
         command_deposit = f"mam-deposit -a {account} -z {limits_dict['deposit']} -f {fund_id}"
