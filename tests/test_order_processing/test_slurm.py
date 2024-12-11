@@ -2,10 +2,10 @@ import unittest
 import uuid
 from unittest import mock
 
-from waldur_site_agent.agent_order_process import process_offerings
-from waldur_site_agent.backends.structures import Account
-from waldur_site_agent import MARKETPLACE_SLURM_OFFERING_TYPE
 from tests.fixtures import OFFERING
+from waldur_site_agent import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.agent_order_process import process_offering
+from waldur_site_agent.backends.structures import Account
 
 
 @mock.patch(
@@ -100,7 +100,7 @@ class CreationOrderTest(unittest.TestCase):
         slurm_client.get_account.return_value = None
         slurm_client._execute_command.return_value = ""
 
-        process_offerings([OFFERING])
+        process_offering(OFFERING)
 
         waldur_client.marketplace_order_approve_by_provider.assert_called_once_with(self.order_uuid)
 
@@ -122,7 +122,7 @@ class CreationOrderTest(unittest.TestCase):
             "account_name_generation_policy": "project_slug"
         }
         offering_user_username = "test-offering-user-01"
-        project_account = f"hpc_project-1"
+        project_account = "hpc_project-1"
         allocation_account = f"{project_account}-1"
 
         waldur_client = self.setup_waldur_client_mock(waldur_client_class)
@@ -132,7 +132,7 @@ class CreationOrderTest(unittest.TestCase):
         slurm_client.get_account.side_effect = [None, None, "account", None]
         slurm_client._execute_command.return_value = ""
 
-        process_offerings([OFFERING])
+        process_offering(OFFERING)
 
         waldur_client.marketplace_order_approve_by_provider.assert_called_once_with(self.order_uuid)
 
@@ -196,7 +196,7 @@ class TerminationOrderTest(unittest.TestCase):
         slurm_client.list_accounts.return_value = []
         slurm_client._execute_command.return_value = ""
 
-        process_offerings([OFFERING])
+        process_offering(OFFERING)
 
         # The method was called twice: for project account and for allocation account
         self.assertEqual(2, slurm_client.delete_account.call_count)
@@ -263,7 +263,7 @@ class UpdateOrderTest(unittest.TestCase):
         waldur_client.get_order.return_value = self.waldur_order
         waldur_client.get_marketplace_provider_resource.return_value = self.waldur_resource
 
-        process_offerings([OFFERING])
+        process_offering(OFFERING)
 
         slurm_client = slurm_client_class.return_value
         slurm_client.set_resource_limits.assert_called_once_with(

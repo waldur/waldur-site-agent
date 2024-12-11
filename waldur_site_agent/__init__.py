@@ -27,6 +27,8 @@ class Offering:
     backend_type: str = ""
     backend_settings: dict = field(default_factory=dict)
     backend_components: dict = field(default_factory=dict)
+    mqtt_enabled: bool = False
+    websocket_use_tls: bool = True
 
 
 class AgentMode(Enum):
