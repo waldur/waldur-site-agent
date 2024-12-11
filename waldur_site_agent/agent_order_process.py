@@ -519,10 +519,16 @@ def start(configuration: WaldurAgentConfiguration) -> None:
             configuration.waldur_site_agent_mode,
         )
 
-        with signal_handling(mqtt_consumers_map):
+        if mqtt_consumers_map:
+            with signal_handling(mqtt_consumers_map):
+                start_periodic_offering_processing(
+                    configuration.waldur_offerings, configuration.waldur_user_agent
+                )
+        else:
             start_periodic_offering_processing(
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
+
     except Exception as e:
         logger.error("Error in main process: %s", e)
         if "mqtt_consumers_map" in locals():
