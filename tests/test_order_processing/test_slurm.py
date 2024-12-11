@@ -110,6 +110,7 @@ class CreationOrderTest(unittest.TestCase):
             name=allocation_account,
             description="test-allocation-01",
             organization=project_account,
+            parent_name=project_account,
         )
         slurm_client.create_association.assert_called_with(
             offering_user_username, allocation_account, "root"
@@ -142,6 +143,7 @@ class CreationOrderTest(unittest.TestCase):
             name=allocation_account,
             description="test-allocation-01",
             organization=project_account,
+            parent_name=project_account,
         )
         slurm_client.create_association.assert_called_with(
             offering_user_username, allocation_account, "root"

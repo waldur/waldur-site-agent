@@ -187,6 +187,7 @@ class BaseBackend(ABC):
                     name=allocation_account,
                     description=resource_name,
                     organization=project_account,
+                    parent_name=project_account,
                 )
                 break
             retries += 1
