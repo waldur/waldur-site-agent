@@ -490,15 +490,17 @@ def signal_handling(
         signal.SIGINT,
         signal.SIGTSTP,
         signal.SIGQUIT,
-        signal.SIGKILL,
-        signal.SIGSTOP,
     )
     original_handlers = {}
 
     try:
+        logger.info("Setting up signal handlers")
         # Save original handlers and set new ones
         for sig in signals:
+            logger.info("Setting up signal handler for %s", sig)
             original_handlers[sig] = signal.signal(sig, signal_handler)
+            logger.info("Signal handler for %s set", sig)
+        logger.info("Signal handlers set")
         yield
     finally:
         # Restore original handlers
