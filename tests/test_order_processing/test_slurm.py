@@ -124,7 +124,7 @@ class CreationOrderTest(unittest.TestCase):
         }
         offering_user_username = "test-offering-user-01"
         project_account = "hpc_project-1"
-        allocation_account = f"{project_account}-1"
+        allocation_account = f"{project_account}-0"
 
         waldur_client = self.setup_waldur_client_mock(waldur_client_class)
 

@@ -116,110 +116,117 @@ class BaseBackend(ABC):
         else:
             logger.warning("No account %s is in %s", account, self.backend_type)
 
-    def create_resource(self, waldur_resource: Dict) -> structures.Resource:
-        """Create resource on the backend."""
-        logger.info("Creating account in the backend")
-        resource_uuid = waldur_resource["uuid"]
-        resource_name = waldur_resource["name"]
-        account_name = waldur_resource["slug"]
-        project_name = waldur_resource["project_name"]
-        customer_name = waldur_resource["customer_name"]
-
-        project_account = self._get_project_name(waldur_resource["project_slug"])
-
-        customer_account = None
-        if self.backend_type == BackendType.SLURM.value:
-            customer_account = self._get_customer_name(waldur_resource["customer_slug"])
-            if not self.client.get_account(customer_account):
-                logger.info(
-                    "Creating SLURM account for customer %s (backend id = %s)",
-                    customer_name,
-                    customer_account,
-                )
-                self.client.create_account(
-                    name=customer_account,
-                    description=customer_name,
-                    organization=customer_account,
-                )
-
-        if not self.client.get_account(project_account):
-            logger.info(
-                "Creating an account for project %s (backend id = %s)",
-                project_name,
-                project_account,
-            )
-            self.client.create_account(
-                name=project_account,
-                description=project_name,
-                organization=project_account,
-                parent_name=customer_account,
-            )
-
-        max_retries = 1
-        account_name_generation_policy = waldur_resource["offering_plugin_options"].get(
-            "account_name_generation_policy"
+    def _create_account(
+        self,
+        account_name: str,
+        account_description: str,
+        account_organization: str,
+        account_parent_name: Optional[str] = None,
+    ) -> bool:
+        logger.info(
+            "Creating SLURM account %s (backend id = %s)",
+            account_name,
+            account_name,
         )
-        if account_name_generation_policy == "project_slug":
-            account_name = waldur_resource["project_slug"] + "-0"
-            max_retries = 10
-
-        retries = 0
-        allocation_account = self._get_allocation_name(account_name)
-        while retries < max_retries:
-            if self.client.get_account(allocation_account) is not None:
-                logger.info(
-                    "The account %s already exists in the cluster",
-                    allocation_account,
-                )
-                if account_name_generation_policy == "project_slug":
-                    # Constructing the new account name with incremented counter
-                    prefix = allocation_account[:-1]
-                    # The last char is guaranteed to be a valid integer
-                    counter = int(allocation_account[-1]) + 1
-                    allocation_account = prefix + str(counter)
-            else:
-                logger.info(
-                    "Creating an account for allocation %s (backend id = %s)",
-                    resource_name,
-                    allocation_account,
-                )
-                self.client.create_account(
-                    name=allocation_account,
-                    description=resource_name,
-                    organization=project_account,
-                    parent_name=project_account,
-                )
-                break
-            retries += 1
-
-        if retries == max_retries:
-            raise BackendError(
-                f"Unable to create an allocation: {allocation_account} "
-                "already exists in the cluster"
+        if self.client.get_account(account_name) is None:
+            self.client.create_account(
+                name=account_name,
+                description=account_description,
+                organization=account_organization,
+                parent_name=account_parent_name,
             )
+            return True
+        logger.info("The account %s already exists in the cluster", account_name)
+        return False
 
-        allocation_limits, waldur_resource_limits = self._collect_limits(waldur_resource)
+    def create_resource(self, waldur_resource: Dict) -> structures.Resource:
+        """Create resource on the backend.
 
-        # Convert limits (for correct logging only)
-        if allocation_limits:
-            converted_limits = {
-                key: value // self.backend_components[key].get("unit_factor", 1)
-                for key, value in allocation_limits.items()
-            }
+        Creates necessary accounts hierarchy and sets up resource limits.
+        """
+        logger.info("Creating account in the backend")
 
-            limits_str = utils.prettify_limits(converted_limits, self.backend_components)
-            logger.info("Setting allocation limits to: \n%s", limits_str)
-            self.client.set_resource_limits(allocation_account, allocation_limits)
-        else:
-            logger.info("Skipping setting of limits")
+        # Setup accounts hierarchy
+        self._setup_accounts_hierarchy(waldur_resource)
+
+        # Create allocation account
+        allocation_account = self._create_allocation_account(waldur_resource)
+
+        # Setup limits
+        self._setup_resource_limits(allocation_account, waldur_resource)
 
         return structures.Resource(
             backend_type=self.backend_type,
-            name=resource_name,
-            marketplace_uuid=resource_uuid,
+            name=waldur_resource["name"],
+            marketplace_uuid=waldur_resource["uuid"],
             backend_id=allocation_account,
-            limits=waldur_resource_limits,
+            limits=self._collect_limits(waldur_resource)[1],
         )
+
+    def _setup_accounts_hierarchy(self, waldur_resource: Dict) -> None:
+        """Setup customer and project accounts hierarchy."""
+        project_account = self._get_project_name(waldur_resource["project_slug"])
+
+        # Setup customer account if using SLURM
+        customer_account = None
+        if self.backend_type == BackendType.SLURM.value:
+            customer_account = self._get_customer_name(waldur_resource["customer_slug"])
+            self._create_account(
+                customer_account, waldur_resource["customer_name"], customer_account
+            )
+
+        # Create project account
+        self._create_account(
+            project_account, waldur_resource["project_name"], project_account, customer_account
+        )
+
+    def _create_allocation_account(self, waldur_resource: Dict) -> str:
+        """Create allocation account with retry logic for name generation."""
+        project_account = self._get_project_name(waldur_resource["project_slug"])
+
+        # Determine allocation name generation strategy
+        use_project_slug = (
+            waldur_resource["offering_plugin_options"].get("account_name_generation_policy")
+            == "project_slug"
+        )
+
+        allocation_name = (
+            waldur_resource["project_slug"] if use_project_slug else waldur_resource["slug"]
+        )
+        max_retries = 10 if use_project_slug else 1
+
+        # Try creating account with generated names
+        for retry in range(max_retries):
+            allocation_account = self._get_allocation_name(allocation_name)
+            if self._create_account(
+                allocation_account, waldur_resource["name"], project_account, project_account
+            ):
+                return allocation_account
+
+            if use_project_slug:
+                allocation_name = f"{waldur_resource['project_slug']}-{retry}"
+
+        raise BackendError(
+            f"Unable to create an allocation: {allocation_account} already exists in the cluster"
+        )
+
+    def _setup_resource_limits(self, allocation_account: str, waldur_resource: Dict) -> None:
+        """Setup resource limits for the allocation account."""
+        allocation_limits, _ = self._collect_limits(waldur_resource)
+
+        if not allocation_limits:
+            logger.info("Skipping setting of limits")
+            return
+
+        # Convert limits for logging
+        converted_limits = {
+            key: value // self.backend_components[key].get("unit_factor", 1)
+            for key, value in allocation_limits.items()
+        }
+
+        limits_str = utils.prettify_limits(converted_limits, self.backend_components)
+        logger.info("Setting allocation limits to: \n%s", limits_str)
+        self.client.set_resource_limits(allocation_account, allocation_limits)
 
     @abstractmethod
     def downscale_resource(self, account: str) -> bool:
