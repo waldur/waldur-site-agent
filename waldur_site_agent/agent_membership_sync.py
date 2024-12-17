@@ -70,12 +70,7 @@ def start_periodic_offering_processing(
         logger.info("Number of offerings to process: %s", len(waldur_offerings))
         for offering in waldur_offerings:
             try:
-                if offering.mqtt_enabled:
-                    logger.info(
-                        "Delay HTTP polling for the offering %s, because it uses mqtt feature",
-                        offering.name,
-                    )
-                    sleep(WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES * 60)
+                # TODO: Check if mqtt feature enabled
 
                 process_offering(offering, user_agent)
             except Exception as e:
