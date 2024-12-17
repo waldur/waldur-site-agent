@@ -228,7 +228,7 @@ class SlurmClient(base.BaseClient):
             f"--user={user}",
             "--format=JobID,JobName,Partition,Account,User,State,Elapsed,Timelimit,NodeList",
         ]
-        output = self._execute_command(args, command_name="sacct")
+        output = self._execute_command(args, command_name="sacct", immediate=False)
         return [line.split("|")[0] for line in output.splitlines() if "|" in line]
 
     def _parse_account(self, line: str) -> Account:

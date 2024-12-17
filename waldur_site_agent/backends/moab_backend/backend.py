@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, Tuple
+from typing import Dict, List, Tuple
 
 from waldur_site_agent.backends import BackendType, logger
 from waldur_site_agent.backends import utils as backend_utils
 from waldur_site_agent.backends.backend import BaseBackend
 from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.moab_backend.client import MoabClient
-
-if TYPE_CHECKING:
-    from waldur_site_agent.backends.moab_backend.parser import MoabReportLine
+from waldur_site_agent.backends.moab_backend.parser import MoabReportLine
 
 
 class MoabBackend(BaseBackend):

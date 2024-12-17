@@ -261,7 +261,7 @@ class BaseBackend(ABC):
         added_users = set()
         for username in user_ids:
             try:
-                succeeded = self._add_user(resource_backend_id, username)
+                succeeded = self.add_user(resource_backend_id, username)
                 if succeeded:
                     added_users.add(username)
             except BackendError as e:
@@ -274,11 +274,16 @@ class BaseBackend(ABC):
 
         return added_users
 
-    def _add_user(self, account: str, username: str) -> bool:
+    def add_user(self, account: str, username: str) -> bool:
         """Add association between user and backend account if it doesn't exists."""
         if not account.strip():
             message = "Empty backend_id for allocation"
             raise BackendError(message)
+
+        logger.info("Adding user %s to account %s", username, account)
+        if not username:
+            logger.warning("Username is blank, skipping creation of association")
+            return False
 
         if not self.client.get_association(username, account):
             logger.info("Creating association between %s and %s", username, account)
@@ -289,6 +294,8 @@ class BaseBackend(ABC):
             except BackendError as err:
                 logger.exception("Unable to create association on backend: %s", err)
                 return False
+        else:
+            logger.info("Association already exists, skipping creation")
         return True
 
     def remove_users_from_account(self, resource_backend_id: str, usernames: Set[str]) -> List[str]:
@@ -301,7 +308,7 @@ class BaseBackend(ABC):
         removed_users = []
         for username in usernames:
             try:
-                succeeded = self._remove_user(resource_backend_id, username)
+                succeeded = self.remove_user(resource_backend_id, username)
                 if succeeded:
                     removed_users.append(username)
             except BackendError as e:
@@ -316,11 +323,13 @@ class BaseBackend(ABC):
     def _pre_delete_user_actions(self, account: str, username: str) -> None:
         del account, username
 
-    def _remove_user(self, account: str, username: str) -> bool:
+    def remove_user(self, account: str, username: str) -> bool:
         """Delete association between user and an account if it exists."""
         if not account.strip():
             message = "Empty account name"
             raise BackendError(message)
+
+        logger.info("Removing user %s from account %s", username, account)
 
         if self.client.get_association(username, account):
             logger.info("Deleting association between %s and %s", username, account)

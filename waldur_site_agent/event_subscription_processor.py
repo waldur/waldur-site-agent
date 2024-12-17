@@ -32,18 +32,19 @@ class EventSubscriptionManager:
         self.on_message_callback = on_message_callback
         self.waldur_site_agent_mode = waldur_site_agent_mode
 
-    def create_event_subscription(self) -> Optional[dict]:
+    def create_event_subscription(self, observable_object_type: str) -> Optional[dict]:
         """Create event subscription."""
         try:
             logger.info(
-                "Creating event subscription for offering %s (%s)",
+                "Creating event subscription for offering %s (%s), object type: %s",
                 self.offering.name,
                 self.offering.uuid,
+                observable_object_type,
             )
             event_subscription = self.waldur_rest_client.create_event_subscription(
                 observable_objects=[
                     {
-                        "object_type": "order",
+                        "object_type": observable_object_type,
                     }
                 ],
                 description=f"Event subscription for waldur site agent {self.user_agent},"
@@ -82,11 +83,14 @@ class EventSubscriptionManager:
 
         mqtt_client.on_connect = self.on_connect_callback
         mqtt_client.on_message = self.on_message_callback
+        topic_postfix = "order" if self.waldur_site_agent_mode == "order_process" else "user_role"
         mqtt_client.user_data_set(
             {
                 "event_subscription": event_subscription,
                 "offering": self.offering,
                 "user_agent": self.user_agent,
+                "waldur_site_agent_mode": self.waldur_site_agent_mode,
+                "topic_postfix": topic_postfix,
             }
         )
         return mqtt_client
@@ -95,7 +99,7 @@ class EventSubscriptionManager:
         """Start MQTT consumer."""
         try:
             mqtt_host = urllib3.util.parse_url(self.offering.api_url).host
-            mqtt_port = 8443
+            mqtt_port = 443
             logger.info(
                 "Starting consumer for %s (%s), mqtt address: mqtt://%s:%s",
                 self.offering.name,

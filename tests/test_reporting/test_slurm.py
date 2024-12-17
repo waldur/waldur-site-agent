@@ -7,7 +7,7 @@ from waldur_client import ComponentUsage
 
 from tests.fixtures import OFFERING
 from waldur_site_agent import MARKETPLACE_SLURM_OFFERING_TYPE, common_utils
-from waldur_site_agent.agent_report import OfferingReportProcessor
+from waldur_site_agent.processors import OfferingReportProcessor
 from waldur_site_agent.backends import BackendType
 from waldur_site_agent.backends.structures import Resource
 
