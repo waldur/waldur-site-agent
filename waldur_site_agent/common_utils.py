@@ -1,5 +1,7 @@
 """Functions shared between agent modules."""
 
+from __future__ import annotations
+
 import argparse
 from importlib.metadata import version
 from pathlib import Path
@@ -114,46 +116,6 @@ def get_backend_for_offering(offering: Offering) -> BaseBackend:
         logger.error("Unknown backend type: %s", offering.backend_type)
 
     return resource_backend
-
-
-def delete_associations_from_waldur_allocation(
-    waldur_rest_client: WaldurClient,
-    backend_resource: Resource,
-    usernames: Set[str],
-) -> None:
-    """Deletes a SLURM association for the specified resource and username in Waldur."""
-    logger.info("Usernames to drop from Waldur allocation: %s", " ,".join(usernames))
-    for username in usernames:
-        try:
-            waldur_rest_client.delete_slurm_association(backend_resource.marketplace_uuid, username)
-            logger.info(
-                "The user %s has been dropped from %s (backend_id: %s)",
-                username,
-                backend_resource.name,
-                backend_resource.backend_id,
-            )
-        except WaldurClientException as e:
-            logger.error("User %s can not be dropped due to: %s", username, e)
-
-
-def create_associations_for_waldur_allocation(
-    waldur_rest_client: WaldurClient,
-    backend_resource: Resource,
-    usernames: Set[str],
-) -> None:
-    """Creates a SLURM association for the specified resource and username in Waldur."""
-    logger.info("New usernames to add to Waldur allocation: %s", " ,".join(usernames))
-    for username in usernames:
-        try:
-            waldur_rest_client.create_slurm_association(backend_resource.marketplace_uuid, username)
-            logger.info(
-                "The user %s has been added to %s (backend_id: %s)",
-                username,
-                backend_resource.name,
-                backend_resource.backend_id,
-            )
-        except WaldurClientException as e:
-            logger.error("User %s can not be added due to: %s", username, e)
 
 
 def mark_waldur_resources_as_erred(

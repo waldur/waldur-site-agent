@@ -6,7 +6,7 @@ from freezegun import freeze_time
 
 from tests.fixtures import OFFERING
 from waldur_site_agent import MARKETPLACE_SLURM_OFFERING_TYPE, common_utils
-from waldur_site_agent.agent_membership_sync import OfferingMembershipProcessor
+from waldur_site_agent.processors import OfferingMembershipProcessor
 from waldur_site_agent.backends import BackendType
 from waldur_site_agent.backends.structures import Resource
 
@@ -99,10 +99,6 @@ class MembershipSyncTest(unittest.TestCase):
                 ],
             }
         )
-        waldur_client.delete_slurm_association.assert_not_called()
-        waldur_client.create_slurm_association.assert_called_once_with(
-            self.waldur_resource["uuid"], offering_users[0]["username"]
-        )
         add_users_to_resource_mock.assert_called_once()
 
         get_resource_metadata_mock.assert_called_once()
@@ -154,11 +150,6 @@ class MembershipSyncTest(unittest.TestCase):
                     "paused",
                 ],
             }
-        )
-        waldur_client.create_slurm_association.assert_not_called()
-
-        waldur_client.delete_slurm_association.assert_called_once_with(
-            self.waldur_resource["uuid"], "user-03"
         )
 
         list_active_user_jobs_mock.assert_called_once()
