@@ -241,9 +241,9 @@ offerings: # Settings for offerings
     backend_type: "moab"
     backend_settings:
       default_account: root
-      customer_prefix: "hpc_mt_"
-      project_prefix: "hpc_mt_"
-      allocation_prefix: "hpc_mt_"
+      customer_prefix: "c_"
+      project_prefix: "p_"
+      allocation_prefix: "a_"
       enable_user_homedir_account_creation: true
     backend_components:
       deposit: # For MOAB backend, only "deposit" is supported
