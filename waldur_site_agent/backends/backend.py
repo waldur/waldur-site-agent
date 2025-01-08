@@ -125,7 +125,7 @@ class BaseBackend(ABC):
     ) -> bool:
         logger.info(
             "Creating SLURM account %s (backend id = %s)",
-            account_name,
+            account_description,
             account_name,
         )
         if self.client.get_account(account_name) is None:

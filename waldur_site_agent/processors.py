@@ -695,7 +695,13 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         for component_usage in waldur_component_usages:
             component_type = component_usage["type"]
-            usage = user_usage[component_type]
+            usage = user_usage.get(component_type)
+            if usage is None:
+                logger.warning(
+                    "No usage for Waldur component %s is found in SLURM user usage report",
+                    component_type,
+                )
+                continue
             logger.info(
                 "Submitting usage for username %s: %s -> %s",
                 username,
