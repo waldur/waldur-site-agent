@@ -5,8 +5,9 @@ from unittest import mock
 from freezegun import freeze_time
 
 from tests.fixtures import OFFERING
-from waldur_site_agent import MARKETPLACE_SLURM_OFFERING_TYPE, common_utils
-from waldur_site_agent.processors import OfferingMembershipProcessor
+from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.common import utils
+from waldur_site_agent.common.processors import OfferingMembershipProcessor
 from waldur_site_agent.backends import BackendType
 from waldur_site_agent.backends.structures import Resource
 
@@ -37,9 +38,9 @@ current_qos = {"qos": "abc"}
 
 
 @freeze_time("2022-01-01")
-@mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
-@mock.patch.object(common_utils.SlurmBackend, "_pull_allocation", return_value=allocation_slurm)
-@mock.patch.object(common_utils.SlurmBackend, "restore_resource", return_value=None)
+@mock.patch("waldur_site_agent.common.processors.WaldurClient", autospec=True)
+@mock.patch.object(utils.SlurmBackend, "_pull_allocation", return_value=allocation_slurm)
+@mock.patch.object(utils.SlurmBackend, "restore_resource", return_value=None)
 class MembershipSyncTest(unittest.TestCase):
     def setUp(self) -> None:
         self.waldur_resource = {
@@ -54,8 +55,8 @@ class MembershipSyncTest(unittest.TestCase):
         self.plan_period_uuid = uuid.uuid4().hex
         self.offering = OFFERING
 
-    @mock.patch.object(common_utils.SlurmBackend, "add_users_to_resource")
-    @mock.patch.object(common_utils.SlurmBackend, "get_resource_metadata", return_value=current_qos)
+    @mock.patch.object(utils.SlurmBackend, "add_users_to_resource")
+    @mock.patch.object(utils.SlurmBackend, "get_resource_metadata", return_value=current_qos)
     def test_association_create(
         self,
         get_resource_metadata_mock,
@@ -106,9 +107,9 @@ class MembershipSyncTest(unittest.TestCase):
             self.waldur_resource["uuid"], current_qos
         )
 
-    @mock.patch.object(common_utils.SlurmBackend, "cancel_active_jobs_for_account_user")
-    @mock.patch.object(common_utils.SlurmBackend, "list_active_user_jobs", return_value=["123"])
-    @mock.patch.object(common_utils.SlurmBackend, "get_resource_metadata", return_value=current_qos)
+    @mock.patch.object(utils.SlurmBackend, "cancel_active_jobs_for_account_user")
+    @mock.patch.object(utils.SlurmBackend, "list_active_user_jobs", return_value=["123"])
+    @mock.patch.object(utils.SlurmBackend, "get_resource_metadata", return_value=current_qos)
     @mock.patch("waldur_site_agent.backends.slurm_backend.backend.SlurmClient", autospec=True)
     def test_association_delete(
         self,
@@ -162,8 +163,8 @@ class MembershipSyncTest(unittest.TestCase):
             self.waldur_resource["uuid"], current_qos
         )
 
-    @mock.patch.object(common_utils.SlurmBackend, "downscale_resource")
-    @mock.patch.object(common_utils.SlurmBackend, "get_resource_metadata", return_value=current_qos)
+    @mock.patch.object(utils.SlurmBackend, "downscale_resource")
+    @mock.patch.object(utils.SlurmBackend, "get_resource_metadata", return_value=current_qos)
     def test_qos_downscaling(
         self,
         get_resource_metadata_mock,

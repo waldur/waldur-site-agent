@@ -3,8 +3,8 @@ import uuid
 from unittest import mock
 
 from tests.fixtures import OFFERING
-from waldur_site_agent import MARKETPLACE_SLURM_OFFERING_TYPE
-from waldur_site_agent.agent_order_process import process_offering
+from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.common.processors import OfferingOrderProcessor
 from waldur_site_agent.backends.structures import Account
 
 
@@ -12,7 +12,7 @@ from waldur_site_agent.backends.structures import Account
     "waldur_site_agent.backends.slurm_backend.backend.SlurmClient",
     autospec=True,
 )
-@mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
+@mock.patch("waldur_site_agent.common.processors.WaldurClient", autospec=True)
 class CreationOrderTest(unittest.TestCase):
     def setUp(self) -> None:
         self.allocation_uuid = uuid.uuid4().hex
@@ -100,7 +100,8 @@ class CreationOrderTest(unittest.TestCase):
         slurm_client.get_account.return_value = None
         slurm_client._execute_command.return_value = ""
 
-        process_offering(OFFERING)
+        processor = OfferingOrderProcessor(OFFERING)
+        processor.process_offering()
 
         waldur_client.marketplace_order_approve_by_provider.assert_called_once_with(self.order_uuid)
 
@@ -133,7 +134,8 @@ class CreationOrderTest(unittest.TestCase):
         slurm_client.get_account.side_effect = [None, None, "account", None]
         slurm_client._execute_command.return_value = ""
 
-        process_offering(OFFERING)
+        processor = OfferingOrderProcessor(OFFERING)
+        processor.process_offering()
 
         waldur_client.marketplace_order_approve_by_provider.assert_called_once_with(self.order_uuid)
 
@@ -154,7 +156,7 @@ class CreationOrderTest(unittest.TestCase):
     "waldur_site_agent.backends.slurm_backend.backend.SlurmClient",
     autospec=True,
 )
-@mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
+@mock.patch("waldur_site_agent.common.processors.WaldurClient", autospec=True)
 class TerminationOrderTest(unittest.TestCase):
     def setUp(self) -> None:
         self.marketplace_resource_uuid = uuid.uuid4().hex
@@ -198,7 +200,8 @@ class TerminationOrderTest(unittest.TestCase):
         slurm_client.list_accounts.return_value = []
         slurm_client._execute_command.return_value = ""
 
-        process_offering(OFFERING)
+        processor = OfferingOrderProcessor(OFFERING)
+        processor.process_offering()
 
         # The method was called twice: for project account and for allocation account
         self.assertEqual(2, slurm_client.delete_account.call_count)
@@ -208,7 +211,7 @@ class TerminationOrderTest(unittest.TestCase):
     "waldur_site_agent.backends.slurm_backend.backend.SlurmClient",
     autospec=True,
 )
-@mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
+@mock.patch("waldur_site_agent.common.processors.WaldurClient", autospec=True)
 class UpdateOrderTest(unittest.TestCase):
     def setUp(self) -> None:
         self.marketplace_resource_uuid = uuid.uuid4().hex
@@ -265,7 +268,8 @@ class UpdateOrderTest(unittest.TestCase):
         waldur_client.get_order.return_value = self.waldur_order
         waldur_client.get_marketplace_provider_resource.return_value = self.waldur_resource
 
-        process_offering(OFFERING)
+        processor = OfferingOrderProcessor(OFFERING)
+        processor.process_offering()
 
         slurm_client = slurm_client_class.return_value
         slurm_client.set_resource_limits.assert_called_once_with(

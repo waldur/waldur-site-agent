@@ -15,35 +15,34 @@ from waldur_client import (
     is_uuid,
 )
 
-from waldur_site_agent import Offering, common_utils
-from waldur_site_agent.backends import BackendType, logger, utils
+from waldur_site_agent.backends import BackendType, logger
+from waldur_site_agent.backends import utils as backend_utils
 from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.structures import Resource
-
-from . import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE, structures, utils
 
 
 class OfferingBaseProcessor(abc.ABC):
     """Abstract class for an offering processing."""
 
-    def __init__(self, offering: Offering, user_agent: str = "") -> None:
+    def __init__(self, offering: structures.Offering, user_agent: str = "") -> None:
         """Constructor."""
-        self.offering: Offering = offering
+        self.offering: structures.Offering = offering
         self.waldur_rest_client: WaldurClient = WaldurClient(
             offering.api_url, offering.api_token, user_agent
         )
-        self.resource_backend = common_utils.get_backend_for_offering(offering)
+        self.resource_backend = utils.get_backend_for_offering(offering)
         if self.resource_backend.backend_type == BackendType.UNKNOWN.value:
             raise BackendError(f"Unable to create backend for {self.offering}")
 
         self._print_current_user()
 
         waldur_offering = self.waldur_rest_client._get_offering(self.offering.uuid)
-        common_utils.extend_backend_components(self.offering, waldur_offering["components"])
+        utils.extend_backend_components(self.offering, waldur_offering["components"])
 
     def _print_current_user(self) -> None:
         current_user = self.waldur_rest_client.get_current_user()
-        common_utils.print_current_user(current_user)
+        utils.print_current_user(current_user)
 
     @abc.abstractmethod
     def process_offering(self) -> None:
@@ -286,7 +285,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 resource_uuid, SlurmAllocationState.UPDATING
             )
 
-        resource_backend = common_utils.get_backend_for_offering(self.offering)
+        resource_backend = utils.get_backend_for_offering(self.offering)
         if resource_backend is None:
             return False
 
@@ -324,7 +323,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         waldur_resource = self.waldur_rest_client.get_marketplace_provider_resource(resource_uuid)
         project_slug = order["project_slug"]
 
-        resource_backend = common_utils.get_backend_for_offering(self.offering)
+        resource_backend = utils.get_backend_for_offering(self.offering)
         if resource_backend is None:
             return False
 
@@ -340,23 +339,26 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     Processes related resources and reports membership data to Waldur.
     """
 
-    def _get_waldur_resources(self) -> List[Resource]:
-        waldur_resources = self.waldur_rest_client.filter_marketplace_provider_resources(
-            {
-                "offering_uuid": self.offering.uuid,
-                "state": "OK",
-                "field": [
-                    "backend_id",
-                    "uuid",
-                    "name",
-                    "resource_uuid",
-                    "offering_type",
-                    "restrict_member_access",
-                    "downscaled",
-                    "paused",
-                ],
-            }
-        )
+    def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> List[Resource]:
+        filters = {
+            "offering_uuid": self.offering.uuid,
+            "state": "OK",
+            "field": [
+                "backend_id",
+                "uuid",
+                "name",
+                "resource_uuid",
+                "offering_type",
+                "restrict_member_access",
+                "downscaled",
+                "paused",
+            ],
+        }
+
+        if project_uuid is not None:
+            filters["project_uuid"] = project_uuid
+
+        waldur_resources = self.waldur_rest_client.filter_marketplace_provider_resources(filters)
 
         if len(waldur_resources) == 0:
             logger.info("No resources to process")
@@ -399,7 +401,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             }
         )
 
-    def process_user_role_changed(self, user_uuid: str, granted: bool) -> None:
+    def process_user_role_changed(self, user_uuid: str, project_uuid: str, granted: bool) -> None:
         """Process event of user role changing."""
         offering_users = self._get_user_offering_users(user_uuid)
         if len(offering_users) == 0:
@@ -417,7 +419,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.warning("Username is blank, skipping processing")
             return
 
-        resources = self._get_waldur_resources()
+        resources = self._get_waldur_resources(project_uuid=project_uuid)
         resource_report = self.resource_backend.pull_resources(resources)
 
         for resource in resource_report.values():
@@ -548,7 +550,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 e,
             )
             error_traceback = traceback.format_exc()
-            common_utils.mark_waldur_resources_as_erred(
+            utils.mark_waldur_resources_as_erred(
                 self.waldur_rest_client,
                 [backend_resource],
                 error_details={
@@ -583,7 +585,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_resources = self.waldur_rest_client.filter_marketplace_provider_resources(
             {
                 "offering_uuid": self.offering.uuid,
-                "state": ["OK", common_utils.RESOURCE_ERRED_STATE],
+                "state": ["OK", utils.RESOURCE_ERRED_STATE],
                 "field": ["backend_id", "uuid", "name", "offering_type", "state"],
             }
         )
@@ -617,11 +619,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 )
                 for resource_info in waldur_resources
                 if resource_info["backend_id"] not in set(resource_report.keys())
-                and resource_info["state"] != common_utils.RESOURCE_ERRED_STATE
+                and resource_info["state"] != utils.RESOURCE_ERRED_STATE
             ]
             logger.info("Number of missing resources %s", len(missing_resources))
             if len(missing_resources) > 0:
-                common_utils.mark_waldur_resources_as_erred(
+                utils.mark_waldur_resources_as_erred(
                     self.waldur_rest_client,
                     missing_resources,
                     {"error_message": "The resource is missing on the backend"},
@@ -718,7 +720,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
     ) -> None:
         """Processes usage report for the resource."""
         waldur_offering = self.waldur_rest_client._get_offering(self.offering.uuid)
-        month_start = utils.month_start(datetime.datetime.now()).date()
+        month_start = backend_utils.month_start(datetime.datetime.now()).date()
 
         # TODO: this part is not generic yet, rather SLURM-specific
         for resource_backend_id, backend_resource in resource_report.items():
@@ -727,7 +729,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 usages: Dict[str, Dict[str, float]] = backend_resource.usage
 
                 # Set resource state OK if it is erred
-                if backend_resource.state == common_utils.RESOURCE_ERRED_STATE:
+                if backend_resource.state == utils.RESOURCE_ERRED_STATE:
                     self.waldur_rest_client.marketplace_provider_resource_set_as_ok(
                         backend_resource.marketplace_uuid
                     )
@@ -760,7 +762,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     e,
                 )
                 error_traceback = traceback.format_exc()
-                common_utils.mark_waldur_resources_as_erred(
+                utils.mark_waldur_resources_as_erred(
                     self.waldur_rest_client,
                     [backend_resource],
                     error_details={
