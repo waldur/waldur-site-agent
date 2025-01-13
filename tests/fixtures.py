@@ -1,4 +1,4 @@
-from waldur_site_agent import Offering
+from waldur_site_agent.common.structures import Offering
 
 OFFERING = Offering(
     uuid="d629d5e45567425da9cdbdc1af67b32c",

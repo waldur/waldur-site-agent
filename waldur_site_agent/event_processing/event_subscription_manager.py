@@ -7,8 +7,8 @@ import paho.mqtt.client as mqtt
 import urllib3.util
 from waldur_client import WaldurClient
 
-from waldur_site_agent import Offering
 from waldur_site_agent.backends import logger
+from waldur_site_agent.common.structures import Offering
 
 
 class EventSubscriptionManager:
@@ -20,7 +20,7 @@ class EventSubscriptionManager:
         on_connect_callback: Optional[Callable] = None,
         on_message_callback: Optional[Callable] = None,
         user_agent: str = "",
-        waldur_site_agent_mode: str = "",
+        observable_object_type: str = "",
     ) -> None:
         """Constructor."""
         self.waldur_rest_client: WaldurClient = WaldurClient(
@@ -30,25 +30,25 @@ class EventSubscriptionManager:
         self.user_agent = user_agent
         self.on_connect_callback = on_connect_callback
         self.on_message_callback = on_message_callback
-        self.waldur_site_agent_mode = waldur_site_agent_mode
+        self.observable_object_type = observable_object_type
 
-    def create_event_subscription(self, observable_object_type: str) -> Optional[dict]:
+    def create_event_subscription(self) -> Optional[dict]:
         """Create event subscription."""
         try:
             logger.info(
                 "Creating event subscription for offering %s (%s), object type: %s",
                 self.offering.name,
                 self.offering.uuid,
-                observable_object_type,
+                self.observable_object_type,
             )
             event_subscription = self.waldur_rest_client.create_event_subscription(
                 observable_objects=[
                     {
-                        "object_type": observable_object_type,
+                        "object_type": self.observable_object_type,
                     }
                 ],
                 description=f"Event subscription for waldur site agent {self.user_agent},"
-                f"mode: {self.waldur_site_agent_mode}",
+                f"observable object type: {self.observable_object_type}",
             )
         except Exception as e:
             logger.error("Failed to create event subscription: %s", e)
@@ -83,13 +83,12 @@ class EventSubscriptionManager:
 
         mqtt_client.on_connect = self.on_connect_callback
         mqtt_client.on_message = self.on_message_callback
-        topic_postfix = "order" if self.waldur_site_agent_mode == "order_process" else "user_role"
+        topic_postfix = self.observable_object_type
         mqtt_client.user_data_set(
             {
                 "event_subscription": event_subscription,
                 "offering": self.offering,
                 "user_agent": self.user_agent,
-                "waldur_site_agent_mode": self.waldur_site_agent_mode,
                 "topic_postfix": topic_postfix,
             }
         )

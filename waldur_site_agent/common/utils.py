@@ -19,23 +19,22 @@ from waldur_site_agent.backends.moab_backend.backend import MoabBackend
 from waldur_site_agent.backends.slurm_backend import utils as slurm_utils
 from waldur_site_agent.backends.slurm_backend.backend import SlurmBackend
 from waldur_site_agent.backends.structures import Resource
-
-from . import AgentMode, Offering, WaldurAgentConfiguration
+from waldur_site_agent.common import structures
 
 RESOURCE_ERRED_STATE = "Erred"
 
 
-def init_configuration() -> WaldurAgentConfiguration:
+def init_configuration() -> structures.WaldurAgentConfiguration:
     """Loads configuration from CLI and config file to the dataclass."""
-    configuration = WaldurAgentConfiguration()
+    configuration = structures.WaldurAgentConfiguration()
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
         "--mode",
         "-m",
         help="Agent mode, choices: order_process, report "
-        "and membership_sync; default is order_process",
-        choices=["order_process", "report", "membership_sync"],
+        "membership_sync and event_process; default is order_process",
+        choices=["order_process", "report", "membership_sync", "event_process"],
         default="order_process",
     )
 
@@ -60,7 +59,7 @@ def init_configuration() -> WaldurAgentConfiguration:
         config = yaml.safe_load(stream)
         offering_list = config["offerings"]
         waldur_offerings = [
-            Offering(
+            structures.Offering(
                 name=offering_info["name"],
                 api_url=offering_info["waldur_api_url"],
                 api_token=offering_info["waldur_api_token"],
@@ -87,10 +86,12 @@ def init_configuration() -> WaldurAgentConfiguration:
     waldur_site_agent_version = version("waldur-site-agent")
 
     user_agent_dict = {
-        AgentMode.ORDER_PROCESS.value: "waldur-site-agent-order-process/"
+        structures.AgentMode.ORDER_PROCESS.value: "waldur-site-agent-order-process/"
         + waldur_site_agent_version,
-        AgentMode.REPORT.value: "waldur-site-agent-report/" + waldur_site_agent_version,
-        AgentMode.MEMBERSHIP_SYNC.value: "waldur-site-agent-membership-sync/"
+        structures.AgentMode.REPORT.value: "waldur-site-agent-report/" + waldur_site_agent_version,
+        structures.AgentMode.MEMBERSHIP_SYNC.value: "waldur-site-agent-membership-sync/"
+        + waldur_site_agent_version,
+        structures.AgentMode.EVENT_PROCESS.value: "waldur-site-agent-event-process/"
         + waldur_site_agent_version,
     }
 
@@ -101,7 +102,7 @@ def init_configuration() -> WaldurAgentConfiguration:
     return configuration
 
 
-def get_backend_for_offering(offering: Offering) -> BaseBackend:
+def get_backend_for_offering(offering: structures.Offering) -> BaseBackend:
     """Creates a corresponding backend for an offering."""
     resource_backend: BaseBackend = UnknownBackend()
     if offering.backend_type == BackendType.SLURM.value:
@@ -156,7 +157,9 @@ def load_offering_components() -> None:
         )
 
 
-def extend_backend_components(offering: Offering, waldur_offering_components: List[dict]) -> None:
+def extend_backend_components(
+    offering: structures.Offering, waldur_offering_components: List[dict]
+) -> None:
     """Pulls offering component data from Waldur and populates it to the local configuration."""
     logger.info("Loading Waldur components to the local config")
     remote_components = {item["type"]: item for item in waldur_offering_components}
@@ -248,21 +251,27 @@ def diagnostics() -> bool:
     logger.info("Provided settings:")
     format_string = "{:<30} = {:<10}"
 
-    if AgentMode.ORDER_PROCESS.value == configuration.waldur_site_agent_mode:
+    if structures.AgentMode.ORDER_PROCESS.value == configuration.waldur_site_agent_mode:
         logger.info(
             "Agent is running in %s mode - "
             "pulling orders from Waldur and creating resources in backend",
-            AgentMode.ORDER_PROCESS.name,
+            structures.AgentMode.ORDER_PROCESS.name,
         )
-    if AgentMode.REPORT.value == configuration.waldur_site_agent_mode:
+    if structures.AgentMode.REPORT.value == configuration.waldur_site_agent_mode:
         logger.info(
             "Agent is running in %s mode - pushing usage data to Waldur",
-            AgentMode.REPORT.name,
+            structures.AgentMode.REPORT.name,
         )
-    if AgentMode.MEMBERSHIP_SYNC.value == configuration.waldur_site_agent_mode:
+    if structures.AgentMode.MEMBERSHIP_SYNC.value == configuration.waldur_site_agent_mode:
         logger.info(
             "Agent is running in %s mode - pushing membership data to Waldur",
-            AgentMode.MEMBERSHIP_SYNC.name,
+            structures.AgentMode.MEMBERSHIP_SYNC.name,
+        )
+
+    if structures.AgentMode.EVENT_PROCESS.value == configuration.waldur_site_agent_mode:
+        logger.info(
+            "Agent is running in %s mode - processing data from Waldur in event-based approach",
+            structures.AgentMode.EVENT_PROCESS.name,
         )
 
     for offering in configuration.waldur_offerings:

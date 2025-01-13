@@ -6,8 +6,9 @@ from freezegun import freeze_time
 from waldur_client import ComponentUsage
 
 from tests.fixtures import OFFERING
-from waldur_site_agent import MARKETPLACE_SLURM_OFFERING_TYPE, common_utils
-from waldur_site_agent.processors import OfferingReportProcessor
+from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.common import utils
+from waldur_site_agent.common.processors import OfferingReportProcessor
 from waldur_site_agent.backends import BackendType
 from waldur_site_agent.backends.structures import Resource
 
@@ -36,8 +37,8 @@ allocation_slurm = Resource(
 
 
 @freeze_time("2022-01-01")
-@mock.patch("waldur_site_agent.processors.WaldurClient", autospec=True)
-@mock.patch.object(common_utils.SlurmBackend, "_pull_allocation", return_value=allocation_slurm)
+@mock.patch("waldur_site_agent.common.processors.WaldurClient", autospec=True)
+@mock.patch.object(utils.SlurmBackend, "_pull_allocation", return_value=allocation_slurm)
 class ReportingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.waldur_resource = {
