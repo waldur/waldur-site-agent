@@ -100,7 +100,7 @@ class EventSubscriptionManager:
             mqtt_host = urllib3.util.parse_url(self.offering.api_url).host
             mqtt_port = 443
             logger.info(
-                "Starting consumer for %s (%s), mqtt address: mqtt://%s:%s",
+                "Starting consumer for %s (%s), MQTT WS address: ws://%s:%s",
                 self.offering.name,
                 self.offering.uuid,
                 mqtt_host,
