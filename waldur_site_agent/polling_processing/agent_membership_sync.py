@@ -16,7 +16,13 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
         logger.info("Number of offerings to process: %s", len(waldur_offerings))
         for offering in waldur_offerings:
             try:
-                # TODO: Check if mqtt feature enabled
+                if offering.mqtt_enabled:
+                    logger.info(
+                        "Skipping HTTP polling for the offering %s, because it uses mqtt feature",
+                        offering.name,
+                    )
+                    continue
+
                 processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
                 processor.process_offering()
             except Exception as e:

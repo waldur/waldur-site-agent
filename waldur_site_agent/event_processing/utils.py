@@ -51,11 +51,10 @@ def setup_offering_subscriptions(
     }
 
     event_subscriptions = []
-    # TODO: add "resource" to object types
-    for object_type in ["order", "user_role"]:
-        on_message_hander = object_type_to_handler[object_type]
+    for object_type in ["order", "user_role", "resource"]:
+        on_message_handler = object_type_to_handler[object_type]
         event_subscription_manager = EventSubscriptionManager(
-            waldur_offering, on_connect, on_message_hander, waldur_user_agent, object_type
+            waldur_offering, on_connect, on_message_handler, waldur_user_agent, object_type
         )
         event_subscription = event_subscription_manager.create_event_subscription()
         if event_subscription is None:
@@ -212,7 +211,16 @@ def on_user_role_message(client: mqtt.Client, userdata: Dict, msg: mqtt.MQTTMess
 
 def on_resource_message(client: mqtt.Client, userdata: Dict, msg: mqtt.MQTTMessage) -> None:
     """Resource update handler for MQTT message event."""
-    del client, userdata, msg
+    del client
+    message_text = msg.payload.decode("utf-8")
+    message = json.loads(message_text)
+    logger.info("Received message: %s on topic %s", message, msg.topic)
+    offering = userdata["offering"]
+    user_agent = userdata["user_agent"]
+    resource_uuid = message["resource_uuid"]
+
+    processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+    processor.process_resource_by_uuid(resource_uuid)
 
 
 def run_initial_offering_processing(

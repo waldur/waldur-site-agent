@@ -6,7 +6,7 @@ import abc
 import datetime
 import traceback
 from time import sleep
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from waldur_client import (
     ComponentUsage,
@@ -365,18 +365,32 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             return []
 
         return [
-            Resource(
-                name=resource_data["name"],
-                backend_id=resource_data["backend_id"],
-                marketplace_uuid=resource_data["uuid"],
-                backend_type=self.offering.backend_type,
-                marketplace_scope_uuid=resource_data["resource_uuid"],
-                restrict_member_access=resource_data.get("restrict_member_access", False),
-                downscaled=resource_data.get("downscaled", False),
-                paused=resource_data.get("paused", False),
-            )
-            for resource_data in waldur_resources
+            self._collect_waldur_resource_info(resource_data) for resource_data in waldur_resources
         ]
+
+    def _collect_waldur_resource_info(self, resource_data: dict) -> Resource:
+        return Resource(
+            name=resource_data["name"],
+            backend_id=resource_data["backend_id"],
+            marketplace_uuid=resource_data["uuid"],
+            backend_type=self.offering.backend_type,
+            marketplace_scope_uuid=resource_data["resource_uuid"],
+            restrict_member_access=resource_data.get("restrict_member_access", False),
+            downscaled=resource_data.get("downscaled", False),
+            paused=resource_data.get("paused", False),
+        )
+
+    def process_resource_by_uuid(self, resource_uuid: str) -> None:
+        """Processes resource status and membership data using resource UUID."""
+        logger.info("Processing resource state and membership data, uuid: %s", resource_uuid)
+        logger.info("Fetching resource from Waldur")
+        waldur_resource = self.waldur_rest_client.get_marketplace_provider_resource(resource_uuid)
+        resource_info = self._collect_waldur_resource_info(waldur_resource)
+        logger.info(
+            "Pulling resource %s (%s) from backend", resource_info.name, resource_info.backend_id
+        )
+        resource_report = self.resource_backend.pull_resources([resource_info])
+        self._process_resources(resource_report)
 
     def process_offering(self) -> None:
         """Processes offering and reports resources usage to Waldur."""
@@ -387,7 +401,6 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         )
 
         waldur_resources_info = self._get_waldur_resources()
-
         resource_report = self.resource_backend.pull_resources(waldur_resources_info)
 
         self._process_resources(resource_report)
@@ -439,13 +452,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     exc,
                 )
 
-    def _sync_slurm_resource_users(
-        self,
-        resource: Resource,
-    ) -> None:
-        """Syncs users for the resource between SLURM cluster and Waldur."""
-        # This method is currently implemented for SLURM backend only
-        logger.info("Syncing user list for resource %s", resource.name)
+    def _get_resource_usernames(self, resource: Resource) -> Tuple[Set[str], Set[str], Set[str]]:
         usernames = resource.users
         local_usernames = set(usernames)
         logger.info("The usernames from the backend: %s", ", ".join(local_usernames))
@@ -453,7 +460,6 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         # Offering users sync
         # The service fetches offering users from Waldur and pushes them to the cluster
         # If an offering user is not in the team anymore, it will be removed from the backend
-        logger.info("Synching offering users")
         team = self.waldur_rest_client.marketplace_provider_resource_get_team(
             resource.marketplace_uuid
         )
@@ -466,106 +472,119 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             }
         )
 
-        if resource.restrict_member_access:
-            # The idea is to remove the existing associations in both sides
-            # and avoid creation of new associations
-            logger.info("Resource restricted for members, removing all the existing associations")
-            existing_offering_user_usernames: Set[str] = {
-                offering_user["username"]
-                for offering_user in offering_users
-                if offering_user["username"] in local_usernames
-                and offering_user["user_uuid"] in team_user_uuids
-            }
+        existing_usernames: Set[str] = {
+            offering_user["username"]
+            for offering_user in offering_users
+            if offering_user["username"] in local_usernames
+            and offering_user["user_uuid"] in team_user_uuids
+        }
 
-            self.resource_backend.remove_users_from_account(
-                resource.backend_id, existing_offering_user_usernames
-            )
-            return
-
-        new_offering_user_usernames: Set[str] = {
+        new_usernames: Set[str] = {
             offering_user["username"]
             for offering_user in offering_users
             if offering_user["username"] not in local_usernames
             and offering_user["user_uuid"] in team_user_uuids
         }
 
-        stale_offering_user_usernames: Set[str] = {
+        stale_usernames: Set[str] = {
             offering_user["username"]
             for offering_user in offering_users
             if offering_user["username"] in local_usernames
             and offering_user["user_uuid"] not in team_user_uuids
         }
 
+        return existing_usernames, stale_usernames, new_usernames
+
+    def _sync_resource_users(
+        self,
+        resource: Resource,
+    ) -> None:
+        """Syncs users for the resource between Waldur and a site."""
+        logger.info("Syncing user list for resource %s", resource.name)
+        existing_usernames, stale_usernames, new_usernames = self._get_resource_usernames(resource)
+
+        if resource.restrict_member_access:
+            # The idea is to remove the existing associations in both sides
+            # and avoid creation of new associations
+            logger.info(
+                "Resource is restricted for members, removing all the existing associations"
+            )
+
+            self.resource_backend.remove_users_from_account(resource.backend_id, existing_usernames)
+            return
+
         self.resource_backend.add_users_to_resource(
             resource.backend_id,
-            new_offering_user_usernames,
+            new_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
 
         self.resource_backend.remove_users_from_account(
             resource.backend_id,
-            stale_offering_user_usernames,
+            stale_usernames,
         )
 
-    def _sync_resource(self, resource: Resource) -> None:
+    def _sync_resource_status(self, resource: Resource) -> None:
+        """Syncs resource status between Waldur and the backend."""
+        logger.info(
+            "Syncing resource status for resource %s (%s)", resource.name, resource.backend_id
+        )
         if resource.paused:
-            logger.info("The resource pausing is requested, processing it")
+            logger.info("Resource pausing is requested, processing it")
             pausing_done = self.resource_backend.pause_resource(resource.backend_id)
             if pausing_done:
-                logger.info("The pausing is successfully completed")
+                logger.info("Pausing is successfully completed")
             else:
-                logger.warning("The pausing is not done")
+                logger.warning("Pausing is not done")
         elif resource.downscaled:
-            logger.info("The resource downscaling is requested, processing it")
+            logger.info("Resource downscaling is requested, processing it")
             downscaling_done = self.resource_backend.downscale_resource(resource.backend_id)
             if downscaling_done:
-                logger.info("The downscaling is successfully completed")
+                logger.info("Downscaling is successfully completed")
             else:
-                logger.warning("The downscaling is not done")
+                logger.warning("Downscaling is not done")
         else:
             logger.info(
-                "The resource is not downscaled or paused, " "resetting the QoS to the default one"
+                "The resource is not downscaled or paused, resetting the QoS to the default one"
             )
             restoring_done = self.resource_backend.restore_resource(resource.backend_id)
             if restoring_done:
-                logger.info("The restoring is successfully completed")
+                logger.info("Restoring is successfully completed")
             else:
-                logger.info("The restoring is skipped")
+                logger.info("Restoring is skipped")
 
         resource_metadata = self.resource_backend.get_resource_metadata(resource.backend_id)
         self.waldur_rest_client.marketplace_provider_resource_set_backend_metadata(
             resource.marketplace_uuid, resource_metadata
         )
 
-    def _process_resource(self, backend_resource: Resource) -> None:
-        try:
-            logger.info("Processing %s", backend_resource.backend_id)
-            if self.offering.backend_type == "slurm":
-                self._sync_slurm_resource_users(backend_resource)
-            self._sync_resource(backend_resource)
-        except Exception as e:
-            logger.exception(
-                "Error while processing allocation %s: %s",
-                backend_resource.backend_id,
-                e,
-            )
-            error_traceback = traceback.format_exc()
-            utils.mark_waldur_resources_as_erred(
-                self.waldur_rest_client,
-                [backend_resource],
-                error_details={
-                    "error_message": str(e),
-                    "error_traceback": error_traceback,
-                },
-            )
-
     def _process_resources(
         self,
         resource_report: Dict[str, Resource],
     ) -> None:
-        """Sync membership data for the resource."""
+        """Sync status and membership data for the resource."""
         for backend_resource in resource_report.values():
-            self._process_resource(backend_resource)
+            try:
+                logger.info("Processing resource %s membership", backend_resource.backend_id)
+                self._sync_resource_users(backend_resource)
+
+                logger.info("Processing resource %s status", backend_resource.backend_id)
+                self._sync_resource_status(backend_resource)
+            except Exception as e:
+                logger.exception(
+                    "Error while processing allocation %s: %s",
+                    backend_resource.backend_id,
+                    e,
+                )
+                error_traceback = traceback.format_exc()
+                utils.mark_waldur_resources_as_erred(
+                    self.waldur_rest_client,
+                    [backend_resource],
+                    error_details={
+                        "error_message": str(e),
+                        "error_traceback": error_traceback,
+                    },
+                )
 
 
 class OfferingReportProcessor(OfferingBaseProcessor):
