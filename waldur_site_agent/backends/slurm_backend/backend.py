@@ -223,6 +223,11 @@ class SlurmBackend(backend.BaseBackend):
         self.client.cancel_active_user_jobs(account, user)
 
     def _pre_delete_user_actions(self, account: str, username: str) -> None:
+        if not self.client.check_user_exists(username):
+            logger.info(
+                'The user "%s" does not exist in the cluster, skipping job cancellation', username
+            )
+            return
         job_ids = self.list_active_user_jobs(account, username)
         if len(job_ids) > 0:
             logger.info(
