@@ -7,6 +7,9 @@ from typing import Dict, List, Optional
 
 from waldur_site_agent.backends import base
 from waldur_site_agent.backends import utils as backend_utils
+from waldur_site_agent.backends.exceptions import (
+    BackendError,
+)
 from waldur_site_agent.backends.structures import Account, Association
 
 from .parser import SlurmAssociationLine, SlurmReportLine
@@ -231,6 +234,18 @@ class SlurmClient(base.BaseClient):
         output = self._execute_command(args, command_name="sacct", immediate=False)
         return [line.split("|")[0] for line in output.splitlines() if "|" in line]
 
+    def check_user_exists(self, username: str) -> bool:
+        """Check if the user exists in the system."""
+        args = ["-u", username]
+        try:
+            output = self._execute_command(
+                args, command_name="id", immediate=False, parsable=False, silent=True
+            )
+        except BackendError as e:
+            if "no such user" in str(e):
+                return False
+        return output.strip().isdigit()
+
     def _parse_account(self, line: str) -> Account:
         parts = line.split("|")
         return Account(
@@ -256,6 +271,7 @@ class SlurmClient(base.BaseClient):
         command_name: str = "sacctmgr",
         immediate: bool = True,
         parsable: bool = True,
+        silent: bool = False,
     ) -> str:
         """Constructs and executes a command with the given parameters."""
         account_command = [command_name]
@@ -264,4 +280,4 @@ class SlurmClient(base.BaseClient):
         if immediate:
             account_command.append("--immediate")
         account_command.extend(command)
-        return self.execute_command(account_command)
+        return self.execute_command(account_command, silent=silent)

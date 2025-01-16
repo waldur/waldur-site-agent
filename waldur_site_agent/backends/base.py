@@ -14,17 +14,16 @@ from waldur_site_agent.backends.structures import Account, Association
 class BaseClient:
     """Generic cli-client for a backend communication."""
 
-    def execute_command(self, command: List[str]) -> str:
+    def execute_command(self, command: List[str], silent: bool = False) -> str:
         """Execute command on backend."""
         try:
             logger.debug("Executing command: %s", " ".join(command))
             return subprocess.check_output(command, stderr=subprocess.STDOUT, encoding="utf-8")
         except subprocess.CalledProcessError as e:
-            logger.exception('Failed to execute command "%s".', command)
+            if not silent:
+                logger.exception('Failed to execute command "%s".', command)
             stdout = e.output or ""
             lines = stdout.splitlines()
-            if len(lines) > 0 and lines[0].startswith("Warning: Permanently added"):
-                lines = lines[1:]
             stdout = "\n".join(lines)
             raise BackendError(stdout) from e
 

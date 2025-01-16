@@ -16,7 +16,7 @@ from waldur_site_agent.backends import (
 )
 from waldur_site_agent.backends.backend import BaseBackend, UnknownBackend
 from waldur_site_agent.backends.moab_backend.backend import MoabBackend
-from waldur_site_agent.backends.slurm_backend import utils as slurm_utils
+from waldur_site_agent.backends.slurm_backend import public_utils as slurm_utils
 from waldur_site_agent.backends.slurm_backend.backend import SlurmBackend
 from waldur_site_agent.backends.structures import Resource
 from waldur_site_agent.common import structures

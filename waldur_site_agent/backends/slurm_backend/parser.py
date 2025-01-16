@@ -1,10 +1,32 @@
 """Parser module for SLURM backend."""
 
 import datetime
+import re
 from functools import cached_property
 from typing import Dict
 
-from . import utils
+UNIT_PATTERN = re.compile(r"(\d+)([KMGTP]?)")
+
+UNITS: Dict[str, int] = {
+    "K": 2**10,
+    "M": 2**20,
+    "G": 2**30,
+    "T": 2**40,
+}
+
+
+def parse_int(value: str) -> int:
+    """Converts human-readable integers to machine-readable ones.
+
+    Example: 5K to 5000.
+    """
+    match = re.match(UNIT_PATTERN, value)
+    if not match:
+        return 0
+    value_ = int(match.group(1))
+    unit = match.group(2)
+    factor = UNITS[unit] if unit else 1
+    return factor * value_
 
 
 def parse_duration(value: str) -> float:
@@ -82,7 +104,7 @@ class SlurmReportLine:
         """Parses integer field."""
         if field not in self._resources:
             return 0
-        return utils.parse_int(self._resources[field])
+        return parse_int(self._resources[field])
 
     @cached_property
     def tres_usage(self) -> Dict:
@@ -130,8 +152,8 @@ class SlurmAssociationLine(SlurmReportLine):
             if tres not in slurm_tres_set:
                 continue
             if tres == "mem":
-                limits[tres] = utils.parse_int(limit) // 2**20  # Convert from Bytes to MB
+                limits[tres] = parse_int(limit) // 2**20  # Convert from Bytes to MB
             else:
-                limits[tres] = utils.parse_int(limit)
+                limits[tres] = parse_int(limit)
 
         return limits
