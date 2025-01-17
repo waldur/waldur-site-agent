@@ -5,7 +5,7 @@ The main purpose of the agent is data syncronization between Waldur
 and a service backend (for example SLURM or MOAB cluster).
 The agent uses order information from Waldur
 to manage accounts in the site (backend) and accounting info
-from the site  to update usage data in Waldur.
+from the site to update usage data in Waldur.
 For now, the agent supports only SLURM and MOAB clusters as a service backend.
 
 ## Architecture
@@ -22,7 +22,7 @@ It consists of 4 sub-applications:
 - `agent-membership-sync`, which syncronizes membership info between Waldur
   and the backend (e.g. adds users to a SLURM allocation);
 - `agent-event-process`, which uses event-based approach to do the same as
-  `argent-order-process` and `agent-membership-sync`; requires an MQTT-system
+  `agent-order-process` and `agent-membership-sync`; requires an MQTT-system
   as an event delivery queue between Waldur and the agent.
 
 ### Integration with Waldur
