@@ -7,7 +7,7 @@ import signal
 import sys
 import types
 from contextlib import contextmanager
-from typing import Dict, Generator, List, Tuple, Union
+from typing import Generator, List, Union
 
 import paho.mqtt.client as mqtt
 
@@ -15,11 +15,19 @@ from waldur_site_agent.backends import logger
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
 from waldur_site_agent.event_processing.event_subscription_manager import EventSubscriptionManager
+from waldur_site_agent.event_processing.structures import (
+    MqttConsumer,
+    MqttConsumersMap,
+    OrderMessage,
+    ResourceMessage,
+    UserData,
+    UserRoleMessage,
+)
 
 
 def on_connect(
     client: mqtt.Client,
-    userdata: Dict,
+    userdata: UserData,
     flags: mqtt.ConnectFlags,
     reason_code: mqtt.ReasonCode,
     properties: Union[mqtt.Properties, None],
@@ -42,7 +50,7 @@ def on_connect(
 
 def setup_offering_subscriptions(
     waldur_offering: common_structures.Offering, waldur_user_agent: str
-) -> List:
+) -> List[MqttConsumer]:
     """Set up MQTT subscriptions for the specified offering."""
     object_type_to_handler = {
         "order": on_order_message,
@@ -50,7 +58,7 @@ def setup_offering_subscriptions(
         "resource": on_resource_message,
     }
 
-    event_subscriptions = []
+    event_subscriptions: List[MqttConsumer] = []
     for object_type in ["order", "user_role", "resource"]:
         on_message_handler = object_type_to_handler[object_type]
         event_subscription_manager = EventSubscriptionManager(
@@ -84,9 +92,9 @@ def setup_offering_subscriptions(
 def start_mqtt_consumers(
     waldur_offerings: List[common_structures.Offering],
     waldur_user_agent: str,
-) -> Dict[Tuple[str, str], List[Tuple[mqtt.Client, dict, common_structures.Offering]]]:
+) -> MqttConsumersMap:
     """Start multiple MQTT consumers."""
-    mqtt_consumers_map = {}
+    mqtt_consumers_map: MqttConsumersMap = {}
     for waldur_offering in waldur_offerings:
         if not waldur_offering.mqtt_enabled:
             logger.info("MQTT feature is disabled for the offering")
@@ -100,9 +108,7 @@ def start_mqtt_consumers(
 
 
 def stop_mqtt_consumers(
-    mqtt_consumers_map: Dict[
-        Tuple[str, str], List[Tuple[mqtt.Client, dict, common_structures.Offering]]
-    ],
+    mqtt_consumers_map: MqttConsumersMap,
 ) -> None:
     """Stop mqtt consumers and delete event subscriptions."""
     for (offering_name, offering_uuid), subscriptions in mqtt_consumers_map.items():
@@ -131,9 +137,7 @@ def stop_mqtt_consumers(
 
 @contextmanager
 def signal_handling(
-    mqtt_consumers_map: Dict[
-        Tuple[str, str], List[Tuple[mqtt.Client, dict, common_structures.Offering]]
-    ],
+    mqtt_consumers_map: MqttConsumersMap,
 ) -> Generator[None, None, None]:
     """Context manager for handling signals gracefully."""
 
@@ -165,11 +169,11 @@ def signal_handling(
             signal.signal(sig, handler)
 
 
-def on_order_message(client: mqtt.Client, userdata: Dict, msg: mqtt.MQTTMessage) -> None:
+def on_order_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
     """Order-processing handler for MQTT message event."""
     del client
     message_text = msg.payload.decode("utf-8")
-    message = json.loads(message_text)
+    message: OrderMessage = json.loads(message_text)
     logger.info("Received message: %s on topic %s", message, msg.topic)
     offering = userdata["offering"]
     user_agent = userdata["user_agent"]
@@ -183,11 +187,11 @@ def on_order_message(client: mqtt.Client, userdata: Dict, msg: mqtt.MQTTMessage)
     processor.process_order(order)
 
 
-def on_user_role_message(client: mqtt.Client, userdata: Dict, msg: mqtt.MQTTMessage) -> None:
+def on_user_role_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
     """Membership sync handler for MQTT message event."""
     del client
     message_text = msg.payload.decode("utf-8")
-    message = json.loads(message_text)
+    message: UserRoleMessage = json.loads(message_text)
     logger.info("Received message: %s on topic %s", message, msg.topic)
     offering = userdata["offering"]
     user_agent = userdata["user_agent"]
@@ -209,11 +213,11 @@ def on_user_role_message(client: mqtt.Client, userdata: Dict, msg: mqtt.MQTTMess
     processor.process_user_role_changed(user_uuid, project_uuid, role_granted)
 
 
-def on_resource_message(client: mqtt.Client, userdata: Dict, msg: mqtt.MQTTMessage) -> None:
+def on_resource_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
     """Resource update handler for MQTT message event."""
     del client
     message_text = msg.payload.decode("utf-8")
-    message = json.loads(message_text)
+    message: ResourceMessage = json.loads(message_text)
     logger.info("Received message: %s on topic %s", message, msg.topic)
     offering = userdata["offering"]
     user_agent = userdata["user_agent"]
