@@ -365,7 +365,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             return []
 
         return [
-            self._collect_waldur_resource_info(resource_data) for resource_data in waldur_resources
+            self._collect_waldur_resource_info(resource_data)
+            for resource_data in waldur_resources
+            if resource_data["backend_id"]
         ]
 
     def _collect_waldur_resource_info(self, resource_data: dict) -> Resource:
@@ -624,6 +626,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 state=resource_data["state"],
             )
             for resource_data in waldur_resources
+            if resource_data["backend_id"]
         ]
 
         resource_report = self.resource_backend.pull_resources(waldur_resources_info)
