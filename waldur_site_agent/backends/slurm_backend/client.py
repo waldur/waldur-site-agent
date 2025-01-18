@@ -144,7 +144,7 @@ class SlurmClient(base.BaseClient):
             ]
         )
 
-    def get_usage_report(self, accounts: List[str]) -> List:
+    def get_usage_report(self, accounts: List[str]) -> List[SlurmReportLine]:
         """Generates per-user usage report for the accounts."""
         month_start, month_end = backend_utils.format_current_month()
 

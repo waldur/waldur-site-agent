@@ -9,6 +9,7 @@ from waldur_client import WaldurClient
 
 from waldur_site_agent.backends import logger
 from waldur_site_agent.common.structures import Offering
+from waldur_site_agent.event_processing.structures import EventSubscription, UserData
 
 
 class EventSubscriptionManager:
@@ -32,7 +33,7 @@ class EventSubscriptionManager:
         self.on_message_callback = on_message_callback
         self.observable_object_type = observable_object_type
 
-    def create_event_subscription(self) -> Optional[dict]:
+    def create_event_subscription(self) -> Optional[EventSubscription]:
         """Create event subscription."""
         try:
             logger.info(
@@ -57,7 +58,7 @@ class EventSubscriptionManager:
             logger.info("Event subscription created: %s", event_subscription["uuid"])
             return event_subscription
 
-    def _setup_mqtt_consumer(self, event_subscription: dict) -> mqtt.Client:
+    def _setup_mqtt_consumer(self, event_subscription: EventSubscription) -> mqtt.Client:
         logger.info(
             "Setting up MQTT consumer for event subscription %s",
             event_subscription["uuid"],
@@ -84,17 +85,16 @@ class EventSubscriptionManager:
         mqtt_client.on_connect = self.on_connect_callback
         mqtt_client.on_message = self.on_message_callback
         topic_postfix = self.observable_object_type
-        mqtt_client.user_data_set(
-            {
-                "event_subscription": event_subscription,
-                "offering": self.offering,
-                "user_agent": self.user_agent,
-                "topic_postfix": topic_postfix,
-            }
-        )
+        userdata: UserData = {
+            "event_subscription": event_subscription,
+            "offering": self.offering,
+            "user_agent": self.user_agent,
+            "topic_postfix": topic_postfix,
+        }
+        mqtt_client.user_data_set(userdata)
         return mqtt_client
 
-    def start_mqtt_consumer(self, event_subscription: dict) -> Optional[mqtt.Client]:
+    def start_mqtt_consumer(self, event_subscription: EventSubscription) -> Optional[mqtt.Client]:
         """Start MQTT consumer."""
         try:
             mqtt_host = urllib3.util.parse_url(self.offering.api_url).host
@@ -139,7 +139,7 @@ class EventSubscriptionManager:
         mqttc.loop_stop()
         mqttc.disconnect()
 
-    def delete_event_subscription(self, event_subscription: dict) -> None:
+    def delete_event_subscription(self, event_subscription: EventSubscription) -> None:
         """Delete the event subscription."""
         try:
             logger.info("Deleting event subscription %s", event_subscription["uuid"])
