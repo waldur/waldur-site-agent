@@ -110,7 +110,11 @@ class EventSubscriptionManager:
             mqtt_client = self._setup_mqtt_consumer(event_subscription)
 
             try:
-                logger.info("Connecting the consumer to the mqtt server")
+                topic_name = (
+                    f"subscription/{event_subscription['uuid']}/offering/"
+                    f"{self.offering.uuid}/{self.observable_object_type}"
+                )
+                logger.info("Connecting the consumer to the mqtt server, topic: %s", topic_name)
                 mqtt_client.connect(mqtt_host, mqtt_port)
             except (ConnectionRefusedError, TimeoutError) as e:
                 logger.error("Failed to connect to MQTT broker: %s", e)
