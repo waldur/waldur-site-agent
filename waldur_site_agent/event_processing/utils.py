@@ -34,18 +34,18 @@ def on_connect(
 ) -> None:
     """Order-processing handler for MQTT connection event."""
     del flags, properties
-    logger.info("Consumer connected with result code %s", reason_code)
+    logger.debug("Consumer connected with result code %s", reason_code)
     offering_uuid = userdata["offering"].uuid
-    if not reason_code.is_failure:
+    if reason_code.is_failure:
+        logger.error("Consumer connection error (%s): %s", offering_uuid, reason_code.getName())
+    else:
         event_subscription_uuid = userdata["event_subscription"]["uuid"]
         topic_postfix = userdata["topic_postfix"]
         topic_name = (
             f"subscription/{event_subscription_uuid}/offering/{offering_uuid}/{topic_postfix}"
         )
-        logger.info("Subscribing to the topic %s", topic_name)
+        logger.debug("Subscribing to the topic %s", topic_name)
         client.subscribe(topic_name)
-    else:
-        logger.error("Consumer connection error (%s): %s", offering_uuid, reason_code.getName())
 
 
 def setup_offering_subscriptions(

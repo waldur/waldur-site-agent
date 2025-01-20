@@ -1,6 +1,7 @@
 """Entrypoint for event processing loop."""
 
 import sys
+import time
 
 from waldur_site_agent.backends import logger
 from waldur_site_agent.common import structures as common_structures
@@ -21,7 +22,7 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
 
         with utils.signal_handling(mqtt_consumers_map):
             while True:
-                pass
+                time.sleep(60 * 60)
     except Exception as e:
         logger.error("Error in main process: %s", e)
         if "mqtt_consumers_map" in locals():
