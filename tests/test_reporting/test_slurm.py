@@ -96,8 +96,8 @@ class ReportingTest(unittest.TestCase):
             }
         )
         waldur_client.create_component_usages.assert_called_once_with(
-            self.plan_period_uuid,
-            [
+            resource_uuid="waldur-resource-uuid",
+            usages=[
                 ComponentUsage(type="cpu", amount=10),
                 ComponentUsage(type="mem", amount=30),
             ],
