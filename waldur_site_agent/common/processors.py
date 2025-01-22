@@ -673,7 +673,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             )
             return
 
-        plan_period = plan_periods[0]
         component_types = [component["type"] for component in waldur_components]
         missing_components = set(total_usage) - set(component_types)
 
@@ -688,7 +687,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             for component, amount in total_usage.items()
             if component in component_types
         ]
-        self.waldur_rest_client.create_component_usages(plan_period["uuid"], usage_objects)
+        self.waldur_rest_client.create_component_usages(
+            resource_uuid=backend_resource.marketplace_uuid, usages=usage_objects
+        )
 
     def _submit_user_usage_for_resource(
         self,
