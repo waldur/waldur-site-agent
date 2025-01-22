@@ -662,16 +662,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         """Reports total usage for a backend resource to Waldur."""
         logger.info("Setting usages: %s", total_usage)
         resource_uuid = backend_resource.marketplace_uuid
-        plan_periods = self.waldur_rest_client.marketplace_provider_resource_get_plan_periods(
-            resource_uuid
-        )
-
-        if len(plan_periods) == 0:
-            logger.warning(
-                "A corresponding ResourcePlanPeriod for resource %s was not found",
-                backend_resource.name,
-            )
-            return
 
         component_types = [component["type"] for component in waldur_components]
         missing_components = set(total_usage) - set(component_types)
@@ -688,7 +678,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             if component in component_types
         ]
         self.waldur_rest_client.create_component_usages(
-            resource_uuid=backend_resource.marketplace_uuid, usages=usage_objects
+            resource_uuid=resource_uuid, usages=usage_objects
         )
 
     def _submit_user_usage_for_resource(
