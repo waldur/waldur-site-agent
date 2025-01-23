@@ -10,7 +10,6 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from waldur_client import (
     ComponentUsage,
-    SlurmAllocationState,
     WaldurClient,
     is_uuid,
 )
@@ -148,20 +147,6 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             logger.error("Unexpected resource UUID format, skipping the order")
             return None
 
-        # TODO: figure out how to generalize it
-        if (
-            waldur_resource["state"] != "Creating"
-            and waldur_resource["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE
-        ):
-            logger.info(
-                "Setting SLURM allocation state (%s) to CREATING (current state is %s)",
-                waldur_resource["uuid"],
-                waldur_resource["state"],
-            )
-            self.waldur_rest_client.set_slurm_allocation_state(
-                resource_uuid, SlurmAllocationState.CREATING
-            )
-
         backend_resource = self.resource_backend.create_resource(waldur_resource)
         if backend_resource.backend_id == "":
             msg = f"Unable to create a backend resource for offering {self.offering}"
@@ -171,17 +156,6 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         self.waldur_rest_client.marketplace_provider_resource_set_backend_id(
             resource_uuid, backend_resource.backend_id
         )
-
-        if waldur_resource["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
-            logger.info("Setting SLURM allocation backend ID")
-            self.waldur_rest_client.set_slurm_allocation_backend_id(
-                waldur_resource["uuid"], backend_resource.backend_id
-            )
-
-            logger.info("Updating allocation limits in Waldur")
-            self.waldur_rest_client.set_slurm_allocation_limits(
-                waldur_resource["uuid"], backend_resource.limits
-            )
 
         return backend_resource
 
@@ -263,15 +237,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             msg = "Unable to create a resource"
             raise BackendError(msg)
 
-        if order["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
-            logger.info("Updating Waldur resource scope state")
-            self.waldur_rest_client.set_slurm_allocation_state(
-                waldur_resource["uuid"], SlurmAllocationState.OK
-            )
-
-            self._add_users_to_resource(
-                backend_resource,
-            )
+        self._add_users_to_resource(
+            backend_resource,
+        )
 
         return True
 
@@ -279,11 +247,6 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         logger.info("Updating limits for %s", order["resource_name"])
         resource_uuid = order["marketplace_resource_uuid"]
         waldur_resource = self.waldur_rest_client.get_marketplace_provider_resource(resource_uuid)
-
-        if order["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
-            self.waldur_rest_client.set_slurm_allocation_state(
-                resource_uuid, SlurmAllocationState.UPDATING
-            )
 
         resource_backend = utils.get_backend_for_offering(self.offering)
         if resource_backend is None:
@@ -301,12 +264,6 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         if new_limits:
             resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits)
-
-        if order["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
-            logger.info("Updating Waldur resource scope state")
-            self.waldur_rest_client.set_slurm_allocation_state(
-                resource_uuid, SlurmAllocationState.OK
-            )
 
         logger.info(
             "The limits for %s were updated successfully from %s to %s",
@@ -352,6 +309,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 "restrict_member_access",
                 "downscaled",
                 "paused",
+                "state",
             ],
         }
 
@@ -380,6 +338,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             restrict_member_access=resource_data.get("restrict_member_access", False),
             downscaled=resource_data.get("downscaled", False),
             paused=resource_data.get("paused", False),
+            state=resource_data["state"],
         )
 
     def process_resource_by_uuid(self, resource_uuid: str) -> None:

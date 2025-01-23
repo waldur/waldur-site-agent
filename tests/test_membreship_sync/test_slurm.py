@@ -50,6 +50,7 @@ class MembershipSyncTest(unittest.TestCase):
             "resource_uuid": uuid.uuid4().hex,
             "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
             "downscaled": False,
+            "state": "OK",
         }
         self.waldur_user_uuid = uuid.uuid4()
         self.plan_period_uuid = uuid.uuid4().hex
@@ -97,6 +98,7 @@ class MembershipSyncTest(unittest.TestCase):
                     "restrict_member_access",
                     "downscaled",
                     "paused",
+                    "state",
                 ],
             }
         )
@@ -149,6 +151,7 @@ class MembershipSyncTest(unittest.TestCase):
                     "restrict_member_access",
                     "downscaled",
                     "paused",
+                    "state",
                 ],
             }
         )
