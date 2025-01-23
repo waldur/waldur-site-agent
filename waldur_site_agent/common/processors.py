@@ -206,25 +206,6 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             order = self.waldur_rest_client.get_order(order["uuid"])
             attempts += 1
 
-        if order["offering_type"] == MARKETPLACE_SLURM_OFFERING_TYPE:
-            # TODO: drop this cycle
-            # after removal of waldur_slurm.Allocation model from Mastermind
-            attempts = 0
-            while order["resource_uuid"] is None:
-                if attempts > max_attempts:
-                    logger.error("Order processing timed out")
-                    return False
-
-                if order["state"] != "executing":
-                    logger.error("order has unexpected state %s", order["state"])
-                    return False
-
-                logger.info("Waiting for Waldur allocation creation...")
-                sleep(5)
-
-                order = self.waldur_rest_client.get_order(order["uuid"])
-                attempts += 1
-
         waldur_resource = self.waldur_rest_client.get_marketplace_provider_resource(
             order["marketplace_resource_uuid"]
         )
