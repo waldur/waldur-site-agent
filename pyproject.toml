@@ -16,7 +16,7 @@ packages = [{ include = "waldur_site_agent" }]
 
 [tool.poetry.dependencies]
 python = "^3.9"
-python-waldur-client = "^0.5.7"
+python-waldur-client = "^0.5.8"
 requests = "2.32.3"
 pyyaml = "6.0.1"
 sentry-sdk = "2.3.1"
