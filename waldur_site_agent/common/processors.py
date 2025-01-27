@@ -512,6 +512,14 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
                 logger.info("Processing resource %s status", backend_resource.backend_id)
                 self._sync_resource_status(backend_resource)
+
+                self.waldur_rest_client.marketplace_provider_resource_refresh_last_sync(
+                    backend_resource.marketplace_uuid
+                )
+                if backend_resource.state == utils.RESOURCE_ERRED_STATE:
+                    self.waldur_rest_client.marketplace_provider_resource_set_as_ok(
+                        backend_resource.marketplace_uuid
+                    )
             except Exception as e:
                 logger.exception(
                     "Error while processing allocation %s: %s",
