@@ -280,7 +280,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> List[Resource]:
         filters = {
             "offering_uuid": self.offering.uuid,
-            "state": "OK",
+            "state": ["OK", utils.RESOURCE_ERRED_STATE],
             "field": [
                 "backend_id",
                 "uuid",
@@ -291,6 +291,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 "downscaled",
                 "paused",
                 "state",
+                "limits",
             ],
         }
 
@@ -320,6 +321,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             downscaled=resource_data.get("downscaled", False),
             paused=resource_data.get("paused", False),
             state=resource_data["state"],
+            limits=resource_data.get("limits", {}),
         )
 
     def process_resource_by_uuid(self, resource_uuid: str) -> None:
@@ -500,6 +502,27 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             resource.marketplace_uuid, resource_metadata
         )
 
+    def _sync_resource_limits(self, resource: Resource) -> None:
+        """Syncs resource limits between Waldur and the backend."""
+        logger.info(
+            "Syncing resource limits for resource %s (%s)", resource.name, resource.backend_id
+        )
+        waldur_limits = resource.limits
+        backend_limits = self.resource_backend.get_resource_limits(resource.backend_id)
+
+        if len(backend_limits) == 0:
+            logger.warning("No limits are found in the backend")
+            return
+
+        if backend_limits == waldur_limits:
+            logger.info("The limits are already in sync, skipping")
+            return
+        # For now, we report all the limits
+        logger.info("Reporting the limits to Waldur: %s", backend_limits)
+        self.waldur_rest_client.marketplace_provider_resource_set_limits(
+            resource.marketplace_uuid, backend_limits
+        )
+
     def _process_resources(
         self,
         resource_report: Dict[str, Resource],
@@ -507,16 +530,24 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         """Sync status and membership data for the resource."""
         for backend_resource in resource_report.values():
             try:
-                logger.info("Processing resource %s membership", backend_resource.backend_id)
                 self._sync_resource_users(backend_resource)
-
-                logger.info("Processing resource %s status", backend_resource.backend_id)
                 self._sync_resource_status(backend_resource)
+                self._sync_resource_limits(backend_resource)
 
+                logger.info(
+                    "Refreshing resource %s (%s) last sync",
+                    backend_resource.name,
+                    backend_resource.backend_id,
+                )
                 self.waldur_rest_client.marketplace_provider_resource_refresh_last_sync(
                     backend_resource.marketplace_uuid
                 )
                 if backend_resource.state == utils.RESOURCE_ERRED_STATE:
+                    logger.info(
+                        "Setting resource %s (%s) state to OK",
+                        backend_resource.name,
+                        backend_resource.backend_id,
+                    )
                     self.waldur_rest_client.marketplace_provider_resource_set_as_ok(
                         backend_resource.marketplace_uuid
                     )

@@ -345,6 +345,10 @@ class BaseBackend(ABC):
         """Set limits for the resource on the backend."""
         self.client.set_resource_limits(resource_backend_id, limits)
 
+    def get_resource_limits(self, resource_backend_id: str) -> Dict[str, int]:
+        """Get limits for the resource on the backend."""
+        return self.client.get_resource_limits(resource_backend_id)
+
     def _get_allocation_name(self, allocation_slug: str, prefix: str = "") -> str:
         prefix = self.backend_settings.get("allocation_prefix", "")
         return f"{prefix}{allocation_slug}".lower()

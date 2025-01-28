@@ -238,19 +238,6 @@ class SlurmBackend(backend.BaseBackend):
             )
             self.cancel_active_jobs_for_account_user(account, username)
 
-    def _get_allocation_limits(self, account: str) -> Dict[str, int]:
-        """Return limits converted to Waldur-readable values."""
-        lines = self.client.get_resource_limits(account)
-        correct_lines = [
-            association.tres_limits for association in lines if association.tres_limits
-        ]
-        if len(correct_lines) == 0:
-            return {}
-
-        return utils.convert_slurm_units_to_waldur_ones(
-            self.backend_components, correct_lines[0], to_int=True
-        )
-
     def set_resource_limits(self, resource_backend_id: str, limits: Dict[str, int]) -> None:
         """Set limits for limit-based components in the SLURM allocation."""
         # Convert limits
@@ -259,3 +246,10 @@ class SlurmBackend(backend.BaseBackend):
             for key, value in limits.items()
         }
         super().set_resource_limits(resource_backend_id, converted_limits)
+
+    def get_resource_limits(self, resource_backend_id: str) -> Dict[str, int]:
+        """Get account limits converted to Waldur-readable values."""
+        account_limits_raw = self.client.get_resource_limits(resource_backend_id)
+        return utils.convert_slurm_units_to_waldur_ones(
+            self.backend_components, account_limits_raw, to_int=True
+        )
