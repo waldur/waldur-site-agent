@@ -88,7 +88,7 @@ class MembershipSyncTest(unittest.TestCase):
         waldur_client.filter_marketplace_provider_resources.assert_called_once_with(
             {
                 "offering_uuid": self.offering.uuid,
-                "state": "OK",
+                "state": ["OK", utils.RESOURCE_ERRED_STATE],
                 "field": [
                     "backend_id",
                     "uuid",
@@ -99,6 +99,7 @@ class MembershipSyncTest(unittest.TestCase):
                     "downscaled",
                     "paused",
                     "state",
+                    "limits",
                 ],
             }
         )
@@ -141,7 +142,7 @@ class MembershipSyncTest(unittest.TestCase):
         waldur_client.filter_marketplace_provider_resources.assert_called_once_with(
             {
                 "offering_uuid": self.offering.uuid,
-                "state": "OK",
+                "state": ["OK", utils.RESOURCE_ERRED_STATE],
                 "field": [
                     "backend_id",
                     "uuid",
@@ -152,6 +153,7 @@ class MembershipSyncTest(unittest.TestCase):
                     "downscaled",
                     "paused",
                     "state",
+                    "limits",
                 ],
             }
         )

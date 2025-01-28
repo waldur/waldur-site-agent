@@ -99,6 +99,10 @@ class MoabClient(base.BaseClient):
         command_deposit = f"mam-deposit -a {account} -z {limits_dict['deposit']} -f {fund_id}"
         return self.execute_command(command_deposit.split())
 
+    def get_resource_limits(self, _: str) -> Dict[str, int]:
+        """Get account limits."""
+        return {}
+
     def get_association(self, user: str, account: str) -> Association | None:
         """Get association between user and account."""
         command = f"mam-list-funds --raw --quiet -u {user} -a {account} --show Constraints,Balance"

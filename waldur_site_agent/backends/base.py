@@ -55,6 +55,11 @@ class BaseClient:
         raise NotImplementedError
 
     @abc.abstractmethod
+    def get_resource_limits(self, account: str) -> Dict[str, int]:
+        """Get account limits."""
+        raise NotImplementedError
+
+    @abc.abstractmethod
     def get_association(self, user: str, account: str) -> Optional[Association]:
         """Get association between user and account."""
         raise NotImplementedError
@@ -108,6 +113,10 @@ class UnknownClient(BaseClient):
         """Set account limits."""
         del account, limits_dict
         return ""
+
+    def get_resource_limits(self, _: str) -> Dict[str, int]:
+        """Get account limits."""
+        return {}
 
     def get_association(self, user: str, account: str) -> Optional[Association]:
         """Get association between user and account."""

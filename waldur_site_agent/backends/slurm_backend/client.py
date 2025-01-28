@@ -163,7 +163,7 @@ class SlurmClient(base.BaseClient):
             SlurmReportLine(line, self.slurm_tres) for line in output.splitlines() if "|" in line
         ]
 
-    def get_resource_limits(self, account: str) -> List[SlurmAssociationLine]:
+    def get_resource_limits(self, account: str) -> Dict[str, int]:
         """Returns limits for the account."""
         args = [
             "show",
@@ -173,11 +173,17 @@ class SlurmClient(base.BaseClient):
             f"accounts={account}",
         ]
         output = self._execute_command(args, immediate=False)
-        return [
+        lines = [
             SlurmAssociationLine(line, self.slurm_tres)
             for line in output.splitlines()
             if "|" in line
         ]
+        correct_lines = [
+            association.tres_limits for association in lines if association.tres_limits
+        ]
+        if len(correct_lines) == 0:
+            return {}
+        return correct_lines[0]
 
     def list_account_users(self, account: str) -> List[str]:
         """Returns list of users linked to the account."""
