@@ -349,6 +349,19 @@ class BaseBackend(ABC):
         """Get limits for the resource on the backend."""
         return self.client.get_resource_limits(resource_backend_id)
 
+    def get_resource_user_limits(self, resource_backend_id: str) -> Dict[str, Dict[str, int]]:
+        """Get limits for the resource users on the backend."""
+        return self.client.get_resource_user_limits(resource_backend_id)
+
+    def set_resource_user_limits(
+        self, resource_backend_id: str, username: str, limits: Dict[str, int]
+    ) -> None:
+        """Set limits for a specific user in a resource on the backend."""
+        logger.info(
+            "Setting user %s limits to %s for resource %s", username, limits, resource_backend_id
+        )
+        self.client.set_resource_user_limits(resource_backend_id, username, limits)
+
     def _get_allocation_name(self, allocation_slug: str, prefix: str = "") -> str:
         prefix = self.backend_settings.get("allocation_prefix", "")
         return f"{prefix}{allocation_slug}".lower()

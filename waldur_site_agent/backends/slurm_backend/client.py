@@ -97,6 +97,16 @@ class SlurmClient(base.BaseClient):
         quota = f"GrpTRESMins={limits_str}"
         return self._execute_command(["modify", "account", account, "set", quota])
 
+    def set_resource_user_limits(
+        self, account: str, username: str, limits_dict: Dict[str, int]
+    ) -> str:
+        """Set account limits for a specific user."""
+        limits_str = ",".join([f"{tres}={limits_dict.get(tres, -1)}" for tres in self.list_tres()])
+        quota = f"MaxTRESMins={limits_str}"
+        return self._execute_command(
+            ["modify", "user", username, "where", f"account={account}", "set", quota]
+        )
+
     def set_account_qos(self, account: str, qos: str) -> None:
         """Set the specified QoS for the account."""
         self._execute_command(["modify", "account", account, "set", f"qos={qos}"])
@@ -184,6 +194,27 @@ class SlurmClient(base.BaseClient):
         if len(correct_lines) == 0:
             return {}
         return correct_lines[0]
+
+    def get_resource_user_limits(self, account: str) -> Dict[str, Dict[str, int]]:
+        """Get per-user limits for the account."""
+        args = [
+            "show",
+            "association",
+            "where",
+            f"accounts={account}",
+            "format=Account,MaxTRESMins,User",
+        ]
+        output = self._execute_command(args, immediate=False)
+        lines = [
+            SlurmAssociationLine(line, self.slurm_tres)
+            for line in output.splitlines()
+            if "|" in line
+        ]
+        return {
+            association.user: association.tres_limits
+            for association in lines
+            if association.user != ""
+        }
 
     def list_account_users(self, account: str) -> List[str]:
         """Returns list of users linked to the account."""
