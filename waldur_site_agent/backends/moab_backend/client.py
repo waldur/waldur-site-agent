@@ -103,6 +103,18 @@ class MoabClient(base.BaseClient):
         """Get account limits."""
         return {}
 
+    def get_resource_user_limits(self, _: str) -> Dict[str, Dict[str, int]]:
+        """Get per-user limits for the account."""
+        return {}
+
+    def set_resource_user_limits(
+        self, account: str, username: str, limits_dict: Dict[str, int]
+    ) -> str:
+        """Set account limits for a specific user."""
+        # The method is a placeholder and is not implemented yet
+        del account, username, limits_dict
+        return ""
+
     def get_association(self, user: str, account: str) -> Association | None:
         """Get association between user and account."""
         command = f"mam-list-funds --raw --quiet -u {user} -a {account} --show Constraints,Balance"

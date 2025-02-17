@@ -396,7 +396,23 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     exc,
                 )
 
+    def _get_waldur_offering_users(self) -> List[Dict]:
+        logger.info("Fetching Waldur offering users")
+        return self.waldur_rest_client.list_remote_offering_users(
+            {
+                "offering_uuid": self.offering.uuid,
+                "is_restricted": False,
+            }
+        )
+
+    def _get_waldur_resource_team(self, resource: Resource) -> List[Dict]:
+        logger.info("Fetching Waldur resource team")
+        return self.waldur_rest_client.marketplace_provider_resource_get_team(
+            resource.marketplace_uuid
+        )
+
     def _get_resource_usernames(self, resource: Resource) -> Tuple[Set[str], Set[str], Set[str]]:
+        logger.info("Fetching new, existing and stale resource users")
         usernames = resource.users
         local_usernames = set(usernames)
         logger.info("The usernames from the backend: %s", ", ".join(local_usernames))
@@ -404,17 +420,16 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         # Offering users sync
         # The service fetches offering users from Waldur and pushes them to the cluster
         # If an offering user is not in the team anymore, it will be removed from the backend
-        team = self.waldur_rest_client.marketplace_provider_resource_get_team(
-            resource.marketplace_uuid
-        )
+        team = self._get_waldur_resource_team(resource)
         team_user_uuids = {user["uuid"] for user in team}
 
-        offering_users = self.waldur_rest_client.list_remote_offering_users(
-            {
-                "offering_uuid": self.offering.uuid,
-                "is_restricted": False,
-            }
-        )
+        offering_users = self._get_waldur_offering_users()
+        resource_offering_usernames = {
+            offering_user["username"]
+            for offering_user in offering_users
+            if offering_user["user_uuid"] in team_user_uuids
+        }
+        logger.info("Resource offering usernames: %s", ", ".join(resource_offering_usernames))
 
         existing_usernames: Set[str] = {
             offering_user["username"]
@@ -422,6 +437,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             if offering_user["username"] in local_usernames
             and offering_user["user_uuid"] in team_user_uuids
         }
+        logger.info("Resource existing usernames: %s", ", ".join(existing_usernames))
 
         new_usernames: Set[str] = {
             offering_user["username"]
@@ -429,6 +445,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             if offering_user["username"] not in local_usernames
             and offering_user["user_uuid"] in team_user_uuids
         }
+        logger.info("Resource new usernames: %s", ", ".join(new_usernames))
 
         stale_usernames: Set[str] = {
             offering_user["username"]
@@ -436,14 +453,18 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             if offering_user["username"] in local_usernames
             and offering_user["user_uuid"] not in team_user_uuids
         }
+        logger.info("Resource stale usernames: %s", ", ".join(stale_usernames))
 
         return existing_usernames, stale_usernames, new_usernames
 
     def _sync_resource_users(
         self,
         resource: Resource,
-    ) -> None:
-        """Syncs users for the resource between Waldur and a site."""
+    ) -> Set[str]:
+        """Sync users for the resource between Waldur and the site.
+
+        return: the actual resource usernames (existing + added)
+        """
         logger.info("Syncing user list for resource %s", resource.name)
         existing_usernames, stale_usernames, new_usernames = self._get_resource_usernames(resource)
 
@@ -455,9 +476,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             )
 
             self.resource_backend.remove_users_from_account(resource.backend_id, existing_usernames)
-            return
+            return set()
 
-        self.resource_backend.add_users_to_resource(
+        added_usernames = self.resource_backend.add_users_to_resource(
             resource.backend_id,
             new_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
@@ -467,6 +488,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             resource.backend_id,
             stale_usernames,
         )
+
+        return existing_usernames | added_usernames
 
     def _sync_resource_status(self, resource: Resource) -> None:
         """Syncs resource status between Waldur and the backend."""
@@ -523,6 +546,58 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             resource.marketplace_uuid, backend_limits
         )
 
+    # TODO: adapt for RabbitMQ-based processing
+    # introduce new event and add support for the event in the agent
+    def _sync_resource_user_limits(
+        self, resource: Resource, usernames: Optional[Set[str]] = None
+    ) -> None:
+        logger.info(
+            "Synching resource user limits for resource %s (%s)", resource.name, resource.backend_id
+        )
+        if resource.restrict_member_access:
+            logger.info("Resource is restricted for members, skipping user limits setup")
+            return
+
+        if usernames is None:
+            existing_usernames, _, _ = self._get_resource_usernames(resource)
+            usernames = existing_usernames
+
+        backend_user_limits = self.resource_backend.get_resource_user_limits(resource.backend_id)
+
+        for username in usernames:
+            try:
+                logger.info(
+                    "Fetching user usage limits for %s, resource %s",
+                    username,
+                    resource.marketplace_uuid,
+                )
+                user_limits = self.waldur_rest_client.list_component_user_usage_limits(
+                    {"resource_uuid": resource.marketplace_uuid, "username": username}
+                )
+                if len(user_limits) == 0:
+                    existing_user_limits = backend_user_limits.get(username)
+                    logger.info("The limits for user %s are not defined in Waldur")
+                    if existing_user_limits is None:
+                        continue
+                    logger.info("Unsetting the existing limits %s", existing_user_limits)
+                    user_component_limits = {}
+                else:
+                    user_component_limits = {
+                        user_limit["component_type"]: int(float(user_limit["limit"]))
+                        for user_limit in user_limits
+                    }
+                self.resource_backend.set_resource_user_limits(
+                    resource.backend_id, username, user_component_limits
+                )
+            except Exception as exc:
+                logger.error(
+                    "Unable to set user %s limits for resource %s (%s), reason: %s",
+                    username,
+                    resource.name,
+                    resource.backend_id,
+                    exc,
+                )
+
     def _process_resources(
         self,
         resource_report: Dict[str, Resource],
@@ -530,9 +605,10 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         """Sync status and membership data for the resource."""
         for backend_resource in resource_report.values():
             try:
-                self._sync_resource_users(backend_resource)
+                resource_usernames = self._sync_resource_users(backend_resource)
                 self._sync_resource_status(backend_resource)
                 self._sync_resource_limits(backend_resource)
+                self._sync_resource_user_limits(backend_resource, resource_usernames)
 
                 logger.info(
                     "Refreshing resource %s (%s) last sync",

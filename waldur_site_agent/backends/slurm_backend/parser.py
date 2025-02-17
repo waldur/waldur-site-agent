@@ -126,8 +126,9 @@ class SlurmAssociationLine(SlurmReportLine):
 
     @cached_property
     def user(self) -> str:
-        """Always empty for association lines."""
-        return ""
+        """Returns an optional username in the association."""
+        user_limit_association_len = 3
+        return self._parts[2] if len(self._parts) >= user_limit_association_len else ""
 
     @cached_property
     def duration(self) -> float:

@@ -253,3 +253,13 @@ class SlurmBackend(backend.BaseBackend):
         return utils.convert_slurm_units_to_waldur_ones(
             self.backend_components, account_limits_raw, to_int=True
         )
+
+    def set_resource_user_limits(
+        self, resource_backend_id: str, username: str, limits: Dict[str, int]
+    ) -> None:
+        """Set limits for a specific user in a resource on the backend."""
+        converted_limits = {
+            key: value * self.backend_components[key]["unit_factor"]
+            for key, value in limits.items()
+        }
+        super().set_resource_user_limits(resource_backend_id, username, converted_limits)
