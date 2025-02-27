@@ -37,19 +37,31 @@ class BaseBackend(ABC):
         for resource_info in resources_info:
             backend_id = resource_info.backend_id
             try:
-                resource = self._pull_allocation(backend_id)
+                resource = self.pull_resource(resource_info)
                 if resource is not None:
-                    resource.name = resource_info.name
-                    resource.marketplace_uuid = resource_info.marketplace_uuid
-                    resource.marketplace_scope_uuid = resource_info.marketplace_scope_uuid
-                    resource.restrict_member_access = resource_info.restrict_member_access
-                    resource.downscaled = resource_info.downscaled
-                    resource.paused = resource_info.paused
-                    resource.state = resource_info.state
                     report[backend_id] = resource
             except Exception as e:
                 logger.exception("Error while pulling allocation [%s]: %s", backend_id, e)
         return report
+
+    def pull_resource(self, resource_info: structures.Resource) -> Optional[structures.Resource]:
+        """Pull resource from backend."""
+        try:
+            backend_id = resource_info.backend_id
+            backend_resource = self._pull_allocation(backend_id)
+            if backend_resource is None:
+                return None
+        except Exception as e:
+            logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
+            return None
+        else:
+            backend_resource.name = resource_info.name
+            backend_resource.marketplace_uuid = resource_info.marketplace_uuid
+            backend_resource.restrict_member_access = resource_info.restrict_member_access
+            backend_resource.downscaled = resource_info.downscaled
+            backend_resource.paused = resource_info.paused
+            backend_resource.state = resource_info.state
+            return backend_resource
 
     def _pull_allocation(self, resource_backend_id: str) -> Optional[structures.Resource]:
         """Pull allocation data from the backend."""

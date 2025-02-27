@@ -18,7 +18,7 @@ from waldur_site_agent.backends import BackendType, logger
 from waldur_site_agent.backends import utils as backend_utils
 from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.structures import Resource
-from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE, structures, utils
+from waldur_site_agent.common import structures, utils
 
 
 class OfferingBaseProcessor(abc.ABC):
@@ -36,12 +36,26 @@ class OfferingBaseProcessor(abc.ABC):
 
         self._print_current_user()
 
-        waldur_offering = self.waldur_rest_client._get_offering(self.offering.uuid)
+        waldur_offering = self.waldur_rest_client.get_marketplace_provider_offering(
+            self.offering.uuid
+        )
         utils.extend_backend_components(self.offering, waldur_offering["components"])
 
     def _print_current_user(self) -> None:
         current_user = self.waldur_rest_client.get_current_user()
         utils.print_current_user(current_user)
+
+    def _collect_waldur_resource_info(self, resource_data: dict) -> Resource:
+        return Resource(
+            name=resource_data["name"],
+            backend_id=resource_data["backend_id"],
+            marketplace_uuid=resource_data["uuid"],
+            backend_type=self.offering.backend_type,
+            restrict_member_access=resource_data.get("restrict_member_access", False),
+            downscaled=resource_data.get("downscaled", False),
+            paused=resource_data.get("paused", False),
+            state=resource_data["state"],
+        )
 
     @abc.abstractmethod
     def process_offering(self) -> None:
@@ -309,20 +323,6 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             for resource_data in waldur_resources
             if resource_data["backend_id"]
         ]
-
-    def _collect_waldur_resource_info(self, resource_data: dict) -> Resource:
-        return Resource(
-            name=resource_data["name"],
-            backend_id=resource_data["backend_id"],
-            marketplace_uuid=resource_data["uuid"],
-            backend_type=self.offering.backend_type,
-            marketplace_scope_uuid=resource_data["resource_uuid"],
-            restrict_member_access=resource_data.get("restrict_member_access", False),
-            downscaled=resource_data.get("downscaled", False),
-            paused=resource_data.get("paused", False),
-            state=resource_data["state"],
-            limits=resource_data.get("limits", {}),
-        )
 
     def process_resource_by_uuid(self, resource_uuid: str) -> None:
         """Processes resource status and membership data using resource UUID."""
@@ -658,6 +658,10 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             self.offering.uuid,
         )
 
+        waldur_offering = self.waldur_rest_client.get_marketplace_provider_offering(
+            self.offering.uuid
+        )
+
         waldur_resources = self.waldur_rest_client.filter_marketplace_provider_resources(
             {
                 "offering_uuid": self.offering.uuid,
@@ -669,8 +673,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         if len(waldur_resources) == 0:
             logger.info("No resources to process")
             return
-
-        offering_type = waldur_resources[0].get("offering_type", "")
 
         waldur_resources_info = [
             Resource(
@@ -684,29 +686,24 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             if resource_data["backend_id"]
         ]
 
-        resource_report = self.resource_backend.pull_resources(waldur_resources_info)
-
-        # TODO: make generic
-        if offering_type == MARKETPLACE_SLURM_OFFERING_TYPE:
-            # Allocations existing in Waldur but missing in SLURM cluster
-            missing_resources = [
-                Resource(
-                    marketplace_uuid=resource_info["uuid"],
-                    backend_id=resource_info["backend_id"],
+        for waldur_resource in waldur_resources_info:
+            try:
+                self._process_resource(waldur_resource, waldur_offering)
+            except Exception as e:
+                logger.exception(
+                    "Error while processing allocation %s: %s",
+                    waldur_resource.backend_id,
+                    e,
                 )
-                for resource_info in waldur_resources
-                if resource_info["backend_id"] not in set(resource_report.keys())
-                and resource_info["state"] != utils.RESOURCE_ERRED_STATE
-            ]
-            logger.info("Number of missing resources %s", len(missing_resources))
-            if len(missing_resources) > 0:
+                error_traceback = traceback.format_exc()
                 utils.mark_waldur_resources_as_erred(
                     self.waldur_rest_client,
-                    missing_resources,
-                    {"error_message": "The resource is missing on the backend"},
+                    [waldur_resource],
+                    error_details={
+                        "error_message": str(e),
+                        "error_traceback": error_traceback,
+                    },
                 )
-
-        self._process_resources(resource_report)
 
     def _submit_total_usage_for_resource(
         self,
@@ -782,59 +779,74 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 component_usage["uuid"], usage, username, offering_user_uuid
             )
 
-    def _process_resources(
+    def _process_resource(
         self,
-        resource_report: Dict[str, Resource],
+        waldur_resource: Resource,
+        waldur_offering: Dict,
     ) -> None:
         """Processes usage report for the resource."""
-        waldur_offering = self.waldur_rest_client._get_offering(self.offering.uuid)
         month_start = backend_utils.month_start(datetime.datetime.now()).date()
-
-        # TODO: this part is not generic yet, rather SLURM-specific
-        for resource_backend_id, backend_resource in resource_report.items():
-            try:
-                logger.info("Processing %s", resource_backend_id)
-                usages: Dict[str, Dict[str, float]] = backend_resource.usage
-
-                # Set resource state OK if it is erred
-                if backend_resource.state == utils.RESOURCE_ERRED_STATE:
-                    self.waldur_rest_client.marketplace_provider_resource_set_as_ok(
-                        backend_resource.marketplace_uuid
-                    )
-
-                # Submit usage
-                total_usage = usages.pop("TOTAL_ACCOUNT_USAGE")
-                self._submit_total_usage_for_resource(
-                    backend_resource,
-                    total_usage,
-                    waldur_offering["components"],
-                )
-
-                # Skip the following actions if the dict is empty
-                if not usages:
-                    continue
-
-                waldur_component_usages = self.waldur_rest_client.list_component_usages(
-                    backend_resource.marketplace_uuid, date_after=month_start
-                )
-
-                logger.info("Setting per-user usages")
-                for username, user_usage in usages.items():
-                    self._submit_user_usage_for_resource(
-                        username, user_usage, waldur_component_usages
-                    )
-            except Exception as e:
-                logger.exception(
-                    "Waldur REST client error while processing allocation %s: %s",
-                    resource_backend_id,
-                    e,
-                )
-                error_traceback = traceback.format_exc()
+        resource_backend_id = waldur_resource.backend_id
+        logger.info("Pulling resource %s (%s)", waldur_resource.name, resource_backend_id)
+        backend_resource = self.resource_backend.pull_resource(waldur_resource)
+        if backend_resource is None:
+            logger.info("The resource %s is missing in backend", resource_backend_id)
+            if waldur_resource.state != utils.RESOURCE_ERRED_STATE:
+                logger.info("Marking resource %s as erred in Waldur", resource_backend_id)
                 utils.mark_waldur_resources_as_erred(
                     self.waldur_rest_client,
-                    [backend_resource],
-                    error_details={
-                        "error_message": str(e),
-                        "error_traceback": error_traceback,
+                    [waldur_resource],
+                    {
+                        "error_message": f"The resource {resource_backend_id} "
+                        "is missing on the backend"
                     },
                 )
+            return
+
+        # Invalidate cache of Waldur resource
+        logger.info(
+            "Fetching Waldur resource data for %s (%s)", waldur_resource.name, resource_backend_id
+        )
+        waldur_resource_data = self.waldur_rest_client.get_marketplace_provider_resource(
+            waldur_resource.marketplace_uuid
+        )
+        waldur_resource = self._collect_waldur_resource_info(waldur_resource_data)
+        waldur_resource.usage = backend_resource.usage
+        waldur_resource.users = backend_resource.users
+        waldur_resource.limits = backend_resource.limits
+
+        if waldur_resource.state not in ["OK", utils.RESOURCE_ERRED_STATE]:
+            logger.error(
+                "Waldur resource %s (%s) has incorrect state %s, skipping processing",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+                waldur_resource.state,
+            )
+            return
+        # Set resource state OK if it is erred
+        if waldur_resource.state == utils.RESOURCE_ERRED_STATE:
+            self.waldur_rest_client.marketplace_provider_resource_set_as_ok(
+                waldur_resource.marketplace_uuid
+            )
+
+        usages: Dict[str, Dict[str, float]] = waldur_resource.usage
+
+        # Submit usage
+        total_usage = usages.pop("TOTAL_ACCOUNT_USAGE")
+        self._submit_total_usage_for_resource(
+            waldur_resource,
+            total_usage,
+            waldur_offering["components"],
+        )
+
+        # Skip the following actions if the dict is empty
+        if not usages:
+            return
+
+        waldur_component_usages = self.waldur_rest_client.list_component_usages(
+            waldur_resource.marketplace_uuid, date_after=month_start
+        )
+
+        logger.info("Setting per-user usages")
+        for username, user_usage in usages.items():
+            self._submit_user_usage_for_resource(username, user_usage, waldur_component_usages)

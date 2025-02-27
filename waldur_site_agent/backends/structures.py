@@ -29,7 +29,6 @@ class Resource:
     backend_type: str = ""
     name: str = ""
     marketplace_uuid: str = ""
-    marketplace_scope_uuid: str = ""
     backend_id: str = ""
     limits: Dict = field(default_factory=dict)
     restrict_member_access: bool = False

@@ -67,7 +67,8 @@ class ReportingTest(unittest.TestCase):
             {"uuid": self.plan_period_uuid}
         ]
         waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
-        waldur_client._get_offering.return_value = {
+        waldur_client.get_marketplace_provider_resource.return_value = self.waldur_resource
+        waldur_client.get_marketplace_provider_offering.return_value = {
             "components": [
                 {"type": "cpu"},
                 {"type": "mem"},
