@@ -110,11 +110,20 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
             if order["state"] == "executing":
                 logger.info("Order is executing already, no need for approval")
-            else:
+            elif order["state"] == "pending-provider":
                 logger.info("Approving the order")
                 self.waldur_rest_client.marketplace_order_approve_by_provider(order["uuid"])
                 logger.info("Refreshing the order")
                 order = self.waldur_rest_client.get_order(order["uuid"])
+            else:
+                logger.warning(
+                    "The order %s %s (%s) is in unexpected state %s, skipping processing",
+                    order["type"],
+                    order["resource_name"],
+                    order["uuid"],
+                    order["state"],
+                )
+                return
 
             order_is_done = False
 
