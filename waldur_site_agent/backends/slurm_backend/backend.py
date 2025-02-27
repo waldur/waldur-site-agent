@@ -238,6 +238,14 @@ class SlurmBackend(backend.BaseBackend):
             )
             self.cancel_active_jobs_for_account_user(account, username)
 
+    def _pre_delete_account_actions(self, account: str) -> None:
+        """Delete all existing associations and cancel all the active jobs."""
+        if self.client.account_has_users(account):
+            logger.info("Cancelling all active jobs for account %s", account)
+            self.client.cancel_active_user_jobs(account)
+            logger.info("Removing all users from account %s", account)
+            self.client.delete_all_users_from_account(account)
+
     def set_resource_limits(self, resource_backend_id: str, limits: Dict[str, int]) -> None:
         """Set limits for limit-based components in the SLURM allocation."""
         # Convert limits

@@ -96,6 +96,10 @@ class BaseBackend(ABC):
     def _get_usage_report(self, accounts: List[str]) -> Dict:
         """Collect usage report for the specified accounts."""
 
+    def _pre_delete_account_actions(self, account: str) -> None:
+        """Perform actions before deleting the account."""
+        del account
+
     def delete_resource(self, resource_backend_id: str, **kwargs: str) -> None:
         """Delete resource from the backend."""
         account = resource_backend_id
@@ -104,6 +108,11 @@ class BaseBackend(ABC):
             message = "Empty backend_id for allocation, skipping deletion"
             raise BackendError(message)
 
+        if self.client.get_account(account) is None:
+            logger.warning("No account %s is in %s", account, self.backend_type)
+            return
+
+        self._pre_delete_account_actions(account)
         self._delete_account_safely(account)
 
         if "project_slug" in kwargs:

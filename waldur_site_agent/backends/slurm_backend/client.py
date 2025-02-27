@@ -86,9 +86,6 @@ class SlurmClient(base.BaseClient):
 
     def delete_account(self, name: str) -> str:
         """Deletes account with the specified name from the SLURM cluster."""
-        if self.account_has_users(name):
-            self.delete_all_users_from_account(name)
-
         return self._execute_command(["remove", "account", "where", f"name={name}"])
 
     def set_resource_limits(self, account: str, limits_dict: Dict[str, int]) -> str | None:
@@ -255,10 +252,15 @@ class SlurmClient(base.BaseClient):
 
         return qos_options[0] if len(qos_options) > 0 else ""
 
-    def cancel_active_user_jobs(self, account: str, user: str) -> None:
-        """Cancel jobs for the account and user."""
-        args = [f"-u={user}", f"-A={account}", "-f"]
-        self._execute_command(args, command_name="scancel")
+    def cancel_active_user_jobs(self, account: str, user: Optional[str] = None) -> None:
+        """Cancel jobs for the account and user.
+
+        If user is None, cancel all the jobs for the account.
+        """
+        args = [f"-A={account}", "-f"]
+        if user is not None:
+            args = [f"-u={user}", *args]
+        self._execute_command(args, command_name="scancel", parsable=False, immediate=False)
 
     def list_active_user_jobs(self, account: str, user: str) -> List[str]:
         """List active jobs for the account and user."""
