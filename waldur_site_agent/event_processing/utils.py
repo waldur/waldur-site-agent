@@ -179,12 +179,15 @@ def on_order_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMess
     user_agent = userdata["user_agent"]
 
     order_uuid = message["order_uuid"]
-    processor = common_processors.OfferingOrderProcessor(offering, user_agent)
-    order = processor.get_order_info(order_uuid)
-    if order is None:
-        logger.error("Failed to process order %s", order_uuid)
-        return
-    processor.process_order(order)
+    try:
+        processor = common_processors.OfferingOrderProcessor(offering, user_agent)
+        order = processor.get_order_info(order_uuid)
+        if order is None:
+            logger.error("Failed to process order %s", order_uuid)
+            return
+        processor.process_order(order)
+    except Exception as e:
+        logger.error("Failed to process order %s: %s", order_uuid, e)
 
 
 def on_user_role_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
@@ -195,22 +198,33 @@ def on_user_role_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTT
     logger.info("Received message: %s on topic %s", message, msg.topic)
     offering = userdata["offering"]
     user_agent = userdata["user_agent"]
-    processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
-
     user_uuid = message["user_uuid"]
     user_username = message["user_username"]
     project_name = message["project_name"]
     project_uuid = message["project_uuid"]
     role_granted = message["granted"]
-    logger.info(
-        "Processing %s (%s) user role changed event in project %s, granted: %s",
-        user_username,
-        user_uuid,
-        project_name,
-        role_granted,
-    )
 
-    processor.process_user_role_changed(user_uuid, project_uuid, role_granted)
+    try:
+        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        logger.info(
+            "Processing %s (%s) user role changed event in project %s, granted: %s",
+            user_username,
+            user_uuid,
+            project_name,
+            role_granted,
+        )
+
+        processor.process_user_role_changed(user_uuid, project_uuid, role_granted)
+    except Exception as e:
+        logger.error(
+            "Failed to process user %s (%s) role change in project %s (%s) (granted: %s): %s",
+            user_username,
+            user_uuid,
+            project_name,
+            project_uuid,
+            role_granted,
+            e,
+        )
 
 
 def on_resource_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
@@ -223,8 +237,11 @@ def on_resource_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTM
     user_agent = userdata["user_agent"]
     resource_uuid = message["resource_uuid"]
 
-    processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
-    processor.process_resource_by_uuid(resource_uuid)
+    try:
+        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        processor.process_resource_by_uuid(resource_uuid)
+    except Exception as e:
+        logger.error("Failed to process resource %s: %s", resource_uuid, e)
 
 
 def run_initial_offering_processing(
