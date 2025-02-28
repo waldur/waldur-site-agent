@@ -64,6 +64,7 @@ class EventSubscriptionManager:
             event_subscription["uuid"],
         )
         mqtt_client = mqtt.Client(
+            client_id=f"paho-mqtt-client-{event_subscription['uuid']}-{self.observable_object_type}",
             transport="websockets",
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         )
