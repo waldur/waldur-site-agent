@@ -42,6 +42,7 @@ class CreationOrderTest(unittest.TestCase):
             "slug": "sample-resource-1",
             "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
             "offering_plugin_options": {},
+            "backend_id": "",
         }
 
     def setup_waldur_client_mock(self, waldur_client_class):
