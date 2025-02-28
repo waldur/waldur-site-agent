@@ -88,7 +88,17 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             return
 
         for order in orders:
-            self.process_order(order)
+            try:
+                self.process_order_with_retries(order)
+            except Exception as e:
+                logger.exception(
+                    "Error while processing offering order %s (%s), type %s, state %s: %s",
+                    order["uuid"],
+                    order["attributes"].get("name", "N/A"),
+                    order["type"],
+                    order["state"],
+                    e,
+                )
 
     def get_order_info(self, order_uuid: str) -> Optional[dict]:
         """Get order info from Waldur."""
@@ -98,13 +108,46 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             logger.error("Failed to get order %s info: %s", order_uuid, e)
             return None
 
+    def process_order_with_retries(
+        self, order: dict, retry_count: int = 10, delay: int = 5
+    ) -> None:
+        """Process order with retries."""
+        for attempt_number in range(retry_count):
+            try:
+                logger.info("Attempt %s of %s", attempt_number + 1, retry_count)
+                order_info = self.get_order_info(order["uuid"])
+                if order_info is None:
+                    logger.error("Failed to get order %s info", order["uuid"])
+                    return
+                self.process_order(order_info)
+            except Exception as e:
+                logger.exception(
+                    "Error while processing order %s (%s), type %s, state %s: %s",
+                    order["uuid"],
+                    order["attributes"].get("name", "N/A"),
+                    order["type"],
+                    order["state"],
+                    e,
+                )
+                logger.info("Retrying order %s processing in %s seconds", order["uuid"], delay)
+                sleep(delay)
+            else:
+                break
+        if attempt_number == retry_count - 1:
+            logger.error(
+                "Failed to process order %s after %s retries, skipping to the next one",
+                order["uuid"],
+                retry_count,
+            )
+
     def process_order(self, order: dict) -> None:
         """Process a single order."""
         try:
             logger.info(
-                "Processing order %s (%s) with state %s",
+                "Processing order %s (%s) type %s, state %s",
                 order["attributes"].get("name", "N/A"),
                 order["uuid"],
+                order["type"],
                 order["state"],
             )
 
@@ -211,7 +254,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         )
 
     def _process_create_order(self, order: Dict) -> bool:
-        # Wait until resource is created
+        # Wait until Waldur resource is created
         attempts = 0
         max_attempts = 4
         while "marketplace_resource_uuid" not in order:
@@ -220,7 +263,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 return False
 
             if order["state"] != "executing":
-                logger.error("order has unexpected state %s", order["state"])
+                logger.error("Order has unexpected state %s", order["state"])
                 return False
 
             logger.info("Waiting for resource creation...")
@@ -232,14 +275,34 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         waldur_resource = self.waldur_rest_client.get_marketplace_provider_resource(
             order["marketplace_resource_uuid"]
         )
+        waldur_resource_info = self._collect_waldur_resource_info(waldur_resource)
+        create_resource = True
 
-        waldur_resource["project_slug"] = order["project_slug"]
-        waldur_resource["customer_slug"] = order["customer_slug"]
+        if waldur_resource_info.backend_id != "":
+            logger.info(
+                "Waldur resource backend id is not empty %s, checking backend resource data",
+                waldur_resource_info.backend_id,
+            )
+            backend_resource = self.resource_backend.pull_resource(waldur_resource_info)
+            if backend_resource is not None:
+                logger.info(
+                    "Resource %s (%s) is already created, skipping creation",
+                    waldur_resource["name"],
+                    waldur_resource["backend_id"],
+                )
+                create_resource = False
 
-        backend_resource = self._create_resource(waldur_resource)
+        if create_resource:
+            waldur_resource["project_slug"] = order["project_slug"]
+            waldur_resource["customer_slug"] = order["customer_slug"]
+
+            backend_resource = self._create_resource(waldur_resource)
+            if backend_resource is None:
+                msg = "Unable to create a resource"
+                raise BackendError(msg)
+
         if backend_resource is None:
-            msg = "Unable to create a resource"
-            raise BackendError(msg)
+            return False
 
         self._add_users_to_resource(
             backend_resource,

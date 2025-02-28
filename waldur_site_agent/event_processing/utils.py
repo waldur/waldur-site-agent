@@ -185,7 +185,7 @@ def on_order_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMess
         if order is None:
             logger.error("Failed to process order %s", order_uuid)
             return
-        processor.process_order(order)
+        processor.process_order_with_retries(order)
     except Exception as e:
         logger.error("Failed to process order %s: %s", order_uuid, e)
 
