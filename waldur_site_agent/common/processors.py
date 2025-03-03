@@ -109,34 +109,34 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             return None
 
     def process_order_with_retries(
-        self, order: dict, retry_count: int = 10, delay: int = 5
+        self, order_info: dict, retry_count: int = 10, delay: int = 5
     ) -> None:
         """Process order with retries."""
         for attempt_number in range(retry_count):
             try:
                 logger.info("Attempt %s of %s", attempt_number + 1, retry_count)
-                order_info = self.get_order_info(order["uuid"])
-                if order_info is None:
-                    logger.error("Failed to get order %s info", order["uuid"])
+                order = self.get_order_info(order_info["uuid"])
+                if order is None:
+                    logger.error("Failed to get order %s info", order_info["uuid"])
                     return
-                self.process_order(order_info)
+                self.process_order(order)
+                break
             except Exception as e:
                 logger.exception(
                     "Error while processing order %s (%s), type %s, state %s: %s",
-                    order["uuid"],
-                    order["attributes"].get("name", "N/A"),
-                    order["type"],
-                    order["state"],
+                    order_info["uuid"],
+                    order_info["attributes"].get("name", "N/A"),
+                    order_info["type"],
+                    order["state"] if order is not None else order_info["state"],
                     e,
                 )
-                logger.info("Retrying order %s processing in %s seconds", order["uuid"], delay)
+                logger.info("Retrying order %s processing in %s seconds", order_info["uuid"], delay)
                 sleep(delay)
-            else:
-                break
+
         if attempt_number == retry_count - 1:
             logger.error(
                 "Failed to process order %s after %s retries, skipping to the next one",
-                order["uuid"],
+                order_info["uuid"],
                 retry_count,
             )
 
