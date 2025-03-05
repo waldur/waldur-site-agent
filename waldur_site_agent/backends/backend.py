@@ -105,8 +105,8 @@ class BaseBackend(ABC):
         account = resource_backend_id
 
         if not account.strip():
-            message = "Empty backend_id for allocation, skipping deletion"
-            raise BackendError(message)
+            logger.warning("Empty backend_id for allocation, skipping deletion")
+            return
 
         if self.client.get_account(account) is None:
             logger.warning("No account %s is in %s", account, self.backend_type)
