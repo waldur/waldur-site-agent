@@ -6,9 +6,8 @@ from typing import Dict, List, Optional
 
 from waldur_site_agent.backends import base, exceptions, logger
 from waldur_site_agent.backends import utils as backend_utils
+from waldur_site_agent.backends.moab_backend.parser import MoabReportLine
 from waldur_site_agent.backends.structures import Account, Association
-
-from .parser import MoabReportLine
 
 
 class MoabClient(base.BaseClient):

@@ -3,10 +3,9 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Set, Tuple
 
+from waldur_site_agent.backends import BackendType, logger, structures, utils
 from waldur_site_agent.backends.base import BaseClient, UnknownClient
 from waldur_site_agent.backends.exceptions import BackendError
-
-from . import BackendType, logger, structures, utils
 
 UNKNOWN_BACKEND_TYPE = "unknown"
 

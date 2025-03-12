@@ -11,9 +11,8 @@ from waldur_site_agent.backends import (
 )
 from waldur_site_agent.backends import utils as backend_utils
 from waldur_site_agent.backends.exceptions import BackendError
-
-from . import utils
-from .client import SlurmClient
+from waldur_site_agent.backends.slurm_backend import utils
+from waldur_site_agent.backends.slurm_backend.client import SlurmClient
 
 
 class SlurmBackend(backend.BaseBackend):

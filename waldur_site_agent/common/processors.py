@@ -784,7 +784,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_components: List[Dict],
     ) -> None:
         """Reports total usage for a backend resource to Waldur."""
-        logger.info("Setting usages: %s", total_usage)
+        logger.info("Setting usages for %s: %s", backend_resource.backend_id, total_usage)
         resource_uuid = backend_resource.marketplace_uuid
 
         component_types = [component["type"] for component in waldur_components]

@@ -10,9 +10,8 @@ from waldur_site_agent.backends import utils as backend_utils
 from waldur_site_agent.backends.exceptions import (
     BackendError,
 )
+from waldur_site_agent.backends.slurm_backend.parser import SlurmAssociationLine, SlurmReportLine
 from waldur_site_agent.backends.structures import Account, Association
-
-from .parser import SlurmAssociationLine, SlurmReportLine
 
 
 class SlurmClient(base.BaseClient):
