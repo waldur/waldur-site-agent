@@ -21,8 +21,8 @@ def month_end(date: datetime.datetime) -> datetime.date:
 def format_current_month() -> Tuple[str, str]:
     """Returns strings for start and end date of the current month."""
     today = datetime.datetime.now()
-    start = month_start(today).strftime("%Y-%m-%d")
-    end = month_end(today).strftime("%Y-%m-%d")
+    start = month_start(today).strftime("%Y-%m-%dT00:00:00")
+    end = month_end(today).strftime("%Y-%m-%dT23:59:59")
     return start, end
 
 
