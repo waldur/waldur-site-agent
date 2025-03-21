@@ -760,7 +760,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         for waldur_resource in waldur_resources_info:
             try:
-                self._process_resource(waldur_resource, waldur_offering)
+                self._process_resource_with_retries(waldur_resource, waldur_offering)
             except Exception as e:
                 logger.exception(
                     "Error while processing allocation %s: %s",
@@ -776,6 +776,48 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                         "error_traceback": error_traceback,
                     },
                 )
+
+    def _process_resource_with_retries(
+        self,
+        waldur_resource: Resource,
+        waldur_offering: Dict,
+        retry_count: int = 10,
+        delay: int = 5,
+    ) -> None:
+        for attempt_number in range(retry_count):
+            try:
+                logger.info(
+                    "Attempt %s of %s, processing resource usage %s (%s)",
+                    attempt_number + 1,
+                    retry_count,
+                    waldur_resource.name,
+                    waldur_resource.backend_id,
+                )
+                self._process_resource(waldur_resource, waldur_offering)
+                break
+            except Exception as e:
+                logger.warning(
+                    "Error while processing resource %s (%s): %s",
+                    waldur_resource.name,
+                    waldur_resource.backend_id,
+                    e,
+                )
+                logger.info(
+                    "Retrying resource usage %s processing in %s seconds",
+                    waldur_resource.backend_id,
+                    delay,
+                )
+                if attempt_number == retry_count - 1:
+                    # If last attempt failed, raise the exception
+                    logger.warning(
+                        "Failed to process resource usage %s after %s retries,"
+                        "skipping to the next resource",
+                        waldur_resource.backend_id,
+                        retry_count,
+                    )
+                    raise
+                # If not last attempt, wait and retry
+                sleep(delay)
 
     def _submit_total_usage_for_resource(
         self,
