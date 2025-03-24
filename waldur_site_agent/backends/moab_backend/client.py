@@ -122,7 +122,7 @@ class MoabClient(base.BaseClient):
         if len(lines) == 0:
             return None
 
-        return Association(account=account, user=user, value=int(lines[0].split("|")[-1]))
+        return Association(account=account, user=user, value=int(float(lines[0].split("|")[-1])))
 
     def create_association(self, username: str, account: str, _: Optional[str] = None) -> str:
         """Create association between user and account in MOAB."""
