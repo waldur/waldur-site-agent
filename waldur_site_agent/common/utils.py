@@ -309,7 +309,7 @@ def diagnostics() -> bool:
                     component["type"],
                     component["name"],
                     component["measured_unit"],
-                    component.get("limit_amount"),
+                    component.get("limit_amount") or "",
                 ]
                 for component in offering_data["components"]
             ]

@@ -22,7 +22,10 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
 
         with utils.signal_handling(mqtt_consumers_map):
             while True:
-                time.sleep(60 * 60)
+                utils.send_agent_health_checks(
+                    configuration.waldur_offerings, configuration.waldur_user_agent
+                )
+                time.sleep(30 * 60)
     except Exception as e:
         logger.error("Error in main process: %s", e)
         if "mqtt_consumers_map" in locals():
