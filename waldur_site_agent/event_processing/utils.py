@@ -270,3 +270,15 @@ def process_offering(offering: common_structures.Offering, user_agent: str = "")
     membership_processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
     logger.info("Running offering membership process")
     membership_processor.process_offering()
+
+
+def send_agent_health_checks(offerings: List[common_structures.Offering], user_agent: str) -> None:
+    """Sends agent health checks for the specified offerings."""
+    for offering in offerings:
+        try:
+            processor = common_processors.OfferingOrderProcessor(offering, user_agent)
+            processor.waldur_rest_client.list_orders({"page_size": 1})
+        except Exception as e:
+            logger.error(
+                "Failed to send agent health check for the offering %s: %s", offering.name, e
+            )
