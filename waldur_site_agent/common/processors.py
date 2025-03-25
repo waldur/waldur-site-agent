@@ -648,7 +648,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 )
                 if len(user_limits) == 0:
                     existing_user_limits = backend_user_limits.get(username)
-                    logger.info("The limits for user %s are not defined in Waldur")
+                    logger.info("The limits for user %s are not defined in Waldur", username)
                     if existing_user_limits is None:
                         continue
                     logger.info("Unsetting the existing limits %s", existing_user_limits)
