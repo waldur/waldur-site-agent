@@ -48,7 +48,7 @@ def prettify_limits(limits: Dict[str, int], slurm_tres: Dict) -> str:
     return yaml.dump(limits_info)
 
 
-def sum_dicts(dict_list: List[Dict]) -> Dict[str, int]:
+def sum_dicts(dict_list: List[Dict]) -> Dict:
     """Sums dictionaries by keys."""
     result_dict: Dict[str, int] = {}
 
