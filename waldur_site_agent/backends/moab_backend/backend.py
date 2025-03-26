@@ -40,7 +40,7 @@ class MoabBackend(BaseBackend):
 
     def _get_usage_report(self, accounts: List[str]) -> Dict:
         """Get usage report."""
-        report: Dict[str, Dict[str, Dict[str, int]]] = {}
+        report: Dict[str, Dict[str, Dict[str, float]]] = {}
         lines: List[MoabReportLine] = self.client.get_usage_report(accounts)
 
         for line in lines:
@@ -52,7 +52,13 @@ class MoabBackend(BaseBackend):
         for account_usage in report.values():
             usages_per_user = list(account_usage.values())
             total = backend_utils.sum_dicts(usages_per_user)
-            account_usage["TOTAL_ACCOUNT_USAGE"] = total
+            account_usage["TOTAL_ACCOUNT_USAGE"] = {
+                key: float(round(value, 2)) for key, value in total.items()
+            }
+            for username, user_usage in account_usage.items():
+                account_usage[username] = {
+                    key: float(round(value, 2)) for key, value in user_usage.items()
+                }
 
         return report
 

@@ -28,6 +28,6 @@ class MoabReportLine:
         return decimal.Decimal(self._parts[2])
 
     @cached_property
-    def usages(self) -> Dict[str, int]:
+    def usages(self) -> Dict[str, decimal.Decimal]:
         """Return deposit usage from the report line."""
-        return {"deposit": int(self.charge)}
+        return {"deposit": self.charge}
