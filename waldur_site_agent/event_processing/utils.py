@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import signal
 import sys
 import types
@@ -10,18 +9,18 @@ from contextlib import contextmanager
 from typing import Generator, List, Union
 
 import paho.mqtt.client as mqtt
+import stomp
 
 from waldur_site_agent.backends import logger
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
+from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.event_subscription_manager import EventSubscriptionManager
 from waldur_site_agent.event_processing.structures import (
     MqttConsumer,
     MqttConsumersMap,
-    OrderMessage,
-    ResourceMessage,
+    StompConsumersMap,
     UserData,
-    UserRoleMessage,
 )
 
 
@@ -48,14 +47,49 @@ def on_connect(
         client.subscribe(topic_name)
 
 
+def setup_stomp_offering_subscriptions(
+    waldur_offering: common_structures.Offering, waldur_user_agent: str
+) -> List[stomp.WSStompConnection]:
+    """Set up STOMP subscriptions for the specified offering."""
+    # TODO: adjust method signatures to match STOMP requirements
+    stomp_connections: List[stomp.WSStompConnection] = []
+    for object_type in ["order", "user_role", "resource"]:
+        event_subscription_manager = EventSubscriptionManager(
+            waldur_offering, None, None, waldur_user_agent, object_type
+        )
+        event_subscription = event_subscription_manager.get_or_create_event_subscription()
+        if event_subscription is None:
+            logger.error(
+                "Failed to create event subscription for the offering %s (%s), object type %s",
+                waldur_offering.name,
+                waldur_offering.uuid,
+                object_type,
+            )
+            continue
+        connection = event_subscription_manager.start_stomp_connection(event_subscription)
+        if connection is None:
+            logger.error(
+                "Failed to start STOMP connection for the offering %s (%s), object type %s",
+                waldur_offering.name,
+                waldur_offering.uuid,
+                object_type,
+            )
+            event_subscription_manager.delete_event_subscription(event_subscription)
+            continue
+
+        stomp_connections.append((connection, event_subscription, waldur_offering))
+
+    return stomp_connections
+
+
 def setup_offering_subscriptions(
     waldur_offering: common_structures.Offering, waldur_user_agent: str
 ) -> List[MqttConsumer]:
     """Set up MQTT subscriptions for the specified offering."""
     object_type_to_handler = {
-        "order": on_order_message,
-        "user_role": on_user_role_message,
-        "resource": on_resource_message,
+        "order": handlers.on_order_message_mqtt,
+        "user_role": handlers.on_user_role_message_mqtt,
+        "resource": handlers.on_resource_message_mqtt,
     }
 
     event_subscriptions: List[MqttConsumer] = []
@@ -87,6 +121,50 @@ def setup_offering_subscriptions(
         event_subscriptions.append((consumer, event_subscription, waldur_offering))
 
     return event_subscriptions
+
+
+def start_stomp_consumers(
+    waldur_offerings: List[common_structures.Offering],
+    waldur_user_agent: str,
+) -> StompConsumersMap:
+    """Start multiple STOMP consumers."""
+    stomp_consumers_map: StompConsumersMap = {}
+    for waldur_offering in waldur_offerings:
+        if not waldur_offering.stomp_enabled:
+            logger.info("STOMP feature is disabled for the offering")
+            continue
+
+        stomp_connections = setup_stomp_offering_subscriptions(waldur_offering, waldur_user_agent)
+        if stomp_connections:
+            stomp_consumers_map[(waldur_offering.name, waldur_offering.uuid)] = stomp_connections
+
+    return stomp_consumers_map
+
+
+def stop_stomp_consumers(
+    stomp_consumers_map: StompConsumersMap,
+) -> None:
+    """Stop STOMP consumers."""
+    for (offering_name, offering_uuid), consumers in stomp_consumers_map.items():
+        logger.info("Stopping STOMP connections for %s (%s)", offering_name, offering_uuid)
+        for (
+            connection,
+            event_subscription,
+            offering,
+        ) in consumers:
+            try:
+                event_subscription_manager = EventSubscriptionManager(
+                    offering,
+                )
+                logger.info(
+                    "Stopping STOMP connection for %s (%s), observable object type: %s",
+                    offering_name,
+                    offering_uuid,
+                    event_subscription["observable_objects"][0]["object_type"],
+                )
+                event_subscription_manager.stop_stomp_connection(connection)
+            except Exception as exc:
+                logger.exception("Unable to stop the connection, reason: %s", exc)
 
 
 def start_mqtt_consumers(
@@ -138,6 +216,7 @@ def stop_mqtt_consumers(
 @contextmanager
 def signal_handling(
     mqtt_consumers_map: MqttConsumersMap,
+    stomp_consumers_map: StompConsumersMap,
 ) -> Generator[None, None, None]:
     """Context manager for handling signals gracefully."""
 
@@ -145,6 +224,7 @@ def signal_handling(
         signal_name = signal.Signals(signum).name
         logger.info("Received %s signal. Shutting down gracefully...", signal_name)
         stop_mqtt_consumers(mqtt_consumers_map)
+        stop_stomp_consumers(stomp_consumers_map)
         sys.exit(0)
 
     # Register signal handlers
@@ -169,81 +249,6 @@ def signal_handling(
             signal.signal(sig, handler)
 
 
-def on_order_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
-    """Order-processing handler for MQTT message event."""
-    del client
-    message_text = msg.payload.decode("utf-8")
-    message: OrderMessage = json.loads(message_text)
-    logger.info("Received message: %s on topic %s", message, msg.topic)
-    offering = userdata["offering"]
-    user_agent = userdata["user_agent"]
-
-    order_uuid = message["order_uuid"]
-    try:
-        processor = common_processors.OfferingOrderProcessor(offering, user_agent)
-        order = processor.get_order_info(order_uuid)
-        if order is None:
-            logger.error("Failed to process order %s", order_uuid)
-            return
-        processor.process_order_with_retries(order)
-    except Exception as e:
-        logger.error("Failed to process order %s: %s", order_uuid, e)
-
-
-def on_user_role_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
-    """Membership sync handler for MQTT message event."""
-    del client
-    message_text = msg.payload.decode("utf-8")
-    message: UserRoleMessage = json.loads(message_text)
-    logger.info("Received message: %s on topic %s", message, msg.topic)
-    offering = userdata["offering"]
-    user_agent = userdata["user_agent"]
-    user_uuid = message["user_uuid"]
-    user_username = message["user_username"]
-    project_name = message["project_name"]
-    project_uuid = message["project_uuid"]
-    role_granted = message["granted"]
-
-    try:
-        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
-        logger.info(
-            "Processing %s (%s) user role changed event in project %s, granted: %s",
-            user_username,
-            user_uuid,
-            project_name,
-            role_granted,
-        )
-
-        processor.process_user_role_changed(user_uuid, project_uuid, role_granted)
-    except Exception as e:
-        logger.error(
-            "Failed to process user %s (%s) role change in project %s (%s) (granted: %s): %s",
-            user_username,
-            user_uuid,
-            project_name,
-            project_uuid,
-            role_granted,
-            e,
-        )
-
-
-def on_resource_message(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
-    """Resource update handler for MQTT message event."""
-    del client
-    message_text = msg.payload.decode("utf-8")
-    message: ResourceMessage = json.loads(message_text)
-    logger.info("Received message: %s on topic %s", message, msg.topic)
-    offering = userdata["offering"]
-    user_agent = userdata["user_agent"]
-    resource_uuid = message["resource_uuid"]
-
-    try:
-        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
-        processor.process_resource_by_uuid(resource_uuid)
-    except Exception as e:
-        logger.error("Failed to process resource %s: %s", resource_uuid, e)
-
-
 def run_initial_offering_processing(
     waldur_offerings: List[common_structures.Offering], user_agent: str = ""
 ) -> None:
@@ -251,7 +256,7 @@ def run_initial_offering_processing(
     logger.info("Processing offerings with MQTT feature enabled")
     for offering in waldur_offerings:
         try:
-            if not offering.mqtt_enabled:
+            if not offering.mqtt_enabled and not offering.stomp_enabled:
                 continue
 
             process_offering(offering, user_agent)

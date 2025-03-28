@@ -17,6 +17,7 @@ class Offering:
     backend_components: dict = field(default_factory=dict)
     mqtt_enabled: bool = False
     websocket_use_tls: bool = True
+    stomp_enabled: bool = False
 
 
 class AgentMode(Enum):
