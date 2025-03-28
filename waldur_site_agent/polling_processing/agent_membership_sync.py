@@ -16,9 +16,10 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
         logger.info("Number of offerings to process: %s", len(waldur_offerings))
         for offering in waldur_offerings:
             try:
-                if offering.mqtt_enabled:
+                if offering.mqtt_enabled or offering.stomp_enabled:
                     logger.info(
-                        "Skipping HTTP polling for the offering %s, because it uses mqtt feature",
+                        "Skipping HTTP polling for the offering %s, "
+                        "because it uses event-based processing",
                         offering.name,
                     )
                     continue

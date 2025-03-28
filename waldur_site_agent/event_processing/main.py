@@ -20,7 +20,12 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
             configuration.waldur_user_agent,
         )
 
-        with utils.signal_handling(mqtt_consumers_map):
+        stomp_consumers_map = utils.start_stomp_consumers(
+            configuration.waldur_offerings,
+            configuration.waldur_user_agent,
+        )
+
+        with utils.signal_handling(mqtt_consumers_map, stomp_consumers_map):
             while True:
                 utils.send_agent_health_checks(
                     configuration.waldur_offerings, configuration.waldur_user_agent
@@ -30,4 +35,6 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
         logger.error("Error in main process: %s", e)
         if "mqtt_consumers_map" in locals():
             utils.stop_mqtt_consumers(mqtt_consumers_map)
+        if "stomp_consumers_map" in locals():
+            utils.stop_stomp_consumers(stomp_consumers_map)
         sys.exit(1)

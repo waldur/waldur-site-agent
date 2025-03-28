@@ -68,6 +68,7 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
                 backend_settings=offering_info["backend_settings"],
                 backend_components=offering_info["backend_components"],
                 mqtt_enabled=offering_info.get("mqtt_enabled", False),
+                stomp_enabled=offering_info.get("stomp_enabled", False),
                 websocket_use_tls=offering_info.get("websocket_use_tls", True),
             )
             for offering_info in offering_list

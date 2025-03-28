@@ -3,6 +3,7 @@
 from typing import Dict, List, Tuple, TypedDict
 
 import paho.mqtt.client as mqtt
+import stomp
 
 from waldur_site_agent.common import structures as common_structures
 
@@ -34,8 +35,15 @@ MqttConsumer = Tuple[mqtt.Client, EventSubscription, common_structures.Offering]
 # A tuple of offering name and UUID used as a key for consumer mapping.
 MqttConsumerKey = Tuple[str, str]
 
+# A tuple of offering name and UUID used as a key for connection mapping.
+StompConsumerKey = Tuple[str, str]
+
+# A tuple containing STOMP connection, subscription, and offering information.
+StompConsumer = Tuple[stomp.WSStompConnection, EventSubscription, common_structures.Offering]
+
 # A dictionary mapping consumer keys to lists of MQTT consumers.
 MqttConsumersMap = Dict[MqttConsumerKey, List[MqttConsumer]]
+StompConsumersMap = Dict[StompConsumerKey, List[StompConsumer]]
 
 
 class UserData(TypedDict):
