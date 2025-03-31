@@ -51,7 +51,6 @@ def setup_stomp_offering_subscriptions(
     waldur_offering: common_structures.Offering, waldur_user_agent: str
 ) -> List[stomp.WSStompConnection]:
     """Set up STOMP subscriptions for the specified offering."""
-    # TODO: adjust method signatures to match STOMP requirements
     stomp_connections: List[stomp.WSStompConnection] = []
     for object_type in ["order", "user_role", "resource"]:
         event_subscription_manager = EventSubscriptionManager(
