@@ -252,13 +252,11 @@ def run_initial_offering_processing(
     waldur_offerings: List[common_structures.Offering], user_agent: str = ""
 ) -> None:
     """Runs processing of offerings with MQTT feature enabled."""
-    logger.info("Processing offerings with MQTT feature enabled")
+    logger.info("Processing offerings with MQTT/STOMP feature enabled")
     for offering in waldur_offerings:
         try:
-            if not offering.mqtt_enabled and not offering.stomp_enabled:
-                continue
-
-            process_offering(offering, user_agent)
+            if offering.mqtt_enabled or offering.stomp_enabled:
+                process_offering(offering, user_agent)
         except Exception as e:
             logger.exception("Error occurred during initial offering process: %s", e)
 
