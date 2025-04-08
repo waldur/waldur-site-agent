@@ -172,6 +172,9 @@ class EventSubscriptionManager:
         connection = stomp.WSStompConnection(
             host_and_ports=[(stomp_host, stomp_port)], ws_path="/rmqws-stomp", vhost=vhost_name
         )
+        if self.offering.websocket_use_tls:
+            connection.set_ssl(for_hosts=[(stomp_host, stomp_port)])
+
         callback_function = OBJECT_TYPE_TO_HANDLER_STOMP[self.observable_object_type]
         connection.set_listener(
             WALDUR_LISTENER_NAME,
