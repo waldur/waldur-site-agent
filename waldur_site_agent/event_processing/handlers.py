@@ -154,7 +154,6 @@ def on_resource_message_stomp(
 ) -> None:
     """Resource update handler for STOMP message event."""
     message: ResourceMessage = json.loads(frame.body)
-    logger.info("Received message: %s on topic %s", message, frame.headers.get("destination"))
     resource_uuid = message["resource_uuid"]
 
     try:
