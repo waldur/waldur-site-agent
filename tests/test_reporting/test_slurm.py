@@ -38,7 +38,7 @@ allocation_slurm = Resource(
 
 @freeze_time("2022-01-01")
 @mock.patch("waldur_site_agent.common.processors.WaldurClient", autospec=True)
-@mock.patch.object(utils.SlurmBackend, "_pull_allocation", return_value=allocation_slurm)
+@mock.patch.object(utils.SlurmBackend, "_pull_allocation")
 class ReportingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.waldur_resource = {
@@ -56,10 +56,36 @@ class ReportingTest(unittest.TestCase):
             ]
         }
         self.offering = OFFERING
-
         self.plan_period_uuid = uuid.uuid4().hex
 
-    def test_usage_reporting(self, _, waldur_client_class: mock.Mock):
+        self.allocation_slurm = Resource(
+            backend_id="test-allocation-01",
+            backend_type=BackendType.SLURM.value,
+            users=["user-01"],
+            usage={
+                "user-01": {
+                    "cpu": 10,
+                    "mem": 30,
+                },
+                "TOTAL_ACCOUNT_USAGE": {
+                    "cpu": 10,
+                    "mem": 30,
+                },
+            },
+            limits={
+                "cpu": 100,
+                "mem": 300,
+            },
+        )
+
+    def tearDown(self) -> None:
+        """Clean up after each test."""
+        # Reset mocks
+        waldur_client_mock.reset_mock()
+        slurm_backend_mock.reset_mock()
+
+    def test_usage_reporting(self, mock_pull_allocation, waldur_client_class: mock.Mock):
+        mock_pull_allocation.return_value = self.allocation_slurm
         processor = OfferingReportProcessor(self.offering)
         waldur_client = waldur_client_class.return_value
 
@@ -81,10 +107,12 @@ class ReportingTest(unittest.TestCase):
             {
                 "uuid": "23565BD44E5D433F88C1028A2E7AB5F6",
                 "type": "cpu",
+                "usage": "5.0",
             },
             {
                 "uuid": "ABFCD77BDE254F7485F839397968A12D",
                 "type": "mem",
+                "usage": "20.0",
             },
         ]
         processor.process_offering()
@@ -104,3 +132,41 @@ class ReportingTest(unittest.TestCase):
             ],
         )
         self.assertEqual(2, waldur_client.create_component_user_usage.call_count)
+
+    def test_usage_reporting_with_anomaly(
+        self, mock_pull_allocation, waldur_client_class: mock.Mock
+    ):
+        mock_pull_allocation.return_value = self.allocation_slurm
+        processor = OfferingReportProcessor(self.offering)
+        waldur_client = waldur_client_class.return_value
+
+        waldur_client.marketplace_provider_resource_get_plan_periods.return_value = [
+            {"uuid": self.plan_period_uuid}
+        ]
+        waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
+        waldur_client.get_marketplace_provider_resource.return_value = self.waldur_resource
+        waldur_client.get_marketplace_provider_offering.return_value = {
+            "components": [
+                {"type": "cpu"},
+                {"type": "mem"},
+            ]
+        }
+        waldur_client.list_remote_offering_users.return_value = [
+            {"uuid": "5B0DB04C6FED40A5AB6D511C0E2282C9"}
+        ]
+        waldur_client.list_component_usages.return_value = [
+            {
+                "uuid": "23565BD44E5D433F88C1028A2E7AB5F6",
+                "type": "cpu",
+                "usage": "15.0",
+            },
+            {
+                "uuid": "ABFCD77BDE254F7485F839397968A12D",
+                "type": "mem",
+                "usage": "20.0",
+            },
+        ]
+        processor.process_offering()
+
+        # Should not call create_component_usages due to anomaly
+        waldur_client.create_component_usages.assert_not_called()
