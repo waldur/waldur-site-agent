@@ -21,6 +21,10 @@ from waldur_site_agent.backends.structures import Resource
 from waldur_site_agent.common import structures, utils
 
 
+class UsageAnomalyError(Exception):
+    """Raised when usage anomaly is detected ( new usage is lower than existing usage)."""
+
+
 class OfferingBaseProcessor(abc.ABC):
     """Abstract class for an offering processing."""
 
@@ -819,6 +823,42 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 # If not last attempt, wait and retry
                 sleep(delay)
 
+    def _check_usage_anomaly(
+        self,
+        component_type: str,
+        current_usage: float,
+        existing_usages: List[Dict],
+    ) -> bool:
+        """Check if the current usage is lower than existing usage."""
+        # Find all usage records for this component type
+        component_usages = [usage for usage in existing_usages if usage["type"] == component_type]
+
+        if not component_usages:
+            return False
+
+        if len(component_usages) > 1:
+            logger.error(
+                "Found multiple usage records for component %s in the same billing period: %d",
+                component_type,
+                len(component_usages),
+            )
+            return True
+
+        component_usage = component_usages[0]
+        existing_usage = float(component_usage["usage"])
+
+        if current_usage < existing_usage:
+            logger.error(
+                "Usage anomaly detected for component %s: "
+                "Current usage %s is lower than existing usage %s",
+                component_type,
+                current_usage,
+                existing_usage,
+            )
+            return True
+
+        return False
+
     def _submit_total_usage_for_resource(
         self,
         backend_resource: Resource,
@@ -828,7 +868,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         """Reports total usage for a backend resource to Waldur."""
         logger.info("Setting usages for %s: %s", backend_resource.backend_id, total_usage)
         resource_uuid = backend_resource.marketplace_uuid
-
         component_types = [component["type"] for component in waldur_components]
         missing_components = set(total_usage) - set(component_types)
 
@@ -837,6 +876,21 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 "The following components are not found in Waldur: %s",
                 ", ".join(missing_components),
             )
+
+        month_start = backend_utils.month_start(datetime.datetime.now()).date()
+        existing_usages = self.waldur_rest_client.list_component_usages(
+            resource_uuid=resource_uuid, billing_period=month_start
+        )
+
+        for component, amount in total_usage.items():
+            if component in component_types and self._check_usage_anomaly(
+                component, amount, existing_usages
+            ):
+                logger.warning(
+                    "Skipping usage update for resource %s due to anomaly detection",
+                    backend_resource.backend_id,
+                )
+                raise UsageAnomalyError(f"Usage anomaly detected for component {component}")
 
         usage_objects = [
             ComponentUsage(type=component, amount=amount)
@@ -947,11 +1001,15 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         # Submit usage
         total_usage = usages.pop("TOTAL_ACCOUNT_USAGE")
-        self._submit_total_usage_for_resource(
-            waldur_resource,
-            total_usage,
-            waldur_offering["components"],
-        )
+        try:
+            self._submit_total_usage_for_resource(
+                waldur_resource,
+                total_usage,
+                waldur_offering["components"],
+            )
+        except UsageAnomalyError:
+            logger.info("Skipping per-user usage processing due to anomaly in usage reporting")
+            return
 
         # Skip the following actions if the dict is empty
         if not usages:
