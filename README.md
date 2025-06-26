@@ -84,12 +84,20 @@ The first one (called agent-order-process) fetches data
 from Waldur with further processing,
 the second one (called agent-report)
 sends usage data from the backend to Waldur
-the third one syncs membership information between Waldur and the backend and
-the optional fourth one processes order and membership info in event-based way.
+the third one syncs membership information between Waldur
+and the backend (called agent-membership-sync) and
+the optional fourth one processes order and membership info in event-based way (agent-event-process).
+The last one covers the same functionality as the first two services,
+but uses event bus for integration with Waldur.
 All the instances must be configured with provider config file and CLI variables.
 
 To deploy them, you need to setup and
 start the systemd services.
+
+**Note**: only one of these service combinations is possible:
+
+1. agent-order-process, agent-membership-sync and agent-report
+2. agent-event-process and agent-report
 
 ### Prerequisite: offering configuration in Waldur
 
