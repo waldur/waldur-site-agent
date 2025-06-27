@@ -41,21 +41,11 @@ class SlurmBackend(backend.BaseBackend):
         """Return a list of TRES on the SLURM cluster."""
         return self.client.list_tres()
 
-    def create_resource(
-        self, waldur_resource: Dict, user_context: Optional[Dict] = None
-    ) -> Resource:
-        """Create resource on SLURM backend with optional user context integration.
-
-        Args:
-            waldur_resource: Resource data from Waldur marketplace
-            user_context: Optional user context with team members and offering users
-
-        Returns:
-            Resource object with backend metadata
-        """
-        # Call the base implementation first
-        resource = super().create_resource(waldur_resource, user_context)
-
+    def post_create_resource(
+        self, resource: Resource, waldur_resource: Dict, user_context: Optional[Dict] = None
+    ) -> None:
+        """Post-create actions for SLURM resources."""
+        del resource, waldur_resource
         # If user context is available and homedir creation is enabled, create homedirs proactively
         if user_context and self.backend_settings.get("enable_user_homedir_account_creation", True):
             offering_user_mappings = user_context.get("offering_user_mappings", {})
@@ -74,8 +64,6 @@ class SlurmBackend(backend.BaseBackend):
                     )
                     umask = self.backend_settings.get("default_homedir_umask", "0700")
                     self._create_user_homedirs(usernames, umask)
-
-        return resource
 
     def _collect_limits(
         self, waldur_resource: Dict[str, Dict]
