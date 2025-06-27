@@ -159,6 +159,15 @@ class BaseBackend(ABC):
         logger.info("The account %s already exists in the cluster", account_name)
         return False
 
+    def post_create_resource(
+        self,
+        resource: structures.Resource,
+        waldur_resource: Dict,
+        user_context: Optional[Dict] = None,
+    ) -> None:
+        """Perform customizable actions after resource creation."""
+        del resource, waldur_resource, user_context  # Not used in base implementation
+
     def create_resource(
         self, waldur_resource: Dict, user_context: Optional[Dict] = None
     ) -> structures.Resource:
@@ -172,7 +181,6 @@ class BaseBackend(ABC):
         """
         logger.info("Creating account in the backend")
         # Note: user_context is available for backends that need it during creation
-        del user_context  # Not used in base implementation
 
         # Setup accounts hierarchy
         self._setup_accounts_hierarchy(waldur_resource)
@@ -183,13 +191,18 @@ class BaseBackend(ABC):
         # Setup limits
         self._setup_resource_limits(allocation_account, waldur_resource)
 
-        return structures.Resource(
+        resource = structures.Resource(
             backend_type=self.backend_type,
             name=waldur_resource["name"],
             marketplace_uuid=waldur_resource["uuid"],
             backend_id=allocation_account,
             limits=self._collect_limits(waldur_resource)[1],
         )
+
+        # Post-create actions
+        self.post_create_resource(resource, waldur_resource, user_context)
+
+        return resource
 
     def _setup_accounts_hierarchy(self, waldur_resource: Dict) -> None:
         """Setup customer and project accounts hierarchy."""

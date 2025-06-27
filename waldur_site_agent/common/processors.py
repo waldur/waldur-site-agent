@@ -22,7 +22,7 @@ from waldur_site_agent.common import structures, utils
 
 
 class UsageAnomalyError(Exception):
-    """Raised when usage anomaly is detected ( new usage is lower than existing usage)."""
+    """Raised when usage anomaly is detected (new usage is lower than existing usage)."""
 
 
 class OfferingBaseProcessor(abc.ABC):
