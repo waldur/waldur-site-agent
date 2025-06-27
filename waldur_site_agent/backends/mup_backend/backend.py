@@ -42,6 +42,15 @@ class MUPBackend(backend.BaseBackend):
             if setting not in mup_settings:
                 raise ValueError(f"Missing required setting: {setting}")
 
+        # Validate components - MUP only supports limit-based accounting
+        for component_name, component_config in mup_components.items():
+            accounting_type = component_config.get("accounting_type")
+            if accounting_type != "limit":
+                raise ValueError(
+                    f"MUP backend only supports components with accounting_type='limit'. "
+                    f"Component '{component_name}' has accounting_type='{accounting_type}'"
+                )
+
         self.client: MUPClient = MUPClient(
             api_url=mup_settings["api_url"],
             username=mup_settings["username"],
@@ -53,7 +62,6 @@ class MUPBackend(backend.BaseBackend):
         self.default_agency = mup_settings.get("default_agency", "FCT")
         self.project_prefix = mup_settings.get("project_prefix", "waldur_")
         self.allocation_prefix = mup_settings.get("allocation_prefix", "alloc_")
-        self.default_allocation_type = mup_settings.get("default_allocation_type", "compute")
         self.default_storage_limit = mup_settings.get("default_storage_limit", 1000)  # GB
 
         # Cache for research fields and user mappings
@@ -83,6 +91,11 @@ class MUPBackend(backend.BaseBackend):
         if self._research_fields_cache is None:
             self._research_fields_cache = self.client.get_research_fields()
         return self._research_fields_cache
+
+    def _raise_no_allocations_error(self) -> None:
+        """Raise error when no allocations were created."""
+        msg = "No allocations were created - all components had zero limits or failed"
+        raise BackendError(msg)
 
     def _get_or_create_user(self, waldur_user: Dict) -> Optional[int]:  # noqa: PLR0911
         """Get or create MUP user based on Waldur user information.
@@ -136,20 +149,20 @@ class MUPBackend(backend.BaseBackend):
 
         return None
 
-    def _get_project_by_waldur_id(self, waldur_project_uuid: str) -> Optional[Dict]:
-        """Find MUP project by Waldur project UUID."""
-        if waldur_project_uuid in self._project_cache:
-            return self._project_cache[waldur_project_uuid]
+    def _get_project_by_waldur_id(self, waldur_resource_uuid: str) -> Optional[Dict]:
+        """Find MUP project by Waldur resource UUID."""
+        if waldur_resource_uuid in self._project_cache:
+            return self._project_cache[waldur_resource_uuid]
 
         try:
             projects = self.client.get_projects()
             for project in projects:
-                # Look for our project by grant_number (we store Waldur UUID there)
-                if project.get("grant_number") == f"{self.project_prefix}{waldur_project_uuid}":
-                    self._project_cache[waldur_project_uuid] = project
+                # Look for our project by grant_number (we store Waldur Resource UUID there)
+                if project.get("grant_number") == f"{self.project_prefix}{waldur_resource_uuid}":
+                    self._project_cache[waldur_resource_uuid] = project
                     return project
         except MUPError:
-            logger.exception("Failed to search for project %s", waldur_project_uuid)
+            logger.exception("Failed to search for resource %s", waldur_resource_uuid)
 
         return None
 
@@ -158,7 +171,7 @@ class MUPBackend(backend.BaseBackend):
         try:
             # Extract project information
             project_name = waldur_project.get("name", f"Project {waldur_project['uuid']}")
-            project_uuid = waldur_project["uuid"]
+            resource_uuid = waldur_project["uuid"]  # This is actually resource UUID now
 
             # Calculate project dates (default to 1 year if not specified)
             start_date = datetime.now()
@@ -173,22 +186,24 @@ class MUPBackend(backend.BaseBackend):
                 "start_date": start_date.strftime("%Y-%m-%d"),
                 "end_date": end_date.strftime("%Y-%m-%d"),
                 "agency": self.default_agency,
-                "grant_number": f"{self.project_prefix}{project_uuid}",  # Store Waldur UUID
+                "grant_number": (
+                    f"{self.project_prefix}{resource_uuid}"  # Store Waldur Resource UUID
+                ),
                 "max_storage": self.default_storage_limit,
                 "ai_included": False,
             }
 
             result = self.client.create_project(project_data)
             logger.info(
-                "Created MUP project %s for Waldur project %s", result.get("id"), project_uuid
+                "Created MUP project %s for Waldur resource %s", result.get("id"), resource_uuid
             )
 
             # Cache the result
-            self._project_cache[project_uuid] = result
+            self._project_cache[resource_uuid] = result
             return result  # noqa: TRY300
 
         except MUPError:
-            logger.exception("Failed to create MUP project for %s", waldur_project["uuid"])
+            logger.exception("Failed to create MUP project for resource %s", resource_uuid)
             return None
 
     def _get_pi_email_from_context(self, user_context: Optional[Dict], project_uuid: str) -> str:
@@ -300,14 +315,14 @@ class MUPBackend(backend.BaseBackend):
                 msg = "No project UUID found in resource data"
                 raise BackendError(msg)  # noqa: TRY301
 
-            # Get or create MUP project
-            mup_project = self._get_project_by_waldur_id(project_uuid)
+            # Get or create MUP project (Resource = Project in MUP)
+            mup_project = self._get_project_by_waldur_id(waldur_resource["uuid"])
             if not mup_project:
                 # Get PI email from user context or use a fallback
                 pi_email = self._get_pi_email_from_context(user_context, project_uuid)
 
                 project_data = {
-                    "uuid": project_uuid,
+                    "uuid": waldur_resource["uuid"],  # Use resource UUID for MUP project
                     "name": project_name,
                     "description": f"Waldur project {project_name}",
                 }
@@ -328,36 +343,79 @@ class MUPBackend(backend.BaseBackend):
             if user_context:
                 self._create_and_add_users_from_context(mup_project["id"], user_context)
 
-            # Create allocation based on resource limits/plan
+            # Create allocations for each backend component
             limits = waldur_resource.get("limits", {})
+            created_allocations = []
+            resource_limits = {}
 
-            # Extract CPU cores (assume this is the main allocation metric)
-            cpu_cores = limits.get("cpu", 1)
-            if isinstance(cpu_cores, dict):
-                cpu_cores = cpu_cores.get("value", 1)
+            for component_key, component_config in self.backend_components.items():
+                # Get limit value for this component
+                component_limit = limits.get(component_key, 0)
+                if isinstance(component_limit, dict):
+                    component_limit = component_limit.get("value", 0)
 
-            allocation_data = {
-                "type": self.default_allocation_type,
-                "identifier": f"{self.allocation_prefix}{waldur_resource['uuid']}",
-                "size": int(cpu_cores),
-                "used": 0,
-                "active": True,
-                "project": mup_project["id"],
-            }
+                # Skip components with zero limits
+                if component_limit <= 0:
+                    continue
 
-            result = self.client.create_allocation(mup_project["id"], allocation_data)
+                # Get MUP allocation type for this component from config
+                allocation_type = component_config.get(
+                    "mup_allocation_type",
+                    "Deucalion x86_64",  # Default fallback
+                )
 
-            logger.info(
-                "Created MUP allocation %s for resource %s", result["id"], waldur_resource["uuid"]
-            )
+                # Apply unit factor for the allocation size
+                unit_factor = component_config.get("unit_factor", 1)
+                allocation_size = int(component_limit * unit_factor)
+
+                allocation_data = {
+                    "type": allocation_type,
+                    "identifier": (
+                        f"{self.allocation_prefix}{waldur_resource['uuid']}_{component_key}"
+                    ),
+                    "size": allocation_size,
+                    "used": 0,
+                    "active": True,
+                    "project": mup_project["id"],
+                }
+
+                try:
+                    result = self.client.create_allocation(mup_project["id"], allocation_data)
+                    created_allocations.append(
+                        {
+                            "id": result["id"],
+                            "component": component_key,
+                            "type": allocation_type,
+                            "identifier": allocation_data["identifier"],
+                        }
+                    )
+                    resource_limits[component_key] = int(component_limit)
+
+                    logger.info(
+                        "Created MUP allocation %s (%s) for resource %s component %s",
+                        result["id"],
+                        allocation_type,
+                        waldur_resource["uuid"],
+                        component_key,
+                    )
+                except Exception:
+                    logger.exception("Failed to create allocation for component %s", component_key)
+                    # Continue with other components even if one fails
+                    continue
+
+            if not created_allocations:
+                self._raise_no_allocations_error()
+
+            # Use the MUP project ID as backend_id (Resource = Project in MUP)
+            project_backend_id = str(mup_project["id"])
 
             # Return Resource object with backend metadata
             return Resource(
                 backend_type=self.backend_type,
                 name=waldur_resource["name"],
                 marketplace_uuid=waldur_resource["uuid"],
-                backend_id=f"{self.allocation_prefix}{waldur_resource['uuid']}",
-                limits={"cpu": int(cpu_cores)},
+                backend_id=project_backend_id,
+                limits=resource_limits,
                 users=[],
                 usage={},
             )
@@ -405,7 +463,7 @@ class MUPBackend(backend.BaseBackend):
         return False
 
     def set_resource_limits(self, resource_backend_id: str, limits: Dict[str, int]) -> None:
-        """Set limits for components in the MUP allocation."""
+        """Set limits for components in the MUP allocations."""
         logger.info("Setting resource limits for %s: %s", resource_backend_id, limits)
 
         # Convert limits with unit factors
@@ -415,42 +473,54 @@ class MUPBackend(backend.BaseBackend):
             if key in self.backend_components
         }
 
-        # Find the project by allocation identifier
+        # resource_backend_id is now the MUP project ID
         try:
-            projects = self.client.get_projects()
-            target_project = None
+            project_id = int(resource_backend_id)
+            updated_allocations = 0
 
-            for project in projects:
-                allocations = self.client.get_project_allocations(project["id"])
-                for allocation in allocations:
-                    if allocation.get("identifier") == resource_backend_id:
-                        target_project = project
-                        target_allocation = allocation
-                        break
-                if target_project:
-                    break
+            # Get all allocations for this project directly
+            allocations = self.client.get_project_allocations(project_id)
 
-            if not target_project:
-                logger.error("No MUP project found for resource %s", resource_backend_id)
-                return
+            # Update each allocation based on component limits
+            for allocation in allocations:
+                allocation_id = allocation.get("identifier", "")
+                # Extract component from allocation identifier (format: alloc_{uuid}_{component})
+                if "_" in allocation_id:
+                    parts = allocation_id.split("_")
+                    min_parts = 3
+                    if len(parts) >= min_parts:
+                        component_key = parts[-1]  # Last part is the component
 
-            # Update allocation size based on CPU limit (primary resource for MUP)
-            if "cpu" in converted_limits:
-                new_size = converted_limits["cpu"]
-                allocation_data = {
-                    "type": target_allocation["type"],
-                    "identifier": target_allocation["identifier"],
-                    "size": new_size,
-                    "used": target_allocation.get("used", 0),
-                    "active": target_allocation.get("active", True),
-                    "project": target_project["id"],
-                }
+                        # Update allocation if we have a limit for this component
+                        if component_key in converted_limits:
+                            new_size = converted_limits[component_key]
+                            allocation_data = {
+                                "type": allocation["type"],
+                                "identifier": allocation["identifier"],
+                                "size": new_size,
+                                "used": allocation.get("used", 0),
+                                "active": allocation.get("active", True),
+                                "project": project_id,
+                            }
 
-                self.client.update_allocation(
-                    target_project["id"], target_allocation["id"], allocation_data
-                )
+                            self.client.update_allocation(
+                                project_id, allocation["id"], allocation_data
+                            )
+                            updated_allocations += 1
+                            logger.info(
+                                "Updated MUP allocation %s (%s) size to %s",
+                                allocation["id"],
+                                component_key,
+                                new_size,
+                            )
+
+            if updated_allocations == 0:
+                logger.warning("No allocations were updated for resource %s", resource_backend_id)
+            else:
                 logger.info(
-                    "Updated MUP allocation %s size to %s", target_allocation["id"], new_size
+                    "Updated %d allocations for resource %s",
+                    updated_allocations,
+                    resource_backend_id,
                 )
 
         except Exception as e:
@@ -459,20 +529,24 @@ class MUPBackend(backend.BaseBackend):
 
     def get_resource_metadata(self, account: str) -> dict:
         """Get backend-specific resource metadata."""
-        # Find project and allocation by account name
-        projects = self.client.get_projects()
-        for project in projects:
-            if project.get("grant_number") == account:
-                allocations = self.client.get_project_allocations(project["id"])
-                if allocations:
-                    allocation = allocations[0]
-                    return {
-                        "mup_project_id": project["id"],
-                        "mup_allocation_id": allocation["id"],
-                        "allocation_type": allocation.get("type"),
-                        "allocation_size": allocation.get("size"),
-                        "allocation_used": allocation.get("used"),
-                    }
+        # Find project and allocation by account name (project ID)
+        try:
+            project_id = int(account)
+            projects = self.client.get_projects()
+            for project in projects:
+                if project.get("id") == project_id:
+                    allocations = self.client.get_project_allocations(project["id"])
+                    if allocations:
+                        allocation = allocations[0]
+                        return {
+                            "mup_project_id": project["id"],
+                            "mup_allocation_id": allocation["id"],
+                            "allocation_type": allocation.get("type"),
+                            "allocation_size": allocation.get("size"),
+                            "allocation_used": allocation.get("used"),
+                        }
+        except (ValueError, Exception):
+            logger.exception("Failed to get resource metadata for %s", account)
         return {}
 
     def _get_usage_report(self, accounts: List[str]) -> Dict[str, Dict[str, Dict[str, int]]]:
@@ -483,25 +557,51 @@ class MUPBackend(backend.BaseBackend):
             projects = self.client.get_projects()
 
             for project in projects:
-                grant_number = project.get("grant_number")
-                if grant_number in accounts:
+                project_id_str = str(project.get("id"))
+                if project_id_str in accounts:
                     allocations = self.client.get_project_allocations(project["id"])
 
                     # Initialize account usage
-                    report[grant_number] = {}
+                    report[project_id_str] = {}
                     total_usage: Dict[str, int] = {}
 
                     for allocation in allocations:
-                        # Map allocation usage to component usage
-                        allocation_type = allocation.get("type", "compute")
+                        # Map allocation usage to component usage based on allocation identifier
+                        allocation_id = allocation.get("identifier", "")
+                        allocation_type = allocation.get("type", "")
                         used = allocation.get("used", 0)
 
-                        # Map to CPU usage for now (could be extended for other types)
-                        if allocation_type == "compute":
-                            total_usage["cpu"] = total_usage.get("cpu", 0) + used
+                        # Extract component from identifier (format: alloc_{uuid}_{component})
+                        component_key = None
+                        if "_" in allocation_id:
+                            parts = allocation_id.split("_")
+                            min_parts = 3
+                            if len(parts) >= min_parts:
+                                component_key = parts[-1]  # Last part is the component
+
+                        # If we can't extract component from identifier, map by allocation type
+                        if not component_key:
+                            # Build reverse mapping from allocation type to component from config
+                            type_to_component = {
+                                config.get("mup_allocation_type"): comp_key
+                                for comp_key, config in self.backend_components.items()
+                                if config.get("mup_allocation_type")
+                            }
+                            component_key = type_to_component.get(allocation_type, "cpu")
+
+                        # Add usage for this component
+                        if component_key and component_key in self.backend_components:
+                            # Apply reverse unit factor to get Waldur units
+                            unit_factor = self.backend_components[component_key].get(
+                                "unit_factor", 1
+                            )
+                            waldur_usage = used // max(unit_factor, 1)
+                            total_usage[component_key] = (
+                                total_usage.get(component_key, 0) + waldur_usage
+                            )
 
                     # Set total account usage
-                    report[grant_number]["TOTAL_ACCOUNT_USAGE"] = total_usage
+                    report[project_id_str]["TOTAL_ACCOUNT_USAGE"] = total_usage
 
                     # Get project members and create per-user usage (placeholder)
                     members = self.client.get_project_members(project["id"])
@@ -511,15 +611,34 @@ class MUPBackend(backend.BaseBackend):
                             if username:
                                 # For now, assign equal share of usage to active users
                                 user_count = len([m for m in members if m.get("active", False)])
-                                user_usage = {
-                                    "cpu": total_usage.get("cpu", 0) // max(user_count, 1)
-                                }
-                                report[grant_number][username] = user_usage
+                                # Distribute usage across all components for this user
+                                user_usage = {}
+                                for component_key, component_total in total_usage.items():
+                                    user_usage[component_key] = component_total // max(
+                                        user_count, 1
+                                    )
+                                report[project_id_str][username] = user_usage
 
         except Exception:
             logger.exception("Failed to get usage report")
 
         return report
+
+    def _find_project_by_resource_id(self, resource_backend_id: str) -> Optional[Dict]:
+        """Find MUP project by resource backend ID (project ID)."""
+        try:
+            project_id = int(resource_backend_id)
+            projects = self.client.get_projects()
+
+            # Find project by ID
+            for project in projects:
+                if project.get("id") == project_id:
+                    return project
+
+        except (ValueError, Exception):
+            logger.exception("Failed to find project for resource %s", resource_backend_id)
+
+        return None
 
     def add_users_to_resource(
         self, resource_backend_id: str, user_ids: Set[str], **_kwargs: dict
@@ -536,18 +655,8 @@ class MUPBackend(backend.BaseBackend):
         )
         added_users: Set[str] = set()
 
-        # Find the project by allocation identifier
-        projects = self.client.get_projects()
-        target_project = None
-
-        for project in projects:
-            allocations = self.client.get_project_allocations(project["id"])
-            for allocation in allocations:
-                if allocation.get("identifier") == resource_backend_id:
-                    target_project = project
-                    break
-            if target_project:
-                break
+        # Find the project by resource backend ID
+        target_project = self._find_project_by_resource_id(resource_backend_id)
 
         if not target_project:
             logger.error("No MUP project found for resource %s", resource_backend_id)
@@ -594,18 +703,8 @@ class MUPBackend(backend.BaseBackend):
         )
         removed_users: List[str] = []
 
-        # Find the project by allocation identifier
-        projects = self.client.get_projects()
-        target_project = None
-
-        for project in projects:
-            allocations = self.client.get_project_allocations(project["id"])
-            for allocation in allocations:
-                if allocation.get("identifier") == resource_backend_id:
-                    target_project = project
-                    break
-            if target_project:
-                break
+        # Find the project by resource backend ID
+        target_project = self._find_project_by_resource_id(resource_backend_id)
 
         if not target_project:
             logger.error("No MUP project found for resource %s", resource_backend_id)
