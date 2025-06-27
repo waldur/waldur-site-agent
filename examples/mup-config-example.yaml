@@ -1,0 +1,48 @@
+# Example configuration for MUP backend in waldur-site-agent
+# Save this as waldur-site-agent-config.yaml
+
+sentry_dsn: ""
+
+offerings:
+  - name: "MUP HPC Allocation"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "your_waldur_api_token_here"
+    waldur_offering_uuid: "uuid_of_your_marketplace_offering"
+
+    # STOMP/WebSocket settings for real-time events
+    stomp_enabled: true
+    mqtt_enabled: false
+    websocket_use_tls: false
+
+    # Backend type
+    backend_type: "mup"
+
+    # MUP-specific backend settings
+    backend_settings:
+      # MUP API connection details
+      api_url: "https://mupdevb.macc.fccn.pt/"
+      username: "your_mup_username"
+      password: "your_mup_password"
+
+      # Default settings for project/allocation creation
+      default_research_field: 1  # Default research field ID in MUP
+      default_agency: "FCT"  # Default funding agency
+      project_prefix: "waldur_"  # Prefix for project grant numbers
+      allocation_prefix: "alloc_"  # Prefix for allocation identifiers
+      default_allocation_type: "compute"  # Default allocation type
+      default_storage_limit: 1000  # Default storage limit in GB
+
+    # Component mapping between Waldur and MUP
+    # This defines how Waldur marketplace components map to MUP allocation units
+    backend_components:
+      cpu:
+        measured_unit: "core-hours"
+        unit_factor: 1
+        accounting_type: "usage"
+        label: "CPU Core Hours"
+
+      storage:
+        measured_unit: "GB"
+        unit_factor: 1
+        accounting_type: "limit"
+        label: "Storage"

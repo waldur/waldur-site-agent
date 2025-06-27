@@ -207,6 +207,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     def _create_resource(
         self,
         waldur_resource: Dict,
+        user_context: Dict,
     ) -> Resource | None:
         resource_uuid = waldur_resource["uuid"]
         resource_name = waldur_resource["name"]
@@ -217,7 +218,8 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             logger.error("Unexpected resource UUID format, skipping the order")
             return None
 
-        backend_resource = self.resource_backend.create_resource(waldur_resource)
+        # Use the provided user context for resource creation
+        backend_resource = self.resource_backend.create_resource(waldur_resource, user_context)
         if backend_resource.backend_id == "":
             msg = f"Unable to create a backend resource for offering {self.offering}"
             raise BackendError(msg)
@@ -229,26 +231,72 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         return backend_resource
 
+    def _fetch_user_context_for_resource(self, resource_uuid: str) -> Dict:
+        """Fetch user context for resource creation.
+
+        Returns a dictionary containing:
+        - team: List of project team members
+        - offering_users: List of offering users
+        - user_mappings: Mapping of user UUIDs to usernames
+        """
+        try:
+            logger.info("Fetching user context for resource %s", resource_uuid)
+
+            # Get project team members
+            team = self.waldur_rest_client.marketplace_provider_resource_get_team(resource_uuid)
+            user_uuids = {user["uuid"] for user in team}
+
+            # Get offering users
+            offering_users_all = self.waldur_rest_client.list_remote_offering_users(
+                {"offering_uuid": self.offering.uuid, "is_restricted": False}
+            )
+
+            # Filter offering users to only those in the project team
+            offering_users = [
+                offering_user
+                for offering_user in offering_users_all
+                if offering_user["user_uuid"] in user_uuids and offering_user["username"] != ""
+            ]
+
+            # Create user mappings for easy lookup
+            user_mappings = {user["uuid"]: user for user in team}
+            offering_user_mappings = {
+                offering_user["user_uuid"]: offering_user for offering_user in offering_users
+            }
+
+        except Exception as e:
+            logger.warning("Failed to fetch user context for resource %s: %s", resource_uuid, e)
+            return {
+                "team": [],
+                "offering_users": [],
+                "user_mappings": {},
+                "offering_user_mappings": {},
+            }
+        else:
+            return {
+                "team": team,
+                "offering_users": offering_users,
+                "user_mappings": user_mappings,
+                "offering_user_mappings": offering_user_mappings,
+            }
+
     def _add_users_to_resource(
         self,
         backend_resource: Resource,
+        user_context: Dict,
     ) -> None:
         logger.info("Adding users to resource")
-        logger.info("Fetching Waldur resource team")
-        team = self.waldur_rest_client.marketplace_provider_resource_get_team(
-            backend_resource.marketplace_uuid
-        )
-        user_uuids = {user["uuid"] for user in team}
 
-        logger.info("Fetching Waldur offering users")
-        offering_users_all = self.waldur_rest_client.list_remote_offering_users(
-            {"offering_uuid": self.offering.uuid, "is_restricted": False}
-        )
+        # Extract usernames from the already-fetched user context
         offering_usernames: Set[str] = {
             offering_user["username"]
-            for offering_user in offering_users_all
-            if offering_user["user_uuid"] in user_uuids and offering_user["username"] != ""
+            for offering_user in user_context["offering_users"]
+            if offering_user["username"] != ""
         }
+
+        if not offering_usernames:
+            logger.info("No users to add to resource")
+            return
 
         logger.info("Adding usernames to resource in backend")
         self.resource_backend.add_users_to_resource(
@@ -296,11 +344,14 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 )
                 create_resource = False
 
+        # Fetch user context once for both resource creation and user addition
+        user_context = self._fetch_user_context_for_resource(order["marketplace_resource_uuid"])
+
         if create_resource:
             waldur_resource["project_slug"] = order["project_slug"]
             waldur_resource["customer_slug"] = order["customer_slug"]
 
-            backend_resource = self._create_resource(waldur_resource)
+            backend_resource = self._create_resource(waldur_resource, user_context)
             if backend_resource is None:
                 msg = "Unable to create a resource"
                 raise BackendError(msg)
@@ -308,9 +359,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         if backend_resource is None:
             return False
 
-        self._add_users_to_resource(
-            backend_resource,
-        )
+        self._add_users_to_resource(backend_resource, user_context)
 
         return True
 

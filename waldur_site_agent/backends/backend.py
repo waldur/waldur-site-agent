@@ -78,7 +78,7 @@ class BaseBackend(ABC):
         usage = report.get(account)
 
         if usage is None:
-            empty_usage = {tres: 0 for tres in self.backend_components}
+            empty_usage = {bc: 0 for bc in self.backend_components}
             usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         return structures.Resource(
@@ -159,12 +159,20 @@ class BaseBackend(ABC):
         logger.info("The account %s already exists in the cluster", account_name)
         return False
 
-    def create_resource(self, waldur_resource: Dict) -> structures.Resource:
+    def create_resource(
+        self, waldur_resource: Dict, user_context: Optional[Dict] = None
+    ) -> structures.Resource:
         """Create resource on the backend.
 
         Creates necessary accounts hierarchy and sets up resource limits.
+
+        Args:
+            waldur_resource: Resource data from Waldur marketplace
+            user_context: Optional user context including team members and offering users
         """
         logger.info("Creating account in the backend")
+        # Note: user_context is available for backends that need it during creation
+        del user_context  # Not used in base implementation
 
         # Setup accounts hierarchy
         self._setup_accounts_hierarchy(waldur_resource)
@@ -417,8 +425,9 @@ class UnknownBackend(BaseBackend):
         """Placeholder."""
         del kwargs, resource_backend_id
 
-    def create_resource(self, _: Dict) -> structures.Resource:
+    def create_resource(self, _: Dict, user_context: Optional[Dict] = None) -> structures.Resource:
         """Placeholder."""
+        del user_context
         return structures.Resource()
 
     def downscale_resource(self, account: str) -> bool:
