@@ -12,6 +12,7 @@ class BackendType(Enum):
 
     SLURM = "slurm"
     MOAB = "moab"
+    MUP = "mup"
     CUSTOM = "custom"
     UNKNOWN = "unknown"
 

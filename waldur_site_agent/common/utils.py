@@ -16,6 +16,7 @@ from waldur_site_agent.backends import (
 )
 from waldur_site_agent.backends.backend import BaseBackend, UnknownBackend
 from waldur_site_agent.backends.moab_backend.backend import MoabBackend
+from waldur_site_agent.backends.mup_backend.backend import MUPBackend
 from waldur_site_agent.backends.slurm_backend import public_utils as slurm_utils
 from waldur_site_agent.backends.slurm_backend.backend import SlurmBackend
 from waldur_site_agent.backends.structures import Resource
@@ -112,6 +113,8 @@ def get_backend_for_offering(offering: structures.Offering) -> BaseBackend:
         BackendType.MOAB.value,
     }:
         resource_backend = MoabBackend(offering.backend_settings, offering.backend_components)
+    elif offering.backend_type == BackendType.MUP.value:
+        resource_backend = MUPBackend(offering.backend_settings, offering.backend_components)
     elif offering.backend_type == BackendType.CUSTOM.value:
         resource_backend = UnknownBackend()
     else:
@@ -229,9 +232,10 @@ def load_components_to_waldur(
                     )
             else:
                 logger.info(
-                    "Creating offering component %s with limit %s %s.",
+                    "Creating offering component %s with type %s and limit %s %s.",
                     component_type,
-                    component_info["limit"],
+                    component_info["accounting_type"],
+                    component_info.get("limit"),
                     component_info["measured_unit"],
                 )
                 waldur_rest_client.create_offering_component(offering_uuid, component)

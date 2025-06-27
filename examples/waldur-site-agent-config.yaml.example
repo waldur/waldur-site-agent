@@ -5,6 +5,7 @@ offerings: # Settings for offerings
     waldur_api_token: "" # Token to access the Waldur API.
     waldur_offering_uuid: "" # UUID of the offering in Waldur.
     mqtt_enabled: false
+    stomp_enabled: false
     websocket_use_tls: true # Whether to use TLS for MQTT connection
     backend_type: "slurm" # type of backend, for now only `slurm` is supported
     backend_settings: # backend-specific settings

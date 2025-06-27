@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from waldur_site_agent.backends import (
     BackendType,
@@ -13,6 +13,7 @@ from waldur_site_agent.backends import utils as backend_utils
 from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.slurm_backend import utils
 from waldur_site_agent.backends.slurm_backend.client import SlurmClient
+from waldur_site_agent.backends.structures import Resource
 
 
 class SlurmBackend(backend.BaseBackend):
@@ -39,6 +40,42 @@ class SlurmBackend(backend.BaseBackend):
     def list_components(self) -> List[str]:
         """Return a list of TRES on the SLURM cluster."""
         return self.client.list_tres()
+
+    def create_resource(
+        self, waldur_resource: Dict, user_context: Optional[Dict] = None
+    ) -> Resource:
+        """Create resource on SLURM backend with optional user context integration.
+
+        Args:
+            waldur_resource: Resource data from Waldur marketplace
+            user_context: Optional user context with team members and offering users
+
+        Returns:
+            Resource object with backend metadata
+        """
+        # Call the base implementation first
+        resource = super().create_resource(waldur_resource, user_context)
+
+        # If user context is available and homedir creation is enabled, create homedirs proactively
+        if user_context and self.backend_settings.get("enable_user_homedir_account_creation", True):
+            offering_user_mappings = user_context.get("offering_user_mappings", {})
+            if offering_user_mappings:
+                # Extract usernames from offering users
+                usernames = {
+                    offering_user.get("username")
+                    for offering_user in offering_user_mappings.values()
+                    if offering_user.get("username")
+                }
+
+                if usernames:
+                    logger.info(
+                        "Creating home directories during resource creation for users: %s",
+                        ", ".join(usernames),
+                    )
+                    umask = self.backend_settings.get("default_homedir_umask", "0700")
+                    self._create_user_homedirs(usernames, umask)
+
+        return resource
 
     def _collect_limits(
         self, waldur_resource: Dict[str, Dict]
@@ -75,6 +112,8 @@ class SlurmBackend(backend.BaseBackend):
 
         if self.backend_settings.get("enable_user_homedir_account_creation", True):
             umask: str = str(kwargs.get("homedir_umask", "0700"))
+            # Only create homedirs for users that don't already have them
+            # (avoids duplicates if they were created during resource creation)
             self._create_user_homedirs(added_users, umask=umask)
 
         return added_users
