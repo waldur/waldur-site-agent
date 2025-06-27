@@ -33,6 +33,7 @@ class MUPBackendTest(unittest.TestCase):
                 "unit_factor": 1,
                 "accounting_type": "limit",
                 "label": "CPU Cores",
+                "mup_allocation_type": "Deucalion x86_64",
             }
         }
 
@@ -54,7 +55,7 @@ class MUPBackendTest(unittest.TestCase):
             "title": "Test Project",
             "description": "A test project",
             "pi": "pi@example.com",
-            "grant_number": f"waldur_{self.project_uuid}",
+            "grant_number": f"waldur_{self.resource_uuid}",
             "active": True,
             "agency": "FCT",
         }
@@ -126,6 +127,27 @@ class MUPBackendTest(unittest.TestCase):
             MUPBackend(incomplete_settings, self.mup_components)
 
         self.assertIn("Missing required setting: username", str(context.exception))
+
+    def test_init_invalid_accounting_type(self):
+        """Test backend initialization fails with invalid accounting_type"""
+        invalid_components = {
+            "cpu": {
+                "measured_unit": "core-hours",
+                "unit_factor": 1,
+                "accounting_type": "usage",  # Invalid for MUP
+                "label": "CPU Cores",
+                "mup_allocation_type": "Deucalion x86_64",
+            }
+        }
+
+        with self.assertRaises(ValueError) as context:
+            MUPBackend(self.mup_settings, invalid_components)
+
+        self.assertIn(
+            "MUP backend only supports components with accounting_type='limit'",
+            str(context.exception),
+        )
+        self.assertIn("Component 'cpu' has accounting_type='usage'", str(context.exception))
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
     def test_ping_success(self, mock_client_class):
@@ -246,7 +268,7 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.get_projects.return_value = [self.sample_mup_project]
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
-        project = backend._get_project_by_waldur_id(self.project_uuid)
+        project = backend._get_project_by_waldur_id(self.resource_uuid)
 
         self.assertEqual(project, self.sample_mup_project)
 
@@ -317,7 +339,7 @@ class MUPBackendTest(unittest.TestCase):
         self.assertIsInstance(result, Resource)
         self.assertEqual(result.backend_type, "mup")
         self.assertEqual(result.marketplace_uuid, self.resource_uuid)
-        self.assertEqual(result.backend_id, f"alloc_{self.resource_uuid}")
+        self.assertEqual(result.backend_id, "1")
         self.assertEqual(result.limits["cpu"], 10)
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
@@ -434,7 +456,7 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.get_project_allocations.return_value = [self.sample_mup_allocation]
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
-        metadata = backend.get_resource_metadata(f"waldur_{self.project_uuid}")
+        metadata = backend.get_resource_metadata("1")
 
         expected_metadata = {
             "mup_project_id": 1,
@@ -459,10 +481,10 @@ class MUPBackendTest(unittest.TestCase):
         ]
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
-        accounts = [f"waldur_{self.project_uuid}"]
+        accounts = ["1"]
         report = backend._get_usage_report(accounts)
 
-        account_key = f"waldur_{self.project_uuid}"
+        account_key = "1"
         self.assertIn(account_key, report)
         self.assertIn("TOTAL_ACCOUNT_USAGE", report[account_key])
         self.assertEqual(report[account_key]["TOTAL_ACCOUNT_USAGE"]["cpu"], 5)
@@ -480,7 +502,7 @@ class MUPBackendTest(unittest.TestCase):
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
         user_ids = {"newuser@example.com"}
-        resource_backend_id = f"alloc_{self.resource_uuid}"
+        resource_backend_id = "1"
 
         added_users = backend.add_users_to_resource(resource_backend_id, user_ids)
 
@@ -500,7 +522,7 @@ class MUPBackendTest(unittest.TestCase):
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
         usernames = {"user1"}
-        resource_backend_id = f"alloc_{self.resource_uuid}"
+        resource_backend_id = "1"
 
         removed_users = backend.remove_users_from_account(resource_backend_id, usernames)
 

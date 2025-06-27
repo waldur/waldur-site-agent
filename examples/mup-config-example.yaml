@@ -29,20 +29,37 @@ offerings:
       default_agency: "FCT"  # Default funding agency
       project_prefix: "waldur_"  # Prefix for project grant numbers
       allocation_prefix: "alloc_"  # Prefix for allocation identifiers
-      default_allocation_type: "compute"  # Default allocation type
       default_storage_limit: 1000  # Default storage limit in GB
 
     # Component mapping between Waldur and MUP
-    # This defines how Waldur marketplace components map to MUP allocation units
+    # This defines how Waldur marketplace components map to MUP allocation types
+    # Each component with limits > 0 will create a separate allocation in MUP
+    # with the specified mup_allocation_type
     backend_components:
       cpu:
         measured_unit: "core-hours"
         unit_factor: 1
-        accounting_type: "usage"
+        accounting_type: "limit"  # MUP only supports limit-based accounting
         label: "CPU Core Hours"
+        mup_allocation_type: "Deucalion x86_64"  # MUP allocation type for x86_64 CPU cores
+
+      gpu:
+        measured_unit: "gpu-hours"
+        unit_factor: 1
+        accounting_type: "limit"  # MUP only supports limit-based accounting
+        label: "GPU Hours"
+        mup_allocation_type: "Deucalion gpu"  # MUP allocation type for GPU resources
+
+      arm_cpu:
+        measured_unit: "core-hours"
+        unit_factor: 1
+        accounting_type: "limit"  # MUP only supports limit-based accounting
+        label: "ARM CPU Hours"
+        mup_allocation_type: "Deucalion aarch64"  # MUP allocation type for ARM64 CPU cores
 
       storage:
         measured_unit: "GB"
         unit_factor: 1
-        accounting_type: "limit"
+        accounting_type: "limit"  # MUP only supports limit-based accounting
         label: "Storage"
+        mup_allocation_type: "storage"  # MUP allocation type for storage resources

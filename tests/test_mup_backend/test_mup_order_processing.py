@@ -33,6 +33,7 @@ MUP_OFFERING = replace(
             "unit_factor": 1,
             "accounting_type": "limit",
             "label": "CPU Cores",
+            "mup_allocation_type": "Deucalion x86_64",
         }
     },
 )
@@ -234,14 +235,14 @@ class MUPCreationOrderTest(unittest.TestCase):
             "id": 1,
             "title": "Test project",
             "pi": "pi@example.com",
-            "grant_number": f"waldur_{self.project_uuid}",
+            "grant_number": f"waldur_{self.resource_uuid}",
             "active": False,
         }
 
         created_allocation = {
             "id": 1,
-            "type": "compute",
-            "identifier": f"alloc_{self.resource_uuid}",
+            "type": "Deucalion x86_64",
+            "identifier": f"alloc_{self.resource_uuid}_cpu",
             "size": 10,
             "used": 0,
             "active": True,
@@ -350,7 +351,7 @@ class MUPTerminationOrderTest(unittest.TestCase):
             "customer_slug": "customer-1",
         }
 
-        self.waldur_allocation = {"backend_id": f"alloc_{self.resource_uuid}"}
+        self.waldur_allocation = {"backend_id": "1"}
 
     def test_mup_resource_termination(
         self, waldur_client_class: mock.Mock, mup_client_class: mock.Mock
@@ -367,7 +368,7 @@ class MUPTerminationOrderTest(unittest.TestCase):
         existing_project = {
             "id": 1,
             "title": "Test project",
-            "grant_number": f"alloc_{self.resource_uuid}",  # Use allocation backend_id format
+            "grant_number": f"waldur_{self.resource_uuid}",  # Original grant_number format
             "active": True,
         }
         mup_client.get_projects.return_value = [existing_project]
@@ -392,7 +393,7 @@ class MUPUpdateOrderTest(unittest.TestCase):
         self.marketplace_resource_uuid = uuid.uuid4().hex
         self.resource_uuid = uuid.uuid4().hex
         self.project_uuid = uuid.uuid4().hex
-        self.backend_id = f"alloc_{self.resource_uuid}"
+        self.backend_id = "1"  # Project ID as backend ID
 
         self.waldur_order = {
             "uuid": uuid.uuid4().hex,
@@ -444,13 +445,13 @@ class MUPUpdateOrderTest(unittest.TestCase):
         existing_project = {
             "id": 1,
             "title": "Test project",
-            "grant_number": self.backend_id,  # Use the backend_id directly
+            "grant_number": f"waldur_{self.resource_uuid}",  # Original grant_number format
             "active": True,
         }
         existing_allocation = {
             "id": 1,
-            "type": "compute",
-            "identifier": self.backend_id,
+            "type": "Deucalion x86_64",  # Updated to match new allocation type mapping
+            "identifier": f"alloc_{self.resource_uuid}_cpu",  # Allocation identifier format
             "size": 10,
             "used": 0,
             "active": True,
