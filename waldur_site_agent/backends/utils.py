@@ -5,6 +5,7 @@ import datetime
 from typing import Dict, List, Tuple
 
 import yaml
+from zoneinfo import ZoneInfo
 
 
 def month_start(date: datetime.datetime) -> datetime.datetime:
@@ -18,9 +19,24 @@ def month_end(date: datetime.datetime) -> datetime.date:
     return datetime.date(month=date.month, year=date.year, day=days_in_month)
 
 
-def format_current_month() -> Tuple[str, str]:
+def get_current_time_in_timezone(timezone_str: str = "") -> datetime.datetime:
+    """Returns current time in the specified timezone.
+
+    Or system timezone if no timezone is specified.
+    """
+    if timezone_str:
+        try:
+            tz = ZoneInfo(timezone_str)
+            return datetime.datetime.now(tz)
+        except Exception:
+            return datetime.datetime.now()
+    else:
+        return datetime.datetime.now()
+
+
+def format_current_month(timezone_str: str = "") -> Tuple[str, str]:
     """Returns strings for start and end date of the current month."""
-    today = datetime.datetime.now()
+    today = get_current_time_in_timezone(timezone_str)
     start = month_start(today).strftime("%Y-%m-%dT00:00:00")
     end = month_end(today).strftime("%Y-%m-%dT23:59:59")
     return start, end

@@ -17,7 +17,9 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
         logger.info("Number of offerings to process: %s", len(waldur_offerings))
         for offering in waldur_offerings:
             try:
-                processor = common_processors.OfferingReportProcessor(offering, user_agent)
+                processor = common_processors.OfferingReportProcessor(
+                    offering, user_agent, configuration.timezone
+                )
                 processor.process_offering()
             except Exception as e:
                 logger.exception("The application crashed due to the error: %s", e)
