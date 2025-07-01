@@ -81,7 +81,7 @@ class MoabBackend(BaseBackend):
         """Temporary placeholder."""
         return {}
 
-    def _collect_limits(
+    def _collect_resource_limits(
         self, waldur_resource: Dict[str, Dict]
     ) -> Tuple[Dict[str, int], Dict[str, int]]:
         """Collect deposit limit only with no conversion."""

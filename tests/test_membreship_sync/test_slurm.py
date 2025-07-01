@@ -39,7 +39,7 @@ current_qos = {"qos": "abc"}
 
 @freeze_time("2022-01-01")
 @mock.patch("waldur_site_agent.common.processors.WaldurClient", autospec=True)
-@mock.patch.object(utils.SlurmBackend, "_pull_allocation", return_value=allocation_slurm)
+@mock.patch.object(utils.SlurmBackend, "_pull_backend_resource", return_value=allocation_slurm)
 @mock.patch.object(utils.SlurmBackend, "restore_resource", return_value=None)
 class MembershipSyncTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -63,10 +63,10 @@ class MembershipSyncTest(unittest.TestCase):
         get_resource_metadata_mock,
         add_users_to_resource_mock,
         restore_resource_mock,
-        pull_allocation_mock,
+        pull_backend_resource_mock,
         waldur_client_class: mock.Mock,
     ):
-        del restore_resource_mock, pull_allocation_mock
+        del restore_resource_mock, pull_backend_resource_mock
         user_uuid = uuid.uuid4().hex
         processor = OfferingMembershipProcessor(self.offering)
 
@@ -121,10 +121,10 @@ class MembershipSyncTest(unittest.TestCase):
         list_active_user_jobs_mock,
         cancel_active_jobs_for_account_user_mock,
         restore_resource_mock,
-        pull_allocation_mock: mock.Mock,
+        pull_backend_resource_mock: mock.Mock,
         waldur_client_class: mock.Mock,
     ):
-        del restore_resource_mock, pull_allocation_mock
+        del restore_resource_mock, pull_backend_resource_mock
         processor = OfferingMembershipProcessor(self.offering)
         waldur_client = waldur_client_class.return_value
         waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
@@ -175,10 +175,10 @@ class MembershipSyncTest(unittest.TestCase):
         get_resource_metadata_mock,
         downscale_resource_mock,
         restore_resource_mock,
-        pull_allocation_mock,
+        pull_backend_resource_mock,
         waldur_client_class: mock.Mock,
     ):
-        del restore_resource_mock, pull_allocation_mock
+        del restore_resource_mock, pull_backend_resource_mock
         self.waldur_resource["downscaled"] = True
         processor = OfferingMembershipProcessor(self.offering)
 

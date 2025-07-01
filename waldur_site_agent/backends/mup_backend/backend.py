@@ -410,7 +410,7 @@ class MUPBackend(backend.BaseBackend):
 
         return str(mup_project["id"])
 
-    def _collect_limits(
+    def _collect_resource_limits(
         self, waldur_resource: Dict[str, Dict]
     ) -> Tuple[Dict[str, int], Dict[str, int]]:
         """Collect MUP and Waldur limits separately."""
@@ -680,7 +680,9 @@ class MUPBackend(backend.BaseBackend):
 
         return added_users
 
-    def remove_users_from_account(self, resource_backend_id: str, usernames: Set[str]) -> List[str]:
+    def remove_users_from_resource(
+        self, resource_backend_id: str, usernames: Set[str]
+    ) -> List[str]:
         """Remove specified users from the MUP project."""
         logger.info(
             "Removing users from MUP project for resource %s: %s",

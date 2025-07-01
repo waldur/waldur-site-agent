@@ -431,7 +431,7 @@ class MUPBackendTest(unittest.TestCase):
 
         waldur_resource = {"limits": {"cpu": 10}}
 
-        allocation_limits, waldur_limits = backend._collect_limits(waldur_resource)
+        allocation_limits, waldur_limits = backend._collect_resource_limits(waldur_resource)
 
         self.assertEqual(allocation_limits["cpu"], 10)  # unit_factor = 1
         self.assertEqual(waldur_limits["cpu"], 10)
@@ -443,7 +443,7 @@ class MUPBackendTest(unittest.TestCase):
 
         waldur_resource = {"limits": {"cpu": {"value": 20}}}
 
-        allocation_limits, waldur_limits = backend._collect_limits(waldur_resource)
+        allocation_limits, waldur_limits = backend._collect_resource_limits(waldur_resource)
 
         self.assertEqual(allocation_limits["cpu"], 20)
         self.assertEqual(waldur_limits["cpu"], 20)
@@ -524,7 +524,7 @@ class MUPBackendTest(unittest.TestCase):
         usernames = {"user1"}
         resource_backend_id = "1"
 
-        removed_users = backend.remove_users_from_account(resource_backend_id, usernames)
+        removed_users = backend.remove_users_from_resource(resource_backend_id, usernames)
 
         self.assertEqual(removed_users, ["user1"])
         mock_client.toggle_member_status.assert_called_once_with(1, 1, {"active": False})
