@@ -131,7 +131,7 @@ class TimezoneMonthBoundaryTest(unittest.TestCase):
 
 
 @mock.patch("waldur_site_agent.common.processors.WaldurClient", autospec=True)
-@mock.patch.object(utils.SlurmBackend, "_pull_allocation")
+@mock.patch.object(utils.SlurmBackend, "_pull_backend_resource")
 class TimezoneIntegrationTest(unittest.TestCase):
     """Integration tests for timezone functionality with mocked dependencies."""
 
@@ -151,10 +151,10 @@ class TimezoneIntegrationTest(unittest.TestCase):
         self.offering = OFFERING
 
     def test_processor_uses_timezone_for_billing_period(
-        self, mock_pull_allocation, waldur_client_class: mock.Mock
+        self, mock_pull_backend_resource, waldur_client_class: mock.Mock
     ):
         """Test that processor uses configured timezone for billing period calculation."""
-        mock_pull_allocation.return_value = None
+        mock_pull_backend_resource.return_value = None
 
         processor = OfferingReportProcessor(self.offering, "test-agent", "UTC")
         waldur_client = waldur_client_class.return_value
