@@ -30,34 +30,28 @@ class BaseClient:
     @abc.abstractmethod
     def list_accounts(self) -> List[Account]:
         """Get accounts list."""
-        raise NotImplementedError
 
     @abc.abstractmethod
     def get_account(self, name: str) -> Optional[Account]:
         """Get account info."""
-        raise NotImplementedError
 
     @abc.abstractmethod
     def create_account(
         self, name: str, description: str, organization: str, parent_name: Optional[str] = None
     ) -> str:
         """Create account in the cluster."""
-        raise NotImplementedError
 
     @abc.abstractmethod
     def delete_account(self, name: str) -> str:
         """Delete account from the cluster."""
-        raise NotImplementedError
 
     @abc.abstractmethod
     def set_resource_limits(self, account: str, limits_dict: Dict[str, int]) -> Optional[str]:
         """Set account limits."""
-        raise NotImplementedError
 
     @abc.abstractmethod
     def get_resource_limits(self, account: str) -> Dict[str, int]:
         """Get account limits."""
-        raise NotImplementedError
 
     @abc.abstractmethod
     def get_resource_user_limits(self, account: str) -> Dict[str, Dict[str, int]]:
@@ -72,29 +66,24 @@ class BaseClient:
     @abc.abstractmethod
     def get_association(self, user: str, account: str) -> Optional[Association]:
         """Get association between user and account."""
-        raise NotImplementedError
 
     @abc.abstractmethod
     def create_association(
         self, username: str, account: str, default_account: Optional[str] = None
     ) -> str:
         """Create association between user and account."""
-        raise NotImplementedError
 
     @abc.abstractmethod
     def delete_association(self, username: str, account: str) -> str:
         """Delete association between user and account."""
-        raise NotImplementedError
 
     @abc.abstractmethod
     def get_usage_report(self, accounts: List[str]) -> List:
         """Get usage records."""
-        raise NotImplementedError
 
     @abc.abstractmethod
     def list_account_users(self, account: str) -> List[str]:
         """Get account users."""
-        raise NotImplementedError
 
 
 class UnknownClient(BaseClient):

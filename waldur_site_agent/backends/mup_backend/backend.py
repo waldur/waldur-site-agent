@@ -291,7 +291,7 @@ class MUPBackend(backend.BaseBackend):
             except Exception:
                 logger.exception("Failed to add user %s to project during creation", user_uuid)
 
-    def _setup_accounts_hierarchy(
+    def _pre_create_resource(
         self, waldur_resource: Dict, user_context: Optional[Dict] = None
     ) -> None:
         """Create and activate MUP project."""
@@ -335,7 +335,7 @@ class MUPBackend(backend.BaseBackend):
         """Skip this step for MUP."""
         del allocation_account, waldur_resource
 
-    def _create_allocation_account(self, waldur_resource: Dict) -> str:
+    def _create_resource_in_backend(self, waldur_resource: Dict) -> str:
         """Create MUP resource within the MUP project."""
         mup_project = self._get_project_by_waldur_id(waldur_resource["uuid"])
         if not mup_project:
