@@ -19,7 +19,6 @@ from typing import Dict, List, Optional, Set, Tuple
 from waldur_site_agent.backends import BackendType, backend
 from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.mup_backend.client import MUPClient, MUPError
-from waldur_site_agent.backends.structures import Resource
 
 logger = logging.getLogger(__name__)
 
@@ -292,137 +291,124 @@ class MUPBackend(backend.BaseBackend):
             except Exception:
                 logger.exception("Failed to add user %s to project during creation", user_uuid)
 
-    def create_resource(
+    def _setup_accounts_hierarchy(
         self, waldur_resource: Dict, user_context: Optional[Dict] = None
-    ) -> Resource:
-        """Create resource on MUP backend - creates project and allocation.
+    ) -> None:
+        """Create and activate MUP project."""
+        # Get project information
+        project_uuid = waldur_resource.get("project_uuid")
+        project_name = waldur_resource.get("project_name", f"Project {project_uuid}")
 
-        Args:
-            waldur_resource: Waldur resource data from marketplace order
-            user_context: User context with team members and offering users
+        if not project_uuid:
+            msg = "No project UUID found in resource data"
+            raise BackendError(msg)
 
-        Returns:
-            Resource object with backend metadata
-        """
-        try:
-            logger.info("Creating MUP allocation for resource %s", waldur_resource["uuid"])
+        # Get or create MUP project (Resource = Project in MUP)
+        mup_project = self._get_project_by_waldur_id(waldur_resource["uuid"])
+        if not mup_project:
+            # Get PI email from user context or use a fallback
+            pi_email = self._get_pi_email_from_context(user_context, project_uuid)
 
-            # Get project information
-            project_uuid = waldur_resource.get("project_uuid")
-            project_name = waldur_resource.get("project_name", f"Project {project_uuid}")
-
-            if not project_uuid:
-                msg = "No project UUID found in resource data"
-                raise BackendError(msg)  # noqa: TRY301
-
-            # Get or create MUP project (Resource = Project in MUP)
-            mup_project = self._get_project_by_waldur_id(waldur_resource["uuid"])
+            project_data = {
+                "uuid": waldur_resource["uuid"],  # Use resource UUID for MUP project
+                "name": project_name,
+                "description": f"Waldur project {project_name}",
+            }
+            mup_project = self._create_mup_project(project_data, pi_email)
             if not mup_project:
-                # Get PI email from user context or use a fallback
-                pi_email = self._get_pi_email_from_context(user_context, project_uuid)
+                msg = "Failed to create MUP project"
+                raise BackendError(msg)
 
-                project_data = {
-                    "uuid": waldur_resource["uuid"],  # Use resource UUID for MUP project
-                    "name": project_name,
-                    "description": f"Waldur project {project_name}",
-                }
-                mup_project = self._create_mup_project(project_data, pi_email)
-                if not mup_project:
-                    msg = "Failed to create MUP project"
-                    raise BackendError(msg)  # noqa: TRY301
+        # Activate project if needed
+        if not mup_project.get("active", False):
+            try:
+                self.client.activate_project(mup_project["id"])
+                logger.info("Activated MUP project %s", mup_project["id"])
+            except MUPError as e:
+                logger.warning("Failed to activate project %s: %s", mup_project["id"], e)
 
-            # Activate project if needed
-            if not mup_project.get("active", False):
-                try:
-                    self.client.activate_project(mup_project["id"])
-                    logger.info("Activated MUP project %s", mup_project["id"])
-                except MUPError as e:
-                    logger.warning("Failed to activate project %s: %s", mup_project["id"], e)
+        # Create users and add them to project if user context is available
+        if user_context:
+            self._create_and_add_users_from_context(mup_project["id"], user_context)
 
-            # Create users and add them to project if user context is available
-            if user_context:
-                self._create_and_add_users_from_context(mup_project["id"], user_context)
+    def _setup_resource_limits(self, allocation_account: str, waldur_resource: Dict) -> None:
+        """Skip this step for MUP."""
+        del allocation_account, waldur_resource
 
-            # Create allocations for each backend component
-            limits = waldur_resource.get("limits", {})
-            created_allocations = []
-            resource_limits = {}
+    def _create_allocation_account(self, waldur_resource: Dict) -> str:
+        """Create MUP resource within the MUP project."""
+        mup_project = self._get_project_by_waldur_id(waldur_resource["uuid"])
+        if not mup_project:
+            msg = (
+                f"MUP project is expected to be created upon MUP resource creation, "
+                f"resource {waldur_resource['name']}, project {waldur_resource['project_uuid']}"
+            )
+            raise BackendError(msg)
 
-            for component_key, component_config in self.backend_components.items():
-                # Get limit value for this component
-                component_limit = limits.get(component_key, 0)
-                if isinstance(component_limit, dict):
-                    component_limit = component_limit.get("value", 0)
+        # Create allocations for each backend component
+        limits = waldur_resource.get("limits", {})
+        created_allocations = []
+        resource_limits = {}
 
-                # Skip components with zero limits
-                if component_limit <= 0:
-                    continue
+        for component_key, component_config in self.backend_components.items():
+            # Get limit value for this component
+            component_limit = limits.get(component_key, 0)
+            if isinstance(component_limit, dict):
+                component_limit = component_limit.get("value", 0)
 
-                # Get MUP allocation type for this component from config
-                allocation_type = component_config.get(
-                    "mup_allocation_type",
-                    "Deucalion x86_64",  # Default fallback
-                )
+            # Skip components with zero limits
+            if component_limit <= 0:
+                continue
 
-                # Apply unit factor for the allocation size
-                unit_factor = component_config.get("unit_factor", 1)
-                allocation_size = int(component_limit * unit_factor)
-
-                allocation_data = {
-                    "type": allocation_type,
-                    "identifier": (
-                        f"{self.allocation_prefix}{waldur_resource['uuid']}_{component_key}"
-                    ),
-                    "size": allocation_size,
-                    "used": 0,
-                    "active": True,
-                    "project": mup_project["id"],
-                }
-
-                try:
-                    result = self.client.create_allocation(mup_project["id"], allocation_data)
-                    created_allocations.append(
-                        {
-                            "id": result["id"],
-                            "component": component_key,
-                            "type": allocation_type,
-                            "identifier": allocation_data["identifier"],
-                        }
-                    )
-                    resource_limits[component_key] = int(component_limit)
-
-                    logger.info(
-                        "Created MUP allocation %s (%s) for resource %s component %s",
-                        result["id"],
-                        allocation_type,
-                        waldur_resource["uuid"],
-                        component_key,
-                    )
-                except Exception:
-                    logger.exception("Failed to create allocation for component %s", component_key)
-                    # Continue with other components even if one fails
-                    continue
-
-            if not created_allocations:
-                self._raise_no_allocations_error()
-
-            # Use the MUP project ID as backend_id (Resource = Project in MUP)
-            project_backend_id = str(mup_project["id"])
-
-            # Return Resource object with backend metadata
-            return Resource(
-                backend_type=self.backend_type,
-                name=waldur_resource["name"],
-                marketplace_uuid=waldur_resource["uuid"],
-                backend_id=project_backend_id,
-                limits=resource_limits,
-                users=[],
-                usage={},
+            # Get MUP allocation type for this component from config
+            allocation_type = component_config.get(
+                "mup_allocation_type",
+                "Deucalion x86_64",  # Default fallback
             )
 
-        except Exception as e:
-            logger.exception("Failed to create allocation")
-            raise BackendError(f"Failed to create allocation: {e}") from e
+            # Apply unit factor for the allocation size
+            unit_factor = component_config.get("unit_factor", 1)
+            allocation_size = int(component_limit * unit_factor)
+
+            allocation_data = {
+                "type": allocation_type,
+                "identifier": (
+                    f"{self.allocation_prefix}{waldur_resource['uuid']}_{component_key}"
+                ),
+                "size": allocation_size,
+                "used": 0,
+                "active": True,
+                "project": mup_project["id"],
+            }
+
+            try:
+                result = self.client.create_allocation(mup_project["id"], allocation_data)
+                created_allocations.append(
+                    {
+                        "id": result["id"],
+                        "component": component_key,
+                        "type": allocation_type,
+                        "identifier": allocation_data["identifier"],
+                    }
+                )
+                resource_limits[component_key] = int(component_limit)
+
+                logger.info(
+                    "Created MUP allocation %s (%s) for resource %s component %s",
+                    result["id"],
+                    allocation_type,
+                    waldur_resource["uuid"],
+                    component_key,
+                )
+            except Exception:
+                logger.exception("Failed to create allocation for component %s", component_key)
+                # Continue with other components even if one fails
+                continue
+
+        if not created_allocations:
+            self._raise_no_allocations_error()
+
+        return str(mup_project["id"])
 
     def _collect_limits(
         self, waldur_resource: Dict[str, Dict]
