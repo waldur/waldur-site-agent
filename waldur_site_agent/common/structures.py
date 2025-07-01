@@ -38,3 +38,4 @@ class WaldurAgentConfiguration:
     waldur_user_agent: str = ""
     waldur_site_agent_version: str = ""
     sentry_dsn: str = ""
+    timezone: str = ""

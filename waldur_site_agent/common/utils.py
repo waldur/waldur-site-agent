@@ -85,6 +85,9 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
             )
             configuration.sentry_dsn = sentry_dsn
 
+        timezone = config.get("timezone", "UTC")
+        configuration.timezone = timezone
+
     waldur_site_agent_version = version("waldur-site-agent")
 
     user_agent_dict = {

@@ -77,6 +77,10 @@ File [example](./examples/waldur-site-agent-config.yaml.example) and [reference]
 **NB:** for MOAB, the only acceptable backend component is `deposit`.
 All other specified components are ignored by the agent.
 
+**NB:** The `timezone` setting is important when agent and Waldur are deployed in
+different timezones, this setting can be used to prevent billing period mismatches
+at month boundaries. Recommended: `timezone: "UTC"`.
+
 ## Deployment
 
 A user can deploy 4 separate instances of the agent.
@@ -227,6 +231,8 @@ cp systemd-conf/agent-event-process/agent-legacy.service /etc/systemd/system/wal
 
 ```yaml
 sentry_dsn: "" # Data Source Name for Sentry (more info https://docs.sentry.io/product/sentry-basics/dsn-explainer/).
+timezone: "UTC" # Timezone for billing period calculations (e.g. "UTC", "Europe/Tallinn").
+  # Defaults to system timezone if not specified.
 offerings: # Settings for offerings
   - name: "Example SLURM Offering" # offering name
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).

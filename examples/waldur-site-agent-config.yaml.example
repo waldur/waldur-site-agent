@@ -1,4 +1,5 @@
 sentry_dsn: "" # Data Source Name for Sentry (more info https://docs.sentry.io/product/sentry-basics/dsn-explainer/).
+timezone: "UTC" # Timezone for billing period calculations (e.g. "UTC", "Europe/Tallinn"). Defaults to system timezone if not specified.
 offerings: # Settings for offerings
   - name: "Example SLURM Offering" # offering name
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).

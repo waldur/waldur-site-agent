@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import abc
-import datetime
 import traceback
 from time import sleep
 from typing import Dict, List, Optional, Set, Tuple
@@ -28,9 +27,12 @@ class UsageAnomalyError(Exception):
 class OfferingBaseProcessor(abc.ABC):
     """Abstract class for an offering processing."""
 
-    def __init__(self, offering: structures.Offering, user_agent: str = "") -> None:
+    def __init__(
+        self, offering: structures.Offering, user_agent: str = "", timezone: str = ""
+    ) -> None:
         """Constructor."""
         self.offering: structures.Offering = offering
+        self.timezone: str = timezone
         self.waldur_rest_client: WaldurClient = WaldurClient(
             offering.api_url, offering.api_token, user_agent
         )
@@ -926,7 +928,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 ", ".join(missing_components),
             )
 
-        month_start = backend_utils.month_start(datetime.datetime.now()).date()
+        current_time = backend_utils.get_current_time_in_timezone(self.timezone)
+        month_start = backend_utils.month_start(current_time).date()
         existing_usages = self.waldur_rest_client.list_component_usages(
             resource_uuid=resource_uuid, billing_period=month_start
         )
@@ -1002,7 +1005,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_offering: Dict,
     ) -> None:
         """Processes usage report for the resource."""
-        month_start = backend_utils.month_start(datetime.datetime.now()).date()
+        current_time = backend_utils.get_current_time_in_timezone(self.timezone)
+        month_start = backend_utils.month_start(current_time).date()
         resource_backend_id = waldur_resource.backend_id
         logger.info("Pulling resource %s (%s)", waldur_resource.name, resource_backend_id)
         backend_resource = self.resource_backend.pull_resource(waldur_resource)
