@@ -173,7 +173,7 @@ class BaseBackend(ABC):
     ) -> structures.Resource:
         """Create resource on the backend.
 
-        Creates necessary accounts hierarchy and sets up resource limits.
+        Creates necessary objects and resources and sets up resource limits.
 
         Args:
             waldur_resource: Resource data from Waldur marketplace
@@ -182,11 +182,11 @@ class BaseBackend(ABC):
         logger.info("Creating account in the backend")
         # Note: user_context is available for backends that need it during creation
 
-        # Setup accounts hierarchy
-        self._setup_accounts_hierarchy(waldur_resource, user_context)
+        # Actions prior to resource creation
+        self._pre_create_resource(waldur_resource, user_context)
 
-        # Create allocation account
-        allocation_account = self._create_allocation_account(waldur_resource)
+        # Create resource in the backend
+        allocation_account = self._create_resource_in_backend(waldur_resource)
 
         # Setup limits
         self._setup_resource_limits(allocation_account, waldur_resource)
@@ -199,15 +199,16 @@ class BaseBackend(ABC):
             limits=self._collect_limits(waldur_resource)[1],
         )
 
-        # Post-create actions
+        # Actions after resource creation
         self.post_create_resource(resource, waldur_resource, user_context)
 
         return resource
 
-    def _setup_accounts_hierarchy(
+    def _pre_create_resource(
         self, waldur_resource: Dict, user_context: Optional[Dict] = None
     ) -> None:
-        """Setup customer and project accounts hierarchy."""
+        """Actions performed prior to resource creation."""
+        # Default implementation: setup customer and project accounts hierarchy
         del user_context
         project_account = self._get_project_name(waldur_resource["project_slug"])
 
@@ -224,7 +225,7 @@ class BaseBackend(ABC):
             project_account, waldur_resource["project_name"], project_account, customer_account
         )
 
-    def _create_allocation_account(self, waldur_resource: Dict) -> str:
+    def _create_resource_in_backend(self, waldur_resource: Dict) -> str:
         """Create allocation account with retry logic for name generation."""
         project_account = self._get_project_name(waldur_resource["project_slug"])
 
