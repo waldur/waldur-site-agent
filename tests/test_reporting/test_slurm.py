@@ -38,7 +38,7 @@ allocation_slurm = Resource(
 
 @freeze_time("2022-01-01")
 @mock.patch("waldur_site_agent.common.processors.WaldurClient", autospec=True)
-@mock.patch.object(utils.SlurmBackend, "_pull_allocation")
+@mock.patch.object(utils.SlurmBackend, "_pull_backend_resource")
 class ReportingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.waldur_resource = {
@@ -84,8 +84,8 @@ class ReportingTest(unittest.TestCase):
         waldur_client_mock.reset_mock()
         slurm_backend_mock.reset_mock()
 
-    def test_usage_reporting(self, mock_pull_allocation, waldur_client_class: mock.Mock):
-        mock_pull_allocation.return_value = self.allocation_slurm
+    def test_usage_reporting(self, mock_pull_backend_resource, waldur_client_class: mock.Mock):
+        mock_pull_backend_resource.return_value = self.allocation_slurm
         processor = OfferingReportProcessor(self.offering)
         waldur_client = waldur_client_class.return_value
 
@@ -134,9 +134,9 @@ class ReportingTest(unittest.TestCase):
         self.assertEqual(2, waldur_client.create_component_user_usage.call_count)
 
     def test_usage_reporting_with_anomaly(
-        self, mock_pull_allocation, waldur_client_class: mock.Mock
+        self, mock_pull_backend_resource, waldur_client_class: mock.Mock
     ):
-        mock_pull_allocation.return_value = self.allocation_slurm
+        mock_pull_backend_resource.return_value = self.allocation_slurm
         processor = OfferingReportProcessor(self.offering)
         waldur_client = waldur_client_class.return_value
 

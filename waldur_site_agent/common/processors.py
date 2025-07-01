@@ -602,7 +602,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 "Resource is restricted for members, removing all the existing associations"
             )
 
-            self.resource_backend.remove_users_from_account(resource.backend_id, existing_usernames)
+            self.resource_backend.remove_users_from_resource(
+                resource.backend_id, existing_usernames
+            )
             return set()
 
         added_usernames = self.resource_backend.add_users_to_resource(
@@ -611,7 +613,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
 
-        self.resource_backend.remove_users_from_account(
+        self.resource_backend.remove_users_from_resource(
             resource.backend_id,
             stale_usernames,
         )
