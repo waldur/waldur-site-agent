@@ -183,7 +183,7 @@ class BaseBackend(ABC):
         # Note: user_context is available for backends that need it during creation
 
         # Setup accounts hierarchy
-        self._setup_accounts_hierarchy(waldur_resource)
+        self._setup_accounts_hierarchy(waldur_resource, user_context)
 
         # Create allocation account
         allocation_account = self._create_allocation_account(waldur_resource)
@@ -204,8 +204,11 @@ class BaseBackend(ABC):
 
         return resource
 
-    def _setup_accounts_hierarchy(self, waldur_resource: Dict) -> None:
+    def _setup_accounts_hierarchy(
+        self, waldur_resource: Dict, user_context: Optional[Dict] = None
+    ) -> None:
         """Setup customer and project accounts hierarchy."""
+        del user_context
         project_account = self._get_project_name(waldur_resource["project_slug"])
 
         # Setup customer account if using SLURM
