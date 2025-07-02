@@ -472,6 +472,25 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     exc,
                 )
 
+    def process_project_user_sync(self, project_uuid: str) -> None:
+        """Process full project user synchronization."""
+        logger.info("Processing sync of all users for project %s", project_uuid)
+        resources = self._get_waldur_resources(project_uuid=project_uuid)
+        resource_report = self.resource_backend.pull_resources(resources)
+        for resource in resource_report.values():
+            try:
+                logger.info(
+                    "Syncing users for resource %s (%s)", resource.name, resource.backend_id
+                )
+                self._sync_resource_users(resource)
+            except Exception as exc:
+                logger.error(
+                    "Unable to sync resource %s (%s), error: %s",
+                    resource.name,
+                    resource.backend_id,
+                    exc,
+                )
+
     def _get_waldur_offering_users(self) -> List[Dict]:
         logger.info("Fetching Waldur offering users")
         return self.waldur_rest_client.list_remote_offering_users(

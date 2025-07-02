@@ -48,33 +48,48 @@ def on_user_role_message_mqtt(
     logger.info("Received message: %s on topic %s", message, msg.topic)
     offering = userdata["offering"]
     user_agent = userdata["user_agent"]
-    user_uuid = message["user_uuid"]
-    user_username = message["user_username"]
+    user_uuid = message.get("user_uuid")
     project_name = message["project_name"]
     project_uuid = message["project_uuid"]
-    role_granted = message["granted"]
 
     try:
         processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
-        logger.info(
-            "Processing %s (%s) user role changed event in project %s, granted: %s",
-            user_username,
-            user_uuid,
-            project_name,
-            role_granted,
-        )
+        if user_uuid:
+            user_username = message["user_username"]
+            role_granted = message["granted"]
+            if role_granted is not None:
+                logger.info(
+                    "Processing %s (%s) user role changed event in project %s, granted: %s",
+                    user_username,
+                    user_uuid,
+                    project_name,
+                    role_granted,
+                )
+                processor.process_user_role_changed(user_uuid, project_uuid, role_granted)
+        else:
+            logger.info(
+                "Processing full project all users sync event for project %s",
+                project_name,
+            )
+            processor.process_project_user_sync(project_uuid)
 
-        processor.process_user_role_changed(user_uuid, project_uuid, role_granted)
     except Exception as e:
-        logger.error(
-            "Failed to process user %s (%s) role change in project %s (%s) (granted: %s): %s",
-            user_username,
-            user_uuid,
-            project_name,
-            project_uuid,
-            role_granted,
-            e,
-        )
+        if user_uuid:
+            logger.error(
+                "Failed to process user %s (%s) role change in project %s (%s) (granted: %s): %s",
+                user_username,
+                user_uuid,
+                project_name,
+                project_uuid,
+                role_granted,
+                e,
+            )
+        else:
+            logger.error(
+                "Failed to process full project all users sync event for project %s: %s",
+                project_uuid,
+                e,
+            )
 
 
 def on_resource_message_mqtt(
@@ -120,33 +135,46 @@ def on_user_role_message_stomp(
     """Membership sync handler for STOMP message event."""
     message: UserRoleMessage = json.loads(frame.body)
     logger.info("Received message: %s on topic %s", message, frame.headers.get("destination"))
-    user_uuid = message["user_uuid"]
-    user_username = message["user_username"]
+    user_uuid = message.get("user_uuid")
     project_name = message["project_name"]
     project_uuid = message["project_uuid"]
-    role_granted = message["granted"]
 
     try:
         processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
-        logger.info(
-            "Processing %s (%s) user role changed event in project %s, granted: %s",
-            user_username,
-            user_uuid,
-            project_name,
-            role_granted,
-        )
-
-        processor.process_user_role_changed(user_uuid, project_uuid, role_granted)
+        if user_uuid:
+            user_username = message["user_username"]
+            role_granted = message["granted"]
+            if role_granted is None:
+                logger.error("Missing required field 'granted' for user role change")
+                return
+            logger.info(
+                "Processing %s (%s) user role changed event in project %s, granted: %s",
+                user_username,
+                user_uuid,
+                project_name,
+                role_granted,
+            )
+            processor.process_user_role_changed(user_uuid, project_uuid, role_granted)
+        else:
+            logger.info("Processing full project all users sync event for project %s", project_name)
+            processor.process_project_user_sync(project_uuid)
     except Exception as e:
-        logger.error(
-            "Failed to process user %s (%s) role change in project %s (%s) (granted: %s): %s",
-            user_username,
-            user_uuid,
-            project_name,
-            project_uuid,
-            role_granted,
-            e,
-        )
+        if user_uuid:
+            logger.error(
+                "Failed to process user %s (%s) role change in project %s (%s) (granted: %s): %s",
+                user_username,
+                user_uuid,
+                project_name,
+                project_uuid,
+                role_granted,
+                e,
+            )
+        else:
+            logger.error(
+                "Failed to process full project all users sync event for project %s: %s",
+                project_uuid,
+                e,
+            )
 
 
 def on_resource_message_stomp(
