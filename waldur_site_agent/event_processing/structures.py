@@ -1,5 +1,7 @@
 """This module defines data structures used in event processing for the Waldur Site Agent."""
 
+from __future__ import annotations
+
 from typing import Dict, List, Tuple, TypedDict
 
 import paho.mqtt.client as mqtt
@@ -59,20 +61,20 @@ class UserRoleMessage(TypedDict):
     """Represents a message about user role changes in a project.
 
     Attributes:
-        user_uuid (str): The UUID of the user whose role is being modified.
-        user_username (str): The username of the user whose role is being modified.
+        user_uuid (str, optional): The UUID of the user whose role is being modified.
+        user_username (str, optional): The username of the user whose role is being modified.
         project_uuid (str): The UUID of the project where the role change occurred.
         project_name (str): The name of the project where the role change occurred.
         role_name (str): The name of the role that was granted or revoked.
-        granted (bool): True if the role was granted, False if it was revoked.
+        granted (bool, optional): True if the role was granted, False if it was revoked.
     """
 
-    user_uuid: str
-    user_username: str
+    user_uuid: str | None
+    user_username: str | None
     project_uuid: str
     project_name: str
     role_name: str
-    granted: bool
+    granted: bool | None
 
 
 class ResourceMessage(TypedDict):
