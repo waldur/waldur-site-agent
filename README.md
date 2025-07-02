@@ -22,8 +22,8 @@ It consists of 4 sub-applications:
 - `agent-membership-sync`, which syncronizes membership info between Waldur
   and the backend (e.g. adds users to a SLURM allocation);
 - `agent-event-process`, which uses event-based approach to do the same as
-  `agent-order-process` and `agent-membership-sync`; requires an MQTT-system
-  as an event delivery queue between Waldur and the agent.
+  `agent-order-process` and `agent-membership-sync`; requires either MQTT- or STOMP-plugin
+  as an event delivery system between Waldur and the agent.
 
 ### Integration with Waldur
 
@@ -204,8 +204,8 @@ systemctl enable waldur-agent-event-process.service # to start after reboot
 
 ### Event-based processing
 
-Each offering from the config file can have `mqtt_enabled`
-set to `true` or `false` (`false` by default).
+Each offering from the config file can have `mqtt_enabled` or `stomp_enabled`
+set to `true` or `false` (`false` by default). **NB:** only of them can be `true`
 
 If this setting set to `true`, the offering is ignored
 by `agent-order-process` and `agent-membership-sync`,
@@ -238,6 +238,7 @@ offerings: # Settings for offerings
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
     waldur_api_token: "" # Token to access the Waldur API.
     waldur_offering_uuid: "" # UUID of the offering in Waldur.
+    stomp_enabled: false # STOMP feature toggler
     mqtt_enabled: true # MQTT feature toggler
     websocket_use_tls: true # Whether to use TLS for websocket connection
     backend_type: "slurm" # type of backend, for now only `slurm` and `moab` is supported
