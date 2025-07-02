@@ -10,11 +10,9 @@ Mapping:
 - Waldur User -> MUP User
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Optional
 
 from waldur_site_agent.backends import BackendType, backend
 from waldur_site_agent.backends.exceptions import BackendError
@@ -30,7 +28,7 @@ class MUPBackend(backend.BaseBackend):
     Waldur marketplace orders and handles user membership synchronization.
     """
 
-    def __init__(self, mup_settings: Dict, mup_components: Dict[str, Dict]) -> None:
+    def __init__(self, mup_settings: dict, mup_components: dict[str, dict]) -> None:
         """Init backend info and creates a corresponding client."""
         super().__init__(mup_settings, mup_components)
         self.backend_type = BackendType.MUP.value
@@ -64,9 +62,9 @@ class MUPBackend(backend.BaseBackend):
         self.default_storage_limit = mup_settings.get("default_storage_limit", 1000)  # GB
 
         # Cache for research fields and user mappings
-        self._research_fields_cache: Optional[List[Dict]] = None
-        self._user_cache: Dict[str, int] = {}
-        self._project_cache: Dict[str, Dict] = {}
+        self._research_fields_cache: Optional[list[dict]] = None
+        self._user_cache: dict[str, int] = {}
+        self._project_cache: dict[str, dict] = {}
 
     def ping(self, raise_exception: bool = False) -> bool:
         """Check if MUP backend is available and accessible."""
@@ -81,11 +79,11 @@ class MUPBackend(backend.BaseBackend):
         else:
             return True
 
-    def list_components(self) -> List[str]:
+    def list_components(self) -> list[str]:
         """Return a list of components supported by MUP backend."""
         return list(self.backend_components.keys())
 
-    def get_research_fields(self) -> List[Dict]:
+    def get_research_fields(self) -> list[dict]:
         """Get and cache research fields."""
         if self._research_fields_cache is None:
             self._research_fields_cache = self.client.get_research_fields()
@@ -96,7 +94,7 @@ class MUPBackend(backend.BaseBackend):
         msg = "No allocations were created - all components had zero limits or failed"
         raise BackendError(msg)
 
-    def _get_or_create_user(self, waldur_user: Dict) -> Optional[int]:  # noqa: PLR0911
+    def _get_or_create_user(self, waldur_user: dict) -> Optional[int]:  # noqa: PLR0911
         """Get or create MUP user based on Waldur user information.
 
         Returns MUP user ID or None if creation fails.
@@ -148,7 +146,7 @@ class MUPBackend(backend.BaseBackend):
 
         return None
 
-    def _get_project_by_waldur_id(self, waldur_resource_uuid: str) -> Optional[Dict]:
+    def _get_project_by_waldur_id(self, waldur_resource_uuid: str) -> Optional[dict]:
         """Find MUP project by Waldur resource UUID."""
         if waldur_resource_uuid in self._project_cache:
             return self._project_cache[waldur_resource_uuid]
@@ -165,7 +163,7 @@ class MUPBackend(backend.BaseBackend):
 
         return None
 
-    def _create_mup_project(self, waldur_project: Dict, pi_user_email: str) -> Optional[Dict]:
+    def _create_mup_project(self, waldur_project: dict, pi_user_email: str) -> Optional[dict]:
         """Create MUP project from Waldur project data."""
         try:
             # Extract project information
@@ -205,7 +203,7 @@ class MUPBackend(backend.BaseBackend):
             logger.exception("Failed to create MUP project for resource %s", resource_uuid)
             return None
 
-    def _get_pi_email_from_context(self, user_context: Optional[Dict], project_uuid: str) -> str:
+    def _get_pi_email_from_context(self, user_context: Optional[dict], project_uuid: str) -> str:
         """Get PI email from user context or return a fallback.
 
         Args:
@@ -247,7 +245,7 @@ class MUPBackend(backend.BaseBackend):
         )
         return f"admin@{project_uuid}.example.com"
 
-    def _create_and_add_users_from_context(self, project_id: int, user_context: Dict) -> None:
+    def _create_and_add_users_from_context(self, project_id: int, user_context: dict) -> None:
         """Create users and add them to the MUP project during resource creation.
 
         Args:
@@ -292,7 +290,7 @@ class MUPBackend(backend.BaseBackend):
                 logger.exception("Failed to add user %s to project during creation", user_uuid)
 
     def _pre_create_resource(
-        self, waldur_resource: Dict, user_context: Optional[Dict] = None
+        self, waldur_resource: dict, user_context: Optional[dict] = None
     ) -> None:
         """Create and activate MUP project."""
         # Get project information
@@ -331,11 +329,11 @@ class MUPBackend(backend.BaseBackend):
         if user_context:
             self._create_and_add_users_from_context(mup_project["id"], user_context)
 
-    def _setup_resource_limits(self, allocation_account: str, waldur_resource: Dict) -> None:
+    def _setup_resource_limits(self, allocation_account: str, waldur_resource: dict) -> None:
         """Skip this step for MUP."""
         del allocation_account, waldur_resource
 
-    def _create_resource_in_backend(self, waldur_resource: Dict) -> str:
+    def _create_resource_in_backend(self, waldur_resource: dict) -> str:
         """Create MUP resource within the MUP project."""
         mup_project = self._get_project_by_waldur_id(waldur_resource["uuid"])
         if not mup_project:
@@ -411,8 +409,8 @@ class MUPBackend(backend.BaseBackend):
         return str(mup_project["id"])
 
     def _collect_resource_limits(
-        self, waldur_resource: Dict[str, Dict]
-    ) -> Tuple[Dict[str, int], Dict[str, int]]:
+        self, waldur_resource: dict[str, dict]
+    ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect MUP and Waldur limits separately."""
         allocation_limits = {}
         waldur_resource_limits = {}
@@ -448,7 +446,7 @@ class MUPBackend(backend.BaseBackend):
         logger.warning("Restore not supported for MUP account %s", account)
         return False
 
-    def set_resource_limits(self, resource_backend_id: str, limits: Dict[str, int]) -> None:
+    def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
         """Set limits for components in the MUP allocations."""
         logger.info("Setting resource limits for %s: %s", resource_backend_id, limits)
 
@@ -535,9 +533,9 @@ class MUPBackend(backend.BaseBackend):
             logger.exception("Failed to get resource metadata for %s", account)
         return {}
 
-    def _get_usage_report(self, accounts: List[str]) -> Dict[str, Dict[str, Dict[str, int]]]:
+    def _get_usage_report(self, accounts: list[str]) -> dict[str, dict[str, dict[str, int]]]:
         """Collect usage report for the specified accounts from MUP."""
-        report: Dict[str, Dict[str, Dict[str, int]]] = {}
+        report: dict[str, dict[str, dict[str, int]]] = {}
 
         try:
             projects = self.client.get_projects()
@@ -549,7 +547,7 @@ class MUPBackend(backend.BaseBackend):
 
                     # Initialize account usage
                     report[project_id_str] = {}
-                    total_usage: Dict[str, int] = {}
+                    total_usage: dict[str, int] = {}
 
                     for allocation in allocations:
                         # Map allocation usage to component usage based on allocation identifier
@@ -610,7 +608,7 @@ class MUPBackend(backend.BaseBackend):
 
         return report
 
-    def _find_project_by_resource_id(self, resource_backend_id: str) -> Optional[Dict]:
+    def _find_project_by_resource_id(self, resource_backend_id: str) -> Optional[dict]:
         """Find MUP project by resource backend ID (project ID)."""
         try:
             project_id = int(resource_backend_id)
@@ -627,8 +625,8 @@ class MUPBackend(backend.BaseBackend):
         return None
 
     def add_users_to_resource(
-        self, resource_backend_id: str, user_ids: Set[str], **_kwargs: dict
-    ) -> Set[str]:
+        self, resource_backend_id: str, user_ids: set[str], **_kwargs: dict
+    ) -> set[str]:
         """Add specified users to the MUP project.
 
         Note: Most users are already added during resource creation. This method
@@ -639,7 +637,7 @@ class MUPBackend(backend.BaseBackend):
             resource_backend_id,
             ", ".join(user_ids),
         )
-        added_users: Set[str] = set()
+        added_users: set[str] = set()
 
         # Find the project by resource backend ID
         target_project = self._find_project_by_resource_id(resource_backend_id)
@@ -681,15 +679,15 @@ class MUPBackend(backend.BaseBackend):
         return added_users
 
     def remove_users_from_resource(
-        self, resource_backend_id: str, usernames: Set[str]
-    ) -> List[str]:
+        self, resource_backend_id: str, usernames: set[str]
+    ) -> list[str]:
         """Remove specified users from the MUP project."""
         logger.info(
             "Removing users from MUP project for resource %s: %s",
             resource_backend_id,
             ", ".join(usernames),
         )
-        removed_users: List[str] = []
+        removed_users: list[str] = []
 
         # Find the project by resource backend ID
         target_project = self._find_project_by_resource_id(resource_backend_id)

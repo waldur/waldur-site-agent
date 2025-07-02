@@ -1,9 +1,7 @@
 """Utils for SLURM backend."""
 
-from typing import Dict
 
-
-def convert_slurm_units_to_waldur_ones(slurm_tres: Dict, units: Dict, to_int: bool = False) -> Dict:
+def convert_slurm_units_to_waldur_ones(slurm_tres: dict, units: dict, to_int: bool = False) -> dict:
     """Converts SLURM computing units to Waldur ones."""
     converted_units = {}
 

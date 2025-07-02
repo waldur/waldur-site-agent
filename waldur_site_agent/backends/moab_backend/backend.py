@@ -1,9 +1,5 @@
 """Moab-specific backend classes and functions."""
 
-from __future__ import annotations
-
-from typing import Dict, List, Tuple
-
 from waldur_site_agent.backends import BackendType, logger
 from waldur_site_agent.backends import utils as backend_utils
 from waldur_site_agent.backends.backend import BaseBackend
@@ -15,7 +11,7 @@ from waldur_site_agent.backends.moab_backend.parser import MoabReportLine
 class MoabBackend(BaseBackend):
     """MOAB backend class."""
 
-    def __init__(self, moab_settings: Dict, moab_components: Dict[str, Dict]) -> None:
+    def __init__(self, moab_settings: dict, moab_components: dict[str, dict]) -> None:
         """Init backend data and creates a corresponding client."""
         super().__init__(moab_settings, moab_components)
         self.backend_type = BackendType.MOAB.value
@@ -34,14 +30,14 @@ class MoabBackend(BaseBackend):
         else:
             return True
 
-    def list_components(self) -> List[str]:
+    def list_components(self) -> list[str]:
         """Return deposit component."""
         return ["deposit"]
 
-    def _get_usage_report(self, accounts: List[str]) -> Dict:
+    def _get_usage_report(self, accounts: list[str]) -> dict:
         """Get usage report."""
-        report: Dict[str, Dict[str, Dict[str, float]]] = {}
-        lines: List[MoabReportLine] = self.client.get_usage_report(accounts)
+        report: dict[str, dict[str, dict[str, float]]] = {}
+        lines: list[MoabReportLine] = self.client.get_usage_report(accounts)
 
         for line in lines:
             report.setdefault(line.account, {}).setdefault(line.user, {})
@@ -82,8 +78,8 @@ class MoabBackend(BaseBackend):
         return {}
 
     def _collect_resource_limits(
-        self, waldur_resource: Dict[str, Dict]
-    ) -> Tuple[Dict[str, int], Dict[str, int]]:
+        self, waldur_resource: dict[str, dict]
+    ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect deposit limit only with no conversion."""
         deposit_limit = {"deposit": waldur_resource["limits"]["deposit"]}
         return deposit_limit, deposit_limit

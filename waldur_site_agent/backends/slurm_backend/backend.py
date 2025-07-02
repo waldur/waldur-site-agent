@@ -1,8 +1,6 @@
 """SLURM-specific backend classes and functions."""
 
-from __future__ import annotations
-
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Optional
 
 from waldur_site_agent.backends import (
     BackendType,
@@ -19,7 +17,7 @@ from waldur_site_agent.backends.structures import Resource
 class SlurmBackend(backend.BaseBackend):
     """Main class for management of SLURM resources."""
 
-    def __init__(self, slurm_settings: Dict, slurm_tres: Dict[str, Dict]) -> None:
+    def __init__(self, slurm_settings: dict, slurm_tres: dict[str, dict]) -> None:
         """Init backend data and creates a corresponding client."""
         super().__init__(slurm_settings, slurm_tres)
         self.backend_type = BackendType.SLURM.value
@@ -37,12 +35,12 @@ class SlurmBackend(backend.BaseBackend):
         else:
             return True
 
-    def list_components(self) -> List[str]:
+    def list_components(self) -> list[str]:
         """Return a list of TRES on the SLURM cluster."""
         return self.client.list_tres()
 
     def post_create_resource(
-        self, resource: Resource, waldur_resource: Dict, user_context: Optional[Dict] = None
+        self, resource: Resource, waldur_resource: dict, user_context: Optional[dict] = None
     ) -> None:
         """Post-create actions for SLURM resources."""
         del resource, waldur_resource
@@ -66,8 +64,8 @@ class SlurmBackend(backend.BaseBackend):
                     self._create_user_homedirs(usernames, umask)
 
     def _collect_resource_limits(
-        self, waldur_resource: Dict[str, Dict]
-    ) -> Tuple[Dict[str, int], Dict[str, int]]:
+        self, waldur_resource: dict[str, dict]
+    ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect SLURM and Waldur limits separately."""
         allocation_limits = backend_utils.get_usage_based_limits(self.backend_components)
         limit_based_components = [
@@ -93,8 +91,8 @@ class SlurmBackend(backend.BaseBackend):
         return allocation_limits, waldur_resource_limits
 
     def add_users_to_resource(
-        self, resource_backend_id: str, user_ids: Set[str], **kwargs: dict
-    ) -> Set[str]:
+        self, resource_backend_id: str, user_ids: set[str], **kwargs: dict
+    ) -> set[str]:
         """Add specified users to the allocations on the SLURM cluster."""
         added_users = super().add_users_to_resource(resource_backend_id, user_ids)
 
@@ -180,7 +178,7 @@ class SlurmBackend(backend.BaseBackend):
         current_qos = self.client.get_current_account_qos(account)
         return {"qos": current_qos}
 
-    def _create_user_homedirs(self, usernames: Set[str], umask: str = "0700") -> None:
+    def _create_user_homedirs(self, usernames: set[str], umask: str = "0700") -> None:
         logger.info("Creating homedirs for users")
         for username in usernames:
             try:
@@ -193,7 +191,7 @@ class SlurmBackend(backend.BaseBackend):
                     err,
                 )
 
-    def _get_usage_report(self, accounts: List[str]) -> Dict[str, Dict[str, Dict[str, int]]]:
+    def _get_usage_report(self, accounts: list[str]) -> dict[str, dict[str, dict[str, int]]]:
         """Example output.
 
         {
@@ -211,7 +209,7 @@ class SlurmBackend(backend.BaseBackend):
             }
         }
         """
-        report: Dict[str, Dict[str, Dict[str, int]]] = {}
+        report: dict[str, dict[str, dict[str, int]]] = {}
         lines = self.client.get_usage_report(accounts)
 
         for line in lines:
@@ -227,7 +225,7 @@ class SlurmBackend(backend.BaseBackend):
             account_usage["TOTAL_ACCOUNT_USAGE"] = total
 
         # Convert SLURM units to Waldur ones
-        report_converted: Dict[str, Dict[str, Dict[str, int]]] = {}
+        report_converted: dict[str, dict[str, dict[str, int]]] = {}
         for account, account_usage in report.items():
             report_converted[account] = {}
             for username, usage_dict in account_usage.items():
@@ -238,7 +236,7 @@ class SlurmBackend(backend.BaseBackend):
 
         return report_converted
 
-    def list_active_user_jobs(self, account: str, user: str) -> List[str]:
+    def list_active_user_jobs(self, account: str, user: str) -> list[str]:
         """List active jobs for account and user."""
         logger.info("Listing jobs for account %s and user %s", account, user)
         return self.client.list_active_user_jobs(account, user)
@@ -272,7 +270,7 @@ class SlurmBackend(backend.BaseBackend):
             logger.info("Removing all users from account %s", account)
             self.client.delete_all_users_from_account(account)
 
-    def set_resource_limits(self, resource_backend_id: str, limits: Dict[str, int]) -> None:
+    def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
         """Set limits for limit-based components in the SLURM allocation."""
         # Convert limits
         converted_limits = {
@@ -281,7 +279,7 @@ class SlurmBackend(backend.BaseBackend):
         }
         super().set_resource_limits(resource_backend_id, converted_limits)
 
-    def get_resource_limits(self, resource_backend_id: str) -> Dict[str, int]:
+    def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
         """Get account limits converted to Waldur-readable values."""
         account_limits_raw = self.client.get_resource_limits(resource_backend_id)
         return utils.convert_slurm_units_to_waldur_ones(
@@ -289,7 +287,7 @@ class SlurmBackend(backend.BaseBackend):
         )
 
     def set_resource_user_limits(
-        self, resource_backend_id: str, username: str, limits: Dict[str, int]
+        self, resource_backend_id: str, username: str, limits: dict[str, int]
     ) -> None:
         """Set limits for a specific user in a resource on the backend."""
         converted_limits = {

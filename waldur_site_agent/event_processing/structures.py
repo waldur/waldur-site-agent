@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple, TypedDict
+from typing import TypedDict
 
 import paho.mqtt.client as mqtt
 import stomp
@@ -28,24 +28,24 @@ class EventSubscription(TypedDict):
 
     uuid: str
     user_uuid: str
-    observable_objects: List[ObservableObject]
+    observable_objects: list[ObservableObject]
 
 
 # A tuple containing MQTT client, subscription, and offering information.
-MqttConsumer = Tuple[mqtt.Client, EventSubscription, common_structures.Offering]
+MqttConsumer = tuple[mqtt.Client, EventSubscription, common_structures.Offering]
 
 # A tuple of offering name and UUID used as a key for consumer mapping.
-MqttConsumerKey = Tuple[str, str]
+MqttConsumerKey = tuple[str, str]
 
 # A tuple of offering name and UUID used as a key for connection mapping.
-StompConsumerKey = Tuple[str, str]
+StompConsumerKey = tuple[str, str]
 
 # A tuple containing STOMP connection, subscription, and offering information.
-StompConsumer = Tuple[stomp.WSStompConnection, EventSubscription, common_structures.Offering]
+StompConsumer = tuple[stomp.WSStompConnection, EventSubscription, common_structures.Offering]
 
 # A dictionary mapping consumer keys to lists of MQTT consumers.
-MqttConsumersMap = Dict[MqttConsumerKey, List[MqttConsumer]]
-StompConsumersMap = Dict[StompConsumerKey, List[StompConsumer]]
+MqttConsumersMap = dict[MqttConsumerKey, list[MqttConsumer]]
+StompConsumersMap = dict[StompConsumerKey, list[StompConsumer]]
 
 
 class UserData(TypedDict):

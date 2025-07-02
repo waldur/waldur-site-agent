@@ -1,7 +1,7 @@
 """Generic backend classes."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Optional
 
 from waldur_site_agent.backends import BackendType, logger, structures, utils
 from waldur_site_agent.backends.base import BaseClient, UnknownClient
@@ -13,7 +13,7 @@ UNKNOWN_BACKEND_TYPE = "unknown"
 class BaseBackend(ABC):
     """Backend class with implemented generic methods and other abstract methods."""
 
-    def __init__(self, backend_settings: Dict, backend_components: Dict[str, Dict]) -> None:
+    def __init__(self, backend_settings: dict, backend_components: dict[str, dict]) -> None:
         """Init backend info."""
         self.backend_type = "abstract"
         self.backend_settings = backend_settings
@@ -25,11 +25,11 @@ class BaseBackend(ABC):
         """Check if backend is online."""
 
     @abstractmethod
-    def list_components(self) -> List[str]:
+    def list_components(self) -> list[str]:
         """Return a list of computing components on the backend."""
 
     @abstractmethod
-    def _get_usage_report(self, resource_backend_ids: List[str]) -> Dict:
+    def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
         """Collect usage report for the specified resource_backend_ids."""
 
     @abstractmethod
@@ -50,13 +50,13 @@ class BaseBackend(ABC):
 
     @abstractmethod
     def _collect_resource_limits(
-        self, waldur_resource: Dict[str, Dict]
-    ) -> Tuple[Dict[str, int], Dict[str, int]]:
+        self, waldur_resource: dict[str, dict]
+    ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect limits for backend and waldur separately."""
 
     def pull_resources(
-        self, resources_info: List[structures.Resource]
-    ) -> Dict[str, structures.Resource]:
+        self, resources_info: list[structures.Resource]
+    ) -> dict[str, structures.Resource]:
         """Pull data of resources available in the backend."""
         report = {}
         for resource_info in resources_info:
@@ -103,7 +103,7 @@ class BaseBackend(ABC):
         usage = report.get(resource_backend_id)
 
         if usage is None:
-            empty_usage = {bc: 0 for bc in self.backend_components}
+            empty_usage = dict.fromkeys(self.backend_components, 0)
             usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         return structures.Resource(
@@ -186,7 +186,7 @@ class BaseBackend(ABC):
         return False
 
     def create_resource(
-        self, waldur_resource: Dict, user_context: Optional[Dict] = None
+        self, waldur_resource: dict, user_context: Optional[dict] = None
     ) -> structures.Resource:
         """Create resource on the backend.
 
@@ -222,7 +222,7 @@ class BaseBackend(ABC):
         return resource
 
     def _pre_create_resource(
-        self, waldur_resource: Dict, user_context: Optional[Dict] = None
+        self, waldur_resource: dict, user_context: Optional[dict] = None
     ) -> None:
         """Actions performed prior to resource creation."""
         # Default implementation: setup customer and project accounts hierarchy
@@ -245,7 +245,7 @@ class BaseBackend(ABC):
             customer_backend_id,
         )
 
-    def _create_resource_in_backend(self, waldur_resource: Dict) -> str:
+    def _create_resource_in_backend(self, waldur_resource: dict) -> str:
         """Create backend resource with retry logic for name generation."""
         project_backend_id = self._get_project_backend_id(waldur_resource["project_slug"])
 
@@ -275,7 +275,7 @@ class BaseBackend(ABC):
             f"Unable to create an resource: {resource_backend_id} already exists in the cluster"
         )
 
-    def _setup_resource_limits(self, resource_backend_id: str, waldur_resource: Dict) -> None:
+    def _setup_resource_limits(self, resource_backend_id: str, waldur_resource: dict) -> None:
         """Setup resource limits for the resource in backend."""
         resource_backend_limits, _ = self._collect_resource_limits(waldur_resource)
 
@@ -296,15 +296,15 @@ class BaseBackend(ABC):
     def post_create_resource(
         self,
         resource: structures.Resource,
-        waldur_resource: Dict,
-        user_context: Optional[Dict] = None,
+        waldur_resource: dict,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Perform customizable actions after resource creation."""
         del resource, waldur_resource, user_context  # Not used in base implementation
 
     def add_users_to_resource(
-        self, resource_backend_id: str, user_ids: Set[str], **kwargs: dict
-    ) -> Set[str]:
+        self, resource_backend_id: str, user_ids: set[str], **kwargs: dict
+    ) -> set[str]:
         """Add specified users to the resource on the backend."""
         del kwargs
         logger.info(
@@ -353,8 +353,8 @@ class BaseBackend(ABC):
         return True
 
     def remove_users_from_resource(
-        self, resource_backend_id: str, usernames: Set[str]
-    ) -> List[str]:
+        self, resource_backend_id: str, usernames: set[str]
+    ) -> list[str]:
         """Remove specified users from the resource on the backend."""
         logger.info(
             "Removing users from resource %s on backend: %s",
@@ -398,20 +398,20 @@ class BaseBackend(ABC):
                 return False
         return True
 
-    def set_resource_limits(self, resource_backend_id: str, limits: Dict[str, int]) -> None:
+    def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
         """Set limits for the resource on the backend."""
         self.client.set_resource_limits(resource_backend_id, limits)
 
-    def get_resource_limits(self, resource_backend_id: str) -> Dict[str, int]:
+    def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
         """Get limits for the resource on the backend."""
         return self.client.get_resource_limits(resource_backend_id)
 
-    def get_resource_user_limits(self, resource_backend_id: str) -> Dict[str, Dict[str, int]]:
+    def get_resource_user_limits(self, resource_backend_id: str) -> dict[str, dict[str, int]]:
         """Get limits for the resource users on the backend."""
         return self.client.get_resource_user_limits(resource_backend_id)
 
     def set_resource_user_limits(
-        self, resource_backend_id: str, username: str, limits: Dict[str, int]
+        self, resource_backend_id: str, username: str, limits: dict[str, int]
     ) -> None:
         """Set limits for a specific user in a resource on the backend."""
         logger.info(
@@ -442,11 +442,11 @@ class UnknownBackend(BaseBackend):
         """Placeholder."""
         return False
 
-    def list_components(self) -> List[str]:
+    def list_components(self) -> list[str]:
         """Placeholder."""
         return []
 
-    def pull_resources(self, _: List[structures.Resource]) -> Dict[str, structures.Resource]:
+    def pull_resources(self, _: list[structures.Resource]) -> dict[str, structures.Resource]:
         """Placeholder."""
         return {}
 
@@ -454,7 +454,7 @@ class UnknownBackend(BaseBackend):
         """Placeholder."""
         del kwargs, resource_backend_id
 
-    def create_resource(self, _: Dict, user_context: Optional[Dict] = None) -> structures.Resource:
+    def create_resource(self, _: dict, user_context: Optional[dict] = None) -> structures.Resource:
         """Placeholder."""
         del user_context
         return structures.Resource()
@@ -479,21 +479,21 @@ class UnknownBackend(BaseBackend):
         return {}
 
     def add_users_to_resource(
-        self, resource_backend_id: str, user_ids: Set[str], **kwargs: dict
-    ) -> Set[str]:
+        self, resource_backend_id: str, user_ids: set[str], **kwargs: dict
+    ) -> set[str]:
         """Placeholder."""
         del kwargs, resource_backend_id
         return user_ids
 
-    def set_resource_limits(self, _: str, limits: Dict[str, int]) -> None:
+    def set_resource_limits(self, _: str, limits: dict[str, int]) -> None:
         """Placeholder."""
         del limits
 
-    def _collect_resource_limits(self, _: Dict[str, Dict]) -> Tuple[Dict[str, int], Dict[str, int]]:
+    def _collect_resource_limits(self, _: dict[str, dict]) -> tuple[dict[str, int], dict[str, int]]:
         return {"": 0}, {"": 0}
 
     def _pull_backend_resource(self, _: str) -> Optional[structures.Resource]:
         return None
 
-    def _get_usage_report(self, _: List[str]) -> Dict:
+    def _get_usage_report(self, _: list[str]) -> dict:
         return {}

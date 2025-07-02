@@ -2,7 +2,6 @@
 
 import decimal
 from functools import cached_property
-from typing import Dict
 
 
 class MoabReportLine:
@@ -28,6 +27,6 @@ class MoabReportLine:
         return decimal.Decimal(self._parts[2])
 
     @cached_property
-    def usages(self) -> Dict[str, decimal.Decimal]:
+    def usages(self) -> dict[str, decimal.Decimal]:
         """Return deposit usage from the report line."""
         return {"deposit": self.charge}

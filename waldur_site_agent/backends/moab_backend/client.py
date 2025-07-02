@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Optional
 
 from waldur_site_agent.backends import base, exceptions, logger
 from waldur_site_agent.backends import utils as backend_utils
@@ -17,10 +17,10 @@ class MoabClient(base.BaseClient):
     http://docs.adaptivecomputing.com/9-1-1/MAM/help.htm
     """
 
-    def list_accounts(self) -> List[Account]:
+    def list_accounts(self) -> list[Account]:
         """Return list of accounts in MOAB."""
         output = self.execute_command(
-            "mam-list-accounts --raw --quiet --show Name,Description,Organization".split()
+            ["mam-list-accounts", "--raw", "--quiet", "--show", "Name,Description,Organization"]
         )
         return [self._parse_account(line) for line in output.splitlines() if "|" in line]
 
@@ -79,7 +79,7 @@ class MoabClient(base.BaseClient):
         command_fund = f"mam-delete-fund -f {fund_id}"
         return self.execute_command(command_fund.split())
 
-    def set_resource_limits(self, account: str, limits_dict: Dict[str, int]) -> str | None:
+    def set_resource_limits(self, account: str, limits_dict: dict[str, int]) -> str | None:
         """Set the limits for the account with the specified name."""
         if limits_dict.get("deposit", 0) < 0:
             logger.warning(
@@ -98,16 +98,16 @@ class MoabClient(base.BaseClient):
         command_deposit = f"mam-deposit -a {account} -z {limits_dict['deposit']} -f {fund_id}"
         return self.execute_command(command_deposit.split())
 
-    def get_resource_limits(self, _: str) -> Dict[str, int]:
+    def get_resource_limits(self, _: str) -> dict[str, int]:
         """Get account limits."""
         return {}
 
-    def get_resource_user_limits(self, _: str) -> Dict[str, Dict[str, int]]:
+    def get_resource_user_limits(self, _: str) -> dict[str, dict[str, int]]:
         """Get per-user limits for the account."""
         return {}
 
     def set_resource_user_limits(
-        self, account: str, username: str, limits_dict: Dict[str, int]
+        self, account: str, username: str, limits_dict: dict[str, int]
     ) -> str:
         """Set account limits for a specific user."""
         # The method is a placeholder and is not implemented yet
@@ -134,7 +134,7 @@ class MoabClient(base.BaseClient):
         command = f"mam-modify-account --del-user {username} -a {account}"
         return self.execute_command(command.split())
 
-    def get_usage_report(self, accounts: List[str]) -> List:
+    def get_usage_report(self, accounts: list[str]) -> list:
         """Get usages records from MOAB."""
         template = (
             "mam-list-usagerecords --raw --quiet --show "
@@ -156,7 +156,7 @@ class MoabClient(base.BaseClient):
 
         return report_lines
 
-    def list_account_users(self, account: str) -> List[str]:
+    def list_account_users(self, account: str) -> list[str]:
         """Returns list of users linked to the account."""
         # TODO: make use of -A flag (fetch only active users)
         command = f"mam-list-users -a {account} --raw --show Name,DefaultAccount --quiet"

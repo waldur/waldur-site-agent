@@ -5,8 +5,9 @@ from __future__ import annotations
 import signal
 import sys
 import types
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator, List, Union
+from typing import Union
 
 import paho.mqtt.client as mqtt
 import stomp
@@ -49,9 +50,9 @@ def on_connect(
 
 def setup_stomp_offering_subscriptions(
     waldur_offering: common_structures.Offering, waldur_user_agent: str
-) -> List[stomp.WSStompConnection]:
+) -> list[stomp.WSStompConnection]:
     """Set up STOMP subscriptions for the specified offering."""
-    stomp_connections: List[stomp.WSStompConnection] = []
+    stomp_connections: list[stomp.WSStompConnection] = []
     for object_type in ["order", "user_role", "resource"]:
         event_subscription_manager = EventSubscriptionManager(
             waldur_offering, None, None, waldur_user_agent, object_type
@@ -83,7 +84,7 @@ def setup_stomp_offering_subscriptions(
 
 def setup_offering_subscriptions(
     waldur_offering: common_structures.Offering, waldur_user_agent: str
-) -> List[MqttConsumer]:
+) -> list[MqttConsumer]:
     """Set up MQTT subscriptions for the specified offering."""
     object_type_to_handler = {
         "order": handlers.on_order_message_mqtt,
@@ -91,7 +92,7 @@ def setup_offering_subscriptions(
         "resource": handlers.on_resource_message_mqtt,
     }
 
-    event_subscriptions: List[MqttConsumer] = []
+    event_subscriptions: list[MqttConsumer] = []
     for object_type in ["order", "user_role", "resource"]:
         on_message_handler = object_type_to_handler[object_type]
         event_subscription_manager = EventSubscriptionManager(
@@ -123,7 +124,7 @@ def setup_offering_subscriptions(
 
 
 def start_stomp_consumers(
-    waldur_offerings: List[common_structures.Offering],
+    waldur_offerings: list[common_structures.Offering],
     waldur_user_agent: str,
 ) -> StompConsumersMap:
     """Start multiple STOMP consumers."""
@@ -167,7 +168,7 @@ def stop_stomp_consumers(
 
 
 def start_mqtt_consumers(
-    waldur_offerings: List[common_structures.Offering],
+    waldur_offerings: list[common_structures.Offering],
     waldur_user_agent: str,
 ) -> MqttConsumersMap:
     """Start multiple MQTT consumers."""
@@ -249,7 +250,7 @@ def signal_handling(
 
 
 def run_initial_offering_processing(
-    waldur_offerings: List[common_structures.Offering], user_agent: str = ""
+    waldur_offerings: list[common_structures.Offering], user_agent: str = ""
 ) -> None:
     """Runs processing of offerings with MQTT feature enabled."""
     logger.info("Processing offerings with MQTT/STOMP feature enabled")
@@ -274,7 +275,7 @@ def process_offering(offering: common_structures.Offering, user_agent: str = "")
     membership_processor.process_offering()
 
 
-def send_agent_health_checks(offerings: List[common_structures.Offering], user_agent: str) -> None:
+def send_agent_health_checks(offerings: list[common_structures.Offering], user_agent: str) -> None:
     """Sends agent health checks for the specified offerings."""
     for offering in offerings:
         try:

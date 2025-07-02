@@ -5,7 +5,7 @@ from __future__ import annotations
 import abc
 import traceback
 from time import sleep
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Optional
 
 from waldur_client import (
     ComponentUsage,
@@ -208,8 +208,8 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
     def _create_resource(
         self,
-        waldur_resource: Dict,
-        user_context: Dict,
+        waldur_resource: dict,
+        user_context: dict,
     ) -> Resource | None:
         resource_uuid = waldur_resource["uuid"]
         resource_name = waldur_resource["name"]
@@ -233,7 +233,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         return backend_resource
 
-    def _fetch_user_context_for_resource(self, resource_uuid: str) -> Dict:
+    def _fetch_user_context_for_resource(self, resource_uuid: str) -> dict:
         """Fetch user context for resource creation.
 
         Returns a dictionary containing:
@@ -285,12 +285,12 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     def _add_users_to_resource(
         self,
         backend_resource: Resource,
-        user_context: Dict,
+        user_context: dict,
     ) -> None:
         logger.info("Adding users to resource")
 
         # Extract usernames from the already-fetched user context
-        offering_usernames: Set[str] = {
+        offering_usernames: set[str] = {
             offering_user["username"]
             for offering_user in user_context["offering_users"]
             if offering_user["username"] != ""
@@ -307,7 +307,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
 
-    def _process_create_order(self, order: Dict) -> bool:
+    def _process_create_order(self, order: dict) -> bool:
         # Wait until Waldur resource is created
         attempts = 0
         max_attempts = 4
@@ -418,7 +418,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     Processes related resources and reports membership data to Waldur.
     """
 
-    def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> List[Resource]:
+    def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[Resource]:
         filters = {
             "offering_uuid": self.offering.uuid,
             "state": ["OK", utils.RESOURCE_ERRED_STATE],
@@ -476,7 +476,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         self._process_resources(resource_report)
 
-    def _get_user_offering_users(self, user_uuid: str) -> List[dict]:
+    def _get_user_offering_users(self, user_uuid: str) -> list[dict]:
         return self.waldur_rest_client.list_remote_offering_users(
             {
                 "offering_uuid": self.offering.uuid,
@@ -542,7 +542,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     exc,
                 )
 
-    def _get_waldur_offering_users(self) -> List[Dict]:
+    def _get_waldur_offering_users(self) -> list[dict]:
         logger.info("Fetching Waldur offering users")
         return self.waldur_rest_client.list_remote_offering_users(
             {
@@ -551,13 +551,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             }
         )
 
-    def _get_waldur_resource_team(self, resource: Resource) -> List[Dict]:
+    def _get_waldur_resource_team(self, resource: Resource) -> list[dict]:
         logger.info("Fetching Waldur resource team")
         return self.waldur_rest_client.marketplace_provider_resource_get_team(
             resource.marketplace_uuid
         )
 
-    def _get_resource_usernames(self, resource: Resource) -> Tuple[Set[str], Set[str], Set[str]]:
+    def _get_resource_usernames(self, resource: Resource) -> tuple[set[str], set[str], set[str]]:
         logger.info("Fetching new, existing and stale resource users")
         usernames = resource.users
         local_usernames = set(usernames)
@@ -577,7 +577,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         }
         logger.info("Resource offering usernames: %s", ", ".join(resource_offering_usernames))
 
-        existing_usernames: Set[str] = {
+        existing_usernames: set[str] = {
             offering_user["username"]
             for offering_user in offering_users
             if offering_user["username"] in local_usernames
@@ -585,7 +585,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         }
         logger.info("Resource existing usernames: %s", ", ".join(existing_usernames))
 
-        new_usernames: Set[str] = {
+        new_usernames: set[str] = {
             offering_user["username"]
             for offering_user in offering_users
             if offering_user["username"] not in local_usernames
@@ -593,7 +593,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         }
         logger.info("Resource new usernames: %s", ", ".join(new_usernames))
 
-        stale_usernames: Set[str] = {
+        stale_usernames: set[str] = {
             offering_user["username"]
             for offering_user in offering_users
             if offering_user["username"] in local_usernames
@@ -606,7 +606,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     def _sync_resource_users(
         self,
         resource: Resource,
-    ) -> Set[str]:
+    ) -> set[str]:
         """Sync users for the resource between Waldur and the site.
 
         return: the actual resource usernames (existing + added)
@@ -697,7 +697,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     # TODO: adapt for RabbitMQ-based processing
     # introduce new event and add support for the event in the agent
     def _sync_resource_user_limits(
-        self, resource: Resource, usernames: Optional[Set[str]] = None
+        self, resource: Resource, usernames: Optional[set[str]] = None
     ) -> None:
         logger.info(
             "Synching resource user limits for resource %s (%s)", resource.name, resource.backend_id
@@ -748,7 +748,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
     def _process_resources(
         self,
-        resource_report: Dict[str, Resource],
+        resource_report: dict[str, Resource],
     ) -> None:
         """Sync status and membership data for the resource."""
         for backend_resource in resource_report.values():
@@ -856,7 +856,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
     def _process_resource_with_retries(
         self,
         waldur_resource: Resource,
-        waldur_offering: Dict,
+        waldur_offering: dict,
         retry_count: int = 10,
         delay: int = 5,
     ) -> None:
@@ -899,7 +899,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         self,
         component_type: str,
         current_usage: float,
-        existing_usages: List[Dict],
+        existing_usages: list[dict],
     ) -> bool:
         """Check if the current usage is lower than existing usage."""
         # Find all usage records for this component type
@@ -934,8 +934,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
     def _submit_total_usage_for_resource(
         self,
         backend_resource: Resource,
-        total_usage: Dict[str, float],
-        waldur_components: List[Dict],
+        total_usage: dict[str, float],
+        waldur_components: list[dict],
     ) -> None:
         """Reports total usage for a backend resource to Waldur."""
         logger.info("Setting usages for %s: %s", backend_resource.backend_id, total_usage)
@@ -977,8 +977,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
     def _submit_user_usage_for_resource(
         self,
         username: str,
-        user_usage: Dict[str, float],
-        waldur_component_usages: List[Dict],
+        user_usage: dict[str, float],
+        waldur_component_usages: list[dict],
     ) -> None:
         """Reports per-user usage for a backend resource to Waldur."""
         logger.info("Setting usages for %s", username)
@@ -1023,7 +1023,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
     def _process_resource(
         self,
         waldur_resource: Resource,
-        waldur_offering: Dict,
+        waldur_offering: dict,
     ) -> None:
         """Processes usage report for the resource."""
         current_time = backend_utils.get_current_time_in_timezone(self.timezone)
@@ -1071,7 +1071,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 waldur_resource.marketplace_uuid
             )
 
-        usages: Dict[str, Dict[str, float]] = waldur_resource.usage
+        usages: dict[str, dict[str, float]] = waldur_resource.usage
 
         # Submit usage
         total_usage = usages.pop("TOTAL_ACCOUNT_USAGE")
