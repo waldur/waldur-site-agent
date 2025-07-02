@@ -1,7 +1,6 @@
 """Common structures shared between different backends."""
 
 from dataclasses import dataclass, field
-from typing import Dict, List
 
 
 @dataclass
@@ -30,11 +29,11 @@ class Resource:
     name: str = ""
     marketplace_uuid: str = ""
     backend_id: str = ""
-    limits: Dict = field(default_factory=dict)
+    limits: dict = field(default_factory=dict)
     restrict_member_access: bool = False
     downscaled: bool = False
     paused: bool = False
-    users: List[str] = field(default_factory=list)
-    usage: Dict = field(default_factory=dict)
-    metadata: Dict = field(default_factory=dict)
+    users: list[str] = field(default_factory=list)
+    usage: dict = field(default_factory=dict)
+    metadata: dict = field(default_factory=dict)
     state: str = ""

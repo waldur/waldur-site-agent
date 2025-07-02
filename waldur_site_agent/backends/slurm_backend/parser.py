@@ -3,11 +3,10 @@
 import datetime
 import re
 from functools import cached_property
-from typing import Dict
 
 UNIT_PATTERN = re.compile(r"(\d+)([KMGTP]?)")
 
-UNITS: Dict[str, int] = {
+UNITS: dict[str, int] = {
     "K": 2**10,
     "M": 2**20,
     "G": 2**30,
@@ -75,7 +74,7 @@ def parse_duration(value: str) -> float:
 class SlurmReportLine:
     """Class for SLURM report line parsing."""
 
-    def __init__(self, line: str, slurm_tres: Dict) -> None:
+    def __init__(self, line: str, slurm_tres: dict) -> None:
         """Inits parts field from the specified line."""
         self._parts = line.split("|")
         self.slurm_tres = slurm_tres
@@ -96,7 +95,7 @@ class SlurmReportLine:
         return parse_duration(self._parts[2])
 
     @cached_property
-    def _resources(self) -> Dict:
+    def _resources(self) -> dict:
         pairs = self._parts[1].split(",")
         return dict(pair.split("=") for pair in pairs)
 
@@ -107,7 +106,7 @@ class SlurmReportLine:
         return parse_int(self._resources[field])
 
     @cached_property
-    def tres_usage(self) -> Dict:
+    def tres_usage(self) -> dict:
         """TRES usage for the line."""
         usage = {}
         slurm_tres_set = set(self.slurm_tres.keys())
@@ -136,14 +135,14 @@ class SlurmAssociationLine(SlurmReportLine):
         return 0.0
 
     @cached_property
-    def _resources(self) -> Dict:
+    def _resources(self) -> dict:
         if self._parts[1] != "":
             pairs = self._parts[1].split(",")
             return dict(pair.split("=") for pair in pairs)
         return {}
 
     @cached_property
-    def tres_limits(self) -> Dict:
+    def tres_limits(self) -> dict:
         """TRES limits in the line."""
         resources = self._resources
         limits = {}

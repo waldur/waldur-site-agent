@@ -5,11 +5,9 @@ This module provides HTTP client for communicating with MUP
 interface for managing projects, allocations, and users.
 """
 
-from __future__ import annotations
-
 import base64
 import logging
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Optional, cast
 from urllib.parse import urljoin
 
 import requests
@@ -155,111 +153,111 @@ class MUPClient(BaseClient):
                 f"Invalid JSON response: {e}. Status: {response.status_code}, Body: {text_preview}"
             ) from e
 
-    def get_projects(self) -> List[Dict]:
+    def get_projects(self) -> list[dict]:
         """Get list of projects from MUP."""
         response = self._make_request("GET", "/api/projects/list/")
-        return cast(List[Dict], self._parse_json_response(response))
+        return cast("list[dict]", self._parse_json_response(response))
 
-    def get_project(self, project_id: int) -> Dict:
+    def get_project(self, project_id: int) -> dict:
         """Get specific project by ID."""
         response = self._make_request("GET", f"/api/projects/view/{project_id}")
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def create_project(self, project_data: Dict) -> Dict:
+    def create_project(self, project_data: dict) -> dict:
         """Create new project in MUP."""
         response = self._make_request("POST", "/api/projects/add/", json=project_data)
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def update_project(self, project_id: int, project_data: Dict) -> Dict:
+    def update_project(self, project_id: int, project_data: dict) -> dict:
         """Update existing project."""
         response = self._make_request("PUT", f"/api/projects/{project_id}/edit", json=project_data)
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def activate_project(self, project_id: int) -> Dict:
+    def activate_project(self, project_id: int) -> dict:
         """Activate project."""
         response = self._make_request("PUT", f"/api/projects/{project_id}/activate", json={})
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def deactivate_project(self, project_id: int) -> Dict:
+    def deactivate_project(self, project_id: int) -> dict:
         """Deactivate project."""
         response = self._make_request("PUT", f"/api/projects/{project_id}/deactivate", json={})
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def get_project_allocations(self, project_id: int) -> List[Dict]:
+    def get_project_allocations(self, project_id: int) -> list[dict]:
         """Get allocations for a project."""
         response = self._make_request("GET", f"/api/projects/{project_id}/allocations/list")
-        return cast(List[Dict], self._parse_json_response(response))
+        return cast("list[dict]", self._parse_json_response(response))
 
-    def create_allocation(self, project_id: int, allocation_data: Dict) -> Dict:
+    def create_allocation(self, project_id: int, allocation_data: dict) -> dict:
         """Create new allocation for project."""
         response = self._make_request(
             "POST", f"/api/projects/{project_id}/allocations/add", json=allocation_data
         )
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def update_allocation(self, project_id: int, allocation_id: int, allocation_data: Dict) -> Dict:
+    def update_allocation(self, project_id: int, allocation_id: int, allocation_data: dict) -> dict:
         """Update existing allocation."""
         response = self._make_request(
             "PUT",
             f"/api/projects/{project_id}/allocations/edit/{allocation_id}",
             json=allocation_data,
         )
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def get_allocation(self, project_id: int, allocation_id: int) -> Dict:
+    def get_allocation(self, project_id: int, allocation_id: int) -> dict:
         """Get specific allocation."""
         response = self._make_request(
             "GET", f"/api/projects/{project_id}/allocations/view/{allocation_id}"
         )
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def get_project_members(self, project_id: int) -> List[Dict]:
+    def get_project_members(self, project_id: int) -> list[dict]:
         """Get project members."""
         response = self._make_request("GET", f"/api/projects/{project_id}/members/list")
-        return cast(List[Dict], self._parse_json_response(response))
+        return cast("list[dict]", self._parse_json_response(response))
 
-    def add_project_member(self, project_id: int, member_data: Dict) -> Dict:
+    def add_project_member(self, project_id: int, member_data: dict) -> dict:
         """Add member to project."""
         response = self._make_request(
             "POST", f"/api/projects/{project_id}/members/add", json=member_data
         )
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def toggle_member_status(self, project_id: int, member_id: int, status_data: Dict) -> Dict:
+    def toggle_member_status(self, project_id: int, member_id: int, status_data: dict) -> dict:
         """Toggle member status (active/inactive)."""
         response = self._make_request(
             "PUT", f"/api/projects/{project_id}/members/{member_id}/toggle-status", json=status_data
         )
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def get_users(self) -> List[Dict]:
+    def get_users(self) -> list[dict]:
         """Get list of users."""
         response = self._make_request("GET", "/api/user/list/")
-        return cast(List[Dict], self._parse_json_response(response))
+        return cast("list[dict]", self._parse_json_response(response))
 
-    def get_user(self, user_id: int) -> Dict:
+    def get_user(self, user_id: int) -> dict:
         """Get specific user by ID."""
         response = self._make_request("GET", f"/api/user/view/{user_id}")
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def create_user_request(self, user_data: Dict) -> Dict:
+    def create_user_request(self, user_data: dict) -> dict:
         """Create user registration request."""
         response = self._make_request("POST", "/api/user/add/", json=user_data)
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def update_user(self, user_id: int, user_data: Dict) -> Dict:
+    def update_user(self, user_id: int, user_data: dict) -> dict:
         """Update user information."""
         response = self._make_request("PUT", f"/api/user/edit/{user_id}", json=user_data)
-        return cast(Dict, self._parse_json_response(response))
+        return cast("dict", self._parse_json_response(response))
 
-    def get_research_fields(self) -> List[Dict]:
+    def get_research_fields(self) -> list[dict]:
         """Get available research fields."""
         response = self._make_request("GET", "/api/research-fields/list/")
-        return cast(List[Dict], self._parse_json_response(response))
+        return cast("list[dict]", self._parse_json_response(response))
 
     # Implementing BaseClient abstract methods with MUP-specific implementations
 
-    def list_accounts(self) -> List[Account]:
+    def list_accounts(self) -> list[Account]:
         """Get accounts list - mapped to MUP projects."""
         projects = self.get_projects()
         accounts = []
@@ -302,7 +300,7 @@ class MUPClient(BaseClient):
                 break
         return name
 
-    def set_resource_limits(self, account: str, limits_dict: Dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, account: str, limits_dict: dict[str, int]) -> Optional[str]:
         """Set account limits - update allocation size."""
         # Find project and allocation by account name (grant number)
         projects = self.get_projects()
@@ -326,7 +324,7 @@ class MUPClient(BaseClient):
                     return f"Updated allocation size to {size}"
         return None
 
-    def get_resource_limits(self, account: str) -> Dict[str, int]:
+    def get_resource_limits(self, account: str) -> dict[str, int]:
         """Get account limits - return allocation limits."""
         projects = self.get_projects()
         for project in projects:
@@ -337,12 +335,12 @@ class MUPClient(BaseClient):
                     return {"cpu": allocation.get("size", 0)}
         return {}
 
-    def get_resource_user_limits(self, _account: str) -> Dict[str, Dict[str, int]]:
+    def get_resource_user_limits(self, _account: str) -> dict[str, dict[str, int]]:
         """Get per-user limits - not supported by MUP, return empty."""
         return {}
 
     def set_resource_user_limits(
-        self, _account: str, username: str, _limits_dict: Dict[str, int]
+        self, _account: str, username: str, _limits_dict: dict[str, int]
     ) -> str:
         """Set account limits for specific user - not supported by MUP."""
         return f"User limits not supported for {username}"
@@ -375,7 +373,7 @@ class MUPClient(BaseClient):
         # This is handled by the backend's user management methods
         return f"Association deleted for {username} from {account}"
 
-    def get_usage_report(self, accounts: List[str]) -> List:
+    def get_usage_report(self, accounts: list[str]) -> list:
         """Get usage records - get allocation usage from MUP."""
         usage_data = []
         projects = self.get_projects()
@@ -395,7 +393,7 @@ class MUPClient(BaseClient):
 
         return usage_data
 
-    def list_account_users(self, account: str) -> List[str]:
+    def list_account_users(self, account: str) -> list[str]:
         """Get account users - get project members."""
         projects = self.get_projects()
         for project in projects:

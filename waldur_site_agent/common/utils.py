@@ -1,11 +1,8 @@
 """Functions shared between agent modules."""
 
-from __future__ import annotations
-
 import argparse
 from importlib.metadata import version
 from pathlib import Path
-from typing import Dict, List, Set
 
 import yaml
 from waldur_client import OfferingComponent, WaldurClient, WaldurClientException
@@ -78,7 +75,7 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
 
         sentry_dsn = config.get("sentry_dsn")
         if sentry_dsn:
-            import sentry_sdk
+            import sentry_sdk  # noqa: PLC0415
 
             sentry_sdk.init(
                 dsn=sentry_dsn,
@@ -128,8 +125,8 @@ def get_backend_for_offering(offering: structures.Offering) -> BaseBackend:
 
 def mark_waldur_resources_as_erred(
     waldur_rest_client: WaldurClient,
-    resources: List[Resource],
-    error_details: Dict[str, str],
+    resources: list[Resource],
+    error_details: dict[str, str],
 ) -> None:
     """Marks resources in Waldur as ERRED."""
     logger.info("Marking Waldur resources as ERRED")
@@ -165,7 +162,7 @@ def load_offering_components() -> None:
 
 
 def extend_backend_components(
-    offering: structures.Offering, waldur_offering_components: List[dict]
+    offering: structures.Offering, waldur_offering_components: list[dict]
 ) -> None:
     """Pulls offering component data from Waldur and populates it to the local configuration."""
     logger.info("Loading Waldur components to the local config")
@@ -192,7 +189,7 @@ def load_components_to_waldur(
     waldur_rest_client: WaldurClient,
     offering_uuid: str,
     offering_name: str,
-    components: Dict,
+    components: dict,
 ) -> None:
     """Creates offering components in Waldur."""
     logger.info(
@@ -382,7 +379,7 @@ def create_homedirs_for_offering_users() -> None:
             }
         )
 
-        offering_user_usernames: Set[str] = {
+        offering_user_usernames: set[str] = {
             offering_user["username"] for offering_user in offering_users
         }
         umask = offering.backend_settings.get("homedir_umask", "0700")
@@ -390,7 +387,7 @@ def create_homedirs_for_offering_users() -> None:
         slurm_backend._create_user_homedirs(offering_user_usernames, umask)
 
 
-def print_current_user(current_user: Dict) -> None:
+def print_current_user(current_user: dict) -> None:
     """Print provided user's info."""
     logger.info("Current user username: %s", current_user["username"])
     logger.info("Current user full name: %s", current_user["full_name"])

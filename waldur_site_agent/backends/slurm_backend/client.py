@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional
+from typing import Optional
 
 from waldur_site_agent.backends import base
 from waldur_site_agent.backends import utils as backend_utils
@@ -20,17 +20,17 @@ class SlurmClient(base.BaseClient):
     See also: https://slurm.schedmd.com/sacctmgr.html
     """
 
-    def __init__(self, slurm_tres: Dict) -> None:
+    def __init__(self, slurm_tres: dict) -> None:
         """Inits SLURM-related data."""
         self.slurm_tres = slurm_tres
 
-    def list_accounts(self) -> List[Account]:
+    def list_accounts(self) -> list[Account]:
         """Returns a list of accounts in the SLURM cluster."""
         command = ["list", "account"]
         output = self._execute_command(command)
         return [self._parse_account(line) for line in output.splitlines() if "|" in line]
 
-    def list_tres(self) -> List[str]:
+    def list_tres(self) -> list[str]:
         """Returns a list of TRES available in cluster."""
         output = self._execute_command(["list", "tres"])
         tres_list = []
@@ -87,14 +87,14 @@ class SlurmClient(base.BaseClient):
         """Deletes account with the specified name from the SLURM cluster."""
         return self._execute_command(["remove", "account", "where", f"name={name}"])
 
-    def set_resource_limits(self, account: str, limits_dict: Dict[str, int]) -> str | None:
+    def set_resource_limits(self, account: str, limits_dict: dict[str, int]) -> str | None:
         """Sets the limits for the account with the specified name."""
         limits_str = ",".join([f"{key}={value}" for key, value in limits_dict.items()])
         quota = f"GrpTRESMins={limits_str}"
         return self._execute_command(["modify", "account", account, "set", quota])
 
     def set_resource_user_limits(
-        self, account: str, username: str, limits_dict: Dict[str, int]
+        self, account: str, username: str, limits_dict: dict[str, int]
     ) -> str:
         """Set account limits for a specific user."""
         limits_str = ",".join([f"{tres}={limits_dict.get(tres, -1)}" for tres in self.list_tres()])
@@ -150,7 +150,7 @@ class SlurmClient(base.BaseClient):
             ]
         )
 
-    def get_usage_report(self, accounts: List[str]) -> List[SlurmReportLine]:
+    def get_usage_report(self, accounts: list[str]) -> list[SlurmReportLine]:
         """Generates per-user usage report for the accounts."""
         month_start, month_end = backend_utils.format_current_month()
 
@@ -169,7 +169,7 @@ class SlurmClient(base.BaseClient):
             SlurmReportLine(line, self.slurm_tres) for line in output.splitlines() if "|" in line
         ]
 
-    def get_resource_limits(self, account: str) -> Dict[str, int]:
+    def get_resource_limits(self, account: str) -> dict[str, int]:
         """Returns limits for the account."""
         args = [
             "show",
@@ -191,7 +191,7 @@ class SlurmClient(base.BaseClient):
             return {}
         return correct_lines[0]
 
-    def get_resource_user_limits(self, account: str) -> Dict[str, Dict[str, int]]:
+    def get_resource_user_limits(self, account: str) -> dict[str, dict[str, int]]:
         """Get per-user limits for the account."""
         args = [
             "show",
@@ -212,7 +212,7 @@ class SlurmClient(base.BaseClient):
             if association.user != ""
         }
 
-    def list_account_users(self, account: str) -> List[str]:
+    def list_account_users(self, account: str) -> list[str]:
         """Returns list of users linked to the account."""
         args = [
             "list",
@@ -261,7 +261,7 @@ class SlurmClient(base.BaseClient):
             args = [f"-u={user}", *args]
         self._execute_command(args, command_name="scancel", parsable=False, immediate=False)
 
-    def list_active_user_jobs(self, account: str, user: str) -> List[str]:
+    def list_active_user_jobs(self, account: str, user: str) -> list[str]:
         """List active jobs for the account and user."""
         args = [
             "-a",
@@ -305,7 +305,7 @@ class SlurmClient(base.BaseClient):
 
     def _execute_command(
         self,
-        command: List[str],
+        command: list[str],
         command_name: str = "sacctmgr",
         immediate: bool = True,
         parsable: bool = True,

@@ -2,7 +2,7 @@
 
 import abc
 import subprocess
-from typing import Dict, List, Optional
+from typing import Optional
 
 from waldur_site_agent.backends import logger
 from waldur_site_agent.backends.exceptions import (
@@ -14,7 +14,7 @@ from waldur_site_agent.backends.structures import Account, Association
 class BaseClient:
     """Generic cli-client for a backend communication."""
 
-    def execute_command(self, command: List[str], silent: bool = False) -> str:
+    def execute_command(self, command: list[str], silent: bool = False) -> str:
         """Execute command on backend."""
         try:
             logger.debug("Executing command: %s", " ".join(command))
@@ -28,7 +28,7 @@ class BaseClient:
             raise BackendError(stdout) from e
 
     @abc.abstractmethod
-    def list_accounts(self) -> List[Account]:
+    def list_accounts(self) -> list[Account]:
         """Get accounts list."""
 
     @abc.abstractmethod
@@ -46,20 +46,20 @@ class BaseClient:
         """Delete account from the cluster."""
 
     @abc.abstractmethod
-    def set_resource_limits(self, account: str, limits_dict: Dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, account: str, limits_dict: dict[str, int]) -> Optional[str]:
         """Set account limits."""
 
     @abc.abstractmethod
-    def get_resource_limits(self, account: str) -> Dict[str, int]:
+    def get_resource_limits(self, account: str) -> dict[str, int]:
         """Get account limits."""
 
     @abc.abstractmethod
-    def get_resource_user_limits(self, account: str) -> Dict[str, Dict[str, int]]:
+    def get_resource_user_limits(self, account: str) -> dict[str, dict[str, int]]:
         """Get per-user limits for the account."""
 
     @abc.abstractmethod
     def set_resource_user_limits(
-        self, account: str, username: str, limits_dict: Dict[str, int]
+        self, account: str, username: str, limits_dict: dict[str, int]
     ) -> str:
         """Set account limits for a specific user."""
 
@@ -78,18 +78,18 @@ class BaseClient:
         """Delete association between user and account."""
 
     @abc.abstractmethod
-    def get_usage_report(self, accounts: List[str]) -> List:
+    def get_usage_report(self, accounts: list[str]) -> list:
         """Get usage records."""
 
     @abc.abstractmethod
-    def list_account_users(self, account: str) -> List[str]:
+    def list_account_users(self, account: str) -> list[str]:
         """Get account users."""
 
 
 class UnknownClient(BaseClient):
     """Unknown cli-client for a backend communication."""
 
-    def list_accounts(self) -> List[Account]:
+    def list_accounts(self) -> list[Account]:
         """Get accounts list."""
         return []
 
@@ -108,21 +108,21 @@ class UnknownClient(BaseClient):
         """Delete account from the cluster."""
         return name
 
-    def set_resource_limits(self, account: str, limits_dict: Dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, account: str, limits_dict: dict[str, int]) -> Optional[str]:
         """Set account limits."""
         del account, limits_dict
         return ""
 
-    def get_resource_limits(self, _: str) -> Dict[str, int]:
+    def get_resource_limits(self, _: str) -> dict[str, int]:
         """Get account limits."""
         return {}
 
-    def get_resource_user_limits(self, _: str) -> Dict[str, Dict[str, int]]:
+    def get_resource_user_limits(self, _: str) -> dict[str, dict[str, int]]:
         """Get per-user limits for the account."""
         return {}
 
     def set_resource_user_limits(
-        self, account: str, username: str, limits_dict: Dict[str, int]
+        self, account: str, username: str, limits_dict: dict[str, int]
     ) -> str:
         """Set account limits for a specific user."""
         del account, username, limits_dict
@@ -145,10 +145,10 @@ class UnknownClient(BaseClient):
         del account
         return username
 
-    def get_usage_report(self, accounts: List[str]) -> List:
+    def get_usage_report(self, accounts: list[str]) -> list:
         """Get usages records."""
         return accounts
 
-    def list_account_users(self, _: str) -> List[str]:
+    def list_account_users(self, _: str) -> list[str]:
         """Get account users."""
         return []
