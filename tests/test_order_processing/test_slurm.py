@@ -81,7 +81,11 @@ class CreationOrderTest(unittest.TestCase):
             },
         ]
         waldur_client.list_remote_offering_users.return_value = [
-            {"username": "test-offering-user-01", "user_uuid": user_uuid}
+            {
+                "username": "test-offering-user-01",
+                "user_uuid": user_uuid,
+                "offering_uuid": uuid.uuid4().hex,
+            },
         ]
         waldur_client.get_marketplace_provider_resource.return_value = updated_resource
 

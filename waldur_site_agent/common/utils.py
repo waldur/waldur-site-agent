@@ -1,7 +1,7 @@
 """Functions shared between agent modules."""
 
 import argparse
-from importlib.metadata import version
+import sys
 from pathlib import Path
 
 import yaml
@@ -17,7 +17,19 @@ from waldur_site_agent.backends.mup_backend.backend import MUPBackend
 from waldur_site_agent.backends.slurm_backend import public_utils as slurm_utils
 from waldur_site_agent.backends.slurm_backend.backend import SlurmBackend
 from waldur_site_agent.backends.structures import Resource
+from waldur_site_agent.backends.username_backend import backend as username_backend
 from waldur_site_agent.common import structures
+
+# Handle different Python versions
+if sys.version_info >= (3, 10):
+    from importlib.metadata import entry_points, version
+else:
+    from importlib_metadata import entry_points, version
+
+USERNAME_BACKENDS: dict[str, type[username_backend.AbstractUsernameManagementBackend]] = {
+    entry_point.name: entry_point.load()
+    for entry_point in entry_points(group="waldur_site_agent.username_management")
+}
 
 RESOURCE_ERRED_STATE = "Erred"
 
@@ -68,6 +80,9 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
                 mqtt_enabled=offering_info.get("mqtt_enabled", False),
                 stomp_enabled=offering_info.get("stomp_enabled", False),
                 websocket_use_tls=offering_info.get("websocket_use_tls", True),
+                username_management_backend=offering_info.get(
+                    "username_management_backend", "base"
+                ),
             )
             for offering_info in offering_list
         ]
@@ -400,3 +415,19 @@ def print_current_user(current_user: dict) -> None:
         logger.info("Scope name: %s", permission.get("scope_name", ""))
         logger.info("Scope UUID: %s", permission.get("scope_uuid", ""))
         logger.info("Expiration time: %s", permission.get("expiration_time", ""))
+
+
+def get_username_management_backend(
+    offering: structures.Offering,
+) -> username_backend.AbstractUsernameManagementBackend:
+    """Get username management backend based on the offering."""
+    username_management_setting = offering.username_management_backend
+
+    if username_management_setting is None:
+        logger.info(
+            "No username_management_backend is set for offering %s, using the default one",
+            offering.name,
+        )
+        return username_backend.BaseUsernameManagementBackend()
+
+    return USERNAME_BACKENDS[username_management_setting]()
