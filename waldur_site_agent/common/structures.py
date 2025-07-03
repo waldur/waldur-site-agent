@@ -18,6 +18,7 @@ class Offering:
     mqtt_enabled: bool = False
     websocket_use_tls: bool = True
     stomp_enabled: bool = False
+    username_management_backend: str = "base"
 
 
 class AgentMode(Enum):

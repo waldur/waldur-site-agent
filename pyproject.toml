@@ -115,3 +115,10 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 addopts = "--cov=waldur_site_agent/"
+
+# Required for the "entry-points" table to work
+[project]
+name = 'waldur-site-agent'
+
+[project.entry-points."waldur_site_agent.username_management"]
+base = "waldur_site_agent.backends.username_backend.backend:BaseUsernameManagementBackend"

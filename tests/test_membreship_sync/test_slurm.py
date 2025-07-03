@@ -79,8 +79,11 @@ class MembershipSyncTest(unittest.TestCase):
                 "full_name": "Test User02",
             },
         ]
+        waldur_client.get_marketplace_provider_offering.return_value = {"plugin_options": {}}
 
-        offering_users = [{"username": "user-02", "user_uuid": user_uuid}]
+        offering_users = [
+            {"username": "user-02", "user_uuid": user_uuid, "offering_uuid": uuid.uuid4().hex}
+        ]
         waldur_client.list_remote_offering_users.return_value = offering_users
 
         processor.process_offering()
@@ -130,8 +133,13 @@ class MembershipSyncTest(unittest.TestCase):
         waldur_client.filter_marketplace_provider_resources.return_value = [self.waldur_resource]
         waldur_client.marketplace_provider_resource_get_team.return_value = []
         waldur_client.list_remote_offering_users.return_value = [
-            {"username": "user-03", "user_uuid": "3D83D488E39D47CB8F620D055888950E"}
+            {
+                "username": "user-03",
+                "user_uuid": "3D83D488E39D47CB8F620D055888950E",
+                "offering_uuid": uuid.uuid4().hex,
+            }
         ]
+        waldur_client.get_marketplace_provider_offering.return_value = {"plugin_options": {}}
 
         slurm_client = slurm_client_class.return_value
         slurm_client.get_association.return_value = "exists"
