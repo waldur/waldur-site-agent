@@ -1,20 +1,25 @@
 import unittest
 import uuid
-from unittest import mock
-from unittest.mock import MagicMock, patch
-from datetime import datetime, timedelta
+from unittest.mock import patch
 
-from waldur_site_agent.backends.mup_backend.backend import MUPBackend
-from waldur_site_agent.backends.mup_backend.client import MUPClient, MUPError
+import pytest
+from waldur_api_client.models.offering_user import OfferingUser
+from waldur_api_client.models.project_user import ProjectUser
+from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.models.resource_limits import ResourceLimits
+from waldur_api_client.types import Unset
+
 from waldur_site_agent.backends.exceptions import BackendError
-from waldur_site_agent.backends.structures import Account, Association, Resource
+from waldur_site_agent.backends.mup_backend.backend import MUPBackend
+from waldur_site_agent.backends.mup_backend.client import MUPError
+from waldur_site_agent.backends.structures import Resource
 
 
 class MUPBackendTest(unittest.TestCase):
-    """Test suite for MUP backend functionality"""
+    """Test suite for MUP backend functionality."""
 
-    def setUp(self):
-        """Set up test fixtures"""
+    def setUp(self) -> None:
+        """Set up test fixtures."""
         self.mup_settings = {
             "api_url": "https://mup-api.example.com/api",
             "username": "test_user",
@@ -37,25 +42,26 @@ class MUPBackendTest(unittest.TestCase):
             }
         }
 
-        self.project_uuid = str(uuid.uuid4())
-        self.resource_uuid = str(uuid.uuid4())
-        self.customer_uuid = str(uuid.uuid4())
+        self.project_uuid = uuid.uuid4()
+        self.resource_uuid = uuid.uuid4()
+        self.customer_uuid = uuid.uuid4()
 
-        self.sample_waldur_resource = {
-            "uuid": self.resource_uuid,
-            "name": "test-resource",
-            "project_uuid": self.project_uuid,
-            "project_name": "Test Project",
-            "offering": {"uuid": str(uuid.uuid4()), "name": "MUP Offering"},
-            "limits": {"cpu": 10},
-        }
+        self.sample_waldur_resource = WaldurResource(
+            uuid=self.resource_uuid,
+            name="test-resource",
+            project_uuid=self.project_uuid,
+            project_name="Test Project",
+            offering_uuid=uuid.uuid4(),
+            offering_name="MUP Offering",
+            limits=ResourceLimits.from_dict({"cpu": 10}),
+        )
 
         self.sample_mup_project = {
             "id": 1,
             "title": "Test Project",
             "description": "A test project",
             "pi": "pi@example.com",
-            "grant_number": f"waldur_{self.resource_uuid}",
+            "grant_number": f"waldur_{self.resource_uuid.hex}",
             "active": True,
             "agency": "FCT",
         }
@@ -63,7 +69,7 @@ class MUPBackendTest(unittest.TestCase):
         self.sample_mup_allocation = {
             "id": 1,
             "type": "compute",
-            "identifier": f"alloc_{self.resource_uuid}",
+            "identifier": f"alloc_{self.resource_uuid.hex}",
             "size": 10,
             "used": 0,
             "active": True,
@@ -73,45 +79,59 @@ class MUPBackendTest(unittest.TestCase):
         # Sample user context for testing
         self.sample_user_context = {
             "team": [
-                {
-                    "uuid": "user-uuid-1",
-                    "email": "pi@example.com",
-                    "first_name": "Principal",
-                    "last_name": "Investigator",
-                }
+                ProjectUser(
+                    uuid="user-uuid-1",
+                    email="pi@example.com",
+                    username="pi_user",
+                    full_name="Principal Investigator",
+                    role="admin",
+                    url="https://waldur.example.com/api/users/user-uuid-1/",
+                    expiration_time=None,
+                    offering_user_username="pi_user",
+                )
             ],
             "offering_users": [
-                {
-                    "username": "pi_user",
-                    "user_uuid": "user-uuid-1",
-                }
+                OfferingUser(
+                    username="pi_user",
+                    user_uuid="user-uuid-1",
+                    offering_uuid="offering-uuid-1",
+                    created="2024-01-01T00:00:00Z",
+                    modified="2024-01-01T00:00:00Z",
+                )
             ],
             "user_mappings": {
-                "user-uuid-1": {
-                    "uuid": "user-uuid-1",
-                    "email": "pi@example.com",
-                    "first_name": "Principal",
-                    "last_name": "Investigator",
-                }
+                "user-uuid-1": ProjectUser(
+                    uuid="user-uuid-1",
+                    email="pi@example.com",
+                    username="pi_user",
+                    full_name="Principal Investigator",
+                    role="admin",
+                    url="https://waldur.example.com/api/users/user-uuid-1/",
+                    expiration_time=None,
+                    offering_user_username="pi_user",
+                )
             },
             "offering_user_mappings": {
-                "user-uuid-1": {
-                    "username": "pi_user",
-                    "user_uuid": "user-uuid-1",
-                }
+                "user-uuid-1": OfferingUser(
+                    username="pi_user",
+                    user_uuid="user-uuid-1",
+                    offering_uuid="offering-uuid-1",
+                    created="2025-01-01T00:00:00Z",
+                    modified="2025-01-01T00:00:00Z",
+                )
             },
         }
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_init_with_valid_settings(self, mock_client_class):
-        """Test backend initialization with valid settings"""
+    def test_init_with_valid_settings(self, mock_client_class) -> None:
+        """Test backend initialization with valid settings."""
         backend = MUPBackend(self.mup_settings, self.mup_components)
 
-        self.assertEqual(backend.backend_type, "mup")
-        self.assertEqual(backend.project_prefix, "waldur_")
-        self.assertEqual(backend.allocation_prefix, "alloc_")
-        self.assertEqual(backend.default_research_field, 1)
-        self.assertEqual(backend.default_agency, "FCT")
+        assert backend.backend_type == "mup"
+        assert backend.project_prefix == "waldur_"
+        assert backend.allocation_prefix == "alloc_"
+        assert backend.default_research_field == 1
+        assert backend.default_agency == "FCT"
 
         mock_client_class.assert_called_once_with(
             api_url="https://mup-api.example.com/api",
@@ -119,17 +139,17 @@ class MUPBackendTest(unittest.TestCase):
             password="test_password",
         )
 
-    def test_init_missing_required_settings(self):
-        """Test backend initialization fails with missing required settings"""
+    def test_init_missing_required_settings(self) -> None:
+        """Test backend initialization fails with missing required settings."""
         incomplete_settings = {"api_url": "https://example.com"}
 
-        with self.assertRaises(ValueError) as context:
+        with pytest.raises(ValueError) as context:
             MUPBackend(incomplete_settings, self.mup_components)
 
-        self.assertIn("Missing required setting: username", str(context.exception))
+        assert "Missing required setting: username" in str(context.value)
 
-    def test_init_invalid_accounting_type(self):
-        """Test backend initialization fails with invalid accounting_type"""
+    def test_init_invalid_accounting_type(self) -> None:
+        """Test backend initialization fails with invalid accounting_type."""
         invalid_components = {
             "cpu": {
                 "measured_unit": "core-hours",
@@ -140,60 +160,59 @@ class MUPBackendTest(unittest.TestCase):
             }
         }
 
-        with self.assertRaises(ValueError) as context:
+        with pytest.raises(ValueError) as context:
             MUPBackend(self.mup_settings, invalid_components)
 
-        self.assertIn(
-            "MUP backend only supports components with accounting_type='limit'",
-            str(context.exception),
+        assert "MUP backend only supports components with accounting_type='limit'" in str(
+            context.value
         )
-        self.assertIn("Component 'cpu' has accounting_type='usage'", str(context.exception))
+        assert "Component 'cpu' has accounting_type='usage'" in str(context.value)
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_ping_success(self, mock_client_class):
-        """Test successful ping to MUP backend"""
+    def test_ping_success(self, mock_client_class) -> None:
+        """Test successful ping to MUP backend."""
         mock_client = mock_client_class.return_value
         mock_client.get_research_fields.return_value = [{"id": 1, "name": "Computer Science"}]
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
         result = backend.ping()
 
-        self.assertTrue(result)
+        assert result
         mock_client.get_research_fields.assert_called_once()
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_ping_failure(self, mock_client_class):
-        """Test ping failure with MUP backend"""
+    def test_ping_failure(self, mock_client_class) -> None:
+        """Test ping failure with MUP backend."""
         mock_client = mock_client_class.return_value
         mock_client.get_research_fields.side_effect = MUPError("Connection failed")
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
         result = backend.ping()
 
-        self.assertFalse(result)
+        assert not result
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_ping_failure_with_exception(self, mock_client_class):
-        """Test ping failure raises exception when requested"""
+    def test_ping_failure_with_exception(self, mock_client_class) -> None:
+        """Test ping failure raises exception when requested."""
         mock_client = mock_client_class.return_value
         mock_client.get_research_fields.side_effect = MUPError("Connection failed")
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
 
-        with self.assertRaises(BackendError):
+        with pytest.raises(BackendError):
             backend.ping(raise_exception=True)
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_list_components(self, mock_client_class):
-        """Test listing backend components"""
+    def test_list_components(self, mock_client_class) -> None:
+        """Test listing backend components."""
         backend = MUPBackend(self.mup_settings, self.mup_components)
         components = backend.list_components()
 
-        self.assertEqual(components, ["cpu"])
+        assert components == ["cpu"]
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_get_research_fields_caching(self, mock_client_class):
-        """Test research fields caching"""
+    def test_get_research_fields_caching(self, mock_client_class) -> None:
+        """Test research fields caching."""
         mock_client = mock_client_class.return_value
         research_fields = [{"id": 1, "name": "Computer Science"}]
         mock_client.get_research_fields.return_value = research_fields
@@ -205,13 +224,13 @@ class MUPBackendTest(unittest.TestCase):
         # Second call should use cache
         result2 = backend.get_research_fields()
 
-        self.assertEqual(result1, research_fields)
-        self.assertEqual(result2, research_fields)
+        assert result1 == research_fields
+        assert result2 == research_fields
         mock_client.get_research_fields.assert_called_once()
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_get_or_create_user_existing(self, mock_client_class):
-        """Test getting existing user"""
+    def test_get_or_create_user_existing(self, mock_client_class) -> None:
+        """Test getting existing user."""
         mock_client = mock_client_class.return_value
         existing_users = [{"id": 1, "email": "pi@example.com", "username": "pi_user"}]
         mock_client.get_users.return_value = existing_users
@@ -226,13 +245,13 @@ class MUPBackendTest(unittest.TestCase):
 
         user_id = backend._get_or_create_user(waldur_user)
 
-        self.assertEqual(user_id, 1)
+        assert user_id == 1
         mock_client.get_users.assert_called_once()
         mock_client.create_user_request.assert_not_called()
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_get_or_create_user_create_new(self, mock_client_class):
-        """Test creating new user"""
+    def test_get_or_create_user_create_new(self, mock_client_class) -> None:
+        """Test creating new user."""
         mock_client = mock_client_class.return_value
         mock_client.get_users.return_value = []  # No existing users
         mock_client.create_user_request.return_value = {"id": 2}
@@ -247,51 +266,51 @@ class MUPBackendTest(unittest.TestCase):
 
         user_id = backend._get_or_create_user(waldur_user)
 
-        self.assertEqual(user_id, 2)
+        assert user_id == 2
         mock_client.get_users.assert_called_once()
         mock_client.create_user_request.assert_called_once()
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_get_or_create_user_no_email(self, mock_client_class):
-        """Test handling user without email"""
+    def test_get_or_create_user_no_email(self, mock_client_class) -> None:
+        """Test handling user without email."""
         backend = MUPBackend(self.mup_settings, self.mup_components)
         waldur_user = {"username": "user_without_email"}
 
         user_id = backend._get_or_create_user(waldur_user)
 
-        self.assertIsNone(user_id)
+        assert user_id is None
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_get_project_by_waldur_id_found(self, mock_client_class):
-        """Test finding project by Waldur ID"""
+    def test_get_project_by_waldur_id_found(self, mock_client_class) -> None:
+        """Test finding project by Waldur ID."""
         mock_client = mock_client_class.return_value
         mock_client.get_projects.return_value = [self.sample_mup_project]
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
-        project = backend._get_project_by_waldur_id(self.resource_uuid)
+        project = backend._get_project_by_waldur_id(self.resource_uuid.hex)
 
-        self.assertEqual(project, self.sample_mup_project)
+        assert project == self.sample_mup_project
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_get_project_by_waldur_id_not_found(self, mock_client_class):
-        """Test project not found by Waldur ID"""
+    def test_get_project_by_waldur_id_not_found(self, mock_client_class) -> None:
+        """Test project not found by Waldur ID."""
         mock_client = mock_client_class.return_value
         mock_client.get_projects.return_value = []
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
         project = backend._get_project_by_waldur_id("nonexistent_uuid")
 
-        self.assertIsNone(project)
+        assert project is None
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_create_mup_project_success(self, mock_client_class):
-        """Test successful MUP project creation"""
+    def test_create_mup_project_success(self, mock_client_class) -> None:
+        """Test successful MUP project creation."""
         mock_client = mock_client_class.return_value
         mock_client.create_project.return_value = self.sample_mup_project
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
         waldur_project = {
-            "uuid": self.project_uuid,
+            "uuid": self.project_uuid.hex,
             "name": "Test Project",
             "description": "A test project",
         }
@@ -299,32 +318,32 @@ class MUPBackendTest(unittest.TestCase):
 
         result = backend._create_mup_project(waldur_project, pi_email)
 
-        self.assertEqual(result, self.sample_mup_project)
+        assert result == self.sample_mup_project
         mock_client.create_project.assert_called_once()
 
         # Check project data structure
         call_args = mock_client.create_project.call_args[0][0]
-        self.assertEqual(call_args["title"], "Test Project")
-        self.assertEqual(call_args["pi"], "pi@example.com")
-        self.assertEqual(call_args["grant_number"], f"waldur_{self.project_uuid}")
+        assert call_args["title"] == "Test Project"
+        assert call_args["pi"] == "pi@example.com"
+        assert call_args["grant_number"] == f"waldur_{self.project_uuid.hex}"
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_create_mup_project_failure(self, mock_client_class):
-        """Test MUP project creation failure"""
+    def test_create_mup_project_failure(self, mock_client_class) -> None:
+        """Test MUP project creation failure."""
         mock_client = mock_client_class.return_value
         mock_client.create_project.side_effect = MUPError("Project creation failed")
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
-        waldur_project = {"uuid": self.project_uuid, "name": "Test Project"}
+        waldur_project = {"uuid": self.project_uuid.hex, "name": "Test Project"}
         pi_email = "pi@example.com"
 
         result = backend._create_mup_project(waldur_project, pi_email)
 
-        self.assertIsNone(result)
+        assert result is None
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_create_resource_success(self, mock_client_class):
-        """Test successful resource creation"""
+    def test_create_resource_success(self, mock_client_class) -> None:
+        """Test successful resource creation."""
         mock_client = mock_client_class.return_value
         # Mock for user creation
         mock_client.get_users.return_value = []  # No existing users
@@ -336,28 +355,28 @@ class MUPBackendTest(unittest.TestCase):
         backend = MUPBackend(self.mup_settings, self.mup_components)
         result = backend.create_resource(self.sample_waldur_resource, self.sample_user_context)
 
-        self.assertIsInstance(result, Resource)
-        self.assertEqual(result.backend_type, "mup")
-        self.assertEqual(result.marketplace_uuid, self.resource_uuid)
-        self.assertEqual(result.backend_id, "1")
-        self.assertEqual(result.limits["cpu"], 10)
+        assert isinstance(result, Resource)
+        assert result.backend_type == "mup"
+        assert result.marketplace_uuid == self.resource_uuid.hex
+        assert result.backend_id == "1"
+        assert result.limits["cpu"] == 10
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_create_resource_no_project_uuid(self, mock_client_class):
-        """Test resource creation failure with no project UUID"""
+    def test_create_resource_no_project_uuid(self, mock_client_class) -> None:
+        """Test resource creation failure with no project UUID."""
         backend = MUPBackend(self.mup_settings, self.mup_components)
 
-        waldur_resource = self.sample_waldur_resource.copy()
-        del waldur_resource["project_uuid"]
+        waldur_resource = self.sample_waldur_resource
+        waldur_resource.project_uuid = Unset()
 
-        with self.assertRaises(BackendError) as context:
+        with pytest.raises(BackendError) as context:
             backend.create_resource(waldur_resource)
 
-        self.assertIn("No project UUID found", str(context.exception))
+        assert "No project UUID found" in str(context.value)
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_create_resource_project_activation(self, mock_client_class):
-        """Test project activation during resource creation"""
+    def test_create_resource_project_activation(self, mock_client_class) -> None:
+        """Test project activation during resource creation."""
         mock_client = mock_client_class.return_value
         # Mock for user creation
         mock_client.get_users.return_value = []  # No existing users
@@ -375,11 +394,11 @@ class MUPBackendTest(unittest.TestCase):
         result = backend.create_resource(self.sample_waldur_resource, self.sample_user_context)
 
         mock_client.activate_project.assert_called_once_with(1)
-        self.assertIsInstance(result, Resource)
+        assert isinstance(result, Resource)
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_create_resource_with_real_pi_from_context(self, mock_client_class):
-        """Test resource creation uses real PI from user context"""
+    def test_create_resource_with_real_pi_from_context(self, mock_client_class) -> None:
+        """Test resource creation uses real PI from user context."""
         mock_client = mock_client_class.return_value
         mock_client.get_users.return_value = []  # No existing users
         mock_client.create_user_request.return_value = {"id": 1}
@@ -394,16 +413,16 @@ class MUPBackendTest(unittest.TestCase):
         # Verify project was created with real PI email from user context
         mock_client.create_project.assert_called_once()
         project_data = mock_client.create_project.call_args[0][0]
-        self.assertEqual(project_data["pi"], "pi@example.com")  # Real email from user context
+        assert project_data["pi"] == "pi@example.com"  # Real email from user context
 
         # Verify user was added to project during creation
         mock_client.add_project_member.assert_called()
 
-        self.assertIsInstance(result, Resource)
+        assert isinstance(result, Resource)
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_create_resource_without_user_context(self, mock_client_class):
-        """Test resource creation falls back to default PI when no user context"""
+    def test_create_resource_without_user_context(self, mock_client_class) -> None:
+        """Test resource creation falls back to default PI when no user context."""
         mock_client = mock_client_class.return_value
         mock_client.get_users.return_value = []
         mock_client.create_user_request.return_value = {"id": 1}
@@ -417,40 +436,28 @@ class MUPBackendTest(unittest.TestCase):
         # Verify project was created with fallback PI email
         mock_client.create_project.assert_called_once()
         project_data = mock_client.create_project.call_args[0][0]
-        self.assertTrue(project_data["pi"].endswith(".example.com"))  # Fallback email
+        assert project_data["pi"].endswith(".example.com")  # Fallback email
 
         # Verify no users were added during creation (since no context)
         mock_client.add_project_member.assert_not_called()
 
-        self.assertIsInstance(result, Resource)
+        assert isinstance(result, Resource)
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_collect_limits(self, mock_client_class):
-        """Test limits collection"""
+    def test_collect_limits(self, mock_client_class) -> None:
+        """Test limits collection."""
         backend = MUPBackend(self.mup_settings, self.mup_components)
 
-        waldur_resource = {"limits": {"cpu": 10}}
+        waldur_resource = WaldurResource(limits=ResourceLimits.from_dict({"cpu": 10}))
 
         allocation_limits, waldur_limits = backend._collect_resource_limits(waldur_resource)
 
-        self.assertEqual(allocation_limits["cpu"], 10)  # unit_factor = 1
-        self.assertEqual(waldur_limits["cpu"], 10)
+        assert allocation_limits["cpu"] == 10  # unit_factor = 1
+        assert waldur_limits["cpu"] == 10
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_collect_limits_with_dict_values(self, mock_client_class):
-        """Test limits collection with dictionary values"""
-        backend = MUPBackend(self.mup_settings, self.mup_components)
-
-        waldur_resource = {"limits": {"cpu": {"value": 20}}}
-
-        allocation_limits, waldur_limits = backend._collect_resource_limits(waldur_resource)
-
-        self.assertEqual(allocation_limits["cpu"], 20)
-        self.assertEqual(waldur_limits["cpu"], 20)
-
-    @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_get_resource_metadata(self, mock_client_class):
-        """Test getting resource metadata"""
+    def test_get_resource_metadata(self, mock_client_class) -> None:
+        """Test getting resource metadata."""
         mock_client = mock_client_class.return_value
         mock_client.get_projects.return_value = [self.sample_mup_project]
         mock_client.get_project_allocations.return_value = [self.sample_mup_allocation]
@@ -466,11 +473,11 @@ class MUPBackendTest(unittest.TestCase):
             "allocation_used": 0,
         }
 
-        self.assertEqual(metadata, expected_metadata)
+        assert metadata == expected_metadata
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_get_usage_report(self, mock_client_class):
-        """Test usage report generation"""
+    def test_get_usage_report(self, mock_client_class) -> None:
+        """Test usage report generation."""
         mock_client = mock_client_class.return_value
         mock_client.get_projects.return_value = [self.sample_mup_project]
         mock_client.get_project_allocations.return_value = [
@@ -485,14 +492,14 @@ class MUPBackendTest(unittest.TestCase):
         report = backend._get_usage_report(accounts)
 
         account_key = "1"
-        self.assertIn(account_key, report)
-        self.assertIn("TOTAL_ACCOUNT_USAGE", report[account_key])
-        self.assertEqual(report[account_key]["TOTAL_ACCOUNT_USAGE"]["cpu"], 5)
-        self.assertIn("user1", report[account_key])
+        assert account_key in report
+        assert "TOTAL_ACCOUNT_USAGE" in report[account_key]
+        assert report[account_key]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 5
+        assert "user1" in report[account_key]
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_add_users_to_resource(self, mock_client_class):
-        """Test adding users to resource"""
+    def test_add_users_to_resource(self, mock_client_class) -> None:
+        """Test adding users to resource."""
         mock_client = mock_client_class.return_value
         mock_client.get_projects.return_value = [self.sample_mup_project]
         mock_client.get_project_allocations.return_value = [self.sample_mup_allocation]
@@ -506,12 +513,12 @@ class MUPBackendTest(unittest.TestCase):
 
         added_users = backend.add_users_to_resource(resource_backend_id, user_ids)
 
-        self.assertEqual(added_users, user_ids)
+        assert added_users == user_ids
         mock_client.add_project_member.assert_called_once()
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_remove_users_from_account(self, mock_client_class):
-        """Test removing users from account"""
+    def test_remove_users_from_account(self, mock_client_class) -> None:
+        """Test removing users from account."""
         mock_client = mock_client_class.return_value
         mock_client.get_projects.return_value = [self.sample_mup_project]
         mock_client.get_project_allocations.return_value = [self.sample_mup_allocation]
@@ -526,18 +533,18 @@ class MUPBackendTest(unittest.TestCase):
 
         removed_users = backend.remove_users_from_resource(resource_backend_id, usernames)
 
-        self.assertEqual(removed_users, ["user1"])
+        assert removed_users == ["user1"]
         mock_client.toggle_member_status.assert_called_once_with(1, 1, {"active": False})
 
     @patch("waldur_site_agent.backends.mup_backend.backend.MUPClient")
-    def test_unsupported_operations_warning_only(self, mock_client_class):
-        """Test that unsupported operations return False and log warnings"""
+    def test_unsupported_operations_warning_only(self, mock_client_class) -> None:
+        """Test that unsupported operations return False and log warnings."""
         backend = MUPBackend(self.mup_settings, self.mup_components)
 
         # These operations are not supported by MUP but should not raise exceptions
-        self.assertFalse(backend.downscale_resource("test_account"))
-        self.assertFalse(backend.pause_resource("test_account"))
-        self.assertFalse(backend.restore_resource("test_account"))
+        assert not backend.downscale_resource("test_account")
+        assert not backend.pause_resource("test_account")
+        assert not backend.restore_resource("test_account")
 
 
 if __name__ == "__main__":

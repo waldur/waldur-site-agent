@@ -3,6 +3,8 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from waldur_api_client.models.resource import Resource as WaldurResource
+
 from waldur_site_agent.backends import BackendType, logger, structures, utils
 from waldur_site_agent.backends.base import BaseClient, UnknownClient
 from waldur_site_agent.backends.exceptions import BackendError
@@ -186,7 +188,7 @@ class BaseBackend(ABC):
         return False
 
     def create_resource(
-        self, waldur_resource: dict, user_context: Optional[dict] = None
+        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
     ) -> structures.Resource:
         """Create resource on the backend.
 
@@ -198,65 +200,61 @@ class BaseBackend(ABC):
         """
         logger.info("Creating resource in the backend")
         # Note: user_context is available for backends that need it during creation
-
         # Actions prior to resource creation
         self._pre_create_resource(waldur_resource, user_context)
 
         # Create resource in the backend
         backend_resource_id = self._create_resource_in_backend(waldur_resource)
 
-        # Setup limits
+        # # Setup limits
         self._setup_resource_limits(backend_resource_id, waldur_resource)
-
         resource = structures.Resource(
             backend_type=self.backend_type,
-            name=waldur_resource["name"],
-            marketplace_uuid=waldur_resource["uuid"],
+            name=waldur_resource.name,
+            marketplace_uuid=waldur_resource.uuid.hex,
             backend_id=backend_resource_id,
             limits=self._collect_resource_limits(waldur_resource)[1],
         )
-
         # Actions after resource creation
         self.post_create_resource(resource, waldur_resource, user_context)
-
         return resource
 
     def _pre_create_resource(
-        self, waldur_resource: dict, user_context: Optional[dict] = None
+        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
     ) -> None:
         """Actions performed prior to resource creation."""
         # Default implementation: setup customer and project accounts hierarchy
         del user_context
-        project_backend_id = self._get_project_backend_id(waldur_resource["project_slug"])
+        project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
 
         # Setup customer resource if using SLURM backend
         customer_backend_id = None
         if self.backend_type == BackendType.SLURM.value:
-            customer_backend_id = self._get_customer_backend_id(waldur_resource["customer_slug"])
+            customer_backend_id = self._get_customer_backend_id(waldur_resource.customer_slug)
             self._create_backend_resource(
-                customer_backend_id, waldur_resource["customer_name"], customer_backend_id
+                customer_backend_id, waldur_resource.customer_name, customer_backend_id
             )
 
         # Create project resource
         self._create_backend_resource(
             project_backend_id,
-            waldur_resource["project_name"],
+            waldur_resource.project_name,
             project_backend_id,
             customer_backend_id,
         )
 
-    def _create_resource_in_backend(self, waldur_resource: dict) -> str:
+    def _create_resource_in_backend(self, waldur_resource: WaldurResource) -> str:
         """Create backend resource with retry logic for name generation."""
-        project_backend_id = self._get_project_backend_id(waldur_resource["project_slug"])
+        project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
 
         # Determine resource name generation strategy
         use_project_slug = (
-            waldur_resource["offering_plugin_options"].get("account_name_generation_policy")
+            waldur_resource.offering_plugin_options.get("account_name_generation_policy")
             == "project_slug"
         )
 
         resource_base_id = (
-            waldur_resource["project_slug"] if use_project_slug else waldur_resource["slug"]
+            waldur_resource.project_slug if use_project_slug else waldur_resource.slug
         )
         max_retries = 10 if use_project_slug else 1
 
@@ -264,18 +262,20 @@ class BaseBackend(ABC):
         for retry in range(max_retries):
             resource_backend_id = self._get_resource_backend_id(resource_base_id)
             if self._create_backend_resource(
-                resource_backend_id, waldur_resource["name"], project_backend_id, project_backend_id
+                resource_backend_id, waldur_resource.name, project_backend_id, project_backend_id
             ):
                 return resource_backend_id
 
             if use_project_slug:
-                resource_base_id = f"{waldur_resource['project_slug']}-{retry}"
+                resource_base_id = f"{waldur_resource.project_slug}-{retry}"
 
         raise BackendError(
             f"Unable to create an resource: {resource_backend_id} already exists in the cluster"
         )
 
-    def _setup_resource_limits(self, resource_backend_id: str, waldur_resource: dict) -> None:
+    def _setup_resource_limits(
+        self, resource_backend_id: str, waldur_resource: WaldurResource
+    ) -> None:
         """Setup resource limits for the resource in backend."""
         resource_backend_limits, _ = self._collect_resource_limits(waldur_resource)
 
@@ -296,7 +296,7 @@ class BaseBackend(ABC):
     def post_create_resource(
         self,
         resource: structures.Resource,
-        waldur_resource: dict,
+        waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
     ) -> None:
         """Perform customizable actions after resource creation."""
@@ -489,7 +489,7 @@ class UnknownBackend(BaseBackend):
         """Placeholder."""
         del limits
 
-    def _collect_resource_limits(self, _: dict[str, dict]) -> tuple[dict[str, int], dict[str, int]]:
+    def _collect_resource_limits(self, _: WaldurResource) -> tuple[dict[str, int], dict[str, int]]:
         return {"": 0}, {"": 0}
 
     def _pull_backend_resource(self, _: str) -> Optional[structures.Resource]:

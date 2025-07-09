@@ -3,9 +3,31 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
+from uuid import UUID
 
 import yaml
-from waldur_client import OfferingComponent, WaldurClient, WaldurClientException
+from waldur_api_client import AuthenticatedClient
+from waldur_api_client.api.marketplace_offering_users import marketplace_offering_users_list
+from waldur_api_client.api.marketplace_orders import marketplace_orders_list
+from waldur_api_client.api.marketplace_provider_offerings import (
+    marketplace_provider_offerings_create_offering_component,
+    marketplace_provider_offerings_retrieve,
+    marketplace_provider_offerings_update_offering_component,
+)
+from waldur_api_client.api.marketplace_provider_resources import (
+    marketplace_provider_resources_set_as_erred,
+)
+from waldur_api_client.api.users import users_me_retrieve
+from waldur_api_client.errors import UnexpectedStatus
+from waldur_api_client.models import ResourceSetStateErredRequest
+from waldur_api_client.models.billing_type_enum import BillingTypeEnum
+from waldur_api_client.models.marketplace_orders_list_state_item import (
+    MarketplaceOrdersListStateItem,
+)
+from waldur_api_client.models.offering_component import OfferingComponent
+from waldur_api_client.models.offering_component_request import OfferingComponentRequest
+from waldur_api_client.models.user import User
 
 from waldur_site_agent.backends import (
     BackendType,
@@ -32,6 +54,29 @@ USERNAME_BACKENDS: dict[str, type[username_backend.AbstractUsernameManagementBac
 }
 
 RESOURCE_ERRED_STATE = "Erred"
+
+
+def get_client(
+    api_url: str, access_token: str, agent_header: Optional[str] = None
+) -> AuthenticatedClient:
+    """Get a client for the Waldur API."""
+    headers = {"User-Agent": agent_header} if agent_header else {}
+    url = api_url.rstrip("/api")
+    return AuthenticatedClient(
+        base_url=url,
+        token=access_token,
+        timeout=600,
+        headers=headers,
+    )
+
+
+def is_uuid(value: str) -> bool:
+    """Check if a string is a valid UUID."""
+    try:
+        UUID(value)
+        return True
+    except ValueError:
+        return False
 
 
 def init_configuration() -> structures.WaldurAgentConfiguration:
@@ -139,7 +184,7 @@ def get_backend_for_offering(offering: structures.Offering) -> BaseBackend:
 
 
 def mark_waldur_resources_as_erred(
-    waldur_rest_client: WaldurClient,
+    waldur_rest_client: AuthenticatedClient,
     resources: list[Resource],
     error_details: dict[str, str],
 ) -> None:
@@ -148,10 +193,14 @@ def mark_waldur_resources_as_erred(
     for resource in resources:
         logger.info("Marking %s resource as ERRED", resource)
         try:
-            waldur_rest_client.marketplace_provider_resource_set_as_erred(
-                resource.marketplace_uuid, error_details
+            request_body = ResourceSetStateErredRequest(
+                error_message=error_details.get("error_message", ""),
+                error_traceback=error_details.get("error_traceback", ""),
             )
-        except WaldurClientException as e:
+            marketplace_provider_resources_set_as_erred.sync_detailed(
+                uuid=resource.marketplace_uuid, client=waldur_rest_client, body=request_body
+            )
+        except UnexpectedStatus as e:
             logger.exception(
                 "Waldur REST client error while setting resource state to Erred %s: %s",
                 resource.backend_id,
@@ -164,7 +213,7 @@ def load_offering_components() -> None:
     configuration = init_configuration()
     for offering in configuration.waldur_offerings:
         logger.info("Processing %s offering", offering.name)
-        waldur_rest_client = WaldurClient(
+        waldur_rest_client = get_client(
             offering.api_url, offering.api_token, configuration.waldur_user_agent
         )
 
@@ -177,11 +226,13 @@ def load_offering_components() -> None:
 
 
 def extend_backend_components(
-    offering: structures.Offering, waldur_offering_components: list[dict]
+    offering: structures.Offering, waldur_offering_components: list[OfferingComponent]
 ) -> None:
     """Pulls offering component data from Waldur and populates it to the local configuration."""
     logger.info("Loading Waldur components to the local config")
-    remote_components = {item["type"]: item for item in waldur_offering_components}
+    remote_components: dict[str, OfferingComponent] = {
+        item.type_: item for item in waldur_offering_components
+    }
     missing_component_types = set(remote_components.keys()) - set(
         offering.backend_components.keys()
     )
@@ -191,17 +242,17 @@ def extend_backend_components(
         logger.info("Loading %s", missing_component_type)
         remote_component_info = remote_components[missing_component_type]
         component_info = {
-            "limit": remote_component_info.get("limit_amount"),
-            "measured_unit": remote_component_info["measured_unit"],
-            "unit_factor": remote_component_info["unit_factor"] or 1,
-            "accounting_type": remote_component_info["billing_type"],
-            "label": remote_component_info["name"],
+            "limit": remote_component_info.limit_amount,
+            "measured_unit": remote_component_info.measured_unit,
+            "unit_factor": remote_component_info.unit_factor or 1,
+            "accounting_type": remote_component_info.billing_type,
+            "label": remote_component_info.name,
         }
         offering.backend_components[missing_component_type] = component_info
 
 
 def load_components_to_waldur(
-    waldur_rest_client: WaldurClient,
+    waldur_rest_client: AuthenticatedClient,
     offering_uuid: str,
     offering_name: str,
     components: dict,
@@ -211,9 +262,11 @@ def load_components_to_waldur(
         "Creating offering components data for the following resources: %s",
         ", ".join(components.keys()),
     )
-    waldur_offering = waldur_rest_client.get_marketplace_provider_offering(offering_uuid)
+    waldur_offering = marketplace_provider_offerings_retrieve.sync(
+        client=waldur_rest_client, uuid=offering_uuid
+    )
     waldur_offering_components = {
-        component["type"]: component for component in waldur_offering["components"]
+        component.type_: component for component in waldur_offering.components
     }
     for component_type, component_info in components.items():
         try:
@@ -221,9 +274,9 @@ def load_components_to_waldur(
             accounting_type = component_info["accounting_type"]
             label = component_info["label"]
 
-            component = OfferingComponent(
-                billing_type=accounting_type,
-                type=component_type,
+            component = OfferingComponentRequest(
+                billing_type=BillingTypeEnum(accounting_type),
+                type_=component_type,
                 name=label,
                 measured_unit=component_info["measured_unit"],
                 limit_amount=limit_amount,
@@ -234,12 +287,14 @@ def load_components_to_waldur(
                     logger.info(
                         "Offering component %s already exists, updating limit from %s to %s %s.",
                         component_type,
-                        existing_component.get("limit_amount"),
+                        existing_component.limit_amount,
                         component_info.get("limit"),
                         component_info["measured_unit"],
                     )
-                    component["uuid"] = existing_component["uuid"]
-                    waldur_rest_client.update_offering_component(offering_uuid, component)
+                    component.uuid = existing_component.uuid
+                    marketplace_provider_offerings_update_offering_component.sync_detailed(
+                        client=waldur_rest_client, uuid=offering_uuid, body=component
+                    )
                 else:
                     logger.info(
                         "Offering component %s already exists, skipping creation.",
@@ -253,7 +308,9 @@ def load_components_to_waldur(
                     component_info.get("limit"),
                     component_info["measured_unit"],
                 )
-                waldur_rest_client.create_offering_component(offering_uuid, component)
+                marketplace_provider_offerings_create_offering_component.sync_detailed(
+                    client=waldur_rest_client, uuid=offering_uuid, body=component
+                )
         except Exception as e:
             logger.info(
                 "Unable to create or update a component %s for offering %s (%s):",
@@ -262,6 +319,11 @@ def load_components_to_waldur(
                 offering_uuid,
             )
             logger.exception(e)
+
+
+def get_current_user_from_client(waldur_rest_client: AuthenticatedClient) -> User:
+    """Get the current user from the Waldur API."""
+    return users_me_retrieve.sync(client=waldur_rest_client)
 
 
 def diagnostics() -> bool:
@@ -306,19 +368,20 @@ def diagnostics() -> bool:
         logger.info(format_string.format("Waldur API URL", offering_api_url))
         logger.info(format_string.format("SENTRY_DSN", str(configuration.sentry_dsn)))
 
-        waldur_rest_client = WaldurClient(
+        waldur_rest_client = get_client(
             offering_api_url, offering_api_token, configuration.waldur_user_agent
         )
 
         try:
-            current_user = waldur_rest_client.get_current_user()
+            current_user = get_current_user_from_client(waldur_rest_client)
             print_current_user(current_user)
-
-            offering_data = waldur_rest_client.get_marketplace_provider_offering(offering_uuid)
-            logger.info("Offering uuid: %s", offering_data["uuid"])
-            logger.info("Offering name: %s", offering_data["name"])
-            logger.info("Offering org: %s", offering_data["customer_name"])
-            logger.info("Offering state: %s", offering_data["state"])
+            offering_data = marketplace_provider_offerings_retrieve.sync(
+                client=waldur_rest_client, uuid=offering_uuid
+            )
+            logger.info("Offering uuid: %s", offering_data.uuid)
+            logger.info("Offering name: %s", offering_data.name)
+            logger.info("Offering org: %s", offering_data.customer_name)
+            logger.info("Offering state: %s", offering_data.state)
 
             logger.info("Offering components:")
             format_string = "{:<10} {:<10} {:<10} {:<10}"
@@ -326,37 +389,37 @@ def diagnostics() -> bool:
             logger.info(format_string.format(*headers))
             components = [
                 [
-                    component["type"],
-                    component["name"],
-                    component["measured_unit"],
-                    component.get("limit_amount") or "",
+                    component.type_,
+                    component.name,
+                    component.measured_unit,
+                    component.limit_amount or "",
                 ]
-                for component in offering_data["components"]
+                for component in offering_data.components
             ]
             for component in components:
                 logger.info(format_string.format(*component))
 
             logger.info("")
-        except WaldurClientException as err:
+        except UnexpectedStatus as err:
             logger.error("Unable to fetch offering data, reason: %s", err)
 
         logger.info("")
         try:
-            orders = waldur_rest_client.list_orders(
-                {
-                    "offering_uuid": offering_uuid,
-                    "state": ["pending-provider", "executing"],
-                }
+            orders = marketplace_orders_list.sync(
+                client=waldur_rest_client,
+                offering_uuid=offering_uuid,
+                state=[
+                    MarketplaceOrdersListStateItem.PENDING_PROVIDER,
+                    MarketplaceOrdersListStateItem.EXECUTING,
+                ],
             )
             logger.info("Active orders:")
             format_string = "{:<10} {:<10} {:<10}"
             headers = ["Project", "Type", "State"]
             logger.info(format_string.format(*headers))
             for order in orders:
-                logger.info(
-                    format_string.format(order["project_name"], order["type"], order["state"])
-                )
-        except WaldurClientException as err:
+                logger.info(format_string.format(order.project_name, order.type_, order.state))
+        except UnexpectedStatus as err:
             logger.error("Unable to fetch orders, reason: %s", err)
 
         backend_diagnostics_result = False
@@ -383,38 +446,34 @@ def create_homedirs_for_offering_users() -> None:
 
         logger.info("Creating homedirs for %s offering users", offering.name)
 
-        waldur_rest_client = WaldurClient(
+        waldur_rest_client = get_client(
             offering.api_url, offering.api_token, configuration.waldur_user_agent
         )
-
-        offering_users = waldur_rest_client.list_remote_offering_users(
-            {
-                "offering_uuid": offering.uuid,
-                "is_restricted": False,
-            }
+        offering_users = marketplace_offering_users_list.sync(
+            client=waldur_rest_client, offering_uuid=offering.uuid, is_restricted=False
         )
 
         offering_user_usernames: set[str] = {
-            offering_user["username"] for offering_user in offering_users
+            offering_user.username for offering_user in offering_users
         }
         umask = offering.backend_settings.get("homedir_umask", "0700")
         slurm_backend = SlurmBackend(offering.backend_settings, offering.backend_components)
         slurm_backend._create_user_homedirs(offering_user_usernames, umask)
 
 
-def print_current_user(current_user: dict) -> None:
+def print_current_user(current_user: User) -> None:
     """Print provided user's info."""
-    logger.info("Current user username: %s", current_user["username"])
-    logger.info("Current user full name: %s", current_user["full_name"])
-    logger.info("Current user is staff: %s", current_user.get("is_staff", False))
+    logger.info("Current user username: %s", current_user.username)
+    logger.info("Current user full name: %s", current_user.full_name)
+    logger.info("Current user is staff: %s", current_user.is_staff)
     logger.info("List of permissions:")
-    for permission in current_user["permissions"]:
-        logger.info("Role name: %s", permission["role_name"])
-        logger.info("Role description: %s", permission["role_description"])
-        logger.info("Scope type: %s", permission["scope_type"])
-        logger.info("Scope name: %s", permission.get("scope_name", ""))
-        logger.info("Scope UUID: %s", permission.get("scope_uuid", ""))
-        logger.info("Expiration time: %s", permission.get("expiration_time", ""))
+    for permission in current_user.permissions:
+        logger.info("Role name: %s", permission.role_name)
+        logger.info("Role description: %s", permission.role_description)
+        logger.info("Scope type: %s", permission.scope_type)
+        logger.info("Scope name: %s", permission.scope_name)
+        logger.info("Scope UUID: %s", permission.scope_uuid)
+        logger.info("Expiration time: %s", permission.expiration_time)
 
 
 def get_username_management_backend(

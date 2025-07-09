@@ -16,12 +16,13 @@ packages = [{ include = "waldur_site_agent" }]
 
 [tool.poetry.dependencies]
 python = "^3.9"
-python-waldur-client = "^0.6.4"
 requests = "2.32.3"
 pyyaml = "6.0.1"
 sentry-sdk = "2.3.1"
 poethepoet = "^0.26.1"
 types-pyyaml = "^6.0.12.20240311"
+waldur-api-client = "7.6.7"
+faker = "^37.0.0"
 
 paho-mqtt = "2.1.0"
 stomp-py = "^8.2.0"
@@ -30,6 +31,8 @@ freezegun = "0.3.4"
 coverage = "6.3.2"
 pytest = "7.1.2"
 pytest-cov = "3.0.0"
+respx = "^0.22.0"
+httpx = "^0.28.1"
 ruff = "^0.12.1"
 
 [tool.poe.tasks]
@@ -75,6 +78,9 @@ lint.ignore = [
   'DTZ005',
   "PLR0915",
   "PLR0912",
+  "B012",
+  "TRY300",
+  "FA102"
 ] # These rules are ignored
 lint.extend-ignore = [
   "COM812",

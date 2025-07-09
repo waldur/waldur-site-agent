@@ -2,6 +2,8 @@
 
 from typing import Optional
 
+from waldur_api_client.models.resource import Resource as WaldurResource
+
 from waldur_site_agent.backends import (
     BackendType,
     backend,
@@ -40,7 +42,10 @@ class SlurmBackend(backend.BaseBackend):
         return self.client.list_tres()
 
     def post_create_resource(
-        self, resource: Resource, waldur_resource: dict, user_context: Optional[dict] = None
+        self,
+        resource: Resource,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Post-create actions for SLURM resources."""
         del resource, waldur_resource
@@ -50,9 +55,9 @@ class SlurmBackend(backend.BaseBackend):
             if offering_user_mappings:
                 # Extract usernames from offering users
                 usernames = {
-                    offering_user.get("username")
+                    offering_user.username
                     for offering_user in offering_user_mappings.values()
-                    if offering_user.get("username")
+                    if offering_user.username
                 }
 
                 if usernames:
@@ -64,7 +69,7 @@ class SlurmBackend(backend.BaseBackend):
                     self._create_user_homedirs(usernames, umask)
 
     def _collect_resource_limits(
-        self, waldur_resource: dict[str, dict]
+        self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect SLURM and Waldur limits separately."""
         allocation_limits = backend_utils.get_usage_based_limits(self.backend_components)
@@ -73,21 +78,23 @@ class SlurmBackend(backend.BaseBackend):
             for component, data in self.backend_components.items()
             if data["accounting_type"] == "limit"
         ]
+        if waldur_resource.limits:
+            # Add limit-based limits
+            for component_key in limit_based_components:
+                allocation_limits[component_key] = (
+                    waldur_resource.limits.to_dict()[component_key]
+                    * self.backend_components[component_key]["unit_factor"]
+                )
 
-        # Add limit-based limits
-        for component_key in limit_based_components:
-            allocation_limits[component_key] = (
-                waldur_resource["limits"][component_key]
-                * self.backend_components[component_key]["unit_factor"]
-            )
-
-        # Keep only limit-based components for Waldur resource
-        waldur_resource_limits = {
-            component_key: waldur_resource["limits"][component_key]
-            for component_key, data in self.backend_components.items()
-            if data["accounting_type"] == "limit"
-        }
-
+            # Keep only limit-based components for Waldur resource
+            if waldur_resource.limits:
+                waldur_resource_limits = {
+                    component_key: waldur_resource.limits.to_dict()[component_key]
+                    for component_key, data in self.backend_components.items()
+                    if data["accounting_type"] == "limit"
+                }
+        else:
+            waldur_resource_limits = {}
         return allocation_limits, waldur_resource_limits
 
     def add_users_to_resource(
