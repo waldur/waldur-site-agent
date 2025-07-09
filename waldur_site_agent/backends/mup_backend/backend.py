@@ -14,6 +14,9 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
+from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.models.resource_limits import ResourceLimits
+
 from waldur_site_agent.backends import BackendType, backend
 from waldur_site_agent.backends.exceptions import BackendError
 from waldur_site_agent.backends.mup_backend.client import MUPClient, MUPError
@@ -197,7 +200,7 @@ class MUPBackend(backend.BaseBackend):
 
             # Cache the result
             self._project_cache[resource_uuid] = result
-            return result  # noqa: TRY300
+            return result
 
         except MUPError:
             logger.exception("Failed to create MUP project for resource %s", resource_uuid)
@@ -220,20 +223,19 @@ class MUPBackend(backend.BaseBackend):
         # Try to get the first available user email from team members
         team = user_context.get("team", [])
         offering_user_mappings = user_context.get("offering_user_mappings", {})
-
         # Look for users with offering usernames (these are the active ones)
         for user in team:
-            user_uuid = user.get("uuid")
+            user_uuid = user.uuid
             if user_uuid in offering_user_mappings:
                 # This user has an offering username, use their email
-                email = user.get("email")
+                email = user.email
                 if email and "@" in email and not email.endswith(".example.com"):
                     logger.info("Using team member %s as PI for project %s", email, project_uuid)
                     return email
 
         # Fallback to first team member email
         for user in team:
-            email = user.get("email")
+            email = user.email
             if email and "@" in email and not email.endswith(".example.com"):
                 logger.info("Using first team member %s as PI for project %s", email, project_uuid)
                 return email
@@ -263,11 +265,14 @@ class MUPBackend(backend.BaseBackend):
                     continue
 
                 # Create user data combining team and offering info
+
+                # NB! first_name and last_name do not exist on ProjectUser, only full_name
+                # needs improvement
                 user_data = {
-                    "username": offering_user.get("username"),
-                    "email": team_user.get("email"),
-                    "first_name": team_user.get("first_name", ""),
-                    "last_name": team_user.get("last_name", ""),
+                    "username": offering_user.username,
+                    "email": team_user.email,
+                    "first_name": team_user.first_name if hasattr(team_user, "first_name") else "",
+                    "last_name": team_user.last_name if hasattr(team_user, "last_name") else "",
                 }
 
                 if not user_data["email"]:
@@ -290,25 +295,27 @@ class MUPBackend(backend.BaseBackend):
                 logger.exception("Failed to add user %s to project during creation", user_uuid)
 
     def _pre_create_resource(
-        self, waldur_resource: dict, user_context: Optional[dict] = None
+        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
     ) -> None:
         """Create and activate MUP project."""
         # Get project information
-        project_uuid = waldur_resource.get("project_uuid")
-        project_name = waldur_resource.get("project_name", f"Project {project_uuid}")
+        project_uuid = waldur_resource.project_uuid
+        project_name = waldur_resource.project_name
+        if not project_name:
+            project_name = f"Project {project_uuid}"
 
         if not project_uuid:
             msg = "No project UUID found in resource data"
             raise BackendError(msg)
 
         # Get or create MUP project (Resource = Project in MUP)
-        mup_project = self._get_project_by_waldur_id(waldur_resource["uuid"])
+        mup_project = self._get_project_by_waldur_id(waldur_resource.uuid.hex)
         if not mup_project:
             # Get PI email from user context or use a fallback
             pi_email = self._get_pi_email_from_context(user_context, project_uuid)
 
             project_data = {
-                "uuid": waldur_resource["uuid"],  # Use resource UUID for MUP project
+                "uuid": waldur_resource.uuid.hex,  # Use resource UUID for MUP project
                 "name": project_name,
                 "description": f"Waldur project {project_name}",
             }
@@ -329,13 +336,15 @@ class MUPBackend(backend.BaseBackend):
         if user_context:
             self._create_and_add_users_from_context(mup_project["id"], user_context)
 
-    def _setup_resource_limits(self, allocation_account: str, waldur_resource: dict) -> None:
+    def _setup_resource_limits(
+        self, allocation_account: str, waldur_resource: WaldurResource
+    ) -> None:
         """Skip this step for MUP."""
         del allocation_account, waldur_resource
 
-    def _create_resource_in_backend(self, waldur_resource: dict) -> str:
+    def _create_resource_in_backend(self, waldur_resource: WaldurResource) -> str:
         """Create MUP resource within the MUP project."""
-        mup_project = self._get_project_by_waldur_id(waldur_resource["uuid"])
+        mup_project = self._get_project_by_waldur_id(waldur_resource.uuid.hex)
         if not mup_project:
             msg = (
                 f"MUP project is expected to be created upon MUP resource creation, "
@@ -344,15 +353,16 @@ class MUPBackend(backend.BaseBackend):
             raise BackendError(msg)
 
         # Create allocations for each backend component
-        limits = waldur_resource.get("limits", {})
+        limits = waldur_resource.limits
         created_allocations = []
         resource_limits = {}
 
         for component_key, component_config in self.backend_components.items():
             # Get limit value for this component
-            component_limit = limits.get(component_key, 0)
-            if isinstance(component_limit, dict):
-                component_limit = component_limit.get("value", 0)
+            if isinstance(limits, ResourceLimits):
+                component_limit = limits[component_key] if component_key in limits else 0  # noqa: SIM401
+            else:
+                component_limit = 0
 
             # Skip components with zero limits
             if component_limit <= 0:
@@ -371,7 +381,7 @@ class MUPBackend(backend.BaseBackend):
             allocation_data = {
                 "type": allocation_type,
                 "identifier": (
-                    f"{self.allocation_prefix}{waldur_resource['uuid']}_{component_key}"
+                    f"{self.allocation_prefix}{waldur_resource.uuid.hex}_{component_key}"
                 ),
                 "size": allocation_size,
                 "used": 0,
@@ -395,7 +405,7 @@ class MUPBackend(backend.BaseBackend):
                     "Created MUP allocation %s (%s) for resource %s component %s",
                     result["id"],
                     allocation_type,
-                    waldur_resource["uuid"],
+                    waldur_resource.uuid.hex,
                     component_key,
                 )
             except Exception:
@@ -409,21 +419,20 @@ class MUPBackend(backend.BaseBackend):
         return str(mup_project["id"])
 
     def _collect_resource_limits(
-        self, waldur_resource: dict[str, dict]
+        self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect MUP and Waldur limits separately."""
-        allocation_limits = {}
-        waldur_resource_limits = {}
+        allocation_limits: dict = {}
+        waldur_resource_limits: dict = {}
 
         # Extract limits from resource
-        limits = waldur_resource.get("limits", {})
+        limits = waldur_resource.limits
+        if not limits:
+            return allocation_limits, waldur_resource_limits
 
         for component_key, data in self.backend_components.items():
             if component_key in limits:
                 limit_value = limits[component_key]
-                if isinstance(limit_value, dict):
-                    limit_value = limit_value.get("value", 0)
-
                 # Apply unit factor
                 unit_factor = data.get("unit_factor", 1)
                 allocation_limits[component_key] = limit_value * unit_factor

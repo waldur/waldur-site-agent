@@ -11,6 +11,7 @@ from typing import Union
 
 import paho.mqtt.client as mqtt
 import stomp
+from waldur_api_client.api.marketplace_orders import marketplace_orders_list
 
 from waldur_site_agent.backends import logger
 from waldur_site_agent.common import processors as common_processors
@@ -18,6 +19,7 @@ from waldur_site_agent.common import structures as common_structures
 from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.event_subscription_manager import EventSubscriptionManager
 from waldur_site_agent.event_processing.structures import (
+    EventSubscription,
     MqttConsumer,
     MqttConsumersMap,
     StompConsumersMap,
@@ -57,7 +59,9 @@ def setup_stomp_offering_subscriptions(
         event_subscription_manager = EventSubscriptionManager(
             waldur_offering, None, None, waldur_user_agent, object_type
         )
-        event_subscription = event_subscription_manager.get_or_create_event_subscription()
+        event_subscription: EventSubscription | None = (
+            event_subscription_manager.get_or_create_event_subscription()
+        )
         if event_subscription is None:
             logger.error(
                 "Failed to create event subscription for the offering %s (%s), object type %s",
@@ -280,7 +284,9 @@ def send_agent_health_checks(offerings: list[common_structures.Offering], user_a
     for offering in offerings:
         try:
             processor = common_processors.OfferingOrderProcessor(offering, user_agent)
-            processor.waldur_rest_client.list_orders({"page_size": 1})
+            marketplace_orders_list.sync(
+                client=processor.waldur_rest_client, offering_uuid=offering.uuid, page_size=1
+            )
         except Exception as e:
             logger.error(
                 "Failed to send agent health check for the offering %s: %s", offering.name, e

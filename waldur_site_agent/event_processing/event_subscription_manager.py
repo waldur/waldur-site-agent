@@ -8,9 +8,19 @@ import paho.mqtt.client as mqtt
 import stomp
 import urllib3.util
 import yaml
-from waldur_client import WaldurClient
+from waldur_api_client.api.event_subscriptions import (
+    event_subscriptions_create,
+    event_subscriptions_destroy,
+    event_subscriptions_retrieve,
+)
+from waldur_api_client.errors import UnexpectedStatus
+from waldur_api_client.models.event_subscription import (
+    EventSubscription as ClientEventSubscriptionObject,
+)
+from waldur_api_client.models.event_subscription_request import EventSubscriptionRequest
 
 from waldur_site_agent.backends import logger
+from waldur_site_agent.common import utils
 from waldur_site_agent.common.structures import Offering
 from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.listener import WaldurListener, connect_to_stomp_server
@@ -37,9 +47,7 @@ class EventSubscriptionManager:
         observable_object_type: str = "",
     ) -> None:
         """Constructor."""
-        self.waldur_rest_client: WaldurClient = WaldurClient(
-            offering.api_url, offering.api_token, user_agent
-        )
+        self.waldur_rest_client = utils.get_client(offering.api_url, offering.api_token, user_agent)
         self.offering = offering
         self.user_agent = user_agent
         self.on_connect_callback = on_connect_callback
@@ -79,21 +87,31 @@ class EventSubscriptionManager:
                 self.offering.uuid,
                 self.observable_object_type,
             )
-            event_subscription = self.waldur_rest_client.create_event_subscription(
+            request_body = EventSubscriptionRequest(
+                description=(
+                    f"Event subscription for waldur site agent {self.user_agent}, "
+                    f"observable object type: {self.observable_object_type}"
+                ),
                 observable_objects=[
                     {
                         "object_type": self.observable_object_type,
                     }
                 ],
-                description=f"Event subscription for waldur site agent {self.user_agent},"
-                f"observable object type: {self.observable_object_type}",
             )
-        except Exception as e:
+            event_subscription = event_subscriptions_create.sync(
+                client=self.waldur_rest_client, body=request_body
+            )
+
+        except UnexpectedStatus as e:
             logger.error("Failed to create event subscription: %s", e)
             return None
         else:
-            logger.info("Event subscription created: %s", event_subscription["uuid"])
-            return event_subscription
+            logger.info("Event subscription created: %s", event_subscription.uuid)
+            return EventSubscription(
+                uuid=event_subscription.uuid.hex,
+                user_uuid=event_subscription.user_uuid.hex,
+                observable_objects=list(event_subscription.observable_objects),
+            )
 
     def get_or_create_event_subscription(self) -> Optional[EventSubscription]:
         """Ger or create event subscription."""
@@ -104,7 +122,17 @@ class EventSubscriptionManager:
                 logger.info(
                     "Fetching the existing event subscription %s info", event_subscription_uuid
                 )
-                return self.waldur_rest_client.get_event_subscription(event_subscription_uuid)
+                # Get the event subscription
+                event_subscription: ClientEventSubscriptionObject = (
+                    event_subscriptions_retrieve.sync(
+                        client=self.waldur_rest_client, uuid=event_subscription_uuid
+                    )
+                )
+                return EventSubscription(
+                    uuid=event_subscription.uuid.hex,
+                    user_uuid=event_subscription.user_uuid.hex,
+                    observable_objects=list(event_subscription.observable_objects),
+                )
         except Exception as e:
             logger.warning("Unable to get an event subscription %s: %s", event_subscription_uuid, e)
 
@@ -265,9 +293,11 @@ class EventSubscriptionManager:
         """Delete the event subscription."""
         try:
             logger.info("Deleting event subscription %s", event_subscription["uuid"])
-            self.waldur_rest_client.delete_event_subscription(event_subscription["uuid"])
+            event_subscriptions_destroy.sync_detailed(
+                uuid=event_subscription["uuid"], client=self.waldur_rest_client
+            )
             logger.info("Event subscription deleted: %s", event_subscription["uuid"])
-        except Exception as e:
+        except UnexpectedStatus as e:
             logger.error(
                 "Failed to delete event subscription %s: %s", event_subscription["uuid"], e
             )
