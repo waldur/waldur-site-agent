@@ -75,10 +75,10 @@ from waldur_api_client.models.resource_backend_metadata_request import (
 from waldur_api_client.models.resource_set_limits_request import ResourceSetLimitsRequest
 from waldur_api_client.types import Unset
 
-from waldur_site_agent.backends import BackendType, logger
-from waldur_site_agent.backends import utils as backend_utils
-from waldur_site_agent.backends.exceptions import BackendError
-from waldur_site_agent.backends.structures import Resource
+from waldur_site_agent.backend import BackendType, logger
+from waldur_site_agent.backend import utils as backend_utils
+from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.structures import Resource
 from waldur_site_agent.common import SERVICE_PROVIDER_USERNAME_GENERATION_POLICY, structures, utils
 
 
@@ -246,9 +246,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         try:
             logger.info(
                 "Processing order %s (%s) type %s, state %s",
-                order.attributes.additional_properties.get("name", "N/A")
-                if order.attributes
-                else "N/A",
+                order.attributes.get("name", "N/A") if order.attributes else "N/A",
                 order.uuid,
                 order.type_,
                 order.state,
@@ -503,10 +501,6 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         if not waldur_resource:
             raise ObjectNotFoundError(f"Waldur resource {resource_uuid} not found")
 
-        resource_backend = utils.get_backend_for_offering(self.offering)
-        if resource_backend is None:
-            return False
-
         waldur_resource_backend_id = waldur_resource.backend_id
         new_limits: Unset | OrderDetailsLimits = order.limits
         if not new_limits:
@@ -516,15 +510,12 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 waldur_resource.name,
             )
 
-        if new_limits:
-            resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits.to_dict())
+        self.resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits.to_dict())
 
         logger.info(
             "The limits for %s were updated successfully from %s to %s",
             waldur_resource.name,
-            order.attributes.additional_properties.get("old_limits", "N/A")
-            if order.attributes
-            else "N/A",
+            order.attributes.get("old_limits", "N/A") if order.attributes else "N/A",
             new_limits.to_dict() if new_limits else "N/A",
         )
         return True
@@ -539,11 +530,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             raise ObjectNotFoundError(f"Waldur resource {resource_uuid} not found")
         project_slug = order.project_slug
 
-        resource_backend = utils.get_backend_for_offering(self.offering)
-        if resource_backend is None:
-            return False
-
-        resource_backend.delete_resource(waldur_resource.backend_id, project_slug=project_slug)
+        self.resource_backend.delete_resource(waldur_resource.backend_id, project_slug=project_slug)
 
         logger.info("Allocation has been terminated successfully")
         return True

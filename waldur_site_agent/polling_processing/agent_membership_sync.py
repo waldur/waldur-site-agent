@@ -2,7 +2,7 @@
 
 from time import sleep
 
-from waldur_site_agent.backends import logger
+from waldur_site_agent.backend import logger
 from waldur_site_agent.common import WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures

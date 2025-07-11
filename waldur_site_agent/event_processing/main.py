@@ -3,7 +3,7 @@
 import sys
 import time
 
-from waldur_site_agent.backends import logger
+from waldur_site_agent.backend import logger
 from waldur_site_agent.common import structures as common_structures
 from waldur_site_agent.event_processing import utils
 

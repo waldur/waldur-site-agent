@@ -1,1 +1,1 @@
-"""Polling-processing module for MQTT integration."""
+"""Polling-processing module."""

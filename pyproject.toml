@@ -1,39 +1,57 @@
-[tool.poetry]
+[project]
 name = "waldur-site-agent"
 version = "0.1.0"
 description = "Agent for integrating service provider's site with Waldur Mastermind."
-authors = ["OpenNode Team <info@opennodecloud.com>"]
-license = "MIT"
-homepage = "https://waldur.com"
-documentation = "https://docs.waldur.com"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9"
 readme = "README.md"
+license = "MIT"
 classifiers = [
-  "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
 ]
-packages = [{ include = "waldur_site_agent" }]
+dependencies = [
+    "requests==2.32.3",
+    "pyyaml==6.0.1",
+    "sentry-sdk==2.3.1",
+    "types-pyyaml>=6.0.12.20240311,<7",
+    "waldur-api-client==7.6.8",
+    "paho-mqtt==2.1.0",
+    "stomp-py>=8.2.0,<9",
+    "importlib-metadata>=8.7.0 ; python_full_version == '3.9.*'",
+]
 
-[tool.poetry.dependencies]
-python = "^3.9"
-requests = "2.32.3"
-pyyaml = "6.0.1"
-sentry-sdk = "2.3.1"
-poethepoet = "^0.26.1"
-types-pyyaml = "^6.0.12.20240311"
-waldur-api-client = "7.6.7"
-faker = "^37.0.0"
+[project.urls]
+Homepage = "https://waldur.com"
+Documentation = "https://docs.waldur.com"
 
-paho-mqtt = "2.1.0"
-stomp-py = "^8.2.0"
-[tool.poetry.group.dev.dependencies]
-freezegun = "0.3.4"
-coverage = "6.3.2"
-pytest = "7.1.2"
-pytest-cov = "3.0.0"
-respx = "^0.22.0"
-httpx = "^0.28.1"
-ruff = "^0.12.1"
+[project.scripts]
+waldur_site_agent = "waldur_site_agent.main:main"
+waldur_site_diagnostics = "waldur_site_agent.common.utils:diagnostics"
+waldur_site_load_components = "waldur_site_agent.common.utils:load_offering_components"
+waldur_site_create_homedirs = "waldur_site_agent.common.utils:create_homedirs_for_offering_users"
+
+[dependency-groups]
+dev = [
+    "freezegun==0.3.4",
+    "coverage==6.3.2",
+    "pytest==7.1.2",
+    "pytest-cov==3.0.0",
+    "respx>=0.22.0,<0.23",
+    "httpx>=0.28.1,<0.29",
+    "ruff>=0.12.1,<0.13",
+]
+
+[tool.hatch.build.targets.sdist]
+include = ["waldur_site_agent"]
+
+[tool.hatch.build.targets.wheel]
+include = ["waldur_site_agent"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.poe.tasks]
 pre.cmd = "pre-commit run --all-files"
@@ -49,7 +67,6 @@ markdown.help = "Run markdown checks"
 
 [tool.ruff]
 lint.extend-select = ["UP"]
-line-length = 100
 lint.select = ["ALL"]
 lint.ignore = [
   "A005",
@@ -86,6 +103,7 @@ lint.extend-ignore = [
   "COM812",
   "ISC001",
 ] # these are ignored for ruff formatting
+line-length = 100
 
 [tool.ruff.format]
 indent-style = "space"
@@ -109,22 +127,10 @@ known-first-party = []
 [tool.ruff.lint.pyupgrade]
 keep-runtime-typing = true
 
-[tool.poetry.scripts]
-waldur_site_agent = 'waldur_site_agent.main:main'
-waldur_site_diagnostics = 'waldur_site_agent.common.utils:diagnostics'
-waldur_site_load_components = 'waldur_site_agent.common.utils:load_offering_components'
-waldur_slurm_create_homedirs = 'waldur_site_agent.common.utils:create_homedirs_for_offering_users'
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
-
 [tool.pytest.ini_options]
 addopts = "--cov=waldur_site_agent/"
 
-# Required for the "entry-points" table to work
-[project]
-name = 'waldur-site-agent'
-
-[project.entry-points."waldur_site_agent.username_management"]
-base = "waldur_site_agent.backends.username_backend.backend:BaseUsernameManagementBackend"
+[tool.uv.workspace]
+members = [
+    "plugins/*",
+]
