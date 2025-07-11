@@ -147,7 +147,7 @@ class BaseMUPOrderTest(unittest.TestCase):
 
 
 @mock.patch(
-    "waldur_site_agent.backends.mup_backend.backend.MUPClient",
+    "waldur_site_agent_mup.backend.MUPClient",
     autospec=True,
 )
 class MUPCreationOrderTest(BaseMUPOrderTest):
@@ -445,7 +445,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
 
 
 @mock.patch(
-    "waldur_site_agent.backends.mup_backend.backend.MUPClient",
+    "waldur_site_agent_mup.backend.MUPClient",
     autospec=True,
 )
 class MUPTerminationOrderTest(BaseMUPOrderTest):
@@ -518,7 +518,7 @@ class MUPTerminationOrderTest(BaseMUPOrderTest):
 
 
 @mock.patch(
-    "waldur_site_agent.backends.mup_backend.backend.MUPClient",
+    "waldur_site_agent_mup.backend.MUPClient",
     autospec=True,
 )
 class MUPUpdateOrderTest(BaseMUPOrderTest):
