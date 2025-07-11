@@ -6,6 +6,9 @@ OFFERING = Offering(
     api_url="http://localhost:8081/api/",
     api_token="9e1132b9616ebfe943ddf632ca32bbb7e1109a32",
     backend_type="slurm",
+    order_processing_backend="slurm",
+    membership_sync_backend="slurm",
+    reporting_backend="slurm",
     backend_settings={
         "default_account": "root",
         "customer_prefix": "hpc_",

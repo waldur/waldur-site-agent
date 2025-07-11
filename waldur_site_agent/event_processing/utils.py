@@ -55,7 +55,25 @@ def setup_stomp_offering_subscriptions(
 ) -> list[stomp.WSStompConnection]:
     """Set up STOMP subscriptions for the specified offering."""
     stomp_connections: list[stomp.WSStompConnection] = []
-    for object_type in ["order", "user_role", "resource"]:
+    object_types = []
+
+    if waldur_offering.order_processing_backend:
+        object_types.append("order")
+    else:
+        logger.info(
+            "Order processing is disabled for offering %s, skipping start of STOMP connections",
+            waldur_offering.name,
+        )
+
+    if waldur_offering.membership_sync_backend:
+        object_types.extend(["user_role", "resource"])
+    else:
+        logger.info(
+            "Membership sync is disabled for offering %s, skipping start of STOMP connections",
+            waldur_offering.name,
+        )
+
+    for object_type in object_types:
         event_subscription_manager = EventSubscriptionManager(
             waldur_offering, None, None, waldur_user_agent, object_type
         )
@@ -90,15 +108,31 @@ def setup_offering_subscriptions(
     waldur_offering: common_structures.Offering, waldur_user_agent: str
 ) -> list[MqttConsumer]:
     """Set up MQTT subscriptions for the specified offering."""
-    object_type_to_handler = {
-        "order": handlers.on_order_message_mqtt,
-        "user_role": handlers.on_user_role_message_mqtt,
-        "resource": handlers.on_resource_message_mqtt,
-    }
+    object_type_to_handler = {}
+
+    if waldur_offering.order_processing_backend:
+        object_type_to_handler["order"] = handlers.on_order_message_mqtt
+    else:
+        logger.info(
+            "Order processing is disabled for offering %s, skipping start of MQTT consumers",
+            waldur_offering.name,
+        )
+
+    if waldur_offering.membership_sync_backend:
+        object_type_to_handler.update(
+            {
+                "user_role": handlers.on_user_role_message_mqtt,
+                "resource": handlers.on_resource_message_mqtt,
+            }
+        )
+    else:
+        logger.info(
+            "Membership sync is disabled for offering %s, skipping start of MQTT consumers",
+            waldur_offering.name,
+        )
 
     event_subscriptions: list[MqttConsumer] = []
-    for object_type in ["order", "user_role", "resource"]:
-        on_message_handler = object_type_to_handler[object_type]
+    for object_type, on_message_handler in object_type_to_handler.items():
         event_subscription_manager = EventSubscriptionManager(
             waldur_offering, on_connect, on_message_handler, waldur_user_agent, object_type
         )
@@ -270,13 +304,19 @@ def process_offering(offering: common_structures.Offering, user_agent: str = "")
     """Processes the specified offering."""
     logger.info("Processing offering %s (%s)", offering.name, offering.uuid)
 
-    order_processor = common_processors.OfferingOrderProcessor(offering, user_agent)
-    logger.info("Running offering order process")
-    order_processor.process_offering()
+    if offering.order_processing_backend:
+        order_processor = common_processors.OfferingOrderProcessor(offering, user_agent)
+        logger.info("Running offering order process")
+        order_processor.process_offering()
+    else:
+        logger.info("Order processing is disabled for this offering, skipping it")
 
-    membership_processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
-    logger.info("Running offering membership process")
-    membership_processor.process_offering()
+    if offering.membership_sync_backend:
+        membership_processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        logger.info("Running offering membership process")
+        membership_processor.process_offering()
+    else:
+        logger.info("Membership sync is disabled for this offering, skipping it")
 
 
 def send_agent_health_checks(offerings: list[common_structures.Offering], user_agent: str) -> None:
@@ -285,7 +325,7 @@ def send_agent_health_checks(offerings: list[common_structures.Offering], user_a
         try:
             processor = common_processors.OfferingOrderProcessor(offering, user_agent)
             marketplace_orders_list.sync(
-                client=processor.waldur_rest_client, offering_uuid=offering.uuid, page_size=1
+                client=processor.waldur_rest_client, offering_uuid=offering.uuid
             )
         except Exception as e:
             logger.error(

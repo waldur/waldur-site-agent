@@ -93,6 +93,8 @@ class ObjectNotFoundError(Exception):
 class OfferingBaseProcessor(abc.ABC):
     """Abstract class for an offering processing."""
 
+    BACKEND_TYPE_KEY = "abstract"
+
     def __init__(
         self, offering: structures.Offering, user_agent: str = "", timezone: str = ""
     ) -> None:
@@ -102,7 +104,7 @@ class OfferingBaseProcessor(abc.ABC):
         self.waldur_rest_client: utils.AuthenticatedClient = utils.get_client(
             offering.api_url, offering.api_token, user_agent
         )
-        self.resource_backend = utils.get_backend_for_offering(offering)
+        self.resource_backend = utils.get_backend_for_offering(offering, self.BACKEND_TYPE_KEY)
         if self.resource_backend.backend_type == BackendType.UNKNOWN.value:
             raise BackendError(f"Unable to create backend for {self.offering}")
 
@@ -165,6 +167,8 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
     Processes related orders and creates necessary associations.
     """
+
+    BACKEND_TYPE_KEY = "order_processing_backend"
 
     def log_order_processing_error(self, order: OrderDetails, e: Exception) -> None:
         """Log the error while processing an order."""
@@ -541,6 +545,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
     Processes related resources and reports membership data to Waldur.
     """
+
+    BACKEND_TYPE_KEY = "membership_sync_backend"
 
     def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[Resource]:
         filters = {
@@ -955,6 +961,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
     Processes related resource and reports computing data to Waldur.
     """
+
+    BACKEND_TYPE_KEY = "reporting_backend"
 
     def process_offering(self) -> None:
         """Processes offering and reports resources usage to Waldur."""

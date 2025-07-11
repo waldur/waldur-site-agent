@@ -134,6 +134,9 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
                 username_management_backend=offering_info.get(
                     "username_management_backend", "base"
                 ),
+                order_processing_backend=offering_info.get("order_processing_backend", ""),
+                membership_sync_backend=offering_info.get("membership_sync_backend", ""),
+                reporting_backend=offering_info.get("reporting_backend", ""),
             )
             for offering_info in offering_list
         ]
@@ -170,11 +173,12 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
     return configuration
 
 
-def get_backend_for_offering(offering: structures.Offering) -> BaseBackend:
+def get_backend_for_offering(offering: structures.Offering, backend_type_key: str) -> BaseBackend:
     """Creates a corresponding backend for an offering."""
-    backend_class = BACKENDS.get(offering.backend_type)
+    backend_type = getattr(offering, backend_type_key, "")
+    backend_class = BACKENDS.get(backend_type)
     if not backend_class:
-        logger.error("Unsupported backend type: %s", offering.backend_type)
+        logger.error("Unsupported backend type for %s: %s", backend_type_key, backend_type)
         return UnknownBackend()
 
     return backend_class(offering.backend_settings, offering.backend_components)
@@ -418,7 +422,7 @@ def diagnostics() -> bool:
         except UnexpectedStatus as err:
             logger.error("Unable to fetch orders, reason: %s", err)
 
-        backend = get_backend_for_offering(offering)
+        backend = get_backend_for_offering(offering, "order_processing_backend")
 
         if not backend.diagnostics():
             return False
@@ -450,7 +454,7 @@ def create_homedirs_for_offering_users() -> None:
             offering_user.username for offering_user in offering_users
         }
         umask = offering.backend_settings.get("homedir_umask", "0700")
-        offering_backend = get_backend_for_offering(offering)
+        offering_backend = get_backend_for_offering(offering, "order_processing_backend")
         offering_backend.create_user_homedirs(offering_user_usernames, umask)
 
 

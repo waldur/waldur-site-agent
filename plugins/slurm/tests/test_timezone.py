@@ -86,6 +86,9 @@ class ProcessorTimezoneTest(unittest.TestCase):
             api_token="token",
             uuid=self.offering_uuid.hex,
             backend_type="slurm",
+            order_processing_backend="slurm",
+            membership_sync_backend="slurm",
+            reporting_backend="slurm",
             backend_settings={},
             backend_components={},
         )
@@ -159,6 +162,9 @@ class TimezoneIntegrationTest(unittest.TestCase):
             api_token="token",
             uuid=self.offering_uuid.hex,
             backend_type="slurm",
+            order_processing_backend="slurm",
+            membership_sync_backend="slurm",
+            reporting_backend="slurm",
             backend_settings={},
             backend_components={},
         )

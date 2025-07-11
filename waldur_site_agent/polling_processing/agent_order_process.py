@@ -23,6 +23,12 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
                     )
                     continue
 
+                if not offering.order_processing_backend:
+                    logger.info(
+                        "Order processing is disabled for offering %s, skipping it", offering.name
+                    )
+                    continue
+
                 processor = processors.OfferingOrderProcessor(offering, user_agent)
                 processor.process_offering()
             except Exception as e:
