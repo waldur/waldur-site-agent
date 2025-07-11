@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Optional
 
 
 @dataclass
@@ -18,6 +19,9 @@ class Offering:
     mqtt_enabled: bool = False
     websocket_use_tls: bool = True
     stomp_enabled: bool = False
+    order_processing_backend: Optional[str] = ""
+    membership_sync_backend: Optional[str] = ""
+    reporting_backend: Optional[str] = ""
     username_management_backend: str = "base"
 
 
