@@ -29,17 +29,17 @@ from waldur_api_client.models.offering_component import OfferingComponent
 from waldur_api_client.models.offering_component_request import OfferingComponentRequest
 from waldur_api_client.models.user import User
 
-from waldur_site_agent.backends import (
+from waldur_site_agent.backend import (
     BackendType,
     logger,
 )
-from waldur_site_agent.backends.backend import BaseBackend, UnknownBackend
-from waldur_site_agent.backends.moab_backend.backend import MoabBackend
-from waldur_site_agent.backends.mup_backend.backend import MUPBackend
-from waldur_site_agent.backends.slurm_backend import public_utils as slurm_utils
-from waldur_site_agent.backends.slurm_backend.backend import SlurmBackend
-from waldur_site_agent.backends.structures import Resource
-from waldur_site_agent.backends.username_backend import backend as username_backend
+from waldur_site_agent.backend.backends import (
+    AbstractUsernameManagementBackend,
+    BaseBackend,
+    UnknownBackend,
+    UnknownUsernameManagementBackend,
+)
+from waldur_site_agent.backend.structures import Resource
 from waldur_site_agent.common import structures
 
 # Handle different Python versions
@@ -48,9 +48,15 @@ if sys.version_info >= (3, 10):
 else:
     from importlib_metadata import entry_points, version
 
-USERNAME_BACKENDS: dict[str, type[username_backend.AbstractUsernameManagementBackend]] = {
+
+BACKENDS: dict[str, type[BaseBackend]] = {
     entry_point.name: entry_point.load()
-    for entry_point in entry_points(group="waldur_site_agent.username_management")
+    for entry_point in entry_points(group="waldur_site_agent.backends")
+}
+
+USERNAME_BACKENDS: dict[str, type[AbstractUsernameManagementBackend]] = {
+    entry_point.name: entry_point.load()
+    for entry_point in entry_points(group="waldur_site_agent.username_management_backends")
 }
 
 RESOURCE_ERRED_STATE = "Erred"
@@ -166,21 +172,12 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
 
 def get_backend_for_offering(offering: structures.Offering) -> BaseBackend:
     """Creates a corresponding backend for an offering."""
-    resource_backend: BaseBackend = UnknownBackend()
-    if offering.backend_type == BackendType.SLURM.value:
-        resource_backend = SlurmBackend(offering.backend_settings, offering.backend_components)
-    elif offering.backend_type in {
-        BackendType.MOAB.value,
-    }:
-        resource_backend = MoabBackend(offering.backend_settings, offering.backend_components)
-    elif offering.backend_type == BackendType.MUP.value:
-        resource_backend = MUPBackend(offering.backend_settings, offering.backend_components)
-    elif offering.backend_type == BackendType.CUSTOM.value:
-        resource_backend = UnknownBackend()
-    else:
-        logger.error("Unknown backend type: %s", offering.backend_type)
+    backend_class = BACKENDS.get(offering.backend_type)
+    if not backend_class:
+        logger.error("Unsupported backend type: %s", offering.backend_type)
+        return UnknownBackend()
 
-    return resource_backend
+    return backend_class(offering.backend_settings, offering.backend_components)
 
 
 def mark_waldur_resources_as_erred(
@@ -291,7 +288,6 @@ def load_components_to_waldur(
                         component_info.get("limit"),
                         component_info["measured_unit"],
                     )
-                    component.uuid = existing_component.uuid
                     marketplace_provider_offerings_update_offering_component.sync_detailed(
                         client=waldur_rest_client, uuid=offering_uuid, body=component
                     )
@@ -422,12 +418,9 @@ def diagnostics() -> bool:
         except UnexpectedStatus as err:
             logger.error("Unable to fetch orders, reason: %s", err)
 
-        backend_diagnostics_result = False
-        if offering.backend_type == BackendType.SLURM.value:
-            backend = SlurmBackend(offering.backend_settings, offering.backend_components)
-            backend_diagnostics_result = slurm_utils.diagnostics(backend)
+        backend = get_backend_for_offering(offering)
 
-        if not backend_diagnostics_result:
+        if not backend.diagnostics():
             return False
 
     logger.info("-" * 10 + "DIAGNOSTICS END" + "-" * 10)
@@ -457,8 +450,8 @@ def create_homedirs_for_offering_users() -> None:
             offering_user.username for offering_user in offering_users
         }
         umask = offering.backend_settings.get("homedir_umask", "0700")
-        slurm_backend = SlurmBackend(offering.backend_settings, offering.backend_components)
-        slurm_backend._create_user_homedirs(offering_user_usernames, umask)
+        offering_backend = get_backend_for_offering(offering)
+        offering_backend.create_user_homedirs(offering_user_usernames, umask)
 
 
 def print_current_user(current_user: User) -> None:
@@ -478,15 +471,15 @@ def print_current_user(current_user: User) -> None:
 
 def get_username_management_backend(
     offering: structures.Offering,
-) -> username_backend.AbstractUsernameManagementBackend:
+) -> AbstractUsernameManagementBackend:
     """Get username management backend based on the offering."""
     username_management_setting = offering.username_management_backend
 
     if username_management_setting is None:
-        logger.info(
+        logger.error(
             "No username_management_backend is set for offering %s, using the default one",
             offering.name,
         )
-        return username_backend.BaseUsernameManagementBackend()
+        return UnknownUsernameManagementBackend()
 
     return USERNAME_BACKENDS[username_management_setting]()

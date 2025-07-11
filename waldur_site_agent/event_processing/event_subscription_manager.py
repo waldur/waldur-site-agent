@@ -19,7 +19,7 @@ from waldur_api_client.models.event_subscription import (
 )
 from waldur_api_client.models.event_subscription_request import EventSubscriptionRequest
 
-from waldur_site_agent.backends import logger
+from waldur_site_agent.backend import logger
 from waldur_site_agent.common import utils
 from waldur_site_agent.common.structures import Offering
 from waldur_site_agent.event_processing import handlers

@@ -6,7 +6,7 @@ import paho.mqtt.client as mqtt
 import stomp
 import stomp.utils
 
-from waldur_site_agent.backends import logger
+from waldur_site_agent.backend import logger
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures
 from waldur_site_agent.event_processing.structures import (
