@@ -1,4 +1,17 @@
-"""Module for abstract offering processor."""
+"""Abstract offering processors for different agent operational modes.
+
+This module provides the core abstract base classes that define the interface
+and common functionality for processing Waldur offerings. The processors handle
+the integration between Waldur Mastermind and backend systems through different
+operational patterns:
+
+- OfferingOrderProcessor: Handles order lifecycle (create, update, terminate)
+- OfferingMembershipProcessor: Manages user membership synchronization
+- OfferingReportProcessor: Reports usage data from backends to Waldur
+
+Each processor type implements specific aspects of the Waldur-backend integration
+while sharing common patterns for error handling, retry logic, and API communication.
+"""
 
 from __future__ import annotations
 
@@ -83,22 +96,61 @@ from waldur_site_agent.common import SERVICE_PROVIDER_USERNAME_GENERATION_POLICY
 
 
 class UsageAnomalyError(Exception):
-    """Raised when usage anomaly is detected (new usage is lower than existing usage)."""
+    """Raised when usage anomaly is detected.
+
+    This exception is raised when the system detects that new usage data
+    is lower than previously reported usage for the same billing period,
+    which typically indicates a data collection or processing error.
+    """
 
 
 class ObjectNotFoundError(Exception):
-    """Object not found."""
+    """Raised when a required object cannot be found in Waldur or backend.
+
+    This exception is used throughout the processors when attempting to
+    retrieve resources, users, or other objects that should exist but
+    cannot be located in either Waldur or the backend system.
+    """
 
 
 class OfferingBaseProcessor(abc.ABC):
-    """Abstract class for an offering processing."""
+    """Abstract base class for all offering processors.
+
+    This class provides the common foundation for all offering processors,
+    including Waldur API client setup, backend initialization, and shared
+    utility methods. All concrete processor implementations inherit from
+    this class to ensure consistent behavior and interface.
+
+    The processor handles:
+    - Waldur REST API client configuration and authentication
+    - Backend system selection and initialization based on offering configuration
+    - Username management backend setup
+    - Common error handling and logging patterns
+
+    Attributes:
+        BACKEND_TYPE_KEY: Key used to identify which backend to use for this processor
+        offering: The offering configuration being processed
+        timezone: Timezone for billing period calculations
+        waldur_rest_client: Authenticated client for Waldur API access
+        resource_backend: Backend implementation for this offering
+        username_management_backend: Backend for username generation/management
+    """
 
     BACKEND_TYPE_KEY = "abstract"
 
     def __init__(
         self, offering: structures.Offering, user_agent: str = "", timezone: str = ""
     ) -> None:
-        """Constructor."""
+        """Initialize the offering processor.
+
+        Args:
+            offering: The offering configuration to process
+            user_agent: HTTP User-Agent string for API requests
+            timezone: Timezone for billing period calculations (defaults to UTC)
+
+        Raises:
+            BackendError: If unable to create a backend for the offering
+        """
         self.offering: structures.Offering = offering
         self.timezone: str = timezone
         self.waldur_rest_client: utils.AuthenticatedClient = utils.get_client(
@@ -118,10 +170,19 @@ class OfferingBaseProcessor(abc.ABC):
         utils.extend_backend_components(self.offering, waldur_offering.components)
 
     def _print_current_user(self) -> None:
+        """Log information about the current authenticated Waldur user."""
         current_user = utils.get_current_user_from_client(self.waldur_rest_client)
         utils.print_current_user(current_user)
 
     def _collect_waldur_resource_info(self, resource_data: WaldurResource) -> Resource:
+        """Convert Waldur API resource data to internal Resource structure.
+
+        Args:
+            resource_data: Resource information from Waldur API
+
+        Returns:
+            Resource: Internal resource representation with normalized data
+        """
         return Resource(
             name=resource_data.name,
             backend_id=resource_data.backend_id,
@@ -137,10 +198,21 @@ class OfferingBaseProcessor(abc.ABC):
 
     @abc.abstractmethod
     def process_offering(self) -> None:
-        """Pulls data form Mastermind using REST client and creates objects on the backend."""
+        """Process the offering according to the specific processor type.
+
+        This method must be implemented by concrete processor classes to handle
+        their specific responsibilities (order processing, membership sync, or reporting).
+        """
 
     def _update_offering_users(self, offering_users: list[OfferingUser]) -> None:
-        """Update offering users with blank usernames if possible."""
+        """Generate usernames for offering users that don't have them.
+
+        This method checks if the service provider is allowed to generate usernames
+        and attempts to create usernames for users who don't have them assigned.
+
+        Args:
+            offering_users: List of offering users to process
+        """
         if not offering_users:
             return
 
@@ -163,15 +235,30 @@ class OfferingBaseProcessor(abc.ABC):
 
 
 class OfferingOrderProcessor(OfferingBaseProcessor):
-    """Class for an offering processing.
+    """Processor for handling Waldur marketplace orders.
 
-    Processes related orders and creates necessary associations.
+    This processor fetches pending and executing orders from Waldur and manages
+    their lifecycle by creating, updating, or terminating backend resources.
+    It handles the complete order workflow from approval through completion.
+
+    The processor supports three types of orders:
+    - CREATE: Creates new resources in the backend system
+    - UPDATE: Modifies existing resource limits or configurations
+    - TERMINATE: Removes resources from the backend system
+
+    Order processing includes user context management, retry logic for failures,
+    and comprehensive error handling with automatic order state updates.
     """
 
     BACKEND_TYPE_KEY = "order_processing_backend"
 
     def log_order_processing_error(self, order: OrderDetails, e: Exception) -> None:
-        """Log the error while processing an order."""
+        """Log detailed error information for order processing failures.
+
+        Args:
+            order: The order that failed to process
+            e: The exception that occurred during processing
+        """
         name = (
             order.attributes.additional_properties.get("name", "N/A") if order.attributes else "N/A"
         )
@@ -185,7 +272,12 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         )
 
     def process_offering(self) -> None:
-        """Pulls data form Mastermind using REST client and creates objects on the backend."""
+        """Process all pending and executing orders for this offering.
+
+        Fetches orders from Waldur with PENDING_PROVIDER or EXECUTING status
+        and processes each order according to its type and current state.
+        Includes error handling and logging for individual order failures.
+        """
         logger.info(
             "Processing offering %s (%s)",
             self.offering.name,
@@ -210,7 +302,14 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 self.log_order_processing_error(order, e)
 
     def get_order_info(self, order_uuid: UUID | str) -> Optional[OrderDetails]:
-        """Get order info from Waldur."""
+        """Retrieve current order information from Waldur API.
+
+        Args:
+            order_uuid: UUID of the order to retrieve
+
+        Returns:
+            OrderDetails if found, None if retrieval fails
+        """
         try:
             return marketplace_orders_retrieve.sync(client=self.waldur_rest_client, uuid=order_uuid)
         except UnexpectedStatus as e:
@@ -220,7 +319,13 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     def process_order_with_retries(
         self, order_info: OrderDetails, retry_count: int = 10, delay: int = 5
     ) -> None:
-        """Process order with retries."""
+        """Process an order with automatic retry on failures.
+
+        Args:
+            order_info: The order to process
+            retry_count: Maximum number of retry attempts (default: 10)
+            delay: Delay in seconds between retry attempts (default: 5)
+        """
         for attempt_number in range(retry_count):
             try:
                 logger.info("Attempt %s of %s", attempt_number + 1, retry_count)
@@ -246,7 +351,15 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             )
 
     def process_order(self, order: OrderDetails) -> None:
-        """Process a single order."""
+        """Process a single order through its complete lifecycle.
+
+        Handles order approval (if needed), determines the order type,
+        and delegates to the appropriate processing method. Updates
+        order state to DONE on success or ERRED on failure.
+
+        Args:
+            order: The order to process
+        """
         try:
             logger.info(
                 "Processing order %s (%s) type %s, state %s",
@@ -316,6 +429,18 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         waldur_resource: WaldurResource,
         user_context: dict,
     ) -> Resource | None:
+        """Create a new resource in the backend system.
+
+        Args:
+            waldur_resource: Waldur resource information
+            user_context: User context containing team and offering user data
+
+        Returns:
+            Created backend resource or None if creation failed
+
+        Raises:
+            BackendError: If resource creation fails
+        """
         resource_uuid = str(waldur_resource.uuid)
         resource_name = waldur_resource.name
 
@@ -341,12 +466,23 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         return backend_resource
 
     def _fetch_user_context_for_resource(self, resource_uuid: str | UUID) -> dict:
-        """Fetch user context for resource creation.
+        """Fetch comprehensive user context for resource operations.
 
-        Returns a dictionary containing:
-        - team: List of project team members
-        - offering_users: List of offering users
-        - user_mappings: Mapping of user UUIDs to usernames
+        Retrieves project team members and offering users, creating mappings
+        for efficient user lookup during resource creation and management.
+
+        Args:
+            resource_uuid: UUID of the resource to fetch context for
+
+        Returns:
+            Dictionary containing:
+            - team: List of project team members
+            - offering_users: List of offering users with usernames
+            - user_mappings: Mapping of user UUIDs to ProjectUser objects
+            - offering_user_mappings: Mapping of user UUIDs to OfferingUser objects
+
+        Raises:
+            ObjectNotFoundError: If no team members found for the resource
         """
         try:
             logger.info("Fetching user context for resource %s", resource_uuid)
@@ -404,6 +540,15 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         backend_resource: Resource,
         user_context: dict,
     ) -> None:
+        """Add offering users to the backend resource.
+
+        Updates offering user usernames if needed and adds all users
+        with valid usernames to the backend resource.
+
+        Args:
+            backend_resource: The backend resource to add users to
+            user_context: User context containing offering users and mappings
+        """
         logger.info("Adding users to resource")
 
         offering_users = user_context["offering_users"]
@@ -430,6 +575,17 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         )
 
     def _process_create_order(self, order: OrderDetails | None) -> bool:
+        """Process a CREATE order to establish a new resource.
+
+        Waits for Waldur resource creation, fetches user context,
+        creates the backend resource, and adds users to it.
+
+        Args:
+            order: The CREATE order to process
+
+        Returns:
+            True if processing completed successfully, False otherwise
+        """
         if not order:
             logger.error("Error during order processing: Order is None")
             return False
@@ -497,6 +653,17 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         return True
 
     def _process_update_order(self, order: OrderDetails) -> bool:
+        """Process an UPDATE order to modify resource limits.
+
+        Args:
+            order: The UPDATE order containing new limit specifications
+
+        Returns:
+            True if update completed successfully, False otherwise
+
+        Raises:
+            ObjectNotFoundError: If the target resource is not found
+        """
         logger.info("Updating limits for %s", order.resource_name)
         resource_uuid = order.marketplace_resource_uuid
         waldur_resource: WaldurResource | None = marketplace_provider_resources_retrieve.sync(
@@ -525,6 +692,17 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         return True
 
     def _process_terminate_order(self, order: OrderDetails) -> bool:
+        """Process a TERMINATE order to remove a resource.
+
+        Args:
+            order: The TERMINATE order specifying the resource to remove
+
+        Returns:
+            True if termination completed successfully, False otherwise
+
+        Raises:
+            ObjectNotFoundError: If the target resource is not found
+        """
         logger.info("Terminating resource %s", order.resource_name)
         resource_uuid = order.marketplace_resource_uuid
         waldur_resource: WaldurResource | None = marketplace_provider_resources_retrieve.sync(
@@ -541,14 +719,35 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
 
 class OfferingMembershipProcessor(OfferingBaseProcessor):
-    """Class for an offering processing.
+    """Processor for synchronizing user memberships between Waldur and backends.
 
-    Processes related resources and reports membership data to Waldur.
+    This processor handles bidirectional synchronization of user access and
+    memberships between Waldur and backend systems. It processes resource
+    status changes, user additions/removals, and maintains consistency
+    between the systems.
+
+    Key responsibilities:
+    - Synchronize user lists between Waldur project teams and backend resources
+    - Handle resource status changes (paused, downscaled, restored)
+    - Manage user limits and permissions on backend resources
+    - Process event-driven user role changes
+    - Update resource metadata and sync timestamps in Waldur
+
+    The processor supports both full synchronization and incremental updates
+    based on specific events or scheduled operations.
     """
 
     BACKEND_TYPE_KEY = "membership_sync_backend"
 
     def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[Resource]:
+        """Fetch Waldur resources for this offering, optionally filtered by project.
+
+        Args:
+            project_uuid: If provided, only return resources from this project
+
+        Returns:
+            List of resources that have backend IDs and are in OK or ERRED state
+        """
         filters = {
             "offering_uuid": self.offering.uuid,
             "state": [
@@ -585,7 +784,17 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         ]
 
     def process_resource_by_uuid(self, resource_uuid: str) -> None:
-        """Processes resource status and membership data using resource UUID."""
+        """Process a specific resource's status and membership data.
+
+        This method processes a single resource identified by UUID,
+        performing full synchronization of its status and user memberships.
+
+        Args:
+            resource_uuid: UUID of the resource to process
+
+        Raises:
+            ObjectNotFoundError: If the resource is not found in Waldur
+        """
         logger.info("Processing resource state and membership data, uuid: %s", resource_uuid)
         logger.info("Fetching resource from Waldur")
         waldur_resource: WaldurResource | None = marketplace_provider_resources_retrieve.sync(
@@ -601,7 +810,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         self._process_resources(resource_report)
 
     def process_offering(self) -> None:
-        """Processes offering and reports resources usage to Waldur."""
+        """Process all resources in this offering for membership synchronization.
+
+        Fetches all resources for the offering and processes each one to
+        synchronize user memberships, resource status, and metadata between
+        Waldur and the backend system.
+        """
         logger.info(
             "Processing offering %s (%s)",
             self.offering.name,
@@ -614,6 +828,17 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         self._process_resources(resource_report)
 
     def _get_user_offering_users(self, user_uuid: str) -> list[OfferingUser]:
+        """Fetch offering users for a specific user UUID.
+
+        Args:
+            user_uuid: UUID of the user to look up
+
+        Returns:
+            List of offering users associated with the specified user
+
+        Raises:
+            ObjectNotFoundError: If no offering users found for the user
+        """
         offering_users: list[OfferingUser] | None = marketplace_offering_users_list.sync(
             client=self.waldur_rest_client, user_uuid=user_uuid, is_restricted=False
         )
@@ -622,7 +847,16 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         return offering_users
 
     def process_user_role_changed(self, user_uuid: str, project_uuid: str, granted: bool) -> None:
-        """Process event of user role changing."""
+        """Process a user role change event.
+
+        Handles adding or removing a user from backend resources when their
+        project role changes. Respects resource access restrictions.
+
+        Args:
+            user_uuid: UUID of the user whose role changed
+            project_uuid: UUID of the project where the role changed
+            granted: True if access was granted, False if revoked
+        """
         offering_users: list[OfferingUser] = self._get_user_offering_users(user_uuid)
         if len(offering_users) == 0:
             logger.info(
@@ -662,7 +896,15 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 )
 
     def process_project_user_sync(self, project_uuid: str) -> None:
-        """Process full project user synchronization."""
+        """Perform full user synchronization for all resources in a project.
+
+        This method synchronizes all users across all resources within
+        a specific project, ensuring consistency between Waldur project
+        teams and backend resource access.
+
+        Args:
+            project_uuid: UUID of the project to synchronize
+        """
         logger.info("Processing sync of all users for project %s", project_uuid)
         resources = self._get_waldur_resources(project_uuid=project_uuid)
         resource_report = self.resource_backend.pull_resources(resources)
@@ -681,6 +923,14 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 )
 
     def _get_waldur_offering_users(self) -> list[OfferingUser]:
+        """Fetch all offering users for this offering.
+
+        Returns:
+            List of all non-restricted offering users for this offering
+
+        Raises:
+            ObjectNotFoundError: If no offering users found
+        """
         logger.info("Fetching Waldur offering users")
         offering_users: list[OfferingUser] | None = marketplace_offering_users_list.sync(
             client=self.waldur_rest_client, offering_uuid=self.offering.uuid, is_restricted=False
@@ -957,15 +1207,34 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
 
 class OfferingReportProcessor(OfferingBaseProcessor):
-    """Class for an offering processing.
+    """Processor for collecting and reporting usage data from backends to Waldur.
 
-    Processes related resource and reports computing data to Waldur.
+    This processor handles the collection of resource usage data from backend
+    systems and reports it to Waldur for billing and monitoring purposes.
+    It processes both total resource usage and per-user usage breakdowns.
+
+    Key responsibilities:
+    - Collect usage data from backend systems for all resources
+    - Validate usage data for anomalies (decreasing usage patterns)
+    - Report total resource usage to Waldur marketplace
+    - Report per-user usage breakdowns for detailed billing
+    - Handle error cases and mark resources as erred when backend data is missing
+    - Implement retry logic for transient failures
+
+    The processor includes anomaly detection to prevent reporting usage data
+    that appears to have decreased from previous reports, which typically
+    indicates a data collection error.
     """
 
     BACKEND_TYPE_KEY = "reporting_backend"
 
     def process_offering(self) -> None:
-        """Processes offering and reports resources usage to Waldur."""
+        """Process all resources in this offering for usage reporting.
+
+        Fetches all OK and ERRED resources for the offering and processes
+        each one to collect and report usage data to Waldur. Includes
+        error handling for individual resource failures.
+        """
         logger.info(
             "Processing offering %s (%s)",
             self.offering.name,

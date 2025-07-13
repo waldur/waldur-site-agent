@@ -1,4 +1,17 @@
-"""Functions shared between agent modules."""
+"""Shared utility functions for Waldur Site Agent modules.
+
+This module provides common functionality used across different agent components:
+- Configuration loading and parsing from CLI arguments and YAML files
+- Waldur API client creation and authentication
+- Backend discovery and initialization via entry points
+- Component loading and synchronization with Waldur offerings
+- Diagnostic and utility functions for system health checks
+- Error handling utilities for resource management
+
+The module handles the initialization of the agent's core configuration
+and provides the plugin discovery mechanism that allows backends to be
+automatically detected and loaded via Python entry points.
+"""
 
 import argparse
 import sys
@@ -65,7 +78,16 @@ RESOURCE_ERRED_STATE = "Erred"
 def get_client(
     api_url: str, access_token: str, agent_header: Optional[str] = None
 ) -> AuthenticatedClient:
-    """Get a client for the Waldur API."""
+    """Create an authenticated Waldur API client.
+
+    Args:
+        api_url: Base URL for the Waldur API (e.g., 'https://waldur.example.com/api/')
+        access_token: Authentication token for API access
+        agent_header: Optional User-Agent string for HTTP requests
+
+    Returns:
+        Configured AuthenticatedClient instance ready for API calls
+    """
     headers = {"User-Agent": agent_header} if agent_header else {}
     url = api_url.rstrip("/api")
     return AuthenticatedClient(
@@ -77,7 +99,14 @@ def get_client(
 
 
 def is_uuid(value: str) -> bool:
-    """Check if a string is a valid UUID."""
+    """Validate if a string represents a valid UUID.
+
+    Args:
+        value: String to validate as UUID
+
+    Returns:
+        True if the string is a valid UUID, False otherwise
+    """
     try:
         UUID(value)
         return True
@@ -86,7 +115,19 @@ def is_uuid(value: str) -> bool:
 
 
 def init_configuration() -> structures.WaldurAgentConfiguration:
-    """Loads configuration from CLI and config file to the dataclass."""
+    """Initialize agent configuration from CLI arguments and config file.
+
+    Parses command-line arguments, loads the YAML configuration file,
+    and creates offering configurations. Also initializes Sentry if
+    configured and sets up user agent strings for different modes.
+
+    Returns:
+        Complete agent configuration with all offerings and settings
+
+    Raises:
+        FileNotFoundError: If the configuration file cannot be found
+        yaml.YAMLError: If the configuration file is malformed
+    """
     configuration = structures.WaldurAgentConfiguration()
     parser = argparse.ArgumentParser()
 
@@ -174,7 +215,19 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
 
 
 def get_backend_for_offering(offering: structures.Offering, backend_type_key: str) -> BaseBackend:
-    """Creates a corresponding backend for an offering."""
+    """Create and initialize a backend instance for the specified offering.
+
+    Uses the plugin discovery system to find and instantiate the appropriate
+    backend class based on the offering's configuration.
+
+    Args:
+        offering: The offering configuration
+        backend_type_key: Key to determine which backend type to use
+                         (e.g., 'order_processing_backend', 'reporting_backend')
+
+    Returns:
+        Initialized backend instance, or UnknownBackend if type not supported
+    """
     backend_type = getattr(offering, backend_type_key, "")
     backend_class = BACKENDS.get(backend_type)
     if not backend_class:
@@ -189,7 +242,16 @@ def mark_waldur_resources_as_erred(
     resources: list[Resource],
     error_details: dict[str, str],
 ) -> None:
-    """Marks resources in Waldur as ERRED."""
+    """Mark multiple resources as ERRED in Waldur with error details.
+
+    This utility function handles batch error reporting for resources
+    that have encountered processing failures.
+
+    Args:
+        waldur_rest_client: Authenticated Waldur API client
+        resources: List of resources to mark as erred
+        error_details: Dictionary containing 'error_message' and 'error_traceback'
+    """
     logger.info("Marking Waldur resources as ERRED")
     for resource in resources:
         logger.info("Marking %s resource as ERRED", resource)
@@ -210,7 +272,12 @@ def mark_waldur_resources_as_erred(
 
 
 def load_offering_components() -> None:
-    """Creates offering components in Waldur based on data from the config file."""
+    """Load and create offering components in Waldur from configuration.
+
+    This function reads the agent configuration and creates or updates
+    offering components in Waldur to match the backend component definitions.
+    Used during initial setup or when component definitions change.
+    """
     configuration = init_configuration()
     for offering in configuration.waldur_offerings:
         logger.info("Processing %s offering", offering.name)
@@ -229,7 +296,16 @@ def load_offering_components() -> None:
 def extend_backend_components(
     offering: structures.Offering, waldur_offering_components: list[OfferingComponent]
 ) -> None:
-    """Pulls offering component data from Waldur and populates it to the local configuration."""
+    """Synchronize local configuration with Waldur offering components.
+
+    Fetches component definitions from Waldur and adds any missing components
+    to the local offering configuration. This ensures consistency between
+    the agent's configuration and Waldur's offering definition.
+
+    Args:
+        offering: Local offering configuration to extend
+        waldur_offering_components: Component definitions from Waldur
+    """
     logger.info("Loading Waldur components to the local config")
     remote_components: dict[str, OfferingComponent] = {
         item.type_: item for item in waldur_offering_components
@@ -258,7 +334,18 @@ def load_components_to_waldur(
     offering_name: str,
     components: dict,
 ) -> None:
-    """Creates offering components in Waldur."""
+    """Create or update offering components in Waldur.
+
+    Processes the component definitions from the configuration and creates
+    or updates the corresponding components in Waldur. Handles both new
+    component creation and limit updates for existing components.
+
+    Args:
+        waldur_rest_client: Authenticated Waldur API client
+        offering_uuid: UUID of the target offering in Waldur
+        offering_name: Name of the offering (for logging)
+        components: Dictionary of component definitions from configuration
+    """
     logger.info(
         "Creating offering components data for the following resources: %s",
         ", ".join(components.keys()),
@@ -322,12 +409,27 @@ def load_components_to_waldur(
 
 
 def get_current_user_from_client(waldur_rest_client: AuthenticatedClient) -> User:
-    """Get the current user from the Waldur API."""
+    """Retrieve current authenticated user information from Waldur.
+
+    Args:
+        waldur_rest_client: Authenticated Waldur API client
+
+    Returns:
+        User object containing current user details and permissions
+    """
     return users_me_retrieve.sync(client=waldur_rest_client)
 
 
 def diagnostics() -> bool:
-    """Performs system check for offerings."""
+    """Perform comprehensive system diagnostics for all offerings.
+
+    Checks connectivity to Waldur, validates offering configurations,
+    tests backend availability, and reports system status. This function
+    is used by the diagnostic command to verify agent setup.
+
+    Returns:
+        True if all diagnostics pass, False if any issues are detected
+    """
     configuration = init_configuration()
     logger.info("-" * 10 + "DIAGNOSTICS START" + "-" * 10)
     logger.info("Provided settings:")
@@ -432,7 +534,12 @@ def diagnostics() -> bool:
 
 
 def create_homedirs_for_offering_users() -> None:
-    """Creates homedirs for offering users in SLURM cluster."""
+    """Create home directories for all offering users.
+
+    This utility function creates home directories for users associated
+    with offerings that have home directory creation enabled. Currently
+    supports SLURM backends with configurable umask settings.
+    """
     configuration = init_configuration()
     for offering in configuration.waldur_offerings:
         # Feature is exclusive for SLURM temporarily
@@ -459,7 +566,14 @@ def create_homedirs_for_offering_users() -> None:
 
 
 def print_current_user(current_user: User) -> None:
-    """Print provided user's info."""
+    """Log detailed information about a Waldur user.
+
+    Displays user details including username, full name, staff status,
+    and all associated permissions with their scopes and expiration times.
+
+    Args:
+        current_user: User object to display information for
+    """
     logger.info("Current user username: %s", current_user.username)
     logger.info("Current user full name: %s", current_user.full_name)
     logger.info("Current user is staff: %s", current_user.is_staff)
@@ -476,7 +590,18 @@ def print_current_user(current_user: User) -> None:
 def get_username_management_backend(
     offering: structures.Offering,
 ) -> AbstractUsernameManagementBackend:
-    """Get username management backend based on the offering."""
+    """Create username management backend instance for the offering.
+
+    Uses the plugin discovery system to instantiate the appropriate
+    username management backend based on the offering configuration.
+
+    Args:
+        offering: Offering configuration specifying the backend to use
+
+    Returns:
+        Username management backend instance, or UnknownUsernameManagementBackend
+        if the specified backend is not available
+    """
     username_management_setting = offering.username_management_backend
 
     if username_management_setting is None:
