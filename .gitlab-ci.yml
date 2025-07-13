@@ -169,7 +169,8 @@ Upload docs:
     - cp -rv $CI_PROJECT_DIR/examples/* docs/admin-guide/providers/examples/
     - mkdir docs/admin-guide/providers/systemd-conf/ || true
     - cp -rv $CI_PROJECT_DIR/systemd-conf/* docs/admin-guide/providers/systemd-conf/
-    - cp -rv $CI_PROJECT_DIR/img/* docs/admin-guide/providers/img/
+    - mkdir docs/admin-guide/providers/docs || true
+    - cp -rv $CI_PROJECT_DIR/docs/* docs/admin-guide/providers/docs/
     - git add docs/admin-guide/providers/
     - git commit -m 'Update Waldur Site Agent docs' || exit 0
     - git branch new-site-agent-docs
