@@ -12,7 +12,7 @@ For now, the agent supports only SLURM and MOAB clusters as a service backend.
 
 Agent is a stateless application, which is deployed
 on a machine with access to backend data.
-It consists of 4 sub-applications:
+It supports 4 modes:
 
 - `agent-order-process`, which fetches ordering data from Waldur and updates
   a state of backend object correspondingly;
@@ -27,15 +27,13 @@ It consists of 4 sub-applications:
 
 Code-wise, the agent consists of the main python module called `waldur-site-agent`
 and set of plugins with implementation for different backends
-(example `waldur-site-agent-slurm`).
+(for example, `waldur-site-agent-slurm`).
 The main module contains the configuration for running the
 application, shared utils and abstract classes for backends.
 A plugin should contain implementation of the abstract classes exposing them
 via entry-points in the respecting `pyproject.toml` file.
 Each plugin depends on the main module,
 while this module uses plugin classes via entry-points.
-
-## Plugin architecture
 
 ### Core architecture & plugin system
 
@@ -137,7 +135,7 @@ graph TB
     class WALDUR,BACKENDS,MQTT external
 ```
 
-#### Key plugin features
+### Key plugin features
 
 - **Automatic Discovery**: Plugins are automatically discovered via Python entry points
 - **Modular Backends**: Each backend (SLURM, MOAB, MUP, etc) is a separate plugin package
@@ -145,7 +143,7 @@ graph TB
 - **Extensible**: External developers can create custom backends by implementing `BaseBackend`
 - **Multi-Backend Support**: Different backends for order processing, reporting, and membership sync
 
-#### Built-in plugin structure
+### Built-in plugin structure
 
 ```text
 plugins/{backend_name}/
@@ -244,10 +242,10 @@ As a service provider owner, you should create a new offering in the marketplace
 
 - Go to `Service Provider` section of the organization
   and open offering creation menu
-- Input a name, choose a category, select `SLURM remote allocation`
+- Input a name, choose a category, select `Waldur site agent`
   from the drop-down list on the bottom and click `Create` button
 
-![offering-creation](img/remote-slurm-offering.png)
+![offering-creation](img/offering-creation.png)
 
 - Open the offering page, choose `Edit` tab, click `Accounting` section,
   choose `Accounting plans` from the drop-down list and create a plan:
