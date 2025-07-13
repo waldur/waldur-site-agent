@@ -35,6 +35,128 @@ via entry-points in the respecting `pyproject.toml` file.
 Each plugin depends on the main module,
 while this module uses plugin classes via entry-points.
 
+## Plugin architecture
+
+### Core architecture & plugin system
+
+```mermaid
+---
+config:
+  layout: elk
+---
+graph TB
+    subgraph "Core Package"
+        WA[waldur-site-agent<br/>Core Logic & Processing]
+        BB[BaseBackend<br/>Abstract Interface]
+        BC[BaseClient<br/>Abstract Interface]
+        CU[Common Utils<br/>Entry Point Discovery]
+    end
+
+    subgraph "Plugin Ecosystem"
+        PLUGINS[Backend Plugins<br/>SLURM, MOAB, MUP, etc.]
+        UMANAGE[Username Management<br/>Plugins]
+    end
+
+    subgraph "Entry Point System"
+        EP_BACKENDS[waldur_site_agent.backends]
+        EP_USERNAME[waldur_site_agent.username_management_backends]
+    end
+
+    %% Core dependencies
+    WA --> BB
+    WA --> BC
+    WA --> CU
+
+    %% Plugin registration and discovery
+    CU --> EP_BACKENDS
+    CU --> EP_USERNAME
+    EP_BACKENDS -.-> PLUGINS
+    EP_USERNAME -.-> UMANAGE
+
+    %% Plugin inheritance
+    PLUGINS -.-> BB
+    PLUGINS -.-> BC
+    UMANAGE -.-> BB
+
+    %% Styling
+    classDef corePackage fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef plugin fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef entrypoint fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+
+    class WA,BB,BC,CU corePackage
+    class PLUGINS,UMANAGE plugin
+    class EP_BACKENDS,EP_USERNAME entrypoint
+```
+
+### Agent modes & external systems
+
+```mermaid
+---
+config:
+  layout: elk
+---
+graph TB
+    subgraph "Agent Modes"
+        ORDER[agent-order-process<br/>Order Processing]
+        REPORT[agent-report<br/>Usage Reporting]
+        SYNC[agent-membership-sync<br/>Membership Sync]
+        EVENT[agent-event-process<br/>Event Processing]
+    end
+
+    subgraph "Plugin Layer"
+        PLUGINS[Backend Plugins<br/>SLURM, MOAB, MUP, etc.]
+    end
+
+    subgraph "External Systems"
+        WALDUR[Waldur Mastermind<br/>REST API]
+        BACKENDS[Cluster Backends<br/>CLI/API Systems]
+        MQTT[MQTT/STOMP Broker<br/>Event Processing]
+    end
+
+    %% Agent mode usage of plugins
+    ORDER --> PLUGINS
+    REPORT --> PLUGINS
+    SYNC --> PLUGINS
+    EVENT --> PLUGINS
+
+    %% External connections
+    ORDER <--> WALDUR
+    REPORT <--> WALDUR
+    SYNC <--> WALDUR
+    EVENT <--> WALDUR
+    EVENT <--> MQTT
+    PLUGINS <--> BACKENDS
+
+    %% Styling
+    classDef agent fill:#fff9c4,stroke:#f57f17,stroke-width:2px
+    classDef plugin fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef external fill:#fff3e0,stroke:#e65100,stroke-width:2px
+
+    class ORDER,REPORT,SYNC,EVENT agent
+    class PLUGINS plugin
+    class WALDUR,BACKENDS,MQTT external
+```
+
+#### Key plugin features
+
+- **Automatic Discovery**: Plugins are automatically discovered via Python entry points
+- **Modular Backends**: Each backend (SLURM, MOAB, MUP, etc) is a separate plugin package
+- **Independent Versioning**: Plugins can be versioned and distributed separately
+- **Extensible**: External developers can create custom backends by implementing `BaseBackend`
+- **Multi-Backend Support**: Different backends for order processing, reporting, and membership sync
+
+#### Built-in plugin structure
+
+```text
+plugins/{backend_name}/
+├── pyproject.toml              # Entry point registration
+├── waldur_site_agent_{name}/   # Plugin implementation
+│   ├── backend.py             # Backend class inheriting BaseBackend
+│   ├── client.py              # Client for external system communication
+│   └── parser.py              # Data parsing utilities (optional)
+└── tests/                     # Plugin-specific tests
+```
+
 ### Integration with Waldur
 
 The agent uses a [Python-based Waldur client](https://github.com/waldur/python-waldur-client)
