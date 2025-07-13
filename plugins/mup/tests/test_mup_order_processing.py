@@ -17,6 +17,9 @@ from waldur_site_agent.common.processors import OfferingOrderProcessor
 MUP_OFFERING = replace(
     OFFERING,
     backend_type="mup",
+    order_processing_backend="mup",
+    membership_sync_backend="mup",
+    reporting_backend="mup",
     backend_settings={
         "api_url": "https://mup-api.example.com/api",
         "username": "test_user",
