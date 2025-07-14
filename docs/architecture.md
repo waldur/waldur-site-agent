@@ -44,10 +44,10 @@ graph TB
     PLUGINS -.-> BC
     UMANAGE -.-> BB
 
-    %% Styling
-    classDef corePackage fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef plugin fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef entrypoint fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    %% Styling - Dark mode compatible colors
+    classDef corePackage fill:#1E3A8A,stroke:#3B82F6,stroke-width:2px,color:#FFFFFF
+    classDef plugin fill:#581C87,stroke:#8B5CF6,stroke-width:2px,color:#FFFFFF
+    classDef entrypoint fill:#065F46,stroke:#10B981,stroke-width:2px,color:#FFFFFF
 
     class WA,BB,BC,CU corePackage
     class PLUGINS,UMANAGE plugin
@@ -93,10 +93,10 @@ graph TB
     EVENT <--> MQTT
     PLUGINS <--> BACKENDS
 
-    %% Styling
-    classDef agent fill:#fff9c4,stroke:#f57f17,stroke-width:2px
-    classDef plugin fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef external fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    %% Styling - Dark mode compatible colors
+    classDef agent fill:#B45309,stroke:#F59E0B,stroke-width:2px,color:#FFFFFF
+    classDef plugin fill:#581C87,stroke:#8B5CF6,stroke-width:2px,color:#FFFFFF
+    classDef external fill:#C2410C,stroke:#F97316,stroke-width:2px,color:#FFFFFF
 
     class ORDER,REPORT,SYNC,EVENT agent
     class PLUGINS plugin
