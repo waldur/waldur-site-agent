@@ -54,17 +54,17 @@ graph TD
     subgraph "Waldur Site Agent Core"
         OA[Order Processing<br/>order_process mode]
         WM[Waldur Mastermind<br/>API Client]
-        CSB[CSCS Backend<br/>create_resource()]
+        CSB[CSCS Backend<br/>create_resource]
     end
 
     subgraph "CSCS HPC Storage Plugin"
         SS[Sync Script<br/>waldur_cscs_storage_sync]
-        GOR[generate_order_json()]
-        GAR[generate_all_resources_json()]
+        GOR[generate_order_json]
+        GAR[generate_all_resources_json]
     end
 
     subgraph "File System Output"
-        OF[Order Files<br/>YYYY-MM-DD-HH-MM-{type}_{uuid}.json]
+        OF[Order Files<br/>YYYY-MM-DD-HH-MM-type_uuid.json]
         AF[All Resources File<br/>YYYY-MM-DD-HH-MM-all.json]
     end
 
