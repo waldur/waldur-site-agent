@@ -16,6 +16,10 @@ build-backend = "hatchling.build"
 [tool.uv.sources]
 waldur-site-agent = { workspace = true }
 
+# Script entry points
+[project.scripts]
+waldur_cscs_storage_sync = "waldur_site_agent_cscs_hpc_storage.sync_script:main"
+
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]
 cscs-hpc-storage = "waldur_site_agent_cscs_hpc_storage.backend:CscsHpcStorageBackend"

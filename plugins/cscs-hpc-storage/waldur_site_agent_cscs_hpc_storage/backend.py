@@ -6,10 +6,13 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
+from waldur_api_client import AuthenticatedClient
+from waldur_api_client.api.marketplace_resources import marketplace_resources_list
 from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend import backends, logger
 from waldur_site_agent.backend.structures import Resource
+from waldur_site_agent.common.pagination import get_all_paginated
 
 
 class CscsHpcStorageBackend(backends.BaseBackend):
@@ -130,7 +133,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
         # Extract storage size from resource limits or attributes
         if waldur_resource.limits:
-            for component_name, limit_value in waldur_resource.limits.items():
+            for component_name, limit_value in waldur_resource.limits.additional_properties.items():
                 if component_name in self.backend_components:
                     backend_limits[component_name] = limit_value
                     waldur_limits[component_name] = limit_value
@@ -155,7 +158,9 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         """Get target item data from backend_metadata or generate mock data."""
         if not self.use_mock_target_items and waldur_resource.backend_metadata:
             # Try to get real data from backend_metadata
-            target_data = waldur_resource.backend_metadata.get(f"{target_type}_item")
+            target_data = waldur_resource.backend_metadata.additional_properties.get(
+                f"{target_type}_item"
+            )
             if target_data:
                 return target_data
 
@@ -191,7 +196,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         storage_quota_tb = 0.0
         if waldur_resource.limits:
             # Get storage component limit (typically the first component configured)
-            for component_name, limit_value in waldur_resource.limits.items():
+            for component_name, limit_value in waldur_resource.limits.additional_properties.items():
                 if component_name in self.backend_components:
                     storage_quota_tb = float(limit_value)  # Assume already in TB
                     break
@@ -211,8 +216,10 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         storage_data_type = "store"  # default
 
         if waldur_resource.attributes:
-            permissions = waldur_resource.attributes.get("permissions", permissions)
-            storage_data_type = waldur_resource.attributes.get(
+            permissions = waldur_resource.attributes.additional_properties.get(
+                "permissions", permissions
+            )
+            storage_data_type = waldur_resource.attributes.additional_properties.get(
                 "storage_data_type", storage_data_type
             )
 
@@ -266,18 +273,43 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             "parentItemId": None,  # Could be set based on hierarchy if needed
         }
 
-    def _get_all_storage_resources(self, offering_uuid: str) -> list[dict]:
-        """Generate storage resources JSON for all resources.
+    def _get_all_storage_resources(
+        self, offering_uuid: str, client: AuthenticatedClient
+    ) -> list[dict]:
+        """Fetch all storage resources from Waldur API with proper pagination.
 
-        Note: This method returns an empty list as it's designed to work with
-        the polling processor which provides resources during order processing.
-        For a complete implementation, this would need to be called from the
-        processing layer with proper Waldur API client access.
+        Args:
+            offering_uuid: UUID of the offering to fetch resources for
+            client: Authenticated Waldur API client for API access
+
+        Returns:
+            List of storage resource dictionaries in JSON format
         """
-        # This backend generates JSON files during order processing
-        # rather than fetching all resources independently
-        logger.debug("Generating all storage resources JSON for offering %s", offering_uuid)
-        return []
+        try:
+            # Fetch all resources using the reusable pagination utility
+            waldur_resources = get_all_paginated(
+                marketplace_resources_list.sync,
+                client,
+                offering_uuid=offering_uuid,
+            )
+
+            # Convert Waldur resources to storage JSON format
+            storage_resources = []
+            for resource in waldur_resources:
+                storage_system = resource.offering_slug
+                storage_resource = self._create_storage_resource_json(resource, storage_system)
+                storage_resources.append(storage_resource)
+
+            logger.info(
+                "Retrieved %d storage resources for offering %s",
+                len(storage_resources),
+                offering_uuid,
+            )
+            return storage_resources
+
+        except Exception as e:
+            logger.error("Failed to fetch storage resources from Waldur API: %s", e)
+            return []
 
     def _write_json_file(self, filename: str, data: dict) -> None:
         """Write JSON data to file."""
@@ -290,12 +322,12 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         except Exception as e:
             logger.error("Failed to write JSON file %s: %s", filepath, e)
 
-    def generate_all_resources_json(self, offering_uuid: str) -> None:
+    def generate_all_resources_json(self, offering_uuid: str, client: AuthenticatedClient) -> None:
         """Generate JSON file with all storage resources."""
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M")
         filename = f"{timestamp}-all.json"
 
-        storage_resources = self._get_all_storage_resources(offering_uuid)
+        storage_resources = self._get_all_storage_resources(offering_uuid, client)
 
         json_data = {
             "status": "success",
@@ -311,7 +343,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M")
         filename = f"{timestamp}-{order_type}_{waldur_resource.uuid.hex}.json"
 
-        storage_system = waldur_resource.offering_name or waldur_resource.offering_slug
+        storage_system = waldur_resource.offering_slug
         storage_resource = self._create_storage_resource_json(waldur_resource, storage_system)
 
         json_data = {
@@ -332,11 +364,9 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         del user_context
         logger.info("Creating CSCS storage resource: %s", waldur_resource.name)
 
-        # Generate JSON for specific order
+        # Generate JSON for specific order only
+        # Note: Bulk all.json generation is handled by separate sync script
         self.generate_order_json(waldur_resource, "create")
-
-        # Generate updated all resources JSON
-        self.generate_all_resources_json(waldur_resource.offering_uuid.hex)
 
         # Return resource structure
         return Resource(

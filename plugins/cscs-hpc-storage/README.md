@@ -44,6 +44,96 @@ backend_components:
     unit_factor: 1                           # Conversion factor (TB to TB)
 ```
 
+## Architecture
+
+The CSCS HPC Storage backend follows a dual-path architecture that separates individual order processing from bulk
+resource synchronization:
+
+```mermaid
+graph TD
+    subgraph "Waldur Site Agent Core"
+        OA[Order Processing<br/>order_process mode]
+        WM[Waldur Mastermind<br/>API Client]
+        CSB[CSCS Backend<br/>create_resource()]
+    end
+
+    subgraph "CSCS HPC Storage Plugin"
+        SS[Sync Script<br/>waldur_cscs_storage_sync]
+        GOR[generate_order_json()]
+        GAR[generate_all_resources_json()]
+    end
+
+    subgraph "File System Output"
+        OF[Order Files<br/>YYYY-MM-DD-HH-MM-{type}_{uuid}.json]
+        AF[All Resources File<br/>YYYY-MM-DD-HH-MM-all.json]
+    end
+
+    subgraph "External Systems"
+        WS[Web Server<br/>File Consumption]
+        SMS[Storage Management<br/>System]
+    end
+
+    %% Order Processing Flow
+    OA --> WM
+    WM --> CSB
+    CSB --> GOR
+    GOR --> OF
+
+    %% Bulk Sync Flow
+    SS --> WM
+    WM --> GAR
+    GAR --> AF
+
+    %% External Consumption
+    OF --> WS
+    AF --> WS
+    WS --> SMS
+
+    %% Styling
+    classDef core fill:#e3f2fd
+    classDef plugin fill:#f3e5f5
+    classDef output fill:#fff8e1
+    classDef external fill:#e8f5e8
+
+    class OA,WM,CSB core
+    class SS,GOR,GAR plugin
+    class OF,AF output
+    class WS,SMS external
+```
+
+### Processing Flows
+
+**Individual Order Processing:**
+1. Waldur Site Agent processes orders in `order_process` mode
+2. Backend `create_resource()` method generates specific order JSON files
+3. Files contain single resource data for immediate processing
+
+**Bulk Resource Synchronization:**
+1. Separate sync script (`waldur_cscs_storage_sync`) runs independently
+2. Fetches all resources from Waldur API for configured offerings
+3. Generates comprehensive `all.json` files with complete resource lists
+4. Supports dry-run mode and selective offering synchronization
+
+### Usage
+
+**Run sync script for all offerings:**
+
+```bash
+uv run waldur_cscs_storage_sync --config /path/to/config.yaml
+```
+
+**Run sync script for specific offering:**
+
+```bash
+uv run waldur_cscs_storage_sync --config /path/to/config.yaml --offering-uuid <uuid>
+```
+
+**Dry-run mode:**
+
+```bash
+uv run waldur_cscs_storage_sync --config /path/to/config.yaml --dry-run --verbose
+```
+
 ## Data Mapping
 
 ### Waldur to Storage Hierarchy

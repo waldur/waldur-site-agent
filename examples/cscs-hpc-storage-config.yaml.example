@@ -5,6 +5,9 @@ offerings: # Settings for offerings
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
     waldur_api_token: "" # Token to access the Waldur API.
     waldur_offering_uuid: "" # UUID of the offering in Waldur.
+    order_processing_backend: "cscs-hpc-storage" # Name of the backend from entrypoints to use for order processing
+    reporting_backend: "cscs-hpc-storage" # Name of the backend from entrypoints to use for reporting
+
     backend_type: "cscs-hpc-storage" # Backend type for CSCS HPC Storage
     backend_settings: # CSCS HPC Storage backend-specific settings
       output_directory: "cscs-storage-orders/" # Directory where JSON files will be generated

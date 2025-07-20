@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 
 import pytest
+from waldur_api_client.api.marketplace_resources import marketplace_resources_list
 
 from waldur_site_agent_cscs_hpc_storage.backend import CscsHpcStorageBackend
 
@@ -171,35 +172,46 @@ class TestCscsHpcStorageBackend:
         assert len(data["result"]["storageResources"]) == 1
         assert data["result"]["storageResources"][0]["itemId"] == mock_resource.uuid.hex
 
-    @patch("waldur_site_agent_cscs_hpc_storage.backend.get_waldur_client")
-    @patch("waldur_site_agent_cscs_hpc_storage.backend.marketplace_resources_list")
-    def test_get_all_storage_resources(self, mock_resources_list, mock_client):
-        """Test fetching all storage resources."""
-        # Mock API response
-        mock_response = Mock()
-        mock_resource = Mock()
-        mock_resource.uuid = Mock()
-        mock_resource.uuid.hex = str(uuid4())
-        mock_resource.offering_name = "test-offering"
-        mock_resource.slug = "test-resource"
-        mock_resource.customer_slug = "university"
-        mock_resource.customer_uuid = Mock()
-        mock_resource.customer_uuid.hex = str(uuid4())
-        mock_resource.project_slug = "physics-dept"
-        mock_resource.project_uuid = Mock()
-        mock_resource.project_uuid.hex = str(uuid4())
-        mock_resource.limits = {}
-        mock_resource.attributes = {}
+    @patch("waldur_site_agent_cscs_hpc_storage.backend.get_all_paginated")
+    def test_get_all_storage_resources_with_pagination(self, mock_get_all_paginated):
+        """Test fetching all storage resources from API with pagination."""
+        # Mock resources
+        mock_resource1 = Mock()
+        mock_resource1.offering_name = "Test Storage"
+        mock_resource1.uuid.hex = "test-uuid-1"
+        mock_resource1.slug = "resource-1"
+        mock_resource1.customer_slug = "university"
+        mock_resource1.project_slug = "physics"
+        mock_resource1.limits = {"storage": 100}
+        mock_resource1.attributes = {}
 
-        mock_response.results = [mock_resource]
-        mock_resources_list.sync.return_value = mock_response
+        mock_resource2 = Mock()
+        mock_resource2.offering_name = "Test Storage"
+        mock_resource2.uuid.hex = "test-uuid-2"
+        mock_resource2.slug = "resource-2"
+        mock_resource2.customer_slug = "university"
+        mock_resource2.project_slug = "chemistry"
+        mock_resource2.limits = {"storage": 200}
+        mock_resource2.attributes = {}
 
-        offering_uuid = str(uuid4())
-        resources = self.backend._get_all_storage_resources(offering_uuid)
+        # Mock the utility function to return all resources
+        mock_get_all_paginated.return_value = [mock_resource1, mock_resource2]
 
-        assert len(resources) == 1
-        assert resources[0]["itemId"] == mock_resource.uuid.hex
-        mock_resources_list.sync.assert_called_once()
+        # Mock API client
+        mock_client = Mock()
+
+        # Test the method
+        resources = self.backend._get_all_storage_resources("test-offering-uuid", mock_client)
+
+        # Should get all 2 resources
+        assert len(resources) == 2
+
+        # Should call the pagination utility with correct parameters
+        mock_get_all_paginated.assert_called_once_with(
+            marketplace_resources_list.sync,
+            mock_client,
+            offering="test-offering-uuid",
+        )
 
     def test_create_resource(self):
         """Test resource creation."""
