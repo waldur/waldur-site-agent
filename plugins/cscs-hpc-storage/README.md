@@ -89,11 +89,11 @@ graph TD
     AF --> WS
     WS --> SMS
 
-    %% Styling
-    classDef core fill:#e3f2fd
-    classDef plugin fill:#f3e5f5
-    classDef output fill:#fff8e1
-    classDef external fill:#e8f5e8
+    %% Theme-neutral styling with good contrast
+    classDef core stroke:#00bcd4,stroke-width:2px,color:#00acc1
+    classDef plugin stroke:#ff9800,stroke-width:2px,color:#f57c00
+    classDef output stroke:#e91e63,stroke-width:2px,color:#c2185b
+    classDef external stroke:#4caf50,stroke-width:2px,color:#388e3c
 
     class OA,WM,CSB core
     class SS,GOR,GAR plugin
