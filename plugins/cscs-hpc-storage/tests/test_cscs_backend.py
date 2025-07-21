@@ -65,8 +65,12 @@ class TestCscsHpcStorageBackend:
     def test_calculate_inode_quotas(self):
         """Test inode quota calculation."""
         soft, hard = self.backend._calculate_inode_quotas(150.0)  # 150TB
-        expected_soft = int(150 * 1_000_000 * 1.5)  # 225M
-        expected_hard = int(150 * 1_000_000 * 2.0)  # 300M
+        expected_soft = int(
+            150 * self.backend.inode_base_multiplier * 1.5
+        )  # 225M with default settings
+        expected_hard = int(
+            150 * self.backend.inode_base_multiplier * 2.0
+        )  # 300M with default settings
         assert soft == expected_soft
         assert hard == expected_hard
 
@@ -107,8 +111,15 @@ class TestCscsHpcStorageBackend:
         mock_resource.project_name = "Physics Department"
         mock_resource.project_uuid = Mock()
         mock_resource.project_uuid.hex = str(uuid4())
-        mock_resource.limits = {"storage": 150}  # 150TB
-        mock_resource.attributes = {"permissions": "2770"}
+        # Create mock limits with additional_properties
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 150}  # 150TB
+        mock_resource.limits = mock_limits
+
+        # Create mock attributes with additional_properties
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {"permissions": "2770"}
+        mock_resource.attributes = mock_attributes
 
         storage_json = self.backend._create_storage_resource_json(mock_resource, "lustre-fs")
 
@@ -146,6 +157,7 @@ class TestCscsHpcStorageBackend:
         mock_resource.name = "Test Order"
         mock_resource.slug = "test-order"
         mock_resource.offering_name = "Test Offering"
+        mock_resource.offering_slug = "test-offering"
         mock_resource.customer_slug = "university"
         mock_resource.customer_name = "University"
         mock_resource.customer_uuid = Mock()
@@ -154,8 +166,15 @@ class TestCscsHpcStorageBackend:
         mock_resource.project_name = "Physics Department"
         mock_resource.project_uuid = Mock()
         mock_resource.project_uuid.hex = str(uuid4())
-        mock_resource.limits = {"storage": 100}  # 100TB
-        mock_resource.attributes = {"permissions": "755"}
+        # Create mock limits with additional_properties
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 100}  # 100TB
+        mock_resource.limits = mock_limits
+
+        # Create mock attributes with additional_properties
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {"permissions": "755"}
+        mock_resource.attributes = mock_attributes
 
         self.backend.generate_order_json(mock_resource, "create")
 
@@ -178,21 +197,38 @@ class TestCscsHpcStorageBackend:
         # Mock resources
         mock_resource1 = Mock()
         mock_resource1.offering_name = "Test Storage"
+        mock_resource1.offering_slug = "test-storage"
         mock_resource1.uuid.hex = "test-uuid-1"
         mock_resource1.slug = "resource-1"
         mock_resource1.customer_slug = "university"
         mock_resource1.project_slug = "physics"
-        mock_resource1.limits = {"storage": 100}
-        mock_resource1.attributes = {}
+        # Create mock limits with additional_properties for resource1
+        mock_limits1 = Mock()
+        mock_limits1.additional_properties = {"storage": 100}
+        mock_resource1.limits = mock_limits1
+
+        # Create mock attributes with additional_properties for resource1
+        mock_attributes1 = Mock()
+        mock_attributes1.additional_properties = {}
+        mock_resource1.attributes = mock_attributes1
 
         mock_resource2 = Mock()
         mock_resource2.offering_name = "Test Storage"
+        mock_resource2.offering_slug = "test-storage"
         mock_resource2.uuid.hex = "test-uuid-2"
         mock_resource2.slug = "resource-2"
         mock_resource2.customer_slug = "university"
         mock_resource2.project_slug = "chemistry"
-        mock_resource2.limits = {"storage": 200}
-        mock_resource2.attributes = {}
+
+        # Create mock limits with additional_properties for resource2
+        mock_limits2 = Mock()
+        mock_limits2.additional_properties = {"storage": 200}
+        mock_resource2.limits = mock_limits2
+
+        # Create mock attributes with additional_properties for resource2
+        mock_attributes2 = Mock()
+        mock_attributes2.additional_properties = {}
+        mock_resource2.attributes = mock_attributes2
 
         # Mock the utility function to return all resources
         mock_get_all_paginated.return_value = [mock_resource1, mock_resource2]
@@ -210,7 +246,7 @@ class TestCscsHpcStorageBackend:
         mock_get_all_paginated.assert_called_once_with(
             marketplace_resources_list.sync,
             mock_client,
-            offering="test-offering-uuid",
+            offering_uuid="test-offering-uuid",
         )
 
     def test_create_resource(self):
@@ -229,8 +265,15 @@ class TestCscsHpcStorageBackend:
         mock_resource.project_slug = "physics-dept"
         mock_resource.project_uuid = Mock()
         mock_resource.project_uuid.hex = str(uuid4())
-        mock_resource.limits = {"storage": 50}  # 50TB
-        mock_resource.attributes = {"permissions": "770"}
+        # Create mock limits with additional_properties
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 50}  # 50TB
+        mock_resource.limits = mock_limits
+
+        # Create mock attributes with additional_properties
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {"permissions": "770"}
+        mock_resource.attributes = mock_attributes
 
         with patch.object(self.backend, "generate_all_resources_json"):
             resource = self.backend.create_resource(mock_resource)

@@ -28,6 +28,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         self.storage_file_system = backend_settings.get("storage_file_system", "lustre")
         self.inode_soft_coefficient = backend_settings.get("inode_soft_coefficient", 1.33)
         self.inode_hard_coefficient = backend_settings.get("inode_hard_coefficient", 2.0)
+        self.inode_base_multiplier = backend_settings.get("inode_base_multiplier", 1_000_000)
         self.use_mock_target_items = backend_settings.get("use_mock_target_items", False)
 
         # Validate configuration
@@ -64,6 +65,13 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             msg = "output_directory must be a non-empty string"
             raise ValueError(msg)
 
+        if (
+            not isinstance(self.inode_base_multiplier, (int, float))
+            or self.inode_base_multiplier <= 0
+        ):
+            msg = "inode_base_multiplier must be a positive number"
+            raise ValueError(msg)
+
     def ping(self, raise_exception: bool = False) -> bool:
         """Check if backend is accessible (always returns True for file-based backend)."""
         try:
@@ -86,6 +94,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         logger.info("Storage file system: %s", self.storage_file_system)
         logger.info("Inode soft coefficient: %s", self.inode_soft_coefficient)
         logger.info("Inode hard coefficient: %s", self.inode_hard_coefficient)
+        logger.info("Inode base multiplier: %s", self.inode_base_multiplier)
         logger.info("Use mock target items: %s", self.use_mock_target_items)
         logger.info("Backend components: %s", list(self.backend_components.keys()))
 
@@ -148,8 +157,8 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
     def _calculate_inode_quotas(self, storage_quota_tb: float) -> tuple[int, int]:
         """Calculate inode quotas based on storage size and coefficients."""
-        # Base calculation: storage in TB * coefficient * 1M inodes
-        base_inodes = storage_quota_tb * 1_000_000
+        # Base calculation: storage in TB * configurable base multiplier
+        base_inodes = storage_quota_tb * self.inode_base_multiplier
         soft_limit = int(base_inodes * self.inode_soft_coefficient)
         hard_limit = int(base_inodes * self.inode_hard_coefficient)
         return soft_limit, hard_limit
