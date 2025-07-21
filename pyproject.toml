@@ -16,7 +16,7 @@ dependencies = [
     "pyyaml==6.0.1",
     "sentry-sdk==2.3.1",
     "types-pyyaml>=6.0.12.20240311,<7",
-    "waldur-api-client==7.6.8",
+    "waldur-api-client@git+https://github.com/waldur/py-client.git@main",
     "paho-mqtt==2.1.0",
     "stomp-py>=8.2.0,<9",
     "importlib-metadata>=8.7.0 ; python_full_version == '3.9.*'",
@@ -42,6 +42,9 @@ dev = [
     "httpx>=0.28.1,<0.29",
     "ruff>=0.12.1,<0.13",
 ]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.sdist]
 include = ["waldur_site_agent"]

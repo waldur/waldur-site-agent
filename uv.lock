@@ -547,16 +547,12 @@ wheels = [
 
 [[package]]
 name = "waldur-api-client"
-version = "7.6.8"
-source = { registry = "https://pypi.org/simple" }
+version = "7.7.1"
+source = { git = "https://github.com/waldur/py-client.git?rev=main#114a751fddf8630e90b25e5d320fecba5eae3cc6" }
 dependencies = [
     { name = "attrs" },
     { name = "httpx" },
     { name = "python-dateutil" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9f/12/e98905360ec4e85429f45252586887d6c7aed5b2c0bbc32098507d697274/waldur_api_client-7.6.8.tar.gz", hash = "sha256:c68fc521e3df8df9549fba313d39a794a4d840622bc9e71bbc797540878bd10a", size = 736847 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/a4/8d88a70b01a9cf75c264fb71a61684b98fb15f208344f31594454ba78917/waldur_api_client-7.6.8-py3-none-any.whl", hash = "sha256:9bb8677cbd6a45a57165f5d05e40d3f62830b3b94ba222edb0769c788325f27c", size = 2741484 },
 ]
 
 [[package]]
@@ -594,7 +590,7 @@ requires-dist = [
     { name = "sentry-sdk", specifier = "==2.3.1" },
     { name = "stomp-py", specifier = ">=8.2.0,<9" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20240311,<7" },
-    { name = "waldur-api-client", specifier = "==7.6.8" },
+    { name = "waldur-api-client", git = "https://github.com/waldur/py-client.git?rev=main" },
 ]
 
 [package.metadata.requires-dev]

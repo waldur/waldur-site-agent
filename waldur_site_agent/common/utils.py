@@ -329,7 +329,10 @@ def extend_backend_components(
         offering.backend_components.keys()
     )
 
-    logger.info("Component types to add: %s", ", ".join(missing_component_types))
+    if missing_component_types:
+        logger.info("Component types to add: %s", ", ".join(missing_component_types))
+    else:
+        logger.info("All remote components already exist in backend configuration, nothing to add")
     for missing_component_type in missing_component_types:
         logger.info("Loading %s", missing_component_type)
         remote_component_info = remote_components[missing_component_type]
@@ -592,14 +595,17 @@ def print_current_user(current_user: User) -> None:
     logger.info("Current user username: %s", current_user.username)
     logger.info("Current user full name: %s", current_user.full_name)
     logger.info("Current user is staff: %s", current_user.is_staff)
-    logger.info("List of permissions:")
-    for permission in current_user.permissions:
-        logger.info("Role name: %s", permission.role_name)
-        logger.info("Role description: %s", permission.role_description)
-        logger.info("Scope type: %s", permission.scope_type)
-        logger.info("Scope name: %s", permission.scope_name)
-        logger.info("Scope UUID: %s", permission.scope_uuid)
-        logger.info("Expiration time: %s", permission.expiration_time)
+    if current_user.permissions:
+        logger.info("List of permissions:")
+        for permission in current_user.permissions:
+            logger.info("Role name: %s", permission.role_name)
+            logger.info("Role description: %s", permission.role_description)
+            logger.info("Scope type: %s", permission.scope_type)
+            logger.info("Scope name: %s", permission.scope_name)
+            logger.info("Scope UUID: %s", permission.scope_uuid)
+            logger.info("Expiration time: %s", permission.expiration_time)
+    else:
+        logger.info("User has no role permissions.")
 
 
 def get_username_management_backend(
