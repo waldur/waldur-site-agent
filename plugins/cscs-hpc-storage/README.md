@@ -144,9 +144,9 @@ uv run waldur_cscs_storage_sync --config /path/to/config.yaml --dry-run --verbos
 
 ### Mount Point Generation
 
-Mount points follow the pattern: `/{storage_system}/store/{tenant}/{customer}/{project}`
+Mount points follow the pattern: `/{storage_system}/{storage_data_type}/{tenant}/{customer}/{project}`
 
-Example: `/lustre/store/university/physics-dept/climate-sim`
+Example: `/capstor/store/university/physics-dept/climate-sim`
 
 ### Resource Attributes
 
