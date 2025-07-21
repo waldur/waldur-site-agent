@@ -1,0 +1,25 @@
+[project]
+name = "waldur-site-agent-cscs-hpc-storage"
+version = "0.1.0"
+description = "CSCS HPC Storage plugin for Waldur Site Agent"
+readme = "README.md"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9, <4"
+dependencies = [
+    "waldur-site-agent==0.1.0"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+
+# Script entry points
+[project.scripts]
+waldur_cscs_storage_sync = "waldur_site_agent_cscs_hpc_storage.sync_script:main"
+
+# Entry points for exporting backends
+[project.entry-points."waldur_site_agent.backends"]
+cscs-hpc-storage = "waldur_site_agent_cscs_hpc_storage.backend:CscsHpcStorageBackend"

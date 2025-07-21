@@ -114,48 +114,23 @@ def is_uuid(value: str) -> bool:
         return False
 
 
-def init_configuration() -> structures.WaldurAgentConfiguration:
-    """Initialize agent configuration from CLI arguments and config file.
+def load_configuration(
+    config_file_path: str, user_agent_suffix: str = "generic"
+) -> structures.WaldurAgentConfiguration:
+    """Load configuration from YAML file.
 
-    Parses command-line arguments, loads the YAML configuration file,
-    and creates offering configurations. Also initializes Sentry if
-    configured and sets up user agent strings for different modes.
+    Args:
+        config_file_path: Path to the YAML configuration file
+        user_agent_suffix: Suffix to add to the user agent string (e.g., "sync", "order-process")
 
     Returns:
-        Complete agent configuration with all offerings and settings
+        Configuration object with offerings loaded from file
 
     Raises:
         FileNotFoundError: If the configuration file cannot be found
         yaml.YAMLError: If the configuration file is malformed
     """
     configuration = structures.WaldurAgentConfiguration()
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--mode",
-        "-m",
-        help="Agent mode, choices: order_process, report "
-        "membership_sync and event_process; default is order_process",
-        choices=["order_process", "report", "membership_sync", "event_process"],
-        default="order_process",
-    )
-
-    parser.add_argument(
-        "--config-file",
-        "-c",
-        help="Path to the config file with provider settings;"
-        "default is waldur-site-agent-config.yaml",
-        dest="config_file_path",
-        default="waldur-site-agent-config.yaml",
-        required=False,
-    )
-
-    cli_args = parser.parse_args()
-
-    config_file_path = cli_args.config_file_path
-    agent_mode = cli_args.mode
-
-    logger.info("Using %s as a config source", config_file_path)
 
     with Path(config_file_path).open(encoding="UTF-8") as stream:
         config = yaml.safe_load(stream)
@@ -183,33 +158,73 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
         ]
         configuration.waldur_offerings = waldur_offerings
 
+        # Handle Sentry configuration - initialize if DSN is provided
         sentry_dsn = config.get("sentry_dsn")
         if sentry_dsn:
+            configuration.sentry_dsn = sentry_dsn
             import sentry_sdk  # noqa: PLC0415
 
-            sentry_sdk.init(
-                dsn=sentry_dsn,
-            )
-            configuration.sentry_dsn = sentry_dsn
+            sentry_sdk.init(dsn=sentry_dsn)
 
         timezone = config.get("timezone", "UTC")
         configuration.timezone = timezone
 
+    # Set version and user agent for all configurations
     waldur_site_agent_version = version("waldur-site-agent")
-
-    user_agent_dict = {
-        structures.AgentMode.ORDER_PROCESS.value: "waldur-site-agent-order-process/"
-        + waldur_site_agent_version,
-        structures.AgentMode.REPORT.value: "waldur-site-agent-report/" + waldur_site_agent_version,
-        structures.AgentMode.MEMBERSHIP_SYNC.value: "waldur-site-agent-membership-sync/"
-        + waldur_site_agent_version,
-        structures.AgentMode.EVENT_PROCESS.value: "waldur-site-agent-event-process/"
-        + waldur_site_agent_version,
-    }
-
-    configuration.waldur_user_agent = user_agent_dict.get(agent_mode, "")
-    configuration.waldur_site_agent_mode = agent_mode
     configuration.waldur_site_agent_version = waldur_site_agent_version
+    configuration.waldur_user_agent = (
+        f"waldur-site-agent-{user_agent_suffix}/{waldur_site_agent_version}"
+    )
+
+    return configuration
+
+
+def init_configuration() -> structures.WaldurAgentConfiguration:
+    """Initialize agent configuration from CLI arguments and config file.
+
+    Parses command-line arguments, loads the YAML configuration file,
+    and creates offering configurations. Also initializes Sentry if
+    configured and sets up user agent strings for different modes.
+
+    Returns:
+        Complete agent configuration with all offerings and settings
+
+    Raises:
+        FileNotFoundError: If the configuration file cannot be found
+        yaml.YAMLError: If the configuration file is malformed
+    """
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--mode",
+        "-m",
+        help="Agent mode, choices: order_process, report "
+        "membership_sync and event_process; default is order_process",
+        choices=["order_process", "report", "membership_sync", "event_process"],
+        default="order_process",
+    )
+
+    parser.add_argument(
+        "--config-file",
+        "-c",
+        help="Path to the config file with provider settings;"
+        "default is waldur-site-agent-config.yaml",
+        dest="config_file_path",
+        default="waldur-site-agent-config.yaml",
+        required=False,
+    )
+
+    cli_args = parser.parse_args()
+    config_file_path = cli_args.config_file_path
+    agent_mode = cli_args.mode
+
+    logger.info("Using %s as a config source", config_file_path)
+
+    # Load base configuration with mode-specific user agent
+    configuration = load_configuration(config_file_path, user_agent_suffix=agent_mode)
+
+    # Add CLI-specific configuration
+    configuration.waldur_site_agent_mode = agent_mode
 
     return configuration
 
@@ -314,7 +329,10 @@ def extend_backend_components(
         offering.backend_components.keys()
     )
 
-    logger.info("Component types to add: %s", ", ".join(missing_component_types))
+    if missing_component_types:
+        logger.info("Component types to add: %s", ", ".join(missing_component_types))
+    else:
+        logger.info("All remote components already exist in backend configuration, nothing to add")
     for missing_component_type in missing_component_types:
         logger.info("Loading %s", missing_component_type)
         remote_component_info = remote_components[missing_component_type]
@@ -577,14 +595,17 @@ def print_current_user(current_user: User) -> None:
     logger.info("Current user username: %s", current_user.username)
     logger.info("Current user full name: %s", current_user.full_name)
     logger.info("Current user is staff: %s", current_user.is_staff)
-    logger.info("List of permissions:")
-    for permission in current_user.permissions:
-        logger.info("Role name: %s", permission.role_name)
-        logger.info("Role description: %s", permission.role_description)
-        logger.info("Scope type: %s", permission.scope_type)
-        logger.info("Scope name: %s", permission.scope_name)
-        logger.info("Scope UUID: %s", permission.scope_uuid)
-        logger.info("Expiration time: %s", permission.expiration_time)
+    if current_user.permissions:
+        logger.info("List of permissions:")
+        for permission in current_user.permissions:
+            logger.info("Role name: %s", permission.role_name)
+            logger.info("Role description: %s", permission.role_description)
+            logger.info("Scope type: %s", permission.scope_type)
+            logger.info("Scope name: %s", permission.scope_name)
+            logger.info("Scope UUID: %s", permission.scope_uuid)
+            logger.info("Expiration time: %s", permission.expiration_time)
+    else:
+        logger.info("User has no role permissions.")
 
 
 def get_username_management_backend(
