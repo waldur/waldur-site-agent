@@ -259,9 +259,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             order: The order that failed to process
             e: The exception that occurred during processing
         """
-        name = (
-            order.attributes.additional_properties.get("name", "N/A") if order.attributes else "N/A"
-        )
+        name = order.attributes.get("name", "N/A") if order.attributes else "N/A"
         logger.exception(
             "Error while processing order %s (%s), type %s, state %s: %s",
             order.uuid,
@@ -636,6 +634,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         # Fetch user context once for both resource creation and user addition
         user_context = self._fetch_user_context_for_resource(order.marketplace_resource_uuid)
 
+        backend_resource = None
         if create_resource:
             waldur_resource.project_slug = order.project_slug
             waldur_resource.customer_slug = order.customer_slug
@@ -933,7 +932,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         """
         logger.info("Fetching Waldur offering users")
         offering_users: list[OfferingUser] | None = marketplace_offering_users_list.sync(
-            client=self.waldur_rest_client, offering_uuid=self.offering.uuid, is_restricted=False
+            client=self.waldur_rest_client,
+            offering_uuid=self.offering.uuid,
+            is_restricted=False,
         )
         if not offering_users:
             raise ObjectNotFoundError(f"Offering users for offering {self.offering.uuid} not found")

@@ -14,9 +14,7 @@ from waldur_site_agent.polling_processing import (
 def main() -> None:
     """Entrypoint for the application."""
     configuration = utils.init_configuration()
-    logger.info(
-        "Waldur site Agent version: %s, site: SLURM", configuration.waldur_site_agent_version
-    )
+    logger.info("Waldur site agent version: %s", configuration.waldur_site_agent_version)
 
     logger.info("Running agent in %s mode", configuration.waldur_site_agent_mode)
     if AgentMode.ORDER_PROCESS.value == configuration.waldur_site_agent_mode:
