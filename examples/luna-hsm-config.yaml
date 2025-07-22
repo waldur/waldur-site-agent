@@ -1,0 +1,58 @@
+# Waldur Site Agent Configuration for Thales Luna HSM
+sentry_dsn: "" # Optional: Data Source Name for Sentry error tracking
+
+offerings:
+  - name: "Production Luna HSM Service" # Offering name
+    waldur_api_url: "https://waldur.example.com/api/" # URL of Waldur API
+    waldur_api_token: "your-waldur-api-token-here" # Token to access the Waldur API
+    waldur_offering_uuid: "your-offering-uuid-here" # UUID of the offering in Waldur
+    backend_type: "luna_hsm" # Backend type for Luna HSM
+    backend_settings: # Luna HSM backend-specific settings
+      # HSM API connection
+      api_base_url: "https://your-hsm-host.example.com:8443" # HSM host URL
+      hsm_id: "657242" # Your actual HSM ID
+      verify_ssl: false # Set to true in production with valid certificates
+
+      # Session authentication credentials (step 1)
+      admin_username: "admin" # HSM admin username
+      admin_password: "your-admin-password" # HSM admin password
+
+      # HSM authentication credentials (step 2)
+      hsm_role: "so" # Security Officer role
+      hsm_password: "your-so-password" # SO password
+      hsm_ped: "0" # PED configuration (usually "0")
+
+      # Optional configuration
+      session_timeout: 3600 # Session lifetime in seconds (1 hour)
+      stats_storage_path: "/var/lib/waldur-site-agent/luna-hsm-stats.json" # Statistics file path
+
+    backend_components: # Component definition for reporting
+      operations:
+        measured_unit: "operations" # Unit for crypto operations
+        unit_factor: 1 # 1:1 ratio (operations to operations)
+        accounting_type: "usage" # Type of accounting for this component
+        label: "Crypto Operations" # Display label for the component in Waldur
+
+# Example for multiple HSM environments (uncomment and configure as needed)
+# - name: "Test Luna HSM Service"
+#   waldur_api_url: "https://test-waldur.example.com/api/"
+#   waldur_api_token: "test-api-token"
+#   waldur_offering_uuid: "test-offering-uuid"
+#   backend_type: "luna_hsm"
+#   backend_settings:
+#     api_base_url: "https://test-hsm-host.example.com:8443"
+#     hsm_id: "123456"
+#     verify_ssl: false
+#     admin_username: "admin"
+#     admin_password: "test-admin-password"
+#     hsm_role: "so"
+#     hsm_password: "test-so-password"
+#     hsm_ped: "0"
+#     session_timeout: 1800 # 30 minutes for test environment
+#     stats_storage_path: "/var/lib/waldur-site-agent/test-luna-hsm-stats.json"
+#   backend_components:
+#     operations:
+#       measured_unit: "operations"
+#       unit_factor: 1
+#       accounting_type: "usage"
+#       label: "Crypto Operations"

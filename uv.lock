@@ -6,6 +6,7 @@ members = [
     "waldur-site-agent",
     "waldur-site-agent-basic-username-management",
     "waldur-site-agent-cscs-hpc-storage",
+    "waldur-site-agent-luna-hsm",
     "waldur-site-agent-moab",
     "waldur-site-agent-mup",
     "waldur-site-agent-slurm",
@@ -625,6 +626,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "waldur-site-agent", editable = "." }]
+
+[[package]]
+name = "waldur-site-agent-luna-hsm"
+version = "0.1.0"
+source = { editable = "plugins/luna-hsm" }
+dependencies = [
+    { name = "requests" },
+    { name = "waldur-site-agent" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "requests", specifier = ">=2.25.0" },
+    { name = "waldur-site-agent", editable = "." },
+]
 
 [[package]]
 name = "waldur-site-agent-moab"

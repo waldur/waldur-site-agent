@@ -1,0 +1,22 @@
+[project]
+name = "waldur-site-agent-luna-hsm"
+version = "0.1.0"
+description = "Thales Luna HSM plugin for Waldur Site Agent"
+readme = "README.md"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9, <4"
+dependencies = [
+    "waldur-site-agent==0.1.0",
+    "requests>=2.25.0"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+
+# Entry points for exporting backends
+[project.entry-points."waldur_site_agent.backends"]
+luna_hsm = "waldur_site_agent_luna_hsm.backend:LunaHsmBackend"

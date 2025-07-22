@@ -1,0 +1,17 @@
+[Unit]
+Description=Run Waldur Site Agent Luna HSM Reporting
+Documentation=https://github.com/waldur/waldur-site-agent
+Requires=waldur-site-agent-luna-hsm.service
+
+[Timer]
+# Run every 15 minutes
+OnCalendar=*:0/15
+# Add randomized delay to prevent all agents from running simultaneously
+RandomizedDelaySec=60
+# Run immediately if the system was down during a scheduled run
+Persistent=true
+# Prevent accumulation of missed runs
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

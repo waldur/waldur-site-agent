@@ -1,0 +1,46 @@
+[Unit]
+Description=Waldur Site Agent - Luna HSM Reporting
+Documentation=https://github.com/waldur/waldur-site-agent
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/waldur-site-agent/luna-hsm-config.yaml
+
+[Service]
+Type=oneshot
+User=waldur
+Group=waldur
+WorkingDirectory=/opt/waldur-site-agent
+ExecStart=/opt/waldur-site-agent/.venv/bin/uv run waldur_site_agent -c /etc/waldur-site-agent/luna-hsm-config.yaml -m report
+
+# Environment
+Environment=HOME=/var/lib/waldur-site-agent
+Environment=PYTHONPATH=/opt/waldur-site-agent
+Environment=UV_PROJECT_ENVIRONMENT=/opt/waldur-site-agent/.venv
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/waldur-site-agent /var/log/waldur-site-agent
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictNamespaces=true
+
+# Resource limits
+TimeoutSec=300
+CPUQuota=50%
+MemoryMax=512M
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=waldur-site-agent-luna-hsm
+
+[Install]
+WantedBy=multi-user.target
