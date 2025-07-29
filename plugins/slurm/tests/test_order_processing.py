@@ -13,6 +13,7 @@ from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
+from waldur_api_client.models.offering_user_state_enum import OfferingUserStateEnum
 
 from waldur_site_agent.backend.structures import Account
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
@@ -163,12 +164,13 @@ class CreationOrderTest(unittest.TestCase):
             offering_user_username="test-offering-user-01",
         ).to_dict()
         self.waldur_resource_team = [self.team_member]
-        self.waldur_offering_users = models.OfferingUser(
+        self.waldur_offering_user = models.OfferingUser(
             username="test-offering-user-01",
             user_uuid=self.team_member["uuid"],
             offering_uuid=OFFERING.uuid,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            state=OfferingUserStateEnum.OK,
         ).to_dict()
         self.client_patcher = mock.patch("waldur_site_agent.common.utils.get_client")
         self.mock_get_client = self.client_patcher.start()
@@ -184,7 +186,6 @@ class CreationOrderTest(unittest.TestCase):
         respx.stop()
 
     def test_allocation_creation(self, slurm_client_class: mock.Mock) -> None:
-        offering_user_username = "test-offering-user-01"
         allocation_account = "hpc_sample-resource-1"
         project_account = "hpc_project-1"
         self.waldur_order.update(
@@ -206,7 +207,7 @@ class CreationOrderTest(unittest.TestCase):
             self.waldur_offering,
             self.waldur_resource,
             self.waldur_resource_team,
-            self.waldur_offering_users,
+            self.waldur_offering_user,
         )
         request_order_set_as_error = setup_order_respx_mocks(
             self.BASE_URL, self.order_uuid, self.waldur_order
@@ -226,7 +227,7 @@ class CreationOrderTest(unittest.TestCase):
             parent_name=project_account,
         )
         slurm_client.create_association.assert_called_with(
-            offering_user_username, allocation_account, "root"
+            self.waldur_offering_user["username"], allocation_account, "root"
         )
 
     def test_allocation_creation_with_project_slug(self, slurm_client_class: mock.Mock) -> None:
@@ -257,7 +258,7 @@ class CreationOrderTest(unittest.TestCase):
             self.waldur_offering,
             self.waldur_resource,
             self.waldur_resource_team,
-            self.waldur_offering_users,
+            self.waldur_offering_user,
         )
         setup_order_respx_mocks(self.BASE_URL, self.order_uuid, self.waldur_order)
         slurm_client = setup_slurm_client_mocks(

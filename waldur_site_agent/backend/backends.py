@@ -537,16 +537,16 @@ class AbstractUsernameManagementBackend(ABC):
         """Get username from local IDP if exists, otherwise request generation."""
         logger.info(
             "Retrieving username for offering user %s (email %s) from the backend",
-            offering_user["uuid"],
-            offering_user["email"],
+            offering_user.uuid,
+            offering_user.user_email,
         )
         username = self.get_username(offering_user)
         if username:
             return username
         logger.info(
             "Generating username for offering user %s (email %s) in the backend",
-            offering_user["uuid"],
-            offering_user["email"],
+            offering_user.uuid,
+            offering_user.user_email,
         )
         return self.generate_username(offering_user)
 
