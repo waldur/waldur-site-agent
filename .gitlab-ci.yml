@@ -36,7 +36,7 @@ include:
     - pip install uv
     - uv sync --all-packages
     - source .venv/bin/activate
-    - pytest --junitxml=report.xml plugins/
+    - pytest --junitxml=report.xml plugins/ tests/
     - coverage xml
     - coverage report
 
