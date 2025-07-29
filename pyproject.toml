@@ -3,7 +3,7 @@ name = "waldur-site-agent"
 version = "0.1.0"
 description = "Agent for integrating service provider's site with Waldur Mastermind."
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
-requires-python = ">=3.9"
+requires-python = ">=3.9, <4.0"
 readme = "README.md"
 license = "MIT"
 classifiers = [
@@ -16,10 +16,10 @@ dependencies = [
     "pyyaml==6.0.1",
     "sentry-sdk==2.3.1",
     "types-pyyaml>=6.0.12.20240311,<7",
-    "waldur-api-client@git+https://github.com/waldur/py-client.git@main",
     "paho-mqtt==2.1.0",
     "stomp-py>=8.2.0,<9",
     "importlib-metadata>=8.7.0 ; python_full_version == '3.9.*'",
+    "waldur-api-client",
 ]
 
 [project.urls]
@@ -31,6 +31,7 @@ waldur_site_agent = "waldur_site_agent.main:main"
 waldur_site_diagnostics = "waldur_site_agent.common.utils:diagnostics"
 waldur_site_load_components = "waldur_site_agent.common.utils:load_offering_components"
 waldur_site_create_homedirs = "waldur_site_agent.common.utils:create_homedirs_for_offering_users"
+waldur_sync_offering_users = "waldur_site_agent.common.utils:sync_offering_users"
 
 [dependency-groups]
 dev = [
@@ -137,3 +138,6 @@ addopts = "--cov=waldur_site_agent/"
 members = [
     "plugins/*",
 ]
+
+[tool.uv.sources]
+waldur-api-client = { git = "https://github.com/waldur/py-client.git", rev = "main" }
