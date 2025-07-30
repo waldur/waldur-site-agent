@@ -346,6 +346,15 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 order.state,
             )
 
+            if order.state in [OrderState.DONE, OrderState.ERRED]:
+                logger.info(
+                    "Order %s (%s) is in finished state %s, skipping processing",
+                    order.attributes.get("name", "N/A") if order.attributes else "N/A",
+                    order.uuid,
+                    order.state,
+                )
+                return
+
             if order.state == OrderState.EXECUTING:
                 logger.info("Order is executing already, no need for approval")
             elif order.state == OrderState.PENDING_PROVIDER:
