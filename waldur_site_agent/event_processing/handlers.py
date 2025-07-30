@@ -5,6 +5,7 @@ import json
 import paho.mqtt.client as mqtt
 import stomp
 import stomp.utils
+from waldur_api_client.models import OrderState
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import processors as common_processors
@@ -27,6 +28,13 @@ def on_order_message_mqtt(client: mqtt.Client, userdata: UserData, msg: mqtt.MQT
     user_agent = userdata["user_agent"]
 
     order_uuid = message["order_uuid"]
+    order_state = message.get("order_state", "")
+
+    # Skip done and erred orders to avoid duplicate processing
+    if order_state in [OrderState.DONE, OrderState.ERRED]:
+        logger.info("Skipping order %s with finished state %s", order_uuid, order_state)
+        return
+
     try:
         processor = common_processors.OfferingOrderProcessor(offering, user_agent)
         order = processor.get_order_info(order_uuid)
@@ -118,6 +126,13 @@ def on_order_message_stomp(
     message: OrderMessage = json.loads(frame.body)
     logger.info("Processing message: %s", message)
     order_uuid = message["order_uuid"]
+    order_state = message.get("order_state", "")
+
+    # Skip done and erred orders to avoid duplicate processing
+    if order_state in [OrderState.DONE, OrderState.ERRED]:
+        logger.info("Skipping order %s with finished state %s", order_uuid, order_state)
+        return
+
     try:
         processor = common_processors.OfferingOrderProcessor(offering, user_agent)
         order = processor.get_order_info(order_uuid)

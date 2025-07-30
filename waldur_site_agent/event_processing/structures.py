@@ -87,3 +87,4 @@ class OrderMessage(TypedDict):
     """Represents a message for an order processing."""
 
     order_uuid: str
+    order_state: str
