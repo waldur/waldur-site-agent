@@ -88,3 +88,9 @@ class OrderMessage(TypedDict):
 
     order_uuid: str
     order_state: str
+
+
+class BackendResourceRequestMessage(TypedDict):
+    """Represents a message for a backend resource request."""
+
+    backend_resource_request_uuid: str

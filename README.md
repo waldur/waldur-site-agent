@@ -292,6 +292,15 @@ offerings: # Settings for offerings
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
     waldur_api_token: "" # Token to access the Waldur API.
     waldur_offering_uuid: "" # UUID of the offering in Waldur.
+    # Name of the backend from entrypoints to use for username management
+    username_management_backend: "base"
+    # Name of the backend from entrypoints to use for order processing
+    order_processing_backend: "slurm"
+    # Name of the backend from entrypoints to use for membership syncing
+    membership_sync_backend: "slurm"
+     # Name of the backend from entrypoints to use for reporting
+    reporting_backend: "slurm"
+    resource_import_enabled: true # Whether to expose importable resources to Waldur
     stomp_enabled: false # STOMP feature toggler
     mqtt_enabled: true # MQTT feature toggler
     websocket_use_tls: true # Whether to use TLS for websocket connection
@@ -330,6 +339,14 @@ offerings: # Settings for offerings
     waldur_api_url: "http://localhost:8081/api/"
     waldur_api_token: ""
     waldur_offering_uuid: ""
+    # Name of the backend from entrypoints to use for username management
+    username_management_backend: "base"
+     # Name of the backend from entrypoints to use for order processing
+    order_processing_backend: "moab"
+    # Name of the backend from entrypoints to use for membership syncing
+    membership_sync_backend: "moab"
+    reporting_backend: "moab" # Name of the backend from entrypoints to use for reporting
+    resource_import_enabled: false # Whether to expose importable resources to Waldur
     backend_type: "moab"
     backend_settings:
       default_account: root

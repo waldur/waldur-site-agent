@@ -2,8 +2,6 @@
 
 from unittest.mock import Mock
 
-import pytest
-
 from waldur_site_agent.common.pagination import get_all_paginated
 
 

@@ -31,6 +31,7 @@ OBJECT_TYPE_TO_HANDLER_STOMP = {
     "order": handlers.on_order_message_stomp,
     "user_role": handlers.on_user_role_message_stomp,
     "resource": handlers.on_resource_message_stomp,
+    "importable_resources": handlers.on_importable_resources_message_stomp,
 }
 PID_FILE_PATH = "/var/run/waldur_site_agent.pid"
 
@@ -78,6 +79,18 @@ class EventSubscriptionManager:
             pid_file_content.update(payload)
             yaml.dump(pid_file_content, pid_file)
 
+    def _delete_event_subscription_from_pidfile(self) -> None:
+        """Delete event subscription from pidfile."""
+        pid_file_content = self._read_pid_file()
+        logger.info(
+            "Deleting %s event subscription info from %s if exists",
+            self.observable_object_type,
+            PID_FILE_PATH,
+        )
+        pid_file_content.pop(self.observable_object_type, None)
+        with Path(PID_FILE_PATH).open("w+", encoding="utf-8") as pid_file:
+            yaml.dump(pid_file_content, pid_file)
+
     def create_event_subscription(self) -> Optional[EventSubscription]:
         """Create event subscription."""
         try:
@@ -106,7 +119,11 @@ class EventSubscriptionManager:
             logger.error("Failed to create event subscription: %s", e)
             return None
         else:
-            logger.info("Event subscription created: %s", event_subscription.uuid)
+            logger.info(
+                "Event subscription created: %s (%s)",
+                event_subscription.uuid.hex,
+                self.observable_object_type,
+            )
             return EventSubscription(
                 uuid=event_subscription.uuid.hex,
                 user_uuid=event_subscription.user_uuid.hex,
@@ -120,7 +137,9 @@ class EventSubscriptionManager:
             event_subscription_uuid = pid_file_content.get(self.observable_object_type)
             if event_subscription_uuid is not None:
                 logger.info(
-                    "Fetching the existing event subscription %s info", event_subscription_uuid
+                    "Fetching the existing event subscription %s (%s) info",
+                    event_subscription_uuid,
+                    self.observable_object_type,
                 )
                 # Get the event subscription
                 event_subscription: ClientEventSubscriptionObject = (
@@ -297,6 +316,7 @@ class EventSubscriptionManager:
                 uuid=event_subscription["uuid"], client=self.waldur_rest_client
             )
             logger.info("Event subscription deleted: %s", event_subscription["uuid"])
+            self._delete_event_subscription_from_pidfile()
         except UnexpectedStatus as e:
             logger.error(
                 "Failed to delete event subscription %s: %s", event_subscription["uuid"], e

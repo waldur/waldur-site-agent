@@ -73,6 +73,14 @@ def setup_stomp_offering_subscriptions(
             waldur_offering.name,
         )
 
+    if waldur_offering.resource_import_enabled:
+        object_types.append("importable_resources")
+    else:
+        logger.info(
+            "Resource import is disabled for offering %s, skipping start of STOMP connections",
+            waldur_offering.name,
+        )
+
     for object_type in object_types:
         event_subscription_manager = EventSubscriptionManager(
             waldur_offering, None, None, waldur_user_agent, object_type

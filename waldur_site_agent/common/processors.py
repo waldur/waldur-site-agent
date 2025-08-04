@@ -21,6 +21,13 @@ from time import sleep
 from typing import Optional
 from uuid import UUID
 
+from waldur_api_client.api.backend_resource_requests import (
+    backend_resource_requests_retrieve,
+    backend_resource_requests_set_done,
+    backend_resource_requests_set_erred,
+    backend_resource_requests_start_processing,
+)
+from waldur_api_client.api.backend_resources import backend_resources_create, backend_resources_list
 from waldur_api_client.api.component_user_usage_limits import component_user_usage_limits_list
 from waldur_api_client.api.marketplace_component_usages import (
     marketplace_component_usages_list,
@@ -50,10 +57,15 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_limits,
     marketplace_provider_resources_team_list,
 )
+from waldur_api_client.api.projects import projects_list
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
     ComponentUsageCreateRequest,
     ComponentUsageItemRequest,
+)
+from waldur_api_client.models.backend_resource_request import BackendResourceRequest
+from waldur_api_client.models.backend_resource_request_set_erred_request import (
+    BackendResourceRequestSetErredRequest,
 )
 from waldur_api_client.models.component_usage import ComponentUsage
 from waldur_api_client.models.component_user_usage_create_request import (
@@ -1138,7 +1150,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 if len(user_limits) == 0:
                     existing_user_limits = backend_user_limits.get(username)
                     logger.info("The limits for user %s are not defined in Waldur", username)
-                    if existing_user_limits is None:
+                    if not existing_user_limits:
                         continue
                     logger.info("Unsetting the existing limits %s", existing_user_limits)
                     user_component_limits = {}
@@ -1563,3 +1575,151 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         logger.info("Setting per-user usages")
         for username, user_usage in usages.items():
             self._submit_user_usage_for_resource(username, user_usage, waldur_component_usages)
+
+
+class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
+    """Processes importable resources for the offering and reports them to Waldur."""
+
+    BACKEND_TYPE_KEY = "order_processing_backend"
+
+    def process_offering(self) -> None:
+        """This function is blank because the processor operates over backend resource request."""
+
+    def _process_importable_resource(self, local_resource: Resource) -> None:
+        logger.info("Processing importable resource %s", local_resource.backend_id)
+        project_prefix = self.offering.backend_settings.get("project_prefix", "")
+        parent_id = local_resource.parent_id
+        if not parent_id.startswith(project_prefix):
+            logger.info(
+                "The parent_id %s of the resource %s does not have a required prefix, skipping it",
+                parent_id,
+                local_resource.backend_id,
+            )
+            return
+
+        project_slug = parent_id.removeprefix(project_prefix)
+        waldur_projects = projects_list.sync(
+            slug=project_slug,
+            client=self.waldur_rest_client,
+        )
+        if not waldur_projects:
+            logger.info(
+                "No Waldur project found for slug %s, skipping resource %s import",
+                project_slug,
+                local_resource.backend_id,
+            )
+            return
+        waldur_project = waldur_projects[0]
+        existing_backend_resources = backend_resources_list.sync(
+            backend_id=local_resource.backend_id,
+            project_uuid=waldur_project.uuid,
+            offering_uuid=self.offering.uuid,
+            client=self.waldur_rest_client,
+        )
+
+        if existing_backend_resources:
+            logger.info(
+                "Backend resource with id %s already exists in Waldur project %s, "
+                "skipping submission",
+                local_resource.backend_id,
+                waldur_project.uuid.hex,
+            )
+            return
+
+        logger.info(
+            "Submitting backend resource %s to Waldur project %s",
+            local_resource.backend_id,
+            waldur_project.uuid.hex,
+        )
+        limits = self.resource_backend.get_resource_limits(local_resource.backend_id)
+        backend_metadata = {
+            "limits": limits,
+        }
+        payload = BackendResourceRequest(
+            name=local_resource.name or local_resource.backend_id,
+            project=waldur_project.uuid,
+            offering=self.offering.uuid,
+            backend_id=local_resource.backend_id,
+            backend_metadata=backend_metadata,
+        )
+        backend_resources_create.sync(
+            body=payload,
+            client=self.waldur_rest_client,
+        )
+
+    def _pre_process_backend_resource_request(self, request_uuid: str) -> None:
+        backend_resource_request = backend_resource_requests_retrieve.sync(
+            uuid=request_uuid,
+            client=self.waldur_rest_client,
+        )
+        backend_resource_requests_start_processing.sync(
+            uuid=backend_resource_request.uuid.hex,
+            client=self.waldur_rest_client,
+        )
+
+    def _get_waldur_resources(self) -> dict[str, WaldurResource]:
+        waldur_resource_list = marketplace_provider_resources_list.sync(
+            offering_uuid=self.offering.uuid,
+            state=[
+                MarketplaceProviderResourcesListStateItem.OK,
+                MarketplaceProviderResourcesListStateItem.ERRED,
+                MarketplaceProviderResourcesListStateItem.CREATING,
+            ],
+            client=self.waldur_rest_client,
+        )
+        return {
+            resource.backend_id: resource
+            for resource in waldur_resource_list
+            if resource.backend_id
+        }
+
+    def process_request(self, request_uuid: str) -> None:
+        """Process backend resource request.
+
+        List all resource in the backend, compare their backend_ids with ones from Waldur
+        and report only ones absent in Waldur.
+        """
+        try:
+            logger.info(
+                "Processing backend resource request %s for offering %s",
+                request_uuid,
+                self.offering.name,
+            )
+
+            self._pre_process_backend_resource_request(request_uuid)
+            waldur_resources: dict[str, WaldurResource] = self._get_waldur_resources()
+
+            local_resource_list = self.resource_backend.list_resources()
+            local_resources = {resource.backend_id: resource for resource in local_resource_list}
+
+            importable_resource_backend_ids = local_resources.keys() - waldur_resources.keys()
+            logger.info(
+                "Found %d importable resources in the backend",
+                len(importable_resource_backend_ids),
+            )
+
+            for backend_id in importable_resource_backend_ids:
+                try:
+                    local_resource = local_resources[backend_id]
+                    self._process_importable_resource(local_resource)
+                except Exception as e:
+                    logger.error(
+                        "Unable to process importable resource %s reason: %s", backend_id, e
+                    )
+
+            logger.info("Setting backend resource request %s as done", request_uuid)
+            backend_resource_requests_set_done.sync(
+                uuid=request_uuid,
+                client=self.waldur_rest_client,
+            )
+        except Exception as e:
+            logger.info("Unable to process importable resources reason: %s", e)
+            payload = BackendResourceRequestSetErredRequest(
+                error_message=str(e),
+                error_traceback=traceback.format_exc(),
+            )
+            backend_resource_requests_set_erred.sync(
+                uuid=request_uuid,
+                client=self.waldur_rest_client,
+                body=payload,
+            )
