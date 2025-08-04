@@ -11,6 +11,7 @@ from waldur_site_agent.backend import logger
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures
 from waldur_site_agent.event_processing.structures import (
+    BackendResourceRequestMessage,
     OrderMessage,
     ResourceMessage,
     UserData,
@@ -204,3 +205,16 @@ def on_resource_message_stomp(
         processor.process_resource_by_uuid(resource_uuid)
     except Exception as e:
         logger.error("Failed to process resource %s: %s", resource_uuid, e)
+
+
+def on_importable_resources_message_stomp(
+    frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
+) -> None:
+    """Handler for importable resource list request for STOMP message event."""
+    message: BackendResourceRequestMessage = json.loads(frame.body)
+    request_uuid = message["backend_resource_request_uuid"]
+    try:
+        processor = common_processors.OfferingImportableResourcesProcessor(offering, user_agent)
+        processor.process_request(request_uuid)
+    except Exception as e:
+        logger.error("Failed to process importable resource list request %s: %s", request_uuid, e)

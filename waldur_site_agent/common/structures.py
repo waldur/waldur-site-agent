@@ -53,6 +53,7 @@ class Offering:
     membership_sync_backend: Optional[str] = ""
     reporting_backend: Optional[str] = ""
     username_management_backend: str = "base"
+    resource_import_enabled: bool = False
 
 
 class AgentMode(Enum):

@@ -37,3 +37,4 @@ class Resource:
     usage: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
     state: str = ""
+    parent_id: str = ""

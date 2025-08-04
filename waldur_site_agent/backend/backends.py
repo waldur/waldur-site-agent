@@ -55,6 +55,14 @@ class BaseBackend(ABC):
     def get_resource_metadata(self, _: str) -> dict:
         """Get backend-specific resource metadata."""
 
+    def list_resources(self) -> list[structures.Resource]:
+        """List resources in the the backend."""
+        accounts = self.client.list_accounts()
+        return [
+            structures.Resource(backend_id=account.name, parent_id=account.organization)
+            for account in accounts
+        ]
+
     def create_user_homedirs(self, usernames: set[str], umask: str = "0700") -> None:
         """Create homedirs for users."""
         logger.info("Creating homedirs for users")

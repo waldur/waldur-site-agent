@@ -168,6 +168,7 @@ def load_configuration(
                 order_processing_backend=offering_info.get("order_processing_backend", ""),
                 membership_sync_backend=offering_info.get("membership_sync_backend", ""),
                 reporting_backend=offering_info.get("reporting_backend", ""),
+                resource_import_enabled=offering_info.get("resource_import_enabled", False),
             )
             for offering_info in offering_list
         ]
@@ -609,7 +610,9 @@ def print_current_user(current_user: User) -> None:
     """
     logger.info("Current user username: %s", current_user.username)
     logger.info("Current user full name: %s", current_user.full_name)
-    logger.info("Current user is staff: %s", current_user.is_staff)
+    logger.info("Current user is staff: %s", current_user.is_staff or False)
+    if current_user.is_staff:
+        return
     if current_user.permissions:
         logger.info("List of permissions:")
         for permission in current_user.permissions:
@@ -785,6 +788,11 @@ def update_offering_users(
                 marketplace_offering_users_set_ok.sync_detailed(
                     uuid=offering_user.uuid, client=waldur_rest_client
                 )
+        except (
+            backend_exceptions.OfferingUserAccountLinkingRequiredError,
+            backend_exceptions.OfferingUserAdditionalValidationRequiredError,
+        ):
+            logger.info("Backend resource is still in the pending state")
         except Exception as e:
             logger.error(
                 "Failed to generate username for offering user %s (%s): %s",
