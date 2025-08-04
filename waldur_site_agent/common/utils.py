@@ -792,7 +792,7 @@ def update_offering_users(
             backend_exceptions.OfferingUserAccountLinkingRequiredError,
             backend_exceptions.OfferingUserAdditionalValidationRequiredError,
         ):
-            logger.info("Backend resource is still in the pending state")
+            logger.info("Backend account is still in the pending state")
         except Exception as e:
             logger.error(
                 "Failed to generate username for offering user %s (%s): %s",
