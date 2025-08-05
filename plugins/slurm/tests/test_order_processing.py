@@ -15,7 +15,7 @@ from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
 from waldur_api_client.models.offering_user_state_enum import OfferingUserStateEnum
 
-from waldur_site_agent.backend.structures import Account
+from waldur_site_agent.backend.structures import ClientResource
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingOrderProcessor
 from tests.fixtures import OFFERING
@@ -77,16 +77,16 @@ def setup_order_respx_mocks(base_url: str, order_uuid: str, waldur_order: dict):
     )
 
 
-def setup_slurm_client_mocks(slurm_client_class: mock.Mock, get_account_side_effect=None):
+def setup_slurm_client_mocks(slurm_client_class: mock.Mock, get_resource_side_effect=None):
     """Setup common SLURM client mocks."""
     slurm_client = slurm_client_class.return_value
     slurm_client.get_association.return_value = None
     slurm_client._execute_command.return_value = ""
 
-    if get_account_side_effect:
-        slurm_client.get_account.side_effect = get_account_side_effect
+    if get_resource_side_effect:
+        slurm_client.get_resource.side_effect = get_resource_side_effect
     else:
-        slurm_client.get_account.return_value = None
+        slurm_client.get_resource.return_value = None
 
     return slurm_client
 
@@ -218,9 +218,9 @@ class CreationOrderTest(unittest.TestCase):
         processor.process_offering()
 
         assert request_order_set_as_error.call_count == 0
-        assert slurm_client.create_account.call_count == 3
+        assert slurm_client.create_resource.call_count == 3
 
-        slurm_client.create_account.assert_called_with(
+        slurm_client.create_resource.assert_called_with(
             name=allocation_account,
             description=self.waldur_resource["name"],
             organization=project_account,
@@ -268,9 +268,9 @@ class CreationOrderTest(unittest.TestCase):
         processor = OfferingOrderProcessor(OFFERING)
         processor.process_offering()
 
-        assert slurm_client.create_account.call_count == 3
+        assert slurm_client.create_resource.call_count == 3
 
-        slurm_client.create_account.assert_called_with(
+        slurm_client.create_resource.assert_called_with(
             name=allocation_account,
             description="sample-resource-1",
             organization=project_account,
@@ -388,19 +388,19 @@ class TerminationOrderTest(unittest.TestCase):
         )
 
         slurm_client = slurm_client_class.return_value
-        slurm_client.get_account.return_value = Account(
+        slurm_client.get_resource.return_value = ClientResource(
             name="test-allocation-01",
             description="test-allocation-01",
             organization="hpc_project-1",
         )
-        slurm_client.list_accounts.return_value = []
+        slurm_client.list_resources.return_value = []
         slurm_client._execute_command.return_value = ""
 
         processor = OfferingOrderProcessor(OFFERING)
         processor.process_offering()
         assert erred_response.call_count == 0
         # The method was called twice: for project account and for allocation account
-        assert slurm_client.delete_account.call_count == 2
+        assert slurm_client.delete_resource.call_count == 2
 
 
 @mock.patch(

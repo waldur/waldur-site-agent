@@ -10,7 +10,7 @@ from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import (
     BackendError,
 )
-from waldur_site_agent.backend.structures import Account, Association
+from waldur_site_agent.backend.structures import Association, ClientResource
 from waldur_site_agent_slurm.parser import SlurmAssociationLine, SlurmReportLine
 
 
@@ -24,7 +24,7 @@ class SlurmClient(clients.BaseClient):
         """Inits SLURM-related data."""
         self.slurm_tres = slurm_tres
 
-    def list_accounts(self) -> list[Account]:
+    def list_resources(self) -> list[ClientResource]:
         """Returns a list of accounts in the SLURM cluster."""
         command = ["list", "account"]
         output = self._execute_command(command)
@@ -46,15 +46,15 @@ class SlurmClient(clients.BaseClient):
                 tres_list.append(component_type)
         return tres_list
 
-    def get_account(self, name: str) -> Account | None:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Returns Account object from cluster based on the account name."""
-        output = self._execute_command(["show", "account", name])
+        output = self._execute_command(["show", "account", resource_id])
         lines = [line for line in output.splitlines() if "|" in line]
         if len(lines) == 0:
             return None
         return self._parse_account(lines[0])
 
-    def create_account(
+    def create_resource(
         self,
         name: str,
         description: str,
@@ -83,31 +83,31 @@ class SlurmClient(clients.BaseClient):
         items = [self._parse_association(line) for line in output.splitlines() if "|" in line]
         return any(item.user != "" for item in items)
 
-    def delete_account(self, name: str) -> str:
+    def delete_resource(self, name: str) -> str:
         """Deletes account with the specified name from the SLURM cluster."""
         return self._execute_command(["remove", "account", "where", f"name={name}"])
 
-    def set_resource_limits(self, account: str, limits_dict: dict[str, int]) -> str | None:
+    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> str | None:
         """Sets the limits for the account with the specified name."""
         limits_str = ",".join([f"{key}={value}" for key, value in limits_dict.items()])
         quota = f"GrpTRESMins={limits_str}"
-        return self._execute_command(["modify", "account", account, "set", quota])
+        return self._execute_command(["modify", "account", resource_id, "set", quota])
 
     def set_resource_user_limits(
-        self, account: str, username: str, limits_dict: dict[str, int]
+        self, resource_id: str, username: str, limits_dict: dict[str, int]
     ) -> str:
         """Set account limits for a specific user."""
         limits_str = ",".join([f"{tres}={limits_dict.get(tres, -1)}" for tres in self.list_tres()])
         quota = f"MaxTRESMins={limits_str}"
         return self._execute_command(
-            ["modify", "user", username, "where", f"account={account}", "set", quota]
+            ["modify", "user", username, "where", f"account={resource_id}", "set", quota]
         )
 
     def set_account_qos(self, account: str, qos: str) -> None:
         """Set the specified QoS for the account."""
         self._execute_command(["modify", "account", account, "set", f"qos={qos}"])
 
-    def get_association(self, user: str, account: str) -> Association | None:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Returns associations between the user and the account if exists."""
         output = self._execute_command(
             [
@@ -115,7 +115,7 @@ class SlurmClient(clients.BaseClient):
                 "association",
                 "where",
                 f"user={user}",
-                f"account={account}",
+                f"account={resource_id}",
             ]
         )
         lines = [line for line in output.splitlines() if "|" in line]
@@ -124,7 +124,7 @@ class SlurmClient(clients.BaseClient):
         return self._parse_association(lines[0])
 
     def create_association(
-        self, username: str, account: str, default_account: Optional[str] = ""
+        self, username: str, resource_id: str, default_account: Optional[str] = ""
     ) -> str:
         """Creates association between the account and the user in SLURM cluster."""
         return self._execute_command(
@@ -132,12 +132,12 @@ class SlurmClient(clients.BaseClient):
                 "add",
                 "user",
                 username,
-                f"account={account}",
+                f"account={resource_id}",
                 f"DefaultAccount={default_account}",
             ]
         )
 
-    def delete_association(self, username: str, account: str) -> str:
+    def delete_association(self, username: str, resource_id: str) -> str:
         """Deletes association between the account and the user in SLURM cluster."""
         return self._execute_command(
             [
@@ -146,11 +146,11 @@ class SlurmClient(clients.BaseClient):
                 "where",
                 f"name={username}",
                 "and",
-                f"account={account}",
+                f"account={resource_id}",
             ]
         )
 
-    def get_usage_report(self, accounts: list[str]) -> list[SlurmReportLine]:
+    def get_usage_report(self, resource_ids: list[str]) -> list[SlurmReportLine]:
         """Generates per-user usage report for the accounts."""
         month_start, month_end = backend_utils.format_current_month()
 
@@ -161,7 +161,7 @@ class SlurmClient(clients.BaseClient):
             "--allusers",
             f"--starttime={month_start}",
             f"--endtime={month_end}",
-            f"--accounts={','.join(accounts)}",
+            f"--accounts={','.join(resource_ids)}",
             "--format=Account,ReqTRES,Elapsed,User",
         ]
         output = self._execute_command(args, "sacct", immediate=False)
@@ -169,14 +169,14 @@ class SlurmClient(clients.BaseClient):
             SlurmReportLine(line, self.slurm_tres) for line in output.splitlines() if "|" in line
         ]
 
-    def get_resource_limits(self, account: str) -> dict[str, int]:
+    def get_resource_limits(self, resource_id: str) -> dict[str, int]:
         """Returns limits for the account."""
         args = [
             "show",
             "association",
             "format=account,GrpTRESMins",
             "where",
-            f"accounts={account}",
+            f"accounts={resource_id}",
         ]
         output = self._execute_command(args, immediate=False)
         lines = [
@@ -191,13 +191,13 @@ class SlurmClient(clients.BaseClient):
             return {}
         return correct_lines[0]
 
-    def get_resource_user_limits(self, account: str) -> dict[str, dict[str, int]]:
+    def get_resource_user_limits(self, resource_id: str) -> dict[str, dict[str, int]]:
         """Get per-user limits for the account."""
         args = [
             "show",
             "association",
             "where",
-            f"accounts={account}",
+            f"accounts={resource_id}",
             "format=Account,MaxTRESMins,User",
         ]
         output = self._execute_command(args, immediate=False)
@@ -212,14 +212,14 @@ class SlurmClient(clients.BaseClient):
             if association.user != ""
         }
 
-    def list_account_users(self, account: str) -> list[str]:
+    def list_resource_users(self, resource_id: str) -> list[str]:
         """Returns list of users linked to the account."""
         args = [
             "list",
             "associations",
             "format=account,user",
             "where",
-            f"account={account}",
+            f"account={resource_id}",
         ]
         output = self._execute_command(args)
         return [
@@ -275,9 +275,9 @@ class SlurmClient(clients.BaseClient):
                 return False
         return output.strip().isdigit()
 
-    def _parse_account(self, line: str) -> Account:
+    def _parse_account(self, line: str) -> ClientResource:
         parts = line.split("|")
-        return Account(
+        return ClientResource(
             name=parts[0],
             description=parts[1],
             organization=parts[2],

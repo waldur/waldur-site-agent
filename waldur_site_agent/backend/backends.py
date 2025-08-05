@@ -52,15 +52,15 @@ class BaseBackend(ABC):
         """Restore the resource after downscaling or pausing."""
 
     @abstractmethod
-    def get_resource_metadata(self, _: str) -> dict:
+    def get_resource_metadata(self, resource_backend_id: str) -> dict:
         """Get backend-specific resource metadata."""
 
     def list_resources(self) -> list[structures.Resource]:
         """List resources in the the backend."""
-        accounts = self.client.list_accounts()
+        resources = self.client.list_resources()
         return [
-            structures.Resource(backend_id=account.name, parent_id=account.organization)
-            for account in accounts
+            structures.Resource(backend_id=resource.name, parent_id=resource.organization)
+            for resource in resources
         ]
 
     def create_user_homedirs(self, usernames: set[str], umask: str = "0700") -> None:
@@ -79,7 +79,7 @@ class BaseBackend(ABC):
 
     @abstractmethod
     def _collect_resource_limits(
-        self, waldur_resource: dict[str, dict]
+        self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect limits for backend and waldur separately."""
 
@@ -120,13 +120,13 @@ class BaseBackend(ABC):
     def _pull_backend_resource(self, resource_backend_id: str) -> Optional[structures.Resource]:
         """Pull resource data from the backend."""
         logger.info("Pulling resource %s", resource_backend_id)
-        resource_backend_info = self.client.get_account(resource_backend_id)
+        resource_backend_info = self.client.get_resource(resource_backend_id)
 
         if resource_backend_info is None:
             logger.warning("There is no resource with ID %s in the backend", resource_backend_id)
             return None
 
-        users = self.client.list_account_users(resource_backend_id)
+        users = self.client.list_resource_users(resource_backend_id)
 
         report = self._get_usage_report([resource_backend_id])
         usage = report.get(resource_backend_id)
@@ -155,7 +155,7 @@ class BaseBackend(ABC):
             logger.warning("Empty backend_id for resource, skipping deletion")
             return
 
-        if self.client.get_account(resource_backend_id) is None:
+        if self.client.get_resource(resource_backend_id) is None:
             logger.warning(
                 "No resource with ID %s is in %s", resource_backend_id, self.backend_type
             )
@@ -170,7 +170,7 @@ class BaseBackend(ABC):
                 len(
                     [
                         resource
-                        for resource in self.client.list_accounts()
+                        for resource in self.client.list_resources()
                         if resource.organization == project_backend_id
                         and resource.name != project_backend_id
                     ]
@@ -180,11 +180,11 @@ class BaseBackend(ABC):
                 self._delete_resource_safely(project_backend_id)
 
     def _delete_resource_safely(self, resource_backend_id: str) -> None:
-        if self.client.get_account(resource_backend_id):
+        if self.client.get_resource(resource_backend_id):
             logger.info(
                 "Deleting the resource with ID %s from %s", resource_backend_id, self.backend_type
             )
-            self.client.delete_account(resource_backend_id)
+            self.client.delete_resource(resource_backend_id)
         else:
             logger.warning(
                 "No resource with ID %s is in %s", resource_backend_id, self.backend_type
@@ -203,8 +203,8 @@ class BaseBackend(ABC):
             self.backend_type,
             resource_backend_id,
         )
-        if self.client.get_account(resource_backend_id) is None:
-            self.client.create_account(
+        if self.client.get_resource(resource_backend_id) is None:
+            self.client.create_resource(
                 name=resource_backend_id,
                 description=resource_name,
                 organization=resource_organization,
