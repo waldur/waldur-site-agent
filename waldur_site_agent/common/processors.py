@@ -74,9 +74,6 @@ from waldur_api_client.models.component_user_usage_limit import ComponentUserUsa
 from waldur_api_client.models.marketplace_orders_list_state_item import (
     MarketplaceOrdersListStateItem,
 )
-from waldur_api_client.models.marketplace_provider_resources_list_field_item import (
-    MarketplaceProviderResourcesListFieldItem,
-)
 from waldur_api_client.models.marketplace_provider_resources_list_state_item import (
     MarketplaceProviderResourcesListStateItem,
 )
@@ -728,18 +725,6 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 MarketplaceProviderResourcesListStateItem.OK,
                 MarketplaceProviderResourcesListStateItem.ERRED,
             ],
-            "field": [
-                MarketplaceProviderResourcesListFieldItem.BACKEND_ID,
-                MarketplaceProviderResourcesListFieldItem.UUID,
-                MarketplaceProviderResourcesListFieldItem.NAME,
-                MarketplaceProviderResourcesListFieldItem.RESOURCE_UUID,
-                MarketplaceProviderResourcesListFieldItem.OFFERING_TYPE,
-                MarketplaceProviderResourcesListFieldItem.RESTRICT_MEMBER_ACCESS,
-                MarketplaceProviderResourcesListFieldItem.DOWNSCALED,
-                MarketplaceProviderResourcesListFieldItem.PAUSED,
-                MarketplaceProviderResourcesListFieldItem.STATE,
-                MarketplaceProviderResourcesListFieldItem.LIMITS,
-            ],
         }
 
         if project_uuid is not None:
@@ -1080,12 +1065,14 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.warning("No limits are found in the backend")
             return
 
-        if waldur_resource.limits == backend_limits:
-            logger.info("The limits are already in sync, skipping")
+        if waldur_resource.limits.additional_properties == backend_limits:
+            logger.info("The limits are already in sync (%s), skipping", backend_limits)
             return
 
         # For now, we report all the limits
-        logger.info("Reporting the limits to Waldur: %s", backend_limits)
+        logger.info(
+            "Changing resource limits from %s to %s", waldur_resource.limits, backend_limits
+        )
 
         marketplace_provider_resources_set_limits.sync(
             uuid=waldur_resource.uuid.hex,
@@ -1243,13 +1230,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             state=[
                 MarketplaceProviderResourcesListStateItem.OK,
                 MarketplaceProviderResourcesListStateItem.ERRED,
-            ],
-            field=[
-                MarketplaceProviderResourcesListFieldItem.BACKEND_ID,
-                MarketplaceProviderResourcesListFieldItem.UUID,
-                MarketplaceProviderResourcesListFieldItem.NAME,
-                MarketplaceProviderResourcesListFieldItem.OFFERING_TYPE,
-                MarketplaceProviderResourcesListFieldItem.STATE,
             ],
         )
         if not waldur_resources:
