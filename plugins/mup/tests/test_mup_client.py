@@ -4,7 +4,7 @@ import requests
 import base64
 
 from waldur_site_agent_mup.client import MUPClient, MUPError
-from waldur_site_agent.backend.structures import Account, Association
+from waldur_site_agent.backend.structures import ClientResource, Association
 
 
 class MUPClientTest(unittest.TestCase):
@@ -402,54 +402,54 @@ class MUPClientTest(unittest.TestCase):
             self.assertEqual(result, expected_fields)
             mock_request.assert_called_once_with("GET", "/api/research-fields/list/")
 
-    def test_list_accounts(self):
-        """Test list_accounts interface method"""
+    def test_list_resources(self):
+        """Test list_resources interface method"""
         projects = [self.sample_project]
 
         with patch.object(self.client, "get_projects", return_value=projects):
-            accounts = self.client.list_accounts()
+            accounts = self.client.list_resources()
 
             self.assertEqual(len(accounts), 1)
             account = accounts[0]
-            self.assertIsInstance(account, Account)
+            self.assertIsInstance(account, ClientResource)
             self.assertEqual(account.name, "waldur_test_project")
             self.assertEqual(account.description, "Test Project")
             self.assertEqual(account.organization, "FCT")
 
-    def test_get_account_found(self):
-        """Test get_account interface method - account found"""
+    def test_get_resource_found(self):
+        """Test get_resource interface method - account found"""
         projects = [self.sample_project]
 
         with patch.object(self.client, "get_projects", return_value=projects):
-            account = self.client.get_account("waldur_test_project")
+            account = self.client.get_resource("waldur_test_project")
 
             self.assertIsNotNone(account)
-            self.assertIsInstance(account, Account)
+            self.assertIsInstance(account, ClientResource)
             self.assertEqual(account.name, "waldur_test_project")
 
-    def test_get_account_not_found(self):
-        """Test get_account interface method - account not found"""
+    def test_get_resource_not_found(self):
+        """Test get_resource interface method - account not found"""
         projects = [self.sample_project]
 
         with patch.object(self.client, "get_projects", return_value=projects):
-            account = self.client.get_account("nonexistent_project")
+            account = self.client.get_resource("nonexistent_project")
 
             self.assertIsNone(account)
 
-    def test_create_account(self):
-        """Test create_account interface method"""
-        result = self.client.create_account("test_account", "Test Account", "Test Org")
+    def test_create_resource(self):
+        """Test create_resource interface method"""
+        result = self.client.create_resource("test_account", "Test Account", "Test Org")
 
         # This method just returns the name as it's handled by backend
         self.assertEqual(result, "test_account")
 
-    def test_delete_account(self):
-        """Test delete_account interface method"""
+    def test_delete_resource(self):
+        """Test delete_resource interface method"""
         projects = [self.sample_project]
 
         with patch.object(self.client, "get_projects", return_value=projects):
             with patch.object(self.client, "deactivate_project") as mock_deactivate:
-                result = self.client.delete_account("waldur_test_project")
+                result = self.client.delete_resource("waldur_test_project")
 
                 self.assertEqual(result, "waldur_test_project")
                 mock_deactivate.assert_called_once_with(1)
@@ -570,7 +570,7 @@ class MUPClientTest(unittest.TestCase):
 
         with patch.object(self.client, "get_projects", return_value=projects):
             with patch.object(self.client, "get_project_members", return_value=members):
-                users = self.client.list_account_users("waldur_test_project")
+                users = self.client.list_resource_users("waldur_test_project")
 
                 # Should only return active users
                 self.assertEqual(users, ["user1"])

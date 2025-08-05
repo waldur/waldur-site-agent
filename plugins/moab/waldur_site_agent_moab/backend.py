@@ -1,5 +1,7 @@
 """Moab-specific backend classes and functions."""
 
+from waldur_api_client.models.resource import Resource as WaldurResource
+
 from waldur_site_agent.backend import BackendType, logger
 from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.backends import BaseBackend
@@ -21,7 +23,7 @@ class MoabBackend(BaseBackend):
     def ping(self, raise_exception: bool = False) -> bool:
         """Check if MOAB is online."""
         try:
-            self.client.list_accounts()
+            self.client.list_resources()
         except BackendError as err:
             if raise_exception:
                 raise
@@ -38,10 +40,10 @@ class MoabBackend(BaseBackend):
         """Return deposit component."""
         return ["deposit"]
 
-    def _get_usage_report(self, accounts: list[str]) -> dict:
+    def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
         """Get usage report."""
         report: dict[str, dict[str, dict[str, float]]] = {}
-        lines: list[MoabReportLine] = self.client.get_usage_report(accounts)
+        lines: list[MoabReportLine] = self.client.get_usage_report(resource_backend_ids)
 
         for line in lines:
             report.setdefault(line.account, {}).setdefault(line.user, {})
@@ -62,19 +64,19 @@ class MoabBackend(BaseBackend):
 
         return report
 
-    def downscale_resource(self, account: str) -> bool:
+    def downscale_resource(self, resource_backend_id: str) -> bool:
         """Temporary placeholder."""
-        del account
+        del resource_backend_id
         return False
 
-    def pause_resource(self, account: str) -> bool:
+    def pause_resource(self, resource_backend_id: str) -> bool:
         """Temporary placeholder."""
-        del account
+        del resource_backend_id
         return False
 
-    def restore_resource(self, account: str) -> bool:
+    def restore_resource(self, resource_backend_id: str) -> bool:
         """Temporary placeholder."""
-        del account
+        del resource_backend_id
         return False
 
     def get_resource_metadata(self, _: str) -> dict:
@@ -82,7 +84,7 @@ class MoabBackend(BaseBackend):
         return {}
 
     def _collect_resource_limits(
-        self, waldur_resource: dict[str, dict]
+        self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect deposit limit only with no conversion."""
         deposit_limit = {"deposit": waldur_resource["limits"]["deposit"]}

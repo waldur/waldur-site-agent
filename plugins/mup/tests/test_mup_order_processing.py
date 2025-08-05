@@ -516,8 +516,8 @@ class MUPTerminationOrderTest(BaseMUPOrderTest):
         processor = OfferingOrderProcessor(MUP_OFFERING)
         processor.process_offering()
 
-        # Verify delete_account was called (which should deactivate the project)
-        mup_client.delete_account.assert_called()
+        # Verify delete_resource was called (which should deactivate the project)
+        mup_client.delete_resource.assert_called()
 
 
 @mock.patch(

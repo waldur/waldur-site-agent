@@ -341,10 +341,10 @@ class MUPBackend(backends.BaseBackend):
             self._create_and_add_users_from_context(mup_project["id"], user_context)
 
     def _setup_resource_limits(
-        self, allocation_account: str, waldur_resource: WaldurResource
+        self, resource_backend_id: str, waldur_resource: WaldurResource
     ) -> None:
         """Skip this step for MUP."""
-        del allocation_account, waldur_resource
+        del resource_backend_id, waldur_resource
 
     def _create_resource_in_backend(self, waldur_resource: WaldurResource) -> str:
         """Create MUP resource within the MUP project."""
@@ -444,19 +444,19 @@ class MUPBackend(backends.BaseBackend):
 
         return allocation_limits, waldur_resource_limits
 
-    def downscale_resource(self, account: str) -> bool:
+    def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale the account on the backend - not supported by MUP."""
-        logger.warning("Downscaling not supported for MUP account %s", account)
+        logger.warning("Downscaling not supported for MUP account %s", resource_backend_id)
         return False
 
-    def pause_resource(self, account: str) -> bool:
+    def pause_resource(self, resource_backend_id: str) -> bool:
         """Pause the account on the backend - not supported by MUP."""
-        logger.warning("Pausing not supported for MUP account %s", account)
+        logger.warning("Pausing not supported for MUP account %s", resource_backend_id)
         return False
 
-    def restore_resource(self, account: str) -> bool:
+    def restore_resource(self, resource_backend_id: str) -> bool:
         """Restore the account after downscaling or pausing - not supported by MUP."""
-        logger.warning("Restore not supported for MUP account %s", account)
+        logger.warning("Restore not supported for MUP account %s", resource_backend_id)
         return False
 
     def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
@@ -524,11 +524,11 @@ class MUPBackend(backends.BaseBackend):
             logger.exception("Failed to update resource limits for %s", resource_backend_id)
             raise BackendError(f"Failed to update resource limits: {e}") from e
 
-    def get_resource_metadata(self, account: str) -> dict:
+    def get_resource_metadata(self, resource_backend_id: str) -> dict:
         """Get backend-specific resource metadata."""
         # Find project and allocation by account name (project ID)
         try:
-            project_id = int(account)
+            project_id = int(resource_backend_id)
             projects = self.client.get_projects()
             for project in projects:
                 if project.get("id") == project_id:
@@ -543,10 +543,12 @@ class MUPBackend(backends.BaseBackend):
                             "allocation_used": allocation.get("used"),
                         }
         except (ValueError, Exception):
-            logger.exception("Failed to get resource metadata for %s", account)
+            logger.exception("Failed to get resource metadata for %s", resource_backend_id)
         return {}
 
-    def _get_usage_report(self, accounts: list[str]) -> dict[str, dict[str, dict[str, int]]]:
+    def _get_usage_report(
+        self, resource_backend_ids: list[str]
+    ) -> dict[str, dict[str, dict[str, int]]]:
         """Collect usage report for the specified accounts from MUP."""
         report: dict[str, dict[str, dict[str, int]]] = {}
 
@@ -555,7 +557,7 @@ class MUPBackend(backends.BaseBackend):
 
             for project in projects:
                 project_id_str = str(project.get("id"))
-                if project_id_str in accounts:
+                if project_id_str in resource_backend_ids:
                     allocations = self.client.get_project_allocations(project["id"])
 
                     # Initialize account usage

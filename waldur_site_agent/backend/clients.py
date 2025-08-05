@@ -8,7 +8,7 @@ from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.exceptions import (
     BackendError,
 )
-from waldur_site_agent.backend.structures import Account, Association
+from waldur_site_agent.backend.structures import Association, ClientResource
 
 
 class BaseClient:
@@ -28,62 +28,62 @@ class BaseClient:
             raise BackendError(stdout) from e
 
     @abc.abstractmethod
-    def list_accounts(self) -> list[Account]:
-        """Get accounts list."""
+    def list_resources(self) -> list[ClientResource]:
+        """Get resource list."""
 
     @abc.abstractmethod
-    def get_account(self, name: str) -> Optional[Account]:
-        """Get account info."""
+    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+        """Get the resource's info."""
 
     @abc.abstractmethod
-    def create_account(
+    def create_resource(
         self, name: str, description: str, organization: str, parent_name: Optional[str] = None
     ) -> str:
-        """Create account in the cluster."""
+        """Create a resource in the cluster."""
 
     @abc.abstractmethod
-    def delete_account(self, name: str) -> str:
-        """Delete account from the cluster."""
+    def delete_resource(self, name: str) -> str:
+        """Delete a resource from the cluster."""
 
     @abc.abstractmethod
-    def set_resource_limits(self, account: str, limits_dict: dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> Optional[str]:
         """Set account limits."""
 
     @abc.abstractmethod
-    def get_resource_limits(self, account: str) -> dict[str, int]:
+    def get_resource_limits(self, resource_id: str) -> dict[str, int]:
         """Get account limits."""
 
     @abc.abstractmethod
-    def get_resource_user_limits(self, account: str) -> dict[str, dict[str, int]]:
+    def get_resource_user_limits(self, resource_id: str) -> dict[str, dict[str, int]]:
         """Get per-user limits for the account."""
 
     @abc.abstractmethod
     def set_resource_user_limits(
-        self, account: str, username: str, limits_dict: dict[str, int]
+        self, resource_id: str, username: str, limits_dict: dict[str, int]
     ) -> str:
-        """Set account limits for a specific user."""
+        """Set resource limits for a specific user."""
 
     @abc.abstractmethod
-    def get_association(self, user: str, account: str) -> Optional[Association]:
-        """Get association between user and account."""
+    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+        """Get association between the user and the resource."""
 
     @abc.abstractmethod
     def create_association(
-        self, username: str, account: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: Optional[str] = None
     ) -> str:
-        """Create association between user and account."""
+        """Create association between the user and the resource."""
 
     @abc.abstractmethod
-    def delete_association(self, username: str, account: str) -> str:
-        """Delete association between user and account."""
+    def delete_association(self, username: str, resource_id: str) -> str:
+        """Delete association between the user and the resource."""
 
     @abc.abstractmethod
-    def get_usage_report(self, accounts: list[str]) -> list:
+    def get_usage_report(self, resource_ids: list[str]) -> list:
         """Get usage records."""
 
     @abc.abstractmethod
-    def list_account_users(self, account: str) -> list[str]:
-        """Get account users."""
+    def list_resource_users(self, resource_id: str) -> list[str]:
+        """Get resource users."""
 
     def create_linux_user_homedir(self, username: str, umask: str = "") -> str:
         """Creates homedir for the user in Linux system."""
@@ -94,32 +94,32 @@ class BaseClient:
 class UnknownClient(BaseClient):
     """Unknown cli-client for a backend communication."""
 
-    def list_accounts(self) -> list[Account]:
+    def list_resources(self) -> list[ClientResource]:
         """Get accounts list."""
         return []
 
-    def get_account(self, _: str) -> Optional[Account]:
-        """Get account info."""
+    def get_resource(self, _: str) -> Optional[ClientResource]:
+        """Get resource info."""
         return None
 
-    def create_account(
+    def create_resource(
         self, name: str, description: str, organization: str, parent_name: Optional[str] = None
     ) -> str:
-        """Create account in the cluster."""
+        """Create resource in the cluster."""
         del description, organization, parent_name
         return name
 
-    def delete_account(self, name: str) -> str:
-        """Delete account from the cluster."""
+    def delete_resource(self, name: str) -> str:
+        """Delete resource from the cluster."""
         return name
 
-    def set_resource_limits(self, account: str, limits_dict: dict[str, int]) -> Optional[str]:
-        """Set account limits."""
-        del account, limits_dict
+    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> Optional[str]:
+        """Set resource limits."""
+        del resource_id, limits_dict
         return ""
 
     def get_resource_limits(self, _: str) -> dict[str, int]:
-        """Get account limits."""
+        """Get resource limits."""
         return {}
 
     def get_resource_user_limits(self, _: str) -> dict[str, dict[str, int]]:
@@ -127,33 +127,33 @@ class UnknownClient(BaseClient):
         return {}
 
     def set_resource_user_limits(
-        self, account: str, username: str, limits_dict: dict[str, int]
+        self, resource_id: str, username: str, limits_dict: dict[str, int]
     ) -> str:
-        """Set account limits for a specific user."""
-        del account, username, limits_dict
+        """Set resource limits for a specific user."""
+        del resource_id, username, limits_dict
         return ""
 
-    def get_association(self, user: str, account: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
         """Get association between user and account."""
-        del user, account
+        del user, resource_id
         return None
 
     def create_association(
-        self, username: str, account: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: Optional[str] = None
     ) -> str:
         """Create association between user and account."""
-        del account, default_account
+        del resource_id, default_account
         return username
 
-    def delete_association(self, username: str, account: str) -> str:
+    def delete_association(self, username: str, resource_id: str) -> str:
         """Delete association between user and account."""
-        del account
+        del resource_id
         return username
 
-    def get_usage_report(self, accounts: list[str]) -> list:
+    def get_usage_report(self, resource_ids: list[str]) -> list:
         """Get usages records."""
-        return accounts
+        return resource_ids
 
-    def list_account_users(self, _: str) -> list[str]:
-        """Get account users."""
+    def list_resource_users(self, _: str) -> list[str]:
+        """Get resource users."""
         return []

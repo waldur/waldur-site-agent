@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class Account:
+class ClientResource:
     """Account model for SLURM and MOAB."""
 
     name: str = ""
@@ -14,7 +14,7 @@ class Account:
 
 @dataclass
 class Association:
-    """Association between a user and an account in SLURM or MOAB."""
+    """Association between a user and a resource."""
 
     account: str = ""
     user: str = ""

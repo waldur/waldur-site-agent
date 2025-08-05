@@ -65,7 +65,7 @@ class SlurmBackend(backends.BaseBackend):
         tres = self.list_components()
         logger.info("Available tres in the cluster: %s", ",".join(tres))
 
-        default_account = self.client.get_account(default_account_name)
+        default_account = self.client.get_resource(default_account_name)
         if default_account is None:
             logger.error("There is no account %s in the cluster", default_account)
             return False
@@ -77,7 +77,7 @@ class SlurmBackend(backends.BaseBackend):
     def ping(self, raise_exception: bool = False) -> bool:
         """Check if the SLURM cluster is online."""
         try:
-            self.client.list_accounts()
+            self.client.list_resources()
         except BackendError as err:
             if raise_exception:
                 raise
@@ -160,7 +160,7 @@ class SlurmBackend(backends.BaseBackend):
 
         return added_users
 
-    def downscale_resource(self, account: str) -> bool:
+    def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale the resource QoS respecting the backend settings."""
         qos_downscaled = self.backend_settings.get("qos_downscaled")
         if not qos_downscaled:
@@ -170,7 +170,7 @@ class SlurmBackend(backends.BaseBackend):
             )
             return False
 
-        current_qos = self.client.get_current_account_qos(account)
+        current_qos = self.client.get_current_account_qos(resource_backend_id)
 
         logger.info("Current QoS: %s", current_qos)
 
@@ -179,11 +179,11 @@ class SlurmBackend(backends.BaseBackend):
             return True
 
         logger.info("Setting %s QoS for the SLURM account", qos_downscaled)
-        self.client.set_account_qos(account, qos_downscaled)
+        self.client.set_account_qos(resource_backend_id, qos_downscaled)
         logger.info("The new QoS successfully set")
         return True
 
-    def pause_resource(self, account: str) -> bool:
+    def pause_resource(self, resource_backend_id: str) -> bool:
         """Set the resource QoS to a paused one respecting the backend settings."""
         qos_paused = self.backend_settings.get("qos_paused")
         if not qos_paused:
@@ -193,7 +193,7 @@ class SlurmBackend(backends.BaseBackend):
             )
             return False
 
-        current_qos = self.client.get_current_account_qos(account)
+        current_qos = self.client.get_current_account_qos(resource_backend_id)
 
         logger.info("Current QoS: %s", current_qos)
 
@@ -202,13 +202,13 @@ class SlurmBackend(backends.BaseBackend):
             return True
 
         logger.info("Setting %s QoS for the SLURM account", qos_paused)
-        self.client.set_account_qos(account, qos_paused)
+        self.client.set_account_qos(resource_backend_id, qos_paused)
         logger.info("The new QoS successfully set")
         return True
 
-    def restore_resource(self, account: str) -> bool:
+    def restore_resource(self, resource_backend_id: str) -> bool:
         """Restore resource QoS to the default one."""
-        current_qos = self.client.get_current_account_qos(account)
+        current_qos = self.client.get_current_account_qos(resource_backend_id)
 
         default_qos = self.backend_settings.get("qos_default", "normal")
 
@@ -223,18 +223,20 @@ class SlurmBackend(backends.BaseBackend):
             return False
 
         logger.info("Setting %s QoS", default_qos)
-        self.client.set_account_qos(account, default_qos)
-        new_qos = self.client.get_current_account_qos(account)
+        self.client.set_account_qos(resource_backend_id, default_qos)
+        new_qos = self.client.get_current_account_qos(resource_backend_id)
         logger.info("The new QoS is %s", new_qos)
 
         return True
 
-    def get_resource_metadata(self, account: str) -> dict:
+    def get_resource_metadata(self, resource_backend_id: str) -> dict:
         """Return backend metadata for the SLURM account (QoS only for now)."""
-        current_qos = self.client.get_current_account_qos(account)
+        current_qos = self.client.get_current_account_qos(resource_backend_id)
         return {"qos": current_qos}
 
-    def _get_usage_report(self, accounts: list[str]) -> dict[str, dict[str, dict[str, int]]]:
+    def _get_usage_report(
+        self, resource_backend_ids: list[str]
+    ) -> dict[str, dict[str, dict[str, int]]]:
         """Example output.
 
         {
@@ -253,7 +255,7 @@ class SlurmBackend(backends.BaseBackend):
         }
         """
         report: dict[str, dict[str, dict[str, int]]] = {}
-        lines = self.client.get_usage_report(accounts)
+        lines = self.client.get_usage_report(resource_backend_ids)
 
         for line in lines:
             report.setdefault(line.account, {}).setdefault(line.user, {})
@@ -289,29 +291,29 @@ class SlurmBackend(backends.BaseBackend):
         logger.info("Cancelling jobs for the account %s and user %s", account, user)
         self.client.cancel_active_user_jobs(account, user)
 
-    def _pre_delete_user_actions(self, account: str, username: str) -> None:
+    def _pre_delete_user_actions(self, resource_backend_id: str, username: str) -> None:
         if not self.client.check_user_exists(username):
             logger.info(
                 'The user "%s" does not exist in the cluster, skipping job cancellation', username
             )
             return
-        job_ids = self.list_active_user_jobs(account, username)
+        job_ids = self.list_active_user_jobs(resource_backend_id, username)
         if len(job_ids) > 0:
             logger.info(
                 "The active jobs for account %s and user %s: %s",
-                account,
+                resource_backend_id,
                 username,
                 ", ".join(job_ids),
             )
-            self.cancel_active_jobs_for_account_user(account, username)
+            self.cancel_active_jobs_for_account_user(resource_backend_id, username)
 
-    def _pre_delete_resource(self, account: str) -> None:
+    def _pre_delete_resource(self, resource_backend_id: str) -> None:
         """Delete all existing associations and cancel all the active jobs."""
-        if self.client.account_has_users(account):
-            logger.info("Cancelling all active jobs for account %s", account)
-            self.client.cancel_active_user_jobs(account)
-            logger.info("Removing all users from account %s", account)
-            self.client.delete_all_users_from_account(account)
+        if self.client.account_has_users(resource_backend_id):
+            logger.info("Cancelling all active jobs for account %s", resource_backend_id)
+            self.client.cancel_active_user_jobs(resource_backend_id)
+            logger.info("Removing all users from account %s", resource_backend_id)
+            self.client.delete_all_users_from_account(resource_backend_id)
 
     def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
         """Set limits for limit-based components in the SLURM allocation."""

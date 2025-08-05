@@ -13,7 +13,7 @@ from urllib.parse import urljoin
 import requests
 
 from waldur_site_agent.backend.clients import BaseClient
-from waldur_site_agent.backend.structures import Account, Association
+from waldur_site_agent.backend.structures import Association, ClientResource
 
 logger = logging.getLogger(__name__)
 
@@ -257,12 +257,12 @@ class MUPClient(BaseClient):
 
     # Implementing BaseClient abstract methods with MUP-specific implementations
 
-    def list_accounts(self) -> list[Account]:
+    def list_resources(self) -> list[ClientResource]:
         """Get accounts list - mapped to MUP projects."""
         projects = self.get_projects()
         accounts = []
         for project in projects:
-            account = Account(
+            account = ClientResource(
                 name=project.get("grant_number", project.get("title", "")),
                 description=project.get("title", ""),
                 organization=project.get("agency", ""),
@@ -270,27 +270,31 @@ class MUPClient(BaseClient):
             accounts.append(account)
         return accounts
 
-    def get_account(self, name: str) -> Optional[Account]:
+    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
         """Get account info - find MUP project by grant number."""
         projects = self.get_projects()
         for project in projects:
-            if project.get("grant_number") == name:
-                return Account(
+            if project.get("grant_number") == resource_id:
+                return ClientResource(
                     name=project.get("grant_number", project.get("title", "")),
                     description=project.get("title", ""),
                     organization=project.get("agency", ""),
                 )
         return None
 
-    def create_account(
-        self, name: str, _description: str, _organization: str, _parent_name: Optional[str] = None
+    def create_resource(
+        self,
+        resource_id: str,
+        _description: str,
+        _organization: str,
+        _parent_name: Optional[str] = None,
     ) -> str:
         """Create account in MUP - creates a project."""
         # This is handled by the backend create_resource method
         # Return the name to satisfy interface
-        return name
+        return resource_id
 
-    def delete_account(self, name: str) -> str:
+    def delete_resource(self, name: str) -> str:
         """Delete account from MUP - deactivate project."""
         # Find project by grant number and deactivate
         projects = self.get_projects()
@@ -300,12 +304,12 @@ class MUPClient(BaseClient):
                 break
         return name
 
-    def set_resource_limits(self, account: str, limits_dict: dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> Optional[str]:
         """Set account limits - update allocation size."""
         # Find project and allocation by account name (grant number)
         projects = self.get_projects()
         for project in projects:
-            if project.get("grant_number") == account:
+            if project.get("grant_number") == resource_id:
                 allocations = self.get_project_allocations(project["id"])
                 if allocations:
                     # Update first allocation (assuming one allocation per project)
@@ -324,62 +328,62 @@ class MUPClient(BaseClient):
                     return f"Updated allocation size to {size}"
         return None
 
-    def get_resource_limits(self, account: str) -> dict[str, int]:
+    def get_resource_limits(self, resource_id: str) -> dict[str, int]:
         """Get account limits - return allocation limits."""
         projects = self.get_projects()
         for project in projects:
-            if project.get("grant_number") == account:
+            if project.get("grant_number") == resource_id:
                 allocations = self.get_project_allocations(project["id"])
                 if allocations:
                     allocation = allocations[0]
                     return {"cpu": allocation.get("size", 0)}
         return {}
 
-    def get_resource_user_limits(self, _account: str) -> dict[str, dict[str, int]]:
+    def get_resource_user_limits(self, _resource_id: str) -> dict[str, dict[str, int]]:
         """Get per-user limits - not supported by MUP, return empty."""
         return {}
 
     def set_resource_user_limits(
-        self, _account: str, username: str, _limits_dict: dict[str, int]
+        self, _resource_id: str, username: str, _limits_dict: dict[str, int]
     ) -> str:
         """Set account limits for specific user - not supported by MUP."""
         return f"User limits not supported for {username}"
 
-    def get_association(self, user: str, account: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
         """Get association between user and account - check project membership."""
         projects = self.get_projects()
         for project in projects:
-            if project.get("grant_number") == account:
+            if project.get("grant_number") == resource_id:
                 members = self.get_project_members(project["id"])
                 for member in members:
                     member_info = member.get("member", {})
                     if member_info.get("username") == user or member_info.get("email") == user:
                         return Association(
-                            account=account,
+                            account=resource_id,
                             user=user,
                             value=1,  # Active membership
                         )
         return None
 
     def create_association(
-        self, username: str, account: str, _default_account: Optional[str] = None
+        self, username: str, resource_id: str, _default_account: Optional[str] = None
     ) -> str:
         """Create association between user and account - add user to project."""
         # This is handled by the backend's user management methods
-        return f"Association created for {username} in {account}"
+        return f"Association created for {username} in {resource_id}"
 
-    def delete_association(self, username: str, account: str) -> str:
+    def delete_association(self, username: str, resource_id: str) -> str:
         """Delete association between user and account - remove user from project."""
         # This is handled by the backend's user management methods
-        return f"Association deleted for {username} from {account}"
+        return f"Association deleted for {username} from {resource_id}"
 
-    def get_usage_report(self, accounts: list[str]) -> list:
+    def get_usage_report(self, resource_ids: list[str]) -> list:
         """Get usage records - get allocation usage from MUP."""
         usage_data = []
         projects = self.get_projects()
 
         for project in projects:
-            if project.get("grant_number") in accounts:
+            if project.get("grant_number") in resource_ids:
                 allocations = self.get_project_allocations(project["id"])
                 for allocation in allocations:
                     usage_data.append(  # noqa: PERF401
@@ -393,11 +397,11 @@ class MUPClient(BaseClient):
 
         return usage_data
 
-    def list_account_users(self, account: str) -> list[str]:
+    def list_resource_users(self, resource_id: str) -> list[str]:
         """Get account users - get project members."""
         projects = self.get_projects()
         for project in projects:
-            if project.get("grant_number") == account:
+            if project.get("grant_number") == resource_id:
                 members = self.get_project_members(project["id"])
                 return [
                     member.get("member", {}).get("username", "")
