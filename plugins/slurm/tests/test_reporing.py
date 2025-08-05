@@ -105,7 +105,6 @@ class ReportingTest(unittest.TestCase):
             params={
                 "offering_uuid": self.offering.uuid,
                 "state": ["OK", "Erred"],
-                "field": ["backend_id", "uuid", "name", "offering_type", "state"],
             },
         ).respond(200, json=[self.waldur_resource])
         respx.get(
@@ -174,7 +173,6 @@ class ReportingTest(unittest.TestCase):
             params={
                 "offering_uuid": self.offering.uuid,
                 "state": ["OK", "Erred"],
-                "field": ["backend_id", "uuid", "name", "offering_type", "state"],
             },
         ).respond(200, json=[self.waldur_resource])
         respx.get(
