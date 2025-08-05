@@ -11,7 +11,7 @@ from waldur_api_client.api.marketplace_resources import marketplace_resources_li
 from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend import backends, logger
-from waldur_site_agent.backend.structures import Resource
+from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common.pagination import get_all_paginated
 
 
@@ -368,7 +368,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
-    ) -> Resource:
+    ) -> BackendResourceInfo:
         """Create storage resource and generate JSON files."""
         del user_context
         logger.info("Creating CSCS storage resource: %s", waldur_resource.name)
@@ -378,10 +378,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         self.generate_order_json(waldur_resource, "create")
 
         # Return resource structure
-        return Resource(
-            backend_type=self.backend_type,
-            name=waldur_resource.name,
-            marketplace_uuid=waldur_resource.uuid.hex,
+        return BackendResourceInfo(
             backend_id=waldur_resource.slug,  # Use slug as backend ID
             limits=self._collect_resource_limits(waldur_resource)[1],
         )

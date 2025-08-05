@@ -55,11 +55,13 @@ class BaseBackend(ABC):
     def get_resource_metadata(self, resource_backend_id: str) -> dict:
         """Get backend-specific resource metadata."""
 
-    def list_resources(self) -> list[structures.Resource]:
+    def list_resources(self) -> list[structures.BackendResourceInfo]:
         """List resources in the the backend."""
         resources = self.client.list_resources()
         return [
-            structures.Resource(backend_id=resource.name, parent_id=resource.organization)
+            structures.BackendResourceInfo(
+                backend_id=resource.name, parent_id=resource.organization
+            )
             for resource in resources
         ]
 
@@ -84,40 +86,38 @@ class BaseBackend(ABC):
         """Collect limits for backend and waldur separately."""
 
     def pull_resources(
-        self, resources_info: list[structures.Resource]
-    ) -> dict[str, structures.Resource]:
+        self, waldur_resources: list[WaldurResource]
+    ) -> dict[str, tuple[WaldurResource, structures.BackendResourceInfo]]:
         """Pull data of resources available in the backend."""
         report = {}
-        for resource_info in resources_info:
-            backend_id = resource_info.backend_id
+        for waldur_resource in waldur_resources:
+            backend_id = waldur_resource.backend_id
             try:
-                resource = self.pull_resource(resource_info)
-                if resource is not None:
-                    report[backend_id] = resource
+                backend_resource_info = self.pull_resource(waldur_resource)
+                if backend_resource_info is not None:
+                    report[backend_id] = (waldur_resource, backend_resource_info)
             except Exception as e:
                 logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
         return report
 
-    def pull_resource(self, resource_info: structures.Resource) -> Optional[structures.Resource]:
+    def pull_resource(
+        self, waldur_resource: WaldurResource
+    ) -> Optional[structures.BackendResourceInfo]:
         """Pull resource from backend."""
         try:
-            backend_id = resource_info.backend_id
-            backend_resource = self._pull_backend_resource(backend_id)
-            if backend_resource is None:
+            backend_id = waldur_resource.backend_id
+            backend_resource_info = self._pull_backend_resource(backend_id)
+            if backend_resource_info is None:
                 return None
         except Exception as e:
             logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
             return None
         else:
-            backend_resource.name = resource_info.name
-            backend_resource.marketplace_uuid = resource_info.marketplace_uuid
-            backend_resource.restrict_member_access = resource_info.restrict_member_access
-            backend_resource.downscaled = resource_info.downscaled
-            backend_resource.paused = resource_info.paused
-            backend_resource.state = resource_info.state
-            return backend_resource
+            return backend_resource_info
 
-    def _pull_backend_resource(self, resource_backend_id: str) -> Optional[structures.Resource]:
+    def _pull_backend_resource(
+        self, resource_backend_id: str
+    ) -> Optional[structures.BackendResourceInfo]:
         """Pull resource data from the backend."""
         logger.info("Pulling resource %s", resource_backend_id)
         resource_backend_info = self.client.get_resource(resource_backend_id)
@@ -135,22 +135,18 @@ class BaseBackend(ABC):
             empty_usage = dict.fromkeys(self.backend_components, 0)
             usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
-        return structures.Resource(
-            name="",
-            marketplace_uuid="",
-            backend_id=resource_backend_id,
-            limits={},
+        return structures.BackendResourceInfo(
             users=users,
             usage=usage,
-            backend_type=self.backend_type,
         )
 
-    def _pre_delete_resource(self, resource_backend_id: str) -> None:
+    def _pre_delete_resource(self, waldur_resource: WaldurResource) -> None:
         """Perform actions before deleting the resource in the backend."""
-        del resource_backend_id
+        del waldur_resource
 
-    def delete_resource(self, resource_backend_id: str, **kwargs: str) -> None:
+    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:
         """Delete resource from the backend."""
+        resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             logger.warning("Empty backend_id for resource, skipping deletion")
             return
@@ -161,7 +157,7 @@ class BaseBackend(ABC):
             )
             return
 
-        self._pre_delete_resource(resource_backend_id)
+        self._pre_delete_resource(waldur_resource)
         self._delete_resource_safely(resource_backend_id)
 
         if "project_slug" in kwargs:
@@ -216,7 +212,7 @@ class BaseBackend(ABC):
 
     def create_resource(
         self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
-    ) -> structures.Resource:
+    ) -> structures.BackendResourceInfo:
         """Create resource on the backend.
 
         Creates necessary objects and resources and sets up resource limits.
@@ -235,16 +231,13 @@ class BaseBackend(ABC):
 
         # # Setup limits
         self._setup_resource_limits(backend_resource_id, waldur_resource)
-        resource = structures.Resource(
-            backend_type=self.backend_type,
-            name=waldur_resource.name,
-            marketplace_uuid=waldur_resource.uuid.hex,
+        backend_resource_info = structures.BackendResourceInfo(
             backend_id=backend_resource_id,
             limits=self._collect_resource_limits(waldur_resource)[1],
         )
         # Actions after resource creation
-        self.post_create_resource(resource, waldur_resource, user_context)
-        return resource
+        self.post_create_resource(backend_resource_info, waldur_resource, user_context)
+        return backend_resource_info
 
     def _pre_create_resource(
         self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
@@ -322,7 +315,7 @@ class BaseBackend(ABC):
 
     def post_create_resource(
         self,
-        resource: structures.Resource,
+        resource: structures.BackendResourceInfo,
         waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
     ) -> None:
@@ -477,18 +470,22 @@ class UnknownBackend(BaseBackend):
         """Placeholder."""
         return []
 
-    def pull_resources(self, _: list[structures.Resource]) -> dict[str, structures.Resource]:
+    def pull_resources(
+        self, _: list[WaldurResource]
+    ) -> dict[str, tuple[WaldurResource, structures.BackendResourceInfo]]:
         """Placeholder."""
         return {}
 
-    def delete_resource(self, resource_backend_id: str, **kwargs: str) -> None:
+    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:
         """Placeholder."""
-        del kwargs, resource_backend_id
+        del kwargs, waldur_resource
 
-    def create_resource(self, _: dict, user_context: Optional[dict] = None) -> structures.Resource:
+    def create_resource(
+        self, _: dict, user_context: Optional[dict] = None
+    ) -> structures.BackendResourceInfo:
         """Placeholder."""
         del user_context
-        return structures.Resource()
+        return structures.BackendResourceInfo()
 
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Placeholder."""
@@ -523,7 +520,7 @@ class UnknownBackend(BaseBackend):
     def _collect_resource_limits(self, _: WaldurResource) -> tuple[dict[str, int], dict[str, int]]:
         return {"": 0}, {"": 0}
 
-    def _pull_backend_resource(self, _: str) -> Optional[structures.Resource]:
+    def _pull_backend_resource(self, _: str) -> Optional[structures.BackendResourceInfo]:
         return None
 
     def _get_usage_report(self, _: list[str]) -> dict:

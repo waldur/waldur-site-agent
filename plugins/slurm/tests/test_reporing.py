@@ -8,17 +8,15 @@ from waldur_api_client.client import AuthenticatedClient
 from waldur_site_agent_slurm import backend
 
 from tests.fixtures import OFFERING
-from waldur_site_agent.backend import BackendType
-from waldur_site_agent.backend.structures import Resource
+from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingReportProcessor
 
 waldur_client_mock = mock.Mock()
 slurm_backend_mock = mock.Mock()
 
-allocation_slurm = Resource(
+allocation_slurm = BackendResourceInfo(
     backend_id="test-allocation-01",
-    backend_type=BackendType.SLURM.value,
     users=["user-01"],
     usage={
         "user-01": {
@@ -69,9 +67,8 @@ class ReportingTest(unittest.TestCase):
             headers={},
         )
         self.mock_get_client.return_value = self.mock_client
-        self.allocation_slurm = Resource(
+        self.allocation_slurm = BackendResourceInfo(
             backend_id="test-allocation-01",
-            backend_type=BackendType.SLURM.value,
             users=["user-01"],
             usage={
                 "user-01": {

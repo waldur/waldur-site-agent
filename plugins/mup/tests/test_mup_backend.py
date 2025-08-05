@@ -12,7 +12,7 @@ from waldur_api_client.types import Unset
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_mup.backend import MUPBackend
 from waldur_site_agent_mup.client import MUPError
-from waldur_site_agent.backend.structures import Resource
+from waldur_site_agent.backend.structures import BackendResourceInfo
 
 
 class MUPBackendTest(unittest.TestCase):
@@ -355,9 +355,7 @@ class MUPBackendTest(unittest.TestCase):
         backend = MUPBackend(self.mup_settings, self.mup_components)
         result = backend.create_resource(self.sample_waldur_resource, self.sample_user_context)
 
-        assert isinstance(result, Resource)
-        assert result.backend_type == "mup"
-        assert result.marketplace_uuid == self.resource_uuid.hex
+        assert isinstance(result, BackendResourceInfo)
         assert result.backend_id == "1"
         assert result.limits["cpu"] == 10
 
@@ -394,7 +392,7 @@ class MUPBackendTest(unittest.TestCase):
         result = backend.create_resource(self.sample_waldur_resource, self.sample_user_context)
 
         mock_client.activate_project.assert_called_once_with(1)
-        assert isinstance(result, Resource)
+        assert isinstance(result, BackendResourceInfo)
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_create_resource_with_real_pi_from_context(self, mock_client_class) -> None:
@@ -418,7 +416,7 @@ class MUPBackendTest(unittest.TestCase):
         # Verify user was added to project during creation
         mock_client.add_project_member.assert_called()
 
-        assert isinstance(result, Resource)
+        assert isinstance(result, BackendResourceInfo)
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_create_resource_without_user_context(self, mock_client_class) -> None:
@@ -441,7 +439,7 @@ class MUPBackendTest(unittest.TestCase):
         # Verify no users were added during creation (since no context)
         mock_client.add_project_member.assert_not_called()
 
-        assert isinstance(result, Resource)
+        assert isinstance(result, BackendResourceInfo)
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_collect_limits(self, mock_client_class) -> None:

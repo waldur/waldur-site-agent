@@ -23,7 +23,6 @@ from tests.fixtures import OFFERING
 
 def setup_common_respx_mocks(
     base_url: str,
-    order_uuid: str,
     waldur_user: dict,
     waldur_offering: dict,
     waldur_resource: dict,
@@ -72,9 +71,21 @@ def setup_order_respx_mocks(base_url: str, order_uuid: str, waldur_order: dict):
     respx.post(f"{base_url}/api/marketplace-orders/{order_uuid}/set_state_done/").respond(
         200, json={}
     )
-    return respx.post(f"{base_url}/api/marketplace-orders/{order_uuid}/set_state_error/").respond(
-        200, json={}
+    respx.post(
+        f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/set_state_error/"
+    ).respond(200, json={})
+    respx.get(f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/").respond(
+        200, json=order_copy
     )
+    respx.post(
+        f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/approve_by_provider/"
+    ).respond(200, json={})
+    respx.post(
+        f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/set_state_done/"
+    ).respond(200, json={})
+    return respx.post(
+        f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/set_state_error/"
+    ).respond(200, json={})
 
 
 def setup_slurm_client_mocks(slurm_client_class: mock.Mock, get_resource_side_effect=None):
@@ -103,8 +114,8 @@ class CreationOrderTest(unittest.TestCase):
         self.allocation_uuid = uuid.uuid4().hex
         self.project_uuid = uuid.uuid4().hex
         self.customer_uuid = uuid.uuid4().hex
-        self.order_uuid = str(uuid.UUID("2c76f6ea-3482-4cb9-a975-ae0235ba4ac7"))
-        self.resource_uuid = uuid.uuid4()
+        self.order_uuid = uuid.UUID("2c76f6ea-3482-4cb9-a975-ae0235ba4ac7").hex
+        self.resource_uuid = uuid.uuid4().hex
         self.waldur_order = models.OrderDetails(
             uuid=self.order_uuid,
             type_=RequestTypes.CREATE,
@@ -202,7 +213,6 @@ class CreationOrderTest(unittest.TestCase):
         # Setup common mocks
         setup_common_respx_mocks(
             self.BASE_URL,
-            self.order_uuid,
             self.waldur_user,
             self.waldur_offering,
             self.waldur_resource,
@@ -253,7 +263,6 @@ class CreationOrderTest(unittest.TestCase):
         # Setup common mocks
         setup_common_respx_mocks(
             self.BASE_URL,
-            self.order_uuid,
             self.waldur_user,
             self.waldur_offering,
             self.waldur_resource,
@@ -293,7 +302,7 @@ class TerminationOrderTest(unittest.TestCase):
         self.marketplace_resource_uuid = str(uuid.uuid4())
         self.resource_uuid = uuid.uuid4().hex
         self.project_uuid = uuid.uuid4().hex
-        self.order_uuid = str(uuid.uuid4())
+        self.order_uuid = uuid.uuid4()
 
         # Create order data
         self.waldur_order = models.OrderDetails(
@@ -366,7 +375,6 @@ class TerminationOrderTest(unittest.TestCase):
     def test_allocation_deletion(self, slurm_client_class: mock.Mock) -> None:
         setup_common_respx_mocks(
             self.base_url,
-            self.order_uuid,
             self.waldur_user,
             self.waldur_offering,
             self.waldur_resource,
@@ -384,6 +392,9 @@ class TerminationOrderTest(unittest.TestCase):
             params={"offering_uuid": OFFERING.uuid, "state": ["pending-provider", "executing"]},
         ).respond(200, json=[self.waldur_order])
         respx.get(f"{self.base_url}/api/marketplace-orders/{self.order_uuid}/").respond(
+            200, json=self.waldur_order
+        )
+        respx.get(f"{self.base_url}/api/marketplace-orders/{self.order_uuid.hex}/").respond(
             200, json=self.waldur_order
         )
 
@@ -415,7 +426,7 @@ class UpdateOrderTest(unittest.TestCase):
         self.marketplace_resource_uuid = str(uuid.uuid4())
         self.resource_uuid = uuid.uuid4().hex
         self.project_uuid = uuid.uuid4().hex
-        self.order_uuid = str(uuid.uuid4())
+        self.order_uuid = uuid.uuid4()
         self.backend_id = f"hpc_{self.resource_uuid[:5]}_test-allocation-01"[:34]
 
         # Create order data
@@ -507,6 +518,9 @@ class UpdateOrderTest(unittest.TestCase):
             params={"offering_uuid": OFFERING.uuid, "state": ["pending-provider", "executing"]},
         ).respond(200, json=[self.waldur_order])
         respx.get(f"{self.base_url}/api/marketplace-orders/{self.order_uuid}/").respond(
+            200, json=self.waldur_order
+        )
+        respx.get(f"{self.base_url}/api/marketplace-orders/{self.order_uuid.hex}/").respond(
             200, json=self.waldur_order
         )
         respx.get(

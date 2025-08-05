@@ -50,10 +50,10 @@ class BaseMUPOrderTest(unittest.TestCase):
 
     def setUp(self) -> None:
         respx.start()
-        self.resource_uuid = uuid.uuid4()
+        self.resource_uuid = uuid.uuid4().hex
         self.marketplace_resource_uuid = self.resource_uuid
         self.project_uuid = uuid.uuid4().hex
-        self.order_uuid = uuid.uuid4()
+        self.order_uuid = uuid.uuid4().hex
 
         self.mock_client = AuthenticatedClient(
             base_url=BASE_URL,
@@ -123,6 +123,9 @@ class BaseMUPOrderTest(unittest.TestCase):
         respx.get(
             f"{BASE_URL}/api/marketplace-provider-resources/{marketplace_resource_uuid}/"
         ).respond(200, json=resource_data)
+        respx.get(
+            f"{BASE_URL}/api/marketplace-provider-resources/{uuid.UUID(marketplace_resource_uuid)}/"
+        ).respond(200, json=resource_data)
 
     def _setup_offering_users_mock(self, offering_users_data) -> None:
         """Setup offering users mock."""
@@ -181,7 +184,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             }
         ]
         self.waldur_order = {
-            "uuid": str(self.order_uuid),
+            "uuid": self.order_uuid,
             "type": "Create",
             "state": "pending-provider",
             "attributes": {"name": "sample_resource"},
@@ -204,7 +207,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
             "offering_plugin_options": {},
             "backend_id": "",
-            "offering": {"uuid": str(uuid.uuid4()), "name": "MUP Offering"},
+            "offering": {"uuid": uuid.uuid4().hex, "name": "MUP Offering"},
         }
 
     def _setup_order_mocks(
@@ -290,8 +293,8 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         mup_client = self.setup_mup_client_mock(mup_client_class)
 
         self._setup_common_mocks()
-        marketplace_resource_uuid = str(uuid.uuid4())
-        self._setup_order_mocks(str(self.order_uuid), marketplace_resource_uuid)
+        marketplace_resource_uuid = uuid.uuid4().hex
+        self._setup_order_mocks(self.order_uuid, marketplace_resource_uuid)
         self._setup_resource_mocks(marketplace_resource_uuid)
         self._setup_offering_users_mock([self.waldur_offering_user])
         self._setup_resource_team_mock(marketplace_resource_uuid, self.waldur_resource_team)
@@ -321,8 +324,8 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         ]
 
         self._setup_common_mocks()
-        marketplace_resource_uuid = str(uuid.uuid4())
-        self._setup_order_mocks(str(self.order_uuid), marketplace_resource_uuid)
+        marketplace_resource_uuid = uuid.uuid4().hex
+        self._setup_order_mocks(self.order_uuid, marketplace_resource_uuid)
         self._setup_resource_mocks(marketplace_resource_uuid)
         self._setup_offering_users_mock([self.waldur_offering_user])
         self._setup_resource_team_mock(marketplace_resource_uuid, self.waldur_resource_team)
@@ -346,8 +349,8 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
 
         # Setup all mocks first to get the marketplace_resource_uuid
         self._setup_common_mocks()
-        marketplace_resource_uuid = uuid.uuid4()
-        self._setup_order_mocks(str(self.order_uuid), str(marketplace_resource_uuid))
+        marketplace_resource_uuid = uuid.uuid4().hex
+        self._setup_order_mocks(self.order_uuid, str(marketplace_resource_uuid))
         self._setup_resource_mocks(str(marketplace_resource_uuid))
         self._setup_offering_users_mock([self.waldur_offering_user])
         self._setup_resource_team_mock(str(marketplace_resource_uuid), self.waldur_resource_team)
@@ -357,14 +360,14 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             "id": 1,
             "title": "Test project",
             "pi": "pi@example.com",
-            "grant_number": f"waldur_{marketplace_resource_uuid.hex}",  # Use the actual resource UUID
+            "grant_number": f"waldur_{marketplace_resource_uuid}",  # Use the actual resource UUID
             "active": False,
         }
 
         created_allocation = {
             "id": 1,
             "type": "Deucalion x86_64",
-            "identifier": f"alloc_{marketplace_resource_uuid.hex}_cpu",
+            "identifier": f"alloc_{marketplace_resource_uuid}_cpu",
             "size": 10,
             "used": 0,
             "active": True,
@@ -406,8 +409,8 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         mup_client.create_user_request.side_effect = create_user_side_effect
 
         self._setup_common_mocks()
-        marketplace_resource_uuid = str(uuid.uuid4())
-        self._setup_order_mocks(str(self.order_uuid), marketplace_resource_uuid)
+        marketplace_resource_uuid = uuid.uuid4().hex
+        self._setup_order_mocks(self.order_uuid, marketplace_resource_uuid)
         self._setup_resource_mocks(marketplace_resource_uuid)
         self._setup_offering_users_mock([self.waldur_offering_user])
         self._setup_resource_team_mock(marketplace_resource_uuid, self.waldur_resource_team)
@@ -435,8 +438,8 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
 
         # Setup all mocks
         self._setup_common_mocks()
-        marketplace_resource_uuid = str(uuid.uuid4())
-        self._setup_order_mocks(str(self.order_uuid), marketplace_resource_uuid)
+        marketplace_resource_uuid = uuid.uuid4().hex
+        self._setup_order_mocks(self.order_uuid, marketplace_resource_uuid)
         self._setup_resource_mocks(marketplace_resource_uuid)
         self._setup_offering_users_mock([self.waldur_offering_user])
         self._setup_resource_team_mock(marketplace_resource_uuid, self.waldur_resource_team)
@@ -459,7 +462,7 @@ class MUPTerminationOrderTest(BaseMUPOrderTest):
         self.backend_id = "1"  # Project ID as backend ID
 
         self.waldur_order = {
-            "uuid": str(self.order_uuid),
+            "uuid": self.order_uuid,
             "type": "Terminate",
             "resource_name": "test-allocation-01",
             "project_uuid": self.project_uuid,
@@ -483,7 +486,7 @@ class MUPTerminationOrderTest(BaseMUPOrderTest):
 
         # Setup order mocks (termination orders are already in executing state)
         self._setup_order_mocks(
-            str(self.order_uuid), str(self.marketplace_resource_uuid), self.waldur_order
+            self.order_uuid, str(self.marketplace_resource_uuid), self.waldur_order
         )
 
         # Setup resource mocks
@@ -532,7 +535,7 @@ class MUPUpdateOrderTest(BaseMUPOrderTest):
         self.backend_id = "1"  # Project ID as backend ID
 
         self.waldur_order = {
-            "uuid": str(self.order_uuid),
+            "uuid": self.order_uuid,
             "marketplace_resource_uuid": str(self.marketplace_resource_uuid),
             "resource_name": "test-allocation-01",
             "type": "Update",
@@ -570,7 +573,7 @@ class MUPUpdateOrderTest(BaseMUPOrderTest):
         # Setup all mocks
         self._setup_common_mocks()
         self._setup_order_mocks(
-            str(self.order_uuid), str(self.marketplace_resource_uuid), self.waldur_order
+            self.order_uuid, str(self.marketplace_resource_uuid), self.waldur_order
         )
         self._setup_resource_mocks(str(self.marketplace_resource_uuid), self.waldur_resource)
 

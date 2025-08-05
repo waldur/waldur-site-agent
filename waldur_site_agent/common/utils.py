@@ -53,6 +53,7 @@ from waldur_api_client.models.offering_user_state_transition_request import (
     OfferingUserStateTransitionRequest,
 )
 from waldur_api_client.models.patched_offering_user_request import PatchedOfferingUserRequest
+from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.user import User
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
 
@@ -67,7 +68,6 @@ from waldur_site_agent.backend.backends import (
     UnknownBackend,
     UnknownUsernameManagementBackend,
 )
-from waldur_site_agent.backend.structures import Resource
 from waldur_site_agent.common import structures
 
 # Handle different Python versions
@@ -86,8 +86,6 @@ USERNAME_BACKENDS: dict[str, type[AbstractUsernameManagementBackend]] = {
     entry_point.name: entry_point.load()
     for entry_point in entry_points(group="waldur_site_agent.username_management_backends")
 }
-
-RESOURCE_ERRED_STATE = "Erred"
 
 
 def get_client(
@@ -270,7 +268,7 @@ def get_backend_for_offering(offering: structures.Offering, backend_type_key: st
 
 def mark_waldur_resources_as_erred(
     waldur_rest_client: AuthenticatedClient,
-    resources: list[Resource],
+    resources: list[WaldurResource],
     error_details: dict[str, str],
 ) -> None:
     """Mark multiple resources as ERRED in Waldur with error details.
@@ -292,7 +290,7 @@ def mark_waldur_resources_as_erred(
                 error_traceback=error_details.get("error_traceback", ""),
             )
             marketplace_provider_resources_set_as_erred.sync_detailed(
-                uuid=resource.marketplace_uuid, client=waldur_rest_client, body=request_body
+                uuid=resource.uuid.hex, client=waldur_rest_client, body=request_body
             )
         except UnexpectedStatus as e:
             logger.exception(
