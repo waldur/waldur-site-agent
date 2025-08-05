@@ -10,6 +10,7 @@ from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models import ResourceState
 from waldur_api_client.models.offering_state import OfferingState
 from waldur_api_client.models.storage_mode_enum import StorageModeEnum
+from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_site_agent_slurm import backend
 
 from waldur_site_agent.backend.structures import BackendResourceInfo
@@ -63,6 +64,12 @@ class MembershipSyncTest(unittest.TestCase):
             modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
             last_sync=datetime(2024, 1, 1, tzinfo=timezone.utc),
             restrict_member_access=False,
+            limits=ResourceLimits.from_dict(
+                {
+                    "cpu": 50,
+                    "mem": 200,
+                }
+            ),
         ).to_dict()
 
         self.waldur_user_uuid = uuid.uuid4()
@@ -237,7 +244,11 @@ class MembershipSyncTest(unittest.TestCase):
         restore_resource_mock,
         pull_backend_resource_mock,
     ) -> None:
-        del restore_resource_mock, pull_backend_resource_mock
+        del (
+            restore_resource_mock,
+            pull_backend_resource_mock,
+            add_users_to_resource_mock,
+        )
         self.waldur_resource["downscaled"] = True
         self.waldur_resource["paused"] = False
 
@@ -251,3 +262,36 @@ class MembershipSyncTest(unittest.TestCase):
 
         downscale_resource_mock.assert_called_once()
         get_resource_metadata_mock.assert_called_once()
+
+    @mock.patch.object(backend.SlurmBackend, "get_resource_metadata", return_value=current_qos)
+    @mock.patch.object(
+        backend.SlurmBackend,
+        "get_resource_limits",
+        return_value=allocation_slurm.limits,
+    )
+    def test_limits_update(
+        self,
+        mock_get_resource_limits,
+        get_resource_metadata_mock,
+        restore_resource_mock,
+        pull_backend_resource_mock: mock.Mock,
+    ) -> None:
+        del (
+            restore_resource_mock,
+            pull_backend_resource_mock,
+        )
+
+        self._setup_common_mocks()
+        self._setup_team_mock(team_data=[])
+        self._setup_offering_users_mock(offering_users_data=[self.waldur_offering_user])
+
+        mock_set_limits = respx.post(
+            f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/set_limits/"
+        ).respond(200, json={"status": "ok"})
+
+        processor = OfferingMembershipProcessor(self.offering)
+        processor.process_offering()
+
+        get_resource_metadata_mock.assert_called_once()
+        mock_get_resource_limits.assert_called_once()
+        assert mock_set_limits.call_count == 1

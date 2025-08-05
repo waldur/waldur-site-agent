@@ -1059,6 +1059,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             waldur_resource.name,
             waldur_resource.backend_id,
         )
+
         backend_limits = self.resource_backend.get_resource_limits(waldur_resource.backend_id)
 
         if len(backend_limits) == 0:
