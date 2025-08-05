@@ -12,7 +12,7 @@ from waldur_site_agent.backend import (
 )
 from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError
-from waldur_site_agent.backend.structures import Resource
+from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent_slurm import utils
 from waldur_site_agent_slurm.client import SlurmClient
 
@@ -92,7 +92,7 @@ class SlurmBackend(backends.BaseBackend):
 
     def post_create_resource(
         self,
-        resource: Resource,
+        resource: BackendResourceInfo,
         waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
     ) -> None:
@@ -307,13 +307,14 @@ class SlurmBackend(backends.BaseBackend):
             )
             self.cancel_active_jobs_for_account_user(resource_backend_id, username)
 
-    def _pre_delete_resource(self, resource_backend_id: str) -> None:
+    def _pre_delete_resource(self, waldur_resource: WaldurResource) -> None:
         """Delete all existing associations and cancel all the active jobs."""
-        if self.client.account_has_users(resource_backend_id):
-            logger.info("Cancelling all active jobs for account %s", resource_backend_id)
-            self.client.cancel_active_user_jobs(resource_backend_id)
-            logger.info("Removing all users from account %s", resource_backend_id)
-            self.client.delete_all_users_from_account(resource_backend_id)
+        backend_id = waldur_resource.backend_id
+        if self.client.account_has_users(backend_id):
+            logger.info("Cancelling all active jobs for account %s", backend_id)
+            self.client.cancel_active_user_jobs(backend_id)
+            logger.info("Removing all users from account %s", backend_id)
+            self.client.delete_all_users_from_account(backend_id)
 
     def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
         """Set limits for limit-based components in the SLURM allocation."""

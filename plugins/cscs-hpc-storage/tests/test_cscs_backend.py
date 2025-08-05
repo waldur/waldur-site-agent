@@ -278,9 +278,6 @@ class TestCscsHpcStorageBackend:
         with patch.object(self.backend, "generate_all_resources_json"):
             resource = self.backend.create_resource(mock_resource)
 
-        assert resource.backend_type == "cscs-hpc-storage"
-        assert resource.name == "Test Resource"
-        assert resource.marketplace_uuid == mock_resource.uuid.hex
         assert resource.backend_id == "test-resource"
 
         # Check that order JSON was created

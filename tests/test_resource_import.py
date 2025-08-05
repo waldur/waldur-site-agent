@@ -126,18 +126,15 @@ class BackendResourceRequestTest(TestCase):
         mock_get_backend,
     ):
         local_resources = [
-            backend_structures.Resource(
-                name="test-resource0",
+            backend_structures.BackendResourceInfo(
                 backend_id="test-resource-id-00",
                 parent_id=self.project_account,
             ),
-            backend_structures.Resource(
-                name="test-resource1",
+            backend_structures.BackendResourceInfo(
                 backend_id="test-resource-id-01",
                 parent_id=self.project_account,
             ),
-            backend_structures.Resource(
-                name="test-resource2",
+            backend_structures.BackendResourceInfo(
                 backend_id="test-resource-id-02",
                 parent_id=self.project_slug,
             ),

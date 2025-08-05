@@ -19,7 +19,6 @@ import abc
 import traceback
 from time import sleep
 from typing import Optional
-from uuid import UUID
 
 from waldur_api_client.api.backend_resource_requests import (
     backend_resource_requests_retrieve,
@@ -101,12 +100,13 @@ from waldur_api_client.models.resource_backend_metadata_request import (
     ResourceBackendMetadataRequest,
 )
 from waldur_api_client.models.resource_set_limits_request import ResourceSetLimitsRequest
+from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import Unset
 
 from waldur_site_agent.backend import BackendType, logger
 from waldur_site_agent.backend import exceptions as backend_exceptions
 from waldur_site_agent.backend import utils as backend_utils
-from waldur_site_agent.backend.structures import Resource
+from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import structures, utils
 
 
@@ -185,28 +185,6 @@ class OfferingBaseProcessor(abc.ABC):
         """Log information about the current authenticated Waldur user."""
         current_user = utils.get_current_user_from_client(self.waldur_rest_client)
         utils.print_current_user(current_user)
-
-    def _collect_waldur_resource_info(self, resource_data: WaldurResource) -> Resource:
-        """Convert Waldur API resource data to internal Resource structure.
-
-        Args:
-            resource_data: Resource information from Waldur API
-
-        Returns:
-            Resource: Internal resource representation with normalized data
-        """
-        return Resource(
-            name=resource_data.name,
-            backend_id=resource_data.backend_id,
-            marketplace_uuid=str(resource_data.uuid.hex),
-            backend_type=self.offering.backend_type,
-            restrict_member_access=resource_data.restrict_member_access
-            if resource_data.restrict_member_access
-            else False,
-            downscaled=resource_data.downscaled if resource_data.downscaled else False,
-            paused=resource_data.paused if resource_data.paused else False,
-            state=resource_data.state,
-        )
 
     @abc.abstractmethod
     def process_offering(self) -> None:
@@ -290,7 +268,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             except Exception as e:
                 self.log_order_processing_error(order, e)
 
-    def get_order_info(self, order_uuid: UUID | str) -> Optional[OrderDetails]:
+    def get_order_info(self, order_uuid: str) -> Optional[OrderDetails]:
         """Retrieve current order information from Waldur API.
 
         Args:
@@ -318,7 +296,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         for attempt_number in range(retry_count):
             try:
                 logger.info("Attempt %s of %s", attempt_number + 1, retry_count)
-                order: Optional[OrderDetails] = self.get_order_info(order_info.uuid)
+                order: Optional[OrderDetails] = self.get_order_info(order_info.uuid.hex)
                 if order is None:
                     logger.error("Failed to get order %s info", order_info.uuid)
                     return
@@ -372,11 +350,11 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             elif order.state == OrderState.PENDING_PROVIDER:
                 logger.info("Approving the order")
                 marketplace_orders_approve_by_provider.sync_detailed(
-                    client=self.waldur_rest_client, uuid=order.uuid
+                    client=self.waldur_rest_client, uuid=order.uuid.hex
                 )
                 logger.info("Refreshing the order")
                 order = marketplace_orders_retrieve.sync(
-                    client=self.waldur_rest_client, uuid=order.uuid
+                    client=self.waldur_rest_client, uuid=order.uuid.hex
                 )
             else:
                 logger.warning(
@@ -426,7 +404,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         self,
         waldur_resource: WaldurResource,
         user_context: dict,
-    ) -> Resource | None:
+    ) -> BackendResourceInfo | None:
         """Create a new resource in the backend system.
 
         Args:
@@ -439,31 +417,24 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         Raises:
             BackendError: If resource creation fails
         """
-        resource_uuid = str(waldur_resource.uuid)
-        resource_name = waldur_resource.name
-
-        logger.info("Creating resource %s", resource_name)
-
-        if not utils.is_uuid(resource_uuid):
-            logger.error("Unexpected resource UUID format, skipping the order")
-            return None
+        logger.info("Creating resource %s", waldur_resource.name)
 
         # Use the provided user context for resource creation
-        backend_resource = self.resource_backend.create_resource(waldur_resource, user_context)
-        if backend_resource.backend_id == "":
+        backend_resource_info = self.resource_backend.create_resource(waldur_resource, user_context)
+        if backend_resource_info.backend_id == "":
             msg = f"Unable to create a backend resource for offering {self.offering}"
             raise backend_exceptions.BackendError(msg)
 
         logger.info("Updating resource metadata in Waldur")
         marketplace_provider_resources_set_backend_id.sync(
             client=self.waldur_rest_client,
-            uuid=resource_uuid,
-            body=ResourceBackendIDRequest(backend_id=backend_resource.backend_id),
+            uuid=waldur_resource.uuid.hex,
+            body=ResourceBackendIDRequest(backend_id=backend_resource_info.backend_id),
         )
 
-        return backend_resource
+        return backend_resource_info
 
-    def _fetch_user_context_for_resource(self, resource_uuid: str | UUID) -> dict:
+    def _fetch_user_context_for_resource(self, resource_uuid: str) -> dict:
         """Fetch comprehensive user context for resource operations.
 
         Retrieves project team members and offering users, creating mappings
@@ -535,7 +506,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
     def _add_users_to_resource(
         self,
-        backend_resource: Resource,
+        waldur_resource: WaldurResource,
         user_context: dict,
     ) -> None:
         """Add offering users to the backend resource.
@@ -544,11 +515,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         with valid usernames to the backend resource.
 
         Args:
-            backend_resource: The backend resource to add users to
+            waldur_resource: The Waldur resource to add users to
             user_context: User context containing offering users and mappings
         """
         logger.info("Adding users to resource")
-
         offering_users = user_context["offering_users"]
 
         # Update offering user usernames (only for users with blank usernames)
@@ -574,7 +544,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         logger.info("Adding usernames to resource in backend")
         self.resource_backend.add_users_to_resource(
-            backend_resource.backend_id,
+            waldur_resource.backend_id,
             offering_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
@@ -617,21 +587,20 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             order = updated_order
             attempts += 1
         waldur_resource: WaldurResource | None = marketplace_provider_resources_retrieve.sync(
-            uuid=order.marketplace_resource_uuid, client=self.waldur_rest_client
+            uuid=order.marketplace_resource_uuid.hex, client=self.waldur_rest_client
         )
         if not waldur_resource:
             raise ObjectNotFoundError(
-                f"Waldur resource {order.marketplace_resource_uuid} not found"
+                f"Waldur resource {order.marketplace_resource_uuid.hex} not found"
             )
-        waldur_resource_info = self._collect_waldur_resource_info(waldur_resource)
         create_resource = True
-        if waldur_resource_info.backend_id != "":
+        if waldur_resource.backend_id != "":
             logger.info(
                 "Waldur resource backend id is not empty %s, checking backend resource data",
-                waldur_resource_info.backend_id,
+                waldur_resource.backend_id,
             )
-            backend_resource = self.resource_backend.pull_resource(waldur_resource_info)
-            if backend_resource is not None:
+            backend_resource_info = self.resource_backend.pull_resource(waldur_resource)
+            if backend_resource_info is not None:
                 logger.info(
                     "Resource %s (%s) is already created, skipping creation",
                     waldur_resource.name,
@@ -639,22 +608,21 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 )
                 create_resource = False
         # Fetch user context once for both resource creation and user addition
-        user_context = self._fetch_user_context_for_resource(order.marketplace_resource_uuid)
+        user_context = self._fetch_user_context_for_resource(order.marketplace_resource_uuid.hex)
 
-        backend_resource = None
+        backend_resource_info = None
         if create_resource:
-            waldur_resource.project_slug = order.project_slug
-            waldur_resource.customer_slug = order.customer_slug
-
-            backend_resource = self._create_resource(waldur_resource, user_context)
-            if backend_resource is None:
-                msg = "Unable to create a resource"
+            backend_resource_info = self._create_resource(waldur_resource, user_context)
+            if backend_resource_info is None:
+                msg = f"Unable to create the resource {waldur_resource.name}"
                 raise backend_exceptions.BackendError(msg)
 
-        if backend_resource is None:
+        if backend_resource_info is None:
             return False
 
-        self._add_users_to_resource(backend_resource, user_context)
+        waldur_resource.backend_id = backend_resource_info.backend_id
+
+        self._add_users_to_resource(waldur_resource, user_context)
 
         return True
 
@@ -718,7 +686,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             raise ObjectNotFoundError(f"Waldur resource {resource_uuid} not found")
         project_slug = order.project_slug
 
-        self.resource_backend.delete_resource(waldur_resource.backend_id, project_slug=project_slug)
+        self.resource_backend.delete_resource(waldur_resource, project_slug=project_slug)
 
         logger.info("Allocation has been terminated successfully")
         return True
@@ -745,7 +713,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
     BACKEND_TYPE_KEY = "membership_sync_backend"
 
-    def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[Resource]:
+    def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[WaldurResource]:
         """Fetch Waldur resources for this offering, optionally filtered by project.
 
         Args:
@@ -784,9 +752,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             return []
 
         return [
-            self._collect_waldur_resource_info(resource_data)
-            for resource_data in waldur_resources
-            if resource_data.backend_id
+            waldur_resource for waldur_resource in waldur_resources if waldur_resource.backend_id
         ]
 
     def process_resource_by_uuid(self, resource_uuid: str) -> None:
@@ -808,11 +774,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         )
         if not waldur_resource:
             raise ObjectNotFoundError(f"Waldur resource {resource_uuid} not found")
-        resource_info = self._collect_waldur_resource_info(waldur_resource)
         logger.info(
-            "Pulling resource %s (%s) from backend", resource_info.name, resource_info.backend_id
+            "Pulling resource %s (%s) from backend",
+            waldur_resource.name,
+            waldur_resource.backend_id,
         )
-        resource_report = self.resource_backend.pull_resources([resource_info])
+        resource_report = self.resource_backend.pull_resources([waldur_resource])
         self._process_resources(resource_report)
 
     def process_offering(self) -> None:
@@ -884,23 +851,23 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.warning("Username is blank, skipping processing")
             return
 
-        resources: list[Resource] = self._get_waldur_resources(project_uuid=project_uuid)
+        resources: list[WaldurResource] = self._get_waldur_resources(project_uuid=project_uuid)
         resource_report = self.resource_backend.pull_resources(resources)
 
-        for resource in resource_report.values():
+        for waldur_resource, _ in resource_report.values():
             try:
                 if granted:
-                    if resource.restrict_member_access:
+                    if waldur_resource.restrict_member_access:
                         logger.info("The resource is restricted, skipping new role.")
                         continue
-                    self.resource_backend.add_user(resource.backend_id, username)
+                    self.resource_backend.add_user(waldur_resource.backend_id, username)
                 else:
-                    self.resource_backend.remove_user(resource.backend_id, username)
+                    self.resource_backend.remove_user(waldur_resource.backend_id, username)
             except Exception as exc:
                 logger.error(
                     "Unable to add user %s to the resource %s, error: %s",
                     username,
-                    resource.backend_id,
+                    waldur_resource.backend_id,
                     exc,
                 )
 
@@ -917,17 +884,19 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         logger.info("Processing sync of all users for project %s", project_uuid)
         resources = self._get_waldur_resources(project_uuid=project_uuid)
         resource_report = self.resource_backend.pull_resources(resources)
-        for resource in resource_report.values():
+        for waldur_resource, backend_resource_info in resource_report.values():
             try:
                 logger.info(
-                    "Syncing users for resource %s (%s)", resource.name, resource.backend_id
+                    "Syncing users for resource %s (%s)",
+                    waldur_resource.name,
+                    waldur_resource.backend_id,
                 )
-                self._sync_resource_users(resource)
+                self._sync_resource_users(waldur_resource, backend_resource_info)
             except Exception as exc:
                 logger.error(
                     "Unable to sync resource %s (%s), error: %s",
-                    resource.name,
-                    resource.backend_id,
+                    waldur_resource.name,
+                    waldur_resource.backend_id,
                     exc,
                 )
 
@@ -950,27 +919,29 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             raise ObjectNotFoundError(f"Offering users for offering {self.offering.uuid} not found")
         return offering_users
 
-    def _get_waldur_resource_team(self, resource: Resource) -> list[ProjectUser] | None:
+    def _get_waldur_resource_team(self, resource: WaldurResource) -> list[ProjectUser] | None:
         logger.info("Fetching Waldur resource team")
         team: list[ProjectUser] | None = marketplace_provider_resources_team_list.sync(
-            client=self.waldur_rest_client, uuid=resource.marketplace_uuid
+            client=self.waldur_rest_client, uuid=resource.uuid.hex
         )
 
         return team
 
-    def _get_resource_usernames(self, resource: Resource) -> tuple[set[str], set[str], set[str]]:
+    def _group_resource_usernames(
+        self, waldur_resource: WaldurResource, backend_resource_info: BackendResourceInfo
+    ) -> tuple[set[str], set[str], set[str]]:
         logger.info("Fetching new, existing and stale resource users")
-        usernames: list[str] = resource.users
+        usernames: list[str] = backend_resource_info.users
         local_usernames = set(usernames)
         logger.info("The usernames from the backend: %s", ", ".join(local_usernames))
 
         # Offering users sync
         # The service fetches offering users from Waldur and pushes them to the cluster
         # If an offering user is not in the team anymore, it will be removed from the backend
-        team: list[ProjectUser] | None = self._get_waldur_resource_team(resource)
+        team: list[ProjectUser] | None = self._get_waldur_resource_team(waldur_resource)
         if not team:
             logger.warning(
-                "No team found for resource %s, treating as empty team", resource.marketplace_uuid
+                "No team found for resource %s, treating as empty team", waldur_resource.uuid.hex
             )
             team_user_uuids = set()
         else:
@@ -1022,17 +993,18 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         return existing_usernames, stale_usernames, new_usernames
 
     def _sync_resource_users(
-        self,
-        resource: Resource,
+        self, waldur_resource: WaldurResource, backend_resource_info: BackendResourceInfo
     ) -> set[str]:
         """Sync users for the resource between Waldur and the site.
 
         return: the actual resource usernames (existing + added)
         """
-        logger.info("Syncing user list for resource %s", resource.name)
-        existing_usernames, stale_usernames, new_usernames = self._get_resource_usernames(resource)
+        logger.info("Syncing user list for resource %s", waldur_resource.name)
+        existing_usernames, stale_usernames, new_usernames = self._group_resource_usernames(
+            waldur_resource, backend_resource_info
+        )
 
-        if resource.restrict_member_access:
+        if waldur_resource.restrict_member_access:
             # The idea is to remove the existing associations in both sides
             # and avoid creation of new associations
             logger.info(
@@ -1040,38 +1012,40 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             )
 
             self.resource_backend.remove_users_from_resource(
-                resource.backend_id, existing_usernames
+                waldur_resource.backend_id, existing_usernames
             )
             return set()
 
         added_usernames = self.resource_backend.add_users_to_resource(
-            resource.backend_id,
+            waldur_resource.backend_id,
             new_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
 
         self.resource_backend.remove_users_from_resource(
-            resource.backend_id,
+            waldur_resource.backend_id,
             stale_usernames,
         )
 
         return existing_usernames | added_usernames
 
-    def _sync_resource_status(self, resource: Resource) -> None:
+    def _sync_resource_status(self, waldur_resource: WaldurResource) -> None:
         """Syncs resource status between Waldur and the backend."""
         logger.info(
-            "Syncing resource status for resource %s (%s)", resource.name, resource.backend_id
+            "Syncing resource status for resource %s (%s)",
+            waldur_resource.name,
+            waldur_resource.backend_id,
         )
-        if resource.paused:
+        if waldur_resource.paused:
             logger.info("Resource pausing is requested, processing it")
-            pausing_done = self.resource_backend.pause_resource(resource.backend_id)
+            pausing_done = self.resource_backend.pause_resource(waldur_resource.backend_id)
             if pausing_done:
                 logger.info("Pausing is successfully completed")
             else:
                 logger.warning("Pausing is not done")
-        elif resource.downscaled:
+        elif waldur_resource.downscaled:
             logger.info("Resource downscaling is requested, processing it")
-            downscaling_done = self.resource_backend.downscale_resource(resource.backend_id)
+            downscaling_done = self.resource_backend.downscale_resource(waldur_resource.backend_id)
             if downscaling_done:
                 logger.info("Downscaling is successfully completed")
             else:
@@ -1080,39 +1054,41 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.info(
                 "The resource is not downscaled or paused, resetting the QoS to the default one"
             )
-            restoring_done = self.resource_backend.restore_resource(resource.backend_id)
+            restoring_done = self.resource_backend.restore_resource(waldur_resource.backend_id)
             if restoring_done:
                 logger.info("Restoring is successfully completed")
             else:
                 logger.info("Restoring is skipped")
 
-        resource_metadata = self.resource_backend.get_resource_metadata(resource.backend_id)
+        resource_metadata = self.resource_backend.get_resource_metadata(waldur_resource.backend_id)
         marketplace_provider_resources_set_backend_metadata.sync(
-            uuid=resource.marketplace_uuid,
+            uuid=waldur_resource.uuid.hex,
             client=self.waldur_rest_client,
             body=ResourceBackendMetadataRequest(backend_metadata=resource_metadata),
         )
 
-    def _sync_resource_limits(self, resource: Resource) -> None:
+    def _sync_resource_limits(self, waldur_resource: WaldurResource) -> None:
         """Syncs resource limits between Waldur and the backend."""
         logger.info(
-            "Syncing resource limits for resource %s (%s)", resource.name, resource.backend_id
+            "Syncing resource limits for resource %s (%s)",
+            waldur_resource.name,
+            waldur_resource.backend_id,
         )
-        waldur_limits = resource.limits
-        backend_limits = self.resource_backend.get_resource_limits(resource.backend_id)
+        backend_limits = self.resource_backend.get_resource_limits(waldur_resource.backend_id)
 
         if len(backend_limits) == 0:
             logger.warning("No limits are found in the backend")
             return
 
-        if backend_limits == waldur_limits:
+        if waldur_resource.limits == backend_limits:
             logger.info("The limits are already in sync, skipping")
             return
+
         # For now, we report all the limits
         logger.info("Reporting the limits to Waldur: %s", backend_limits)
 
         marketplace_provider_resources_set_limits.sync(
-            uuid=resource.marketplace_uuid,
+            uuid=waldur_resource.uuid.hex,
             client=self.waldur_rest_client,
             body=ResourceSetLimitsRequest(limits=backend_limits),
         )
@@ -1120,31 +1096,31 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     # TODO: adapt for RabbitMQ-based processing
     # introduce new event and add support for the event in the agent
     def _sync_resource_user_limits(
-        self, resource: Resource, usernames: Optional[set[str]] = None
+        self, waldur_resource: WaldurResource, usernames: set[str]
     ) -> None:
         logger.info(
-            "Synching resource user limits for resource %s (%s)", resource.name, resource.backend_id
+            "Synching resource user limits for resource %s (%s)",
+            waldur_resource.name,
+            waldur_resource.backend_id,
         )
-        if resource.restrict_member_access:
+        if waldur_resource.restrict_member_access:
             logger.info("Resource is restricted for members, skipping user limits setup")
             return
 
-        if usernames is None:
-            existing_usernames, _, _ = self._get_resource_usernames(resource)
-            usernames = existing_usernames
-
-        backend_user_limits = self.resource_backend.get_resource_user_limits(resource.backend_id)
+        backend_user_limits = self.resource_backend.get_resource_user_limits(
+            waldur_resource.backend_id
+        )
 
         for username in usernames:
             try:
                 logger.info(
                     "Fetching user usage limits for %s, resource %s",
                     username,
-                    resource.marketplace_uuid,
+                    waldur_resource.uuid.hex,
                 )
                 user_limits: list[ComponentUserUsageLimit] = component_user_usage_limits_list.sync(
                     client=self.waldur_rest_client,
-                    resource_uuid=resource.marketplace_uuid,
+                    resource_uuid=waldur_resource.uuid.hex,
                     username=username,
                 )
                 if len(user_limits) == 0:
@@ -1160,59 +1136,61 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                         for user_limit in user_limits
                     }
                 self.resource_backend.set_resource_user_limits(
-                    resource.backend_id, username, user_component_limits
+                    waldur_resource.backend_id, username, user_component_limits
                 )
             except Exception as exc:
                 logger.error(
                     "Unable to set user %s limits for resource %s (%s), reason: %s",
                     username,
-                    resource.name,
-                    resource.backend_id,
+                    waldur_resource.name,
+                    waldur_resource.backend_id,
                     exc,
                 )
 
     def _process_resources(
         self,
-        resource_report: dict[str, Resource],
+        resource_report: dict[str, tuple[WaldurResource, BackendResourceInfo]],
     ) -> None:
         """Sync status and membership data for the resource."""
-        for backend_resource in resource_report.values():
+        for waldur_resource, backend_resource_info in resource_report.values():
             try:
-                resource_usernames = self._sync_resource_users(backend_resource)
-                self._sync_resource_status(backend_resource)
-                self._sync_resource_limits(backend_resource)
-                self._sync_resource_user_limits(backend_resource, resource_usernames)
+                resource_usernames = self._sync_resource_users(
+                    waldur_resource, backend_resource_info
+                )
+                self._sync_resource_status(waldur_resource)
+                self._sync_resource_limits(waldur_resource)
+                self._sync_resource_user_limits(waldur_resource, resource_usernames)
 
                 logger.info(
                     "Refreshing resource %s (%s) last sync",
-                    backend_resource.name,
-                    backend_resource.backend_id,
+                    waldur_resource.name,
+                    waldur_resource.backend_id,
                 )
 
                 marketplace_provider_resources_refresh_last_sync.sync_detailed(
-                    uuid=backend_resource.marketplace_uuid,
+                    uuid=waldur_resource.uuid.hex,
                     client=self.waldur_rest_client,
                 )
-                if backend_resource.state == utils.RESOURCE_ERRED_STATE:
+                if waldur_resource.state == ResourceState.ERRED:
                     logger.info(
                         "Setting resource %s (%s) state to OK",
-                        backend_resource.name,
-                        backend_resource.backend_id,
+                        waldur_resource.name,
+                        waldur_resource.backend_id,
                     )
                     marketplace_provider_resources_set_as_ok.sync_detailed(
-                        uuid=backend_resource.marketplace_uuid,
+                        uuid=waldur_resource.uuid.hex,
                         client=self.waldur_rest_client,
                     )
             except Exception as e:
                 logger.exception(
                     "Error while processing allocation %s: %s",
-                    backend_resource.backend_id,
+                    waldur_resource.backend_id,
                     e,
                 )
                 error_traceback = traceback.format_exc()
                 utils.mark_waldur_resources_as_erred(
                     self.waldur_rest_client,
-                    [backend_resource],
+                    [waldur_resource],
                     error_details={
                         "error_message": str(e),
                         "error_traceback": error_traceback,
@@ -1278,19 +1256,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             logger.info("No resources to process")
             return
 
-        waldur_resources_info = [
-            Resource(
-                name=resource_data.name,
-                backend_id=resource_data.backend_id,
-                marketplace_uuid=str(resource_data.uuid.hex),
-                backend_type=self.offering.backend_type,
-                state=resource_data.state,
-            )
-            for resource_data in waldur_resources
-            if resource_data.backend_id
-        ]
-
-        for waldur_resource in waldur_resources_info:
+        for waldur_resource in waldur_resources:
             try:
                 self._process_resource_with_retries(waldur_resource, waldur_offering)
             except Exception as e:
@@ -1311,7 +1277,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
     def _process_resource_with_retries(
         self,
-        waldur_resource: Resource,
+        waldur_resource: WaldurResource,
         waldur_offering: ProviderOfferingDetails,
         retry_count: int = 10,
         delay: int = 5,
@@ -1391,13 +1357,13 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
     def _submit_total_usage_for_resource(
         self,
-        backend_resource: Resource,
+        waldur_resource: WaldurResource,
         total_usage: dict[str, float],
         waldur_components: list[OfferingComponent],
     ) -> None:
         """Reports total usage for a backend resource to Waldur."""
-        logger.info("Setting usages for %s: %s", backend_resource.backend_id, total_usage)
-        resource_uuid = backend_resource.marketplace_uuid
+        logger.info("Setting usages for %s: %s", waldur_resource.backend_id, total_usage)
+        resource_uuid = waldur_resource.uuid.hex
 
         component_types: list[str] = [
             component.type_ for component in waldur_components if component.type_
@@ -1420,7 +1386,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             ):
                 logger.warning(
                     "Skipping usage update for resource %s due to anomaly detection",
-                    backend_resource.backend_id,
+                    waldur_resource.backend_id,
                 )
                 raise UsageAnomalyError(f"Usage anomaly detected for component {component}")
 
@@ -1493,7 +1459,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
     def _process_resource(
         self,
-        waldur_resource: Resource,
+        waldur_resource: WaldurResource,
         waldur_offering: ProviderOfferingDetails,
     ) -> None:
         """Processes usage report for the resource."""
@@ -1501,10 +1467,10 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         month_start = backend_utils.month_start(current_time).date()
         resource_backend_id = waldur_resource.backend_id
         logger.info("Pulling resource %s (%s)", waldur_resource.name, resource_backend_id)
-        backend_resource = self.resource_backend.pull_resource(waldur_resource)
-        if backend_resource is None:
+        backend_resource_info = self.resource_backend.pull_resource(waldur_resource)
+        if backend_resource_info is None:
             logger.info("The resource %s is missing in backend", resource_backend_id)
-            if waldur_resource.state != utils.RESOURCE_ERRED_STATE:
+            if waldur_resource.state != ResourceState.ERRED:
                 logger.info("Marking resource %s as erred in Waldur", resource_backend_id)
                 utils.mark_waldur_resources_as_erred(
                     self.waldur_rest_client,
@@ -1520,40 +1486,35 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         logger.info(
             "Fetching Waldur resource data for %s (%s)", waldur_resource.name, resource_backend_id
         )
-        waldur_resource_data: WaldurResource | None = marketplace_provider_resources_retrieve.sync(
-            client=self.waldur_rest_client, uuid=waldur_resource.marketplace_uuid
+        waldur_resource_info: WaldurResource = marketplace_provider_resources_retrieve.sync(
+            client=self.waldur_rest_client, uuid=waldur_resource.uuid.hex
         )
 
-        waldur_resource = self._collect_waldur_resource_info(waldur_resource_data)
-        waldur_resource.usage = backend_resource.usage
-        waldur_resource.users = backend_resource.users
-        waldur_resource.limits = backend_resource.limits
-
-        if waldur_resource.state not in [
+        if waldur_resource_info.state not in [
             MarketplaceProviderResourcesListStateItem.OK,
             MarketplaceProviderResourcesListStateItem.ERRED,
         ]:
             logger.error(
                 "Waldur resource %s (%s) has incorrect state %s, skipping processing",
-                waldur_resource.name,
-                waldur_resource.backend_id,
-                waldur_resource.state,
+                waldur_resource_info.name,
+                waldur_resource_info.backend_id,
+                waldur_resource_info.state,
             )
             return
         # Set resource state OK if it is erred
-        if waldur_resource.state == utils.RESOURCE_ERRED_STATE:
+        if waldur_resource_info.state == ResourceState.ERRED:
             marketplace_provider_resources_set_as_ok.sync_detailed(
-                uuid=waldur_resource.marketplace_uuid,
+                uuid=waldur_resource_info.uuid,
                 client=self.waldur_rest_client,
             )
 
-        usages: dict[str, dict[str, float]] = waldur_resource.usage
+        usages: dict[str, dict[str, float]] = backend_resource_info.usage
 
         # Submit usage
         total_usage = usages.pop("TOTAL_ACCOUNT_USAGE")
         try:
             self._submit_total_usage_for_resource(
-                waldur_resource,
+                waldur_resource_info,
                 total_usage,
                 waldur_offering.components,
             )
@@ -1568,7 +1529,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_component_usages: list[ComponentUsage] | None = (
             marketplace_component_usages_list.sync(
                 client=self.waldur_rest_client,
-                resource_uuid=waldur_resource.marketplace_uuid,
+                resource_uuid=waldur_resource_info.uuid.hex,
                 date_after=month_start,
             )
         )
@@ -1585,15 +1546,15 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
     def process_offering(self) -> None:
         """This function is blank because the processor operates over backend resource request."""
 
-    def _process_importable_resource(self, local_resource: Resource) -> None:
-        logger.info("Processing importable resource %s", local_resource.backend_id)
+    def _process_importable_resource(self, local_resource_info: BackendResourceInfo) -> None:
+        logger.info("Processing importable resource %s", local_resource_info.backend_id)
         project_prefix = self.offering.backend_settings.get("project_prefix", "")
-        parent_id = local_resource.parent_id
+        parent_id = local_resource_info.parent_id
         if not parent_id.startswith(project_prefix):
             logger.info(
                 "The parent_id %s of the resource %s does not have a required prefix, skipping it",
                 parent_id,
-                local_resource.backend_id,
+                local_resource_info.backend_id,
             )
             return
 
@@ -1606,12 +1567,12 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
             logger.info(
                 "No Waldur project found for slug %s, skipping resource %s import",
                 project_slug,
-                local_resource.backend_id,
+                local_resource_info.backend_id,
             )
             return
         waldur_project = waldur_projects[0]
         existing_backend_resources = backend_resources_list.sync(
-            backend_id=local_resource.backend_id,
+            backend_id=local_resource_info.backend_id,
             project_uuid=waldur_project.uuid,
             offering_uuid=self.offering.uuid,
             client=self.waldur_rest_client,
@@ -1621,25 +1582,25 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
             logger.info(
                 "Backend resource with id %s already exists in Waldur project %s, "
                 "skipping submission",
-                local_resource.backend_id,
+                local_resource_info.backend_id,
                 waldur_project.uuid.hex,
             )
             return
 
         logger.info(
             "Submitting backend resource %s to Waldur project %s",
-            local_resource.backend_id,
+            local_resource_info.backend_id,
             waldur_project.uuid.hex,
         )
-        limits = self.resource_backend.get_resource_limits(local_resource.backend_id)
+        limits = self.resource_backend.get_resource_limits(local_resource_info.backend_id)
         backend_metadata = {
             "limits": limits,
         }
         payload = BackendResourceRequest(
-            name=local_resource.name or local_resource.backend_id,
+            name=local_resource_info.backend_id,
             project=waldur_project.uuid,
             offering=self.offering.uuid,
-            backend_id=local_resource.backend_id,
+            backend_id=local_resource_info.backend_id,
             backend_metadata=backend_metadata,
         )
         backend_resources_create.sync(

@@ -22,19 +22,11 @@ class Association:
 
 
 @dataclass
-class Resource:
-    """Common resource structure."""
+class BackendResourceInfo:
+    """Resource info from a backend."""
 
-    backend_type: str = ""
-    name: str = ""
-    marketplace_uuid: str = ""
     backend_id: str = ""
-    limits: dict = field(default_factory=dict)
-    restrict_member_access: bool = False
-    downscaled: bool = False
-    paused: bool = False
+    parent_id: str = ""
     users: list[str] = field(default_factory=list)
     usage: dict = field(default_factory=dict)
-    metadata: dict = field(default_factory=dict)
-    state: str = ""
-    parent_id: str = ""
+    limits: dict = field(default_factory=dict)
