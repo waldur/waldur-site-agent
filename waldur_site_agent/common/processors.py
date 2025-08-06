@@ -797,11 +797,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         Raises:
             ObjectNotFoundError: If no offering users found for the user
         """
-        offering_users: list[OfferingUser] | None = marketplace_offering_users_list.sync(
+        offering_users: list[OfferingUser] = marketplace_offering_users_list.sync(
             client=self.waldur_rest_client, user_uuid=user_uuid, is_restricted=False
         )
-        if not offering_users:
-            raise ObjectNotFoundError(f"Offering users for user {user_uuid} not found")
         return offering_users
 
     def process_user_role_changed(self, user_uuid: str, project_uuid: str, granted: bool) -> None:
@@ -895,13 +893,11 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             ObjectNotFoundError: If no offering users found
         """
         logger.info("Fetching Waldur offering users")
-        offering_users: list[OfferingUser] | None = marketplace_offering_users_list.sync(
+        offering_users: list[OfferingUser] = marketplace_offering_users_list.sync(
             client=self.waldur_rest_client,
             offering_uuid=self.offering.uuid,
             is_restricted=False,
         )
-        if not offering_users:
-            raise ObjectNotFoundError(f"Offering users for offering {self.offering.uuid} not found")
         return offering_users
 
     def _get_waldur_resource_team(self, resource: WaldurResource) -> list[ProjectUser] | None:
@@ -1408,7 +1404,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 ", ".join(missing_components),
             )
         # Assumed to be looking up offering users by the user's username
-        offering_users: list[OfferingUser] | None = marketplace_offering_users_list.sync(
+        offering_users: list[OfferingUser] = marketplace_offering_users_list.sync(
             client=self.waldur_rest_client, user_username=username, query=self.offering.uuid
         )
         offering_user = None if not offering_users else offering_users[0]
