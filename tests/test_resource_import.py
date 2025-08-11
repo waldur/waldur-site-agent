@@ -45,6 +45,8 @@ class BackendResourceRequestTest(TestCase):
             offering=self.offering.uuid,
             offering_name=self.offering.name,
             offering_url="",
+            error_message="",
+            error_traceback="",
         )
 
     def tearDown(self) -> None:

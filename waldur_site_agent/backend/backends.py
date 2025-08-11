@@ -528,7 +528,20 @@ class UnknownBackend(BaseBackend):
 
 
 class AbstractUsernameManagementBackend(ABC):
-    """Base class for username management backends."""
+    """Base class for username management backends.
+
+    Username management backends are responsible for creating and managing
+    usernames for offering users. They support the new OfferingUser state model
+    with enhanced error handling that can include comments and URLs for user guidance.
+
+    When username generation encounters issues that require user action,
+    backends can raise exceptions with detailed comments and optional URLs:
+    - OfferingUserAccountLinkingRequiredError: When user needs to link existing account
+    - OfferingUserAdditionalValidationRequiredError: When additional validation needed
+
+    Both exceptions support an optional comment_url parameter to provide
+    users with links to forms, documentation, or other resources.
+    """
 
     @abstractmethod
     def generate_username(self, offering_user: OfferingUser) -> str:

@@ -728,7 +728,9 @@ def update_offering_users(
                 offering_user.uuid,
                 e,
             )
-            payload = OfferingUserStateTransitionRequest(comment=str(e))
+            # Build payload with separate comment and comment_url fields
+            comment_url = e.comment_url if hasattr(e, "comment_url") and e.comment_url else None
+            payload = OfferingUserStateTransitionRequest(comment=str(e), comment_url=comment_url)
             marketplace_offering_users_set_pending_account_linking.sync_detailed(
                 uuid=offering_user.uuid, client=waldur_rest_client, body=payload
             )
@@ -739,7 +741,9 @@ def update_offering_users(
                 offering_user.uuid,
                 e,
             )
-            payload = OfferingUserStateTransitionRequest(comment=str(e))
+            # Build payload with separate comment and comment_url fields
+            comment_url = e.comment_url if hasattr(e, "comment_url") and e.comment_url else None
+            payload = OfferingUserStateTransitionRequest(comment=str(e), comment_url=comment_url)
             marketplace_offering_users_set_pending_additional_validation.sync_detailed(
                 uuid=offering_user.uuid, client=waldur_rest_client, body=payload
             )
@@ -756,6 +760,7 @@ def update_offering_users(
         for offering_user in offering_users
         if offering_user.state
         in [
+            OfferingUserStateEnum.CREATING,
             OfferingUserStateEnum.PENDING_ACCOUNT_LINKING,
             OfferingUserStateEnum.PENDING_ADDITIONAL_VALIDATION,
         ]

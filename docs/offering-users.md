@@ -171,12 +171,15 @@ The system defines specific exceptions for different error scenarios:
 - **`OfferingUserAccountLinkingRequiredError`**: Raised when manual account linking is required
 - **`OfferingUserAdditionalValidationRequiredError`**: Raised when additional validation steps are needed
 
+Both exceptions support an optional `comment_url` parameter to provide links to forms, documentation, or
+other resources needed for error resolution.
+
 ### Error Recovery
 
 When exceptions occur:
 1. User state transitions to appropriate pending state
 2. Error details are logged with context
-3. Comment field is updated with error information
+3. Comment field is updated with error message and comment_url field with any provided URL
 4. Processing continues for other users
 5. Pending users are retried in subsequent runs
 
