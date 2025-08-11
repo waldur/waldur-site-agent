@@ -6,7 +6,8 @@ readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent==0.1.0"
+    "fastapi[standard]>=0.115.14",
+    "waldur-site-agent==0.1.0",
 ]
 
 [build-system]

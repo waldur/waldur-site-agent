@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_resources import marketplace_resources_list
+from waldur_api_client.models import ResourceState
 from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend import backends, logger
@@ -283,23 +284,28 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         }
 
     def _get_all_storage_resources(
-        self, offering_uuid: str, client: AuthenticatedClient
+        self, offering_uuid: str, client: AuthenticatedClient, state: Optional[ResourceState] = None
     ) -> list[dict]:
         """Fetch all storage resources from Waldur API with proper pagination.
 
         Args:
             offering_uuid: UUID of the offering to fetch resources for
             client: Authenticated Waldur API client for API access
+            state: Optional resource state
 
         Returns:
             List of storage resource dictionaries in JSON format
         """
         try:
             # Fetch all resources using the reusable pagination utility
+            filters = {}
+            if state:
+                filters["state"] = state
             waldur_resources = get_all_paginated(
                 marketplace_resources_list.sync,
                 client,
                 offering_uuid=offering_uuid,
+                **filters,
             )
 
             # Convert Waldur resources to storage JSON format
@@ -331,12 +337,18 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         except Exception as e:
             logger.error("Failed to write JSON file %s: %s", filepath, e)
 
-    def generate_all_resources_json(self, offering_uuid: str, client: AuthenticatedClient) -> None:
+    def generate_all_resources_json(
+        self,
+        offering_uuid: str,
+        client: AuthenticatedClient,
+        state: Optional[ResourceState] = None,
+        write_file: bool = True,
+    ) -> dict:
         """Generate JSON file with all storage resources."""
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M")
         filename = f"{timestamp}-all.json"
 
-        storage_resources = self._get_all_storage_resources(offering_uuid, client)
+        storage_resources = self._get_all_storage_resources(offering_uuid, client, state)
 
         json_data = {
             "status": "success",
@@ -345,7 +357,10 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             "result": {"storageResources": storage_resources},
         }
 
-        self._write_json_file(filename, json_data)
+        if write_file:
+            self._write_json_file(filename, json_data)
+
+        return json_data
 
     def generate_order_json(self, waldur_resource: WaldurResource, order_type: str) -> None:
         """Generate JSON file for a specific order."""
