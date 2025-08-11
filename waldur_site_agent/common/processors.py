@@ -528,11 +528,11 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             client=self.waldur_rest_client,
         )
 
-        # Use only non-blank usernames
+        # Use only non-blank usernames from users in OK state
         offering_usernames: set[str] = {
             offering_user.username
             for offering_user in user_context["offering_users"]
-            if offering_user.state == OfferingUserStateEnum.OK
+            if offering_user.state == OfferingUserStateEnum.OK and offering_user.username
         }
 
         if not offering_usernames:
