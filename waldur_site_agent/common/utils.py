@@ -412,7 +412,7 @@ def load_components_to_waldur(
                         component_info["measured_unit"],
                     )
                     marketplace_provider_offerings_update_offering_component.sync_detailed(
-                        client=waldur_rest_client, uuid=offering_uuid, body=component
+                        client=waldur_rest_client, uuid=existing_component.uuid, body=component
                     )
                 else:
                     logger.info(
