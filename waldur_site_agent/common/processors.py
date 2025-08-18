@@ -53,7 +53,6 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_as_ok,
     marketplace_provider_resources_set_backend_id,
     marketplace_provider_resources_set_backend_metadata,
-    marketplace_provider_resources_set_limits,
     marketplace_provider_resources_team_list,
 )
 from waldur_api_client.api.projects import projects_list
@@ -96,7 +95,6 @@ from waldur_api_client.models.resource_backend_id_request import ResourceBackend
 from waldur_api_client.models.resource_backend_metadata_request import (
     ResourceBackendMetadataRequest,
 )
-from waldur_api_client.models.resource_set_limits_request import ResourceSetLimitsRequest
 from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import Unset
 
@@ -1050,31 +1048,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
     def _sync_resource_limits(self, waldur_resource: WaldurResource) -> None:
         """Syncs resource limits between Waldur and the backend."""
-        logger.info(
-            "Syncing resource limits for resource %s (%s)",
-            waldur_resource.name,
-            waldur_resource.backend_id,
-        )
-
-        backend_limits = self.resource_backend.get_resource_limits(waldur_resource.backend_id)
-
-        if len(backend_limits) == 0:
-            logger.warning("No limits are found in the backend")
-            return
-
-        if waldur_resource.limits.additional_properties == backend_limits:
-            logger.info("The limits are already in sync (%s), skipping", backend_limits)
-            return
-
-        # For now, we report all the limits
-        logger.info(
-            "Changing resource limits from %s to %s", waldur_resource.limits, backend_limits
-        )
-
-        marketplace_provider_resources_set_limits.sync(
-            uuid=waldur_resource.uuid.hex,
-            client=self.waldur_rest_client,
-            body=ResourceSetLimitsRequest(limits=backend_limits),
+        utils.sync_waldur_resource_limits(
+            self.resource_backend, self.waldur_rest_client, waldur_resource
         )
 
     # TODO: adapt for RabbitMQ-based processing

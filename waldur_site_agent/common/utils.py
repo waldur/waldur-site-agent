@@ -20,6 +20,7 @@ from typing import Optional
 from uuid import UUID
 
 import yaml
+from httpx import TimeoutException
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_offering_users import (
     marketplace_offering_users_begin_creating,
@@ -37,10 +38,16 @@ from waldur_api_client.api.marketplace_provider_offerings import (
 )
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_as_erred,
+    marketplace_provider_resources_set_limits,
 )
+from waldur_api_client.api.marketplace_resources import marketplace_resources_list
 from waldur_api_client.api.users import users_me_retrieve
 from waldur_api_client.errors import UnexpectedStatus
-from waldur_api_client.models import ResourceSetStateErredRequest
+from waldur_api_client.models import (
+    MarketplaceResourcesListStateItem,
+    ResourceSetLimitsRequest,
+    ResourceSetStateErredRequest,
+)
 from waldur_api_client.models.billing_type_enum import BillingTypeEnum
 from waldur_api_client.models.marketplace_orders_list_state_item import (
     MarketplaceOrdersListStateItem,
@@ -68,6 +75,7 @@ from waldur_site_agent.backend.backends import (
     UnknownBackend,
     UnknownUsernameManagementBackend,
 )
+from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common import structures
 
 # Handle different Python versions
@@ -666,6 +674,26 @@ def update_offering_users(
         waldur_rest_client: Authenticated Waldur API client
         offering_users: List of offering users to process
     """
+
+    def update_offering_user_username(offering_user: OfferingUser) -> None:
+        username = username_management_backend.get_or_create_username(offering_user)
+        if username:
+            logger.info(
+                "Updating username for offering user %s (%s) to %s",
+                offering_user.user_email,
+                offering_user.uuid,
+                username,
+            )
+            offering_user.username = username
+            payload = PatchedOfferingUserRequest(username=username)
+            marketplace_offering_users_partial_update.sync(
+                uuid=offering_user.uuid, client=waldur_rest_client, body=payload
+            )
+            logger.info("Setting offering user state to OK")
+            marketplace_offering_users_set_ok.sync_detailed(
+                uuid=offering_user.uuid, client=waldur_rest_client
+            )
+
     if not offering_users:
         return
 
@@ -704,23 +732,7 @@ def update_offering_users(
                 uuid=offering_user.uuid, client=waldur_rest_client
             )
 
-            username = username_management_backend.get_or_create_username(offering_user)
-            if username:
-                logger.info(
-                    "Updating username for offering user %s (%s) to %s",
-                    offering_user.user_uuid,
-                    offering_user.username,
-                    username,
-                )
-                offering_user.username = username
-                payload = PatchedOfferingUserRequest(username=username)
-                marketplace_offering_users_partial_update.sync(
-                    uuid=offering_user.uuid, client=waldur_rest_client, body=payload
-                )
-                logger.info("Setting offering user state to OK")
-                marketplace_offering_users_set_ok.sync_detailed(
-                    uuid=offering_user.uuid, client=waldur_rest_client
-                )
+            update_offering_user_username(offering_user)
         except backend_exceptions.OfferingUserAccountLinkingRequiredError as e:
             logger.warning(
                 "Offering user %s (%s) requires user linking: %s",
@@ -774,23 +786,8 @@ def update_offering_users(
                 offering_user.user_email,
                 offering_user.uuid,
             )
-            username = username_management_backend.get_or_create_username(offering_user)
-            if username:
-                logger.info(
-                    "Updating username for offering user %s (%s) to %s",
-                    offering_user.user_email,
-                    offering_user.uuid,
-                    username,
-                )
-                offering_user.username = username
-                payload = PatchedOfferingUserRequest(username=username)
-                marketplace_offering_users_partial_update.sync(
-                    uuid=offering_user.uuid, client=waldur_rest_client, body=payload
-                )
-                logger.info("Setting offering user state to OK")
-                marketplace_offering_users_set_ok.sync_detailed(
-                    uuid=offering_user.uuid, client=waldur_rest_client
-                )
+
+            update_offering_user_username(offering_user)
         except (
             backend_exceptions.OfferingUserAccountLinkingRequiredError,
             backend_exceptions.OfferingUserAdditionalValidationRequiredError,
@@ -824,3 +821,69 @@ def sync_offering_users() -> None:
             client=waldur_rest_client, offering_uuid=offering.uuid, is_restricted=False
         )
         update_offering_users(offering, waldur_rest_client, offering_users)
+
+
+def sync_waldur_resource_limits(
+    resource_backend: BaseBackend,
+    waldur_rest_client: AuthenticatedClient,
+    waldur_resource: WaldurResource,
+) -> None:
+    """Syncs resource limits between Waldur and the backend.
+
+    The method is shared between utils and processors.
+    """
+    logger.info(
+        "Syncing resource limits for resource %s (%s)",
+        waldur_resource.name,
+        waldur_resource.backend_id,
+    )
+
+    backend_limits = resource_backend.get_resource_limits(waldur_resource.backend_id)
+
+    if not backend_limits:
+        logger.warning("No limits found in the backend")
+        return
+
+    if waldur_resource.limits.additional_properties == backend_limits:
+        logger.info("The limits are already in sync (%s), skipping", backend_limits)
+        return
+
+    # For now, we report all the limits
+    logger.info("Changing resource limits from %s to %s", waldur_resource.limits, backend_limits)
+
+    marketplace_provider_resources_set_limits.sync(
+        uuid=waldur_resource.uuid.hex,
+        client=waldur_rest_client,
+        body=ResourceSetLimitsRequest(limits=backend_limits),
+    )
+
+
+def sync_resource_limits() -> None:
+    """Report resource limits for the existing resources to Waldur."""
+    configuration = init_configuration()
+    for offering in configuration.waldur_offerings:
+        logger.info(
+            "Processing resource limits for offering %s, backend plugin is %s",
+            offering.name,
+            offering.membership_sync_backend,
+        )
+        backend = get_backend_for_offering(offering, "membership_sync_backend")
+        logger.info("Using class %s as a backend", backend.__class__.__name__)
+        waldur_rest_client = get_client(
+            offering.api_url, offering.api_token, configuration.waldur_user_agent
+        )
+        resources = marketplace_resources_list.sync(
+            client=waldur_rest_client,
+            offering_uuid=offering.uuid,
+            state=[MarketplaceResourcesListStateItem.OK, MarketplaceResourcesListStateItem.ERRED],
+        )
+
+        waldur_resources = [resource for resource in resources if resource.backend_id]
+        logger.info("Processing limits for %s resource(s)", len(waldur_resources))
+        for waldur_resource in waldur_resources:
+            try:
+                sync_waldur_resource_limits(backend, waldur_rest_client, waldur_resource)
+            except (BackendError, UnexpectedStatus, TimeoutException) as e:
+                logger.error(
+                    "Failed to sync resource limits for %s, reason: %s", waldur_resource.name, e
+                )
