@@ -72,7 +72,7 @@ def setup_order_respx_mocks(base_url: str, order_uuid: str, waldur_order: dict):
         200, json={}
     )
     respx.post(
-        f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/set_state_error/"
+        f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/set_state_erred/"
     ).respond(200, json={})
     respx.get(f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/").respond(
         200, json=order_copy
@@ -84,7 +84,7 @@ def setup_order_respx_mocks(base_url: str, order_uuid: str, waldur_order: dict):
         f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/set_state_done/"
     ).respond(200, json={})
     return respx.post(
-        f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/set_state_error/"
+        f"{base_url}/api/marketplace-orders/{uuid.UUID(order_uuid)}/set_state_erred/"
     ).respond(200, json={})
 
 
@@ -288,6 +288,88 @@ class CreationOrderTest(unittest.TestCase):
         slurm_client.create_association.assert_called_with(
             offering_user_username, allocation_account, "root"
         )
+
+    def test_allocation_creation_with_empty_customer_slug(
+        self, slurm_client_class: mock.Mock
+    ) -> None:
+        """Test allocation creation failure with empty customer_slug."""
+
+        self.waldur_order.update(
+            {
+                "uuid": self.order_uuid,
+                "state": "pending-provider",
+                "type": "Create",
+                "resource_name": "test-allocation-01",
+                "customer_slug": "customer-1",
+                "project_slug": "project-1",
+                "marketplace_resource_uuid": str(self.resource_uuid),
+            }
+        )
+
+        self.waldur_resource["customer_slug"] = None
+
+        setup_common_respx_mocks(
+            self.BASE_URL,
+            self.waldur_user,
+            self.waldur_offering,
+            self.waldur_resource,
+            self.waldur_resource_team,
+            self.waldur_offering_user,
+        )
+        request_order_set_as_error = setup_order_respx_mocks(
+            self.BASE_URL, self.order_uuid, self.waldur_order
+        )
+        slurm_client = setup_slurm_client_mocks(slurm_client_class)
+
+        processor = OfferingOrderProcessor(OFFERING)
+
+        processor.process_offering()
+
+        assert request_order_set_as_error.call_count == 1
+        error_request = request_order_set_as_error.calls[0].request
+        assert "unset or missing slug fields" in error_request.content.decode()
+
+    def test_allocation_creation_with_empty_project_slug(
+        self, slurm_client_class: mock.Mock
+    ) -> None:
+        """Test allocation creation failure with empty project_slug."""
+
+        self.waldur_order.update(
+            {
+                "uuid": self.order_uuid,
+                "state": "pending-provider",
+                "type": "Create",
+                "resource_name": "test-allocation-01",
+                "customer_slug": "customer-1",
+                "project_slug": "project-1",
+                "marketplace_resource_uuid": str(self.resource_uuid),
+            }
+        )
+
+        self.waldur_resource["project_slug"] = ""
+
+        setup_common_respx_mocks(
+            self.BASE_URL,
+            self.waldur_user,
+            self.waldur_offering,
+            self.waldur_resource,
+            self.waldur_resource_team,
+            self.waldur_offering_user,
+        )
+        request_order_set_as_error = setup_order_respx_mocks(
+            self.BASE_URL, self.order_uuid, self.waldur_order
+        )
+        slurm_client = setup_slurm_client_mocks(slurm_client_class)
+
+        processor = OfferingOrderProcessor(OFFERING)
+
+        # Process offering - should catch BackendError and mark order as erred
+        processor.process_offering()
+
+        # Check that the order was marked as erred due to empty project_slug
+        assert request_order_set_as_error.call_count == 1
+        error_request = request_order_set_as_error.calls[0].request
+        assert "unset or missing slug fields" in error_request.content.decode()
 
 
 @mock.patch(

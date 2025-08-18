@@ -87,6 +87,11 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             logger.error("Cannot write to output directory %s: %s", self.output_directory, e)
             return False
 
+    def _pre_create_resource(
+        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+    ) -> None:
+        """For CSCS storage backend the step is empty."""
+
     def diagnostics(self) -> bool:
         """Log backend diagnostics information."""
         logger.info("CSCS HPC Storage Backend Diagnostics")
