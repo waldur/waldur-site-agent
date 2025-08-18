@@ -1,5 +1,7 @@
 """Moab-specific backend classes and functions."""
 
+from typing import Optional
+
 from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend import BackendType, logger
@@ -63,6 +65,37 @@ class MoabBackend(BaseBackend):
                 }
 
         return report
+
+    def _pre_create_resource(
+        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+    ) -> None:
+        """Override parent method to validate slug fields."""
+        if not waldur_resource.project_slug:
+            logger.warning(
+                "Resource %s has unset or missing project slug. project_slug: %s",
+                waldur_resource.uuid,
+                waldur_resource.project_slug,
+            )
+            msg = (
+                f"Resource {waldur_resource.uuid} has unset or missing slug fields. "
+                f"project_slug: {waldur_resource.project_slug}. "
+                "Cannot create backend resources with invalid slug values."
+            )
+            raise BackendError(msg)
+
+        del user_context
+
+        project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
+
+        customer_backend_id = None
+
+        # Create project resource
+        self._create_backend_resource(
+            project_backend_id,
+            waldur_resource.project_name,
+            project_backend_id,
+            customer_backend_id,
+        )
 
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Temporary placeholder."""

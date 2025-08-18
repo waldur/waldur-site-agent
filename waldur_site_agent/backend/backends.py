@@ -6,7 +6,7 @@ from typing import Optional
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.resource import Resource as WaldurResource
 
-from waldur_site_agent.backend import BackendType, logger, structures, utils
+from waldur_site_agent.backend import logger, structures, utils
 from waldur_site_agent.backend.clients import BaseClient, UnknownClient
 from waldur_site_agent.backend.exceptions import BackendError
 
@@ -239,29 +239,11 @@ class BaseBackend(ABC):
         self.post_create_resource(backend_resource_info, waldur_resource, user_context)
         return backend_resource_info
 
+    @abstractmethod
     def _pre_create_resource(
         self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
     ) -> None:
-        """Actions performed prior to resource creation."""
-        # Default implementation: setup customer and project accounts hierarchy
-        del user_context
-        project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
-
-        # Setup customer resource if using SLURM backend
-        customer_backend_id = None
-        if self.backend_type == BackendType.SLURM.value:
-            customer_backend_id = self._get_customer_backend_id(waldur_resource.customer_slug)
-            self._create_backend_resource(
-                customer_backend_id, waldur_resource.customer_name, customer_backend_id
-            )
-
-        # Create project resource
-        self._create_backend_resource(
-            project_backend_id,
-            waldur_resource.project_name,
-            project_backend_id,
-            customer_backend_id,
-        )
+        """Perform actions prior to resource creation."""
 
     def _create_resource_in_backend(self, waldur_resource: WaldurResource) -> str:
         """Create backend resource with retry logic for name generation."""
@@ -469,6 +451,11 @@ class UnknownBackend(BaseBackend):
     def list_components(self) -> list[str]:
         """Placeholder."""
         return []
+
+    def _pre_create_resource(
+        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+    ) -> None:
+        """Placeholder."""
 
     def pull_resources(
         self, _: list[WaldurResource]
