@@ -97,7 +97,7 @@ USERNAME_BACKENDS: dict[str, type[AbstractUsernameManagementBackend]] = {
 
 
 def get_client(
-    api_url: str, access_token: str, agent_header: Optional[str] = None
+    api_url: str, access_token: str, agent_header: Optional[str] = None, verify_ssl: bool = True
 ) -> AuthenticatedClient:
     """Create an authenticated Waldur API client.
 
@@ -105,6 +105,7 @@ def get_client(
         api_url: Base URL for the Waldur API (e.g., 'https://waldur.example.com/api/')
         access_token: Authentication token for API access
         agent_header: Optional User-Agent string for HTTP requests
+        verify_ssl: Whether or not to verify SSL certificates
 
     Returns:
         Configured AuthenticatedClient instance ready for API calls
@@ -116,6 +117,7 @@ def get_client(
         token=access_token,
         timeout=600,
         headers=headers,
+        verify_ssl=verify_ssl,
     )
 
 
