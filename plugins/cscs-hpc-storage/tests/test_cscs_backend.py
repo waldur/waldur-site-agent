@@ -8,7 +8,9 @@ from uuid import uuid4
 
 import pytest
 from waldur_api_client.api.marketplace_resources import marketplace_resources_list
+from waldur_api_client.types import Unset
 
+from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_cscs_hpc_storage.backend import CscsHpcStorageBackend
 
 
@@ -283,3 +285,91 @@ class TestCscsHpcStorageBackend:
         # Check that order JSON was created
         files = list(Path(self.temp_dir).glob("*-create_*.json"))
         assert len(files) == 1
+
+    def test_unset_offering_slug_validation(self):
+        """Test that Unset offering_slug raises a clear validation error."""
+        backend = CscsHpcStorageBackend(self.backend_settings, self.backend_components)
+
+        # Create a mock resource with Unset offering_slug
+        mock_resource = Mock()
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = str(uuid4())
+        mock_resource.slug = "test-resource"
+        mock_resource.name = "Test Resource"
+        mock_resource.offering_slug = Unset()  # This should raise a validation error
+        mock_resource.customer_slug = "university"
+        mock_resource.project_slug = "physics-dept"
+
+        # Test that validation raises BackendError with clear message
+        with pytest.raises(BackendError) as exc_info:
+            backend._validate_resource_data(mock_resource)
+
+        error_message = str(exc_info.value)
+        assert "offering_slug" in error_message
+        assert "missing required fields" in error_message
+        assert "test-resource" in error_message  # Should include resource ID for context
+
+    def test_multiple_unset_fields_validation(self):
+        """Test validation error when multiple fields are Unset."""
+        backend = CscsHpcStorageBackend(self.backend_settings, self.backend_components)
+
+        # Create a mock resource with multiple Unset fields
+        mock_resource = Mock()
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = str(uuid4())
+        mock_resource.slug = "test-resource"
+        mock_resource.offering_slug = Unset()
+        mock_resource.customer_slug = Unset()
+        mock_resource.project_slug = Unset()
+
+        # Test that validation raises BackendError listing all missing fields
+        with pytest.raises(BackendError) as exc_info:
+            backend._validate_resource_data(mock_resource)
+
+        error_message = str(exc_info.value)
+        assert "offering_slug" in error_message
+        assert "customer_slug" in error_message
+        assert "project_slug" in error_message
+        assert "test-resource" in error_message
+
+    def test_generate_order_json_with_unset_fields(self):
+        """Test that generate_order_json fails fast with validation error for Unset fields."""
+        backend = CscsHpcStorageBackend(self.backend_settings, self.backend_components)
+
+        # Create a mock resource with Unset offering_slug
+        mock_resource = Mock()
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = str(uuid4())
+        mock_resource.slug = "test-resource"
+        mock_resource.offering_slug = Unset()
+        mock_resource.customer_slug = "university"
+        mock_resource.project_slug = "physics-dept"
+
+        # Test that generate_order_json raises validation error
+        with pytest.raises(BackendError) as exc_info:
+            backend.generate_order_json(mock_resource, "create")
+
+        error_message = str(exc_info.value)
+        assert "offering_slug" in error_message
+        assert "missing required fields" in error_message
+
+    def test_create_resource_with_unset_fields(self):
+        """Test that create_resource fails fast with validation error for Unset fields."""
+        backend = CscsHpcStorageBackend(self.backend_settings, self.backend_components)
+
+        # Create a mock resource with Unset fields
+        mock_resource = Mock()
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = str(uuid4())
+        mock_resource.slug = Unset()  # Missing slug
+        mock_resource.offering_slug = "test-offering"
+        mock_resource.customer_slug = "university"
+        mock_resource.project_slug = "physics-dept"
+
+        # Test that create_resource raises validation error
+        with pytest.raises(BackendError) as exc_info:
+            backend.create_resource(mock_resource)
+
+        error_message = str(exc_info.value)
+        assert "slug" in error_message
+        assert "missing required fields" in error_message

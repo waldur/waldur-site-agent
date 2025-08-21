@@ -10,8 +10,10 @@ from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_resources import marketplace_resources_list
 from waldur_api_client.models import ResourceState
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.types import Unset
 
 from waldur_site_agent.backend import backends, logger
+from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common.pagination import get_all_paginated
 
@@ -72,6 +74,39 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         ):
             msg = "inode_base_multiplier must be a positive number"
             raise ValueError(msg)
+
+    def _validate_resource_data(self, waldur_resource: WaldurResource) -> None:
+        """Validate that required resource data is present and not Unset."""
+        missing_fields = []
+
+        if isinstance(waldur_resource.offering_slug, Unset):
+            missing_fields.append("offering_slug")
+
+        if isinstance(waldur_resource.uuid, Unset):
+            missing_fields.append("uuid")
+
+        if isinstance(waldur_resource.slug, Unset):
+            missing_fields.append("slug")
+
+        if isinstance(waldur_resource.customer_slug, Unset):
+            missing_fields.append("customer_slug")
+
+        if isinstance(waldur_resource.project_slug, Unset):
+            missing_fields.append("project_slug")
+
+        if missing_fields:
+            resource_id = (
+                waldur_resource.slug
+                if not isinstance(waldur_resource.slug, Unset)
+                else str(waldur_resource.uuid)
+                if not isinstance(waldur_resource.uuid, Unset)
+                else "unknown"
+            )
+            raise BackendError(
+                f"Resource {resource_id} is missing required fields from Waldur API: "
+                f"{', '.join(missing_fields)}. This indicates incomplete data from the "
+                f"marketplace API response."
+            )
 
     def ping(self, raise_exception: bool = False) -> bool:
         """Check if backend is accessible (always returns True for file-based backend)."""
@@ -316,8 +351,11 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             # Convert Waldur resources to storage JSON format
             storage_resources = []
             for resource in waldur_resources:
-                storage_system = resource.offering_slug
-                storage_resource = self._create_storage_resource_json(resource, storage_system)
+                # Validate resource data before processing
+                self._validate_resource_data(resource)
+                storage_resource = self._create_storage_resource_json(
+                    resource, resource.offering_slug
+                )
                 storage_resources.append(storage_resource)
 
             logger.info(
@@ -372,8 +410,11 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M")
         filename = f"{timestamp}-{order_type}_{waldur_resource.uuid.hex}.json"
 
-        storage_system = waldur_resource.offering_slug
-        storage_resource = self._create_storage_resource_json(waldur_resource, storage_system)
+        # Validate resource data before processing
+        self._validate_resource_data(waldur_resource)
+        storage_resource = self._create_storage_resource_json(
+            waldur_resource, waldur_resource.offering_slug
+        )
 
         json_data = {
             "status": "success",
