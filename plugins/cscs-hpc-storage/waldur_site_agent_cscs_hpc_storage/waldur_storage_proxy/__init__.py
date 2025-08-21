@@ -40,3 +40,11 @@ backend_settings = offering_config.backend_settings
 backend_components = offering_config.backend_components
 
 cscs_storage_backend = CscsHpcStorageBackend(backend_settings, backend_components)
+
+CSCS_KEYCLOAK_URL = os.getenv("CSCS_KEYCLOAK_URL", "https://auth-tds.cscs.ch/auth/")
+CSCS_KEYCLOAK_REALM = os.getenv("CSCS_KEYCLOAK_REALM", "cscs")
+CSCS_KEYCLOAK_CLIENT_ID = os.getenv("CSCS_KEYCLOAK_CLIENT_ID")
+CSCS_KEYCLOAK_CLIENT_SECRET = os.getenv("CSCS_KEYCLOAK_CLIENT_SECRET")
+CSCS_KEYCLOAK_REDIRECT_URL = os.getenv(
+    "CSCS_KEYCLOAK_REDIRECT_URL", "https://api-storage.waldur.tds.cscs.ch/api/storage-resources/"
+)
