@@ -94,3 +94,13 @@ class BackendResourceRequestMessage(TypedDict):
     """Represents a message for a backend resource request."""
 
     backend_resource_request_uuid: str
+
+
+class ServiceAccountMessage(TypedDict):
+    """Represents a message for service account processing."""
+
+    service_account_uuid: str
+    service_account_username: str
+    scope_type: str
+    project_uuid: str
+    project_name: str

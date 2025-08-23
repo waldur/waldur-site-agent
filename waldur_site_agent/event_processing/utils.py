@@ -66,7 +66,7 @@ def setup_stomp_offering_subscriptions(
         )
 
     if waldur_offering.membership_sync_backend:
-        object_types.extend(["user_role", "resource"])
+        object_types.extend(["user_role", "resource", "service_account"])
     else:
         logger.info(
             "Membership sync is disabled for offering %s, skipping start of STOMP connections",
@@ -131,6 +131,7 @@ def setup_offering_subscriptions(
             {
                 "user_role": handlers.on_user_role_message_mqtt,
                 "resource": handlers.on_resource_message_mqtt,
+                "service_account": handlers.on_service_account_message_mqtt,
             }
         )
     else:
