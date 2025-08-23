@@ -1,0 +1,93 @@
+sentry_dsn: "" # Data Source Name for Sentry (more info https://docs.sentry.io/product/sentry-basics/dsn-explainer/).
+timezone: "UTC" # Timezone for billing period calculations (e.g. "UTC", "Europe/Tallinn"). Defaults to system timezone if not specified.
+offerings: # Settings for offerings
+  - name: "Mixed SLURM + CSCS-DWDI Offering" # offering name
+    waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
+    waldur_api_token: "" # Token to access the Waldur API.
+    waldur_offering_uuid: "" # UUID of the offering in Waldur.
+    username_management_backend: "base" # Name of the backend from entrypoints to use for username management
+    order_processing_backend: "slurm" # Use SLURM for order processing (account creation, deletion, etc.)
+    membership_sync_backend: "slurm" # Use SLURM for membership syncing (user associations)
+    reporting_backend: "cscs-dwdi" # Use CSCS-DWDI for usage reporting
+    resource_import_enabled: false # Whether to expose importable resources to Waldur
+    mqtt_enabled: false # MQTT feature toggler
+    stomp_enabled: false # STOMP feature toggler
+    websocket_use_tls: true # Whether to use TLS for MQTT connection
+    backend_type: "slurm" # Backend type for order processing and membership sync
+
+    # SLURM settings for order processing and membership sync
+    backend_settings:
+      default_account: "root" # Default parent account name in SLURM cluster for new ones
+      customer_prefix: "hpc_" # Prefix for customer's accounts.
+      project_prefix: "hpc_" # Prefix for project's accounts.
+      allocation_prefix: "hpc_" # Prefix used for allocation's accounts created by the agent.
+      qos_downscaled: "limited" # The QoS set to an account after downscaling
+      qos_paused: "paused" # The QoS set to an account after pausing
+      qos_default: "normal" # The default QoS for account in the SLURM cluster
+      enable_user_homedir_account_creation: true # Whether to create home directories for users associated to accounts.
+      homedir_umask: "0700" # A umask for created homedirs
+
+      # CSCS-DWDI settings for usage reporting
+      cscs_dwdi_api_url: "https://dwdi-api.cscs.ch" # Base URL for the CSCS-DWDI API service
+      cscs_dwdi_client_id: "your-oidc-client-id" # OIDC client ID for authentication
+      cscs_dwdi_client_secret: "your-oidc-client-secret" # OIDC client secret for authentication
+      cscs_dwdi_oidc_token_url: "https://identity.cscs.ch/realms/cscs/protocol/openid-connect/token" # OIDC token endpoint URL
+      cscs_dwdi_oidc_scope: "cscs-dwdi:read" # OIDC scope to request (optional, defaults to "openid")
+
+    # Backend components configuration
+    # These components are used by both SLURM (for limits) and CSCS-DWDI (for usage reporting)
+    backend_components:
+      nodeHours: # Node hours component - must match CSCS-DWDI API response field name
+        limit: 1000 # SLURM limit in node-hours
+        measured_unit: "node-hours" # Waldur measured unit for accounting
+        unit_factor: 1 # Conversion factor from API units to measured units
+        accounting_type: "usage" # Type of accounting (usage for reporting)
+        label: "Node Hours" # Display label in Waldur interface
+
+      # Additional components can be added if supported by CSCS-DWDI API
+      # gpuHours:
+      #   limit: 500
+      #   measured_unit: "gpu-hours"
+      #   unit_factor: 1
+      #   accounting_type: "usage"
+      #   label: "GPU Hours"
+      #
+      # storage:
+      #   limit: 100
+      #   measured_unit: "TB"
+      #   unit_factor: 1
+      #   accounting_type: "usage"
+      #   label: "Storage Usage"
+
+# Example of a pure CSCS-DWDI reporting-only offering
+# (no order processing or membership sync capabilities)
+  - name: "CSCS-DWDI Reporting Only Offering"
+    waldur_api_url: "http://localhost:8081/api/"
+    waldur_api_token: ""
+    waldur_offering_uuid: ""
+    reporting_backend: "cscs-dwdi" # Only reporting is supported
+    resource_import_enabled: false
+    mqtt_enabled: false
+    stomp_enabled: false
+    websocket_use_tls: true
+    backend_type: "cscs-dwdi" # Backend type for reporting-only
+
+    backend_settings:
+      # CSCS-DWDI API configuration
+      cscs_dwdi_api_url: "https://dwdi-api.cscs.ch"
+      cscs_dwdi_client_id: "your-oidc-client-id"
+      cscs_dwdi_client_secret: "your-oidc-client-secret"
+      cscs_dwdi_oidc_token_url: "https://identity.cscs.ch/realms/cscs/protocol/openid-connect/token"
+      cscs_dwdi_oidc_scope: "cscs-dwdi:read"
+
+    backend_components:
+      nodeHours:
+        measured_unit: "node-hours"
+        unit_factor: 1
+        accounting_type: "usage"
+        label: "Node Hours"
+      storage:
+        measured_unit: "TB"
+        unit_factor: 1
+        accounting_type: "usage"
+        label: "Storage Usage"

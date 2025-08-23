@@ -1,11 +1,12 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10, <4.0"
 
 [manifest]
 members = [
     "waldur-site-agent",
     "waldur-site-agent-basic-username-management",
+    "waldur-site-agent-cscs-dwdi",
     "waldur-site-agent-cscs-hpc-storage",
     "waldur-site-agent-moab",
     "waldur-site-agent-mup",
@@ -1247,6 +1248,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "waldur-site-agent", editable = "." }]
+
+[[package]]
+name = "waldur-site-agent-cscs-dwdi"
+version = "0.1.0"
+source = { editable = "plugins/cscs-dwdi" }
+dependencies = [
+    { name = "httpx" },
+    { name = "waldur-site-agent" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.25.0" },
+    { name = "waldur-site-agent", editable = "." },
+]
 
 [[package]]
 name = "waldur-site-agent-cscs-hpc-storage"
