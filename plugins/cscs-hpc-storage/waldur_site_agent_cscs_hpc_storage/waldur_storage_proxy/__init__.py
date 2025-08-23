@@ -10,8 +10,21 @@ from waldur_site_agent.common.utils import get_client, load_configuration
 from waldur_site_agent_cscs_hpc_storage.backend import CscsHpcStorageBackend
 from waldur_site_agent_cscs_hpc_storage.sync_script import setup_logging
 
+# Check if debug mode is enabled via environment variable
+DEBUG_MODE = os.getenv("DEBUG", "false").lower() in ("true", "yes", "1")
+
 logger = logging.getLogger(__name__)
-setup_logging()
+setup_logging(verbose=DEBUG_MODE)
+
+if DEBUG_MODE:
+    logger.info("Debug mode is enabled")
+    # Set debug level for the backend logger specifically
+    backend_logger = logging.getLogger("waldur_site_agent.backend")
+    backend_logger.setLevel(logging.DEBUG)
+
+    # Also set debug for the cscs backend logger
+    cscs_logger = logging.getLogger("waldur_site_agent_cscs_hpc_storage.backend")
+    cscs_logger.setLevel(logging.DEBUG)
 
 config_file_path = os.getenv("WALDUR_CSCS_STORAGE_PROXY_CONFIG_PATH")
 
@@ -41,6 +54,7 @@ backend_components = offering_config.backend_components
 
 cscs_storage_backend = CscsHpcStorageBackend(backend_settings, backend_components)
 
+DISABLE_AUTH = os.getenv("DISABLE_AUTH", "false").lower() in ("true", "yes", "1")
 CSCS_KEYCLOAK_URL = os.getenv("CSCS_KEYCLOAK_URL", "https://auth-tds.cscs.ch/auth/")
 CSCS_KEYCLOAK_REALM = os.getenv("CSCS_KEYCLOAK_REALM", "cscs")
 CSCS_KEYCLOAK_CLIENT_ID = os.getenv("CSCS_KEYCLOAK_CLIENT_ID")
