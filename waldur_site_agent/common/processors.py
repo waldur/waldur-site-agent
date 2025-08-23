@@ -55,6 +55,10 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_backend_metadata,
     marketplace_provider_resources_team_list,
 )
+from waldur_api_client.api.marketplace_service_providers import (
+    marketplace_service_providers_list,
+    marketplace_service_providers_project_service_accounts_list,
+)
 from waldur_api_client.api.projects import projects_list
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
@@ -101,6 +105,7 @@ from waldur_api_client.types import Unset
 from waldur_site_agent.backend import BackendType, logger
 from waldur_site_agent.backend import exceptions as backend_exceptions
 from waldur_site_agent.backend import utils as backend_utils
+from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import structures, utils
 
@@ -171,10 +176,10 @@ class OfferingBaseProcessor(abc.ABC):
 
         self._print_current_user()
 
-        waldur_offering = marketplace_provider_offerings_retrieve.sync(
+        self.waldur_offering = marketplace_provider_offerings_retrieve.sync(
             client=self.waldur_rest_client, uuid=self.offering.uuid
         )
-        utils.extend_backend_components(self.offering, waldur_offering.components)
+        utils.extend_backend_components(self.offering, self.waldur_offering.components)
 
     def _print_current_user(self) -> None:
         """Log information about the current authenticated Waldur user."""
@@ -708,6 +713,21 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
     BACKEND_TYPE_KEY = "membership_sync_backend"
 
+    def __init__(
+        self, offering: structures.Offering, user_agent: str = "", timezone: str = ""
+    ) -> None:
+        """Constructor.
+
+        Overrides the default constructor and adds service provider details to the instance.
+        """
+        super().__init__(offering, user_agent, timezone)
+        service_providers = marketplace_service_providers_list.sync(
+            customer_uuid=self.waldur_offering.customer_uuid.hex,
+            client=self.waldur_rest_client,
+        )
+
+        self.service_provider = service_providers[0]
+
     def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[WaldurResource]:
         """Fetch Waldur resources for this offering, optionally filtered by project.
 
@@ -1106,6 +1126,25 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     exc,
                 )
 
+    def _sync_resource_service_accounts(self, waldur_resource: WaldurResource) -> None:
+        """Syncs project service accounts between Waldur and the backend resource."""
+        logger.info(
+            "Syncing service accounts for the resource %s (%s)",
+            waldur_resource.name,
+            waldur_resource.backend_id,
+        )
+        if self.service_provider is None:
+            logger.warning("No service provider configured, skipping service accounts sync")
+            return
+
+        service_accounts = marketplace_service_providers_project_service_accounts_list.sync(
+            service_provider_uuid=self.service_provider.uuid.hex,
+            project_uuid=waldur_resource.project_uuid.hex,
+            client=self.waldur_rest_client,
+        )
+        usernames = {account.username for account in service_accounts if account.username}
+        self.resource_backend.add_users_to_resource(waldur_resource.backend_id, usernames)
+
     def _process_resources(
         self,
         resource_report: dict[str, tuple[WaldurResource, BackendResourceInfo]],
@@ -1116,6 +1155,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 resource_usernames = self._sync_resource_users(
                     waldur_resource, backend_resource_info
                 )
+                self._sync_resource_service_accounts(waldur_resource)
                 self._sync_resource_status(waldur_resource)
                 self._sync_resource_limits(waldur_resource)
                 self._sync_resource_user_limits(waldur_resource, resource_usernames)
@@ -1154,6 +1194,38 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                         "error_message": str(e),
                         "error_traceback": error_traceback,
                     },
+                )
+
+    def process_service_account_creation(self, service_account_username: str) -> None:
+        """Process service account creation."""
+        service_accounts = marketplace_service_providers_project_service_accounts_list.sync(
+            service_provider_uuid=self.service_provider.uuid.hex,
+            username=service_account_username,
+            client=self.waldur_rest_client,
+        )
+        if len(service_accounts) == 0:
+            logger.info(
+                "No service accounts found with username %s,"
+                "skipping processing for offering %s (%s)",
+                service_account_username,
+                self.offering.uuid,
+                self.offering.name,
+            )
+            return
+
+        service_account = service_accounts[0]
+        resources = self._get_waldur_resources(service_account.project_uuid.hex)
+        for resource in resources:
+            try:
+                self.resource_backend.add_users_to_resource(
+                    resource.backend_id, {service_account.username}
+                )
+            except BackendError as e:
+                logger.error(
+                    "Unable to add the service account %s to resource %s, reason: %s",
+                    service_account.username,
+                    resource.backend_id,
+                    e,
                 )
 
 

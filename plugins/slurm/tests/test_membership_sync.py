@@ -5,9 +5,10 @@ from unittest import mock
 
 import respx
 from freezegun import freeze_time
+from respx import Route
 from waldur_api_client import models
 from waldur_api_client.client import AuthenticatedClient
-from waldur_api_client.models import ResourceState
+from waldur_api_client.models import ResourceState, ServiceProvider, ProjectServiceAccount
 from waldur_api_client.models.offering_state import OfferingState
 from waldur_api_client.models.storage_mode_enum import StorageModeEnum
 from waldur_api_client.models.resource_limits import ResourceLimits
@@ -45,18 +46,16 @@ current_qos = {"qos": "abc"}
 
 
 @freeze_time("2022-01-01")
-@mock.patch.object(backend.SlurmBackend, "_pull_backend_resource", return_value=allocation_slurm)
-@mock.patch.object(backend.SlurmBackend, "restore_resource", return_value=None)
 class MembershipSyncTest(unittest.TestCase):
     BASE_URL = "https://waldur.example.com"
 
     def setUp(self) -> None:
         respx.start()
         self.waldur_resource = models.Resource(
-            uuid="10a0f810be1c43bbb651e8cbdbb90198",
+            uuid=uuid.uuid4(),
             name="test-alloc-01",
             backend_id="test-allocation-01",
-            resource_uuid="10a0f810be1c43bbb651e8cbdbb90198",
+            resource_uuid=uuid.uuid4(),
             offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
             downscaled=False,
             state=ResourceState.OK,
@@ -70,7 +69,11 @@ class MembershipSyncTest(unittest.TestCase):
                     "mem": 200,
                 }
             ),
-        ).to_dict()
+            project_uuid=uuid.uuid4(),
+            project_name="Test project",
+            customer_uuid=uuid.uuid4(),
+            customer_name="Test customer",
+        )
 
         self.waldur_user_uuid = uuid.uuid4()
         self.plan_period_uuid = uuid.uuid4().hex
@@ -84,7 +87,8 @@ class MembershipSyncTest(unittest.TestCase):
                 latest_date_for_resource_termination=datetime(2024, 12, 31, tzinfo=timezone.utc),
                 storage_mode=StorageModeEnum.FIXED,
             ),
-        ).to_dict()
+            customer_uuid=uuid.uuid4(),
+        )
         self.offering = OFFERING
         self.client_patcher = mock.patch("waldur_site_agent.common.utils.get_client")
         self.mock_get_client = self.client_patcher.start()
@@ -124,15 +128,19 @@ class MembershipSyncTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         respx.stop()
+        mock.patch.stopall()
 
-    def _setup_common_mocks(self) -> None:
+    def _setup_common_mocks(self) -> Route:
         """Setup common respx mocks used across all tests."""
         respx.post(
-            f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/set_as_erred/"
+            f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_as_erred/"
+        ).respond(200, json={})
+        respx.post(
+            f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/refresh_last_sync/"
         ).respond(200, json={})
         respx.get("https://waldur.example.com/api/users/me/").respond(200, json=self.waldur_user)
         respx.get(f"{self.BASE_URL}/api/marketplace-provider-offerings/{OFFERING.uuid}/").respond(
-            200, json=self.waldur_offering
+            200, json=self.waldur_offering.to_dict()
         )
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-resources/",
@@ -140,17 +148,43 @@ class MembershipSyncTest(unittest.TestCase):
                 "offering_uuid": self.offering.uuid,
                 "state": ["OK", "Erred"],
             },
-        ).respond(200, json=[self.waldur_resource])
+        ).respond(200, json=[self.waldur_resource.to_dict()])
         respx.post(
-            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/set_backend_metadata/"
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_backend_metadata/"
         ).respond(200, json={"status": "OK"})
+        service_provider = ServiceProvider(uuid=uuid.uuid4())
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering.customer_uuid.hex}"
+        ).respond(200, json=[service_provider.to_dict()])
+        service_account = ProjectServiceAccount(
+            url="",
+            uuid=uuid.uuid4(),
+            created=datetime.now(),
+            modified=datetime.now(),
+            error_message="",
+            token=None,
+            expires_at=None,
+            project=self.waldur_resource.project_uuid,
+            project_uuid=self.waldur_resource.project_uuid,
+            project_name=self.waldur_resource.project_name,
+            username="svc-test-account",
+            customer_uuid=self.waldur_resource.customer_uuid,
+            customer_name=self.waldur_resource.customer_name,
+            customer_abbreviation="",
+        )
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/project_service_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"
+        ).respond(200, json=[service_account.to_dict()])
+        return respx.post(
+            f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_limits/"
+        ).respond(200, json={"status": "ok"})
 
     def _setup_team_mock(self, team_data=None) -> None:
         """Setup team mock with optional team data."""
         if team_data is None:
             team_data = self.waldur_resource_team
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/team/"
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/team/"
         ).respond(200, json=team_data)
 
     def _setup_offering_users_mock(self, offering_users_data=None) -> None:
@@ -168,50 +202,66 @@ class MembershipSyncTest(unittest.TestCase):
             offering_user_data = self.waldur_offering_user
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-offerings/{offering_user_data['offering_uuid']}/"
-        ).respond(200, json=self.waldur_offering)
+        ).respond(200, json=self.waldur_offering.to_dict())
 
-    @mock.patch.object(backend.SlurmBackend, "add_users_to_resource")
-    @mock.patch.object(backend.SlurmBackend, "get_resource_metadata", return_value=current_qos)
+    def _setup_slurm_mock(self) -> None:
+        self.mock_pull_backend_resource = mock.patch.object(
+            backend.SlurmBackend, "_pull_backend_resource", return_value=allocation_slurm
+        ).start()
+        self.mock_restore_resource = mock.patch.object(
+            backend.SlurmBackend, "restore_resource", return_value=None
+        ).start()
+        self.mock_get_resource_limits = mock.patch.object(
+            backend.SlurmBackend,
+            "get_resource_limits",
+            return_value=allocation_slurm.limits,
+        ).start()
+        self.mock_get_resource_user_limits = mock.patch.object(
+            backend.SlurmBackend,
+            "get_resource_user_limits",
+            return_value={},
+        ).start()
+        self.mock_add_users_to_resource = mock.patch.object(
+            backend.SlurmBackend, "add_users_to_resource"
+        ).start()
+        self.mock_get_resource_metadata = mock.patch.object(
+            backend.SlurmBackend, "get_resource_metadata", return_value=current_qos
+        ).start()
+        self.mock_cancel_active_jobs_for_account_user = mock.patch.object(
+            backend.SlurmBackend, "cancel_active_jobs_for_account_user"
+        ).start()
+        self.mock_list_active_user_jobs = mock.patch.object(
+            backend.SlurmBackend, "list_active_user_jobs", return_value=["123"]
+        ).start()
+        self.mock_downscale_resource = mock.patch.object(
+            backend.SlurmBackend, "downscale_resource"
+        ).start()
+
     def test_association_create(
         self,
-        get_resource_metadata_mock,
-        add_users_to_resource_mock,
-        restore_resource_mock,
-        pull_backend_resource_mock,
     ) -> None:
-        del restore_resource_mock, pull_backend_resource_mock
-
         self._setup_common_mocks()
         self._setup_team_mock()
         self._setup_offering_users_mock()
         self._setup_offering_details_mock()
+        self._setup_slurm_mock()
 
         set_backend_metadata_response = respx.post(
-            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/set_backend_metadata/"
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_backend_metadata/"
         ).respond(200, json={"status": "OK"})
 
         processor = OfferingMembershipProcessor(self.offering)
         processor.process_offering()
 
-        add_users_to_resource_mock.assert_called_once()
+        assert self.mock_add_users_to_resource.call_count == 2
         assert set_backend_metadata_response.call_count == 1
-        get_resource_metadata_mock.assert_called_once()
+        self.mock_get_resource_metadata.assert_called_once()
 
-    @mock.patch.object(backend.SlurmBackend, "cancel_active_jobs_for_account_user")
-    @mock.patch.object(backend.SlurmBackend, "list_active_user_jobs", return_value=["123"])
-    @mock.patch.object(backend.SlurmBackend, "get_resource_metadata", return_value=current_qos)
     @mock.patch("waldur_site_agent_slurm.backend.SlurmClient", autospec=True)
     def test_association_delete(
         self,
         slurm_client_class,
-        get_resource_metadata_mock,
-        list_active_user_jobs_mock,
-        cancel_active_jobs_for_account_user_mock,
-        restore_resource_mock,
-        pull_backend_resource_mock: mock.Mock,
     ) -> None:
-        del restore_resource_mock, pull_backend_resource_mock
-
         stale_offering_user_data = self.waldur_offering_user.copy()
         stale_offering_user_data["username"] = "user-03"
 
@@ -219,6 +269,7 @@ class MembershipSyncTest(unittest.TestCase):
         self._setup_team_mock(team_data=[])
         self._setup_offering_users_mock(offering_users_data=[stale_offering_user_data])
         self._setup_offering_details_mock(offering_user_data=stale_offering_user_data)
+        self._setup_slurm_mock()
 
         slurm_client = slurm_client_class.return_value
         slurm_client.get_association.return_value = "exists"
@@ -227,71 +278,41 @@ class MembershipSyncTest(unittest.TestCase):
         processor = OfferingMembershipProcessor(self.offering)
         processor.process_offering()
 
-        list_active_user_jobs_mock.assert_called_once()
-        cancel_active_jobs_for_account_user_mock.assert_called_once_with(
+        self.mock_list_active_user_jobs.assert_called_once()
+        self.mock_cancel_active_jobs_for_account_user.assert_called_once_with(
             allocation_slurm.backend_id, "user-03"
         )
-        get_resource_metadata_mock.assert_called_once()
+        self.mock_get_resource_metadata.assert_called_once()
 
-    @mock.patch.object(backend.SlurmBackend, "downscale_resource")
-    @mock.patch.object(backend.SlurmBackend, "get_resource_metadata", return_value=current_qos)
-    @mock.patch.object(backend.SlurmBackend, "add_users_to_resource")
     def test_qos_downscaling(
         self,
-        add_users_to_resource_mock,
-        get_resource_metadata_mock,
-        downscale_resource_mock,
-        restore_resource_mock,
-        pull_backend_resource_mock,
     ) -> None:
-        del (
-            restore_resource_mock,
-            pull_backend_resource_mock,
-            add_users_to_resource_mock,
-        )
-        self.waldur_resource["downscaled"] = True
-        self.waldur_resource["paused"] = False
+        self.waldur_resource.downscaled = True
+        self.waldur_resource.paused = False
 
         self._setup_common_mocks()
         self._setup_team_mock()
         self._setup_offering_users_mock()
         self._setup_offering_details_mock()
+        self._setup_slurm_mock()
 
         processor = OfferingMembershipProcessor(self.offering)
         processor.process_offering()
 
-        downscale_resource_mock.assert_called_once()
-        get_resource_metadata_mock.assert_called_once()
+        self.mock_downscale_resource.assert_called_once()
+        self.mock_get_resource_metadata.assert_called_once()
 
-    @mock.patch.object(backend.SlurmBackend, "get_resource_metadata", return_value=current_qos)
-    @mock.patch.object(
-        backend.SlurmBackend,
-        "get_resource_limits",
-        return_value=allocation_slurm.limits,
-    )
     def test_limits_update(
         self,
-        mock_get_resource_limits,
-        get_resource_metadata_mock,
-        restore_resource_mock,
-        pull_backend_resource_mock: mock.Mock,
     ) -> None:
-        del (
-            restore_resource_mock,
-            pull_backend_resource_mock,
-        )
-
-        self._setup_common_mocks()
+        mock_set_limits = self._setup_common_mocks()
         self._setup_team_mock(team_data=[])
         self._setup_offering_users_mock(offering_users_data=[self.waldur_offering_user])
-
-        mock_set_limits = respx.post(
-            f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/set_limits/"
-        ).respond(200, json={"status": "ok"})
+        self._setup_slurm_mock()
 
         processor = OfferingMembershipProcessor(self.offering)
         processor.process_offering()
 
-        get_resource_metadata_mock.assert_called_once()
-        mock_get_resource_limits.assert_called_once()
+        self.mock_get_resource_metadata.assert_called_once()
+        self.mock_get_resource_limits.assert_called_once()
         assert mock_set_limits.call_count == 1
