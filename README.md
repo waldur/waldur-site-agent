@@ -78,8 +78,6 @@ Optional environment variables:
   mode in minutes (default is 30);
 - `WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES` - trigger period for `membership_sync`
   mode in minutes (default is 5).
-- `REQUESTS_VERIFY_SSL` - flag for SSL verification
-  for Waldur client, default is `true`.
 - `SENTRY_ENVIRONMENT` - name of the Sentry environment.
 
 The main config source for the agent is `waldur-site-agent-config.yaml` file.
@@ -291,6 +289,7 @@ offerings: # Settings for offerings
   - name: "Example SLURM Offering" # offering name
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
     waldur_api_token: "" # Token to access the Waldur API.
+    verify_ssl: true # Whether to verify SSL cert for Waldur API.
     waldur_offering_uuid: "" # UUID of the offering in Waldur.
     # Name of the backend from entrypoints to use for username management
     username_management_backend: "base"
