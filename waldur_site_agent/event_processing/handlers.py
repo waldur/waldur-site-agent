@@ -14,6 +14,7 @@ from waldur_site_agent.event_processing.structures import (
     BackendResourceRequestMessage,
     OrderMessage,
     ResourceMessage,
+    ServiceAccountMessage,
     UserData,
     UserRoleMessage,
 )
@@ -120,6 +121,30 @@ def on_resource_message_mqtt(
         logger.error("Failed to process resource %s: %s", resource_uuid, e)
 
 
+def on_service_account_message_mqtt(
+    client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage
+) -> None:
+    """Resource update handler for MQTT message event."""
+    del client
+    message_text = msg.payload.decode("utf-8")
+    message: ServiceAccountMessage = json.loads(message_text)
+    logger.info("Received message: %s on topic %s", message, msg.topic)
+    offering = userdata["offering"]
+    user_agent = userdata["user_agent"]
+    service_account_username = message["service_account_username"]
+    service_account_uuid = message["service_account_uuid"]
+    try:
+        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        processor.process_service_account_creation(service_account_username)
+    except Exception as e:
+        logger.error(
+            "Failed to process creation of service account %s (%s): %s",
+            service_account_username,
+            service_account_uuid,
+            e,
+        )
+
+
 def on_order_message_stomp(
     frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
 ) -> None:
@@ -218,3 +243,22 @@ def on_importable_resources_message_stomp(
         processor.process_request(request_uuid)
     except Exception as e:
         logger.error("Failed to process importable resource list request %s: %s", request_uuid, e)
+
+
+def on_service_account_message_stomp(
+    frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
+) -> None:
+    """Service account create handler for STOMP."""
+    message: ServiceAccountMessage = json.loads(frame.body)
+    service_account_uuid = message["service_account_uuid"]
+    service_account_username = message["service_account_username"]
+    try:
+        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        processor.process_service_account_creation(service_account_username)
+    except Exception as e:
+        logger.error(
+            "Failed to process creation of service account %s (%s): %s",
+            service_account_username,
+            service_account_uuid,
+            e,
+        )

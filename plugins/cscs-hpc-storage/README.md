@@ -144,13 +144,91 @@ uv run waldur_cscs_storage_sync --config /path/to/config.yaml --dry-run --verbos
 
 ### Mount Point Generation
 
-Mount points follow the pattern: `/{storage_system}/{storage_data_type}/{tenant}/{customer}/{project}`
+Mount points follow the pattern: `/{storage_system}/store/{tenant}/{customer}/{project}`
 
-Example: `/capstor/store/university/physics-dept/climate-sim`
+Example: `/cscs-storage/store/university/physics-dept/climate-sim`
+
+Where:
+- `storage_system`: From `storage_system` attribute (default: `"cscs-storage"`)
+- `tenant`: Waldur customer slug (`waldur_resource.customer_slug`)
+- `customer`: Waldur project slug (`waldur_resource.project_slug`)
+- `project`: Waldur resource slug (`waldur_resource.slug`)
 
 ### Resource Attributes
 
-The backend extracts the following from Waldur resource attributes:
+The backend extracts the following attributes from `waldur_resource.attributes.additional_properties`:
 
-- `permissions`: Octal permissions (e.g., "2770")
-- `storage_data_type`: Data type classification (e.g., "store", "scratch", "archive")
+| Attribute | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `permissions` | string | No | `"775"` | Octal permissions for storage access (e.g., `"2770"`, `"755"`) |
+| `storage_data_type` | string | No | `"store"` | Storage data type classification. Determines target type mapping |
+| `storage_system` | string | No | `"cscs-storage"` | Storage system identifier for mount points and system references |
+
+**Validation Rules:**
+- All attributes must be strings if provided (non-string values raise `TypeError`)
+- Unknown `storage_data_type` values fall back to `"project"` target type with warning
+- Empty or missing attributes use their respective default values
+
+**Storage Data Type Mapping:**
+
+The `storage_data_type` attribute determines the target structure in the generated JSON:
+
+- **Project targets**: `"store"`, `"archive"` → target type `"project"`
+  - Fields: `status`, `name`, `unixGid`, `active`
+- **User targets**: `"users"`, `"scratch"` → target type `"user"`
+  - Fields: `status`, `email`, `unixUid`, `primaryProject`, `active`
+
+## API Filtering
+
+The storage proxy API supports filtering capabilities to query specific storage resources:
+
+### API Endpoint
+
+```http
+GET /api/storage-resources/
+```
+
+### Filter Parameters
+
+| Parameter | Type | Required | Description | Examples |
+|-----------|------|----------|-------------|----------|
+| `storage_system` | string | **Yes** | Filter by storage system | `capstor`, `vast`, `iopsstor` |
+| `data_type` | string | No | Filter by data type | `users`, `scratch`, `store`, `archive` |
+| `status` | string | No | Filter by status | `pending`, `removing`, `active`, `error` |
+| `state` | ResourceState | No | Filter by Waldur resource state | `Creating`, `OK`, `Erred` |
+| `page` | integer | No | Page number (≥1) | `1`, `2`, `3` |
+| `page_size` | integer | No | Items per page (1-500) | `50`, `100`, `200` |
+
+### Example API Calls
+
+**Filter by storage system (required):**
+
+```bash
+curl "/api/storage-resources/?storage_system=capstor"
+```
+
+**Filter by storage system and data type:**
+
+```bash
+curl "/api/storage-resources/?storage_system=vast&data_type=users"
+```
+
+**Filter by storage system, data type, and status:**
+
+```bash
+curl "/api/storage-resources/?storage_system=iopsstor&data_type=store&status=active"
+```
+
+**Paginated results with filters:**
+
+```bash
+curl "/api/storage-resources/?storage_system=capstor&page=2&page_size=50"
+```
+
+### Filter Behavior
+
+- **Required filtering**: `storage_system` parameter is mandatory
+- **Optional filtering**: Other filters are applied only when provided
+- **Exact matching**: All filters use exact string matching (case-sensitive)
+- **Combine filters**: Multiple filters are combined with AND logic
+- **Empty results**: Non-matching filters return empty result arrays

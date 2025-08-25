@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-from uuid import uuid4
+from uuid import NAMESPACE_OID, uuid5
 
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_resources import marketplace_resources_list
@@ -15,7 +15,6 @@ from waldur_api_client.types import Unset
 from waldur_site_agent.backend import backends, logger
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
-from waldur_site_agent.common.pagination import get_all_paginated
 
 
 class CscsHpcStorageBackend(backends.BaseBackend):
@@ -39,6 +38,63 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
         # Ensure output directory exists
         Path(self.output_directory).mkdir(parents=True, exist_ok=True)
+
+    def _generate_deterministic_uuid(self, name: str) -> str:
+        """Generate a deterministic UUID from a string name."""
+        return str(uuid5(NAMESPACE_OID, name))
+
+    def _apply_filters(
+        self,
+        storage_resources: list[dict],
+        storage_system: Optional[str] = None,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> list[dict]:
+        """Apply filtering to storage resources list.
+
+        Args:
+            storage_resources: List of storage resource dictionaries
+            storage_system: Required filter for storage system
+            data_type: Optional filter for data type
+            status: Optional filter for status
+
+        Returns:
+            Filtered list of storage resources
+        """
+        filtered_resources = []
+
+        for resource in storage_resources:
+            # Required storage_system filter
+            if storage_system:
+                resource_storage_system = resource.get("storageSystem", {}).get("key", "")
+                if resource_storage_system != storage_system:
+                    continue
+
+            # Optional data_type filter
+            if data_type:
+                resource_data_type = resource.get("storageDataType", {}).get("key", "")
+                if resource_data_type != data_type:
+                    continue
+
+            # Optional status filter
+            if status:
+                resource_status = resource.get("status", "")
+                if resource_status != status:
+                    continue
+
+            filtered_resources.append(resource)
+
+        logger.debug(
+            "Applied filters: storage_system=%s, data_type=%s, status=%s. "
+            "Filtered %d resources from %d total",
+            storage_system,
+            data_type,
+            status,
+            len(filtered_resources),
+            len(storage_resources),
+        )
+
+        return filtered_resources
 
     def _validate_configuration(self) -> None:
         """Validate backend configuration settings."""
@@ -217,38 +273,132 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         # Generate mock data for development/testing
         if target_type == "tenant":
             return {
-                "itemId": waldur_resource.customer_uuid.hex,
+                "itemId": self._generate_deterministic_uuid(
+                    f"tenant:{waldur_resource.customer_slug}"
+                ),
                 "key": waldur_resource.customer_slug,
                 "name": waldur_resource.customer_name,
             }
         if target_type == "customer":
             return {
-                "itemId": waldur_resource.project_uuid.hex,
+                "itemId": self._generate_deterministic_uuid(
+                    f"customer:{waldur_resource.project_slug}"
+                ),
                 "key": waldur_resource.project_slug,
                 "name": waldur_resource.project_name,
             }
         if target_type == "project":
             return {
-                "itemId": waldur_resource.uuid.hex,
+                "itemId": self._generate_deterministic_uuid(f"project:{waldur_resource.slug}"),
                 "status": "open",
                 "name": waldur_resource.slug,
                 "unixGid": 30000 + hash(waldur_resource.slug) % 10000,  # Mock GID
                 "active": True,
             }
+        if target_type == "user":
+            return {
+                "itemId": self._generate_deterministic_uuid(f"user:{waldur_resource.slug}"),
+                "status": "active",
+                "email": f"user-{waldur_resource.slug}@example.com",  # Mock email
+                "unixUid": 20000 + hash(waldur_resource.slug) % 10000,  # Mock UID
+                "primaryProject": {
+                    "name": (
+                        waldur_resource.project_slug
+                        if not isinstance(waldur_resource.project_slug, Unset)
+                        else "default-project"
+                    ),
+                    "unixGid": (
+                        30000 + hash(str(waldur_resource.project_slug)) % 10000
+                    ),  # Mock project GID
+                    "active": True,
+                },
+                "active": True,
+            }
 
         return {}
+
+    def _get_target_data(self, waldur_resource: WaldurResource, storage_data_type: str) -> dict:
+        """Get target data based on storage data type mapping."""
+        # Validate storage_data_type is a string
+        if not isinstance(storage_data_type, str):
+            error_msg = (
+                f"Invalid storage_data_type for resource {waldur_resource.uuid}: "
+                f"expected string, got {type(storage_data_type).__name__}. "
+                f"Value: {storage_data_type!r}"
+            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
+
+        # Map storage data types to target types
+        data_type_to_target = {
+            "store": "project",
+            "archive": "project",
+            "users": "user",
+            "scratch": "user",
+        }
+
+        # Validate that storage_data_type is a supported type
+        if storage_data_type not in data_type_to_target:
+            logger.warning(
+                "Unknown storage_data_type '%s' for resource %s, using default 'project' "
+                "target type. Supported types: %s",
+                storage_data_type,
+                waldur_resource.uuid,
+                list(data_type_to_target.keys()),
+            )
+
+        target_type = data_type_to_target.get(storage_data_type, "project")
+        logger.debug(
+            "  Mapped storage_data_type '%s' to target_type '%s'",
+            storage_data_type,
+            target_type,
+        )
+
+        return {
+            "targetType": target_type,
+            "targetItem": self._get_target_item_data(waldur_resource, target_type),
+        }
 
     def _create_storage_resource_json(
         self, waldur_resource: WaldurResource, storage_system: str
     ) -> dict:
         """Create JSON structure for a single storage resource."""
+        logger.debug("Creating storage resource JSON for resource %s", waldur_resource.uuid)
+        logger.debug("  Input storage_system: %s (type: %s)", storage_system, type(storage_system))
+
+        # Validate storage_system is a string
+        if not isinstance(storage_system, str):
+            error_msg = (
+                f"Invalid storage_system type for resource {waldur_resource.uuid}: "
+                f"expected string, got {type(storage_system).__name__}. "
+                f"Value: {storage_system!r}"
+            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
+
+        if not storage_system:
+            error_msg = (
+                f"Empty storage_system provided for resource {waldur_resource.uuid}. "
+                "A valid storage system name is required."
+            )
+            logger.error(error_msg)
+            raise TypeError(error_msg)
+
+        logger.debug("  Final storage_system: %s", storage_system)
+
         # Extract storage size from resource limits (assuming in terabytes)
         storage_quota_tb = 0.0
         if waldur_resource.limits:
+            logger.debug("  Processing limits: %s", waldur_resource.limits.additional_properties)
             # Get storage component limit (typically the first component configured)
             for component_name, limit_value in waldur_resource.limits.additional_properties.items():
                 if component_name in self.backend_components:
                     storage_quota_tb = float(limit_value)  # Assume already in TB
+                    logger.debug(
+                        "  Found storage limit for component '%s': %s TB",
+                        component_name,
+                        storage_quota_tb,
+                    )
                     break
 
         inode_soft, inode_hard = self._calculate_inode_quotas(storage_quota_tb)
@@ -266,55 +416,124 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         storage_data_type = "store"  # default
 
         if waldur_resource.attributes:
-            permissions = waldur_resource.attributes.additional_properties.get(
+            logger.debug(
+                "  Processing attributes: %s",
+                waldur_resource.attributes.additional_properties,
+            )
+
+            perm_value = waldur_resource.attributes.additional_properties.get(
                 "permissions", permissions
             )
-            storage_data_type = waldur_resource.attributes.additional_properties.get(
+            logger.debug("  Raw permissions value: %s (type: %s)", perm_value, type(perm_value))
+
+            # Validate permissions is a string
+            if perm_value is not None and not isinstance(perm_value, str):
+                error_msg = (
+                    f"Invalid permissions type for resource {waldur_resource.uuid}: "
+                    f"expected string or None, got {type(perm_value).__name__}. "
+                    f"Value: {perm_value!r}"
+                )
+                logger.error(error_msg)
+                raise TypeError(error_msg)
+
+            permissions = perm_value if perm_value else permissions
+            logger.debug("  Final permissions: %s", permissions)
+
+            storage_type_value = waldur_resource.attributes.additional_properties.get(
                 "storage_data_type", storage_data_type
             )
+            logger.debug(
+                "  Raw storage_data_type value: %s (type: %s)",
+                storage_type_value,
+                type(storage_type_value),
+            )
+
+            # Validate storage_data_type is a string
+            if storage_type_value is not None and not isinstance(storage_type_value, str):
+                error_msg = (
+                    f"Invalid storage_data_type for resource {waldur_resource.uuid}: "
+                    f"expected string or None, got {type(storage_type_value).__name__}. "
+                    f"Value: {storage_type_value!r}"
+                )
+                logger.error(error_msg)
+                raise TypeError(error_msg)
+
+            storage_data_type = storage_type_value if storage_type_value else storage_data_type
+            logger.debug("  Final storage_data_type: %s", storage_data_type)
+        else:
+            logger.debug("  No attributes present, using defaults")
+
+        # Map Waldur resource state to CSCS status
+        status_mapping = {
+            "Creating": "pending",
+            "OK": "active",
+            "Erred": "error",
+            "Terminating": "removing",
+            "Terminated": "removed",
+        }
+
+        # Get status from waldur resource state, default to "pending"
+        waldur_state = getattr(waldur_resource, "state", None)
+        if waldur_state and not isinstance(waldur_state, Unset):
+            cscs_status = status_mapping.get(str(waldur_state), "pending")
+        else:
+            cscs_status = "pending"
+
+        logger.debug("  Mapped waldur state '%s' to CSCS status '%s'", waldur_state, cscs_status)
 
         # Create JSON structure
         return {
             "itemId": waldur_resource.uuid.hex,
-            "status": "pending",
+            "status": cscs_status,
             "mountPoint": {"default": mount_point},
             "permission": {"permissionType": "octal", "value": permissions},
             "quotas": [
                 {
                     "type": "space",
-                    "quota": int(storage_quota_tb),
+                    "quota": float(storage_quota_tb),
                     "unit": "tera",
                     "enforcementType": "soft",
                 },
                 {
                     "type": "space",
-                    "quota": int(storage_quota_tb),
+                    "quota": float(storage_quota_tb),
                     "unit": "tera",
                     "enforcementType": "hard",
                 },
-                {"type": "inodes", "quota": inode_soft, "unit": "none", "enforcementType": "soft"},
-                {"type": "inodes", "quota": inode_hard, "unit": "none", "enforcementType": "hard"},
+                {
+                    "type": "inodes",
+                    "quota": float(inode_soft),
+                    "unit": "none",
+                    "enforcementType": "soft",
+                },
+                {
+                    "type": "inodes",
+                    "quota": float(inode_hard),
+                    "unit": "none",
+                    "enforcementType": "hard",
+                },
             ]
             if storage_quota_tb > 0
             else None,
-            "target": {
-                "targetType": "project",
-                "targetItem": self._get_target_item_data(waldur_resource, "project"),
-            },
+            "target": self._get_target_data(waldur_resource, storage_data_type),
             "storageSystem": {
-                "itemId": str(uuid4()),  # Generate for storage system
+                "itemId": self._generate_deterministic_uuid(f"storage_system:{storage_system}"),
                 "key": storage_system,
                 "name": storage_system.upper(),
                 "active": True,
             },
             "storageFileSystem": {
-                "itemId": str(uuid4()),  # Generate for file system
+                "itemId": self._generate_deterministic_uuid(
+                    f"storage_file_system:{self.storage_file_system}"
+                ),
                 "key": self.storage_file_system,
                 "name": self.storage_file_system.upper(),
                 "active": True,
             },
             "storageDataType": {
-                "itemId": str(uuid4()),  # Generate for data type
+                "itemId": self._generate_deterministic_uuid(
+                    f"storage_data_type:{storage_data_type}"
+                ),
                 "key": storage_data_type,
                 "name": storage_data_type.upper(),
                 "path": storage_data_type,
@@ -324,50 +543,186 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         }
 
     def _get_all_storage_resources(
-        self, offering_uuid: str, client: AuthenticatedClient, state: Optional[ResourceState] = None
-    ) -> list[dict]:
-        """Fetch all storage resources from Waldur API with proper pagination.
+        self,
+        offering_uuid: str,
+        client: AuthenticatedClient,
+        state: Optional[ResourceState] = None,
+        page: int = 1,
+        page_size: int = 100,
+        storage_system: Optional[str] = None,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> tuple[list[dict], dict]:
+        """Fetch storage resources from Waldur API with pagination and filtering support.
 
         Args:
             offering_uuid: UUID of the offering to fetch resources for
             client: Authenticated Waldur API client for API access
-            state: Optional resource state
+            state: Optional resource state filter
+            page: Page number (1-based)
+            page_size: Number of items per page
+            storage_system: Required filter for storage system (e.g., 'capstor', 'vast', 'iopsstor')
+            data_type: Optional filter for data type (e.g., 'users', 'scratch', 'store', 'archive')
+            status: Optional filter for status (e.g., 'pending', 'removing', 'active')
 
         Returns:
-            List of storage resource dictionaries in JSON format
+            Tuple of (storage resource list, pagination info dict)
         """
         try:
-            # Fetch all resources using the reusable pagination utility
+            # Fetch paginated resources from Waldur API using sync_detailed
             filters = {}
             if state:
                 filters["state"] = state
-            waldur_resources = get_all_paginated(
-                marketplace_resources_list.sync,
-                client,
+
+            # Use sync_detailed to get both content and headers
+            response = marketplace_resources_list.sync_detailed(
+                client=client,
                 offering_uuid=offering_uuid,
+                page=page,
+                page_size=page_size,
                 **filters,
             )
 
+            # Extract resources from response parsed data
+            # sync_detailed returns parsed objects in response.parsed
+            waldur_resources = response.parsed if response.parsed else []
+
+            # Extract pagination info from headers
+            total_count = 0
+            # Headers is a httpx.Headers object, access it like a dict (case-insensitive)
+            header_value = response.headers.get("x-result-count")
+            if header_value:
+                try:
+                    total_count = int(header_value)
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid X-Result-Count header value: {header_value}")
+
+            # Calculate pagination info
+            total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+            offset = (page - 1) * page_size
+
+            pagination_info = {
+                "current": page,
+                "limit": page_size,
+                "offset": offset,
+                "pages": total_pages,
+                "total": total_count,
+            }
+
             # Convert Waldur resources to storage JSON format
             storage_resources = []
-            for resource in waldur_resources:
+            for i, resource in enumerate(waldur_resources):
+                # Log raw resource data for debugging
+                logger.info("Processing resource %d/%d", i + 1, len(waldur_resources))
+                logger.info(f"Resource {resource.uuid} / {resource.name}")
+                logger.debug("Raw resource data from Waldur SDK:")
+                logger.debug(
+                    "  Slug: %s",
+                    resource.slug if not isinstance(resource.slug, Unset) else "Unset",
+                )
+                logger.debug(
+                    "  State: %s",
+                    resource.state if not isinstance(resource.state, Unset) else "Unset",
+                )
+                logger.debug(
+                    "  Customer: slug=%s, name=%s, uuid=%s",
+                    resource.customer_slug
+                    if not isinstance(resource.customer_slug, Unset)
+                    else "Unset",
+                    resource.customer_name
+                    if not isinstance(resource.customer_name, Unset)
+                    else "Unset",
+                    resource.customer_uuid
+                    if not isinstance(resource.customer_uuid, Unset)
+                    else "Unset",
+                )
+                logger.debug(
+                    "  Project: slug=%s, name=%s, uuid=%s",
+                    resource.project_slug
+                    if not isinstance(resource.project_slug, Unset)
+                    else "Unset",
+                    resource.project_name
+                    if not isinstance(resource.project_name, Unset)
+                    else "Unset",
+                    resource.project_uuid
+                    if not isinstance(resource.project_uuid, Unset)
+                    else "Unset",
+                )
+                logger.debug(
+                    "  Offering: slug=%s, uuid=%s, type=%s",
+                    resource.offering_slug
+                    if not isinstance(resource.offering_slug, Unset)
+                    else "Unset",
+                    resource.offering_uuid
+                    if not isinstance(resource.offering_uuid, Unset)
+                    else "Unset",
+                    resource.offering_type
+                    if not isinstance(resource.offering_type, Unset)
+                    else "Unset",
+                )
+
+                # Log limits if present
+                if resource.limits and not isinstance(resource.limits, Unset):
+                    logger.debug("  Limits: %s", resource.limits.additional_properties)
+                else:
+                    logger.debug("  Limits: None or Unset")
+
+                # Log attributes if present
+                if resource.attributes and not isinstance(resource.attributes, Unset):
+                    logger.debug("  Attributes: %s", resource.attributes.additional_properties)
+                else:
+                    logger.debug("  Attributes: None or Unset")
+
                 # Validate resource data before processing
                 self._validate_resource_data(resource)
-                storage_resource = self._create_storage_resource_json(
-                    resource, resource.offering_slug
-                )
+                # Use a default storage system name or derive from attributes
+                storage_system_name = "cscs-storage"  # Default storage system name
+                if resource.attributes and not isinstance(resource.attributes, Unset):
+                    # Try to get storage system from attributes if available
+                    attr_storage_system = resource.attributes.additional_properties.get(
+                        "storage_system"
+                    )
+                    if attr_storage_system and isinstance(attr_storage_system, str):
+                        storage_system_name = attr_storage_system
+                    logger.debug("  Using storage_system from attributes: %s", storage_system_name)
+                else:
+                    logger.debug("  Using default storage_system: %s", storage_system_name)
+
+                storage_resource = self._create_storage_resource_json(resource, storage_system_name)
                 storage_resources.append(storage_resource)
 
+            # Apply filters to the converted storage resources
+            storage_resources = self._apply_filters(
+                storage_resources, storage_system, data_type, status
+            )
+
+            # Update pagination info based on filtered results
+            filtered_count = len(storage_resources)
+            filtered_pages = (
+                (filtered_count + page_size - 1) // page_size if filtered_count > 0 else 1
+            )
+
+            pagination_info.update(
+                {
+                    "total": filtered_count,
+                    "pages": filtered_pages,
+                }
+            )
+
             logger.info(
-                "Retrieved %d storage resources for offering %s",
+                "Retrieved %d filtered storage resources for offering %s (page %d/%d, total: %d)",
                 len(storage_resources),
                 offering_uuid,
+                page,
+                pagination_info["pages"],
+                pagination_info["total"],
             )
-            return storage_resources
+            return storage_resources, pagination_info
 
         except Exception as e:
             logger.error("Failed to fetch storage resources from Waldur API: %s", e)
-            return []
+            # Re-raise the exception to be handled by the caller
+            raise
 
     def _write_json_file(self, filename: str, data: dict) -> None:
         """Write JSON data to file."""
@@ -386,24 +741,62 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         client: AuthenticatedClient,
         state: Optional[ResourceState] = None,
         write_file: bool = True,
+        page: int = 1,
+        page_size: int = 100,
+        storage_system: Optional[str] = None,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
     ) -> dict:
-        """Generate JSON file with all storage resources."""
+        """Generate JSON file with all storage resources with pagination support."""
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M")
         filename = f"{timestamp}-all.json"
 
-        storage_resources = self._get_all_storage_resources(offering_uuid, client, state)
+        try:
+            storage_resources, pagination_info = self._get_all_storage_resources(
+                offering_uuid,
+                client,
+                state,
+                page=page,
+                page_size=page_size,
+                storage_system=storage_system,
+                data_type=data_type,
+                status=status,
+            )
 
-        json_data = {
-            "status": "success",
-            "code": 200,
-            "meta": {"date": datetime.now().isoformat(), "appVersion": "1.4.0"},
-            "result": {"storageResources": storage_resources},
-        }
+            json_data = {
+                "status": "success",
+                "code": 200,
+                "meta": {"date": datetime.now().isoformat(), "appVersion": "1.4.0"},
+                "result": {
+                    "storageResources": storage_resources,
+                    "paginate": pagination_info,
+                },
+            }
 
-        if write_file:
-            self._write_json_file(filename, json_data)
+            if write_file:
+                self._write_json_file(filename, json_data)
 
-        return json_data
+            return json_data
+
+        except Exception as e:
+            logger.error("Error generating storage resources JSON: %s", e)
+            # Return error response instead of empty results
+            return {
+                "status": "error",
+                "code": 500,
+                "meta": {"date": datetime.now().isoformat(), "appVersion": "1.4.0"},
+                "message": f"Failed to fetch storage resources: {e!s}",
+                "result": {
+                    "storageResources": [],
+                    "paginate": {
+                        "current": page,
+                        "limit": page_size,
+                        "offset": (page - 1) * page_size,
+                        "pages": 0,
+                        "total": 0,
+                    },
+                },
+            }
 
     def generate_order_json(self, waldur_resource: WaldurResource, order_type: str) -> None:
         """Generate JSON file for a specific order."""
@@ -412,9 +805,18 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
         # Validate resource data before processing
         self._validate_resource_data(waldur_resource)
-        storage_resource = self._create_storage_resource_json(
-            waldur_resource, waldur_resource.offering_slug
-        )
+
+        # Use a default storage system name or derive from attributes
+        storage_system_name = "cscs-storage"  # Default storage system name
+        if waldur_resource.attributes and not isinstance(waldur_resource.attributes, Unset):
+            # Try to get storage system from attributes if available
+            attr_storage_system = waldur_resource.attributes.additional_properties.get(
+                "storage_system"
+            )
+            if attr_storage_system and isinstance(attr_storage_system, str):
+                storage_system_name = attr_storage_system
+
+        storage_resource = self._create_storage_resource_json(waldur_resource, storage_system_name)
 
         json_data = {
             "status": "success",
