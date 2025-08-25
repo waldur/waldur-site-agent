@@ -168,7 +168,7 @@ class OfferingBaseProcessor(abc.ABC):
         self.offering: structures.Offering = offering
         self.timezone: str = timezone
         self.waldur_rest_client: utils.AuthenticatedClient = utils.get_client(
-            offering.api_url, offering.api_token, user_agent
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
         )
         self.resource_backend = utils.get_backend_for_offering(offering, self.BACKEND_TYPE_KEY)
         if self.resource_backend.backend_type == BackendType.UNKNOWN.value:
