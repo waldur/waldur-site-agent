@@ -393,16 +393,23 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         storage_quota_tb = 0.0
         if waldur_resource.limits:
             logger.debug("  Processing limits: %s", waldur_resource.limits.additional_properties)
-            # Get storage component limit (typically the first component configured)
-            for component_name, limit_value in waldur_resource.limits.additional_properties.items():
-                if component_name in self.backend_components:
-                    storage_quota_tb = float(limit_value)  # Assume already in TB
-                    logger.debug(
-                        "  Found storage limit for component '%s': %s TB",
-                        component_name,
-                        storage_quota_tb,
+            # Only accept 'storage' limit - be strict about supported limits
+            storage_limit = waldur_resource.limits.additional_properties.get("storage")
+            if storage_limit is not None:
+                try:
+                    storage_quota_tb = float(storage_limit)  # Assume already in TB
+                    logger.debug("  Found storage limit: %s TB", storage_quota_tb)
+                except (ValueError, TypeError):
+                    logger.warning(
+                        "  Invalid storage limit value for resource %s: %s (type: %s). Using 0 TB.",
+                        waldur_resource.uuid,
+                        storage_limit,
+                        type(storage_limit).__name__,
                     )
-                    break
+            else:
+                logger.debug("  No 'storage' limit found in limits")
+        else:
+            logger.debug("  No limits present")
 
         inode_soft, inode_hard = self._calculate_inode_quotas(storage_quota_tb)
 
@@ -471,14 +478,12 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         storage_quota_hard_tb = storage_quota_tb
 
         # Check for override values in the options field
-        if waldur_resource.options and hasattr(waldur_resource.options, "additional_properties"):
-            logger.debug(
-                "  Processing options for overrides: %s",
-                waldur_resource.options.additional_properties,
-            )
+        if waldur_resource.options:
+            options_dict = waldur_resource.options
+            logger.debug("  Processing options for overrides: %s", options_dict)
 
             # Override permissions if provided in options
-            options_permissions = waldur_resource.options.additional_properties.get("permissions")
+            options_permissions = options_dict.get("permissions")
             if options_permissions is not None:
                 if not isinstance(options_permissions, str):
                     logger.warning(
@@ -492,12 +497,8 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                     logger.debug("  Override permissions from options: %s", permissions)
 
             # Override storage quotas if provided in options
-            options_soft_quota = waldur_resource.options.additional_properties.get(
-                "soft_quota_space"
-            )
-            options_hard_quota = waldur_resource.options.additional_properties.get(
-                "hard_quota_space"
-            )
+            options_soft_quota = options_dict.get("soft_quota_space")
+            options_hard_quota = options_dict.get("hard_quota_space")
 
             if options_soft_quota is not None:
                 try:
@@ -528,12 +529,8 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                     )
 
             # Override inode quotas if provided in options
-            options_soft_inodes = waldur_resource.options.additional_properties.get(
-                "soft_quota_indoes"
-            )
-            options_hard_inodes = waldur_resource.options.additional_properties.get(
-                "hard_quota_indoes"
-            )
+            options_soft_inodes = options_dict.get("soft_quota_indoes")
+            options_hard_inodes = options_dict.get("hard_quota_indoes")
 
             if options_soft_inodes is not None or options_hard_inodes is not None:
                 logger.debug(
@@ -623,7 +620,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             ]
             if storage_quota_soft_tb > 0 or storage_quota_hard_tb > 0
             else None,
-            "target": self._get_target_data(waldur_resource, storage_data_type),
+            "target": self._get_target_data(waldur_resource, storage_data_type.lower()),
             "storageSystem": {
                 "itemId": self._generate_deterministic_uuid(f"storage_system:{storage_system}"),
                 "key": storage_system.lower(),
