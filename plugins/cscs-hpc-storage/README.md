@@ -146,10 +146,10 @@ uv run waldur_cscs_storage_sync --config /path/to/config.yaml --dry-run --verbos
 
 Mount points follow the pattern: `/{storage_system}/store/{tenant}/{customer}/{project}`
 
-Example: `/cscs-storage/store/university/physics-dept/climate-sim`
+Example: `/capstor/store/university/physics-dept/climate-sim`
 
 Where:
-- `storage_system`: From `storage_system` attribute (default: `"cscs-storage"`)
+- `storage_system`: From offering slug (`waldur_resource.offering_slug`)
 - `tenant`: Waldur customer slug (`waldur_resource.customer_slug`)
 - `customer`: Waldur project slug (`waldur_resource.project_slug`)
 - `project`: Waldur resource slug (`waldur_resource.slug`)
@@ -162,7 +162,10 @@ The backend extracts the following attributes from `waldur_resource.attributes.a
 |-----------|------|----------|---------|-------------|
 | `permissions` | string | No | `"775"` | Octal permissions for storage access (e.g., `"2770"`, `"755"`) |
 | `storage_data_type` | string | No | `"store"` | Storage data type classification. Determines target type mapping |
-| `storage_system` | string | No | `"cscs-storage"` | Storage system identifier for mount points and system references |
+
+**Storage System Source:**
+- The `storageSystem` value comes from the `offering_slug` field, not from resource attributes
+- Each offering represents a different storage system (e.g., offering with slug "capstor" = capstor storage system)
 
 **Validation Rules:**
 - All attributes must be strings if provided (non-string values raise `TypeError`)
@@ -190,14 +193,15 @@ GET /api/storage-resources/
 
 ### Filter Parameters
 
-| Parameter | Type | Required | Description | Examples |
-|-----------|------|----------|-------------|----------|
-| `storage_system` | string | **Yes** | Filter by storage system | `capstor`, `vast`, `iopsstor` |
+| Parameter | Type | Required | Description | Allowed Values |
+|-----------|------|----------|-------------|----------------|
+| `storage_system` | enum | **Yes** | Filter by storage system | `capstor`, `vast`, `iopsstor` |
 | `data_type` | string | No | Filter by data type | `users`, `scratch`, `store`, `archive` |
 | `status` | string | No | Filter by status | `pending`, `removing`, `active`, `error` |
 | `state` | ResourceState | No | Filter by Waldur resource state | `Creating`, `OK`, `Erred` |
 | `page` | integer | No | Page number (≥1) | `1`, `2`, `3` |
 | `page_size` | integer | No | Items per page (1-500) | `50`, `100`, `200` |
+| `debug` | boolean | No | Return raw Waldur data for debugging | `true`, `false` |
 
 ### Example API Calls
 
@@ -225,10 +229,153 @@ curl "/api/storage-resources/?storage_system=iopsstor&data_type=store&status=act
 curl "/api/storage-resources/?storage_system=capstor&page=2&page_size=50"
 ```
 
+**Debug mode for troubleshooting:**
+
+```bash
+curl "/api/storage-resources/?storage_system=capstor&debug=true"
+```
+
 ### Filter Behavior
 
 - **Required filtering**: `storage_system` parameter is mandatory
+- **Value validation**: `storage_system` only accepts: `capstor`, `vast`, `iopsstor`
 - **Optional filtering**: Other filters are applied only when provided
 - **Exact matching**: All filters use exact string matching (case-sensitive)
 - **Combine filters**: Multiple filters are combined with AND logic
 - **Empty results**: Non-matching filters return empty result arrays
+
+### Error Responses
+
+**Missing storage_system parameter:**
+
+```json
+{
+  "detail": [{
+    "type": "missing",
+    "loc": ["query", "storage_system"],
+    "msg": "storage_system is mandatory.",
+    "ctx": {
+      "allowed_values": ["capstor", "vast", "iopsstor"],
+      "help": "Add ?storage_system=<system_name> to your request"
+    }
+  }]
+}
+```
+
+**Invalid storage_system value:**
+
+```json
+{
+  "detail": [{
+    "type": "enum_validation",
+    "loc": ["query", "storage_system"],
+    "msg": "Invalid storage_system value.",
+    "ctx": {
+      "allowed_values": ["capstor", "vast", "iopsstor"],
+      "help": "Use: ?storage_system=capstor or ?storage_system=vast or ?storage_system=iopsstor"
+    }
+  }]
+}
+```
+
+**Empty storage_system parameter:**
+
+```json
+{
+  "detail": [{
+    "type": "enum_validation",
+    "loc": ["query", "storage_system"],
+    "msg": "storage_system cannot be empty.",
+    "ctx": {
+      "allowed_values": ["capstor", "vast", "iopsstor"],
+      "help": "Use ?storage_system=capstor (not just ?storage_system=)"
+    }
+  }]
+}
+```
+
+### Debug Mode
+
+When `debug=true` is specified, the API returns raw Waldur data without translation to the CSCS
+storage JSON format. This is useful for troubleshooting and understanding the source data.
+
+**Debug Response Format:**
+
+```json
+{
+  "status": "success",
+  "debug_mode": true,
+  "agent_offering_config": {
+    "uuid": "...",
+    "api_url": "...",
+    "backend_type": "cscs-hpc-storage",
+    "backend_settings": {...},
+    "backend_components": {...}
+  },
+  "waldur_offering_details": {
+    "uuid": "...",
+    "name": "CSCS Storage Offering",
+    "slug": "capstor",
+    "description": "CSCS Storage System",
+    "type": "cscs-hpc-storage",
+    "state": "Active",
+    "category_title": "Storage",
+    "customer_name": "CSCS",
+    "customer_slug": "cscs",
+    "options": {...},
+    "attributes": {...},
+    "components": {...},
+    "created": "2024-01-01T00:00:00Z",
+    "modified": "2024-01-01T00:00:00Z"
+  },
+  "raw_resources": {
+    "resources": [
+      {
+        "uuid": "abc123...",
+        "name": "Storage Resource Name",
+        "slug": "resource-slug",
+        "state": "OK",
+        "customer_slug": "customer",
+        "customer_name": "Customer Name",
+        "project_slug": "project",
+        "project_name": "Project Name",
+        "offering_slug": "capstor",
+        "offering_type": "cscs-hpc-storage",
+        "limits": {"storage": 100},
+        "attributes": {
+          "permissions": "775",
+          "storage_data_type": "store"
+        },
+        "backend_metadata": {},
+        "created": "2024-01-01T00:00:00Z",
+        "modified": "2024-01-01T00:00:00Z"
+      }
+    ],
+    "pagination": {
+      "current": 1,
+      "limit": 100,
+      "offset": 0,
+      "pages": 1,
+      "total": 1
+    },
+    "filters_applied": {
+      "storage_system": "capstor",
+      "data_type": null,
+      "status": null,
+      "state": null
+    }
+  }
+}
+```
+
+**Debug Mode Features:**
+- **Separate configurations**: Shows both agent's offering config and live Waldur offering details
+- **Agent offering config**: Configuration from the agent's YAML file (excludes `secret_options`)
+- **Waldur offering details**: Complete live offering data from Waldur API with all available attributes
+- **Complete attribute exposure**: All `ProviderOfferingDetails` attributes are included dynamically
+- **Raw resource data**: Unprocessed Waldur resource data with all fields
+- **Filter transparency**: Shows which filters were applied to the results
+- **Security**: Only `secret_options` is explicitly excluded for security
+- **Smart serialization**: Automatically handles UUIDs, dates, and complex nested objects
+- **Error handling**: Shows errors if offering lookup fails, continues with other attributes
+- **Useful for debugging**: Compare agent config vs Waldur state, see all available offering data

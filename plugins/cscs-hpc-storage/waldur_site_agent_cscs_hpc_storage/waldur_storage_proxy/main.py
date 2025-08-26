@@ -1,5 +1,6 @@
 """API server used as proxy to Waldur storage resources."""
 
+from enum import Enum
 from typing import Annotated, Optional
 
 from fastapi import Depends, FastAPI, Query, Request
@@ -25,37 +26,87 @@ from waldur_site_agent_cscs_hpc_storage.waldur_storage_proxy import (
     waldur_client,
 )
 
-app = FastAPI()
+app = FastAPI(redirect_slashes=True)
+
+
+class StorageSystem(str, Enum):
+    """Allowed storage system values."""
+
+    CAPSTOR = "capstor"
+    VAST = "vast"
+    IOPSSTOR = "iopsstor"
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
     _request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """Custom validation error handler with helpful messages for missing storage_system."""
-    # Check if storage_system is missing from query parameters
+    """Custom validation error handler with helpful messages for storage_system validation."""
+    # Check validation errors for storage_system parameter
     for error in exc.errors():
-        if error.get("loc") == ["query", "storage_system"] and error.get("type") == "missing":
-            return JSONResponse(
-                status_code=422,
-                content={
-                    "detail": [
-                        {
-                            "type": "missing",
-                            "loc": ["query", "storage_system"],
-                            "msg": (
-                                "storage_system is a mandatory filter parameter. "
-                                "Please specify a storage system (e.g., capstor, vast, iopsstor)."
-                            ),
-                            "input": None,
-                            "ctx": {
-                                "examples": ["capstor", "vast", "iopsstor"],
-                                "help": "Add ?storage_system=<system_name> to your request",
-                            },
-                        }
-                    ]
-                },
-            )
+        if error.get("loc") == ["query", "storage_system"]:
+            error_type = error.get("type")
+            error_input = error.get("input")
+
+            # Handle missing parameter
+            if error_type == "missing":
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "detail": [
+                            {
+                                "type": "missing",
+                                "loc": ["query", "storage_system"],
+                                "msg": (
+                                    "storage_system is a mandatory filter parameter. "
+                                    "Please specify one of the allowed storage systems."
+                                ),
+                                "input": None,
+                                "ctx": {
+                                    "allowed_values": ["capstor", "vast", "iopsstor"],
+                                    "help": "Add ?storage_system=<system_name> to your request",
+                                },
+                            }
+                        ]
+                    },
+                )
+
+            # Handle empty string or invalid enum values
+            if error_type == "enum" or (error_input == ""):
+                # Special message for empty string
+                if error_input == "":
+                    msg = (
+                        "storage_system cannot be empty. "
+                        "Please specify one of the allowed storage systems."
+                    )
+                    help_text = "Use ?storage_system=capstor (not just ?storage_system=)"
+                else:
+                    msg = (
+                        f"Invalid storage_system value '{error_input}'. "
+                        "Must be one of the allowed values."
+                    )
+                    help_text = (
+                        "Use one of: ?storage_system=capstor, ?storage_system=vast, "
+                        "or ?storage_system=iopsstor"
+                    )
+
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "detail": [
+                            {
+                                "type": "enum_validation",
+                                "loc": ["query", "storage_system"],
+                                "msg": msg,
+                                "input": error_input,
+                                "ctx": {
+                                    "allowed_values": ["capstor", "vast", "iopsstor"],
+                                    "help": help_text,
+                                },
+                            }
+                        ]
+                    },
+                )
 
     # For other validation errors, return the default FastAPI error format
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
@@ -180,9 +231,7 @@ OIDCUserDependency = Annotated[User, Depends(user_dependency)]
 @app.get("/api/storage-resources/")
 async def storage_resources(
     user: OIDCUserDependency,
-    storage_system: Annotated[
-        str, Query(description="REQUIRED: Storage system filter (e.g., capstor, vast, iopsstor)")
-    ],
+    storage_system: Annotated[StorageSystem, Query(description="REQUIRED: Storage system filter")],
     state: Optional[ResourceState] = None,
     page: Annotated[int, Query(ge=1, description="Page number (starts from 1)")] = 1,
     page_size: Annotated[int, Query(ge=1, le=500, description="Number of items per page")] = 100,
@@ -192,19 +241,64 @@ async def storage_resources(
     status: Annotated[
         Optional[str], Query(description="Optional: Status filter (pending/removing/active/error)")
     ] = None,
+    debug: Annotated[
+        bool, Query(description="Enable debug mode to return raw Waldur data")
+    ] = False,
 ) -> JSONResponse:
     """Exposes list of all storage resources with pagination and filtering."""
     logger.info(
         "Processing request for user %s (page=%d, page_size=%d, storage_system=%s, "
-        "data_type=%s, status=%s)",
+        "data_type=%s, status=%s, debug=%s)",
         user.preferred_username,
         page,
         page_size,
         storage_system,
         data_type,
         status,
+        debug,
     )
 
+    # Handle debug mode - return raw Waldur data
+    if debug:
+        logger.info("Debug mode enabled - returning raw Waldur data")
+
+        # Prepare agent's offering configuration (excluding secret_options)
+        agent_offering_config = {
+            "uuid": offering_config.uuid,
+            "api_url": offering_config.api_url,
+            "backend_type": offering_config.backend_type,
+            "backend_settings": offering_config.backend_settings,
+            "backend_components": offering_config.backend_components,
+            # Explicitly exclude secret_options
+        }
+
+        # Get raw resources and Waldur offering details from backend in debug mode
+        debug_data = cscs_storage_backend.get_debug_resources(
+            offering_config.uuid,
+            waldur_client,
+            state=state,
+            page=page,
+            page_size=page_size,
+            storage_system=storage_system.value,
+            data_type=data_type,
+            status=status,
+        )
+
+        return JSONResponse(
+            content={
+                "status": "success",
+                "debug_mode": True,
+                "agent_offering_config": agent_offering_config,
+                "waldur_offering_details": debug_data.get("waldur_offering", {}),
+                "raw_resources": {
+                    "resources": debug_data.get("resources", []),
+                    "pagination": debug_data.get("pagination", {}),
+                    "filters_applied": debug_data.get("filters_applied", {}),
+                },
+            }
+        )
+
+    # Normal mode - translated API response
     storage_data: dict = cscs_storage_backend.generate_all_resources_json(
         offering_config.uuid,
         waldur_client,
@@ -212,7 +306,7 @@ async def storage_resources(
         write_file=False,
         page=page,
         page_size=page_size,
-        storage_system=storage_system,
+        storage_system=storage_system.value,  # Convert enum to string value
         data_type=data_type,
         status=status,
     )
