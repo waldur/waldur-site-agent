@@ -347,6 +347,7 @@ class BaseBackend(ABC):
                     resource_backend_id,
                     self.backend_settings.get("default_account", "root"),
                 )
+                logger.info("Created association between %s and %s", username, resource_backend_id)
             except BackendError as err:
                 logger.exception("Unable to create association on backend: %s", err)
                 return False

@@ -181,6 +181,7 @@ def start_stomp_consumers(
             logger.info("STOMP feature is disabled for the offering")
             continue
 
+        logger.info("Starting STOMP consumers for offering %s", waldur_offering.name)
         stomp_connections = setup_stomp_offering_subscriptions(waldur_offering, waldur_user_agent)
         if stomp_connections:
             stomp_consumers_map[(waldur_offering.name, waldur_offering.uuid)] = stomp_connections
@@ -225,6 +226,7 @@ def start_mqtt_consumers(
             logger.info("MQTT feature is disabled for the offering")
             continue
 
+        logger.info("Setting up MQTT consumers for offering %s", waldur_offering.name)
         event_subscriptions = setup_offering_subscriptions(waldur_offering, waldur_user_agent)
         if event_subscriptions:
             mqtt_consumers_map[(waldur_offering.name, waldur_offering.uuid)] = event_subscriptions

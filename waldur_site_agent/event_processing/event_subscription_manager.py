@@ -210,7 +210,7 @@ class EventSubscriptionManager:
         # Mapped to a vhost in RabbitMQ bound to a Waldur User object
         vhost_name = event_subscription["user_uuid"]
         event_subscription_uuid = event_subscription["uuid"]
-        # Mapped to a username in RabbitMQ bound to an the Waldur EventSubscription object
+        # Mapped to a username in RabbitMQ bound to the Waldur EventSubscription object
         username = event_subscription_uuid
         queue_name = (
             f"subscription_{event_subscription_uuid}_"
