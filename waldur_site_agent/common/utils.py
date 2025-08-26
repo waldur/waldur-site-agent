@@ -177,6 +177,7 @@ def load_configuration(
                 membership_sync_backend=offering_info.get("membership_sync_backend", ""),
                 reporting_backend=offering_info.get("reporting_backend", ""),
                 resource_import_enabled=offering_info.get("resource_import_enabled", False),
+                verify_ssl=offering_info.get("verify_ssl", True),
             )
             for offering_info in offering_list
         ]
@@ -321,7 +322,10 @@ def load_offering_components() -> None:
     for offering in configuration.waldur_offerings:
         logger.info("Processing %s offering", offering.name)
         waldur_rest_client = get_client(
-            offering.api_url, offering.api_token, configuration.waldur_user_agent
+            offering.api_url,
+            offering.api_token,
+            configuration.waldur_user_agent,
+            offering.verify_ssl,
         )
 
         load_components_to_waldur(
@@ -513,7 +517,10 @@ def diagnostics() -> bool:
         logger.info(format_string.format("SENTRY_DSN", str(configuration.sentry_dsn)))
 
         waldur_rest_client = get_client(
-            offering_api_url, offering_api_token, configuration.waldur_user_agent
+            offering_api_url,
+            offering_api_token,
+            configuration.waldur_user_agent,
+            offering.verify_ssl,
         )
 
         try:
@@ -593,7 +600,10 @@ def create_homedirs_for_offering_users() -> None:
         logger.info("Creating homedirs for %s offering users", offering.name)
 
         waldur_rest_client = get_client(
-            offering.api_url, offering.api_token, configuration.waldur_user_agent
+            offering.api_url,
+            offering.api_token,
+            configuration.waldur_user_agent,
+            offering.verify_ssl,
         )
         offering_users = marketplace_offering_users_list.sync(
             client=waldur_rest_client, offering_uuid=offering.uuid, is_restricted=False
@@ -817,7 +827,10 @@ def sync_offering_users() -> None:
         logger.info("Processing offering users for %s", offering.name)
 
         waldur_rest_client = get_client(
-            offering.api_url, offering.api_token, configuration.waldur_user_agent
+            offering.api_url,
+            offering.api_token,
+            configuration.waldur_user_agent,
+            offering.verify_ssl,
         )
         offering_users = marketplace_offering_users_list.sync(
             client=waldur_rest_client, offering_uuid=offering.uuid, is_restricted=False
@@ -872,7 +885,10 @@ def sync_resource_limits() -> None:
         backend = get_backend_for_offering(offering, "membership_sync_backend")
         logger.info("Using class %s as a backend", backend.__class__.__name__)
         waldur_rest_client = get_client(
-            offering.api_url, offering.api_token, configuration.waldur_user_agent
+            offering.api_url,
+            offering.api_token,
+            configuration.waldur_user_agent,
+            offering.verify_ssl,
         )
         resources = marketplace_resources_list.sync(
             client=waldur_rest_client,

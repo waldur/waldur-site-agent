@@ -23,3 +23,4 @@ WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES = int(
 WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES = int(
     os.environ.get("WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES", "5")
 )
+waldur_verify_ssl = os.getenv("WALDUR_VERIFY_SSL", "true").lower() in ("true", "yes")

@@ -4,6 +4,7 @@ offerings: # Settings for offerings
   - name: "CSCS HPC Storage Offering" # offering name
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
     waldur_api_token: "" # Token to access the Waldur API.
+    verify_ssl: true # Whether to verify SSL cert for Waldur API.
     waldur_offering_uuid: "" # UUID of the offering in Waldur.
     order_processing_backend: "cscs-hpc-storage" # Name of the backend from entrypoints to use for order processing
     reporting_backend: "cscs-hpc-storage" # Name of the backend from entrypoints to use for reporting

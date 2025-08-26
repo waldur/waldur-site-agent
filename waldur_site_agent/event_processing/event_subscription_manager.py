@@ -49,7 +49,9 @@ class EventSubscriptionManager:
         observable_object_type: str = "",
     ) -> None:
         """Constructor."""
-        self.waldur_rest_client = utils.get_client(offering.api_url, offering.api_token, user_agent)
+        self.waldur_rest_client = utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
         self.offering = offering
         self.user_agent = user_agent
         self.on_connect_callback = on_connect_callback

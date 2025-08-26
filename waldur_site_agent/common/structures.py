@@ -54,6 +54,7 @@ class Offering:
     reporting_backend: Optional[str] = ""
     username_management_backend: str = "base"
     resource_import_enabled: bool = False
+    verify_ssl: bool = True
 
 
 class AgentMode(Enum):
