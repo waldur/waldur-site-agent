@@ -7,6 +7,9 @@ from typing import Optional
 from uuid import NAMESPACE_OID, uuid5
 
 from waldur_api_client import AuthenticatedClient
+from waldur_api_client.api.marketplace_provider_offerings import (
+    marketplace_provider_offerings_retrieve,
+)
 from waldur_api_client.api.marketplace_resources import marketplace_resources_list
 from waldur_api_client.models import ResourceState
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -276,7 +279,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 "itemId": self._generate_deterministic_uuid(
                     f"tenant:{waldur_resource.customer_slug}"
                 ),
-                "key": waldur_resource.customer_slug,
+                "key": waldur_resource.customer_slug.lower(),
                 "name": waldur_resource.customer_name,
             }
         if target_type == "customer":
@@ -284,7 +287,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 "itemId": self._generate_deterministic_uuid(
                     f"customer:{waldur_resource.project_slug}"
                 ),
-                "key": waldur_resource.project_slug,
+                "key": waldur_resource.project_slug.lower(),
                 "name": waldur_resource.project_name,
             }
         if target_type == "project":
@@ -463,6 +466,111 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         else:
             logger.debug("  No attributes present, using defaults")
 
+        # Initialize separate soft and hard storage quota variables
+        storage_quota_soft_tb = storage_quota_tb
+        storage_quota_hard_tb = storage_quota_tb
+
+        # Check for override values in the options field
+        if waldur_resource.options and hasattr(waldur_resource.options, "additional_properties"):
+            logger.debug(
+                "  Processing options for overrides: %s",
+                waldur_resource.options.additional_properties,
+            )
+
+            # Override permissions if provided in options
+            options_permissions = waldur_resource.options.additional_properties.get("permissions")
+            if options_permissions is not None:
+                if not isinstance(options_permissions, str):
+                    logger.warning(
+                        "  Invalid permissions type in options for resource %s: "
+                        "expected string, got %s. Ignoring override.",
+                        waldur_resource.uuid,
+                        type(options_permissions).__name__,
+                    )
+                else:
+                    permissions = options_permissions
+                    logger.debug("  Override permissions from options: %s", permissions)
+
+            # Override storage quotas if provided in options
+            options_soft_quota = waldur_resource.options.additional_properties.get(
+                "soft_quota_space"
+            )
+            options_hard_quota = waldur_resource.options.additional_properties.get(
+                "hard_quota_space"
+            )
+
+            if options_soft_quota is not None:
+                try:
+                    storage_quota_soft_tb = float(options_soft_quota)
+                    logger.debug(
+                        "  Override storage soft quota from options: %s TB", storage_quota_soft_tb
+                    )
+                except (ValueError, TypeError):
+                    logger.warning(
+                        "  Invalid soft_quota_space type in options for resource %s: "
+                        "expected numeric, got %s. Ignoring override.",
+                        waldur_resource.uuid,
+                        type(options_soft_quota).__name__,
+                    )
+
+            if options_hard_quota is not None:
+                try:
+                    storage_quota_hard_tb = float(options_hard_quota)
+                    logger.debug(
+                        "  Override storage hard quota from options: %s TB", storage_quota_hard_tb
+                    )
+                except (ValueError, TypeError):
+                    logger.warning(
+                        "  Invalid hard_quota_space type in options for resource %s: "
+                        "expected numeric, got %s. Ignoring override.",
+                        waldur_resource.uuid,
+                        type(options_hard_quota).__name__,
+                    )
+
+            # Override inode quotas if provided in options
+            options_soft_inodes = waldur_resource.options.additional_properties.get(
+                "soft_quota_indoes"
+            )
+            options_hard_inodes = waldur_resource.options.additional_properties.get(
+                "hard_quota_indoes"
+            )
+
+            if options_soft_inodes is not None or options_hard_inodes is not None:
+                logger.debug(
+                    "  Found inode quota overrides in options - soft: %s, hard: %s",
+                    options_soft_inodes,
+                    options_hard_inodes,
+                )
+
+                # Override calculated inode quotas
+                if options_soft_inodes is not None:
+                    try:
+                        inode_soft = int(float(options_soft_inodes))
+                        logger.debug("  Override inode soft quota from options: %d", inode_soft)
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            "  Invalid soft_quota_indoes type in options for resource %s: "
+                            "expected numeric, got %s. Ignoring override.",
+                            waldur_resource.uuid,
+                            type(options_soft_inodes).__name__,
+                        )
+
+                if options_hard_inodes is not None:
+                    try:
+                        inode_hard = int(float(options_hard_inodes))
+                        logger.debug("  Override inode hard quota from options: %d", inode_hard)
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            "  Invalid hard_quota_indoes type in options for resource %s: "
+                            "expected numeric, got %s. Ignoring override.",
+                            waldur_resource.uuid,
+                            type(options_hard_inodes).__name__,
+                        )
+        else:
+            logger.debug(
+                "  No options present or no additional_properties, using calculated values"
+            )
+
         # Map Waldur resource state to CSCS status
         status_mapping = {
             "Creating": "pending",
@@ -490,13 +598,13 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             "quotas": [
                 {
                     "type": "space",
-                    "quota": float(storage_quota_tb),
+                    "quota": float(storage_quota_soft_tb),
                     "unit": "tera",
                     "enforcementType": "soft",
                 },
                 {
                     "type": "space",
-                    "quota": float(storage_quota_tb),
+                    "quota": float(storage_quota_hard_tb),
                     "unit": "tera",
                     "enforcementType": "hard",
                 },
@@ -513,12 +621,12 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                     "enforcementType": "hard",
                 },
             ]
-            if storage_quota_tb > 0
+            if storage_quota_soft_tb > 0 or storage_quota_hard_tb > 0
             else None,
             "target": self._get_target_data(waldur_resource, storage_data_type),
             "storageSystem": {
                 "itemId": self._generate_deterministic_uuid(f"storage_system:{storage_system}"),
-                "key": storage_system,
+                "key": storage_system.lower(),
                 "name": storage_system.upper(),
                 "active": True,
             },
@@ -526,7 +634,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 "itemId": self._generate_deterministic_uuid(
                     f"storage_file_system:{self.storage_file_system}"
                 ),
-                "key": self.storage_file_system,
+                "key": self.storage_file_system.lower(),
                 "name": self.storage_file_system.upper(),
                 "active": True,
             },
@@ -534,9 +642,9 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 "itemId": self._generate_deterministic_uuid(
                     f"storage_data_type:{storage_data_type}"
                 ),
-                "key": storage_data_type,
+                "key": storage_data_type.lower(),
                 "name": storage_data_type.upper(),
-                "path": storage_data_type,
+                "path": storage_data_type.lower(),
                 "active": True,
             },
             "parentItemId": None,  # Could be set based on hierarchy if needed
@@ -675,18 +783,9 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
                 # Validate resource data before processing
                 self._validate_resource_data(resource)
-                # Use a default storage system name or derive from attributes
-                storage_system_name = "cscs-storage"  # Default storage system name
-                if resource.attributes and not isinstance(resource.attributes, Unset):
-                    # Try to get storage system from attributes if available
-                    attr_storage_system = resource.attributes.additional_properties.get(
-                        "storage_system"
-                    )
-                    if attr_storage_system and isinstance(attr_storage_system, str):
-                        storage_system_name = attr_storage_system
-                    logger.debug("  Using storage_system from attributes: %s", storage_system_name)
-                else:
-                    logger.debug("  Using default storage_system: %s", storage_system_name)
+                # Use offering_slug as the storage system name
+                storage_system_name = resource.offering_slug
+                logger.debug("  Using storage_system from offering_slug: %s", storage_system_name)
 
                 storage_resource = self._create_storage_resource_json(resource, storage_system_name)
                 storage_resources.append(storage_resource)
@@ -734,6 +833,261 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             logger.info("Generated JSON file: %s", filepath)
         except Exception as e:
             logger.error("Failed to write JSON file %s: %s", filepath, e)
+
+    def get_debug_resources(
+        self,
+        offering_uuid: str,
+        client: AuthenticatedClient,
+        state: Optional[ResourceState] = None,
+        page: int = 1,
+        page_size: int = 100,
+        storage_system: Optional[str] = None,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> dict:
+        """Get raw Waldur resources for debug mode without translation.
+
+        Returns raw resource data with minimal processing for debugging purposes.
+        """
+        try:
+            # First, fetch offering details from Waldur API
+            waldur_offering: dict[str, object] = {}
+            try:
+                offering_response = marketplace_provider_offerings_retrieve.sync_detailed(
+                    client=client,
+                    uuid=offering_uuid,
+                )
+
+                if offering_response.parsed:
+                    offering = offering_response.parsed
+
+                    # Helper function to safely convert values to JSON-serializable format
+                    def serialize_value(value: object) -> object:  # noqa: PLR0911
+                        # Handle None and Unset values
+                        if isinstance(value, Unset) or value is None:
+                            return None
+
+                        # Handle primitive types that are already JSON-serializable
+                        if isinstance(value, (str, int, float, bool)):
+                            return value
+
+                        # Handle collections
+                        if isinstance(value, (list, tuple)):
+                            return [serialize_value(item) for item in value]
+                        if isinstance(value, dict):
+                            return {k: serialize_value(v) for k, v in value.items()}
+
+                        # Handle special object types
+                        if hasattr(value, "hex") and callable(value.hex):
+                            return value.hex  # UUID objects
+                        if hasattr(value, "isoformat") and callable(value.isoformat):
+                            return value.isoformat()  # datetime objects
+                        if hasattr(value, "additional_properties"):
+                            return serialize_value(value.additional_properties)  # API client models
+
+                        # Handle complex objects by converting their public attributes to dict
+                        if hasattr(value, "__dict__"):
+                            try:
+                                result = {}
+                                for k, v in value.__dict__.items():
+                                    # Skip private/protected attributes and methods
+                                    if not k.startswith("_") and not callable(v):
+                                        try:
+                                            result[k] = serialize_value(v)
+                                        except Exception as e:
+                                            # If we can't serialize nested value, convert to string
+                                            logger.debug(
+                                                "Could not serialize nested value %s.%s: %s",
+                                                type(value).__name__,
+                                                k,
+                                                e,
+                                            )
+                                            result[k] = str(v)
+                                return result
+                            except Exception as e:
+                                # If we can't access __dict__, convert to string
+                                logger.debug(
+                                    "Could not serialize object %s: %s", type(value).__name__, e
+                                )
+                                return str(value)
+
+                        # For any other type, convert to string as fallback
+                        try:
+                            return str(value)
+                        except Exception:
+                            return f"<{type(value).__name__} object>"
+
+                    # Get all attributes from the offering object, excluding secret_options
+                    waldur_offering = {}
+                    for attr_name in dir(offering):
+                        # Skip private/magic methods and secret_options
+                        if attr_name.startswith("_") or attr_name == "secret_options":
+                            continue
+
+                        try:
+                            attr_value = getattr(offering, attr_name)
+                            # Skip methods/callables
+                            if callable(attr_value):
+                                continue
+
+                            # Serialize the value to be JSON-safe
+                            waldur_offering[attr_name] = serialize_value(attr_value)
+
+                        except Exception as e:
+                            # If we can't access an attribute, log it but continue
+                            logger.debug("Could not access attribute %s: %s", attr_name, e)
+                            waldur_offering[attr_name] = f"Error accessing attribute: {e}"
+            except Exception as e:
+                logger.warning("Failed to fetch offering details: %s", e)
+                waldur_offering = {"error": f"Failed to fetch offering details: {e}"}
+
+            # Then fetch resources from Waldur API
+            filters = {}
+            if state:
+                filters["state"] = state
+
+            response = marketplace_resources_list.sync_detailed(
+                client=client,
+                offering_uuid=offering_uuid,
+                page=page,
+                page_size=page_size,
+                **filters,
+            )
+
+            waldur_resources = response.parsed if response.parsed else []
+
+            # Convert resources to dictionaries, filtering by offering_slug if needed
+            raw_resources = []
+            for resource in waldur_resources:
+                # Apply storage_system filter based on offering_slug
+                if storage_system and resource.offering_slug != storage_system:
+                    continue
+
+                # Apply data_type filter if present in attributes
+                if data_type and resource.attributes and not isinstance(resource.attributes, Unset):
+                    resource_data_type = resource.attributes.additional_properties.get(
+                        "storage_data_type"
+                    )
+                    if resource_data_type != data_type:
+                        continue
+
+                # Apply status filter based on state mapping
+                if status:
+                    status_mapping = {
+                        "Creating": "pending",
+                        "OK": "active",
+                        "Erred": "error",
+                        "Terminating": "removing",
+                        "Terminated": "removed",
+                    }
+                    resource_status = status_mapping.get(str(resource.state), "pending")
+                    if resource_status != status:
+                        continue
+
+                # Convert resource to dictionary format
+                resource_dict = {
+                    "uuid": resource.uuid.hex if not isinstance(resource.uuid, Unset) else None,
+                    "name": resource.name if not isinstance(resource.name, Unset) else None,
+                    "slug": resource.slug if not isinstance(resource.slug, Unset) else None,
+                    "state": str(resource.state) if not isinstance(resource.state, Unset) else None,
+                    "customer_slug": (
+                        resource.customer_slug
+                        if not isinstance(resource.customer_slug, Unset)
+                        else None
+                    ),
+                    "customer_name": (
+                        resource.customer_name
+                        if not isinstance(resource.customer_name, Unset)
+                        else None
+                    ),
+                    "project_slug": (
+                        resource.project_slug
+                        if not isinstance(resource.project_slug, Unset)
+                        else None
+                    ),
+                    "project_name": (
+                        resource.project_name
+                        if not isinstance(resource.project_name, Unset)
+                        else None
+                    ),
+                    "offering_slug": (
+                        resource.offering_slug
+                        if not isinstance(resource.offering_slug, Unset)
+                        else None
+                    ),
+                    "offering_type": (
+                        resource.offering_type
+                        if not isinstance(resource.offering_type, Unset)
+                        else None
+                    ),
+                    "limits": (
+                        resource.limits.additional_properties
+                        if resource.limits and not isinstance(resource.limits, Unset)
+                        else {}
+                    ),
+                    "attributes": (
+                        resource.attributes.additional_properties
+                        if resource.attributes and not isinstance(resource.attributes, Unset)
+                        else {}
+                    ),
+                    "backend_metadata": (
+                        resource.backend_metadata.additional_properties
+                        if resource.backend_metadata
+                        and not isinstance(resource.backend_metadata, Unset)
+                        else {}
+                    ),
+                    "created": (
+                        resource.created.isoformat()
+                        if hasattr(resource, "created") and not isinstance(resource.created, Unset)
+                        else None
+                    ),
+                    "modified": (
+                        resource.modified.isoformat()
+                        if hasattr(resource, "modified")
+                        and not isinstance(resource.modified, Unset)
+                        else None
+                    ),
+                }
+                raw_resources.append(resource_dict)
+
+            # Update count based on filtered results
+            filtered_count = len(raw_resources)
+            filtered_pages = (
+                (filtered_count + page_size - 1) // page_size if filtered_count > 0 else 1
+            )
+
+            return {
+                "waldur_offering": waldur_offering,
+                "resources": raw_resources,
+                "pagination": {
+                    "current": page,
+                    "limit": page_size,
+                    "offset": (page - 1) * page_size,
+                    "pages": filtered_pages,
+                    "total": filtered_count,
+                },
+                "filters_applied": {
+                    "storage_system": storage_system,
+                    "data_type": data_type,
+                    "status": status,
+                    "state": str(state) if state else None,
+                },
+            }
+
+        except Exception as e:
+            logger.error("Error fetching debug resources: %s", e)
+            return {
+                "error": str(e),
+                "waldur_offering": {"error": f"Failed to fetch offering due to error: {e}"},
+                "resources": [],
+                "pagination": {
+                    "current": page,
+                    "limit": page_size,
+                    "offset": (page - 1) * page_size,
+                    "pages": 0,
+                    "total": 0,
+                },
+            }
 
     def generate_all_resources_json(
         self,
@@ -806,15 +1160,8 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         # Validate resource data before processing
         self._validate_resource_data(waldur_resource)
 
-        # Use a default storage system name or derive from attributes
-        storage_system_name = "cscs-storage"  # Default storage system name
-        if waldur_resource.attributes and not isinstance(waldur_resource.attributes, Unset):
-            # Try to get storage system from attributes if available
-            attr_storage_system = waldur_resource.attributes.additional_properties.get(
-                "storage_system"
-            )
-            if attr_storage_system and isinstance(attr_storage_system, str):
-                storage_system_name = attr_storage_system
+        # Use offering_slug as the storage system name
+        storage_system_name = waldur_resource.offering_slug
 
         storage_resource = self._create_storage_resource_json(waldur_resource, storage_system_name)
 

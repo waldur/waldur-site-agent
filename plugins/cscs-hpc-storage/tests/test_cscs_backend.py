@@ -283,6 +283,7 @@ class TestCscsHpcStorageBackend:
         mock_resource.project_slug = "physics-dept"
         mock_resource.project_uuid = Mock()
         mock_resource.project_uuid.hex = str(uuid4())
+        mock_resource.offering_slug = "test-offering"
         # Create mock limits with additional_properties
         mock_limits = Mock()
         mock_limits.additional_properties = {"storage": 50}  # 50TB
@@ -449,6 +450,7 @@ class TestCscsHpcStorageBackend:
         mock_resource.slug = "resource-1"
         mock_resource.customer_slug = "university"
         mock_resource.project_slug = "physics"
+        mock_resource.offering_slug = "test-storage"
 
         mock_limits = Mock()
         mock_limits.additional_properties = {"storage": 100}
@@ -969,6 +971,7 @@ class TestCscsHpcStorageBackend:
         mock_resource1.slug = "resource-1"
         mock_resource1.customer_slug = "university"
         mock_resource1.project_slug = "physics"
+        mock_resource1.offering_slug = "capstor"
         mock_resource1.state = "OK"
         mock_limits1 = Mock()
         mock_limits1.additional_properties = {"storage": 100}
@@ -982,6 +985,7 @@ class TestCscsHpcStorageBackend:
         mock_resource2.slug = "resource-2"
         mock_resource2.customer_slug = "university"
         mock_resource2.project_slug = "chemistry"
+        mock_resource2.offering_slug = "vast"
         mock_resource2.state = "OK"
         mock_limits2 = Mock()
         mock_limits2.additional_properties = {"storage": 200}
