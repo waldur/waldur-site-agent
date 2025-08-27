@@ -250,10 +250,15 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         return backend_limits, waldur_limits
 
     def _generate_mount_point(
-        self, storage_system: str, tenant_id: str, customer: str, project_id: str
+        self,
+        storage_system: str,
+        tenant_id: str,
+        customer: str,
+        project_id: str,
+        data_type: str = "store",
     ) -> str:
-        """Generate mount point path based on hierarchy."""
-        return f"/{storage_system}/store/{tenant_id}/{customer}/{project_id}"
+        """Generate mount point path based on hierarchy and storage data type."""
+        return f"/{storage_system}/{data_type.lower()}/{tenant_id}/{customer}/{project_id}"
 
     def _calculate_inode_quotas(self, storage_quota_tb: float) -> tuple[int, int]:
         """Calculate inode quotas based on storage size and coefficients."""
@@ -413,15 +418,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
         inode_soft, inode_hard = self._calculate_inode_quotas(storage_quota_tb)
 
-        # Generate mount point
-        mount_point = self._generate_mount_point(
-            storage_system=storage_system,
-            tenant_id=waldur_resource.customer_slug,
-            customer=waldur_resource.project_slug,
-            project_id=waldur_resource.slug,
-        )
-
-        # Get permissions and data type from resource attributes
+        # Get permissions and data type from resource attributes first (needed for mount point)
         permissions = "775"  # default
         storage_data_type = "store"  # default
 
@@ -472,6 +469,15 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             logger.debug("  Final storage_data_type: %s", storage_data_type)
         else:
             logger.debug("  No attributes present, using defaults")
+
+        # Generate mount point now that we have the storage_data_type
+        mount_point = self._generate_mount_point(
+            storage_system=storage_system,
+            tenant_id=waldur_resource.customer_slug,
+            customer=waldur_resource.project_slug,
+            project_id=waldur_resource.slug,
+            data_type=storage_data_type,
+        )
 
         # Initialize separate soft and hard storage quota variables
         storage_quota_soft_tb = storage_quota_tb
