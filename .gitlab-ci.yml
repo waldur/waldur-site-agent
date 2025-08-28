@@ -24,6 +24,12 @@ include:
     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
     # If event is related to a created merge request
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/**/*
+        - tests/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
   coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
   artifacts:
     when: always
@@ -124,7 +130,7 @@ Run python v3.13 tests:
     - pip install uv
     - uv sync --all-packages
     - uv pip install cyclonedx-bom
-    - cyclonedx-py environment "$(which python )" -o ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
+    - uv run cyclonedx-py environment "$(which python )" -o ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
     - echo "SBOM generated. Size:"
     - du -h ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
     - tar -czf ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
