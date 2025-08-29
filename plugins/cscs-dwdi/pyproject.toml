@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-cscs-dwdi"
-version = "0.1.0"
+version = "0.7.0"
 description = "CSCS-DWDI reporting plugin for Waldur Site Agent"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent==0.1.0",
+    "waldur-site-agent>=0.7.0",
     "httpx>=0.25.0",
 ]
 

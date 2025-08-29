@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10, <4.0"
 
 [manifest]
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "waldur-site-agent"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "paho-mqtt" },
@@ -1241,7 +1241,7 @@ dev = [
 
 [[package]]
 name = "waldur-site-agent-basic-username-management"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "plugins/basic_username_management" }
 dependencies = [
     { name = "waldur-site-agent" },
@@ -1252,7 +1252,7 @@ requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "waldur-site-agent-cscs-dwdi"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "plugins/cscs-dwdi" }
 dependencies = [
     { name = "httpx" },
@@ -1267,7 +1267,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-cscs-hpc-storage"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "plugins/cscs-hpc-storage" }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
@@ -1284,7 +1284,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-moab"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "plugins/moab" }
 dependencies = [
     { name = "waldur-site-agent" },
@@ -1295,7 +1295,7 @@ requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "waldur-site-agent-mup"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "plugins/mup" }
 dependencies = [
     { name = "waldur-site-agent" },
@@ -1306,7 +1306,7 @@ requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "waldur-site-agent-slurm"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "plugins/slurm" }
 dependencies = [
     { name = "waldur-site-agent" },
