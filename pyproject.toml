@@ -1,6 +1,6 @@
 [project]
 name = "waldur-site-agent"
-version = "0.1.0"
+version = "0.7.0"
 description = "Agent for integrating service provider's site with Waldur Mastermind."
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4.0"

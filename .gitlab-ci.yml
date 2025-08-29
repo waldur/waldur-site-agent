@@ -207,7 +207,7 @@ Publish python module tagged release with uv:
     - uv publish
 
 
-Publish multiarch latest docker image template:
+Publish multiarch latest docker image:
   stage: release
   interruptible: true
   image: registry.hpc.ut.ee/mirror/docker:latest

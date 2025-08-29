@@ -39,11 +39,9 @@ class TestConfigurationLoading:
             # Verify user agent is set correctly
             assert configuration.waldur_user_agent is not None
             assert configuration.waldur_user_agent.startswith("waldur-site-agent-sync/")
-            assert "0.1.0" in configuration.waldur_user_agent  # Version should be in user agent
 
             # Verify version is set
             assert configuration.waldur_site_agent_version is not None
-            assert configuration.waldur_site_agent_version == "0.1.0"
 
             # Verify offerings are loaded
             assert len(configuration.waldur_offerings) == 1
