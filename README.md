@@ -159,7 +159,11 @@ pip install waldur-site-agent
 Secondly, create the provider config file and adjust the content for your needs.
 
 ```sh
-cp examples/waldur-site-agent-config.yaml.example /etc/waldur/waldur-site-agent-config.yaml
+sudo mkdir -p /etc/waldur
+
+sudo curl -L \
+https://raw.githubusercontent.com/waldur/waldur-site-agent/main/examples/waldur-site-agent-config.yaml.example \
+  -o /etc/waldur/waldur-site-agent-config.yaml
 ```
 
 Please use the `waldur_site_load_components` command
