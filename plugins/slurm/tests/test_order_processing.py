@@ -384,7 +384,7 @@ class TerminationOrderTest(unittest.TestCase):
         self.marketplace_resource_uuid = str(uuid.uuid4())
         self.resource_uuid = uuid.uuid4().hex
         self.project_uuid = uuid.uuid4().hex
-        self.order_uuid = uuid.uuid4()
+        self.order_uuid = uuid.uuid4().hex
 
         # Create order data
         self.waldur_order = models.OrderDetails(
@@ -476,9 +476,6 @@ class TerminationOrderTest(unittest.TestCase):
         respx.get(f"{self.base_url}/api/marketplace-orders/{self.order_uuid}/").respond(
             200, json=self.waldur_order
         )
-        respx.get(f"{self.base_url}/api/marketplace-orders/{self.order_uuid.hex}/").respond(
-            200, json=self.waldur_order
-        )
 
         slurm_client = slurm_client_class.return_value
         slurm_client.get_resource.return_value = ClientResource(
@@ -508,7 +505,7 @@ class UpdateOrderTest(unittest.TestCase):
         self.marketplace_resource_uuid = str(uuid.uuid4())
         self.resource_uuid = uuid.uuid4().hex
         self.project_uuid = uuid.uuid4().hex
-        self.order_uuid = uuid.uuid4()
+        self.order_uuid = uuid.uuid4().hex
         self.backend_id = f"hpc_{self.resource_uuid[:5]}_test-allocation-01"[:34]
 
         # Create order data
@@ -600,9 +597,6 @@ class UpdateOrderTest(unittest.TestCase):
             params={"offering_uuid": OFFERING.uuid, "state": ["pending-provider", "executing"]},
         ).respond(200, json=[self.waldur_order])
         respx.get(f"{self.base_url}/api/marketplace-orders/{self.order_uuid}/").respond(
-            200, json=self.waldur_order
-        )
-        respx.get(f"{self.base_url}/api/marketplace-orders/{self.order_uuid.hex}/").respond(
             200, json=self.waldur_order
         )
         respx.get(

@@ -688,7 +688,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             # Use sync_detailed to get both content and headers
             response = marketplace_resources_list.sync_detailed(
                 client=client,
-                offering_uuid=offering_uuid,
+                offering_uuid=[offering_uuid],
                 page=page,
                 page_size=page_size,
                 **filters,
@@ -951,7 +951,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
             response = marketplace_resources_list.sync_detailed(
                 client=client,
-                offering_uuid=offering_uuid,
+                offering_uuid=[offering_uuid],
                 page=page,
                 page_size=page_size,
                 **filters,

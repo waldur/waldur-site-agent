@@ -606,7 +606,7 @@ def create_homedirs_for_offering_users() -> None:
             offering.verify_ssl,
         )
         offering_users = marketplace_offering_users_list.sync(
-            client=waldur_rest_client, offering_uuid=offering.uuid, is_restricted=False
+            client=waldur_rest_client, offering_uuid=[offering.uuid], is_restricted=False
         )
 
         offering_user_usernames: set[str] = {
@@ -833,7 +833,7 @@ def sync_offering_users() -> None:
             offering.verify_ssl,
         )
         offering_users = marketplace_offering_users_list.sync(
-            client=waldur_rest_client, offering_uuid=offering.uuid, is_restricted=False
+            client=waldur_rest_client, offering_uuid=[offering.uuid], is_restricted=False
         )
         update_offering_users(offering, waldur_rest_client, offering_users)
 
@@ -892,7 +892,7 @@ def sync_resource_limits() -> None:
         )
         resources = marketplace_resources_list.sync(
             client=waldur_rest_client,
-            offering_uuid=offering.uuid,
+            offering_uuid=[offering.uuid],
             state=[MarketplaceResourcesListStateItem.OK, MarketplaceResourcesListStateItem.ERRED],
         )
 

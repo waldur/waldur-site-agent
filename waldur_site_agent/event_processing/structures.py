@@ -104,3 +104,4 @@ class ServiceAccountMessage(TypedDict):
     scope_type: str
     project_uuid: str
     project_name: str
+    action: str
