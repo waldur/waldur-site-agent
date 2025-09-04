@@ -8,7 +8,12 @@ from freezegun import freeze_time
 from respx import Route
 from waldur_api_client import models
 from waldur_api_client.client import AuthenticatedClient
-from waldur_api_client.models import ResourceState, ServiceProvider, ProjectServiceAccount
+from waldur_api_client.models import (
+    ResourceState,
+    ServiceProvider,
+    ProjectServiceAccount,
+    ServiceAccountState,
+)
 from waldur_api_client.models.offering_state import OfferingState
 from waldur_api_client.models.storage_mode_enum import StorageModeEnum
 from waldur_api_client.models.resource_limits import ResourceLimits
@@ -171,6 +176,7 @@ class MembershipSyncTest(unittest.TestCase):
             customer_uuid=self.waldur_resource.customer_uuid,
             customer_name=self.waldur_resource.customer_name,
             customer_abbreviation="",
+            state=ServiceAccountState.OK,
         )
         respx.get(
             f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/project_service_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"

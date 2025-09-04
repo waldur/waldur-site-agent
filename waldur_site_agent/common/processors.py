@@ -64,6 +64,7 @@ from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
     ComponentUsageCreateRequest,
     ComponentUsageItemRequest,
+    ServiceAccountState,
 )
 from waldur_api_client.models.backend_resource_request import BackendResourceRequest
 from waldur_api_client.models.backend_resource_request_set_erred_request import (
@@ -468,7 +469,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             # Get offering users
             offering_users_all: list[OfferingUser] | None = marketplace_offering_users_list.sync(
                 client=self.waldur_rest_client,
-                offering_uuid=self.offering.uuid,
+                offering_uuid=[self.offering.uuid],
                 is_restricted=False,
             )
 
@@ -526,7 +527,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         # Refresh local offering users
         user_context["offering_users"] = marketplace_offering_users_list.sync(
-            offering_uuid=self.offering.uuid,
+            offering_uuid=[self.offering.uuid],
             is_restricted=False,
             client=self.waldur_rest_client,
         )
@@ -737,8 +738,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         Returns:
             List of resources that have backend IDs and are in OK or ERRED state
         """
-        filters = {
-            "offering_uuid": self.offering.uuid,
+        filters: dict[str, list | str] = {
+            "offering_uuid": [self.offering.uuid],
             "state": [
                 MarketplaceProviderResourcesListStateItem.OK,
                 MarketplaceProviderResourcesListStateItem.ERRED,
@@ -913,7 +914,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         logger.info("Fetching Waldur offering users")
         offering_users: list[OfferingUser] = marketplace_offering_users_list.sync(
             client=self.waldur_rest_client,
-            offering_uuid=self.offering.uuid,
+            offering_uuid=[self.offering.uuid],
             is_restricted=False,
         )
         return offering_users
@@ -1142,8 +1143,21 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             project_uuid=waldur_resource.project_uuid.hex,
             client=self.waldur_rest_client,
         )
-        usernames = {account.username for account in service_accounts if account.username}
-        self.resource_backend.add_users_to_resource(waldur_resource.backend_id, usernames)
+        usernames_active = {
+            account.username
+            for account in service_accounts
+            if account.username and account.state == ServiceAccountState.OK
+        }
+        self.resource_backend.add_users_to_resource(waldur_resource.backend_id, usernames_active)
+
+        usernames_closed = {
+            account.username
+            for account in service_accounts
+            if account.username and account.state == ServiceAccountState.CLOSED
+        }
+        self.resource_backend.remove_users_from_resource(
+            waldur_resource.backend_id, usernames_closed
+        )
 
     def _process_resources(
         self,
@@ -1228,6 +1242,24 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     e,
                 )
 
+    def process_service_account_removal(
+        self, service_account_username: str, project_uuid: str
+    ) -> None:
+        """Process service account removal."""
+        resources = self._get_waldur_resources(project_uuid)
+        for resource in resources:
+            try:
+                self.resource_backend.remove_users_from_resource(
+                    resource.backend_id, {service_account_username}
+                )
+            except BackendError as e:
+                logger.error(
+                    "Unable to remove the service account %s from resource %s, reason: %s",
+                    service_account_username,
+                    resource.backend_id,
+                    e,
+                )
+
 
 class OfferingReportProcessor(OfferingBaseProcessor):
     """Processor for collecting and reporting usage data from backends to Waldur.
@@ -1270,7 +1302,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         )
         waldur_resources: list[WaldurResource] | None = marketplace_provider_resources_list.sync(
             client=self.waldur_rest_client,
-            offering_uuid=self.offering.uuid,
+            offering_uuid=[self.offering.uuid],
             state=[
                 MarketplaceProviderResourcesListStateItem.OK,
                 MarketplaceProviderResourcesListStateItem.ERRED,
@@ -1644,7 +1676,7 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
 
     def _get_waldur_resources(self) -> dict[str, WaldurResource]:
         waldur_resource_list = marketplace_provider_resources_list.sync(
-            offering_uuid=self.offering.uuid,
+            offering_uuid=[self.offering.uuid],
             state=[
                 MarketplaceProviderResourcesListStateItem.OK,
                 MarketplaceProviderResourcesListStateItem.ERRED,

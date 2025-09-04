@@ -262,7 +262,7 @@ class TestCscsHpcStorageBackend:
         # Should call the sync_detailed endpoint with pagination
         mock_list.sync_detailed.assert_called_once_with(
             client=mock_client,
-            offering_uuid="test-offering-uuid",
+            offering_uuid=["test-offering-uuid"],
             page=1,
             page_size=10,
         )
