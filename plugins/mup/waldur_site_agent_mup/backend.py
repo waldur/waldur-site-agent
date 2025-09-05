@@ -342,9 +342,10 @@ class MUPBackend(backends.BaseBackend):
 
     def _setup_resource_limits(
         self, resource_backend_id: str, waldur_resource: WaldurResource
-    ) -> None:
+    ) -> dict[str, int]:
         """Skip this step for MUP."""
-        del resource_backend_id, waldur_resource
+        del resource_backend_id
+        return waldur_resource.limits.to_dict()
 
     def _create_resource_in_backend(self, waldur_resource: WaldurResource) -> str:
         """Create MUP resource within the MUP project."""
