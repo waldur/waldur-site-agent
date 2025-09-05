@@ -53,6 +53,7 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_as_ok,
     marketplace_provider_resources_set_backend_id,
     marketplace_provider_resources_set_backend_metadata,
+    marketplace_provider_resources_set_limits,
     marketplace_provider_resources_team_list,
 )
 from waldur_api_client.api.marketplace_service_providers import (
@@ -64,6 +65,7 @@ from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
     ComponentUsageCreateRequest,
     ComponentUsageItemRequest,
+    ResourceSetLimitsRequest,
     ServiceAccountState,
 )
 from waldur_api_client.models.backend_resource_request import BackendResourceRequest
@@ -432,6 +434,15 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             uuid=waldur_resource.uuid.hex,
             body=ResourceBackendIDRequest(backend_id=backend_resource_info.backend_id),
         )
+        logger.info("Resource backend id is set to %s", backend_resource_info.backend_id)
+
+        if backend_resource_info.limits:
+            marketplace_provider_resources_set_limits.sync(
+                uuid=waldur_resource.uuid.hex,
+                body=ResourceSetLimitsRequest(limits=backend_resource_info.limits),
+                client=self.waldur_rest_client,
+            )
+            logger.info("Resource limits are set to %s", backend_resource_info.limits)
 
         return backend_resource_info
 

@@ -158,29 +158,31 @@ class SlurmBackend(backends.BaseBackend):
         self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect SLURM and Waldur limits separately."""
-        allocation_limits = backend_utils.get_usage_based_limits(self.backend_components)
+        allocation_limits = {}
+        usage_based_limits = backend_utils.get_usage_based_limits(self.backend_components)
         limit_based_components = [
             component
             for component, data in self.backend_components.items()
             if data["accounting_type"] == "limit"
         ]
-        if waldur_resource.limits:
-            # Add limit-based limits
-            for component_key in limit_based_components:
+        # Waldur resource is expected to have limits set for limit-based components
+        waldur_resource_limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
+
+        # Add usage-based limits to allocation limits
+        allocation_limits.update(usage_based_limits)
+
+        # Add limit-based limits to allocation limits
+        for component_key in limit_based_components:
+            if component_key in waldur_resource_limits:
                 allocation_limits[component_key] = (
-                    waldur_resource.limits.to_dict()[component_key]
+                    waldur_resource_limits[component_key]
                     * self.backend_components[component_key]["unit_factor"]
                 )
 
-            # Keep only limit-based components for Waldur resource
-            if waldur_resource.limits:
-                waldur_resource_limits = {
-                    component_key: waldur_resource.limits.to_dict()[component_key]
-                    for component_key, data in self.backend_components.items()
-                    if data["accounting_type"] == "limit"
-                }
-        else:
-            waldur_resource_limits = {}
+        # Add usage-based limits to Waldur limits
+        for component_key in usage_based_limits:
+            waldur_resource_limits[component_key] = self.backend_components[component_key]["limit"]
+
         return allocation_limits, waldur_resource_limits
 
     def add_users_to_resource(

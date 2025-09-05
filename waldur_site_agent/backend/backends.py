@@ -230,10 +230,10 @@ class BaseBackend(ABC):
         backend_resource_id = self._create_resource_in_backend(waldur_resource)
 
         # # Setup limits
-        self._setup_resource_limits(backend_resource_id, waldur_resource)
+        waldur_limits = self._setup_resource_limits(backend_resource_id, waldur_resource)
         backend_resource_info = structures.BackendResourceInfo(
             backend_id=backend_resource_id,
-            limits=self._collect_resource_limits(waldur_resource)[1],
+            limits=waldur_limits,
         )
         # Actions after resource creation
         self.post_create_resource(backend_resource_info, waldur_resource, user_context)
@@ -277,13 +277,13 @@ class BaseBackend(ABC):
 
     def _setup_resource_limits(
         self, resource_backend_id: str, waldur_resource: WaldurResource
-    ) -> None:
+    ) -> dict[str, int]:
         """Setup resource limits for the resource in backend."""
-        resource_backend_limits, _ = self._collect_resource_limits(waldur_resource)
+        resource_backend_limits, waldur_limits = self._collect_resource_limits(waldur_resource)
 
         if not resource_backend_limits:
             logger.info("Skipping setting of limits")
-            return
+            return {}
 
         # Convert limits for logging
         converted_limits = {
@@ -294,6 +294,7 @@ class BaseBackend(ABC):
         limits_str = utils.prettify_limits(converted_limits, self.backend_components)
         logger.info("Setting resource backend limits to: \n%s", limits_str)
         self.client.set_resource_limits(resource_backend_id, resource_backend_limits)
+        return waldur_limits
 
     def post_create_resource(
         self,

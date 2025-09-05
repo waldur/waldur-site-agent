@@ -51,6 +51,9 @@ def setup_common_respx_mocks(
     respx.post(
         f"{base_url}/api/marketplace-provider-resources/{waldur_resource['uuid']}/set_backend_id/"
     ).respond(200, json={"status": "OK"})
+    respx.post(
+        f"{base_url}/api/marketplace-provider-resources/{waldur_resource['uuid']}/set_limits/"
+    ).respond(200, json={"status": "OK"})
     if waldur_offering_users is not None:
         respx.get(
             f"{base_url}/api/marketplace-provider-offerings/{waldur_offering_users['offering_uuid']}/"
