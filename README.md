@@ -187,16 +187,24 @@ and provider config files to the corresponding locations.
 
 ```bash
 # For agent-order-process
-cp systemd-conf/agent-order-process/agent.service /etc/systemd/system/waldur-agent-order-process.service
+sudo curl -L \
+https://raw.githubusercontent.com/waldur/waldur-site-agent/main/systemd-conf/agent-order-process/agent.service \
+  -o /etc/systemd/system/waldur-agent-report.service
 
 # For agent-report
-cp systemd-conf/agent-report/agent.service /etc/systemd/system/waldur-agent-report.service
+sudo curl -L \
+https://raw.githubusercontent.com/waldur/waldur-site-agent/main/systemd-conf/agent-report/agent.service \
+  -o /etc/systemd/system/waldur-agent-report.service
 
 # For agent-membership-sync
-cp systemd-conf/agent-membership-sync/agent.service /etc/systemd/system/waldur-agent-membership-sync.service
+sudo curl -L \
+https://raw.githubusercontent.com/waldur/waldur-site-agent/main/systemd-conf/agent-membership-sync/agent.service \
+  -o /etc/systemd/system/waldur-agent-membership-sync.service
 
 # For agent-event-process
-cp systemd-conf/agent-event-process/agent.service /etc/systemd/system/waldur-agent-event-process.service
+sudo curl -L \
+https://raw.githubusercontent.com/waldur/waldur-site-agent/main/systemd-conf/agent-event-process/agent.service \
+  -o /etc/systemd/system/waldur-agent-event-process.service
 ```
 
 After these preparation steps, run the following script to apply the changes.
@@ -233,13 +241,21 @@ you should use files with legacy configuration:
 
 ```bash
 # For agent-order-process
-cp systemd-conf/agent-order-process/agent-legacy.service /etc/systemd/system/waldur-agent-order-process-legacy.service
+sudo curl -L \
+https://raw.githubusercontent.com/waldur/waldur-site-agent/main/systemd-conf/agent-order-process/agent-legacy.service \
+  -o /etc/systemd/system/waldur-agent-order-process-legacy.service
 # For agent-report
-cp systemd-conf/agent-report/agent-legacy.service /etc/systemd/system/waldur-agent-report-legacy.service
+sudo curl -L \
+https://raw.githubusercontent.com/waldur/waldur-site-agent/main/systemd-conf/agent-report/agent-legacy.service \
+  -o /etc/systemd/system/waldur-agent-report-legacy.service
 # For agent-membership-sync
-cp systemd-conf/agent-membership-sync/agent-legacy.service /etc/systemd/system/waldur-agent-membership-sync-legacy.service
+sudo curl -L \
+https://raw.githubusercontent.com/waldur/waldur-site-agent/main/systemd-conf/agent-membership-sync/agent-legacy.service \
+  -o /etc/systemd/system/waldur-agent-membership-sync-legacy.service
 # For agent-event-process
-cp systemd-conf/agent-event-process/agent-legacy.service /etc/systemd/system/waldur-agent-event-process-legacy.service
+sudo curl -L \
+https://raw.githubusercontent.com/waldur/waldur-site-agent/main/systemd-conf/agent-event-process/agent-legacy.service \
+  -o /etc/systemd/system/waldur-agent-event-process-legacy.service
 ```
 
 ### Custom backends
