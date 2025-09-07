@@ -1,0 +1,25 @@
+# Test configuration for storage proxy tests
+waldur_api_url: "https://test.api.url/api/"
+waldur_api_token: "test-token"
+waldur_verify_ssl: false
+
+backend_settings:
+  storage_file_system: "lustre"
+  inode_soft_coefficient: 1.0
+  inode_hard_coefficient: 1.0
+  use_mock_target_items: true
+
+backend_components:
+  storage:
+    measured_unit: "TB"
+    accounting_type: "limit"
+    label: "Storage"
+    unit_factor: 1
+
+storage_systems:
+  capstor: "capstor"
+  vast: "vast"
+  iopsstor: "iopsstor"
+
+auth:
+  disable_auth: true

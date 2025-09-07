@@ -1,17 +1,13 @@
 """Tests for CSCS HPC Storage backend."""
 
-import json
-import tempfile
-from pathlib import Path
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
 import pytest
-from waldur_api_client.api.marketplace_resources import marketplace_resources_list
 from waldur_api_client.types import Unset
+from waldur_site_agent_cscs_hpc_storage.backend import CscsHpcStorageBackend
 
 from waldur_site_agent.backend.exceptions import BackendError
-from waldur_site_agent_cscs_hpc_storage.backend import CscsHpcStorageBackend
 
 
 class TestCscsHpcStorageBackend:
@@ -19,13 +15,12 @@ class TestCscsHpcStorageBackend:
 
     def setup_method(self):
         """Set up test environment."""
-        self.temp_dir = tempfile.mkdtemp()
         self.backend_settings = {
-            "output_directory": self.temp_dir,
             "storage_file_system": "lustre",
             "inode_soft_coefficient": 1.5,
             "inode_hard_coefficient": 2.0,
             "use_mock_target_items": True,
+            "development_mode": True,  # Enable development mode for tests
         }
         self.backend_components = {
             "storage": {"unit_factor": 1024**4}  # TB to bytes
@@ -35,7 +30,6 @@ class TestCscsHpcStorageBackend:
     def test_backend_initialization(self):
         """Test backend initialization."""
         assert self.backend.backend_type == "cscs-hpc-storage"
-        assert self.backend.output_directory == self.temp_dir
         assert self.backend.storage_file_system == "lustre"
         assert self.backend.inode_soft_coefficient == 1.5
         assert self.backend.inode_hard_coefficient == 2.0
@@ -90,13 +84,47 @@ class TestCscsHpcStorageBackend:
         mock_resource.slug = "climate-sim"
         mock_resource.uuid = Mock()
         mock_resource.uuid.hex = str(uuid4())
+        mock_resource.state = "OK"  # Set state to map to "active" status
 
         target_data = self.backend._get_target_item_data(mock_resource, "project")
 
         assert target_data["name"] == "climate-sim"
         assert "itemId" in target_data
         assert "unixGid" in target_data
+        assert target_data["status"] == "active"
         assert target_data["active"] is True
+
+    def test_target_status_mapping_from_waldur_state(self):
+        """Test that target item status correctly maps from Waldur resource states."""
+        mock_resource = Mock()
+        mock_resource.customer_slug = "university"
+        mock_resource.customer_name = "University"
+        mock_resource.project_slug = "physics-dept"
+        mock_resource.project_name = "Physics Department"
+        mock_resource.slug = "test-resource"
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = str(uuid4())
+
+        # Test different Waldur states and their expected target statuses
+        test_cases = [
+            ("Creating", "pending", False),
+            ("OK", "active", True),
+            ("Erred", "pending", False),
+            ("Terminating", "removing", False),
+            ("Terminated", "removing", False),
+        ]
+
+        for waldur_state, expected_status, expected_active in test_cases:
+            mock_resource.state = waldur_state
+
+            target_data = self.backend._get_target_item_data(mock_resource, "project")
+
+            assert target_data["status"] == expected_status, (
+                f"Waldur state '{waldur_state}' should map to status '{expected_status}', got '{target_data['status']}'"
+            )
+            assert target_data["active"] == expected_active, (
+                f"Waldur state '{waldur_state}' should set active={expected_active}, got {target_data['active']}"
+            )
 
     def test_create_storage_resource_json(self):
         """Test storage resource JSON creation."""
@@ -135,63 +163,6 @@ class TestCscsHpcStorageBackend:
         assert len(storage_json["quotas"]) == 4  # 2 space + 2 inode quotas
         assert storage_json["storageSystem"]["key"] == "lustre-fs"
         assert storage_json["storageFileSystem"]["key"] == "lustre"
-
-    def test_write_json_file(self):
-        """Test JSON file writing."""
-        test_data = {"test": "data", "number": 42}
-        filename = "test.json"
-
-        self.backend._write_json_file(filename, test_data)
-
-        filepath = Path(self.temp_dir) / filename
-        assert filepath.exists()
-
-        with open(filepath, "r", encoding="utf-8") as f:
-            loaded_data = json.load(f)
-
-        assert loaded_data == test_data
-
-    def test_generate_order_json(self):
-        """Test order JSON generation."""
-        mock_resource = Mock()
-        mock_resource.uuid = Mock()
-        mock_resource.uuid.hex = str(uuid4())
-        mock_resource.name = "Test Order"
-        mock_resource.slug = "test-order"
-        mock_resource.offering_name = "Test Offering"
-        mock_resource.offering_slug = "test-offering"
-        mock_resource.customer_slug = "university"
-        mock_resource.customer_name = "University"
-        mock_resource.customer_uuid = Mock()
-        mock_resource.customer_uuid.hex = str(uuid4())
-        mock_resource.project_slug = "physics-dept"
-        mock_resource.project_name = "Physics Department"
-        mock_resource.project_uuid = Mock()
-        mock_resource.project_uuid.hex = str(uuid4())
-        # Create mock limits with additional_properties
-        mock_limits = Mock()
-        mock_limits.additional_properties = {"storage": 100}  # 100TB
-        mock_resource.limits = mock_limits
-
-        # Create mock attributes with additional_properties
-        mock_attributes = Mock()
-        mock_attributes.additional_properties = {"permissions": "755"}
-        mock_resource.attributes = mock_attributes
-
-        self.backend.generate_order_json(mock_resource, "create")
-
-        # Check that file was created
-        files = list(Path(self.temp_dir).glob("*-create_*.json"))
-        assert len(files) == 1
-
-        # Check file content
-        with open(files[0], "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        assert data["status"] == "success"
-        assert data["code"] == 200
-        assert len(data["result"]["storageResources"]) == 1
-        assert data["result"]["storageResources"][0]["itemId"] == mock_resource.uuid.hex
 
     @patch("waldur_site_agent_cscs_hpc_storage.backend.marketplace_resources_list")
     def test_get_all_storage_resources_with_pagination(self, mock_list):
@@ -299,10 +270,6 @@ class TestCscsHpcStorageBackend:
 
         assert resource.backend_id == "test-resource"
 
-        # Check that order JSON was created
-        files = list(Path(self.temp_dir).glob("*-create_*.json"))
-        assert len(files) == 1
-
     def test_unset_offering_slug_validation(self):
         """Test that Unset offering_slug raises a clear validation error."""
         backend = CscsHpcStorageBackend(self.backend_settings, self.backend_components)
@@ -349,47 +316,37 @@ class TestCscsHpcStorageBackend:
         assert "project_slug" in error_message
         assert "test-resource" in error_message
 
-    def test_generate_order_json_with_unset_fields(self):
-        """Test that generate_order_json fails fast with validation error for Unset fields."""
+    def test_create_resource_basic_functionality(self):
+        """Test that create_resource returns proper BackendResourceInfo structure."""
         backend = CscsHpcStorageBackend(self.backend_settings, self.backend_components)
 
-        # Create a mock resource with Unset offering_slug
+        # Create a properly mocked resource
         mock_resource = Mock()
         mock_resource.uuid = Mock()
         mock_resource.uuid.hex = str(uuid4())
+        mock_resource.name = "Test Resource"
         mock_resource.slug = "test-resource"
-        mock_resource.offering_slug = Unset()
-        mock_resource.customer_slug = "university"
-        mock_resource.project_slug = "physics-dept"
-
-        # Test that generate_order_json raises validation error
-        with pytest.raises(BackendError) as exc_info:
-            backend.generate_order_json(mock_resource, "create")
-
-        error_message = str(exc_info.value)
-        assert "offering_slug" in error_message
-        assert "missing required fields" in error_message
-
-    def test_create_resource_with_unset_fields(self):
-        """Test that create_resource fails fast with validation error for Unset fields."""
-        backend = CscsHpcStorageBackend(self.backend_settings, self.backend_components)
-
-        # Create a mock resource with Unset fields
-        mock_resource = Mock()
-        mock_resource.uuid = Mock()
-        mock_resource.uuid.hex = str(uuid4())
-        mock_resource.slug = Unset()  # Missing slug
         mock_resource.offering_slug = "test-offering"
         mock_resource.customer_slug = "university"
         mock_resource.project_slug = "physics-dept"
 
-        # Test that create_resource raises validation error
-        with pytest.raises(BackendError) as exc_info:
-            backend.create_resource(mock_resource)
+        # Create mock limits with additional_properties
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 100}
+        mock_resource.limits = mock_limits
 
-        error_message = str(exc_info.value)
-        assert "slug" in error_message
-        assert "missing required fields" in error_message
+        # Create mock attributes with additional_properties
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {"permissions": "775"}
+        mock_resource.attributes = mock_attributes
+
+        # Test that create_resource works and returns BackendResourceInfo
+        result = backend.create_resource(mock_resource)
+
+        # Verify result structure
+        assert result.backend_id == "test-resource"
+        assert isinstance(result.limits, dict)
+        assert "storage" in result.limits
 
     def test_invalid_storage_system_type_validation(self):
         """Test that non-string storage_system raises clear validation error."""
@@ -648,7 +605,7 @@ class TestCscsHpcStorageBackend:
             if expected_target_type == "project":
                 assert "status" in target_item
                 assert "unixGid" in target_item
-                assert target_item["status"] == "open"
+                assert target_item["status"] == "active"
             elif expected_target_type == "user":
                 assert "email" in target_item
                 assert "unixUid" in target_item
@@ -1032,3 +989,191 @@ class TestCscsHpcStorageBackend:
         assert pagination_info["current"] == 1
         assert pagination_info["limit"] == 10
         assert pagination_info["offset"] == 0
+
+    def test_get_project_unix_gid_with_hpc_user_client(self):
+        """Test unixGid lookup using HPC User client."""
+        # Set up backend with HPC User service
+        backend_settings = {
+            "storage_file_system": "lustre",
+            "use_mock_target_items": True,
+            "hpc_user_api_url": "https://api-user.hpc-user.example.com",
+            "hpc_user_client_id": "test_client",
+            "hpc_user_client_secret": "test_secret",
+            "hpc_user_oidc_token_url": "https://auth.example.com/token",
+        }
+        backend = CscsHpcStorageBackend(backend_settings, self.backend_components)
+
+        # Mock the HPC User client
+        mock_client = Mock()
+        mock_client.get_project_unix_gid.return_value = 30001
+        backend.hpc_user_client = mock_client
+
+        result = backend._get_project_unix_gid("physics-project")
+
+        assert result == 30001
+        mock_client.get_project_unix_gid.assert_called_once_with("physics-project")
+
+    def test_get_project_unix_gid_fallback_to_mock(self):
+        """Test unixGid lookup falls back to mock when HPC User client fails."""
+        # Set up backend with HPC User service
+        backend_settings = {
+            "storage_file_system": "lustre",
+            "use_mock_target_items": True,
+            "development_mode": True,  # Enable development mode for fallback
+            "hpc_user_api_url": "https://api-user.hpc-user.example.com",
+            "hpc_user_client_id": "test_client",
+            "hpc_user_client_secret": "test_secret",
+            "hpc_user_oidc_token_url": "https://auth.example.com/token",
+        }
+        backend = CscsHpcStorageBackend(backend_settings, self.backend_components)
+
+        # Mock the HPC User client to return None (project not found)
+        mock_client = Mock()
+        mock_client.get_project_unix_gid.return_value = None
+        backend.hpc_user_client = mock_client
+
+        result = backend._get_project_unix_gid("physics-project")
+
+        # Should fall back to mock value
+        expected_mock_gid = 30000 + hash("physics-project") % 10000
+        assert result == expected_mock_gid
+        mock_client.get_project_unix_gid.assert_called_once_with("physics-project")
+
+    def test_get_project_unix_gid_exception_fallback(self):
+        """Test unixGid lookup falls back to mock when HPC User client raises exception."""
+        # Set up backend with HPC User service
+        backend_settings = {
+            "storage_file_system": "lustre",
+            "use_mock_target_items": True,
+            "development_mode": True,  # Enable development mode for fallback
+            "hpc_user_api_url": "https://api-user.hpc-user.example.com",
+            "hpc_user_client_id": "test_client",
+            "hpc_user_client_secret": "test_secret",
+            "hpc_user_oidc_token_url": "https://auth.example.com/token",
+        }
+        backend = CscsHpcStorageBackend(backend_settings, self.backend_components)
+
+        # Mock the HPC User client to raise an exception
+        mock_client = Mock()
+        mock_client.get_project_unix_gid.side_effect = Exception("API connection failed")
+        backend.hpc_user_client = mock_client
+
+        result = backend._get_project_unix_gid("physics-project")
+
+        # Should fall back to mock value
+        expected_mock_gid = 30000 + hash("physics-project") % 10000
+        assert result == expected_mock_gid
+        mock_client.get_project_unix_gid.assert_called_once_with("physics-project")
+
+    def test_get_project_unix_gid_no_client_configured(self):
+        """Test unixGid lookup uses mock when no HPC User client is configured."""
+        # Use default settings (no HPC User client)
+        backend = CscsHpcStorageBackend(self.backend_settings, self.backend_components)
+
+        result = backend._get_project_unix_gid("physics-project")
+
+        # Should use mock value
+        expected_mock_gid = 30000 + hash("physics-project") % 10000
+        assert result == expected_mock_gid
+
+    def test_target_item_uses_external_unix_gid(self):
+        """Test that target items use unixGid from external service."""
+        # Set up backend with HPC User service
+        backend_settings = {
+            "storage_file_system": "lustre",
+            "use_mock_target_items": True,
+            "hpc_user_api_url": "https://api-user.hpc-user.example.com",
+            "hpc_user_client_id": "test_client",
+            "hpc_user_client_secret": "test_secret",
+            "hpc_user_oidc_token_url": "https://auth.example.com/token",
+        }
+        backend = CscsHpcStorageBackend(backend_settings, self.backend_components)
+
+        # Mock the HPC User client
+        mock_client = Mock()
+        mock_client.get_project_unix_gid.return_value = 30042
+        backend.hpc_user_client = mock_client
+
+        # Create a mock resource
+        mock_resource = Mock()
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = "test-uuid"
+        mock_resource.slug = "test-resource"
+        mock_resource.customer_slug = "university"
+        mock_resource.project_slug = "physics-project"
+        mock_resource.project_uuid = Mock()
+        mock_resource.project_uuid.hex = "project-uuid"
+        mock_resource.state = "OK"
+
+        # Create mock limits and attributes for project target type
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 50}
+        mock_resource.limits = mock_limits
+
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {"storage_data_type": "store"}  # maps to project
+        mock_resource.attributes = mock_attributes
+
+        result = backend._create_storage_resource_json(mock_resource, "test-storage")
+
+        # Verify that target item uses external unixGid
+        target_item = result["target"]["targetItem"]
+        assert target_item["unixGid"] == 30042
+        mock_client.get_project_unix_gid.assert_called_once_with("physics-project")
+
+    def test_diagnostics_includes_hpc_user_service(self):
+        """Test that diagnostics includes HPC User service status."""
+        # Set up backend with HPC User service
+        backend_settings = {
+            "storage_file_system": "lustre",
+            "use_mock_target_items": True,
+            "hpc_user_api_url": "https://api-user.hpc-user.example.com",
+            "hpc_user_client_id": "test_client",
+            "hpc_user_client_secret": "test_secret",
+            "hpc_user_oidc_token_url": "https://auth.example.com/token",
+        }
+        backend = CscsHpcStorageBackend(backend_settings, self.backend_components)
+
+        # Mock the HPC User client ping method
+        mock_client = Mock()
+        mock_client.ping.return_value = True
+        backend.hpc_user_client = mock_client
+
+        result = backend.diagnostics()
+
+        assert result is True
+        mock_client.ping.assert_called_once()
+
+    def test_diagnostics_handles_hpc_user_service_failure(self):
+        """Test that diagnostics handles HPC User service failure gracefully."""
+        # Set up backend with HPC User service
+        backend_settings = {
+            "storage_file_system": "lustre",
+            "use_mock_target_items": True,
+            "hpc_user_api_url": "https://api-user.hpc-user.example.com",
+            "hpc_user_client_id": "test_client",
+            "hpc_user_client_secret": "test_secret",
+            "hpc_user_oidc_token_url": "https://auth.example.com/token",
+        }
+        backend = CscsHpcStorageBackend(backend_settings, self.backend_components)
+
+        # Mock the HPC User client ping method to fail
+        mock_client = Mock()
+        mock_client.ping.return_value = False
+        backend.hpc_user_client = mock_client
+
+        result = backend.diagnostics()
+
+        # Backend should still report success even if HPC User service is down
+        # since it can fall back to mock values
+        assert result is True
+        mock_client.ping.assert_called_once()
+
+    def test_diagnostics_without_hpc_user_service(self):
+        """Test that diagnostics works without HPC User service configured."""
+        # Use default settings (no HPC User client)
+        backend = CscsHpcStorageBackend(self.backend_settings, self.backend_components)
+
+        result = backend.diagnostics()
+
+        assert result is True

@@ -1,24 +1,26 @@
 # CSCS HPC Storage Backend
 
-A Waldur Site Agent backend plugin for managing CSCS HPC Storage systems. This backend generates JSON
-files for storage resource provisioning instead of directly interfacing with storage systems.
+A Waldur Site Agent backend plugin for managing CSCS HPC Storage systems. This backend provides a REST API proxy to
+access storage resource information from Waldur.
 
 ## Overview
 
-The CSCS HPC Storage backend is designed as a drop-in replacement for existing CSCS storage integrations.
-It generates two types of JSON files that can be consumed by external web servers or storage management systems:
-
-1. **All storage resources**: `YYYY-MM-DD-HH-MM-all.json` - Contains all storage resources for the offering
-2. **Specific orders**: `YYYY-MM-DD-HH-MM-{order_type}_{order_uuid}.json` - Contains only the resources from specific orders
+The CSCS HPC Storage backend provides a REST API proxy that serves storage resource information from Waldur
+Mastermind. The proxy translates Waldur resource data into CSCS-specific JSON format for consumption by external web
+servers and storage management systems.
 
 ## Features
 
-- **File-based output**: Generates JSON files instead of direct system integration
+- **REST API Proxy**: Provides HTTP API access to storage resource information from Waldur
+- **Multi-offering support**: Aggregates resources from multiple storage system offerings (capstor, vast, iopsstor)
 - **Hierarchical storage structure**: Maps Waldur organization → customer → project to storage
   tenant → customer → project
 - **Configurable quotas**: Automatic inode quota calculation based on storage size
+- **External HPC User API integration**: Fetches Unix GID values for storage accounts with configurable SOCKS proxy support
+- **GID caching**: Project GID values are cached in memory until server restart to reduce external API calls
 - **Mock data support**: Development/testing mode with generated target item data
-- **Flexible configuration**: Customizable file system types, output directories, and quota coefficients
+- **Flexible configuration**: Customizable file system types and quota coefficients
+- **API Filtering**: Supports filtering by storage system, data type, status, and pagination
 
 ## Configuration
 
@@ -26,7 +28,6 @@ It generates two types of JSON files that can be consumed by external web server
 
 ```yaml
 backend_settings:
-  output_directory: "cscs-storage-orders/"     # Output directory for JSON files
   storage_file_system: "lustre"               # Storage file system type
   inode_soft_coefficient: 1.33                # Multiplier for soft inode limits
   inode_hard_coefficient: 2.0                 # Multiplier for hard inode limits
@@ -44,94 +45,143 @@ backend_components:
     unit_factor: 1                           # Conversion factor (TB to TB)
 ```
 
+### Storage Systems Configuration
+
+The storage proxy supports multiple storage systems through offering slug mapping:
+
+```yaml
+# Storage systems configuration - maps storage_system names to offering slugs
+# The API will fetch resources from all configured offering slugs
+storage_systems:
+  capstor: "capstor"                          # CAPSTOR storage system
+  vast: "vast"                                # VAST storage system
+  iopsstor: "iopsstor"                        # IOPSSTOR storage system
+```
+
+### HPC User API Configuration
+
+The backend can integrate with an external HPC User API to retrieve Unix GID values for storage accounts.
+This configuration is optional - if not provided, mock GID values will be used.
+
+```yaml
+# HPC User API Configuration (optional)
+# External service for retrieving Unix GID values for storage accounts
+hpc_user_api:
+  api_url: "https://hpc-user-api.example.com"          # Base URL of HPC User API
+  client_id: "YOUR_HPC_CLIENT_ID"                      # OAuth2 client ID
+  client_secret: "YOUR_HPC_CLIENT_SECRET"              # OAuth2 client secret
+  oidc_token_url: "https://auth.example.com/token"     # OAuth2 token endpoint
+  oidc_scope: "openid"                                 # OAuth2 scope for authentication
+  socks_proxy: "socks5://localhost:12345"              # SOCKS proxy URL (optional)
+```
+
+**HPC User API Features:**
+- **OAuth2 authentication**: Automatic token acquisition and refresh
+- **GID caching**: Project GID values are cached in memory until server restart
+- **SOCKS proxy support**: Configurable SOCKS proxy for accessing APIs behind firewalls
+- **Fallback to mock data**: If API is unavailable, uses generated mock GID values
+- **Cache statistics**: Available via `get_gid_cache_stats()` method for monitoring
+
+**SOCKS Proxy Support:**
+- Use `socks_proxy` field to configure SOCKS proxy access to the HPC User API
+- Format: `socks5://host:port` or `socks4://host:port`
+- Useful when the HPC User API is behind a firewall or requires proxy access
+- Optional field - if not specified, direct connection is used
+
 ## Architecture
 
-The CSCS HPC Storage backend follows a dual-path architecture that separates individual order processing from bulk
-resource synchronization:
+The CSCS HPC Storage backend provides a REST API proxy that serves storage resource information:
 
 ```mermaid
 graph TD
-    subgraph "Waldur Site Agent Core"
-        OA[Order Processing<br/>order_process mode]
-        WM[Waldur Mastermind<br/>API Client]
-        CSB[CSCS Backend<br/>create_resource]
+    subgraph "Storage Proxy API"
+        SP[Storage Proxy Server<br/>FastAPI Application]
+        API[REST API Endpoints<br/>/api/storage-resources/]
+        AUTH[Authentication<br/>Keycloak/OIDC]
     end
 
     subgraph "CSCS HPC Storage Plugin"
-        SS[Sync Script<br/>waldur_cscs_storage_sync]
-        GOR[generate_order_json]
-        GAR[generate_all_resources_json]
+        BACKEND[CSCS Backend<br/>Data Processing]
+        TRANSFORM[Data Transformation<br/>Waldur → CSCS Format]
+        CACHE[GID Cache<br/>In-Memory Storage]
+        HPCCLIENT[HPC User Client<br/>OAuth2 + SOCKS Proxy]
     end
 
-    subgraph "File System Output"
-        OF[Order Files<br/>YYYY-MM-DD-HH-MM-type_uuid.json]
-        AF[All Resources File<br/>YYYY-MM-DD-HH-MM-all.json]
+    subgraph "Waldur Integration"
+        WM[Waldur Mastermind<br/>API Client]
+        RESOURCES[Multi-Offering<br/>Resource Fetching]
     end
 
     subgraph "External Systems"
-        WS[Web Server<br/>File Consumption]
+        CLIENT[Client Applications<br/>Web UI, Scripts]
         SMS[Storage Management<br/>System]
+        HPCAPI[HPC User API<br/>Unix GID Service]
+        PROXY[SOCKS Proxy<br/>localhost:12345]
     end
 
-    %% Order Processing Flow
-    OA --> WM
-    WM --> CSB
-    CSB --> GOR
-    GOR --> OF
+    %% API Flow
+    CLIENT --> AUTH
+    AUTH --> API
+    API --> SP
+    SP --> BACKEND
+    BACKEND --> TRANSFORM
+    TRANSFORM --> RESOURCES
+    RESOURCES --> WM
 
-    %% Bulk Sync Flow
-    SS --> WM
-    WM --> GAR
-    GAR --> AF
+    %% HPC API Flow
+    BACKEND --> CACHE
+    CACHE --> HPCCLIENT
+    HPCCLIENT --> PROXY
+    PROXY --> HPCAPI
 
-    %% External Consumption
-    OF --> WS
-    AF --> WS
-    WS --> SMS
+    %% Response Flow
+    WM --> RESOURCES
+    RESOURCES --> TRANSFORM
+    HPCAPI --> PROXY
+    PROXY --> HPCCLIENT
+    HPCCLIENT --> CACHE
+    CACHE --> BACKEND
+    TRANSFORM --> BACKEND
+    BACKEND --> SP
+    SP --> API
+    API --> CLIENT
 
-    %% Theme-neutral styling with good contrast
-    classDef core stroke:#00bcd4,stroke-width:2px,color:#00acc1
+    %% External Integration
+    CLIENT --> SMS
+
+    %% Styling
+    classDef proxy stroke:#00bcd4,stroke-width:2px,color:#00acc1
     classDef plugin stroke:#ff9800,stroke-width:2px,color:#f57c00
-    classDef output stroke:#e91e63,stroke-width:2px,color:#c2185b
+    classDef waldur stroke:#9c27b0,stroke-width:2px,color:#7b1fa2
     classDef external stroke:#4caf50,stroke-width:2px,color:#388e3c
+    classDef cache stroke:#e91e63,stroke-width:2px,color:#c2185b
 
-    class OA,WM,CSB core
-    class SS,GOR,GAR plugin
-    class OF,AF output
-    class WS,SMS external
+    class SP,API,AUTH proxy
+    class BACKEND,TRANSFORM,HPCCLIENT plugin
+    class WM,RESOURCES waldur
+    class CLIENT,SMS,HPCAPI,PROXY external
+    class CACHE cache
 ```
 
-### Processing Flows
+### API Usage
 
-**Individual Order Processing:**
-1. Waldur Site Agent processes orders in `order_process` mode
-2. Backend `create_resource()` method generates specific order JSON files
-3. Files contain single resource data for immediate processing
-
-**Bulk Resource Synchronization:**
-1. Separate sync script (`waldur_cscs_storage_sync`) runs independently
-2. Fetches all resources from Waldur API for configured offerings
-3. Generates comprehensive `all.json` files with complete resource lists
-4. Supports dry-run mode and selective offering synchronization
-
-### Usage
-
-**Run sync script for all offerings:**
+**Start the storage proxy server:**
 
 ```bash
-uv run waldur_cscs_storage_sync --config /path/to/config.yaml
+DEBUG=true DISABLE_AUTH=true PYTHONUNBUFFERED=1 \
+WALDUR_CSCS_STORAGE_PROXY_CONFIG_PATH=/path/to/config.yaml \
+uv run uvicorn \
+plugins.cscs-hpc-storage.\
+waldur_site_agent_cscs_hpc_storage.waldur_storage_proxy.main:app \
+--host 0.0.0.0 --port 8080 --reload
 ```
 
-**Run sync script for specific offering:**
+**Query storage resources:**
 
 ```bash
-uv run waldur_cscs_storage_sync --config /path/to/config.yaml --offering-uuid <uuid>
-```
-
-**Dry-run mode:**
-
-```bash
-uv run waldur_cscs_storage_sync --config /path/to/config.yaml --dry-run --verbose
+curl "http://0.0.0.0:8080/api/storage-resources/"
+curl "http://0.0.0.0:8080/api/storage-resources/?storage_system=capstor"
+curl "http://0.0.0.0:8080/api/storage-resources/?storage_system=vast&data_type=users"
 ```
 
 ## Data Mapping
@@ -195,7 +245,7 @@ GET /api/storage-resources/
 
 | Parameter | Type | Required | Description | Allowed Values |
 |-----------|------|----------|-------------|----------------|
-| `storage_system` | enum | **Yes** | Filter by storage system | `capstor`, `vast`, `iopsstor` |
+| `storage_system` | enum | No | Filter by storage system | `capstor`, `vast`, `iopsstor` |
 | `data_type` | string | No | Filter by data type | `users`, `scratch`, `store`, `archive` |
 | `status` | string | No | Filter by status | `pending`, `removing`, `active`, `error` |
 | `state` | ResourceState | No | Filter by Waldur resource state | `Creating`, `OK`, `Erred` |
@@ -205,7 +255,13 @@ GET /api/storage-resources/
 
 ### Example API Calls
 
-**Filter by storage system (required):**
+**Get all storage resources:**
+
+```bash
+curl "/api/storage-resources/"
+```
+
+**Filter by storage system:**
 
 ```bash
 curl "/api/storage-resources/?storage_system=capstor"
@@ -237,30 +293,28 @@ curl "/api/storage-resources/?storage_system=capstor&debug=true"
 
 ### Filter Behavior
 
-- **Required filtering**: `storage_system` parameter is mandatory
+- **Optional filtering**: All filters are optional and applied only when provided
 - **Value validation**: `storage_system` only accepts: `capstor`, `vast`, `iopsstor`
-- **Optional filtering**: Other filters are applied only when provided
+- **Default behavior**: Without filters, returns resources from all configured storage systems
 - **Exact matching**: All filters use exact string matching (case-sensitive)
 - **Combine filters**: Multiple filters are combined with AND logic
 - **Empty results**: Non-matching filters return empty result arrays
+- **Post-serialization filtering**: Filters are applied after JSON transformation to ensure consistent
+  behavior across single and multi-offering queries
+
+#### Filter Implementation Details
+
+The filtering system processes resources in the following sequence:
+
+1. **Resource fetching**: Resources are retrieved from Waldur API using offering slugs
+2. **JSON serialization**: Raw Waldur resources are transformed to CSCS JSON format
+3. **Filter application**: Filters (`data_type`, `status`) are applied to serialized JSON objects
+4. **Pagination**: Results are paginated based on filtered resource count
+
+This approach ensures that filters work consistently whether querying a single storage system or
+multiple storage systems simultaneously.
 
 ### Error Responses
-
-**Missing storage_system parameter:**
-
-```json
-{
-  "detail": [{
-    "type": "missing",
-    "loc": ["query", "storage_system"],
-    "msg": "storage_system is mandatory.",
-    "ctx": {
-      "allowed_values": ["capstor", "vast", "iopsstor"],
-      "help": "Add ?storage_system=<system_name> to your request"
-    }
-  }]
-}
-```
 
 **Invalid storage_system value:**
 
@@ -379,3 +433,63 @@ storage JSON format. This is useful for troubleshooting and understanding the so
 - **Smart serialization**: Automatically handles UUIDs, dates, and complex nested objects
 - **Error handling**: Shows errors if offering lookup fails, continues with other attributes
 - **Useful for debugging**: Compare agent config vs Waldur state, see all available offering data
+
+## Recent Improvements
+
+### Multi-Offering Storage System Support
+
+The storage proxy now supports aggregating resources from multiple storage system offerings:
+
+- **Configurable storage systems**: Map storage system names to Waldur offering slugs
+- **Unified API responses**: Single endpoint returns resources from all configured storage systems
+- **Consistent filtering**: Filters work across all storage systems or can target specific ones
+- **Resource aggregation**: Resources from multiple offerings are combined and properly paginated
+
+### HPC User API Integration
+
+Integration with external HPC User API for Unix GID management:
+
+- **OAuth2 authentication**: Automatic token acquisition and management
+- **SOCKS proxy support**: Access APIs behind firewalls via configurable SOCKS proxy
+- **GID caching**: Project GID values cached in memory until server restart
+- **Graceful fallbacks**: Mock GID values used when API is unavailable
+
+### Data Type Filtering Fix
+
+Resolved data_type filtering issues that affected multi-storage-system queries:
+
+- **Root cause**: Filtering was applied before JSON serialization in multi-offering queries
+- **Solution**: Unified filtering approach applied after JSON serialization across all query types
+- **Behavior**: Consistent filtering whether querying single or multiple storage systems
+- **Impact**: `data_type` parameter now works correctly in all scenarios
+
+## Troubleshooting
+
+### Common Issues
+
+**Data type filtering not working:**
+- Ensure you're using lowercase values: `data_type=archive` not `data_type=Archive`
+- Check that the storage system has resources with the specified data type
+- Use `debug=true` to inspect raw data and verify data type values
+
+**SOCKS proxy connection issues:**
+- Verify the proxy is running: `netstat -an | grep 12345`
+- Check proxy format: use `socks5://localhost:12345` not just `localhost:12345`
+- Ensure httpx[socks] dependency is installed: `uv add "httpx[socks]"`
+
+**GID cache not working:**
+- Cache statistics available via backend's `get_gid_cache_stats()` method
+- Cache persists until server restart (no TTL-based expiration)
+- Mock values are used if HPC User API is unavailable
+
+**Empty filter results:**
+- Verify filter values match exactly (case-sensitive)
+- Use `debug=true` to see available values in raw data
+- Check that storage system configuration matches offering slugs
+
+### Performance Considerations
+
+- **GID caching**: Reduces external API calls by caching project GIDs until server restart
+- **Multi-offering efficiency**: Single API call to Waldur with comma-separated offering slugs
+- **Pagination**: Applied after filtering to ensure accurate page counts
+- **SOCKS proxy overhead**: Minimal latency impact for accessing external APIs
