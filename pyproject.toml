@@ -142,3 +142,6 @@ members = [
 
 [tool.uv.sources]
 waldur-api-client = { git = "https://github.com/waldur/py-client.git", rev = "main" }
+
+[tool.mypy]
+explicit_package_bases = true

@@ -1,8 +1,6 @@
 """CSCS HPC Storage backend for Waldur Site Agent."""
 
-import json
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 from uuid import NAMESPACE_OID, uuid5
 
@@ -19,28 +17,83 @@ from waldur_site_agent.backend import backends, logger
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
+from .hpc_user_client import CSCSHpcUserClient
+
 
 class CscsHpcStorageBackend(backends.BaseBackend):
     """CSCS HPC Storage backend for JSON file generation."""
 
-    def __init__(self, backend_settings: dict, backend_components: dict[str, dict]) -> None:
-        """Initialize CSCS storage backend."""
+    def __init__(
+        self,
+        backend_settings: dict,
+        backend_components: dict[str, dict],
+        hpc_user_api_settings: Optional[dict] = None,
+    ) -> None:
+        """Initialize CSCS storage backend.
+
+        Args:
+            backend_settings: Backend-specific configuration settings
+            backend_components: Component configuration
+            hpc_user_api_settings: Optional HPC User API configuration
+        """
         super().__init__(backend_settings, backend_components)
         self.backend_type = "cscs-hpc-storage"
 
         # Configuration with defaults
-        self.output_directory = backend_settings.get("output_directory", "cscs-storage-orders/")
         self.storage_file_system = backend_settings.get("storage_file_system", "lustre")
         self.inode_soft_coefficient = backend_settings.get("inode_soft_coefficient", 1.33)
         self.inode_hard_coefficient = backend_settings.get("inode_hard_coefficient", 2.0)
         self.inode_base_multiplier = backend_settings.get("inode_base_multiplier", 1_000_000)
         self.use_mock_target_items = backend_settings.get("use_mock_target_items", False)
+        self.development_mode = backend_settings.get("development_mode", False)
+
+        # HPC User service configuration
+        # Support both new separate section and legacy backend_settings location
+        if hpc_user_api_settings:
+            # Use new separate configuration section
+            self.hpc_user_api_url = hpc_user_api_settings.get("api_url")
+            self.hpc_user_client_id = hpc_user_api_settings.get("client_id")
+            self.hpc_user_client_secret = hpc_user_api_settings.get("client_secret")
+            self.hpc_user_oidc_token_url = hpc_user_api_settings.get("oidc_token_url")
+            self.hpc_user_oidc_scope = hpc_user_api_settings.get("oidc_scope")
+            self.hpc_user_socks_proxy = hpc_user_api_settings.get("socks_proxy")
+            if self.hpc_user_socks_proxy:
+                logger.info(
+                    "SOCKS proxy configured from hpc_user_api settings: %s",
+                    self.hpc_user_socks_proxy,
+                )
+        else:
+            # Fall back to legacy configuration in backend_settings
+            self.hpc_user_api_url = backend_settings.get("hpc_user_api_url")
+            self.hpc_user_client_id = backend_settings.get("hpc_user_client_id")
+            self.hpc_user_client_secret = backend_settings.get("hpc_user_client_secret")
+            self.hpc_user_oidc_token_url = backend_settings.get("hpc_user_oidc_token_url")
+            self.hpc_user_oidc_scope = backend_settings.get("hpc_user_oidc_scope")
+            self.hpc_user_socks_proxy = backend_settings.get("hpc_user_socks_proxy")
+
+        # Initialize HPC User client if configured
+        self.hpc_user_client: Optional[CSCSHpcUserClient] = None
+        if self.hpc_user_api_url and self.hpc_user_client_id and self.hpc_user_client_secret:
+            self.hpc_user_client = CSCSHpcUserClient(
+                api_url=self.hpc_user_api_url,
+                client_id=self.hpc_user_client_id,
+                client_secret=self.hpc_user_client_secret,
+                oidc_token_url=self.hpc_user_oidc_token_url,
+                oidc_scope=self.hpc_user_oidc_scope,
+                socks_proxy=self.hpc_user_socks_proxy,
+            )
+            logger.info("HPC User client initialized with URL: %s", self.hpc_user_api_url)
+            if self.hpc_user_socks_proxy:
+                logger.info("Using SOCKS proxy: %s", self.hpc_user_socks_proxy)
+        else:
+            logger.info("HPC User client not configured - using mock unixGid values")
+
+        # Initialize GID cache (persists until server restart)
+        self._gid_cache: dict[str, int] = {}
+        logger.info("Project GID cache initialized (persists until server restart)")
 
         # Validate configuration
         self._validate_configuration()
-
-        # Ensure output directory exists
-        Path(self.output_directory).mkdir(parents=True, exist_ok=True)
 
     def _generate_deterministic_uuid(self, name: str) -> str:
         """Generate a deterministic UUID from a string name."""
@@ -57,17 +110,24 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
         Args:
             storage_resources: List of storage resource dictionaries
-            storage_system: Required filter for storage system
+            storage_system: Optional filter for storage system
             data_type: Optional filter for data type
             status: Optional filter for status
 
         Returns:
             Filtered list of storage resources
         """
+        logger.debug(
+            "Applying filters: storage_system=%s, data_type=%s, status=%s on %d resources",
+            storage_system,
+            data_type,
+            status,
+            len(storage_resources),
+        )
         filtered_resources = []
 
         for resource in storage_resources:
-            # Required storage_system filter
+            # Optional storage_system filter
             if storage_system:
                 resource_storage_system = resource.get("storageSystem", {}).get("key", "")
                 if resource_storage_system != storage_system:
@@ -76,6 +136,11 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             # Optional data_type filter
             if data_type:
                 resource_data_type = resource.get("storageDataType", {}).get("key", "")
+                logger.debug(
+                    "Comparing data_type filter '%s' with resource data_type '%s'",
+                    data_type,
+                    resource_data_type,
+                )
                 if resource_data_type != data_type:
                     continue
 
@@ -115,16 +180,15 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             msg = "inode_hard_coefficient must be a positive number"
             raise ValueError(msg)
 
-        if self.inode_hard_coefficient <= self.inode_soft_coefficient:
-            msg = "inode_hard_coefficient must be greater than inode_soft_coefficient"
+        if self.inode_hard_coefficient < self.inode_soft_coefficient:
+            msg = (
+                f"inode_hard_coefficient {self.inode_hard_coefficient} must be greater than "
+                f"inode_soft_coefficient {self.inode_soft_coefficient}"
+            )
             raise ValueError(msg)
 
         if not isinstance(self.storage_file_system, str) or not self.storage_file_system.strip():
             msg = "storage_file_system must be a non-empty string"
-            raise ValueError(msg)
-
-        if not isinstance(self.output_directory, str) or not self.output_directory.strip():
-            msg = "output_directory must be a non-empty string"
             raise ValueError(msg)
 
         if (
@@ -167,19 +231,10 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 f"marketplace API response."
             )
 
-    def ping(self, raise_exception: bool = False) -> bool:
-        """Check if backend is accessible (always returns True for file-based backend)."""
-        try:
-            # Test if we can write to output directory
-            test_file = Path(self.output_directory) / "test_write.tmp"
-            test_file.touch()
-            test_file.unlink()
-            return True
-        except Exception as e:
-            if raise_exception:
-                raise
-            logger.error("Cannot write to output directory %s: %s", self.output_directory, e)
-            return False
+    def ping(self, raise_exception: bool = False) -> bool:  # noqa: ARG002
+        """Check if backend is accessible (always returns True for storage proxy backend)."""
+        # Note: raise_exception is part of the BaseBackend interface but not used here
+        return True
 
     def _pre_create_resource(
         self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
@@ -190,18 +245,30 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         """Log backend diagnostics information."""
         logger.info("CSCS HPC Storage Backend Diagnostics")
         logger.info("=====================================")
-        logger.info("Output directory: %s", self.output_directory)
         logger.info("Storage file system: %s", self.storage_file_system)
         logger.info("Inode soft coefficient: %s", self.inode_soft_coefficient)
         logger.info("Inode hard coefficient: %s", self.inode_hard_coefficient)
         logger.info("Inode base multiplier: %s", self.inode_base_multiplier)
         logger.info("Use mock target items: %s", self.use_mock_target_items)
+        logger.info("Development mode: %s", self.development_mode)
         logger.info("Backend components: %s", list(self.backend_components.keys()))
 
-        # Test directory accessibility
-        can_write = self.ping()
-        logger.info("Output directory writable: %s", can_write)
+        # HPC User client diagnostics
+        if self.hpc_user_client:
+            logger.info("HPC User API configured: %s", self.hpc_user_api_url)
+            hpc_user_available = self.hpc_user_client.ping()
+            logger.info("HPC User API accessible: %s", hpc_user_available)
+            if not hpc_user_available:
+                logger.warning("HPC User API not accessible, falling back to mock unixGid values")
+        else:
+            logger.info("HPC User API: Not configured (using mock unixGid values)")
 
+        # Test basic functionality
+        can_write = self.ping()
+        logger.info("Backend functionality: %s", can_write)
+
+        # Backend is functional as long as basic functionality works
+        # HPC User service failure doesn't break backend since we have fallback
         return can_write
 
     def list_components(self) -> list[str]:
@@ -268,7 +335,124 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         hard_limit = int(base_inodes * self.inode_hard_coefficient)
         return soft_limit, hard_limit
 
-    def _get_target_item_data(self, waldur_resource: WaldurResource, target_type: str) -> dict:
+    def _get_project_unix_gid(self, project_slug: str) -> Optional[int]:
+        """Get unixGid for project from HPC User service with caching.
+
+        Cache persists until server restart. No TTL-based expiration.
+
+        In production mode: Returns None if service fails (resource should be skipped)
+        In development mode: Falls back to mock values if service fails
+
+        Args:
+            project_slug: Project slug to look up
+
+        Returns:
+            unixGid value from service, mock value (dev mode), or None (prod mode on failure)
+        """
+        # Check cache first
+        if project_slug in self._gid_cache:
+            cached_gid = self._gid_cache[project_slug]
+            logger.debug("Found cached unixGid %d for project %s", cached_gid, project_slug)
+            return cached_gid
+
+        # Try to fetch from HPC User service
+        if self.hpc_user_client:
+            try:
+                unix_gid = self.hpc_user_client.get_project_unix_gid(project_slug)
+                if unix_gid is not None:
+                    # Cache the successful result
+                    self._gid_cache[project_slug] = unix_gid
+                    logger.debug(
+                        "Found and cached unixGid %d for project %s from HPC User service",
+                        unix_gid,
+                        project_slug,
+                    )
+                    return unix_gid
+
+                # Project not found in service
+                if self.development_mode:
+                    logger.warning(
+                        "Project %s not found in HPC User service, using mock value (dev mode)",
+                        project_slug,
+                    )
+                else:
+                    logger.error(
+                        "Project %s not found in HPC User service, "
+                        "skipping resource (production mode)",
+                        project_slug,
+                    )
+                    return None
+
+            except Exception as e:
+                logger.error(
+                    "Failed to fetch unixGid for project %s from HPC User service: %s",
+                    project_slug,
+                    e,
+                )
+                if self.development_mode:
+                    logger.info(
+                        "Falling back to mock unixGid for project %s (dev mode)", project_slug
+                    )
+                else:
+                    logger.error(
+                        "HPC User service unavailable for project %s, "
+                        "skipping resource (production mode)",
+                        project_slug,
+                    )
+                    return None
+
+        # No HPC User client configured - use development mode behavior
+        if not self.development_mode:
+            logger.error(
+                "HPC User service not configured for project %s, "
+                "skipping resource (production mode)",
+                project_slug,
+            )
+            return None
+
+        # Development mode or no HPC client: use mock value and cache it
+        mock_gid = 30000 + hash(project_slug) % 10000
+        self._gid_cache[project_slug] = mock_gid
+        logger.debug(
+            "Using and caching mock unixGid %d for project %s (dev mode)", mock_gid, project_slug
+        )
+        return mock_gid
+
+    def get_gid_cache_stats(self) -> dict:
+        """Get statistics about the GID cache.
+
+        Returns:
+            Dictionary with cache statistics
+        """
+        max_projects_to_list = 10
+        return {
+            "total_entries": len(self._gid_cache),
+            "cache_policy": "Persists until server restart",
+            "projects": list(self._gid_cache.keys())
+            if len(self._gid_cache) <= max_projects_to_list
+            else f"{len(self._gid_cache)} projects (too many to list)",
+        }
+
+    def _get_target_status_from_waldur_state(self, waldur_resource: WaldurResource) -> str:
+        """Map Waldur resource state to target item status (pending, active, removing)."""
+        # Map Waldur resource state to target item status
+        target_status_mapping = {
+            "Creating": "pending",
+            "OK": "active",
+            "Erred": "pending",  # Treat errors as pending for target items
+            "Terminating": "removing",
+            "Terminated": "removing",  # Treat terminated as removing for target items
+        }
+
+        # Get status from waldur resource state, default to "pending"
+        waldur_state = getattr(waldur_resource, "state", None)
+        if waldur_state and not isinstance(waldur_state, Unset):
+            return target_status_mapping.get(str(waldur_state), "pending")
+        return "pending"
+
+    def _get_target_item_data(  # noqa: PLR0911
+        self, waldur_resource: WaldurResource, target_type: str
+    ) -> Optional[dict]:
         """Get target item data from backend_metadata or generate mock data."""
         if not self.use_mock_target_items and waldur_resource.backend_metadata:
             # Try to get real data from backend_metadata
@@ -296,36 +480,47 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 "name": waldur_resource.project_name,
             }
         if target_type == "project":
+            target_status = self._get_target_status_from_waldur_state(waldur_resource)
+            unix_gid = self._get_project_unix_gid(waldur_resource.project_slug)
+            if unix_gid is None:
+                return None  # Skip resource when unixGid lookup fails in production
             return {
                 "itemId": self._generate_deterministic_uuid(f"project:{waldur_resource.slug}"),
-                "status": "open",
+                "status": target_status,
                 "name": waldur_resource.slug,
-                "unixGid": 30000 + hash(waldur_resource.slug) % 10000,  # Mock GID
-                "active": True,
+                "unixGid": unix_gid,
+                "active": target_status == "active",  # Active only when status is "active"
             }
         if target_type == "user":
+            target_status = self._get_target_status_from_waldur_state(waldur_resource)
+            project_slug = (
+                waldur_resource.project_slug
+                if not isinstance(waldur_resource.project_slug, Unset)
+                else "default-project"
+            )
+            # TODO: Just a placeholder, for user a default gid would be needed, which could be
+            # looked up from https://api-user.hpc-user.tds.cscs.ch/api/v1/export/cscs/users/{username}
+            unix_gid = self._get_project_unix_gid(project_slug)
+            if unix_gid is None:
+                return None  # Skip resource when unixGid lookup fails in production
             return {
                 "itemId": self._generate_deterministic_uuid(f"user:{waldur_resource.slug}"),
-                "status": "active",
+                "status": target_status,
                 "email": f"user-{waldur_resource.slug}@example.com",  # Mock email
                 "unixUid": 20000 + hash(waldur_resource.slug) % 10000,  # Mock UID
                 "primaryProject": {
-                    "name": (
-                        waldur_resource.project_slug
-                        if not isinstance(waldur_resource.project_slug, Unset)
-                        else "default-project"
-                    ),
-                    "unixGid": (
-                        30000 + hash(str(waldur_resource.project_slug)) % 10000
-                    ),  # Mock project GID
-                    "active": True,
+                    "name": project_slug,
+                    "unixGid": unix_gid,
+                    "active": target_status == "active",  # Active only when status is "active"
                 },
-                "active": True,
+                "active": target_status == "active",  # Active only when status is "active"
             }
 
         return {}
 
-    def _get_target_data(self, waldur_resource: WaldurResource, storage_data_type: str) -> dict:
+    def _get_target_data(
+        self, waldur_resource: WaldurResource, storage_data_type: str
+    ) -> Optional[dict]:
         """Get target data based on storage data type mapping."""
         # Validate storage_data_type is a string
         if not isinstance(storage_data_type, str):
@@ -362,14 +557,20 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             target_type,
         )
 
+        target_item = self._get_target_item_data(waldur_resource, target_type)
+        if target_item is None:
+            return (
+                None  # Skip resource when target item creation fails (e.g., unixGid lookup fails)
+            )
+
         return {
             "targetType": target_type,
-            "targetItem": self._get_target_item_data(waldur_resource, target_type),
+            "targetItem": target_item,
         }
 
     def _create_storage_resource_json(
         self, waldur_resource: WaldurResource, storage_system: str
-    ) -> dict:
+    ) -> Optional[dict]:
         """Create JSON structure for a single storage resource."""
         logger.debug("Creating storage resource JSON for resource %s", waldur_resource.uuid)
         logger.debug("  Input storage_system: %s (type: %s)", storage_system, type(storage_system))
@@ -592,6 +793,16 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
         logger.debug("  Mapped waldur state '%s' to CSCS status '%s'", waldur_state, cscs_status)
 
+        # Get target data - return None if target creation fails
+        # (e.g., unixGid lookup fails in production)
+        target_data = self._get_target_data(waldur_resource, storage_data_type.lower())
+        if target_data is None:
+            logger.warning(
+                "Skipping resource %s due to target data creation failure (production mode)",
+                waldur_resource.uuid,
+            )
+            return None
+
         # Create JSON structure
         return {
             "itemId": waldur_resource.uuid.hex,
@@ -626,7 +837,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             ]
             if storage_quota_soft_tb > 0 or storage_quota_hard_tb > 0
             else None,
-            "target": self._get_target_data(waldur_resource, storage_data_type.lower()),
+            "target": target_data,
             "storageSystem": {
                 "itemId": self._generate_deterministic_uuid(f"storage_system:{storage_system}"),
                 "key": storage_system.lower(),
@@ -672,7 +883,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             state: Optional resource state filter
             page: Page number (1-based)
             page_size: Number of items per page
-            storage_system: Required filter for storage system (e.g., 'capstor', 'vast', 'iopsstor')
+            storage_system: Optional filter for storage system (e.g., 'capstor', 'vast', 'iopsstor')
             data_type: Optional filter for data type (e.g., 'users', 'scratch', 'store', 'archive')
             status: Optional filter for status (e.g., 'pending', 'removing', 'active')
 
@@ -791,7 +1002,8 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 logger.debug("  Using storage_system from offering_slug: %s", storage_system_name)
 
                 storage_resource = self._create_storage_resource_json(resource, storage_system_name)
-                storage_resources.append(storage_resource)
+                if storage_resource is not None:
+                    storage_resources.append(storage_resource)
 
             # Apply filters to the converted storage resources
             storage_resources = self._apply_filters(
@@ -825,17 +1037,6 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             logger.error("Failed to fetch storage resources from Waldur API: %s", e)
             # Re-raise the exception to be handled by the caller
             raise
-
-    def _write_json_file(self, filename: str, data: dict) -> None:
-        """Write JSON data to file."""
-        filepath = Path(self.output_directory) / filename
-
-        try:
-            with filepath.open("w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            logger.info("Generated JSON file: %s", filepath)
-        except Exception as e:
-            logger.error("Failed to write JSON file %s: %s", filepath, e)
 
     def get_debug_resources(
         self,
@@ -1097,17 +1298,13 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         offering_uuid: str,
         client: AuthenticatedClient,
         state: Optional[ResourceState] = None,
-        write_file: bool = True,
         page: int = 1,
         page_size: int = 100,
         storage_system: Optional[str] = None,
         data_type: Optional[str] = None,
         status: Optional[str] = None,
     ) -> dict:
-        """Generate JSON file with all storage resources with pagination support."""
-        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M")
-        filename = f"{timestamp}-all.json"
-
+        """Generate JSON data with all storage resources with pagination support."""
         try:
             storage_resources, pagination_info = self._get_all_storage_resources(
                 offering_uuid,
@@ -1120,7 +1317,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 status=status,
             )
 
-            json_data = {
+            return {
                 "status": "success",
                 "code": 200,
                 "meta": {"date": datetime.now().isoformat(), "appVersion": "1.4.0"},
@@ -1129,11 +1326,6 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                     "paginate": pagination_info,
                 },
             }
-
-            if write_file:
-                self._write_json_file(filename, json_data)
-
-            return json_data
 
         except Exception as e:
             logger.error("Error generating storage resources JSON: %s", e)
@@ -1155,43 +1347,524 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 },
             }
 
-    def generate_order_json(self, waldur_resource: WaldurResource, order_type: str) -> None:
-        """Generate JSON file for a specific order."""
-        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M")
-        filename = f"{timestamp}-{order_type}_{waldur_resource.uuid.hex}.json"
-
-        # Validate resource data before processing
-        self._validate_resource_data(waldur_resource)
-
-        # Use offering_slug as the storage system name
-        storage_system_name = waldur_resource.offering_slug
-
-        storage_resource = self._create_storage_resource_json(waldur_resource, storage_system_name)
-
-        json_data = {
-            "status": "success",
-            "code": 200,
-            "meta": {"date": datetime.now().isoformat(), "appVersion": "1.4.0"},
-            "result": {"storageResources": [storage_resource]},
-        }
-
-        self._write_json_file(filename, json_data)
-
     def create_resource(
         self,
         waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
     ) -> BackendResourceInfo:
-        """Create storage resource and generate JSON files."""
+        """Create storage resource."""
         del user_context
         logger.info("Creating CSCS storage resource: %s", waldur_resource.name)
-
-        # Generate JSON for specific order only
-        # Note: Bulk all.json generation is handled by separate sync script
-        self.generate_order_json(waldur_resource, "create")
 
         # Return resource structure
         return BackendResourceInfo(
             backend_id=waldur_resource.slug,  # Use slug as backend ID
             limits=self._collect_resource_limits(waldur_resource)[1],
         )
+
+    def generate_all_resources_json_by_slugs(
+        self,
+        offering_slugs: list[str],
+        client: AuthenticatedClient,
+        state: Optional[ResourceState] = None,
+        page: int = 1,
+        page_size: int = 100,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+        storage_system_filter: Optional[str] = None,
+    ) -> dict:
+        """Generate JSON with resources filtered by multiple offering slugs."""
+        try:
+            storage_resources, pagination_info = self._get_resources_by_offering_slugs(
+                offering_slugs=offering_slugs,
+                client=client,
+                state=state,
+                page=page,
+                page_size=page_size,
+                data_type=data_type,
+                status=status,
+                storage_system_filter=storage_system_filter,
+            )
+
+            return {
+                "status": "success",
+                "resources": storage_resources,
+                "pagination": pagination_info,
+                "filters_applied": {
+                    "offering_slugs": offering_slugs,
+                    "storage_system": storage_system_filter,
+                    "data_type": data_type,
+                    "status": status,
+                    "state": state.value if state else None,
+                },
+            }
+
+        except Exception as e:
+            logger.error("Failed to generate storage resources JSON: %s", e, exc_info=True)
+            return {
+                "status": "error",
+                "error": f"Failed to fetch storage resources: {e}",
+                "code": 500,
+            }
+
+    def generate_all_resources_json_by_slug(
+        self,
+        offering_slug: str,
+        client: AuthenticatedClient,
+        state: Optional[ResourceState] = None,
+        page: int = 1,
+        page_size: int = 100,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> dict:
+        """Generate JSON with resources filtered by offering slug instead of UUID."""
+        try:
+            storage_resources, pagination_info = self._get_resources_by_offering_slug(
+                offering_slug=offering_slug,
+                client=client,
+                state=state,
+                page=page,
+                page_size=page_size,
+                data_type=data_type,
+                status=status,
+            )
+
+            return {
+                "status": "success",
+                "resources": storage_resources,
+                "pagination": pagination_info,
+                "filters_applied": {
+                    "offering_slug": offering_slug,
+                    "data_type": data_type,
+                    "status": status,
+                    "state": state.value if state else None,
+                },
+            }
+
+        except Exception as e:
+            logger.error("Failed to generate storage resources JSON: %s", e, exc_info=True)
+            return {
+                "status": "error",
+                "error": f"Failed to fetch storage resources: {e}",
+                "code": 500,
+            }
+
+    def get_debug_resources_by_slugs(
+        self,
+        offering_slugs: list[str],
+        client: AuthenticatedClient,
+        state: Optional[ResourceState] = None,
+        page: int = 1,
+        page_size: int = 100,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+        storage_system_filter: Optional[str] = None,
+    ) -> dict:
+        """Get raw Waldur resources for debug mode without translation (multiple slugs)."""
+        try:
+            # Note: Offering details fetching removed - API doesn't support slug-based filtering
+            # The offering information is available in the resource data itself
+            waldur_offerings: dict[str, dict] = {
+                slug: {"note": "Offering details available in resource data"}
+                for slug in offering_slugs
+            }
+
+            # Fetch raw resources filtered by offering slugs
+            filters = {
+                "client": client,
+                "page": page,
+                "page_size": page_size,
+                "offering_slug": offering_slugs,
+            }
+            if state:
+                filters["state"] = state
+
+            response = marketplace_resources_list.sync_detailed(**filters)
+
+            raw_resources = []
+            total_count = int(response.headers.get("x-total-count", "0"))
+
+            if response.parsed:
+                for resource in response.parsed:
+                    # Apply storage_system filter if provided
+                    if storage_system_filter and resource.offering_slug != storage_system_filter:
+                        continue
+
+                    # Apply additional filters
+                    if not self._resource_matches_filters(resource, data_type, status):
+                        continue
+
+                    raw_resources.append(self._serialize_resource(resource))
+
+            pagination_info = {
+                "current": page,
+                "limit": page_size,
+                "offset": (page - 1) * page_size,
+                "pages": (len(raw_resources) + page_size - 1) // page_size if raw_resources else 0,
+                "total": len(raw_resources),
+                "api_total": total_count,
+            }
+
+            return {
+                "offering_details": waldur_offerings,
+                "resources": raw_resources,
+                "pagination": pagination_info,
+                "filters_applied": {
+                    "offering_slugs": offering_slugs,
+                    "storage_system": storage_system_filter,
+                    "data_type": data_type,
+                    "status": status,
+                    "state": state.value if state else None,
+                },
+            }
+
+        except Exception as e:
+            logger.error("Failed to fetch debug resources by slugs: %s", e, exc_info=True)
+            return {
+                "error": f"Failed to fetch debug resources: {e}",
+                "offering_details": {},
+                "resources": [],
+                "pagination": {
+                    "current": page,
+                    "limit": page_size,
+                    "offset": (page - 1) * page_size,
+                    "pages": 0,
+                    "total": 0,
+                },
+            }
+
+    def get_debug_resources_by_slug(
+        self,
+        offering_slug: str,
+        client: AuthenticatedClient,
+        state: Optional[ResourceState] = None,
+        page: int = 1,
+        page_size: int = 100,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> dict:
+        """Get raw resource data filtered by offering slug for debugging."""
+        try:
+            # Fetch resources directly with offering slug filter
+            filters = {
+                "client": client,
+                "page": page,
+                "page_size": page_size,
+                "offering_slug": [offering_slug],  # Filter by offering slug
+            }
+            if state:
+                filters["state"] = state
+
+            response = marketplace_resources_list.sync_detailed(**filters)
+
+            if not response.parsed:
+                return {
+                    "resources": [],
+                    "pagination": {
+                        "current": page,
+                        "limit": page_size,
+                        "offset": (page - 1) * page_size,
+                        "pages": 0,
+                        "total": 0,
+                    },
+                    "filters_applied": {
+                        "offering_slug": offering_slug,
+                        "data_type": data_type,
+                        "status": status,
+                        "state": state.value if state else None,
+                    },
+                }
+
+            resources = response.parsed
+            # Extract pagination info from response headers
+            total_count = int(response.headers.get("X-Total-Count", len(resources)))
+
+            # Serialize resources for JSON response first
+            serialized_resources = []
+            for resource in resources:
+                try:
+                    serialized_resource = self._serialize_resource(resource)
+                    serialized_resources.append(serialized_resource)
+                except Exception as e:
+                    resource_id = getattr(resource, "uuid", "unknown")
+                    logger.warning("Failed to serialize resource %s: %s", resource_id, e)
+
+            # Apply additional filters (data_type, status) in memory after serialization
+            logger.debug(
+                "About to apply filters on %d serialized resources", len(serialized_resources)
+            )
+            filtered_resources = self._apply_filters(serialized_resources, None, data_type, status)
+
+            # Update pagination info based on filtered results
+            filtered_count = len(filtered_resources)
+            pages = (filtered_count + page_size - 1) // page_size
+
+            return {
+                "resources": filtered_resources,
+                "pagination": {
+                    "current": page,
+                    "limit": page_size,
+                    "offset": (page - 1) * page_size,
+                    "pages": max(1, pages),
+                    "total": filtered_count,
+                    "raw_total_from_api": total_count,
+                },
+                "filters_applied": {
+                    "offering_slug": offering_slug,
+                    "data_type": data_type,
+                    "status": status,
+                    "state": state.value if state else None,
+                },
+            }
+
+        except Exception as e:
+            logger.error("Failed to fetch debug resources by slug: %s", e, exc_info=True)
+            return {
+                "error": f"Failed to fetch resources: {e}",
+                "resources": [],
+                "pagination": {
+                    "current": page,
+                    "limit": page_size,
+                    "offset": (page - 1) * page_size,
+                    "pages": 0,
+                    "total": 0,
+                },
+            }
+
+    def _get_resources_by_offering_slugs(
+        self,
+        offering_slugs: list[str],
+        client: AuthenticatedClient,
+        state: Optional[ResourceState] = None,
+        page: int = 1,
+        page_size: int = 100,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+        storage_system_filter: Optional[str] = None,
+    ) -> tuple[list[dict], dict]:
+        """Fetch and process resources filtered by multiple offering slugs."""
+        logger.debug("_get_resources_by_offering_slugs called with data_type=%s", data_type)
+        try:
+            # Use single API call with comma-separated offering slugs
+            logger.info("Fetching resources for offering slugs: %s", ", ".join(offering_slugs))
+
+            filters = {
+                "client": client,
+                "page": page,
+                "page_size": page_size,
+                "offering_slug": ",".join(offering_slugs),  # Comma-separated slugs for Waldur API
+            }
+            if state:
+                filters["state"] = state
+
+            response = marketplace_resources_list.sync_detailed(**filters)
+
+            all_storage_resources = []
+            total_api_count = 0
+
+            if response.parsed:
+                # Get count from headers
+                total_api_count = int(response.headers.get("x-result-count", "0"))
+                logger.debug("Response headers: %s", dict(response.headers))
+                logger.debug("Total API count from headers: %d", total_api_count)
+
+                logger.info(
+                    "Found %d resources from API (total: %d)", len(response.parsed), total_api_count
+                )
+
+                logger.debug("Starting to process %d resources", len(response.parsed))
+                for resource in response.parsed:
+                    try:
+                        # Apply storage_system filter if provided
+                        if (
+                            storage_system_filter
+                            and resource.offering_slug != storage_system_filter
+                        ):
+                            logger.debug("Skipping resource due to storage_system filter")
+                            continue
+
+                        # Note: Additional filters (data_type, status) are applied
+                        # after serialization
+
+                        storage_resource = self._create_storage_resource_json(
+                            resource, resource.offering_slug
+                        )
+                        if storage_resource is not None:
+                            all_storage_resources.append(storage_resource)
+
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to process resource %s: %s",
+                            getattr(resource, "uuid", "unknown"),
+                            e,
+                        )
+                        continue
+            else:
+                logger.warning(
+                    "No resources found for offering slugs: %s", ", ".join(offering_slugs)
+                )
+
+            storage_resources = all_storage_resources
+            total_count = total_api_count
+
+            # Apply additional filters (data_type, status) in memory after JSON serialization
+            logger.debug("About to apply filters on %d resources", len(storage_resources))
+            filtered_resources = self._apply_filters(storage_resources, None, data_type, status)
+            storage_resources = filtered_resources
+
+            # Calculate pagination based on filtered results
+            total_pages = (
+                (len(storage_resources) + page_size - 1) // page_size if storage_resources else 0
+            )
+            pagination_info = {
+                "current": page,
+                "limit": page_size,
+                "offset": (page - 1) * page_size,
+                "pages": total_pages,
+                "total": len(storage_resources),
+                "api_total": total_count,
+            }
+
+            return storage_resources, pagination_info
+
+        except Exception as e:
+            logger.error("Failed to fetch storage resources by slugs: %s", e, exc_info=True)
+            raise
+
+    def _get_resources_by_offering_slug(
+        self,
+        offering_slug: str,
+        client: AuthenticatedClient,
+        state: Optional[ResourceState] = None,
+        page: int = 1,
+        page_size: int = 100,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> tuple[list[dict], dict]:
+        """Fetch and process resources filtered by offering slug."""
+        try:
+            # Fetch resources with offering slug filter
+            filters = {
+                "client": client,
+                "page": page,
+                "page_size": page_size,
+                "offering_slug": [offering_slug],  # Filter by offering slug
+            }
+            if state:
+                filters["state"] = state
+
+            response = marketplace_resources_list.sync_detailed(**filters)
+
+            if not response.parsed:
+                return [], {
+                    "current": page,
+                    "limit": page_size,
+                    "offset": (page - 1) * page_size,
+                    "pages": 0,
+                    "total": 0,
+                }
+
+            resources = response.parsed
+            # Extract pagination info from response headers
+            total_count = int(response.headers.get("X-Total-Count", len(resources)))
+
+            storage_resources = []
+            processed_count = 0
+
+            logger.info("Processing resource %d/%d", processed_count + 1, len(resources))
+
+            for resource in resources:
+                processed_count += 1
+                logger.info("Processing resource %d/%d", processed_count, len(resources))
+                logger.info("Resource %s / %s", resource.uuid, resource.name)
+
+                try:
+                    storage_system_name = resource.offering_slug
+                    logger.debug(
+                        "  Using storage_system from offering_slug: %s", storage_system_name
+                    )
+
+                    storage_resource = self._create_storage_resource_json(
+                        resource, storage_system_name
+                    )
+                    if storage_resource is not None:
+                        storage_resources.append(storage_resource)
+
+                except Exception as e:
+                    logger.error(
+                        "Failed to process resource %s: %s", resource.uuid, e, exc_info=True
+                    )
+
+            # Apply additional filters (data_type, status) in memory
+            filtered_resources = self._apply_filters(
+                storage_resources, offering_slug, data_type, status
+            )
+
+            # Update pagination info based on filtered results
+            filtered_count = len(filtered_resources)
+            pages = (filtered_count + page_size - 1) // page_size
+
+            pagination_info = {
+                "current": page,
+                "limit": page_size,
+                "offset": (page - 1) * page_size,
+                "pages": max(1, pages),
+                "total": filtered_count,
+                "raw_total_from_api": total_count,
+            }
+
+            return filtered_resources, pagination_info
+
+        except Exception as e:
+            logger.error("Failed to fetch storage resources by slug: %s", e, exc_info=True)
+            raise
+
+    def _serialize_resource(self, resource: object) -> dict:
+        """Serialize a Waldur resource object for JSON output."""
+
+        def serialize_value(value: object) -> object:
+            """Convert various types to JSON-serializable format."""
+            if hasattr(value, "__dict__"):
+                return {k: serialize_value(v) for k, v in value.__dict__.items()}
+            if isinstance(value, (list, tuple)):
+                return [serialize_value(item) for item in value]
+            if isinstance(value, dict):
+                return {k: serialize_value(v) for k, v in value.items()}
+            return str(value) if value is not None else None
+
+        result = serialize_value(resource)
+        return result if isinstance(result, dict) else {"serialized": result}
+
+    def _resource_matches_filters(
+        self,
+        resource: WaldurResource,
+        data_type: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> bool:
+        """Check if a resource matches the given filters."""
+        # Check data_type filter
+        if data_type:
+            storage_data_type = getattr(resource, "storage_data_type", None)
+            logger.debug(
+                "Comparing raw resource storage_data_type '%s' with filter '%s'",
+                storage_data_type,
+                data_type,
+            )
+            if storage_data_type != data_type:
+                return False
+
+        # Check status filter
+        if status:
+            # Map resource state to status
+            state_to_status_map = {
+                ResourceState.CREATING: "pending",
+                ResourceState.OK: "active",
+                ResourceState.ERRED: "error",
+                ResourceState.TERMINATING: "removing",
+                ResourceState.TERMINATED: "removed",
+            }
+            resource_status = state_to_status_map.get(resource.state, "unknown")
+            if resource_status != status:
+                return False
+
+        return True

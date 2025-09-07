@@ -21,8 +21,8 @@ from waldur_site_agent_cscs_hpc_storage.waldur_storage_proxy import (
     CSCS_KEYCLOAK_REALM,
     CSCS_KEYCLOAK_URL,
     DISABLE_AUTH,
+    config,
     cscs_storage_backend,
-    offering_config,
     waldur_client,
 )
 
@@ -48,38 +48,17 @@ async def validation_exception_handler(
             error_type = error.get("type")
             error_input = error.get("input")
 
-            # Handle missing parameter
-            if error_type == "missing":
-                return JSONResponse(
-                    status_code=422,
-                    content={
-                        "detail": [
-                            {
-                                "type": "missing",
-                                "loc": ["query", "storage_system"],
-                                "msg": (
-                                    "storage_system is a mandatory filter parameter. "
-                                    "Please specify one of the allowed storage systems."
-                                ),
-                                "input": None,
-                                "ctx": {
-                                    "allowed_values": ["capstor", "vast", "iopsstor"],
-                                    "help": "Add ?storage_system=<system_name> to your request",
-                                },
-                            }
-                        ]
-                    },
-                )
-
             # Handle empty string or invalid enum values
             if error_type == "enum" or (error_input == ""):
                 # Special message for empty string
                 if error_input == "":
                     msg = (
                         "storage_system cannot be empty. "
-                        "Please specify one of the allowed storage systems."
+                        "Please specify one of the allowed storage systems or omit the parameter."
                     )
-                    help_text = "Use ?storage_system=capstor (not just ?storage_system=)"
+                    help_text = (
+                        "Use ?storage_system=capstor (not just ?storage_system=) or omit parameter"
+                    )
                 else:
                     msg = (
                         f"Invalid storage_system value '{error_input}'. "
@@ -231,7 +210,9 @@ OIDCUserDependency = Annotated[User, Depends(user_dependency)]
 @app.get("/api/storage-resources/")
 async def storage_resources(
     user: OIDCUserDependency,
-    storage_system: Annotated[StorageSystem, Query(description="REQUIRED: Storage system filter")],
+    storage_system: Annotated[
+        Optional[StorageSystem], Query(description="Optional: Storage system filter")
+    ] = None,
     state: Optional[ResourceState] = None,
     page: Annotated[int, Query(ge=1, description="Page number (starts from 1)")] = 1,
     page_size: Annotated[int, Query(ge=1, le=500, description="Number of items per page")] = 100,
@@ -258,58 +239,108 @@ async def storage_resources(
         debug,
     )
 
+    # Validate that storage_system is one of the configured storage systems (if provided)
+    if storage_system and storage_system.value not in config.storage_systems:
+        logger.warning(
+            "Requested storage_system '%s' is not in configured storage_systems: %s",
+            storage_system.value,
+            list(config.storage_systems.keys()),
+        )
+        # Return empty result for non-configured storage systems
+        return JSONResponse(
+            content={
+                "status": "success",
+                "resources": [],
+                "pagination": {
+                    "current": page,
+                    "limit": page_size,
+                    "offset": (page - 1) * page_size,
+                    "pages": 0,
+                    "total": 0,
+                },
+                "filters_applied": {
+                    "storage_system": storage_system.value if storage_system else None,
+                    "data_type": data_type,
+                    "status": status,
+                    "state": state.value if state else None,
+                },
+            }
+        )
+
     # Handle debug mode - return raw Waldur data
     if debug:
         logger.info("Debug mode enabled - returning raw Waldur data")
 
-        # Prepare agent's offering configuration (excluding secret_options)
-        agent_offering_config = {
-            "uuid": offering_config.uuid,
-            "api_url": offering_config.api_url,
-            "backend_type": offering_config.backend_type,
-            "backend_settings": offering_config.backend_settings,
-            "backend_components": offering_config.backend_components,
-            # Explicitly exclude secret_options
+        # Prepare agent's configuration info
+        agent_config_info = {
+            "waldur_api_url": config.waldur_api_url,
+            "backend_settings": config.backend_settings,
+            "backend_components": config.backend_components,
+            "configured_storage_systems": config.storage_systems,
+            "requested_storage_system": storage_system.value if storage_system else None,
+            "resolved_offering_slug": config.storage_systems.get(storage_system.value)
+            if storage_system
+            else None,
         }
 
-        # Get raw resources and Waldur offering details from backend in debug mode
-        debug_data = cscs_storage_backend.get_debug_resources(
-            offering_config.uuid,
-            waldur_client,
-            state=state,
-            page=page,
-            page_size=page_size,
-            storage_system=storage_system.value,
-            data_type=data_type,
-            status=status,
-        )
+        # Get raw resources
+        if storage_system:
+            # Get raw resources for the specific storage_system
+            storage_system_offering_slug = config.storage_systems[storage_system.value]
+            debug_data = cscs_storage_backend.get_debug_resources_by_slug(
+                offering_slug=storage_system_offering_slug,
+                client=waldur_client,
+                state=state,
+                page=page,
+                page_size=page_size,
+                data_type=data_type,
+                status=status,
+            )
+        else:
+            # Get raw resources from all storage systems
+            debug_data = cscs_storage_backend.get_debug_resources_by_slugs(
+                offering_slugs=list(config.storage_systems.values()),
+                client=waldur_client,
+                state=state,
+                page=page,
+                page_size=page_size,
+                data_type=data_type,
+                status=status,
+            )
 
         return JSONResponse(
             content={
                 "status": "success",
                 "debug_mode": True,
-                "agent_offering_config": agent_offering_config,
-                "waldur_offering_details": debug_data.get("waldur_offering", {}),
-                "raw_resources": {
-                    "resources": debug_data.get("resources", []),
-                    "pagination": debug_data.get("pagination", {}),
-                    "filters_applied": debug_data.get("filters_applied", {}),
-                },
+                "agent_config": agent_config_info,
+                "raw_resources": debug_data,
             }
         )
 
     # Normal mode - translated API response
-    storage_data: dict = cscs_storage_backend.generate_all_resources_json(
-        offering_config.uuid,
-        waldur_client,
-        state=state,
-        write_file=False,
-        page=page,
-        page_size=page_size,
-        storage_system=storage_system.value,  # Convert enum to string value
-        data_type=data_type,
-        status=status,
-    )
+    if storage_system:
+        # Fetch resources for the specific storage_system
+        storage_system_offering_slug = config.storage_systems[storage_system.value]
+        storage_data = cscs_storage_backend.generate_all_resources_json_by_slug(
+            offering_slug=storage_system_offering_slug,
+            client=waldur_client,
+            state=state,
+            page=page,
+            page_size=page_size,
+            data_type=data_type,
+            status=status,
+        )
+    else:
+        # Fetch resources from all storage systems
+        storage_data = cscs_storage_backend.generate_all_resources_json_by_slugs(
+            offering_slugs=list(config.storage_systems.values()),
+            client=waldur_client,
+            state=state,
+            page=page,
+            page_size=page_size,
+            data_type=data_type,
+            status=status,
+        )
 
     # Return appropriate HTTP status code based on response status
     if storage_data.get("status") == "error":
