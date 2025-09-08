@@ -103,9 +103,6 @@ class StorageProxyConfig:
         if not self.waldur_api_url:
             msg = "waldur_api_url is required"
             raise ValueError(msg)
-        if not self.waldur_api_token:
-            msg = "waldur_api_token is required"
-            raise ValueError(msg)
         if not self.storage_systems:
             msg = "At least one storage_system mapping is required"
             raise ValueError(msg)
