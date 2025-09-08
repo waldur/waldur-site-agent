@@ -50,9 +50,13 @@ if waldur_verify_ssl is not None:
     config.waldur_verify_ssl = waldur_verify_ssl.lower() in ("true", "yes", "1")
 
 # Create Waldur API client
+WALDUR_API_TOKEN = os.getenv("WALDUR_API_TOKEN", "")
+if not WALDUR_API_TOKEN and config.waldur_api_token:
+    WALDUR_API_TOKEN = config.waldur_api_token
+
 waldur_client = get_client(
     api_url=config.waldur_api_url,
-    access_token=config.waldur_api_token,
+    access_token=WALDUR_API_TOKEN,
     verify_ssl=config.waldur_verify_ssl,
 )
 
