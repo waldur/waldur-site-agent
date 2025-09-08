@@ -57,16 +57,50 @@ waldur_client = get_client(
 )
 
 # Initialize backend with configuration
-# Convert HpcUserApiConfig to dict if present
+# HPC User API settings with environment variable support
+HPC_USER_API_URL = os.getenv("HPC_USER_API_URL")
+if HPC_USER_API_URL is None and config.hpc_user_api:
+    HPC_USER_API_URL = config.hpc_user_api.api_url
+
+HPC_USER_CLIENT_ID = os.getenv("HPC_USER_CLIENT_ID")
+if HPC_USER_CLIENT_ID is None and config.hpc_user_api:
+    HPC_USER_CLIENT_ID = config.hpc_user_api.client_id
+
+HPC_USER_CLIENT_SECRET = os.getenv("HPC_USER_CLIENT_SECRET")
+if HPC_USER_CLIENT_SECRET is None and config.hpc_user_api:
+    HPC_USER_CLIENT_SECRET = config.hpc_user_api.client_secret
+
+HPC_USER_OIDC_TOKEN_URL = os.getenv("HPC_USER_OIDC_TOKEN_URL")
+if HPC_USER_OIDC_TOKEN_URL is None and config.hpc_user_api:
+    HPC_USER_OIDC_TOKEN_URL = config.hpc_user_api.oidc_token_url
+
+HPC_USER_OIDC_SCOPE = os.getenv("HPC_USER_OIDC_SCOPE")
+if HPC_USER_OIDC_SCOPE is None and config.hpc_user_api:
+    HPC_USER_OIDC_SCOPE = config.hpc_user_api.oidc_scope
+
+HPC_USER_SOCKS_PROXY = os.getenv("HPC_USER_SOCKS_PROXY")
+if HPC_USER_SOCKS_PROXY is None and config.hpc_user_api:
+    HPC_USER_SOCKS_PROXY = config.hpc_user_api.socks_proxy
+
+# Convert HPC User API settings to dict if any values are present
 hpc_user_api_settings = None
-if config.hpc_user_api:
+if any(
+    [
+        HPC_USER_API_URL,
+        HPC_USER_CLIENT_ID,
+        HPC_USER_CLIENT_SECRET,
+        HPC_USER_OIDC_TOKEN_URL,
+        HPC_USER_OIDC_SCOPE,
+        HPC_USER_SOCKS_PROXY,
+    ]
+):
     hpc_user_api_settings = {
-        "api_url": config.hpc_user_api.api_url,
-        "client_id": config.hpc_user_api.client_id,
-        "client_secret": config.hpc_user_api.client_secret,
-        "oidc_token_url": config.hpc_user_api.oidc_token_url,
-        "oidc_scope": config.hpc_user_api.oidc_scope,
-        "socks_proxy": config.hpc_user_api.socks_proxy,
+        "api_url": HPC_USER_API_URL,
+        "client_id": HPC_USER_CLIENT_ID,
+        "client_secret": HPC_USER_CLIENT_SECRET,
+        "oidc_token_url": HPC_USER_OIDC_TOKEN_URL,
+        "oidc_scope": HPC_USER_OIDC_SCOPE,
+        "socks_proxy": HPC_USER_SOCKS_PROXY,
     }
 
 cscs_storage_backend = CscsHpcStorageBackend(
