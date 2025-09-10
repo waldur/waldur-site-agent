@@ -57,6 +57,7 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_team_list,
 )
 from waldur_api_client.api.marketplace_service_providers import (
+    marketplace_service_providers_course_accounts_list,
     marketplace_service_providers_list,
     marketplace_service_providers_project_service_accounts_list,
 )
@@ -65,6 +66,8 @@ from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
     ComponentUsageCreateRequest,
     ComponentUsageItemRequest,
+    CourseAccount,
+    ProjectServiceAccount,
     ResourceSetLimitsRequest,
     ServiceAccountState,
 )
@@ -111,6 +114,7 @@ from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import structures, utils
+from waldur_site_agent.common.structures import AccountType
 
 
 class UsageAnomalyError(Exception):
@@ -1139,7 +1143,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 )
 
     def _sync_resource_service_accounts(self, waldur_resource: WaldurResource) -> None:
-        """Syncs project service accounts between Waldur and the backend resource."""
+        """Sync project service accounts between Waldur and the backend resource."""
         logger.info(
             "Syncing service accounts for the resource %s (%s)",
             waldur_resource.name,
@@ -1170,6 +1174,38 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             waldur_resource.backend_id, usernames_closed
         )
 
+    def _sync_resource_course_accounts(self, waldur_resource: WaldurResource) -> None:
+        """Sync course accounts between Waldur and the backend resource."""
+        logger.info(
+            "Syncing course accounts for the resource %s (%s)",
+            waldur_resource.name,
+            waldur_resource.backend_id,
+        )
+        if self.service_provider is None:
+            logger.warning("No service provider configured, skipping service accounts sync")
+            return
+
+        course_accounts = marketplace_service_providers_course_accounts_list.sync(
+            service_provider_uuid=self.service_provider.uuid.hex,
+            project_uuid=waldur_resource.project_uuid.hex,
+            client=self.waldur_rest_client,
+        )
+        usernames_active = {
+            account.user_username
+            for account in course_accounts
+            if account.user_username and account.state == ServiceAccountState.OK
+        }
+        self.resource_backend.add_users_to_resource(waldur_resource.backend_id, usernames_active)
+
+        usernames_closed = {
+            account.user_username
+            for account in course_accounts
+            if account.user_username and account.state == ServiceAccountState.CLOSED
+        }
+        self.resource_backend.remove_users_from_resource(
+            waldur_resource.backend_id, usernames_closed
+        )
+
     def _process_resources(
         self,
         resource_report: dict[str, tuple[WaldurResource, BackendResourceInfo]],
@@ -1181,6 +1217,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     waldur_resource, backend_resource_info
                 )
                 self._sync_resource_service_accounts(waldur_resource)
+                self._sync_resource_course_accounts(waldur_resource)
                 self._sync_resource_status(waldur_resource)
                 self._sync_resource_limits(waldur_resource)
                 self._sync_resource_user_limits(waldur_resource, resource_usernames)
@@ -1221,52 +1258,53 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     },
                 )
 
-    def process_service_account_creation(self, service_account_username: str) -> None:
-        """Process service account creation."""
-        service_accounts = marketplace_service_providers_project_service_accounts_list.sync(
-            service_provider_uuid=self.service_provider.uuid.hex,
-            username=service_account_username,
-            client=self.waldur_rest_client,
-        )
-        if len(service_accounts) == 0:
+    def process_account_creation(self, account_username: str, account_type: AccountType) -> None:
+        """Process service or course account creation."""
+        params = {
+            "service_provider_uuid": self.service_provider.uuid.hex,
+            "username": account_username,
+            "client": self.waldur_rest_client,
+        }
+        if account_type == AccountType.SERVICE_ACCOUNT:
+            accounts = marketplace_service_providers_project_service_accounts_list.sync(**params)
+        else:
+            accounts = marketplace_service_providers_course_accounts_list.sync(**params)
+
+        if len(accounts) == 0:
             logger.info(
-                "No service accounts found with username %s,"
-                "skipping processing for offering %s (%s)",
-                service_account_username,
+                "No %s accounts found with username %s, skipping processing for offering %s (%s)",
+                account_type.value,
+                account_username,
                 self.offering.uuid,
                 self.offering.name,
             )
             return
 
-        service_account = service_accounts[0]
-        resources = self._get_waldur_resources(service_account.project_uuid.hex)
+        account: ProjectServiceAccount | CourseAccount = accounts[0]
+        resources = self._get_waldur_resources(account.project_uuid.hex)
         for resource in resources:
             try:
-                self.resource_backend.add_users_to_resource(
-                    resource.backend_id, {service_account.username}
-                )
+                self.resource_backend.add_users_to_resource(resource.backend_id, {account_username})
             except BackendError as e:
                 logger.error(
-                    "Unable to add the service account %s to resource %s, reason: %s",
-                    service_account.username,
+                    "Unable to add the account %s to resource %s, reason: %s",
+                    account_username,
                     resource.backend_id,
                     e,
                 )
 
-    def process_service_account_removal(
-        self, service_account_username: str, project_uuid: str
-    ) -> None:
-        """Process service account removal."""
+    def process_account_removal(self, account_username: str, project_uuid: str) -> None:
+        """Process course account removal."""
         resources = self._get_waldur_resources(project_uuid)
         for resource in resources:
             try:
                 self.resource_backend.remove_users_from_resource(
-                    resource.backend_id, {service_account_username}
+                    resource.backend_id, {account_username}
                 )
             except BackendError as e:
                 logger.error(
-                    "Unable to remove the service account %s from resource %s, reason: %s",
-                    service_account_username,
+                    "Unable to remove the account %s from resource %s, reason: %s",
+                    account_username,
                     resource.backend_id,
                     e,
                 )
