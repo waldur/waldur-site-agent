@@ -32,7 +32,8 @@ OBJECT_TYPE_TO_HANDLER_STOMP = {
     "user_role": handlers.on_user_role_message_stomp,
     "resource": handlers.on_resource_message_stomp,
     "importable_resources": handlers.on_importable_resources_message_stomp,
-    "service_account": handlers.on_service_account_message_stomp,
+    "service_account": handlers.on_account_message_stomp,
+    "course_account": handlers.on_account_message_stomp,
 }
 PID_FILE_PATH = "/var/run/waldur_site_agent.pid"
 

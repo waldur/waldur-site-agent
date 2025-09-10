@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10, <4.0"
 
 [manifest]
@@ -1198,7 +1198,7 @@ wheels = [
 [[package]]
 name = "waldur-api-client"
 version = "7.7.7"
-source = { git = "https://github.com/waldur/py-client.git?rev=main#3fce989e354b3053f8a9a6459bdb5ee4313e6696" }
+source = { git = "https://github.com/waldur/py-client.git?rev=main#3881f7b453042aee065efbf1885e15f9fd68a087" }
 dependencies = [
     { name = "attrs" },
     { name = "httpx" },

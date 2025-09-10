@@ -98,3 +98,10 @@ class WaldurAgentConfiguration:
     waldur_site_agent_version: str = ""
     sentry_dsn: str = ""
     timezone: str = ""
+
+
+class AccountType(Enum):
+    """Enumeration of service account types for the Waldur Site Agent."""
+
+    SERVICE_ACCOUNT = "service_account"
+    COURSE_ACCOUNT = "course_account"

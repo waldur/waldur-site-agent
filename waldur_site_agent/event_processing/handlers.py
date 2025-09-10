@@ -5,16 +5,18 @@ import json
 import paho.mqtt.client as mqtt
 import stomp
 import stomp.utils
+from stomp.constants import HDR_DESTINATION
 from waldur_api_client.models import OrderState
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures
+from waldur_site_agent.common.structures import AccountType
 from waldur_site_agent.event_processing.structures import (
+    AccountMessage,
     BackendResourceRequestMessage,
     OrderMessage,
     ResourceMessage,
-    ServiceAccountMessage,
     UserData,
     UserRoleMessage,
 )
@@ -121,45 +123,48 @@ def on_resource_message_mqtt(
         logger.error("Failed to process resource %s: %s", resource_uuid, e)
 
 
-def process_service_account_message(
-    message: ServiceAccountMessage, offering: structures.Offering, user_agent: str = ""
+def process_account_message(
+    message: AccountMessage,
+    offering: structures.Offering,
+    account_type: AccountType,
+    user_agent: str = "",
 ) -> None:
-    """Process service account message."""
-    service_account_username = message["service_account_username"]
-    service_account_uuid = message["service_account_uuid"]
+    """Process generic account message."""
+    account_username = message["account_username"]
+    service_account_uuid = message["account_uuid"]
     project_uuid = message["project_uuid"]
     action = message.get("action", "create")
     try:
         processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
         if action == "create":
-            processor.process_service_account_creation(service_account_username)
+            processor.process_account_creation(account_username, account_type)
         elif action == "delete":
-            processor.process_service_account_removal(service_account_username, project_uuid)
+            processor.process_account_removal(account_username, project_uuid)
         else:
-            logger.error(
-                "Unknown action %s for service account %s", action, service_account_username
-            )
+            logger.error("Unknown action %s for course account %s", action, account_username)
     except Exception as e:
         logger.error(
-            "Failed to process %s of service account %s (%s): %s",
+            "Failed to process %s of course account %s (%s): %s",
             action,
-            service_account_username,
+            account_username,
             service_account_uuid,
             e,
         )
 
 
-def on_service_account_message_mqtt(
-    client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage
-) -> None:
-    """Service account handler for MQTT message event."""
+def on_account_message_mqtt(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
+    """Generic account handler for MQTT message event."""
     del client
     message_text = msg.payload.decode("utf-8")
-    message: ServiceAccountMessage = json.loads(message_text)
+    message: AccountMessage = json.loads(message_text)
     logger.info("Received message: %s on topic %s", message, msg.topic)
     offering = userdata["offering"]
     user_agent = userdata["user_agent"]
-    process_service_account_message(message, offering, user_agent)
+    account_type_raw = msg.topic.split("/")[-1]
+    account_type = AccountType.SERVICE_ACCOUNT
+    if account_type_raw == AccountType.COURSE_ACCOUNT.value:
+        account_type = AccountType.COURSE_ACCOUNT
+    process_account_message(message, offering, account_type, user_agent)
 
 
 def on_order_message_stomp(
@@ -262,9 +267,15 @@ def on_importable_resources_message_stomp(
         logger.error("Failed to process importable resource list request %s: %s", request_uuid, e)
 
 
-def on_service_account_message_stomp(
+def on_account_message_stomp(
     frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
 ) -> None:
     """Service account handler for STOMP."""
-    message: ServiceAccountMessage = json.loads(frame.body)
-    process_service_account_message(message, offering, user_agent)
+    message: AccountMessage = json.loads(frame.body)
+    queue: str = frame.headers[HDR_DESTINATION]
+    queue_parts = queue.split("_")
+    account_type_raw = f"{queue_parts[-2]}_{queue_parts[-1]}"
+    account_type = AccountType.SERVICE_ACCOUNT
+    if account_type_raw == AccountType.COURSE_ACCOUNT.value:
+        account_type = AccountType.COURSE_ACCOUNT
+    process_account_message(message, offering, account_type, user_agent)

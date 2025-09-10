@@ -13,6 +13,7 @@ from waldur_api_client.models import (
     ServiceProvider,
     ProjectServiceAccount,
     ServiceAccountState,
+    CourseAccount,
 )
 from waldur_api_client.models.offering_state import OfferingState
 from waldur_api_client.models.storage_mode_enum import StorageModeEnum
@@ -181,6 +182,24 @@ class MembershipSyncTest(unittest.TestCase):
         respx.get(
             f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/project_service_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"
         ).respond(200, json=[service_account.to_dict()])
+        course_account = CourseAccount(
+            url="",
+            uuid=uuid.uuid4(),
+            created=datetime.now(),
+            modified=datetime.now(),
+            project=self.waldur_resource.project_uuid,
+            project_uuid=self.waldur_resource.project_uuid,
+            project_name=self.waldur_resource.project_name,
+            user_uuid=uuid.uuid4(),
+            user_username="course-test-00",
+            customer_uuid=self.waldur_resource.customer_uuid,
+            customer_name=self.waldur_resource.customer_name,
+            state=ServiceAccountState.OK,
+            error_message="",
+        )
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/course_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"
+        ).respond(200, json=[course_account.to_dict()])
         return respx.post(
             f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_limits/"
         ).respond(200, json={"status": "ok"})
@@ -259,7 +278,7 @@ class MembershipSyncTest(unittest.TestCase):
         processor = OfferingMembershipProcessor(self.offering)
         processor.process_offering()
 
-        assert self.mock_add_users_to_resource.call_count == 2
+        assert self.mock_add_users_to_resource.call_count == 3
         assert set_backend_metadata_response.call_count == 1
         self.mock_get_resource_metadata.assert_called_once()
 
