@@ -1,0 +1,131 @@
+sentry_dsn: "" # Data Source Name for Sentry (more info https://docs.sentry.io/product/sentry-basics/dsn-explainer/).
+timezone: "UTC" # Timezone for billing period calculations (e.g. "UTC", "Europe/Tallinn"). Defaults to system timezone if not specified.
+offerings: # Settings for offerings
+  # CSCS DWDI Compute Usage Reporting
+  - name: "CSCS HPC Compute Usage" # offering name
+    waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
+    waldur_api_token: "" # Token to access the Waldur API.
+    verify_ssl: true # Whether to verify SSL cert for Waldur API.
+    waldur_offering_uuid: "" # UUID of the compute offering in Waldur.
+    reporting_backend: "cscs-dwdi-compute" # Use CSCS-DWDI compute backend for usage reporting
+
+    backend_type: "cscs-dwdi-compute" # Backend type for CSCS-DWDI compute reporting
+    backend_settings: # CSCS-DWDI compute backend-specific settings
+      # DWDI API connection details
+      cscs_dwdi_api_url: "https://dwdi.cscs.ch" # CSCS DWDI API endpoint
+      cscs_dwdi_client_id: "" # OIDC client ID for authentication
+      cscs_dwdi_client_secret: "" # OIDC client secret for authentication
+
+      # OIDC authentication settings
+      cscs_dwdi_oidc_token_url: "https://auth.cscs.ch/realms/cscs/protocol/openid-connect/token" # OIDC token endpoint
+      cscs_dwdi_oidc_scope: "openid" # OIDC scope (optional, defaults to "openid")
+
+      # Optional SOCKS proxy configuration for network access
+      # Uncomment and configure if DWDI API is only accessible through a proxy
+      # socks_proxy: "socks5://localhost:12345" # SOCKS5 proxy (e.g., SSH tunnel)
+      # socks_proxy: "socks4://proxy.cscs.ch:1080" # SOCKS4 proxy
+      # socks_proxy: "http://proxy.cscs.ch:8080" # HTTP proxy
+
+    backend_components: # Compute components with their settings
+      nodeHours: # Node hours component definition
+        measured_unit: "node-hours" # Node hours as the unit
+        accounting_type: "usage" # Component type - usage for reporting actual consumption
+        label: "Node Hours" # Display label for the component in Waldur
+        unit_factor: 1 # No conversion needed (node-hours to node-hours = 1)
+
+      cpuHours: # CPU hours component definition
+        measured_unit: "cpu-hours" # CPU hours as the unit
+        accounting_type: "usage" # Component type - usage for reporting actual consumption
+        label: "CPU Hours" # Display label for the component in Waldur
+        unit_factor: 1 # No conversion needed (cpu-hours to cpu-hours = 1)
+
+  # CSCS DWDI Storage Usage Reporting
+  - name: "CSCS Storage Usage" # offering name
+    waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API
+    waldur_api_token: "" # Token to access the Waldur API.
+    verify_ssl: true # Whether to verify SSL cert for Waldur API.
+    waldur_offering_uuid: "" # UUID of the storage offering in Waldur.
+    reporting_backend: "cscs-dwdi-storage" # Use CSCS-DWDI storage backend for usage reporting
+
+    backend_type: "cscs-dwdi-storage" # Backend type for CSCS-DWDI storage reporting
+    backend_settings: # CSCS-DWDI storage backend-specific settings
+      # DWDI API connection details (same as compute)
+      cscs_dwdi_api_url: "https://dwdi.cscs.ch" # CSCS DWDI API endpoint
+      cscs_dwdi_client_id: "" # OIDC client ID for authentication
+      cscs_dwdi_client_secret: "" # OIDC client secret for authentication
+
+      # OIDC authentication settings
+      cscs_dwdi_oidc_token_url: "https://auth.cscs.ch/realms/cscs/protocol/openid-connect/token" # OIDC token endpoint
+      cscs_dwdi_oidc_scope: "openid" # OIDC scope (optional, defaults to "openid")
+
+      # Optional SOCKS proxy configuration (same as compute)
+      # socks_proxy: "socks5://localhost:12345" # Uncomment and configure if needed
+
+      # Storage-specific settings
+      storage_filesystem: "lustre" # Filesystem name to query (required)
+      storage_data_type: "projects" # Data type to query (required)
+      storage_tenant: "cscs" # Optional tenant identifier
+
+      # Map Waldur resource backend IDs to actual storage paths
+      # This is optional - if not provided, the resource backend_id will be used as the path directly
+      storage_path_mapping:
+        "project_alpha": "/store/projects/alpha" # Map project_alpha -> actual path
+        "project_beta": "/store/projects/beta" # Map project_beta -> actual path
+        "scratch_gamma": "/scratch/projects/gamma" # Map scratch_gamma -> actual path
+
+    backend_components: # Storage components with their settings
+      storage_space: # Storage space component definition
+        measured_unit: "GB" # Storage measured in gigabytes
+        accounting_type: "usage" # Component type - usage for reporting actual consumption
+        label: "Storage Space (GB)" # Display label for the component in Waldur
+        unit_factor: 0.000000001 # Convert bytes to GB (1 byte = 1e-9 GB)
+
+      storage_inodes: # Storage inode component definition
+        measured_unit: "count" # File count as the unit
+        accounting_type: "usage" # Component type - usage for reporting actual consumption
+        label: "File Count" # Display label for the component in Waldur
+        unit_factor: 1 # No conversion needed (count to count = 1)
+
+# Example combined offering for both compute and storage from same project
+  - name: "CSCS Integrated HPC Services" # offering name combining both services
+    waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API
+    waldur_api_token: "" # Token to access the Waldur API.
+    verify_ssl: true # Whether to verify SSL cert for Waldur API.
+    waldur_offering_uuid: "" # UUID of the combined offering in Waldur.
+    # Note: This would typically use different backends for different functions
+    # For example: SLURM for order processing, CSCS-DWDI for reporting
+    reporting_backend: "cscs-dwdi-compute" # Primary reporting backend
+
+    backend_type: "cscs-dwdi-compute" # Primary backend type
+    backend_settings: # Combined backend settings
+      # DWDI API settings
+      cscs_dwdi_api_url: "https://dwdi.cscs.ch"
+      cscs_dwdi_client_id: ""
+      cscs_dwdi_client_secret: ""
+      cscs_dwdi_oidc_token_url: "https://auth.cscs.ch/realms/cscs/protocol/openid-connect/token"
+      cscs_dwdi_oidc_scope: "openid"
+
+      # Proxy settings for restrictive network environments
+      # Example: SSH tunnel through bastion host
+      # socks_proxy: "socks5://localhost:12345"
+
+    backend_components: # Combined components
+      # Compute components
+      nodeHours:
+        measured_unit: "node-hours"
+        accounting_type: "usage"
+        label: "Compute Node Hours"
+        unit_factor: 1
+
+      cpuHours:
+        measured_unit: "cpu-hours"
+        accounting_type: "usage"
+        label: "Compute CPU Hours"
+        unit_factor: 1
+
+      # Storage components (if supported by compute backend)
+      storage:
+        measured_unit: "TB"
+        accounting_type: "limit" # Storage typically tracked as limits/quotas
+        label: "Storage Allocation"
+        unit_factor: 1
