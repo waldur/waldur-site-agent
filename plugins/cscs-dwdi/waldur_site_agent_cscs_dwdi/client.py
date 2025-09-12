@@ -21,6 +21,7 @@ class CSCSDWDIClient:
         client_secret: str,
         oidc_token_url: Optional[str] = None,
         oidc_scope: Optional[str] = None,
+        socks_proxy: Optional[str] = None,
     ) -> None:
         """Initialize CSCS-DWDI client.
 
@@ -30,12 +31,14 @@ class CSCSDWDIClient:
             client_secret: OIDC client secret for authentication
             oidc_token_url: OIDC token endpoint URL (required for authentication)
             oidc_scope: OIDC scope to request (optional)
+            socks_proxy: SOCKS proxy URL (e.g., "socks5://localhost:12345")
         """
         self.api_url = api_url.rstrip("/")
         self.client_id = client_id
         self.client_secret = client_secret
         self.oidc_token_url = oidc_token_url
         self.oidc_scope = oidc_scope or "openid"
+        self.socks_proxy = socks_proxy
         self._token: Optional[str] = None
         self._token_expires_at: Optional[datetime] = None
 
@@ -91,10 +94,14 @@ class CSCSDWDIClient:
 
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-        with httpx.Client() as client:
-            response = client.post(
-                self.oidc_token_url, data=token_data, headers=headers, timeout=30.0
-            )
+        # Configure httpx client with SOCKS proxy if specified
+        client_args: dict[str, Any] = {"timeout": 30.0}
+        if self.socks_proxy:
+            client_args["proxy"] = self.socks_proxy
+            logger.debug("Using SOCKS proxy for token acquisition: %s", self.socks_proxy)
+
+        with httpx.Client(**client_args) as client:
+            response = client.post(self.oidc_token_url, data=token_data, headers=headers)
             response.raise_for_status()
             token_response = response.json()
 
@@ -160,8 +167,14 @@ class CSCSDWDIClient:
             to_month,
         )
 
-        with httpx.Client() as client:
-            response = client.get(url, params=params, headers=headers, timeout=30.0)
+        # Configure httpx client with SOCKS proxy if specified
+        client_args: dict[str, Any] = {"timeout": 30.0}
+        if self.socks_proxy:
+            client_args["proxy"] = self.socks_proxy
+            logger.debug("Using SOCKS proxy for API request: %s", self.socks_proxy)
+
+        with httpx.Client(**client_args) as client:
+            response = client.get(url, params=params, headers=headers)
             response.raise_for_status()
             return response.json()
 
@@ -207,13 +220,139 @@ class CSCSDWDIClient:
             to_day,
         )
 
-        with httpx.Client() as client:
-            response = client.get(url, params=params, headers=headers, timeout=30.0)
+        # Configure httpx client with SOCKS proxy if specified
+        client_args: dict[str, Any] = {"timeout": 30.0}
+        if self.socks_proxy:
+            client_args["proxy"] = self.socks_proxy
+            logger.debug("Using SOCKS proxy for API request: %s", self.socks_proxy)
+
+        with httpx.Client(**client_args) as client:
+            response = client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            return response.json()
+
+    def get_storage_usage_for_month(
+        self,
+        paths: list[str],
+        tenant: Optional[str],
+        filesystem: str,
+        data_type: str,
+        exact_month: str,
+    ) -> dict[str, Any]:
+        """Get storage usage data for specified paths for a month.
+
+        Args:
+            paths: List of storage paths to query
+            tenant: Tenant identifier (optional)
+            filesystem: Filesystem name (e.g., "lustre")
+            data_type: Data type (e.g., "projects")
+            exact_month: Month in YYYY-MM format
+
+        Returns:
+            API response with storage usage data
+
+        Raises:
+            httpx.HTTPError: If API request fails
+        """
+        token = self._get_auth_token()
+
+        params: dict[str, Any] = {
+            "exact-month": exact_month,
+        }
+
+        # Add optional parameters
+        if paths:
+            params["paths"] = paths
+        if tenant:
+            params["tenant"] = tenant
+        if filesystem:
+            params["filesystem"] = filesystem
+        if data_type:
+            params["data_type"] = data_type
+
+        headers = {"Authorization": f"Bearer {token}"}
+
+        url = f"{self.api_url}/api/v1/storage/usage-month/filesystem_name/data_type"
+
+        logger.debug(
+            "Fetching storage usage for paths %s for month %s",
+            paths,
+            exact_month,
+        )
+
+        # Configure httpx client with SOCKS proxy if specified
+        client_args: dict[str, Any] = {"timeout": 30.0}
+        if self.socks_proxy:
+            client_args["proxy"] = self.socks_proxy
+            logger.debug("Using SOCKS proxy for API request: %s", self.socks_proxy)
+
+        with httpx.Client(**client_args) as client:
+            response = client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            return response.json()
+
+    def get_storage_usage_for_day(
+        self,
+        paths: list[str],
+        tenant: Optional[str],
+        filesystem: str,
+        data_type: str,
+        exact_date: date,
+    ) -> dict[str, Any]:
+        """Get storage usage data for specified paths for a specific day.
+
+        Args:
+            paths: List of storage paths to query
+            tenant: Tenant identifier (optional)
+            filesystem: Filesystem name (e.g., "lustre")
+            data_type: Data type (e.g., "projects")
+            exact_date: Specific date
+
+        Returns:
+            API response with storage usage data
+
+        Raises:
+            httpx.HTTPError: If API request fails
+        """
+        token = self._get_auth_token()
+
+        params: dict[str, Any] = {
+            "exact-date": exact_date.strftime("%Y-%m-%d"),
+        }
+
+        # Add optional parameters
+        if paths:
+            params["paths"] = paths
+        if tenant:
+            params["tenant"] = tenant
+        if filesystem:
+            params["filesystem"] = filesystem
+        if data_type:
+            params["data_type"] = data_type
+
+        headers = {"Authorization": f"Bearer {token}"}
+
+        url = f"{self.api_url}/api/v1/storage/usage-day/filesystem_name/data_type"
+
+        logger.debug(
+            "Fetching storage usage for paths %s for date %s",
+            paths,
+            exact_date,
+        )
+
+        # Configure httpx client with SOCKS proxy if specified
+        client_args: dict[str, Any] = {"timeout": 30.0}
+        if self.socks_proxy:
+            client_args["proxy"] = self.socks_proxy
+            logger.debug("Using SOCKS proxy for API request: %s", self.socks_proxy)
+
+        with httpx.Client(**client_args) as client:
+            response = client.get(url, params=params, headers=headers)
             response.raise_for_status()
             return response.json()
 
     def ping(self) -> bool:
-        """Check if CSCS-DWDI API is accessible.
+        """Check if CSCS-DWDI compute API is accessible.
 
         Returns:
             True if API is accessible, False otherwise
@@ -231,9 +370,46 @@ class CSCSDWDIClient:
 
             url = f"{self.api_url}/api/v1/compute/usage-day-multiaccount"
 
-            with httpx.Client() as client:
-                response = client.get(url, params=params, headers=headers, timeout=10.0)
+            # Configure httpx client with SOCKS proxy if specified
+            client_args: dict[str, Any] = {"timeout": 10.0}
+            if self.socks_proxy:
+                client_args["proxy"] = self.socks_proxy
+                logger.debug("Using SOCKS proxy for ping: %s", self.socks_proxy)
+
+            with httpx.Client(**client_args) as client:
+                response = client.get(url, params=params, headers=headers)
                 return response.status_code == HTTP_OK
         except Exception:
-            logger.exception("Ping failed")
+            logger.exception("Compute ping failed")
+            return False
+
+    def ping_storage(self) -> bool:
+        """Check if CSCS-DWDI storage API is accessible.
+
+        Returns:
+            True if API is accessible, False otherwise
+        """
+        try:
+            token = self._get_auth_token()
+            headers = {"Authorization": f"Bearer {token}"}
+
+            # Use a simple query to test connectivity
+            today = datetime.now(tz=timezone.utc).date()
+            params = {
+                "exact-date": today.strftime("%Y-%m-%d"),
+            }
+
+            url = f"{self.api_url}/api/v1/storage/usage-day/filesystem_name/data_type"
+
+            # Configure httpx client with SOCKS proxy if specified
+            client_args: dict[str, Any] = {"timeout": 10.0}
+            if self.socks_proxy:
+                client_args["proxy"] = self.socks_proxy
+                logger.debug("Using SOCKS proxy for storage ping: %s", self.socks_proxy)
+
+            with httpx.Client(**client_args) as client:
+                response = client.get(url, params=params, headers=headers)
+                return response.status_code == HTTP_OK
+        except Exception:
+            logger.exception("Storage ping failed")
             return False

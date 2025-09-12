@@ -1,165 +1,246 @@
 # CSCS-DWDI Plugin for Waldur Site Agent
 
-This plugin provides reporting functionality for Waldur Site Agent by integrating with the CSCS-DWDI
-(Data Warehouse and Data Intelligence) API.
+This plugin provides integration with the CSCS Data Warehouse Data Intelligence (DWDI) system to report both
+computational and storage usage data to Waldur.
 
 ## Overview
 
-The CSCS-DWDI plugin is a **reporting-only backend** that fetches compute usage data from the CSCS-DWDI
-service and reports it to Waldur. It supports node-hour usage tracking for multiple accounts and users.
+The plugin implements two separate backends to handle different types of accounting data:
 
-## Features
+- **Compute Backend** (`cscs-dwdi-compute`): Reports CPU and node hour usage from HPC clusters
+- **Storage Backend** (`cscs-dwdi-storage`): Reports storage space and inode usage from filesystems
 
-- **Monthly Usage Reporting**: Fetches usage data for the current month
-- **Multi-Account Support**: Reports usage for multiple accounts in a single API call
-- **Per-User Usage**: Breaks down usage by individual users within each account
-- **OIDC Authentication**: Uses OAuth2/OIDC for secure API access
-- **Automatic Aggregation**: Combines usage across different clusters and time periods
+## Backend Types
+
+### Compute Backend
+
+The compute backend queries the DWDI API for computational resource usage and reports:
+
+- Node hours consumed by accounts and users
+- CPU hours consumed by accounts and users
+- Account-level and user-level usage aggregation
+
+**API Endpoints Used:**
+
+- `/api/v1/compute/usage-month/account` - Monthly usage data
+- `/api/v1/compute/usage-day/account` - Daily usage data
+
+### Storage Backend
+
+The storage backend queries the DWDI API for storage resource usage and reports:
+
+- Storage space used (converted from bytes to configured units)
+- Inode (file count) usage
+- Path-based resource identification
+
+**API Endpoints Used:**
+
+- `/api/v1/storage/usage-month/filesystem_name/data_type` - Monthly storage usage
+- `/api/v1/storage/usage-day/filesystem_name/data_type` - Daily storage usage
 
 ## Configuration
 
-Add the following configuration to your Waldur Site Agent offering:
+### Compute Backend Configuration
 
 ```yaml
-offerings:
-  - name: "CSCS HPC Offering"
-    reporting_backend: "cscs-dwdi"
-    backend_settings:
-      cscs_dwdi_api_url: "https://dwdi-api.cscs.ch"
-      cscs_dwdi_client_id: "your-oidc-client-id"
-      cscs_dwdi_client_secret: "your-oidc-client-secret"
-      # Optional OIDC configuration (for production use)
-      cscs_dwdi_oidc_token_url: "https://identity.cscs.ch/realms/cscs/protocol/openid-connect/token"
-      cscs_dwdi_oidc_scope: "cscs-dwdi:read"
+backend_type: "cscs-dwdi-compute"
 
-    backend_components:
-      nodeHours:
-        measured_unit: "node-hours"
-        unit_factor: 1
-        accounting_type: "usage"
-        label: "Node Hours"
-      storage:
-        measured_unit: "TB"
-        unit_factor: 1
-        accounting_type: "usage"
-        label: "Storage Usage"
+backend_settings:
+  cscs_dwdi_api_url: "https://dwdi.cscs.ch"
+  cscs_dwdi_client_id: "your_oidc_client_id"
+  cscs_dwdi_client_secret: "your_oidc_client_secret"
+  cscs_dwdi_oidc_token_url: "https://auth.cscs.ch/realms/cscs/protocol/openid-connect/token"
+  cscs_dwdi_oidc_scope: "openid"  # Optional
+
+backend_components:
+  nodeHours:
+    measured_unit: "node-hours"
+    unit_factor: 1
+    accounting_type: "usage"
+    label: "Node Hours"
+
+  cpuHours:
+    measured_unit: "cpu-hours"
+    unit_factor: 1
+    accounting_type: "usage"
+    label: "CPU Hours"
 ```
 
-### Configuration Parameters
+### Storage Backend Configuration
 
-#### Backend Settings
+```yaml
+backend_type: "cscs-dwdi-storage"
 
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `cscs_dwdi_api_url` | Yes | Base URL for the CSCS-DWDI API service |
-| `cscs_dwdi_client_id` | Yes | OIDC client ID for authentication |
-| `cscs_dwdi_client_secret` | Yes | OIDC client secret for authentication |
-| `cscs_dwdi_oidc_token_url` | Yes | OIDC token endpoint URL (required for authentication) |
-| `cscs_dwdi_oidc_scope` | No | OIDC scope to request (defaults to "openid") |
+backend_settings:
+  cscs_dwdi_api_url: "https://dwdi.cscs.ch"
+  cscs_dwdi_client_id: "your_oidc_client_id"
+  cscs_dwdi_client_secret: "your_oidc_client_secret"
+  cscs_dwdi_oidc_token_url: "https://auth.cscs.ch/realms/cscs/protocol/openid-connect/token"
 
-#### Backend Components
+  # Storage-specific settings
+  storage_filesystem: "lustre"
+  storage_data_type: "projects"
+  storage_tenant: "cscs"  # Optional
 
-Components must match the field names returned by the CSCS-DWDI API. For example:
+  # Map Waldur resource IDs to storage paths
+  storage_path_mapping:
+    "project_123": "/store/projects/proj123"
+    "project_456": "/store/projects/proj456"
 
-- `nodeHours` - Maps to the `nodeHours` field in API responses
-- `storage` - Maps to the `storage` field in API responses (if available)
-- `gpuHours` - Maps to the `gpuHours` field in API responses (if available)
+backend_components:
+  storage_space:
+    measured_unit: "GB"
+    unit_factor: 0.000000001  # Convert bytes to GB
+    accounting_type: "usage"
+    label: "Storage Space (GB)"
 
-Each component supports:
+  storage_inodes:
+    measured_unit: "count"
+    unit_factor: 1
+    accounting_type: "usage"
+    label: "File Count"
+```
 
-| Parameter | Description |
-|-----------|-------------|
-| `measured_unit` | Unit for display in Waldur (e.g., "node-hours", "TB") |
-| `unit_factor` | Conversion factor from API units to measured units |
-| `accounting_type` | Either "usage" for actual usage or "limit" for quotas |
-| `label` | Display label in Waldur interface |
+## Authentication
 
-## Usage Data Format
+Both backends use OIDC client credentials flow for authentication with the DWDI API. You need:
 
-The plugin reports usage for all configured components:
+- `cscs_dwdi_client_id`: OIDC client identifier
+- `cscs_dwdi_client_secret`: OIDC client secret
+- `cscs_dwdi_oidc_token_url`: OIDC token endpoint URL
+- `cscs_dwdi_oidc_scope`: OIDC scope (optional, defaults to "openid")
 
-- **Component Types**: Configurable (e.g., `nodeHours`, `storage`, `gpuHours`)
-- **Units**: Based on API response and `unit_factor` configuration
-- **Granularity**: Monthly reporting with current month data
-- **User Attribution**: Individual user usage within each account
-- **Aggregation**: Automatically aggregates across clusters and time periods
+## SOCKS Proxy Support
 
-## API Integration
+Both backends support SOCKS proxy for network connectivity. This is useful when the DWDI API is only accessible
+through a proxy or jump host.
 
-The plugin uses the CSCS-DWDI API endpoints:
+### SOCKS Proxy Configuration
 
-- `GET /api/v1/compute/usage-month-multiaccount` - Primary endpoint for monthly usage data
-- Authentication via OIDC Bearer tokens
+Add the SOCKS proxy setting to your backend configuration:
 
-### Authentication
+```yaml
+backend_settings:
+  # ... other settings ...
+  socks_proxy: "socks5://localhost:12345"  # SOCKS5 proxy URL
+```
 
-The plugin uses OAuth2/OIDC authentication with the following requirements:
+### Supported Proxy Types
 
-- Requires `cscs_dwdi_oidc_token_url` in backend settings
-- Uses OAuth2 `client_credentials` grant flow
-- Automatically handles token caching and renewal
-- Includes 5-minute safety margin for token expiry
-- Fails with proper error logging if OIDC configuration is missing
+- **SOCKS5**: `socks5://hostname:port`
+- **SOCKS4**: `socks4://hostname:port`
+- **HTTP**: `http://hostname:port`
 
-### Data Processing
+### Usage Examples
 
-1. **Account Filtering**: Only reports on accounts that match Waldur resource backend IDs
-2. **User Aggregation**: Combines usage for the same user across different dates and clusters
-3. **Time Range**: Automatically queries from the first day of the current month to today
-4. **Precision**: Rounds node-hours to 2 decimal places
+**SSH Tunnel with SOCKS5:**
+
+```bash
+# Create SSH tunnel to jump host
+ssh -D 12345 -N user@jumphost.cscs.ch
+
+# Configure backend to use tunnel
+backend_settings:
+  socks_proxy: "socks5://localhost:12345"
+```
+
+**HTTP Proxy:**
+
+```yaml
+backend_settings:
+  socks_proxy: "http://proxy.cscs.ch:8080"
+```
+
+## Resource Identification
+
+### Compute Resources
+
+For compute resources, the system uses account names as returned by the DWDI API. The Waldur resource
+`backend_id` should match the account name in the cluster accounting system.
+
+### Storage Resources
+
+For storage resources, there are two options:
+
+1. **Direct Path Usage**: Set the Waldur resource `backend_id` to the actual filesystem path
+2. **Path Mapping**: Use the `storage_path_mapping` setting to map resource IDs to paths
+
+## Usage Reporting
+
+Both backends are read-only and designed for usage reporting. They implement the `_get_usage_report()` method
+but do not support:
+
+- Account creation/deletion
+- Resource management
+- User management
+- Limit setting
+
+## Example Configurations
+
+See the `examples/` directory for complete configuration examples:
+
+- `cscs-dwdi-compute-config.yaml` - Compute backend only
+- `cscs-dwdi-storage-config.yaml` - Storage backend only
+- `cscs-dwdi-combined-config.yaml` - Both backends in one configuration
 
 ## Installation
 
-This plugin is part of the Waldur Site Agent workspace. To install:
+The plugin is automatically discovered when the waldur-site-agent-cscs-dwdi package is installed alongside waldur-site-agent.
 
 ```bash
 # Install all workspace packages including cscs-dwdi plugin
 uv sync --all-packages
-
-# Install specific plugin for development
-uv sync --extra cscs-dwdi
 ```
 
 ## Testing
 
-Run the plugin tests:
+Run the test suite:
 
 ```bash
-# Run CSCS-DWDI plugin tests
 uv run pytest plugins/cscs-dwdi/tests/
-
-# Run with coverage
-uv run pytest plugins/cscs-dwdi/tests/ --cov=waldur_site_agent_cscs_dwdi
 ```
 
-## Limitations
+## API Compatibility
 
-This is a **reporting-only backend** that does not support:
+This plugin is compatible with DWDI API version 1 (`/api/v1/`). It requires the following API endpoints to be available:
 
-- Account creation or deletion
-- User management
-- Resource limit management
-- Order processing
-- Membership synchronization
+**Compute API:**
 
-For these operations, use a different backend (e.g., SLURM) in combination with the CSCS-DWDI reporting backend:
+- `/api/v1/compute/usage-month/account`
+- `/api/v1/compute/usage-day/account`
 
-```yaml
-offerings:
-  - name: "Mixed Backend Offering"
-    order_processing_backend: "slurm"       # Use SLURM for orders
-    reporting_backend: "cscs-dwdi"          # Use CSCS-DWDI for reporting
-    membership_sync_backend: "slurm"        # Use SLURM for membership
-```
+**Storage API:**
 
-## Error Handling
+- `/api/v1/storage/usage-month/filesystem_name/data_type`
+- `/api/v1/storage/usage-day/filesystem_name/data_type`
 
-The plugin includes comprehensive error handling:
+## Troubleshooting
 
-- **API Connectivity**: Ping checks verify API availability
-- **Authentication**: Token refresh and error handling
-- **Data Validation**: Validates API responses and filters invalid data
-- **Retry Logic**: Uses the framework's built-in retry mechanisms
+### Authentication Issues
+
+- Verify OIDC client credentials are correct
+- Check that the token endpoint URL is accessible
+- Ensure the client has appropriate scopes
+
+### Storage Backend Issues
+
+- Verify `storage_filesystem` and `storage_data_type` match available values in DWDI
+- Check `storage_path_mapping` if using custom resource IDs
+- Ensure storage paths exist in the DWDI system
+
+### Connection Issues
+
+- Use the `ping()` method to test API connectivity
+- Check network connectivity to the DWDI API endpoint
+- Verify SSL/TLS configuration
+- If behind a firewall, configure SOCKS proxy (`socks_proxy` setting)
+
+### Proxy Issues
+
+- Verify proxy server is running and accessible
+- Check proxy authentication if required
+- Test proxy connectivity manually: `curl --proxy socks5://localhost:12345 https://dwdi.cscs.ch`
+- Ensure proxy supports the required protocol (SOCKS4/5, HTTP)
 
 ## Development
 
@@ -169,9 +250,10 @@ The plugin includes comprehensive error handling:
 plugins/cscs-dwdi/
 ├── pyproject.toml                           # Plugin configuration
 ├── README.md                               # This documentation
+├── examples/                               # Configuration examples
 ├── waldur_site_agent_cscs_dwdi/
 │   ├── __init__.py                         # Package init
-│   ├── backend.py                          # Main backend implementation
+│   ├── backend.py                          # Backend implementations
 │   └── client.py                          # CSCS-DWDI API client
 └── tests/
     └── test_cscs_dwdi.py                  # Plugin tests
@@ -179,7 +261,8 @@ plugins/cscs-dwdi/
 
 ### Key Classes
 
-- **`CSCSDWDIBackend`**: Main backend class implementing reporting functionality
+- **`CSCSDWDIComputeBackend`**: Compute usage reporting backend
+- **`CSCSDWDIStorageBackend`**: Storage usage reporting backend
 - **`CSCSDWDIClient`**: HTTP client for CSCS-DWDI API communication
 
 ### Extension Points
@@ -188,43 +271,4 @@ To extend the plugin:
 
 1. **Additional Endpoints**: Modify `CSCSDWDIClient` to support more API endpoints
 2. **Authentication Methods**: Update authentication logic in `client.py`
-3. **Data Processing**: Enhance `_process_api_response()` for additional data formats
-
-## Troubleshooting
-
-### Common Issues
-
-#### Authentication Failures
-
-- Verify OIDC client credentials
-- Check API URL configuration
-- Ensure proper token scopes
-
-#### Missing Usage Data
-
-- Verify account names match between Waldur and CSCS-DWDI
-- Check date ranges and API response format
-- Review API rate limits and quotas
-
-#### Network Connectivity
-
-- Test API connectivity with ping functionality
-- Verify network access from agent deployment environment
-- Check firewall and proxy settings
-
-### Debugging
-
-Enable debug logging for detailed API interactions:
-
-```python
-import logging
-logging.getLogger('waldur_site_agent_cscs_dwdi').setLevel(logging.DEBUG)
-```
-
-## Support
-
-For issues and questions:
-
-- Check the [Waldur Site Agent documentation](../../docs/)
-- Review plugin test cases for usage examples
-- Create issues in the project repository
+3. **Data Processing**: Enhance response processing methods for additional data formats

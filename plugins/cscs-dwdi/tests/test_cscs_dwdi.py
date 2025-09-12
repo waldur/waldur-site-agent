@@ -5,7 +5,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from waldur_site_agent_cscs_dwdi.backend import CSCSDWDIBackend
+from waldur_site_agent_cscs_dwdi.backend import CSCSDWDIComputeBackend, CSCSDWDIStorageBackend
 from waldur_site_agent_cscs_dwdi.client import CSCSDWDIClient
 
 
@@ -25,6 +25,18 @@ class TestCSCSDWDIClient:
         assert client.client_secret == "test_secret"
         assert client.oidc_token_url is None
         assert client.oidc_scope == "openid"
+        assert client.socks_proxy is None
+
+    def test_client_initialization_with_proxy(self) -> None:
+        """Test client initializes with SOCKS proxy."""
+        client = CSCSDWDIClient(
+            api_url="https://api.example.com",
+            client_id="test_client",
+            client_secret="test_secret",
+            socks_proxy="socks5://localhost:12345",
+        )
+
+        assert client.socks_proxy == "socks5://localhost:12345"
 
     def test_client_strips_trailing_slash(self) -> None:
         """Test client strips trailing slash from API URL."""
@@ -230,8 +242,8 @@ class TestCSCSDWDIClient:
         assert token1 == token2
 
 
-class TestCSCSDWDIBackend:
-    """Tests for CSCS-DWDI backend."""
+class TestCSCSDWDIComputeBackend:
+    """Tests for CSCS-DWDI compute backend."""
 
     def test_backend_initialization(self) -> None:
         """Test backend initializes with correct configuration."""
@@ -250,12 +262,36 @@ class TestCSCSDWDIBackend:
             }
         }
 
-        backend = CSCSDWDIBackend(backend_settings, backend_components)
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
 
         assert backend.api_url == "https://api.example.com"
         assert backend.client_id == "test_client"
         assert backend.client_secret == "test_secret"
         assert isinstance(backend.cscs_client, CSCSDWDIClient)
+        assert backend.socks_proxy is None
+
+    def test_backend_initialization_with_proxy(self) -> None:
+        """Test backend initializes with SOCKS proxy configuration."""
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+            "socks_proxy": "socks5://localhost:12345",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 1,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+
+        assert backend.socks_proxy == "socks5://localhost:12345"
+        assert backend.cscs_client.socks_proxy == "socks5://localhost:12345"
 
     def test_backend_initialization_missing_config(self) -> None:
         """Test backend raises error when configuration is missing."""
@@ -266,7 +302,7 @@ class TestCSCSDWDIBackend:
         backend_components: dict[str, dict] = {}
 
         with pytest.raises(ValueError) as exc_info:
-            CSCSDWDIBackend(backend_settings, backend_components)
+            CSCSDWDIComputeBackend(backend_settings, backend_components)
 
         assert "cscs_dwdi_oidc_token_url" in str(exc_info.value)
 
@@ -286,7 +322,7 @@ class TestCSCSDWDIBackend:
                 "label": "Node Hours",
             }
         }
-        backend = CSCSDWDIBackend(backend_settings, backend_components)
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
 
         # Sample API response
         api_response = {
@@ -347,7 +383,7 @@ class TestCSCSDWDIBackend:
                 "label": "Node Hours",
             }
         }
-        backend = CSCSDWDIBackend(backend_settings, backend_components)
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
 
         # API response with same user appearing multiple times
         api_response = {
@@ -416,7 +452,7 @@ class TestCSCSDWDIBackend:
                 "label": "Node Hours",
             }
         }
-        backend = CSCSDWDIBackend(backend_settings, backend_components)
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
 
         # Test the method
         result = backend._get_usage_report(["account1", "account2"])
@@ -448,7 +484,7 @@ class TestCSCSDWDIBackend:
                 "label": "Node Hours",
             }
         }
-        backend = CSCSDWDIBackend(backend_settings, backend_components)
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
 
         # Mock the client method
         with patch.object(backend.cscs_client, "get_usage_for_month") as mock_get:
@@ -496,7 +532,7 @@ class TestCSCSDWDIBackend:
                 "label": "Node Hours",
             }
         }
-        backend = CSCSDWDIBackend(backend_settings, backend_components)
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
 
         with pytest.raises(NotImplementedError):
             backend.create_account({})
