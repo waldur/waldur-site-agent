@@ -1,6 +1,8 @@
+"""Tests for MUP backend functionality."""
+
 import unittest
 import uuid
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from waldur_api_client.models.offering_user import OfferingUser
@@ -8,10 +10,10 @@ from waldur_api_client.models.project_user import ProjectUser
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_api_client.types import Unset
-
-from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_mup.backend import MUPBackend
 from waldur_site_agent_mup.client import MUPError
+
+from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
 
@@ -30,6 +32,19 @@ class MUPBackendTest(unittest.TestCase):
             "allocation_prefix": "alloc_",
             "default_allocation_type": "compute",
             "default_storage_limit": 1000,
+        }
+
+        # Settings with custom user creation defaults for testing
+        self.custom_user_settings = {
+            **self.mup_settings,
+            "default_user_salutation": "Prof.",
+            "default_user_gender": "Female",
+            "default_user_birth_year": 1985,
+            "default_user_country": "Germany",
+            "default_user_institution_type": "Industry",
+            "default_user_institution": "Max Planck Institute",
+            "default_user_biography": "Custom researcher profile",
+            "user_funding_agency_prefix": "CUSTOM-PREFIX-",
         }
 
         self.mup_components = {
@@ -163,8 +178,9 @@ class MUPBackendTest(unittest.TestCase):
         with pytest.raises(ValueError) as context:
             MUPBackend(self.mup_settings, invalid_components)
 
-        assert "MUP backend only supports components with accounting_type='limit'" in str(
-            context.value
+        assert (
+            "MUP backend only supports components with accounting_type='limit'"
+            in str(context.value)
         )
         assert "Component 'cpu' has accounting_type='usage'" in str(context.value)
 
@@ -172,7 +188,9 @@ class MUPBackendTest(unittest.TestCase):
     def test_ping_success(self, mock_client_class) -> None:
         """Test successful ping to MUP backend."""
         mock_client = mock_client_class.return_value
-        mock_client.get_research_fields.return_value = [{"id": 1, "name": "Computer Science"}]
+        mock_client.get_research_fields.return_value = [
+            {"id": 1, "name": "Computer Science"}
+        ]
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
         result = backend.ping()
@@ -353,7 +371,9 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.add_project_member.return_value = {"status": "success"}
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
-        result = backend.create_resource(self.sample_waldur_resource, self.sample_user_context)
+        result = backend.create_resource(
+            self.sample_waldur_resource, self.sample_user_context
+        )
 
         assert isinstance(result, BackendResourceInfo)
         assert result.backend_id == "1"
@@ -389,7 +409,9 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.add_project_member.return_value = {"status": "success"}
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
-        result = backend.create_resource(self.sample_waldur_resource, self.sample_user_context)
+        result = backend.create_resource(
+            self.sample_waldur_resource, self.sample_user_context
+        )
 
         mock_client.activate_project.assert_called_once_with(1)
         assert isinstance(result, BackendResourceInfo)
@@ -406,7 +428,9 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.add_project_member.return_value = {"status": "success"}
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
-        result = backend.create_resource(self.sample_waldur_resource, self.sample_user_context)
+        result = backend.create_resource(
+            self.sample_waldur_resource, self.sample_user_context
+        )
 
         # Verify project was created with real PI email from user context
         mock_client.create_project.assert_called_once()
@@ -448,7 +472,9 @@ class MUPBackendTest(unittest.TestCase):
 
         waldur_resource = WaldurResource(limits=ResourceLimits.from_dict({"cpu": 10}))
 
-        allocation_limits, waldur_limits = backend._collect_resource_limits(waldur_resource)
+        allocation_limits, waldur_limits = backend._collect_resource_limits(
+            waldur_resource
+        )
 
         assert allocation_limits["cpu"] == 10  # unit_factor = 1
         assert waldur_limits["cpu"] == 10
@@ -482,7 +508,11 @@ class MUPBackendTest(unittest.TestCase):
             {"id": 1, "type": "compute", "used": 5, "size": 10}
         ]
         mock_client.get_project_members.return_value = [
-            {"id": 1, "active": True, "member": {"username": "user1", "email": "user1@example.com"}}
+            {
+                "id": 1,
+                "active": True,
+                "member": {"username": "user1", "email": "user1@example.com"},
+            }
         ]
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
@@ -521,7 +551,11 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.get_projects.return_value = [self.sample_mup_project]
         mock_client.get_project_allocations.return_value = [self.sample_mup_allocation]
         mock_client.get_project_members.return_value = [
-            {"id": 1, "active": True, "member": {"username": "user1", "email": "user1@example.com"}}
+            {
+                "id": 1,
+                "active": True,
+                "member": {"username": "user1", "email": "user1@example.com"},
+            }
         ]
         mock_client.toggle_member_status.return_value = {"status": "deactivated"}
 
@@ -529,10 +563,14 @@ class MUPBackendTest(unittest.TestCase):
         usernames = {"user1"}
         resource_backend_id = "1"
 
-        removed_users = backend.remove_users_from_resource(resource_backend_id, usernames)
+        removed_users = backend.remove_users_from_resource(
+            resource_backend_id, usernames
+        )
 
         assert removed_users == ["user1"]
-        mock_client.toggle_member_status.assert_called_once_with(1, 1, {"active": False})
+        mock_client.toggle_member_status.assert_called_once_with(
+            1, 1, {"active": False}
+        )
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_unsupported_operations_warning_only(self, mock_client_class) -> None:
@@ -543,6 +581,241 @@ class MUPBackendTest(unittest.TestCase):
         assert not backend.downscale_resource("test_account")
         assert not backend.pause_resource("test_account")
         assert not backend.restore_resource("test_account")
+
+    def test_configurable_user_creation_defaults(self) -> None:
+        """Test that user creation defaults are configurable through backend_settings."""
+        backend = MUPBackend(self.custom_user_settings, self.mup_components)
+
+        # Verify that custom settings are loaded correctly
+        assert backend.user_defaults["salutation"] == "Prof."
+        assert backend.user_defaults["gender"] == "Female"
+        assert backend.user_defaults["year_of_birth"] == 1985
+        assert backend.user_defaults["country"] == "Germany"
+        assert backend.user_defaults["type_of_institution"] == "Industry"
+        assert backend.user_defaults["affiliated_institution"] == "Max Planck Institute"
+        assert backend.user_defaults["biography"] == "Custom researcher profile"
+        assert backend.user_defaults["funding_agency_prefix"] == "CUSTOM-PREFIX-"
+
+    def test_default_user_creation_fallbacks(self) -> None:
+        """Test that default values are used when not specified in backend_settings."""
+        minimal_settings = {
+            "api_url": "https://mupdevb.macc.fccn.pt/",
+            "username": "test",
+            "password": "test",
+        }
+        backend = MUPBackend(minimal_settings, self.mup_components)
+
+        # Verify default fallback values are used
+        assert backend.user_defaults["salutation"] == "Dr."
+        assert backend.user_defaults["gender"] == "Other"
+        assert backend.user_defaults["year_of_birth"] == 1990
+        assert backend.user_defaults["country"] == "Portugal"
+        assert backend.user_defaults["type_of_institution"] == "Academic"
+        assert backend.user_defaults["affiliated_institution"] == "Research Institution"
+        assert (
+            "Researcher using Waldur site agent" in backend.user_defaults["biography"]
+        )
+        assert backend.user_defaults["funding_agency_prefix"] == "WALDUR-SITE-AGENT-"
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_user_creation_payload_construction(self, mock_client_class) -> None:
+        """Test that user creation payloads are constructed with configurable defaults."""
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        # Mock user search returns no existing users
+        mock_client.get_users.return_value = []
+
+        # Mock user creation workflow
+        mock_client.create_user_request.return_value = {"success": True, "id": 123}
+
+        backend = MUPBackend(self.custom_user_settings, self.mup_components)
+
+        result = backend._get_or_create_user(
+            {
+                "email": "test@example.com",
+                "full_name": "Test User",
+                "username": "testuser",
+            }
+        )
+
+        # Verify create_user_request was called with custom defaults
+        mock_client.create_user_request.assert_called_once()
+        call_args = mock_client.create_user_request.call_args[0][
+            0
+        ]  # First argument is user_data
+
+        assert call_args["salutation"] == "Prof."
+        assert call_args["gender"] == "Female"
+        assert call_args["year_of_birth"] == 1985
+        assert call_args["country"] == "Germany"
+        assert call_args["type_of_institution"] == "Industry"
+        assert call_args["affiliated_institution"] == "Max Planck Institute"
+        assert call_args["biography"] == "Custom researcher profile"
+        assert call_args["funding_agency_grant"].startswith("CUSTOM-PREFIX-")
+        assert result == 123
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_user_request_lookup_by_email(self, mock_client_class) -> None:
+        """Test that user ID can be found by looking up user requests by email."""
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        # Mock user search returns no existing users
+        mock_client.get_users.return_value = []
+
+        # Simulate user creation response without user_id
+        mock_client.create_user_request.return_value = {
+            "success": True
+        }  # No ID returned
+
+        # Mock user requests response for lookup
+        mock_client.get_user_requests.return_value = [
+            {"id": 456, "email": "other@example.com", "status": "pending"},
+            {"id": 123, "email": "test@example.com", "status": "pending"},
+            {"id": 789, "email": "another@example.com", "status": "approved"},
+        ]
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+
+        result = backend._get_or_create_user(
+            {
+                "email": "test@example.com",
+                "full_name": "Test User",
+                "username": "testuser",
+            }
+        )
+
+        # Verify that user request lookup was performed and correct ID found
+        mock_client.create_user_request.assert_called_once()
+        mock_client.get_user_requests.assert_called_once()
+        assert result == 123
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_user_request_lookup_no_match(self, mock_client_class) -> None:
+        """Test handling when user request lookup finds no matching email."""
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        # Mock user search returns no existing users
+        mock_client.get_users.return_value = []
+
+        # Simulate user creation response without user_id
+        mock_client.create_user_request.return_value = {
+            "success": True
+        }  # No ID returned
+
+        # Mock user requests response with no matching email
+        mock_client.get_user_requests.return_value = [
+            {"id": 456, "email": "other@example.com", "status": "pending"},
+            {"id": 789, "email": "another@example.com", "status": "approved"},
+        ]
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+
+        result = backend._get_or_create_user(
+            {
+                "email": "test@example.com",
+                "full_name": "Test User",
+                "username": "testuser",
+            }
+        )
+
+        # Verify that lookup was attempted but no matching email was found
+        mock_client.create_user_request.assert_called_once()
+        mock_client.get_user_requests.assert_called_once()
+        assert result is None
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_user_creation_error_handling(self, mock_client_class) -> None:
+        """Test error handling when user creation fails."""
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        # Mock user search returns no existing users
+        mock_client.get_users.return_value = []
+
+        # Simulate user creation failure
+        mock_client.create_user_request.side_effect = Exception("API Error")
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+
+        with self.assertLogs(level="ERROR") as log:
+            result = backend._get_or_create_user(
+                {
+                    "email": "test@example.com",
+                    "full_name": "Test User",
+                    "username": "testuser",
+                }
+            )
+
+        # Verify error is logged and None is returned
+        assert result is None
+        assert any("Unexpected error creating user" in msg for msg in log.output)
+        mock_client.get_user_requests.assert_not_called()
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_user_request_lookup_error_handling(self, mock_client_class) -> None:
+        """Test error handling when user request lookup fails."""
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        # Mock user search returns no existing users
+        mock_client.get_users.return_value = []
+
+        # Simulate user creation without ID
+        mock_client.create_user_request.return_value = {
+            "success": True
+        }  # No ID returned
+
+        # Simulate error during user request lookup
+        mock_client.get_user_requests.side_effect = Exception("Lookup failed")
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+
+        with self.assertLogs(level="WARNING") as log:
+            result = backend._get_or_create_user(
+                {
+                    "email": "test@example.com",
+                    "full_name": "Test User",
+                    "username": "testuser",
+                }
+            )
+
+        # Verify error is handled gracefully and None is returned
+        assert result is None
+        assert any(
+            "Error searching for user request by email" in msg for msg in log.output
+        )
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_user_creation_with_direct_user_id_response(
+        self, mock_client_class
+    ) -> None:
+        """Test user creation when API directly returns user_id."""
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        # Mock user search returns no existing users
+        mock_client.get_users.return_value = []
+
+        # Simulate user creation response with direct ID returned
+        mock_client.create_user_request.return_value = {"success": True, "id": 456}
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+
+        result = backend._get_or_create_user(
+            {
+                "email": "test@example.com",
+                "full_name": "Test User",
+                "username": "testuser",
+            }
+        )
+
+        # Verify that user request lookup is skipped when ID is directly available
+        mock_client.create_user_request.assert_called_once()
+        mock_client.get_user_requests.assert_not_called()
+        assert result == 456
 
 
 if __name__ == "__main__":

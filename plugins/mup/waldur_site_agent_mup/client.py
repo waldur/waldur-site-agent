@@ -43,7 +43,9 @@ class MUPClient(BaseClient):
             }
         )
 
-    def _make_request(self, method: str, endpoint: str, **kwargs: Any) -> requests.Response:  # noqa: ANN401
+    def _make_request(
+        self, method: str, endpoint: str, **kwargs: Any
+    ) -> requests.Response:  # noqa: ANN401
         """Make HTTP request to MUP API with error handling."""
         url = urljoin(self.api_url, endpoint)
 
@@ -97,7 +99,11 @@ class MUPClient(BaseClient):
 
         if not response.content:
             try:
-                method = response.request.method if hasattr(response, "request") else "UNKNOWN"
+                method = (
+                    response.request.method
+                    if hasattr(response, "request")
+                    else "UNKNOWN"
+                )
                 url = response.url if hasattr(response, "url") else "UNKNOWN"
                 logger.warning("Empty response content for %s %s", method, url)
             except Exception:
@@ -107,7 +113,11 @@ class MUPClient(BaseClient):
         content_type = response.headers.get("content-type", "").lower()
         if "application/json" not in content_type:
             try:
-                method = response.request.method if hasattr(response, "request") else "UNKNOWN"
+                method = (
+                    response.request.method
+                    if hasattr(response, "request")
+                    else "UNKNOWN"
+                )
                 url = response.url if hasattr(response, "url") else "UNKNOWN"
                 text = response.text[:200] if hasattr(response, "text") else "UNKNOWN"
                 logger.warning(
@@ -125,7 +135,9 @@ class MUPClient(BaseClient):
                     response.status_code,
                 )
 
-            text_preview = response.text[:200] if hasattr(response, "text") else "UNKNOWN"
+            text_preview = (
+                response.text[:200] if hasattr(response, "text") else "UNKNOWN"
+            )
             raise MUPError(
                 f"Expected JSON response but got Content-Type: {content_type}. "
                 f"Status: {response.status_code}, Body: {text_preview}"
@@ -135,7 +147,11 @@ class MUPClient(BaseClient):
             return response.json()
         except ValueError as e:
             try:
-                method = response.request.method if hasattr(response, "request") else "UNKNOWN"
+                method = (
+                    response.request.method
+                    if hasattr(response, "request")
+                    else "UNKNOWN"
+                )
                 url = response.url if hasattr(response, "url") else "UNKNOWN"
                 text = response.text[:500] if hasattr(response, "text") else "UNKNOWN"
                 logger.exception(
@@ -146,9 +162,13 @@ class MUPClient(BaseClient):
                     text,
                 )
             except Exception:
-                logger.exception("Failed to parse JSON response. Status: %d", response.status_code)
+                logger.exception(
+                    "Failed to parse JSON response. Status: %d", response.status_code
+                )
 
-            text_preview = response.text[:200] if hasattr(response, "text") else "UNKNOWN"
+            text_preview = (
+                response.text[:200] if hasattr(response, "text") else "UNKNOWN"
+            )
             raise MUPError(
                 f"Invalid JSON response: {e}. Status: {response.status_code}, Body: {text_preview}"
             ) from e
@@ -170,22 +190,30 @@ class MUPClient(BaseClient):
 
     def update_project(self, project_id: int, project_data: dict) -> dict:
         """Update existing project."""
-        response = self._make_request("PUT", f"/api/projects/{project_id}/edit", json=project_data)
+        response = self._make_request(
+            "PUT", f"/api/projects/{project_id}/edit", json=project_data
+        )
         return cast("dict", self._parse_json_response(response))
 
     def activate_project(self, project_id: int) -> dict:
         """Activate project."""
-        response = self._make_request("PUT", f"/api/projects/{project_id}/activate", json={})
+        response = self._make_request(
+            "PUT", f"/api/projects/{project_id}/activate", json={}
+        )
         return cast("dict", self._parse_json_response(response))
 
     def deactivate_project(self, project_id: int) -> dict:
         """Deactivate project."""
-        response = self._make_request("PUT", f"/api/projects/{project_id}/deactivate", json={})
+        response = self._make_request(
+            "PUT", f"/api/projects/{project_id}/deactivate", json={}
+        )
         return cast("dict", self._parse_json_response(response))
 
     def get_project_allocations(self, project_id: int) -> list[dict]:
         """Get allocations for a project."""
-        response = self._make_request("GET", f"/api/projects/{project_id}/allocations/list")
+        response = self._make_request(
+            "GET", f"/api/projects/{project_id}/allocations/list"
+        )
         return cast("list[dict]", self._parse_json_response(response))
 
     def create_allocation(self, project_id: int, allocation_data: dict) -> dict:
@@ -195,7 +223,9 @@ class MUPClient(BaseClient):
         )
         return cast("dict", self._parse_json_response(response))
 
-    def update_allocation(self, project_id: int, allocation_id: int, allocation_data: dict) -> dict:
+    def update_allocation(
+        self, project_id: int, allocation_id: int, allocation_data: dict
+    ) -> dict:
         """Update existing allocation."""
         response = self._make_request(
             "PUT",
@@ -223,16 +253,25 @@ class MUPClient(BaseClient):
         )
         return cast("dict", self._parse_json_response(response))
 
-    def toggle_member_status(self, project_id: int, member_id: int, status_data: dict) -> dict:
+    def toggle_member_status(
+        self, project_id: int, member_id: int, status_data: dict
+    ) -> dict:
         """Toggle member status (active/inactive)."""
         response = self._make_request(
-            "PUT", f"/api/projects/{project_id}/members/{member_id}/toggle-status", json=status_data
+            "PUT",
+            f"/api/projects/{project_id}/members/{member_id}/toggle-status",
+            json=status_data,
         )
         return cast("dict", self._parse_json_response(response))
 
     def get_users(self) -> list[dict]:
         """Get list of users."""
         response = self._make_request("GET", "/api/user/list/")
+        return cast("list[dict]", self._parse_json_response(response))
+
+    def get_user_requests(self) -> list[dict]:
+        """Get list of user requests."""
+        response = self._make_request("GET", "/api/user/request/list/")
         return cast("list[dict]", self._parse_json_response(response))
 
     def get_user(self, user_id: int) -> dict:
@@ -247,7 +286,9 @@ class MUPClient(BaseClient):
 
     def update_user(self, user_id: int, user_data: dict) -> dict:
         """Update user information."""
-        response = self._make_request("PUT", f"/api/user/edit/{user_id}", json=user_data)
+        response = self._make_request(
+            "PUT", f"/api/user/edit/{user_id}", json=user_data
+        )
         return cast("dict", self._parse_json_response(response))
 
     def get_research_fields(self) -> list[dict]:
@@ -304,7 +345,9 @@ class MUPClient(BaseClient):
                 break
         return name
 
-    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> Optional[str]:
+    def set_resource_limits(
+        self, resource_id: str, limits_dict: dict[str, int]
+    ) -> Optional[str]:
         """Set account limits - update allocation size."""
         # Find project and allocation by account name (grant number)
         projects = self.get_projects()
@@ -324,7 +367,9 @@ class MUPClient(BaseClient):
                         "active": allocation.get("active", True),
                         "project": project["id"],
                     }
-                    self.update_allocation(project["id"], allocation["id"], allocation_data)
+                    self.update_allocation(
+                        project["id"], allocation["id"], allocation_data
+                    )
                     return f"Updated allocation size to {size}"
         return None
 
@@ -357,7 +402,10 @@ class MUPClient(BaseClient):
                 members = self.get_project_members(project["id"])
                 for member in members:
                     member_info = member.get("member", {})
-                    if member_info.get("username") == user or member_info.get("email") == user:
+                    if (
+                        member_info.get("username") == user
+                        or member_info.get("email") == user
+                    ):
                         return Association(
                             account=resource_id,
                             user=user,

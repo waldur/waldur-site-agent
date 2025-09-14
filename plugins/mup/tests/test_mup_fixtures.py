@@ -131,7 +131,11 @@ def create_sample_mup_user(user_id=1, email="test@example.com", username="testus
 
 def create_sample_mup_member(member_id=1, user_id=1, active=True):
     """Create a sample MUP project member for testing"""
-    return {"id": member_id, "active": active, "member": create_sample_mup_user(user_id)}
+    return {
+        "id": member_id,
+        "active": active,
+        "member": create_sample_mup_user(user_id),
+    }
 
 
 def create_sample_research_fields():
@@ -272,7 +276,10 @@ class MUPMockResponses:
 
     @staticmethod
     def project_members_response():
-        return [create_sample_mup_member(1, 1, True), create_sample_mup_member(2, 2, False)]
+        return [
+            create_sample_mup_member(1, 1, True),
+            create_sample_mup_member(2, 2, False),
+        ]
 
     @staticmethod
     def project_allocations_response(resource_uuid=None):

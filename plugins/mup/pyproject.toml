@@ -19,3 +19,13 @@ waldur-site-agent = { workspace = true }
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]
 mup = "waldur_site_agent_mup.backend:MUPBackend"
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**/*.py" = [
+  "S101",   # we can (and MUST!) use 'assert' in test files.
+  "ANN001", # annotations for fixtures are sometimes a pain for test files
+  "PLR2004", # magic values are OK in tests
+  "PT011",   # pytest.raises can be broad in tests
+  "S106",    # hardcoded passwords are OK in test fixtures
+  "ARG002",  # unused arguments from mock decorators are OK
+]
