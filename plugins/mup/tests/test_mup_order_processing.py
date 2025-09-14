@@ -84,9 +84,9 @@ class BaseMUPOrderTest(unittest.TestCase):
     def _setup_common_mocks(self) -> None:
         """Setup common respx mocks used across all tests."""
         respx.get(f"{BASE_URL}/api/users/me/").respond(200, json=self.waldur_user)
-        respx.get(f"{BASE_URL}/api/marketplace-provider-offerings/{MUP_OFFERING.uuid}/").respond(
-            200, json=self.waldur_offering_response
-        )
+        respx.get(
+            f"{BASE_URL}/api/marketplace-provider-offerings/{MUP_OFFERING.uuid}/"
+        ).respond(200, json=self.waldur_offering_response)
 
     def _setup_order_mocks(
         self, order_uuid, marketplace_resource_uuid, order_data, order_states=None
@@ -94,7 +94,10 @@ class BaseMUPOrderTest(unittest.TestCase):
         """Setup order-specific mocks with flexible state handling."""
         respx.get(
             f"{BASE_URL}/api/marketplace-orders/",
-            params={"offering_uuid": MUP_OFFERING.uuid, "state": ["pending-provider", "executing"]},
+            params={
+                "offering_uuid": MUP_OFFERING.uuid,
+                "state": ["pending-provider", "executing"],
+            },
         ).respond(200, json=[order_data])
 
         if order_states:
@@ -106,12 +109,12 @@ class BaseMUPOrderTest(unittest.TestCase):
                 200, json=order_data
             )
 
-        respx.post(f"{BASE_URL}/api/marketplace-orders/{order_uuid}/set_state_done/").respond(
-            200, json={}
-        )
-        respx.post(f"{BASE_URL}/api/marketplace-orders/{order_uuid}/set_state_erred/").respond(
-            200, json={}
-        )
+        respx.post(
+            f"{BASE_URL}/api/marketplace-orders/{order_uuid}/set_state_done/"
+        ).respond(200, json={})
+        respx.post(
+            f"{BASE_URL}/api/marketplace-orders/{order_uuid}/set_state_erred/"
+        ).respond(200, json={})
 
         if order_data.get("state") == "pending-provider":
             respx.post(
@@ -232,7 +235,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         resource_data["uuid"] = marketplace_resource_uuid
 
         super()._setup_resource_mocks(marketplace_resource_uuid, resource_data)
-        super()._setup_resource_team_mock(marketplace_resource_uuid, self.waldur_resource_team)
+        super()._setup_resource_team_mock(
+            marketplace_resource_uuid, self.waldur_resource_team
+        )
 
         return super()._setup_set_backend_id_mock(marketplace_resource_uuid)
 
@@ -241,7 +246,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         mup_client = mup_client_class.return_value
 
         # Mock research fields
-        mup_client.get_research_fields.return_value = [{"id": 1, "name": "Computer Science"}]
+        mup_client.get_research_fields.return_value = [
+            {"id": 1, "name": "Computer Science"}
+        ]
 
         # Mock existing users (empty - will create new)
         mup_client.get_users.return_value = []
@@ -272,7 +279,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         # This simulates the project being created during the process
         mup_client.get_projects.side_effect = [
             [],  # First call - no projects (during create_resource)
-            [created_project],  # Second call - project exists (during add_users_to_resource)
+            [
+                created_project
+            ],  # Second call - project exists (during add_users_to_resource)
             [created_project],  # Additional calls as needed
         ]
 
@@ -297,7 +306,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         self._setup_order_mocks(self.order_uuid, marketplace_resource_uuid)
         self._setup_resource_mocks(marketplace_resource_uuid)
         self._setup_offering_users_mock([self.waldur_offering_user])
-        self._setup_resource_team_mock(marketplace_resource_uuid, self.waldur_resource_team)
+        self._setup_resource_team_mock(
+            marketplace_resource_uuid, self.waldur_resource_team
+        )
 
         processor = OfferingOrderProcessor(MUP_OFFERING)
         processor.process_offering()
@@ -308,14 +319,20 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         mup_client.create_allocation.assert_called_once()
         mup_client.add_project_member.assert_called()  # Users are added after resource creation
 
-    def test_mup_resource_creation_with_existing_user(self, mup_client_class: mock.Mock) -> None:
+    def test_mup_resource_creation_with_existing_user(
+        self, mup_client_class: mock.Mock
+    ) -> None:
         """Test MUP resource creation with existing user."""
         mup_client = self.setup_mup_client_mock(mup_client_class)
 
         # Override the side_effect to simulate existing user for offering user
         def get_users_side_effect():
             return [
-                {"id": 2, "email": "test-offering-user-01", "username": "test-offering-user-01"}
+                {
+                    "id": 2,
+                    "email": "test-offering-user-01",
+                    "username": "test-offering-user-01",
+                }
             ]
 
         mup_client.get_users.side_effect = [
@@ -328,7 +345,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         self._setup_order_mocks(self.order_uuid, marketplace_resource_uuid)
         self._setup_resource_mocks(marketplace_resource_uuid)
         self._setup_offering_users_mock([self.waldur_offering_user])
-        self._setup_resource_team_mock(marketplace_resource_uuid, self.waldur_resource_team)
+        self._setup_resource_team_mock(
+            marketplace_resource_uuid, self.waldur_resource_team
+        )
 
         processor = OfferingOrderProcessor(MUP_OFFERING)
         processor.process_offering()
@@ -343,7 +362,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         # Existing user was added to project
         mup_client.add_project_member.assert_called()
 
-    def test_mup_resource_creation_with_existing_project(self, mup_client_class: mock.Mock) -> None:
+    def test_mup_resource_creation_with_existing_project(
+        self, mup_client_class: mock.Mock
+    ) -> None:
         """Test MUP resource creation with existing project."""
         mup_client = self.setup_mup_client_mock(mup_client_class)
 
@@ -353,7 +374,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         self._setup_order_mocks(self.order_uuid, str(marketplace_resource_uuid))
         self._setup_resource_mocks(str(marketplace_resource_uuid))
         self._setup_offering_users_mock([self.waldur_offering_user])
-        self._setup_resource_team_mock(str(marketplace_resource_uuid), self.waldur_resource_team)
+        self._setup_resource_team_mock(
+            str(marketplace_resource_uuid), self.waldur_resource_team
+        )
 
         # Mock existing project (inactive) - use the correct resource UUID
         existing_project = {
@@ -377,7 +400,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         # Mock get_projects to return existing project
         mup_client.get_projects.side_effect = [
             [existing_project],  # First call - project exists (during create_resource)
-            [existing_project],  # Second call - same project (during add_users_to_resource)
+            [
+                existing_project
+            ],  # Second call - same project (during add_users_to_resource)
         ]
 
         mup_client.activate_project.return_value = {"status": "activated"}
@@ -394,7 +419,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         # Allocation was still created
         mup_client.create_allocation.assert_called_once()
 
-    def test_mup_resource_creation_user_creation_failure(self, mup_client_class: mock.Mock) -> None:
+    def test_mup_resource_creation_user_creation_failure(
+        self, mup_client_class: mock.Mock
+    ) -> None:
         """Test MUP resource creation when user addition fails."""
         mup_client = self.setup_mup_client_mock(mup_client_class)
 
@@ -413,7 +440,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         self._setup_order_mocks(self.order_uuid, marketplace_resource_uuid)
         self._setup_resource_mocks(marketplace_resource_uuid)
         self._setup_offering_users_mock([self.waldur_offering_user])
-        self._setup_resource_team_mock(marketplace_resource_uuid, self.waldur_resource_team)
+        self._setup_resource_team_mock(
+            marketplace_resource_uuid, self.waldur_resource_team
+        )
 
         processor = OfferingOrderProcessor(MUP_OFFERING)
 
@@ -442,7 +471,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         self._setup_order_mocks(self.order_uuid, marketplace_resource_uuid)
         self._setup_resource_mocks(marketplace_resource_uuid)
         self._setup_offering_users_mock([self.waldur_offering_user])
-        self._setup_resource_team_mock(marketplace_resource_uuid, self.waldur_resource_team)
+        self._setup_resource_team_mock(
+            marketplace_resource_uuid, self.waldur_resource_team
+        )
 
         processor = OfferingOrderProcessor(MUP_OFFERING)
 
@@ -575,7 +606,9 @@ class MUPUpdateOrderTest(BaseMUPOrderTest):
         self._setup_order_mocks(
             self.order_uuid, str(self.marketplace_resource_uuid), self.waldur_order
         )
-        self._setup_resource_mocks(str(self.marketplace_resource_uuid), self.waldur_resource)
+        self._setup_resource_mocks(
+            str(self.marketplace_resource_uuid), self.waldur_resource
+        )
 
         mup_client = mup_client_class.return_value
 

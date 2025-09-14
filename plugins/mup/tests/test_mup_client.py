@@ -61,7 +61,9 @@ class MUPClientTest(unittest.TestCase):
             mock_session_class.assert_called_once()
 
             # Verify headers were set
-            expected_auth = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
+            expected_auth = base64.b64encode(
+                f"{self.username}:{self.password}".encode()
+            ).decode()
             mock_session.headers.update.assert_called_once_with(
                 {
                     "Authorization": f"Basic {expected_auth}",
@@ -89,7 +91,9 @@ class MUPClientTest(unittest.TestCase):
     def test_make_request_http_error(self):
         """Test HTTP request with error response"""
         self.client.session = Mock()
-        self.client.session.request.side_effect = requests.exceptions.HTTPError("404 Not Found")
+        self.client.session.request.side_effect = requests.exceptions.HTTPError(
+            "404 Not Found"
+        )
 
         with self.assertRaises(MUPError) as context:
             self.client._make_request("GET", "/api/nonexistent")
@@ -134,7 +138,9 @@ class MUPClientTest(unittest.TestCase):
             result = self.client.get_project(project_id)
 
             self.assertEqual(result, self.sample_project)
-            mock_request.assert_called_once_with("GET", f"/api/projects/view/{project_id}")
+            mock_request.assert_called_once_with(
+                "GET", f"/api/projects/view/{project_id}"
+            )
 
     def test_create_project(self):
         """Test creating new project"""
@@ -152,7 +158,9 @@ class MUPClientTest(unittest.TestCase):
             result = self.client.create_project(project_data)
 
             self.assertEqual(result, self.sample_project)
-            mock_request.assert_called_once_with("POST", "/api/projects/add/", json=project_data)
+            mock_request.assert_called_once_with(
+                "POST", "/api/projects/add/", json=project_data
+            )
 
     def test_update_project(self):
         """Test updating existing project"""
@@ -234,7 +242,9 @@ class MUPClientTest(unittest.TestCase):
 
             self.assertEqual(result, self.sample_allocation)
             mock_request.assert_called_once_with(
-                "POST", f"/api/projects/{project_id}/allocations/add", json=allocation_data
+                "POST",
+                f"/api/projects/{project_id}/allocations/add",
+                json=allocation_data,
             )
 
     def test_update_allocation(self):
@@ -248,7 +258,9 @@ class MUPClientTest(unittest.TestCase):
             mock_response.json.return_value = self.sample_allocation
             mock_request.return_value = mock_response
 
-            result = self.client.update_allocation(project_id, allocation_id, allocation_data)
+            result = self.client.update_allocation(
+                project_id, allocation_id, allocation_data
+            )
 
             self.assertEqual(result, self.sample_allocation)
             mock_request.assert_called_once_with(
@@ -287,7 +299,9 @@ class MUPClientTest(unittest.TestCase):
             result = self.client.get_project_members(project_id)
 
             self.assertEqual(result, expected_members)
-            mock_request.assert_called_once_with("GET", f"/api/projects/{project_id}/members/list")
+            mock_request.assert_called_once_with(
+                "GET", f"/api/projects/{project_id}/members/list"
+            )
 
     def test_add_project_member(self):
         """Test adding project member"""
@@ -317,7 +331,9 @@ class MUPClientTest(unittest.TestCase):
             mock_response.json.return_value = {"status": "updated"}
             mock_request.return_value = mock_response
 
-            result = self.client.toggle_member_status(project_id, member_id, status_data)
+            result = self.client.toggle_member_status(
+                project_id, member_id, status_data
+            )
 
             self.assertEqual(result, {"status": "updated"})
             mock_request.assert_called_once_with(
@@ -371,7 +387,9 @@ class MUPClientTest(unittest.TestCase):
             result = self.client.create_user_request(user_data)
 
             self.assertEqual(result, {"id": 2, "status": "pending"})
-            mock_request.assert_called_once_with("POST", "/api/user/add/", json=user_data)
+            mock_request.assert_called_once_with(
+                "POST", "/api/user/add/", json=user_data
+            )
 
     def test_update_user(self):
         """Test updating user information"""
@@ -386,11 +404,16 @@ class MUPClientTest(unittest.TestCase):
             result = self.client.update_user(user_id, user_data)
 
             self.assertEqual(result, self.sample_user)
-            mock_request.assert_called_once_with("PUT", f"/api/user/edit/{user_id}", json=user_data)
+            mock_request.assert_called_once_with(
+                "PUT", f"/api/user/edit/{user_id}", json=user_data
+            )
 
     def test_get_research_fields(self):
         """Test getting research fields"""
-        expected_fields = [{"id": 1, "name": "Computer Science"}, {"id": 2, "name": "Physics"}]
+        expected_fields = [
+            {"id": 1, "name": "Computer Science"},
+            {"id": 2, "name": "Physics"},
+        ]
 
         with patch.object(self.client, "_make_request") as mock_request:
             mock_response = Mock()
@@ -460,9 +483,13 @@ class MUPClientTest(unittest.TestCase):
         allocations = [self.sample_allocation]
 
         with patch.object(self.client, "get_projects", return_value=projects):
-            with patch.object(self.client, "get_project_allocations", return_value=allocations):
+            with patch.object(
+                self.client, "get_project_allocations", return_value=allocations
+            ):
                 with patch.object(self.client, "update_allocation") as mock_update:
-                    result = self.client.set_resource_limits("waldur_test_project", {"cpu": 20})
+                    result = self.client.set_resource_limits(
+                        "waldur_test_project", {"cpu": 20}
+                    )
 
                     self.assertIn("Updated allocation size to 20", result)
                     mock_update.assert_called_once()
@@ -473,7 +500,9 @@ class MUPClientTest(unittest.TestCase):
         allocations = [self.sample_allocation]
 
         with patch.object(self.client, "get_projects", return_value=projects):
-            with patch.object(self.client, "get_project_allocations", return_value=allocations):
+            with patch.object(
+                self.client, "get_project_allocations", return_value=allocations
+            ):
                 limits = self.client.get_resource_limits("waldur_test_project")
 
                 self.assertEqual(limits, {"cpu": 10})
@@ -487,7 +516,9 @@ class MUPClientTest(unittest.TestCase):
 
     def test_set_resource_user_limits(self):
         """Test set_resource_user_limits interface method"""
-        result = self.client.set_resource_user_limits("test_account", "user1", {"cpu": 5})
+        result = self.client.set_resource_user_limits(
+            "test_account", "user1", {"cpu": 5}
+        )
 
         # MUP doesn't support per-user limits
         self.assertEqual(result, "User limits not supported for user1")
@@ -505,7 +536,9 @@ class MUPClientTest(unittest.TestCase):
 
         with patch.object(self.client, "get_projects", return_value=projects):
             with patch.object(self.client, "get_project_members", return_value=members):
-                association = self.client.get_association("testuser", "waldur_test_project")
+                association = self.client.get_association(
+                    "testuser", "waldur_test_project"
+                )
 
                 self.assertIsNotNone(association)
                 self.assertIsInstance(association, Association)
@@ -520,7 +553,9 @@ class MUPClientTest(unittest.TestCase):
 
         with patch.object(self.client, "get_projects", return_value=projects):
             with patch.object(self.client, "get_project_members", return_value=members):
-                association = self.client.get_association("nonexistent", "waldur_test_project")
+                association = self.client.get_association(
+                    "nonexistent", "waldur_test_project"
+                )
 
                 self.assertIsNone(association)
 
@@ -544,7 +579,9 @@ class MUPClientTest(unittest.TestCase):
         allocations = [self.sample_allocation]
 
         with patch.object(self.client, "get_projects", return_value=projects):
-            with patch.object(self.client, "get_project_allocations", return_value=allocations):
+            with patch.object(
+                self.client, "get_project_allocations", return_value=allocations
+            ):
                 usage_data = self.client.get_usage_report(["waldur_test_project"])
 
                 self.assertEqual(len(usage_data), 1)
