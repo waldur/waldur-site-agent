@@ -1552,14 +1552,17 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 component_type,
                 usage,
             )
+            body = ComponentUserUsageCreateRequest(
+                username=username,
+                usage=usage,
+            )
+            if offering_user:
+                body.user = offering_user.url
+            else:
+                logger.warning("No offering user found for username %s", username)
+
             marketplace_component_usages_set_user_usage.sync_detailed(
-                uuid=component_usage.uuid,
-                client=self.waldur_rest_client,
-                body=ComponentUserUsageCreateRequest(
-                    username=username,
-                    usage=usage,
-                    user=offering_user.url if offering_user else None,
-                ),
+                uuid=component_usage.uuid, client=self.waldur_rest_client, body=body
             )
 
     def _process_resource(
