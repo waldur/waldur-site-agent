@@ -79,7 +79,7 @@ class CourseAccountMessageTest(TestCase):
             200, json=[self.waldur_resource.to_dict()]
         )
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/?username={self.course_account.user_username}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/?username={self.course_account.username}"
         ).respond(200, json=[self.course_account.to_dict()])
 
     @mock.patch("waldur_site_agent.common.processors.utils.get_backend_for_offering")
@@ -92,9 +92,7 @@ class CourseAccountMessageTest(TestCase):
         self._setup_common_mocks()
 
         processor = OfferingMembershipProcessor(self.offering)
-        processor.process_account_creation(
-            self.course_account.user_username, AccountType.COURSE_ACCOUNT
-        )
+        processor.process_account_creation(self.course_account.username, AccountType.COURSE_ACCOUNT)
 
         mock_backend.add_users_to_resource.assert_called_once()
 
@@ -109,11 +107,11 @@ class CourseAccountMessageTest(TestCase):
 
         processor = OfferingMembershipProcessor(self.offering)
         processor.process_account_removal(
-            self.course_account.user_username, self.waldur_resource.project_uuid.hex
+            self.course_account.username, self.waldur_resource.project_uuid.hex
         )
 
         mock_backend.remove_users_from_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, {self.course_account.user_username}
+            self.waldur_resource.backend_id, {self.course_account.username}
         )
 
     @mock.patch(
@@ -125,7 +123,7 @@ class CourseAccountMessageTest(TestCase):
 
         message = {
             "account_uuid": self.course_account.uuid.hex,
-            "account_username": self.course_account.user_username,
+            "account_username": self.course_account.username,
             "project_uuid": self.waldur_resource.project_uuid.hex,
             "action": "create",
         }
@@ -143,7 +141,7 @@ class CourseAccountMessageTest(TestCase):
         handlers.on_account_message_mqtt(mock_client, userdata, mock_msg)
 
         mock_processor.process_account_creation.assert_called_once_with(
-            self.course_account.user_username, AccountType.COURSE_ACCOUNT
+            self.course_account.username, AccountType.COURSE_ACCOUNT
         )
 
     @mock.patch(
@@ -155,7 +153,7 @@ class CourseAccountMessageTest(TestCase):
 
         message = {
             "account_uuid": self.course_account.uuid.hex,
-            "account_username": self.course_account.user_username,
+            "account_username": self.course_account.username,
             "project_uuid": self.waldur_resource.project_uuid.hex,
             "action": "delete",
         }
@@ -173,7 +171,7 @@ class CourseAccountMessageTest(TestCase):
         handlers.on_account_message_mqtt(mock_client, userdata, mock_msg)
 
         mock_processor.process_account_removal.assert_called_once_with(
-            self.course_account.user_username, self.waldur_resource.project_uuid.hex
+            self.course_account.username, self.waldur_resource.project_uuid.hex
         )
 
     @mock.patch(
@@ -185,7 +183,7 @@ class CourseAccountMessageTest(TestCase):
 
         message = {
             "account_uuid": self.course_account.uuid.hex,
-            "account_username": self.course_account.user_username,
+            "account_username": self.course_account.username,
             "project_uuid": self.waldur_resource.project_uuid.hex,
             "action": "create",
         }
@@ -199,7 +197,7 @@ class CourseAccountMessageTest(TestCase):
         handlers.on_account_message_stomp(test_frame, self.offering, "test-agent")
 
         mock_processor.process_account_creation.assert_called_once_with(
-            self.course_account.user_username, AccountType.COURSE_ACCOUNT
+            self.course_account.username, AccountType.COURSE_ACCOUNT
         )
 
     @mock.patch(
@@ -211,7 +209,7 @@ class CourseAccountMessageTest(TestCase):
 
         message = {
             "account_uuid": self.course_account.uuid.hex,
-            "account_username": self.course_account.user_username,
+            "account_username": self.course_account.username,
             "project_uuid": self.waldur_resource.project_uuid.hex,
             "action": "delete",
         }
@@ -224,7 +222,7 @@ class CourseAccountMessageTest(TestCase):
         handlers.on_account_message_stomp(test_frame, self.offering, "test-agent")
 
         mock_processor.process_account_removal.assert_called_once_with(
-            self.course_account.user_username, self.waldur_resource.project_uuid.hex
+            self.course_account.username, self.waldur_resource.project_uuid.hex
         )
 
     @mock.patch("waldur_site_agent.common.processors.utils.get_backend_for_offering")
@@ -253,6 +251,7 @@ class CourseAccountMessageTest(TestCase):
             state=ServiceAccountState.OK,
             customer_uuid=uuid.uuid4(),
             customer_name="",
+            error_traceback="",
         )
 
         closed_account = CourseAccount(
@@ -269,6 +268,7 @@ class CourseAccountMessageTest(TestCase):
             state=ServiceAccountState.CLOSED,
             customer_uuid=uuid.uuid4(),
             customer_name="",
+            error_traceback="",
         )
 
         respx.get(
@@ -326,6 +326,7 @@ class CourseAccountMessageTest(TestCase):
             state=ServiceAccountState.OK,
             customer_uuid=uuid.uuid4(),
             customer_name="",
+            error_traceback="",
         )
 
         respx.get(

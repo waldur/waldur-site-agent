@@ -1191,16 +1191,16 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             client=self.waldur_rest_client,
         )
         usernames_active = {
-            account.user_username
+            account.username
             for account in course_accounts
-            if account.user_username and account.state == ServiceAccountState.OK
+            if account.username and account.state == ServiceAccountState.OK
         }
         self.resource_backend.add_users_to_resource(waldur_resource.backend_id, usernames_active)
 
         usernames_closed = {
-            account.user_username
+            account.username
             for account in course_accounts
-            if account.user_username and account.state == ServiceAccountState.CLOSED
+            if account.username and account.state == ServiceAccountState.CLOSED
         }
         self.resource_backend.remove_users_from_resource(
             waldur_resource.backend_id, usernames_closed
