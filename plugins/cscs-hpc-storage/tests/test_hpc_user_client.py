@@ -158,18 +158,20 @@ class TestCSCSHpcUserClient:
 
         # Mock API response
         mock_response = Mock()
-        mock_response.json.return_value = [
-            {
-                "posixName": "project1",
-                "unixGid": 30001,
-                "displayName": "Test Project 1",
-            },
-            {
-                "posixName": "project2",
-                "unixGid": 30002,
-                "displayName": "Test Project 2",
-            },
-        ]
+        mock_response.json.return_value = {
+            "projects": [
+                {
+                    "posixName": "project1",
+                    "unixGid": 30001,
+                    "displayName": "Test Project 1",
+                },
+                {
+                    "posixName": "project2",
+                    "unixGid": 30002,
+                    "displayName": "Test Project 2",
+                },
+            ]
+        }
         mock_response.raise_for_status.return_value = None
 
         mock_client_instance = Mock()
@@ -204,7 +206,7 @@ class TestCSCSHpcUserClient:
 
         # Mock API response
         mock_response = Mock()
-        mock_response.json.return_value = []
+        mock_response.json.return_value = {"projects": []}
         mock_response.raise_for_status.return_value = None
 
         mock_client_instance = Mock()
@@ -234,13 +236,15 @@ class TestCSCSHpcUserClient:
 
         # Mock API response
         mock_response = Mock()
-        mock_response.json.return_value = [
-            {
-                "posixName": "project1",
-                "unixGid": 30001,
-                "displayName": "Test Project 1",
-            }
-        ]
+        mock_response.json.return_value = {
+            "projects": [
+                {
+                    "posixName": "project1",
+                    "unixGid": 30001,
+                    "displayName": "Test Project 1",
+                }
+            ]
+        }
         mock_response.raise_for_status.return_value = None
 
         mock_client_instance = Mock()
@@ -263,13 +267,15 @@ class TestCSCSHpcUserClient:
 
         # Mock API response with different project
         mock_response = Mock()
-        mock_response.json.return_value = [
-            {
-                "posixName": "other_project",
-                "unixGid": 30099,
-                "displayName": "Other Project",
-            }
-        ]
+        mock_response.json.return_value = {
+            "response": [
+                {
+                    "posixName": "other_project",
+                    "unixGid": 30099,
+                    "displayName": "Other Project",
+                }
+            ]
+        }
         mock_response.raise_for_status.return_value = None
 
         mock_client_instance = Mock()

@@ -160,7 +160,7 @@ class CSCSHpcUserClient:
         with httpx.Client(**client_args) as client:
             response = client.get(url, params=params, headers=headers)
             response.raise_for_status()
-            return response.json()
+            return response.json()["projects"]
 
     def get_project_unix_gid(self, project_slug: str) -> Optional[int]:
         """Get unixGid for a specific project slug.
