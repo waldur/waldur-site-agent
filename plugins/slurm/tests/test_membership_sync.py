@@ -191,11 +191,12 @@ class MembershipSyncTest(unittest.TestCase):
             project_uuid=self.waldur_resource.project_uuid,
             project_name=self.waldur_resource.project_name,
             user_uuid=uuid.uuid4(),
-            user_username="course-test-00",
+            username="course-test-00",
             customer_uuid=self.waldur_resource.customer_uuid,
             customer_name=self.waldur_resource.customer_name,
             state=ServiceAccountState.OK,
             error_message="",
+            error_traceback="",
         )
         respx.get(
             f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/course_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"
