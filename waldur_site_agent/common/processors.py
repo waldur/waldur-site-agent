@@ -486,7 +486,6 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 marketplace_offering_users_list.sync,
                 client=self.waldur_rest_client,
                 offering_uuid=[self.offering.uuid],
-                state=[OfferingUserStateEnum.OK],
                 is_restricted=False,
             )
 
@@ -542,20 +541,21 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         # Update offering user usernames (only for users with blank usernames)
         self._update_offering_users(offering_users)
 
-        # Refresh local offering users
-        user_context["offering_users"] = pagination.get_all_paginated(
-            marketplace_offering_users_list.sync,
-            client=self.waldur_rest_client,
-            offering_uuid=[self.offering.uuid],
-            state=[OfferingUserStateEnum.OK],
-            is_restricted=False,
+        # Refresh local user_context cache
+        user_context_new = self._fetch_user_context_for_resource(waldur_resource.uuid.hex)
+        user_context.update(user_context_new)
+        logger.info(
+            "Using %s (%s) offering users, user count: %s",
+            self.offering.name,
+            self.offering.uuid,
+            len(user_context["offering_users"]),
         )
 
-        # Use only non-blank usernames from users in OK state
-        offering_usernames: set[str] = {
+        # Filter only team members with usernames set and in OK state
+        offering_usernames = {
             offering_user.username
             for offering_user in user_context["offering_users"]
-            if offering_user.username
+            if offering_user.state == OfferingUserStateEnum.OK
         }
 
         if not offering_usernames:
@@ -766,12 +766,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         if project_uuid is not None:
             filters["project_uuid"] = project_uuid
-        waldur_resources: list[WaldurResource] | None = marketplace_provider_resources_list.sync(
-            client=self.waldur_rest_client, **filters
+        waldur_resources: list[WaldurResource] = pagination.get_all_paginated(
+            marketplace_provider_resources_list.sync,
+            client=self.waldur_rest_client,
+            page_size=100,
+            **filters,
         )
-        if not waldur_resources:
-            logger.info("No resources to process")
-            return []
 
         return [
             waldur_resource for waldur_resource in waldur_resources if waldur_resource.backend_id
@@ -946,13 +946,11 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         )
         return offering_users
 
-    def _get_waldur_resource_team(self, resource: WaldurResource) -> list[ProjectUser] | None:
+    def _get_waldur_resource_team(self, resource: WaldurResource) -> list[ProjectUser]:
         logger.info("Fetching Waldur resource team")
-        team: list[ProjectUser] | None = marketplace_provider_resources_team_list.sync(
+        return marketplace_provider_resources_team_list.sync(
             client=self.waldur_rest_client, uuid=resource.uuid.hex
         )
-
-        return team
 
     def _group_resource_usernames(
         self, waldur_resource: WaldurResource, backend_resource_info: BackendResourceInfo
@@ -965,14 +963,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         # Offering users sync
         # The service fetches offering users from Waldur and pushes them to the cluster
         # If an offering user is not in the team anymore, it will be removed from the backend
-        team: list[ProjectUser] | None = self._get_waldur_resource_team(waldur_resource)
-        if not team:
-            logger.warning(
-                "No team found for resource %s, treating as empty team", waldur_resource.uuid.hex
-            )
-            team_user_uuids = set()
-        else:
-            team_user_uuids = {user.uuid for user in team}
+        team: list[ProjectUser] = self._get_waldur_resource_team(waldur_resource)
+        team_user_uuids = {user.uuid for user in team}
 
         offering_users: list[OfferingUser] = self._get_waldur_offering_users()
         self._update_offering_users(offering_users)
@@ -1132,7 +1124,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 )
                 if len(user_limits) == 0:
                     existing_user_limits = backend_user_limits.get(username)
-                    logger.info("The limits for user %s are not defined in Waldur", username)
+                    logger.debug("The limits for user %s are not set in Waldur", username)
                     if not existing_user_limits:
                         continue
                     logger.info("Unsetting the existing limits %s", existing_user_limits)
@@ -1361,7 +1353,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 client=self.waldur_rest_client, uuid=self.offering.uuid
             )
         )
-        waldur_resources: list[WaldurResource] | None = marketplace_provider_resources_list.sync(
+        waldur_resources = pagination.get_all_paginated(
+            marketplace_provider_resources_list.sync,
             client=self.waldur_rest_client,
             offering_uuid=[self.offering.uuid],
             state=[
@@ -1739,7 +1732,8 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
         )
 
     def _get_waldur_resources(self) -> dict[str, WaldurResource]:
-        waldur_resource_list = marketplace_provider_resources_list.sync(
+        waldur_resource_list = pagination.get_all_paginated(
+            marketplace_provider_resources_list.sync,
             offering_uuid=[self.offering.uuid],
             state=[
                 MarketplaceProviderResourcesListStateItem.OK,
