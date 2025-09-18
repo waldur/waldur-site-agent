@@ -76,7 +76,7 @@ from waldur_site_agent.backend.backends import (
     UnknownUsernameManagementBackend,
 )
 from waldur_site_agent.backend.exceptions import BackendError
-from waldur_site_agent.common import structures
+from waldur_site_agent.common import pagination, structures
 
 # Handle different Python versions
 if sys.version_info >= (3, 10):
@@ -605,8 +605,12 @@ def create_homedirs_for_offering_users() -> None:
             configuration.waldur_user_agent,
             offering.verify_ssl,
         )
-        offering_users = marketplace_offering_users_list.sync(
-            client=waldur_rest_client, offering_uuid=[offering.uuid], is_restricted=False
+        offering_users = pagination.get_all_paginated(
+            marketplace_offering_users_list.sync,
+            client=waldur_rest_client,
+            offering_uuid=[offering.uuid],
+            state=[OfferingUserStateEnum.OK],
+            is_restricted=False,
         )
 
         offering_user_usernames: set[str] = {
@@ -832,8 +836,11 @@ def sync_offering_users() -> None:
             configuration.waldur_user_agent,
             offering.verify_ssl,
         )
-        offering_users = marketplace_offering_users_list.sync(
-            client=waldur_rest_client, offering_uuid=[offering.uuid], is_restricted=False
+        offering_users = pagination.get_all_paginated(
+            marketplace_offering_users_list.sync,
+            client=waldur_rest_client,
+            offering_uuid=[offering.uuid],
+            is_restricted=False,
         )
         update_offering_users(offering, waldur_rest_client, offering_users)
 

@@ -19,7 +19,10 @@ class BackendType(Enum):
 
 console_handler = logging.StreamHandler(sys.stdout)
 logger = logging.getLogger(__name__)
-formatter = logging.Formatter("[%(levelname)s] [%(asctime)s] %(message)s")
+
+formatter = logging.Formatter(
+    "[%(levelname)s] [%(asctime)s] [%(thread)d] [%(threadName)s] %(message)s"
+)
 console_handler.setFormatter(formatter)
 
 blank_handler = logging.StreamHandler(sys.stdout)
