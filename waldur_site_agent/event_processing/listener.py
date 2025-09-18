@@ -1,10 +1,11 @@
 """Message listener module for Waldur STOMP plugin."""
 
 import json
+import time
 from typing import Callable
 
-import stomp
 import stomp.utils
+from stomp.exception import StompException
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import structures
@@ -14,17 +15,24 @@ def connect_to_stomp_server(
     connection: stomp.StompConnection12, username: str, password: str
 ) -> None:
     """Connects the existing connection to the STOMP server."""
-    if not connection.is_connected():
-        logger.debug("Connecting to STOMP server as user %s", username)
-        connection.connect(
-            username,
-            password,
-            wait=True,
-            headers={
-                "accept-version": "1.2",
-                "heart-beat": "10000,10000",  # Heartbeat configuration (client, server)
-            },
-        )
+    while not connection.is_connected():
+        try:
+            logger.debug("Connecting to STOMP server as user %s", username)
+            connection.connect(
+                username,
+                password,
+                wait=True,
+                headers={
+                    "accept-version": "1.2",
+                    "heart-beat": "10000,10000",  # Heartbeat configuration (client, server)
+                },
+            )
+        except StompException as e:
+            logger.error(
+                "Failed to connect to the STOMP server, retrying in 10 seconds, reason: %s",
+                e.__class__.__name__,
+            )
+            time.sleep(10)
 
 
 class WaldurListener(stomp.ConnectionListener):
@@ -52,7 +60,7 @@ class WaldurListener(stomp.ConnectionListener):
 
     def on_error(self, frame: stomp.utils.Frame) -> None:
         """Error handler method."""
-        logger.info("Received an error %s", frame.body)
+        logger.error("Received an error %s", frame.body)
 
     def on_message(self, frame: stomp.utils.Frame) -> None:
         """Message handler method."""
