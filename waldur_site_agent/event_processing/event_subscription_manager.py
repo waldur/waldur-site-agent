@@ -1,6 +1,7 @@
 """Classes and functions for event subscription management."""
 
 import ssl
+import threading
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -239,6 +240,18 @@ class EventSubscriptionManager:
                 self.user_agent,
             ),
         )
+
+        def create_stomp_thread(callback: Callable) -> threading.Thread:
+            thread = threading.Thread(
+                target=callback,
+                group=None,
+                name=f"waldur-{self.observable_object_type}-listener",
+            )
+            thread.daemon = True  # Don't let thread prevent termination
+            thread.start()
+            return thread
+
+        connection.transport.override_threading(create_stomp_thread)
         return connection
 
     def start_stomp_connection(

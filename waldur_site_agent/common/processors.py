@@ -18,7 +18,7 @@ from __future__ import annotations
 import abc
 import traceback
 from time import sleep
-from typing import Optional
+from typing import Any, Optional
 
 from waldur_api_client.api.backend_resource_requests import (
     backend_resource_requests_retrieve,
@@ -113,7 +113,7 @@ from waldur_site_agent.backend import exceptions as backend_exceptions
 from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
-from waldur_site_agent.common import structures, utils
+from waldur_site_agent.common import pagination, structures, utils
 from waldur_site_agent.common.structures import AccountType
 
 
@@ -482,9 +482,11 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             user_uuids = {user.uuid for user in team}
 
             # Get offering users
-            offering_users_all: list[OfferingUser] | None = marketplace_offering_users_list.sync(
+            offering_users_all: list[OfferingUser] | None = pagination.get_all_paginated(
+                marketplace_offering_users_list.sync,
                 client=self.waldur_rest_client,
                 offering_uuid=[self.offering.uuid],
+                state=[OfferingUserStateEnum.OK],
                 is_restricted=False,
             )
 
@@ -541,24 +543,25 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         self._update_offering_users(offering_users)
 
         # Refresh local offering users
-        user_context["offering_users"] = marketplace_offering_users_list.sync(
-            offering_uuid=[self.offering.uuid],
-            is_restricted=False,
+        user_context["offering_users"] = pagination.get_all_paginated(
+            marketplace_offering_users_list.sync,
             client=self.waldur_rest_client,
+            offering_uuid=[self.offering.uuid],
+            state=[OfferingUserStateEnum.OK],
+            is_restricted=False,
         )
 
         # Use only non-blank usernames from users in OK state
         offering_usernames: set[str] = {
             offering_user.username
             for offering_user in user_context["offering_users"]
-            if offering_user.state == OfferingUserStateEnum.OK and offering_user.username
+            if offering_user.username
         }
 
         if not offering_usernames:
             logger.info("No users to add to resource")
             return
 
-        logger.info("Adding usernames to resource in backend")
         self.resource_backend.add_users_to_resource(
             waldur_resource.backend_id,
             offering_usernames,
@@ -819,20 +822,26 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         self._process_resources(resource_report)
 
-    def _get_user_offering_users(self, user_uuid: str) -> list[OfferingUser]:
+    def _get_user_offering_users(
+        self, user_uuid: str, offering_uuid: str | None = None
+    ) -> list[OfferingUser]:
         """Fetch offering users for a specific user UUID.
 
         Args:
             user_uuid: UUID of the user to look up
+            offering_uuid: optional UUID of the offering
 
         Returns:
-            List of offering users associated with the specified user
+            List of offering users associated with the specified user and the offering if specified
 
         Raises:
             ObjectNotFoundError: If no offering users found for the user
         """
+        filters: dict[str, Any] = {"user_uuid": user_uuid, "is_restricted": False}
+        if offering_uuid is not None:
+            filters["offering_uuid"] = [offering_uuid]
         offering_users: list[OfferingUser] = marketplace_offering_users_list.sync(
-            client=self.waldur_rest_client, user_uuid=user_uuid, is_restricted=False
+            client=self.waldur_rest_client, **filters
         )
         return offering_users
 
@@ -847,7 +856,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             project_uuid: UUID of the project where the role changed
             granted: True if access was granted, False if revoked
         """
-        offering_users: list[OfferingUser] = self._get_user_offering_users(user_uuid)
+        offering_users: list[OfferingUser] = self._get_user_offering_users(
+            user_uuid, self.offering.uuid
+        )
         if len(offering_users) == 0:
             logger.info(
                 "User %s is not linked to the offering %s (%s)",
@@ -860,7 +871,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         self._update_offering_users(offering_users)
 
         # Refresh offering users after username generation
-        offering_users = self._get_user_offering_users(user_uuid)
+        offering_users = self._get_user_offering_users(user_uuid, self.offering.uuid)
 
         username = offering_users[0].username
         logger.info("Using offering user with username %s", username)
@@ -927,7 +938,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             ObjectNotFoundError: If no offering users found
         """
         logger.info("Fetching Waldur offering users")
-        offering_users: list[OfferingUser] = marketplace_offering_users_list.sync(
+        offering_users: list[OfferingUser] = pagination.get_all_paginated(
+            marketplace_offering_users_list.sync,
             client=self.waldur_rest_client,
             offering_uuid=[self.offering.uuid],
             is_restricted=False,
@@ -1535,7 +1547,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         offering_users: list[OfferingUser] = marketplace_offering_users_list.sync(
             client=self.waldur_rest_client, user_username=username, query=self.offering.uuid
         )
-        offering_user = None if not offering_users else offering_users[0]
+        offering_user = offering_users[0] if offering_users else None
 
         for component_usage in waldur_component_usages:
             component_type = component_usage.type_

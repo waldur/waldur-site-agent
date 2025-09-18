@@ -311,7 +311,10 @@ class BaseBackend(ABC):
         """Add specified users to the resource on the backend."""
         del kwargs
         logger.info(
-            "Adding users to resource %s on backend: %s", resource_backend_id, " ,".join(user_ids)
+            "Adding %s users to resource %s on backend: %s",
+            len(user_ids),
+            resource_backend_id,
+            " ,".join(user_ids),
         )
         added_users = set()
         for username in user_ids:
