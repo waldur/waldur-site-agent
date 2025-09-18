@@ -67,6 +67,7 @@ from waldur_api_client.models import (
     ComponentUsageCreateRequest,
     ComponentUsageItemRequest,
     CourseAccount,
+    MarketplaceOfferingUsersListStateItem,
     ProjectServiceAccount,
     ResourceSetLimitsRequest,
     ServiceAccountState,
@@ -257,13 +258,14 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             self.offering.name,
             self.offering.uuid,
         )
-        orders: list[OrderDetails] | None = marketplace_orders_list.sync(
+        orders: list[OrderDetails] = marketplace_orders_list.sync(
             client=self.waldur_rest_client,
             offering_uuid=self.offering.uuid,
             state=[
                 MarketplaceOrdersListStateItem.PENDING_PROVIDER,
                 MarketplaceOrdersListStateItem.EXECUTING,
             ],
+            page_size=100,
         )
 
         if not orders:
@@ -773,9 +775,18 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             **filters,
         )
 
-        return [
+        waldur_resources_filtered = [
             waldur_resource for waldur_resource in waldur_resources if waldur_resource.backend_id
         ]
+
+        logger.info(
+            "Fetched %s resources (%s with backend_id set) under %s offering",
+            len(waldur_resources),
+            len(waldur_resources_filtered),
+            self.offering.name,
+        )
+
+        return waldur_resources_filtered
 
     def process_resource_by_uuid(self, resource_uuid: str) -> None:
         """Process a specific resource's status and membership data.
@@ -937,13 +948,18 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         Raises:
             ObjectNotFoundError: If no offering users found
         """
-        logger.info("Fetching Waldur offering users")
+        logger.info("Fetching Waldur offering users (OK and Requested)")
         offering_users: list[OfferingUser] = pagination.get_all_paginated(
             marketplace_offering_users_list.sync,
             client=self.waldur_rest_client,
             offering_uuid=[self.offering.uuid],
+            state=[
+                MarketplaceOfferingUsersListStateItem.OK,
+                MarketplaceOfferingUsersListStateItem.REQUESTED,
+            ],
             is_restricted=False,
         )
+        logger.info("Fetched %d offering users", len(offering_users))
         return offering_users
 
     def _get_waldur_resource_team(self, resource: WaldurResource) -> list[ProjectUser]:
@@ -1157,7 +1173,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.warning("No service provider configured, skipping service accounts sync")
             return
 
-        service_accounts = marketplace_service_providers_project_service_accounts_list.sync(
+        service_accounts = pagination.get_all_paginated(
+            marketplace_service_providers_project_service_accounts_list.sync,
             service_provider_uuid=self.service_provider.uuid.hex,
             project_uuid=waldur_resource.project_uuid.hex,
             client=self.waldur_rest_client,
@@ -1189,7 +1206,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.warning("No service provider configured, skipping service accounts sync")
             return
 
-        course_accounts = marketplace_service_providers_course_accounts_list.sync(
+        course_accounts = pagination.get_all_paginated(
+            marketplace_service_providers_course_accounts_list.sync,
             service_provider_uuid=self.service_provider.uuid.hex,
             project_uuid=waldur_resource.project_uuid.hex,
             client=self.waldur_rest_client,
@@ -1366,6 +1384,10 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             logger.info("No resources to process")
             return
 
+        logger.info(
+            "Fetched %s resources under %s offering", len(waldur_resources), self.offering.name
+        )
+
         for waldur_resource in waldur_resources:
             try:
                 self._process_resource_with_retries(waldur_resource, waldur_offering)
@@ -1487,7 +1509,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         current_time = backend_utils.get_current_time_in_timezone(self.timezone)
         month_start = backend_utils.month_start(current_time).date()
-        existing_usages: list[ComponentUsage] | None = marketplace_component_usages_list.sync(
+        existing_usages: list[ComponentUsage] = marketplace_component_usages_list.sync(
             client=self.waldur_rest_client, resource_uuid=resource_uuid, billing_period=month_start
         )
         for component, amount in total_usage.items():
@@ -1684,7 +1706,8 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
             )
             return
         waldur_project = waldur_projects[0]
-        existing_backend_resources = backend_resources_list.sync(
+        existing_backend_resources = pagination.get_all_paginated(
+            backend_resources_list.sync,
             backend_id=local_resource_info.backend_id,
             project_uuid=waldur_project.uuid,
             offering_uuid=self.offering.uuid,
@@ -1732,7 +1755,7 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
         )
 
     def _get_waldur_resources(self) -> dict[str, WaldurResource]:
-        waldur_resource_list = pagination.get_all_paginated(
+        waldur_resources = pagination.get_all_paginated(
             marketplace_provider_resources_list.sync,
             offering_uuid=[self.offering.uuid],
             state=[
@@ -1742,11 +1765,18 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
             ],
             client=self.waldur_rest_client,
         )
-        return {
-            resource.backend_id: resource
-            for resource in waldur_resource_list
-            if resource.backend_id
+
+        waldur_resources_filtered = {
+            resource.backend_id: resource for resource in waldur_resources if resource.backend_id
         }
+
+        logger.info(
+            "Fetched %s resources (%s with backend_id set) under %s offering",
+            len(waldur_resources),
+            len(waldur_resources_filtered),
+            self.offering.name,
+        )
+        return waldur_resources_filtered
 
     def process_request(self, request_uuid: str) -> None:
         """Process backend resource request.

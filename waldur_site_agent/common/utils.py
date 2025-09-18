@@ -563,6 +563,7 @@ def diagnostics() -> bool:
                     MarketplaceOrdersListStateItem.PENDING_PROVIDER,
                     MarketplaceOrdersListStateItem.EXECUTING,
                 ],
+                page_size=100,
             )
             logger.info("Active orders:")
             format_string = "{:<10} {:<10} {:<10}"
@@ -897,7 +898,8 @@ def sync_resource_limits() -> None:
             configuration.waldur_user_agent,
             offering.verify_ssl,
         )
-        resources = marketplace_resources_list.sync(
+        resources = pagination.get_all_paginated(
+            marketplace_resources_list.sync,
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
             state=[MarketplaceResourcesListStateItem.OK, MarketplaceResourcesListStateItem.ERRED],

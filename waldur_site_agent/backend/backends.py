@@ -310,6 +310,10 @@ class BaseBackend(ABC):
     ) -> set[str]:
         """Add specified users to the resource on the backend."""
         del kwargs
+        if len(user_ids) < 1:
+            logger.info("No new users to add")
+            return set()
+
         logger.info(
             "Adding %s users to resource %s on backend: %s",
             len(user_ids),
@@ -363,8 +367,13 @@ class BaseBackend(ABC):
         self, resource_backend_id: str, usernames: set[str]
     ) -> list[str]:
         """Remove specified users from the resource on the backend."""
+        if len(usernames) < 1:
+            logger.info("No users to remove")
+            return []
+
         logger.info(
-            "Removing users from resource %s on backend: %s",
+            "Removing %s users from resource %s on backend: %s",
+            len(usernames),
             resource_backend_id,
             " ,".join(usernames),
         )
