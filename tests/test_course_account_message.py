@@ -272,7 +272,7 @@ class CourseAccountMessageTest(TestCase):
         )
 
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}&page_size=100&page=1",
         ).respond(200, json=[active_account.to_dict(), closed_account.to_dict()])
 
         processor = OfferingMembershipProcessor(self.offering)
