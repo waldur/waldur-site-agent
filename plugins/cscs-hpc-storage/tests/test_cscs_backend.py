@@ -133,6 +133,7 @@ class TestCscsHpcStorageBackend:
         mock_resource.uuid.hex = str(uuid4())
         mock_resource.name = "Test Storage"
         mock_resource.slug = "test-storage"
+        mock_resource.offering_customer_slug = "cscs"
         mock_resource.customer_slug = "university"
         mock_resource.customer_name = "University"
         mock_resource.customer_uuid = Mock()
@@ -156,8 +157,7 @@ class TestCscsHpcStorageBackend:
         assert storage_json["itemId"] == mock_resource.uuid.hex
         assert storage_json["status"] == "pending"
         assert (
-            storage_json["mountPoint"]["default"]
-            == "/lustre-fs/store/university/physics-dept/test-storage"
+            storage_json["mountPoint"]["default"] == "/lustre-fs/store/cscs/university/physics-dept"
         )
         assert storage_json["permission"]["value"] == "2770"
         assert len(storage_json["quotas"]) == 4  # 2 space + 2 inode quotas
