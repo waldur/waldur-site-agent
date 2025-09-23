@@ -13,8 +13,8 @@ servers and storage management systems.
 
 - **REST API Proxy**: Provides HTTP API access to storage resource information from Waldur
 - **Multi-offering support**: Aggregates resources from multiple storage system offerings (capstor, vast, iopsstor)
-- **Hierarchical storage structure**: Maps Waldur organization → customer → project to storage
-  tenant → customer → project
+- **Hierarchical storage structure**: Maps Waldur offering customer → resource customer → resource project to
+  storage tenant → customer → project
 - **Configurable quotas**: Automatic inode quota calculation based on storage size
 - **External HPC User API integration**: Fetches Unix GID values for storage accounts with configurable SOCKS proxy support
 - **GID caching**: Project GID values are cached in memory until server restart to reduce external API calls
@@ -188,21 +188,22 @@ curl "http://0.0.0.0:8080/api/storage-resources/?storage_system=vast&data_type=u
 
 ### Waldur to Storage Hierarchy
 
-- **Waldur Organization** → **Storage Tenant** (customer_slug)
-- **Waldur Project** → **Storage Customer** (project_slug)
-- **Waldur Resource** → **Storage Project** (resource_slug)
+- **Waldur Offering Customer** → **Storage Tenant** (offering_customer_slug)
+- **Waldur Resource Customer** → **Storage Customer** (customer_slug)
+- **Waldur Resource Project** → **Storage Project** (project_slug)
 
 ### Mount Point Generation
 
-Mount points follow the pattern: `/{storage_system}/store/{tenant}/{customer}/{project}`
+Mount points follow the pattern: `/{storage_system}/{data_type}/{tenant}/{customer}/{project}`
 
-Example: `/capstor/store/university/physics-dept/climate-sim`
+Example: `/capstor/store/cscs/university-physics/climate-sim`
 
 Where:
 - `storage_system`: From offering slug (`waldur_resource.offering_slug`)
-- `tenant`: Waldur customer slug (`waldur_resource.customer_slug`)
-- `customer`: Waldur project slug (`waldur_resource.project_slug`)
-- `project`: Waldur resource slug (`waldur_resource.slug`)
+- `data_type`: Storage data type (e.g., `store`, `users`, `scratch`, `archive`)
+- `tenant`: Offering customer slug (`waldur_resource.offering_customer_slug`)
+- `customer`: Resource customer slug (`waldur_resource.customer_slug`)
+- `project`: Resource project slug (`waldur_resource.project_slug`)
 
 ### Resource Attributes
 
@@ -435,6 +436,15 @@ storage JSON format. This is useful for troubleshooting and understanding the so
 - **Useful for debugging**: Compare agent config vs Waldur state, see all available offering data
 
 ## Recent Improvements
+
+### Storage Hierarchy Mapping Update
+
+The storage hierarchy mapping has been updated to better align with multi-tenant storage architectures:
+
+- **Tenant level**: Now uses `offering_customer_slug` (the customer who owns the offering)
+- **Customer level**: Now uses `customer_slug` (the customer using the resource)
+- **Project level**: Now uses `project_slug` (the project containing the resource)
+- **Rationale**: This mapping provides clearer organizational boundaries in multi-tenant environments
 
 ### Multi-Offering Storage System Support
 
