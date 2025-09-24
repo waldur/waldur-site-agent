@@ -5,6 +5,7 @@ from typing import Optional
 from unittest import mock
 
 import respx
+import httpx
 from waldur_api_client import AuthenticatedClient, models
 from waldur_api_client.models import ResourceState
 from waldur_api_client.models.merged_plugin_options import MergedPluginOptions
@@ -28,15 +29,26 @@ def setup_common_respx_mocks(
     waldur_resource: dict,
     waldur_resource_team: Optional[list] = None,
     waldur_offering_users: Optional[dict] = None,
+    resource_backend_id: Optional[str] = None,
 ) -> None:
     """Setup common respx mocks for order processing tests."""
     respx.get(f"{base_url}/api/users/me/").respond(200, json=waldur_user)
     respx.get(f"{base_url}/api/marketplace-provider-offerings/{OFFERING.uuid}/").respond(
         200, json=waldur_offering
     )
-    respx.get(f"{base_url}/api/marketplace-provider-resources/{waldur_resource['uuid']}/").respond(
-        200, json=waldur_resource
-    )
+    if resource_backend_id:
+        waldur_resource_with_backend_id = waldur_resource.copy()
+        waldur_resource_with_backend_id["backend_id"] = resource_backend_id
+        respx.get(f"{base_url}/api/marketplace-provider-resources/{waldur_resource['uuid']}/").mock(
+            side_effect=[
+                httpx.Response(200, json=waldur_resource),
+                httpx.Response(200, json=waldur_resource_with_backend_id),
+            ]
+        )
+    else:
+        respx.get(
+            f"{base_url}/api/marketplace-provider-resources/{waldur_resource['uuid']}/"
+        ).respond(200, json=waldur_resource)
 
     if waldur_resource_team is not None:
         respx.get(
@@ -221,6 +233,7 @@ class CreationOrderTest(unittest.TestCase):
             self.waldur_resource,
             self.waldur_resource_team,
             self.waldur_offering_user,
+            allocation_account,
         )
         request_order_set_as_error = setup_order_respx_mocks(
             self.BASE_URL, self.order_uuid, self.waldur_order
@@ -271,6 +284,7 @@ class CreationOrderTest(unittest.TestCase):
             self.waldur_resource,
             self.waldur_resource_team,
             self.waldur_offering_user,
+            allocation_account,
         )
         setup_order_respx_mocks(self.BASE_URL, self.order_uuid, self.waldur_order)
         slurm_client = setup_slurm_client_mocks(
