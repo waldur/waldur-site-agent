@@ -236,7 +236,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             order: The order that failed to process
             e: The exception that occurred during processing
         """
-        name = order.attributes.get("name", "N/A") if order.attributes else "N/A"
+        name = order.resource_name or "N/A"
         logger.exception(
             "Error while processing order %s (%s), type %s, state %s: %s",
             order.uuid,
@@ -339,7 +339,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         try:
             logger.info(
                 "Processing order %s (%s) type %s, state %s",
-                order.attributes.get("name", "N/A") if order.attributes else "N/A",
+                order.resource_name or "N/A",
                 order.uuid,
                 order.type_,
                 order.state,
@@ -347,8 +347,8 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
             if order.state in [OrderState.DONE, OrderState.ERRED]:
                 logger.info(
-                    "Order %s (%s) is in finished state %s, skipping processing",
-                    order.attributes.get("name", "N/A") if order.attributes else "N/A",
+                    "Order %s (%s) is in a terminal state %s, skipping processing",
+                    order.resource_name or "N/A",
                     order.uuid,
                     order.state,
                 )
@@ -392,6 +392,13 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 )
 
                 logger.info("The order has been successfully processed")
+
+                # Refresh local order
+                order = marketplace_orders_retrieve.sync(
+                    client=self.waldur_rest_client, uuid=order.uuid.hex
+                )
+
+                self._post_process_order(order)
             else:
                 logger.warning("The order processing was not finished, skipping to the next one")
 
@@ -401,13 +408,16 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 order.uuid,
                 e,
             )
-            order_set_state_erred_request = OrderSetStateErredRequest(
-                error_message=str(e),
-                error_traceback=traceback.format_exc(),
-            )
-            marketplace_orders_set_state_erred.sync_detailed(
-                client=self.waldur_rest_client, uuid=order.uuid, body=order_set_state_erred_request
-            )
+            if order.state != OrderState.DONE:
+                order_set_state_erred_request = OrderSetStateErredRequest(
+                    error_message=str(e),
+                    error_traceback=traceback.format_exc(),
+                )
+                marketplace_orders_set_state_erred.sync_detailed(
+                    client=self.waldur_rest_client,
+                    uuid=order.uuid,
+                    body=order_set_state_erred_request,
+                )
 
     def _create_resource(
         self,
@@ -585,28 +595,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         if not order:
             logger.error("Error during order processing: Order is None")
             return False
-        # Wait until Waldur resource is created
-        attempts = 0
-        max_attempts = 4
-        while not order.marketplace_resource_uuid:
-            if attempts > max_attempts:
-                logger.error("Order processing timed out")
-                return False
 
-            if order.state != OrderState.EXECUTING:
-                logger.error("Order has unexpected state %s", order.state)
-                return False
-
-            logger.info("Waiting for resource creation...")
-            sleep(5)
-            order_uuid = order.uuid
-            updated_order: OrderDetails | None = marketplace_orders_retrieve.sync(
-                client=self.waldur_rest_client, uuid=order_uuid
-            )
-            if not updated_order:
-                raise ValueError(f"Failed to get order {order_uuid} info")
-            order = updated_order
-            attempts += 1
         waldur_resource: WaldurResource | None = marketplace_provider_resources_retrieve.sync(
             uuid=order.marketplace_resource_uuid.hex, client=self.waldur_rest_client
         )
@@ -614,6 +603,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             raise ObjectNotFoundError(
                 f"Waldur resource {order.marketplace_resource_uuid.hex} not found"
             )
+
         create_resource = True
         if waldur_resource.backend_id != "":
             logger.info(
@@ -628,7 +618,8 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     waldur_resource.backend_id,
                 )
                 create_resource = False
-        # Fetch user context once for both resource creation and user addition
+
+        # Fetch user context for resource creation
         user_context = self._fetch_user_context_for_resource(order.marketplace_resource_uuid.hex)
 
         backend_resource_info = None
@@ -642,8 +633,6 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             return False
 
         waldur_resource.backend_id = backend_resource_info.backend_id
-
-        self._add_users_to_resource(waldur_resource, user_context)
 
         return True
 
@@ -681,7 +670,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         logger.info(
             "The limits for %s were updated successfully from %s to %s",
             waldur_resource.name,
-            order.attributes.get("old_limits", "N/A") if order.attributes else "N/A",
+            order.resource_name or "N/A",
             new_limits.to_dict() if new_limits else "N/A",
         )
         return True
@@ -710,6 +699,28 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         self.resource_backend.delete_resource(waldur_resource, project_slug=project_slug)
 
         logger.info("Allocation has been terminated successfully")
+        return True
+
+    def _post_process_order(self, order: OrderDetails) -> bool:
+        if order.type_ == RequestTypes.CREATE:
+            logger.info(
+                "Running post process order script for %s (%s)",
+                order.resource_name or "N/A",
+                order.uuid.hex,
+            )
+            # Get Waldur resource data
+            waldur_resource: WaldurResource = marketplace_provider_resources_retrieve.sync(
+                uuid=order.marketplace_resource_uuid.hex, client=self.waldur_rest_client
+            )
+
+            # Fetch fresh user context for adding users
+            user_context = self._fetch_user_context_for_resource(
+                order.marketplace_resource_uuid.hex
+            )
+
+            # Add users to the backend resource
+            self._add_users_to_resource(waldur_resource, user_context)
+
         return True
 
 
