@@ -6,6 +6,7 @@ from uuid import NAMESPACE_OID, uuid5
 
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_provider_offerings import (
+    marketplace_provider_offerings_customers_list,
     marketplace_provider_offerings_retrieve,
 )
 from waldur_api_client.api.marketplace_resources import marketplace_resources_list
@@ -327,6 +328,25 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         """Generate mount point path based on hierarchy and storage data type."""
         return f"/{storage_system}/{data_type.lower()}/{tenant_id}/{customer}/{project_id}"
 
+    def _generate_customer_mount_point(
+        self,
+        storage_system: str,
+        tenant_id: str,
+        customer: str,
+        data_type: str = "store",
+    ) -> str:
+        """Generate mount point path for customer-level entry."""
+        return f"/{storage_system}/{data_type.lower()}/{tenant_id}/{customer}"
+
+    def _generate_tenant_mount_point(
+        self,
+        storage_system: str,
+        tenant_id: str,
+        data_type: str = "store",
+    ) -> str:
+        """Generate mount point path for tenant-level entry."""
+        return f"/{storage_system}/{data_type.lower()}/{tenant_id}"
+
     def _calculate_inode_quotas(self, storage_quota_tb: float) -> tuple[int, int]:
         """Calculate inode quotas based on storage size and coefficients."""
         # Base calculation: storage in TB * configurable base multiplier
@@ -417,6 +437,41 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             "Using and caching mock unixGid %d for project %s (dev mode)", mock_gid, project_slug
         )
         return mock_gid
+
+    def _get_offering_customers(self, offering_uuid: str, client: AuthenticatedClient) -> dict:
+        """Get customers for a specific offering.
+
+        Args:
+            offering_uuid: UUID of the offering
+            client: Authenticated Waldur API client
+
+        Returns:
+            Dictionary mapping customer slugs to customer information
+        """
+        try:
+            response = marketplace_provider_offerings_customers_list.sync_detailed(
+                uuid=offering_uuid, client=client
+            )
+
+            if not response.parsed:
+                logger.warning("No customers found for offering %s", offering_uuid)
+                return {}
+
+            customers = {}
+            for customer in response.parsed:
+                customers[customer.slug] = {
+                    "itemId": customer.uuid.hex,
+                    "key": customer.slug,
+                    "name": customer.name,
+                    "uuid": customer.uuid.hex,
+                }
+
+            logger.debug("Found %d customers for offering %s", len(customers), offering_uuid)
+            return customers
+
+        except Exception as e:
+            logger.error("Failed to fetch customers for offering %s: %s", offering_uuid, e)
+            return {}
 
     def get_gid_cache_stats(self) -> dict:
         """Get statistics about the GID cache.
@@ -861,7 +916,141 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 "path": storage_data_type.lower(),
                 "active": True,
             },
-            "parentItemId": None,  # Could be set based on hierarchy if needed
+            "parentItemId": None,  # Will be set for hierarchical resources
+        }
+
+    def _create_tenant_storage_resource_json(
+        self,
+        tenant_id: str,
+        tenant_name: str,
+        storage_system: str,
+        storage_data_type: str,
+        offering_uuid: Optional[str] = None,
+    ) -> dict:
+        """Create JSON structure for a tenant-level storage resource."""
+        logger.debug("Creating tenant storage resource JSON for tenant %s", tenant_id)
+
+        # Generate tenant mount point
+        mount_point = self._generate_tenant_mount_point(
+            storage_system=storage_system,
+            tenant_id=tenant_id,
+            data_type=storage_data_type,
+        )
+
+        # Use offering UUID if provided, otherwise generate deterministic UUID
+        tenant_item_id = (
+            offering_uuid
+            if offering_uuid
+            else self._generate_deterministic_uuid(
+                f"tenant:{tenant_id}-{storage_system}-{storage_data_type}"
+            )
+        )
+
+        return {
+            "itemId": tenant_item_id,
+            "status": "pending",  # Tenant entries are always pending
+            "mountPoint": {"default": mount_point},
+            "permission": {
+                "permissionType": "octal",
+                "value": "775",  # Default permissions for tenant level
+            },
+            "quotas": None,  # Tenant entries don't have quotas
+            "target": {
+                "targetType": "tenant",
+                "targetItem": {
+                    "itemId": offering_uuid
+                    if offering_uuid
+                    else self._generate_deterministic_uuid(f"tenant:{tenant_id}"),
+                    "key": tenant_id.lower(),
+                    "name": tenant_name,
+                },
+            },
+            "storageSystem": {
+                "itemId": self._generate_deterministic_uuid(f"storage_system:{storage_system}"),
+                "key": storage_system.lower(),
+                "name": storage_system.upper(),
+                "active": True,
+            },
+            "storageFileSystem": {
+                "itemId": self._generate_deterministic_uuid(
+                    f"storage_file_system:{self.storage_file_system}"
+                ),
+                "key": self.storage_file_system.lower(),
+                "name": self.storage_file_system.upper(),
+                "active": True,
+            },
+            "storageDataType": {
+                "itemId": self._generate_deterministic_uuid(
+                    f"storage_data_type:{storage_data_type}"
+                ),
+                "key": storage_data_type.lower(),
+                "name": storage_data_type.upper(),
+                "active": True,
+            },
+            "parentItemId": None,  # Tenant entries are top-level
+        }
+
+    def _create_customer_storage_resource_json(
+        self,
+        customer_info: dict,
+        storage_system: str,
+        storage_data_type: str,
+        tenant_id: str,
+        parent_tenant_id: Optional[str] = None,
+    ) -> dict:
+        """Create JSON structure for a customer-level storage resource."""
+        logger.debug(
+            "Creating customer storage resource JSON for customer %s", customer_info["key"]
+        )
+
+        # Generate customer mount point
+        mount_point = self._generate_customer_mount_point(
+            storage_system=storage_system,
+            tenant_id=tenant_id,
+            customer=customer_info["key"],
+            data_type=storage_data_type,
+        )
+
+        return {
+            "itemId": customer_info["itemId"],
+            "status": "pending",  # Customer entries are always pending
+            "mountPoint": {"default": mount_point},
+            "permission": {
+                "permissionType": "octal",
+                "value": "775",  # Default permissions for customer level
+            },
+            "quotas": None,  # Customer entries typically don't have quotas
+            "target": {
+                "targetType": "customer",
+                "targetItem": {
+                    "itemId": customer_info["itemId"],
+                    "key": customer_info["key"],
+                    "name": customer_info["name"],
+                },
+            },
+            "storageSystem": {
+                "itemId": self._generate_deterministic_uuid(f"storage_system:{storage_system}"),
+                "key": storage_system.lower(),
+                "name": storage_system.upper(),
+                "active": True,
+            },
+            "storageFileSystem": {
+                "itemId": self._generate_deterministic_uuid(
+                    f"storage_file_system:{self.storage_file_system}"
+                ),
+                "key": self.storage_file_system.lower(),
+                "name": self.storage_file_system.upper(),
+                "active": True,
+            },
+            "storageDataType": {
+                "itemId": self._generate_deterministic_uuid(
+                    f"storage_data_type:{storage_data_type}"
+                ),
+                "key": storage_data_type.lower(),
+                "name": storage_data_type.upper(),
+                "active": True,
+            },
+            "parentItemId": parent_tenant_id,  # Reference to parent tenant entry
         }
 
     def _get_all_storage_resources(
@@ -931,8 +1120,15 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 "total": total_count,
             }
 
+            # Get offering customers for hierarchical resources
+            offering_customers = self._get_offering_customers(offering_uuid, client)
+
             # Convert Waldur resources to storage JSON format
+            # We'll create tenant, customer-level and project-level entries (three-tier hierarchy)
             storage_resources = []
+            tenant_entries = {}  # Track unique tenant entries by tenant_id-storage_system-data_type
+            customer_entries = {}  # Track unique customer entries by slug-system-data_type
+
             for i, resource in enumerate(waldur_resources):
                 # Log raw resource data for debugging
                 logger.info("Processing resource %d/%d", i + 1, len(waldur_resources))
@@ -997,12 +1193,90 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
                 # Validate resource data before processing
                 self._validate_resource_data(resource)
+
                 # Use offering_slug as the storage system name
                 storage_system_name = resource.offering_slug
                 logger.debug("  Using storage_system from offering_slug: %s", storage_system_name)
 
+                # Get storage data type for the resource
+                storage_data_type = "store"  # default
+                if resource.attributes and not isinstance(resource.attributes, Unset):
+                    storage_data_type = resource.attributes.additional_properties.get(
+                        "storage_data_type", storage_data_type
+                    )
+
+                # Get tenant information
+                tenant_id = resource.offering_customer_slug  # tenant is the offering customer
+                tenant_name = (
+                    resource.offering_customer_name
+                    if hasattr(resource, "offering_customer_name")
+                    and not isinstance(resource.offering_customer_name, Unset)
+                    else tenant_id.upper()
+                )
+
+                # Create tenant-level entry if not already created for this combination
+                tenant_key = f"{tenant_id}-{storage_system_name}-{storage_data_type}"
+                if tenant_key not in tenant_entries:
+                    # Get offering UUID from resource (use str() for proper UUID format)
+                    offering_uuid_str = (
+                        str(resource.offering_uuid)
+                        if hasattr(resource, "offering_uuid")
+                        and not isinstance(resource.offering_uuid, Unset)
+                        else None
+                    )
+
+                    tenant_resource = self._create_tenant_storage_resource_json(
+                        tenant_id=tenant_id,
+                        tenant_name=tenant_name,
+                        storage_system=storage_system_name,
+                        storage_data_type=storage_data_type,
+                        offering_uuid=offering_uuid_str,
+                    )
+                    storage_resources.append(tenant_resource)
+                    tenant_entries[tenant_key] = tenant_resource["itemId"]
+                    logger.debug(
+                        "Created tenant entry for %s with offering UUID %s",
+                        tenant_key,
+                        offering_uuid_str,
+                    )
+
+                # Create customer-level entry if not already created for this combination
+                customer_key = f"{resource.customer_slug}-{storage_system_name}-{storage_data_type}"
+                if (
+                    customer_key not in customer_entries
+                    and resource.customer_slug in offering_customers
+                ):
+                    customer_info = offering_customers[resource.customer_slug]
+                    # Get parent tenant ID for this customer
+                    parent_tenant_id = tenant_entries.get(tenant_key)
+
+                    customer_resource = self._create_customer_storage_resource_json(
+                        customer_info=customer_info,
+                        storage_system=storage_system_name,
+                        storage_data_type=storage_data_type,
+                        tenant_id=tenant_id,
+                        parent_tenant_id=parent_tenant_id,  # Link to parent tenant
+                    )
+                    storage_resources.append(customer_resource)
+                    customer_entries[customer_key] = customer_resource["itemId"]
+                    logger.debug(
+                        "Created customer entry for %s with parent tenant %s",
+                        customer_key,
+                        parent_tenant_id,
+                    )
+
+                # Create project-level resource (the original resource)
                 storage_resource = self._create_storage_resource_json(resource, storage_system_name)
                 if storage_resource is not None:
+                    # Set parent reference if customer entry exists
+                    if customer_key in customer_entries:
+                        storage_resource["parentItemId"] = customer_entries[customer_key]
+                        logger.debug(
+                            "Set parentItemId %s for resource %s",
+                            customer_entries[customer_key],
+                            resource.uuid,
+                        )
+
                     storage_resources.append(storage_resource)
 
             # Apply filters to the converted storage resources
@@ -1672,6 +1946,23 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                     "Found %d resources from API (total: %d)", len(response.parsed), total_api_count
                 )
 
+                # Get offering customers for hierarchical resources
+                # For multiple slugs, we need to get customers for all unique offerings
+                offering_uuids = set()
+                for resource in response.parsed:
+                    if hasattr(resource, "offering_uuid") and not isinstance(
+                        resource.offering_uuid, Unset
+                    ):
+                        offering_uuids.add(resource.offering_uuid.hex)
+
+                all_offering_customers = {}
+                for offering_uuid in offering_uuids:
+                    customers = self._get_offering_customers(offering_uuid, client)
+                    all_offering_customers.update(customers)  # Merge all customers
+
+                tenant_entries = {}  # Track unique tenant entries
+                customer_entries = {}  # Track unique customer entries
+
                 logger.debug("Starting to process %d resources", len(response.parsed))
                 for resource in response.parsed:
                     try:
@@ -1686,10 +1977,88 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                         # Note: Additional filters (data_type, status) are applied
                         # after serialization
 
+                        # Get storage data type for the resource
+                        storage_data_type = "store"  # default
+                        if resource.attributes and not isinstance(resource.attributes, Unset):
+                            storage_data_type = resource.attributes.additional_properties.get(
+                                "storage_data_type", storage_data_type
+                            )
+
+                        # Get tenant information
+                        tenant_id = resource.offering_customer_slug
+                        tenant_name = (
+                            resource.offering_customer_name
+                            if hasattr(resource, "offering_customer_name")
+                            and not isinstance(resource.offering_customer_name, Unset)
+                            else tenant_id.upper()
+                        )
+
+                        # Create tenant-level entry if not already created for this combination
+                        tenant_key = f"{tenant_id}-{resource.offering_slug}-{storage_data_type}"
+                        if tenant_key not in tenant_entries:
+                            # Get offering UUID from resource
+                            offering_uuid_str = (
+                                str(resource.offering_uuid)
+                                if hasattr(resource, "offering_uuid")
+                                and not isinstance(resource.offering_uuid, Unset)
+                                else None
+                            )
+
+                            tenant_resource = self._create_tenant_storage_resource_json(
+                                tenant_id=tenant_id,
+                                tenant_name=tenant_name,
+                                storage_system=resource.offering_slug,
+                                storage_data_type=storage_data_type,
+                                offering_uuid=offering_uuid_str,
+                            )
+                            all_storage_resources.append(tenant_resource)
+                            tenant_entries[tenant_key] = tenant_resource["itemId"]
+                            logger.debug(
+                                "Created tenant entry for %s with offering UUID %s",
+                                tenant_key,
+                                offering_uuid_str,
+                            )
+
+                        # Create customer-level entry if not already created for this combination
+                        customer_key = (
+                            f"{resource.customer_slug}-{resource.offering_slug}-{storage_data_type}"
+                        )
+                        if (
+                            customer_key not in customer_entries
+                            and resource.customer_slug in all_offering_customers
+                        ):
+                            customer_info = all_offering_customers[resource.customer_slug]
+                            parent_tenant_id = tenant_entries.get(tenant_key)
+
+                            customer_resource = self._create_customer_storage_resource_json(
+                                customer_info=customer_info,
+                                storage_system=resource.offering_slug,
+                                storage_data_type=storage_data_type,
+                                tenant_id=tenant_id,
+                                parent_tenant_id=parent_tenant_id,
+                            )
+                            all_storage_resources.append(customer_resource)
+                            customer_entries[customer_key] = customer_resource["itemId"]
+                            logger.debug(
+                                "Created customer entry for %s with parent tenant %s",
+                                customer_key,
+                                parent_tenant_id,
+                            )
+
+                        # Create project-level resource (the original resource)
                         storage_resource = self._create_storage_resource_json(
                             resource, resource.offering_slug
                         )
                         if storage_resource is not None:
+                            # Set parent reference if customer entry exists
+                            if customer_key in customer_entries:
+                                storage_resource["parentItemId"] = customer_entries[customer_key]
+                                logger.debug(
+                                    "Set parentItemId %s for resource %s",
+                                    customer_entries[customer_key],
+                                    resource.uuid,
+                                )
+
                             all_storage_resources.append(storage_resource)
 
                     except Exception as e:
@@ -1768,7 +2137,26 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             # Extract pagination info from response headers
             total_count = int(response.headers.get("X-Total-Count", len(resources)))
 
+            # Get offering customers for hierarchical resources
+            # Note: For slug-based lookup, we need to convert slug to UUID first
+            offering_uuid_for_customers = None
+            if resources:
+                # Get UUID from the first resource's offering_uuid field
+                first_resource = resources[0]
+                if hasattr(first_resource, "offering_uuid") and not isinstance(
+                    first_resource.offering_uuid, Unset
+                ):
+                    offering_uuid_for_customers = first_resource.offering_uuid.hex
+
+            offering_customers = {}
+            if offering_uuid_for_customers:
+                offering_customers = self._get_offering_customers(
+                    offering_uuid_for_customers, client
+                )
+
             storage_resources = []
+            tenant_entries = {}  # Track unique tenant entries
+            customer_entries = {}  # Track unique customer entries by slug-system-data_type
             processed_count = 0
 
             logger.info("Processing resource %d/%d", processed_count + 1, len(resources))
@@ -1784,10 +2172,88 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                         "  Using storage_system from offering_slug: %s", storage_system_name
                     )
 
+                    # Get storage data type for the resource
+                    storage_data_type = "store"  # default
+                    if resource.attributes and not isinstance(resource.attributes, Unset):
+                        storage_data_type = resource.attributes.additional_properties.get(
+                            "storage_data_type", storage_data_type
+                        )
+
+                    # Get tenant information
+                    tenant_id = resource.offering_customer_slug
+                    tenant_name = (
+                        resource.offering_customer_name
+                        if hasattr(resource, "offering_customer_name")
+                        and not isinstance(resource.offering_customer_name, Unset)
+                        else tenant_id.upper()
+                    )
+
+                    # Create tenant-level entry if not already created for this combination
+                    tenant_key = f"{tenant_id}-{storage_system_name}-{storage_data_type}"
+                    if tenant_key not in tenant_entries:
+                        # Get offering UUID from resource
+                        offering_uuid_str = (
+                            str(resource.offering_uuid)
+                            if hasattr(resource, "offering_uuid")
+                            and not isinstance(resource.offering_uuid, Unset)
+                            else None
+                        )
+
+                        tenant_resource = self._create_tenant_storage_resource_json(
+                            tenant_id=tenant_id,
+                            tenant_name=tenant_name,
+                            storage_system=storage_system_name,
+                            storage_data_type=storage_data_type,
+                            offering_uuid=offering_uuid_str,
+                        )
+                        storage_resources.append(tenant_resource)
+                        tenant_entries[tenant_key] = tenant_resource["itemId"]
+                        logger.debug(
+                            "Created tenant entry for %s with offering UUID %s",
+                            tenant_key,
+                            offering_uuid_str,
+                        )
+
+                    # Create customer-level entry if not already created for this combination
+                    customer_key = (
+                        f"{resource.customer_slug}-{storage_system_name}-{storage_data_type}"
+                    )
+                    if (
+                        customer_key not in customer_entries
+                        and resource.customer_slug in offering_customers
+                    ):
+                        customer_info = offering_customers[resource.customer_slug]
+                        parent_tenant_id = tenant_entries.get(tenant_key)
+
+                        customer_resource = self._create_customer_storage_resource_json(
+                            customer_info=customer_info,
+                            storage_system=storage_system_name,
+                            storage_data_type=storage_data_type,
+                            tenant_id=tenant_id,
+                            parent_tenant_id=parent_tenant_id,
+                        )
+                        storage_resources.append(customer_resource)
+                        customer_entries[customer_key] = customer_resource["itemId"]
+                        logger.debug(
+                            "Created customer entry for %s with parent tenant %s",
+                            customer_key,
+                            parent_tenant_id,
+                        )
+
+                    # Create project-level resource (the original resource)
                     storage_resource = self._create_storage_resource_json(
                         resource, storage_system_name
                     )
                     if storage_resource is not None:
+                        # Set parent reference if customer entry exists
+                        if customer_key in customer_entries:
+                            storage_resource["parentItemId"] = customer_entries[customer_key]
+                            logger.debug(
+                                "Set parentItemId %s for resource %s",
+                                customer_entries[customer_key],
+                                resource.uuid,
+                            )
+
                         storage_resources.append(storage_resource)
 
                 except Exception as e:

@@ -188,22 +188,109 @@ curl "http://0.0.0.0:8080/api/storage-resources/?storage_system=vast&data_type=u
 
 ### Waldur to Storage Hierarchy
 
-- **Waldur Offering Customer** → **Storage Tenant** (offering_customer_slug)
-- **Waldur Resource Customer** → **Storage Customer** (customer_slug)
-- **Waldur Resource Project** → **Storage Project** (project_slug)
+The three-tier hierarchy maps specific Waldur resource attributes to storage organization levels:
+
+#### Tenant Level Mapping
+
+**Target Type:** `tenant`
+
+**Waldur Source Attributes:**
+- `resource.offering_customer_slug`
+- `resource.offering_customer_name`
+- `resource.offering_uuid`
+
+**Generated Fields:**
+- `itemId`: `str(resource.offering_uuid)`
+- `key`: `resource.offering_customer_slug`
+- `name`: `resource.offering_customer_name`
+- `parentItemId`: `null`
+
+#### Customer Level Mapping
+
+**Target Type:** `customer`
+
+**Waldur Source Attributes:**
+- `resource.customer_slug`
+- `customer_info.name` (from API)
+- `customer_info.uuid` (from API)
+
+**Generated Fields:**
+- `itemId`: deterministic UUID from customer data
+- `key`: `resource.customer_slug`
+- `name`: `customer_info.name`
+- `parentItemId`: tenant `itemId`
+
+#### Project Level Mapping
+
+**Target Type:** `project`
+
+**Waldur Source Attributes:**
+- `resource.project_slug`
+- `resource.project_name`
+- `resource.uuid`
+- `resource.limits`
+
+**Generated Fields:**
+- `itemId`: `str(resource.uuid)`
+- `key`: `resource.project_slug`
+- `name`: `resource.project_name`
+- `parentItemId`: customer `itemId`
+- `quotas`: from `resource.limits`
+
+#### Key Mapping Details
+
+- **Tenant level**: Uses the **offering owner** information (`offering_customer_slug`, `offering_customer_name`)
+- **Customer level**: Uses the **resource customer** information (`customer_slug`) with details fetched from Waldur API
+- **Project level**: Uses the **resource project** information (`project_slug`, `project_name`) with resource-specific data
 
 ### Mount Point Generation
 
-Mount points follow the pattern: `/{storage_system}/{data_type}/{tenant}/{customer}/{project}`
+The storage proxy generates hierarchical mount points for three levels of storage organization:
 
-Example: `/capstor/store/cscs/university-physics/climate-sim`
+#### Hierarchical Structure
 
-Where:
+Mount points are generated at three levels:
+
+1. **Tenant Level**: `/{storage_system}/{data_type}/{tenant}`
+2. **Customer Level**: `/{storage_system}/{data_type}/{tenant}/{customer}`
+3. **Project Level**: `/{storage_system}/{data_type}/{tenant}/{customer}/{project}`
+
+#### Examples
+
+**Tenant Mount Point:**
+
+```text
+/capstor/store/cscs
+```
+
+**Customer Mount Point:**
+
+```text
+/capstor/store/cscs/university-physics
+```
+
+**Project Mount Point:**
+
+```text
+/capstor/store/cscs/university-physics/climate-sim
+```
+
+#### Path Components
+
+Where each component is derived from Waldur resource data:
 - `storage_system`: From offering slug (`waldur_resource.offering_slug`)
 - `data_type`: Storage data type (e.g., `store`, `users`, `scratch`, `archive`)
 - `tenant`: Offering customer slug (`waldur_resource.offering_customer_slug`)
 - `customer`: Resource customer slug (`waldur_resource.customer_slug`)
 - `project`: Resource project slug (`waldur_resource.project_slug`)
+
+#### Hierarchical Relationships
+
+The three-tier hierarchy provides parent-child relationships:
+
+- **Tenant entries** have `parentItemId: null` (top-level)
+- **Customer entries** reference their parent tenant via `parentItemId`
+- **Project entries** reference their parent customer via `parentItemId`
 
 ### Resource Attributes
 
