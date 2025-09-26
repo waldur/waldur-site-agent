@@ -202,13 +202,13 @@ class OfferingBaseProcessor(abc.ABC):
         their specific responsibilities (order processing, membership sync, or reporting).
         """
 
-    def _update_offering_users(self, offering_users: list[OfferingUser]) -> None:
+    def _update_offering_users(self, offering_users: list[OfferingUser]) -> bool:
         """Generate usernames for offering users and update their state accordingly.
 
         Args:
             offering_users: List of offering users to process
         """
-        utils.update_offering_users(self.offering, self.waldur_rest_client, offering_users)
+        return utils.update_offering_users(self.offering, self.waldur_rest_client, offering_users)
 
 
 class OfferingOrderProcessor(OfferingBaseProcessor):
@@ -551,11 +551,11 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         offering_users = user_context["offering_users"]
 
         # Update offering user usernames (only for users with blank usernames)
-        self._update_offering_users(offering_users)
+        if self._update_offering_users(offering_users):
+            # Refresh local user_context cache
+            user_context_new = self._fetch_user_context_for_resource(waldur_resource.uuid.hex)
+            user_context.update(user_context_new)
 
-        # Refresh local user_context cache
-        user_context_new = self._fetch_user_context_for_resource(waldur_resource.uuid.hex)
-        user_context.update(user_context_new)
         logger.info(
             "Using %s (%s) offering users, user count: %s",
             self.offering.name,
@@ -890,10 +890,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             )
             return
 
-        self._update_offering_users(offering_users)
-
-        # Refresh offering users after username generation
-        offering_users = self._get_user_offering_users(user_uuid, self.offering.uuid)
+        if self._update_offering_users(offering_users):
+            # Refresh offering users after username generation
+            offering_users = self._get_user_offering_users(user_uuid, self.offering.uuid)
 
         username = offering_users[0].username
         logger.info("Using offering user with username %s", username)
@@ -921,6 +920,20 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     exc,
                 )
 
+    def _refresh_local_offering_users(self) -> list[OfferingUser]:
+        try:
+            # Fetch offering users
+            offering_users: list[OfferingUser] = self._get_waldur_offering_users()
+
+            # Update offering user usernames
+            if self._update_offering_users(offering_users):
+                # Refresh offering users after username generation
+                return self._get_waldur_offering_users()
+            return offering_users
+        except Exception as exc:
+            logger.error("Unable to refresh local offering users: %s", exc)
+            return []
+
     def process_project_user_sync(self, project_uuid: str) -> None:
         """Perform full user synchronization for all resources in a project.
 
@@ -934,6 +947,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         logger.info("Processing sync of all users for project %s", project_uuid)
         resources = self._get_waldur_resources(project_uuid=project_uuid)
         resource_report = self.resource_backend.pull_resources(resources)
+        # Fetch offering users
+        offering_users = self._refresh_local_offering_users()
+
         for waldur_resource, backend_resource_info in resource_report.values():
             try:
                 logger.info(
@@ -941,7 +957,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     waldur_resource.name,
                     waldur_resource.backend_id,
                 )
-                self._sync_resource_users(waldur_resource, backend_resource_info)
+                self._sync_resource_users(waldur_resource, backend_resource_info, offering_users)
             except Exception as exc:
                 logger.error(
                     "Unable to sync resource %s (%s), error: %s",
@@ -980,74 +996,71 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         )
 
     def _group_resource_usernames(
-        self, waldur_resource: WaldurResource, backend_resource_info: BackendResourceInfo
+        self,
+        waldur_resource: WaldurResource,
+        backend_resource_info: BackendResourceInfo,
+        offering_users: list[OfferingUser],
     ) -> tuple[set[str], set[str], set[str]]:
         logger.info("Fetching new, existing and stale resource users")
         usernames: list[str] = backend_resource_info.users
         local_usernames = set(usernames)
-        logger.info("The usernames from the backend: %s", ", ".join(local_usernames))
+        logger.info(
+            "The usernames from the backend (%s): %s",
+            len(local_usernames),
+            ", ".join(local_usernames),
+        )
 
         # Offering users sync
         # The service fetches offering users from Waldur and pushes them to the cluster
         # If an offering user is not in the team anymore, it will be removed from the backend
         team: list[ProjectUser] = self._get_waldur_resource_team(waldur_resource)
-        team_user_uuids = {user.uuid for user in team}
 
-        offering_users: list[OfferingUser] = self._get_waldur_offering_users()
-        self._update_offering_users(offering_users)
+        offering_user_usernames = {
+            offering_user.username for offering_user in offering_users if offering_user.username
+        }
 
-        # Refresh offering users after username generation
-        offering_users = self._get_waldur_offering_users()
-
-        resource_offering_usernames = {
-            offering_user.username
-            for offering_user in offering_users
-            if offering_user.user_uuid in team_user_uuids
+        resource_usernames = {
+            user.offering_user_username for user in team if user.offering_user_username
         }
         logger.info(
-            "Resource offering usernames: %s",
-            ", ".join(str(u) for u in resource_offering_usernames),
+            "Resource offering usernames (%s): %s",
+            len(resource_usernames),
+            ", ".join(str(u) for u in resource_usernames),
         )
 
-        existing_usernames: set[str] = {
-            offering_user.username
-            for offering_user in offering_users
-            if offering_user.username
-            and offering_user.username in local_usernames
-            and offering_user.user_uuid in team_user_uuids
-        }
-        logger.info("Resource existing usernames: %s", ", ".join(existing_usernames))
+        logger.info("Number of offering user usernames: %s", len(offering_user_usernames))
 
-        new_usernames: set[str] = {
-            offering_user.username
-            for offering_user in offering_users
-            if offering_user.username
-            and offering_user.username not in local_usernames
-            and offering_user.user_uuid in team_user_uuids
-        }
-        logger.info("Resource new usernames: %s", ", ".join(new_usernames))
+        existing_usernames: set[str] = resource_usernames & local_usernames
+        logger.info(
+            "Resource existing usernames (%s): %s",
+            len(existing_usernames),
+            ", ".join(existing_usernames),
+        )
 
-        stale_usernames: set[str] = {
-            offering_user.username
-            for offering_user in offering_users
-            if offering_user.username
-            and offering_user.username in local_usernames
-            and offering_user.user_uuid not in team_user_uuids
-        }
-        logger.info("Resource stale usernames: %s", ", ".join(stale_usernames))
+        new_usernames: set[str] = resource_usernames - local_usernames
+        logger.info("Resource new usernames (%s): %s", len(new_usernames), ", ".join(new_usernames))
+
+        stale_usernames: set[str] = (offering_user_usernames & local_usernames) - resource_usernames
+        logger.info(
+            "Resource stale usernames (%s): %s", len(stale_usernames), ", ".join(stale_usernames)
+        )
 
         return existing_usernames, stale_usernames, new_usernames
 
     def _sync_resource_users(
-        self, waldur_resource: WaldurResource, backend_resource_info: BackendResourceInfo
+        self,
+        waldur_resource: WaldurResource,
+        backend_resource_info: BackendResourceInfo,
+        offering_users: list[OfferingUser],
     ) -> set[str]:
         """Sync users for the resource between Waldur and the site.
 
         return: the actual resource usernames (existing + added)
         """
         logger.info("Syncing user list for resource %s", waldur_resource.name)
+
         existing_usernames, stale_usernames, new_usernames = self._group_resource_usernames(
-            waldur_resource, backend_resource_info
+            waldur_resource, backend_resource_info, offering_users
         )
 
         if waldur_resource.restrict_member_access:
@@ -1244,10 +1257,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         resource_report: dict[str, tuple[WaldurResource, BackendResourceInfo]],
     ) -> None:
         """Sync status and membership data for the resource."""
+        # Fetch offering users
+        offering_users = self._refresh_local_offering_users()
+
         for waldur_resource, backend_resource_info in resource_report.values():
             try:
                 resource_usernames = self._sync_resource_users(
-                    waldur_resource, backend_resource_info
+                    waldur_resource, backend_resource_info, offering_users
                 )
                 self._sync_resource_service_accounts(waldur_resource)
                 self._sync_resource_course_accounts(waldur_resource)
