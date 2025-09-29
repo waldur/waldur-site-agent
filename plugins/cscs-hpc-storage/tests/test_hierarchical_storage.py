@@ -41,8 +41,8 @@ def create_mock_resource(
     project_slug: str = "test-project",
     project_name: str = "Test Project",
     offering_slug: str = "capstor",
-    offering_customer_slug: str = "cscs",
-    offering_customer_name: str = "CSCS",
+    provider_slug: str = "cscs",
+    provider_name: str = "CSCS",
     storage_data_type: str = "store",
     storage_limit: float = 150.0,
 ) -> Mock:
@@ -65,8 +65,8 @@ def create_mock_resource(
     resource.project_uuid = Mock()
     resource.project_uuid.hex = str(uuid4())
     resource.offering_slug = offering_slug
-    resource.offering_customer_slug = offering_customer_slug
-    resource.offering_customer_name = offering_customer_name
+    resource.provider_slug = provider_slug
+    resource.provider_name = provider_name
     resource.offering_uuid = Mock()
     resource.offering_uuid.hex = str(uuid4())
 
@@ -224,7 +224,7 @@ class TestProjectLevelGeneration:
             project_slug="msclim",
             project_name="MSCLIM",
             customer_slug="mch",
-            offering_customer_slug="cscs",
+            provider_slug="cscs",
             storage_limit=150.0,
         )
 
@@ -289,24 +289,24 @@ class TestThreeTierHierarchyGeneration:
                 customer_slug="mch",
                 customer_name="MCH",
                 project_slug="msclim",
-                offering_customer_slug="cscs",
-                offering_customer_name="CSCS",
+                provider_slug="cscs",
+                provider_name="CSCS",
                 storage_data_type="store",
             ),
             create_mock_resource(
                 customer_slug="eth",
                 customer_name="ETH",
                 project_slug="climate-data",
-                offering_customer_slug="cscs",
-                offering_customer_name="CSCS",
+                provider_slug="cscs",
+                provider_name="CSCS",
                 storage_data_type="store",
             ),
             create_mock_resource(
                 customer_slug="mch",
                 customer_name="MCH",
                 project_slug="user-homes",
-                offering_customer_slug="cscs",
-                offering_customer_name="CSCS",
+                provider_slug="cscs",
+                provider_name="CSCS",
                 storage_data_type="users",
             ),
         ]
@@ -321,8 +321,8 @@ class TestThreeTierHierarchyGeneration:
             storage_data_type = resource.attributes.additional_properties.get(
                 "storage_data_type", "store"
             )
-            tenant_id = resource.offering_customer_slug
-            tenant_name = resource.offering_customer_name
+            tenant_id = resource.provider_slug
+            tenant_name = resource.provider_name
 
             # Create tenant entry
             tenant_key = f"{tenant_id}-{storage_system_name}-{storage_data_type}"
@@ -611,7 +611,7 @@ class TestIntegrationScenarios:
         for resource in resources:
             storage_system = resource.offering_slug
             data_type = resource.attributes.additional_properties["storage_data_type"]
-            tenant_id = resource.offering_customer_slug
+            tenant_id = resource.provider_slug
 
             # Create tenant
             tenant_key = f"{tenant_id}-{storage_system}-{data_type}"
