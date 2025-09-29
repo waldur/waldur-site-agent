@@ -195,14 +195,14 @@ The three-tier hierarchy maps specific Waldur resource attributes to storage org
 **Target Type:** `tenant`
 
 **Waldur Source Attributes:**
-- `resource.offering_customer_slug`
-- `resource.offering_customer_name`
+- `resource.provider_slug`
+- `resource.provider_name`
 - `resource.offering_uuid`
 
 **Generated Fields:**
 - `itemId`: `str(resource.offering_uuid)`
-- `key`: `resource.offering_customer_slug`
-- `name`: `resource.offering_customer_name`
+- `key`: `resource.provider_slug`
+- `name`: `resource.provider_name`
 - `parentItemId`: `null`
 
 #### Customer Level Mapping
@@ -239,7 +239,7 @@ The three-tier hierarchy maps specific Waldur resource attributes to storage org
 
 #### Key Mapping Details
 
-- **Tenant level**: Uses the **offering owner** information (`offering_customer_slug`, `offering_customer_name`)
+- **Tenant level**: Uses the **offering owner** information (`provider_slug`, `provider_name`)
 - **Customer level**: Uses the **resource customer** information (`customer_slug`) with details fetched from Waldur API
 - **Project level**: Uses the **resource project** information (`project_slug`, `project_name`) with resource-specific data
 
@@ -280,7 +280,7 @@ Mount points are generated at three levels:
 Where each component is derived from Waldur resource data:
 - `storage_system`: From offering slug (`waldur_resource.offering_slug`)
 - `data_type`: Storage data type (e.g., `store`, `users`, `scratch`, `archive`)
-- `tenant`: Offering customer slug (`waldur_resource.offering_customer_slug`)
+- `tenant`: Offering customer slug (`waldur_resource.provider_slug`)
 - `customer`: Resource customer slug (`waldur_resource.customer_slug`)
 - `project`: Resource project slug (`waldur_resource.project_slug`)
 
@@ -528,7 +528,7 @@ storage JSON format. This is useful for troubleshooting and understanding the so
 
 The storage hierarchy mapping has been updated to better align with multi-tenant storage architectures:
 
-- **Tenant level**: Now uses `offering_customer_slug` (the customer who owns the offering)
+- **Tenant level**: Now uses `provider_slug` (the customer who owns the offering)
 - **Customer level**: Now uses `customer_slug` (the customer using the resource)
 - **Project level**: Now uses `project_slug` (the project containing the resource)
 - **Rationale**: This mapping provides clearer organizational boundaries in multi-tenant environments

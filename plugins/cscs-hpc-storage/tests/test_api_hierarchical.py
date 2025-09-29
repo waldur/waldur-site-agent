@@ -38,8 +38,8 @@ def mock_waldur_resources():
         project_slug="test-project",
         project_name="Test Project",
         offering_slug="capstor",
-        offering_customer_slug="cscs",
-        offering_customer_name="CSCS",
+        provider_slug="cscs",
+        provider_name="CSCS",
         storage_data_type="store",
         storage_limit=150.0,
     ):
@@ -61,8 +61,8 @@ def mock_waldur_resources():
         resource.project_uuid = Mock()
         resource.project_uuid.hex = str(uuid4())
         resource.offering_slug = offering_slug
-        resource.offering_customer_slug = offering_customer_slug
-        resource.offering_customer_name = offering_customer_name
+        resource.provider_slug = provider_slug
+        resource.provider_name = provider_name
         resource.offering_uuid = Mock()
         resource.offering_uuid.hex = str(uuid4())
 

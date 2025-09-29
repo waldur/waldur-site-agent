@@ -729,7 +729,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         # Generate mount point now that we have the storage_data_type
         mount_point = self._generate_mount_point(
             storage_system=storage_system,
-            tenant_id=waldur_resource.offering_customer_slug,
+            tenant_id=waldur_resource.provider_slug,
             customer=waldur_resource.customer_slug,
             project_id=waldur_resource.project_slug,  # might not be unique
             data_type=storage_data_type,
@@ -1206,11 +1206,11 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                     )
 
                 # Get tenant information
-                tenant_id = resource.offering_customer_slug  # tenant is the offering customer
+                tenant_id = resource.provider_slug  # tenant is the offering customer
                 tenant_name = (
-                    resource.offering_customer_name
-                    if hasattr(resource, "offering_customer_name")
-                    and not isinstance(resource.offering_customer_name, Unset)
+                    resource.provider_name
+                    if hasattr(resource, "provider_name")
+                    and not isinstance(resource.provider_name, Unset)
                     else tenant_id.upper()
                 )
 
@@ -1985,11 +1985,11 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                             )
 
                         # Get tenant information
-                        tenant_id = resource.offering_customer_slug
+                        tenant_id = resource.provider_slug
                         tenant_name = (
-                            resource.offering_customer_name
-                            if hasattr(resource, "offering_customer_name")
-                            and not isinstance(resource.offering_customer_name, Unset)
+                            resource.provider_name
+                            if hasattr(resource, "provider_name")
+                            and not isinstance(resource.provider_name, Unset)
                             else tenant_id.upper()
                         )
 
@@ -2180,11 +2180,11 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                         )
 
                     # Get tenant information
-                    tenant_id = resource.offering_customer_slug
+                    tenant_id = resource.provider_slug
                     tenant_name = (
-                        resource.offering_customer_name
-                        if hasattr(resource, "offering_customer_name")
-                        and not isinstance(resource.offering_customer_name, Unset)
+                        resource.provider_name
+                        if hasattr(resource, "provider_name")
+                        and not isinstance(resource.provider_name, Unset)
                         else tenant_id.upper()
                     )
 
