@@ -1,0 +1,128 @@
+# Example configuration for OKD/OpenShift backend plugin
+
+# Waldur API settings
+waldur_api_url: https://waldur.example.com/api/
+waldur_api_token: your-waldur-api-token
+waldur_offering_uuid: 123e4567e89b12d3a456426614174000
+
+# Backend type must be 'okd' to use the OKD plugin
+backend_type: okd
+
+# OKD/OpenShift cluster settings
+backend_settings:
+  # OKD API endpoint
+  api_url: https://api.okd.example.com:8443
+
+  # Service account token for authentication
+  # Create with: oc create serviceaccount waldur-agent
+  # Get token: oc sa get-token waldur-agent
+  token: your-okd-service-account-token
+
+  # SSL certificate verification (set to false for self-signed certs)
+  verify_cert: true
+
+  # Namespace naming prefixes
+  namespace_prefix: waldur-      # Prefix for all managed namespaces
+  customer_prefix: org-          # Prefix for customer/organization namespaces
+  project_prefix: proj-          # Prefix for project namespaces
+  allocation_prefix: alloc-      # Prefix for allocation/resource namespaces
+
+  # Default role for new user associations (admin, edit, or view)
+  default_role: edit
+
+# Component definitions for resource management
+backend_components:
+  cpu:
+    measured_unit: Core
+    accounting_type: limit
+    label: CPU Cores
+    unit_factor: 1
+
+  memory:
+    measured_unit: GB
+    accounting_type: limit
+    label: Memory (GB)
+    unit_factor: 1
+
+  storage:
+    measured_unit: GB
+    accounting_type: limit
+    label: Storage (GB)
+    unit_factor: 1
+
+  pods:
+    measured_unit: Count
+    accounting_type: limit
+    label: Pod Count
+    unit_factor: 1
+
+# Agent operation modes
+agent_mode: event_process  # Options: order_process, report, membership_sync, event_process
+
+# Logging configuration
+log_level: INFO
+log_file: /var/log/waldur-site-agent-okd.log
+
+# Optional: Event processing settings (for event_process mode)
+event_processing:
+  stomp_host: stomp.example.com
+  stomp_port: 61613
+  stomp_username: stomp-user
+  stomp_password: stomp-password
+  stomp_destination: /queue/waldur.events
+  stomp_ssl: true
+
+# Optional: Dry-run mode for testing
+dry_run: false
+
+# Optional: Polling interval (seconds) for order_process and report modes
+polling_interval: 300
+
+# Optional: Resource quota defaults (applied when creating new projects)
+default_quotas:
+  cpu: 10           # 10 cores
+  memory: 32        # 32 GB RAM
+  storage: 100      # 100 GB storage
+  pods: 50          # 50 pods maximum
+
+# Optional: Project template for advanced customization
+project_template:
+  # Network policy to isolate projects
+  enable_network_isolation: true
+
+  # Default service accounts to create
+  service_accounts:
+    - name: default
+    - name: deployer
+    - name: builder
+
+  # Default limit ranges
+  limit_ranges:
+    - name: default-limits
+      limits:
+        - type: Pod
+          max:
+            cpu: "4"
+            memory: 16Gi
+          min:
+            cpu: 100m
+            memory: 128Mi
+        - type: Container
+          default:
+            cpu: 500m
+            memory: 1Gi
+          defaultRequest:
+            cpu: 200m
+            memory: 256Mi
+
+# Optional: Monitoring and metrics
+monitoring:
+  # Enable Prometheus metrics collection
+  enable_metrics: true
+  metrics_port: 8080
+
+  # Alert thresholds
+  alert_thresholds:
+    cpu_usage_percent: 80
+    memory_usage_percent: 90
+    storage_usage_percent: 85
