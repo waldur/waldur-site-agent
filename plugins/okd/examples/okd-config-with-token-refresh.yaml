@@ -1,0 +1,156 @@
+# OKD Configuration with Token Refresh Examples
+
+# Waldur API settings
+waldur_api_url: https://waldur.example.com/api/
+waldur_api_token: your-waldur-api-token
+waldur_offering_uuid: 123e4567e89b12d3a456426614174000
+
+# Backend type must be 'okd'
+backend_type: okd
+
+# OKD/OpenShift cluster settings
+backend_settings:
+  api_url: https://api.okd.example.com:6443
+  verify_cert: true
+
+  # OPTION 1: Static Token (Current/Simple)
+  # Use this for testing or when you manually manage token renewal
+  token: your-static-okd-token
+
+  # OPTION 2: Service Account Token with Auto-Refresh (Recommended for Production)
+  # Uncomment and configure this section for production deployments
+  # token_config:
+  #   token_type: service_account
+  #   service_account_path: /var/run/secrets/kubernetes.io/serviceaccount
+
+  # OPTION 3: File-based Token Refresh
+  # Use this when tokens are managed by external systems (e.g., rotating files)
+  # token_config:
+  #   token_type: file
+  #   token_file_path: /etc/okd-tokens/current-token
+
+  # OPTION 4: OAuth Token Refresh (Future Implementation)
+  # token_config:
+  #   token_type: oauth
+  #   oauth_config:
+  #     client_id: your-oauth-client-id
+  #     client_secret: your-oauth-client-secret
+  #     refresh_token: your-refresh-token
+  #     token_endpoint: https://oauth.okd.example.com/oauth/token
+
+  # Other OKD settings
+  namespace_prefix: waldur-
+  customer_prefix: org-
+  project_prefix: proj-
+  allocation_prefix: alloc-
+  default_role: edit
+
+# Component definitions
+backend_components:
+  cpu:
+    measured_unit: Core
+    accounting_type: limit
+    label: CPU Cores
+    unit_factor: 1
+  memory:
+    measured_unit: GB
+    accounting_type: limit
+    label: Memory (GB)
+    unit_factor: 1
+  storage:
+    measured_unit: GB
+    accounting_type: limit
+    label: Storage (GB)
+    unit_factor: 1
+  pods:
+    measured_unit: Count
+    accounting_type: limit
+    label: Pod Count
+    unit_factor: 1
+
+# Agent mode
+agent_mode: order_process
+
+# Logging
+log_level: INFO
+
+---
+# Production Example: Service Account Token Configuration
+# This example shows how to configure for production deployment with service account
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: waldur-site-agent
+  namespace: waldur-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: waldur-site-agent
+rules:
+  - apiGroups: ["project.openshift.io"]
+    resources: ["projects", "projectrequests"]
+    verbs: ["create", "delete", "get", "list", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["namespaces", "resourcequotas"]
+    verbs: ["create", "delete", "get", "list", "patch", "update"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create", "delete", "get", "list", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: waldur-site-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: waldur-site-agent
+subjects:
+  - kind: ServiceAccount
+    name: waldur-site-agent
+    namespace: waldur-system
+---
+# Deployment example with service account token
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waldur-site-agent
+  namespace: waldur-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: waldur-site-agent
+  template:
+    metadata:
+      labels:
+        app: waldur-site-agent
+    spec:
+      serviceAccountName: waldur-site-agent
+      containers:
+        - name: waldur-site-agent
+          image: waldur-site-agent-okd:latest
+          env:
+            - name: WALDUR_CONFIG
+              value: |
+                backend_settings:
+                  api_url: https://kubernetes.default.svc.cluster.local:443
+                  verify_cert: true
+                  token_config:
+                    token_type: service_account
+                    service_account_path: /var/run/secrets/kubernetes.io/serviceaccount
+          volumeMounts:
+            - name: service-account-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      volumes:
+        - name: service-account-token
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  audience: api
+                  expirationSeconds: 3600
+                  path: token
