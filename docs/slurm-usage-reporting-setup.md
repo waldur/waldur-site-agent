@@ -39,7 +39,7 @@ git clone https://github.com/waldur/waldur-site-agent.git
 cd waldur-site-agent
 
 # Install dependencies with SLURM plugin
-uv sync --extra slurm
+uv sync --package waldur-site-agent-slurm
 ```
 
 ### 2. Create Configuration Directory
