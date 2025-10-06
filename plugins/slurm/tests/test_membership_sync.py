@@ -78,8 +78,10 @@ class MembershipSyncTest(unittest.TestCase):
             ),
             project_uuid=uuid.uuid4(),
             project_name="Test project",
+            project_slug="test-project",
             customer_uuid=uuid.uuid4(),
             customer_name="Test customer",
+            customer_slug="test-customer",
         )
 
         self.waldur_user_uuid = uuid.uuid4()

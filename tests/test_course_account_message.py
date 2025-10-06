@@ -39,6 +39,7 @@ class CourseAccountMessageTest(TestCase):
             backend_id="test-allocation-01",
             project_uuid=uuid.uuid4(),
             project_name="Test project",
+            project_slug="test-project",
         )
         self.service_provider = ServiceProvider(uuid=uuid.uuid4())
         self.course_account = CourseAccount(
