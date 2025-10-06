@@ -19,7 +19,7 @@ dependencies = [
     "paho-mqtt==2.1.0",
     "stomp-py>=8.2.0,<9",
     "importlib-metadata>=8.7.0 ; python_full_version == '3.9.*'",
-    "waldur-api-client>=7.8.3",
+    "waldur-api-client @ git+https://github.com/waldur/py-client@main",
 ]
 
 [project.urls]
