@@ -5,6 +5,7 @@ import uuid
 from unittest.mock import Mock, patch
 
 import pytest
+from waldur_api_client.models import OfferingUserState
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.project_user import ProjectUser
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -103,6 +104,7 @@ class MUPBackendTest(unittest.TestCase):
                     url="https://waldur.example.com/api/users/user-uuid-1/",
                     expiration_time=None,
                     offering_user_username="pi_user",
+                    offering_user_state=OfferingUserState.OK,
                 )
             ],
             "offering_users": [
@@ -124,6 +126,7 @@ class MUPBackendTest(unittest.TestCase):
                     url="https://waldur.example.com/api/users/user-uuid-1/",
                     expiration_time=None,
                     offering_user_username="pi_user",
+                    offering_user_state=OfferingUserState.OK,
                 )
             },
             "offering_user_mappings": {

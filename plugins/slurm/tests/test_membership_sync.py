@@ -14,6 +14,7 @@ from waldur_api_client.models import (
     ProjectServiceAccount,
     ServiceAccountState,
     CourseAccount,
+    OfferingUserState,
 )
 from waldur_api_client.models.offering_state import OfferingState
 from waldur_api_client.models.storage_mode_enum import StorageModeEnum
@@ -115,6 +116,7 @@ class MembershipSyncTest(unittest.TestCase):
             expiration_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
             offering_user_username="test-offering-user-01",
             email="test-user-02@example.com",
+            offering_user_state=OfferingUserState.OK,
         ).to_dict()
         self.waldur_offering_user = models.OfferingUser(
             username="test-offering-user-01",

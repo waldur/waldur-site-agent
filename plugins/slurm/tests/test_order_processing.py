@@ -188,6 +188,7 @@ class CreationOrderTest(unittest.TestCase):
             role="admin",
             expiration_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
             offering_user_username="test-offering-user-01",
+            offering_user_state=OfferingUserState.OK,
         ).to_dict()
         self.waldur_resource_team = [self.team_member]
         self.waldur_offering_user = models.OfferingUser(
