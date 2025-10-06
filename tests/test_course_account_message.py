@@ -56,6 +56,9 @@ class CourseAccountMessageTest(TestCase):
             customer_uuid=uuid.uuid4(),
             customer_name="",
             error_traceback="",
+            project_slug=self.waldur_resource.project_slug,
+            project_start_date=datetime.now(),
+            project_end_date=datetime.now(),
         )
 
     def _setup_common_mocks(self):
@@ -252,6 +255,9 @@ class CourseAccountMessageTest(TestCase):
             customer_uuid=uuid.uuid4(),
             customer_name="",
             error_traceback="",
+            project_slug=self.waldur_resource.project_slug,
+            project_start_date=datetime.now(),
+            project_end_date=datetime.now(),
         )
 
         closed_account = CourseAccount(
@@ -269,6 +275,9 @@ class CourseAccountMessageTest(TestCase):
             customer_uuid=uuid.uuid4(),
             customer_name="",
             error_traceback="",
+            project_slug=self.waldur_resource.project_slug,
+            project_start_date=datetime.now(),
+            project_end_date=datetime.now(),
         )
 
         respx.get(
@@ -327,6 +336,9 @@ class CourseAccountMessageTest(TestCase):
             customer_uuid=uuid.uuid4(),
             customer_name="",
             error_traceback="",
+            project_slug=self.waldur_resource.project_slug,
+            project_start_date=datetime.now(),
+            project_end_date=datetime.now(),
         )
 
         respx.get(

@@ -199,6 +199,9 @@ class MembershipSyncTest(unittest.TestCase):
             state=ServiceAccountState.OK,
             error_message="",
             error_traceback="",
+            project_slug=self.waldur_resource.project_slug,
+            project_start_date=datetime.now(),
+            project_end_date=datetime.now(),
         )
         respx.get(
             f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/course_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"
