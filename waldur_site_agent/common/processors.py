@@ -89,7 +89,7 @@ from waldur_api_client.models.marketplace_provider_resources_list_state_item imp
 )
 from waldur_api_client.models.offering_component import OfferingComponent
 from waldur_api_client.models.offering_user import OfferingUser
-from waldur_api_client.models.offering_user_state_enum import OfferingUserStateEnum
+from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.order_details import (
     OrderDetails,
 )
@@ -567,7 +567,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         offering_usernames = {
             offering_user.username
             for offering_user in user_context["offering_users"]
-            if offering_user.state == OfferingUserStateEnum.OK
+            if offering_user.state == OfferingUserState.OK
         }
 
         if not offering_usernames:

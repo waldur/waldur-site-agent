@@ -9,7 +9,7 @@ from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.provider_offering_details import ProviderOfferingDetails
 from waldur_api_client.models.merged_plugin_options import MergedPluginOptions
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
-from waldur_api_client.models.offering_user_state_enum import OfferingUserStateEnum
+from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_site_agent.backend.backends import (
     UnknownUsernameManagementBackend,
     AbstractUsernameManagementBackend,
@@ -39,21 +39,21 @@ class TestOfferingUserUpdate(unittest.TestCase):
                 user_email="user00@example.com",
                 is_restricted=False,
                 username="",
-                state=OfferingUserStateEnum.REQUESTED,
+                state=OfferingUserState.REQUESTED,
             ),
             OfferingUser(
                 uuid=uuid.uuid4(),
                 user_email="user01@example.com",
                 is_restricted=False,
                 username="",
-                state=OfferingUserStateEnum.PENDING_ACCOUNT_LINKING,
+                state=OfferingUserState.PENDING_ACCOUNT_LINKING,
             ),
             OfferingUser(
                 uuid=uuid.uuid4(),
                 user_email="user02@example.com",
                 is_restricted=False,
                 username="",
-                state=OfferingUserStateEnum.CREATING,
+                state=OfferingUserState.CREATING,
             ),
         ]
 

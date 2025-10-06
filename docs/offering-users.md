@@ -189,7 +189,7 @@ if self._update_offering_users(offering_users):
 # Use only users with valid usernames
 valid_usernames = {
     user.username for user in user_context["offering_users"]
-    if user.state == OfferingUserStateEnum.OK and user.username
+    if user.state == OfferingUserState.OK and user.username
 }
 ```
 

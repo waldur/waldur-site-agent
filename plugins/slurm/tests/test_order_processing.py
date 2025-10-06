@@ -14,7 +14,7 @@ from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
-from waldur_api_client.models.offering_user_state_enum import OfferingUserStateEnum
+from waldur_api_client.models.offering_user_state import OfferingUserState
 
 from waldur_site_agent.backend.structures import ClientResource
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
@@ -196,7 +196,7 @@ class CreationOrderTest(unittest.TestCase):
             offering_uuid=OFFERING.uuid,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            state=OfferingUserStateEnum.OK,
+            state=OfferingUserState.OK,
         ).to_dict()
         self.client_patcher = mock.patch("waldur_site_agent.common.utils.get_client")
         self.mock_get_client = self.client_patcher.start()

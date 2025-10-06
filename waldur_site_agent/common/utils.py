@@ -55,7 +55,7 @@ from waldur_api_client.models.marketplace_orders_list_state_item import (
 from waldur_api_client.models.offering_component import OfferingComponent
 from waldur_api_client.models.offering_component_request import OfferingComponentRequest
 from waldur_api_client.models.offering_user import OfferingUser
-from waldur_api_client.models.offering_user_state_enum import OfferingUserStateEnum
+from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.offering_user_state_transition_request import (
     OfferingUserStateTransitionRequest,
 )
@@ -610,7 +610,7 @@ def create_homedirs_for_offering_users() -> None:
             marketplace_offering_users_list.sync,
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
-            state=[OfferingUserStateEnum.OK],
+            state=[OfferingUserState.OK],
             is_restricted=False,
         )
 
@@ -749,12 +749,12 @@ def _group_users_by_state(
     pending_users = []
 
     for user in offering_users:
-        if user.state == OfferingUserStateEnum.REQUESTED:
+        if user.state == OfferingUserState.REQUESTED:
             requested_users.append(user)
         elif user.state in {
-            OfferingUserStateEnum.CREATING,
-            OfferingUserStateEnum.PENDING_ACCOUNT_LINKING,
-            OfferingUserStateEnum.PENDING_ADDITIONAL_VALIDATION,
+            OfferingUserState.CREATING,
+            OfferingUserState.PENDING_ACCOUNT_LINKING,
+            OfferingUserState.PENDING_ADDITIONAL_VALIDATION,
         }:
             pending_users.append(user)
 
