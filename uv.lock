@@ -1307,8 +1307,8 @@ wheels = [
 
 [[package]]
 name = "waldur-api-client"
-version = "7.8.3"
-source = { git = "https://github.com/waldur/py-client?rev=main#1d0b0c44bfaa69000f0440e87489fe8d0fca4dd2" }
+version = "7.8.4"
+source = { git = "https://github.com/waldur/py-client.git?rev=main#8c162e795fd730821bcbaf7678ac3fe98d45bd58" }
 dependencies = [
     { name = "attrs" },
     { name = "httpx" },
@@ -1349,7 +1349,7 @@ requires-dist = [
     { name = "sentry-sdk", specifier = "==2.3.1" },
     { name = "stomp-py", specifier = ">=8.2.0,<9" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20240311,<7" },
-    { name = "waldur-api-client", git = "https://github.com/waldur/py-client?rev=main" },
+    { name = "waldur-api-client", git = "https://github.com/waldur/py-client.git?rev=main" },
 ]
 
 [package.metadata.requires-dev]
