@@ -85,8 +85,11 @@ else:
     from importlib_metadata import entry_points, version
 
 
-BACKENDS: dict[str, type[BaseBackend]] = {
-    entry_point.name: entry_point.load()
+BACKENDS: dict[str, tuple[type[BaseBackend], str]] = {
+    entry_point.name: (
+        entry_point.load(),
+        version(entry_point.dist.name) if entry_point.dist else "unknown",
+    )
     for entry_point in entry_points(group="waldur_site_agent.backends")
 }
 
@@ -200,6 +203,7 @@ def load_configuration(
     configuration.waldur_user_agent = (
         f"waldur-site-agent-{user_agent_suffix}/{waldur_site_agent_version}"
     )
+    configuration.config_file_path = config_file_path
 
     return configuration
 
@@ -254,7 +258,9 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
     return configuration
 
 
-def get_backend_for_offering(offering: structures.Offering, backend_type_key: str) -> BaseBackend:
+def get_backend_for_offering(
+    offering: structures.Offering, backend_type_key: str
+) -> tuple[BaseBackend, str]:
     """Create and initialize a backend instance for the specified offering.
 
     Uses the plugin discovery system to find and instantiate the appropriate
@@ -266,15 +272,25 @@ def get_backend_for_offering(offering: structures.Offering, backend_type_key: st
                          (e.g., 'order_processing_backend', 'reporting_backend')
 
     Returns:
-        Initialized backend instance, or UnknownBackend if type not supported
+        Initialized backend instance with version as a second value,
+        or UnknownBackend if type not supported
     """
     backend_type = getattr(offering, backend_type_key, "")
-    backend_class = BACKENDS.get(backend_type)
-    if not backend_class:
+    backend_info = BACKENDS.get(backend_type)
+    if not backend_info:
         logger.error("Unsupported backend type for %s: %s", backend_type_key, backend_type)
-        return UnknownBackend()
+        return UnknownBackend(), "unknown"
 
-    return backend_class(offering.backend_settings, offering.backend_components)
+    backend_class, dist_version = backend_info
+
+    logger.info(
+        "Using %s backend (version %s) for %s offering",
+        backend_type,
+        dist_version,
+        offering.name,
+    )
+
+    return backend_class(offering.backend_settings, offering.backend_components), dist_version
 
 
 def mark_waldur_resources_as_erred(
@@ -574,7 +590,7 @@ def diagnostics() -> bool:
         except UnexpectedStatus as err:
             logger.error("Unable to fetch orders, reason: %s", err)
 
-        backend = get_backend_for_offering(offering, "order_processing_backend")
+        backend, _ = get_backend_for_offering(offering, "order_processing_backend")
 
         if not backend.diagnostics():
             return False
@@ -618,7 +634,7 @@ def create_homedirs_for_offering_users() -> None:
             offering_user.username for offering_user in offering_users
         }
         umask = offering.backend_settings.get("homedir_umask", "0700")
-        offering_backend = get_backend_for_offering(offering, "order_processing_backend")
+        offering_backend, _ = get_backend_for_offering(offering, "order_processing_backend")
         offering_backend.create_user_homedirs(offering_user_usernames, umask)
 
 
@@ -983,7 +999,7 @@ def sync_resource_limits() -> None:
             offering.name,
             offering.membership_sync_backend,
         )
-        backend = get_backend_for_offering(offering, "membership_sync_backend")
+        backend, _ = get_backend_for_offering(offering, "membership_sync_backend")
         logger.info("Using class %s as a backend", backend.__class__.__name__)
         waldur_rest_client = get_client(
             offering.api_url,

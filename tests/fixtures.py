@@ -3,7 +3,7 @@ from waldur_site_agent.common.structures import Offering
 OFFERING = Offering(
     uuid="d629d5e45567425da9cdbdc1af67b32c",
     name="example-test-00",
-    api_url="http://localhost:8081/api/",
+    api_url="https://waldur.example.com/",
     api_token="9e1132b9616ebfe943ddf632ca32bbb7e1109a32",
     backend_type="slurm",
     order_processing_backend="slurm",

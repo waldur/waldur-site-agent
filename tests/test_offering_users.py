@@ -76,7 +76,26 @@ class TestOfferingUserUpdate(unittest.TestCase):
             ).respond(200, json=offering_user.to_dict())
 
     @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
-    def test_offering_user_update(self, get_username_management_backend_mock):
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_begin_creating.sync_detailed"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_partial_update.sync_detailed"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_ok.sync_detailed"
+    )
+    def test_offering_user_update(
+        self,
+        marketplace_offering_users_set_ok_mock,
+        marketplace_offering_users_partial_update_mock,
+        marketplace_offering_users_begin_creating_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
         new_requested_username = "user00"
         new_pending_username = "user01"
         new_creating_username = "user02"
@@ -88,7 +107,18 @@ class TestOfferingUserUpdate(unittest.TestCase):
         )
         get_username_management_backend_mock.return_value = username_management_backend_mock
 
-        self.mock_waldur_client()
+        # Mock all API calls directly instead of using respx
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        # Create mock response objects with required attributes
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
+
+        marketplace_offering_users_begin_creating_mock.return_value = mock_response
+        marketplace_offering_users_partial_update_mock.return_value = mock_response
+        marketplace_offering_users_set_ok_mock.return_value = mock_response
+
         result = utils.update_offering_users(self.offering, self.waldur_client, self.offering_users)
 
         # Verify that processing actually occurred (should return True since usernames were updated)
@@ -106,7 +136,14 @@ class TestOfferingUserUpdate(unittest.TestCase):
         self.assertEqual(self.offering_users[2].username, new_creating_username)
 
     def _setup_error_test_mocks(
-        self, endpoint_path: str, exception_class, error_message: str, comment_url: str
+        self,
+        endpoint_path: str,
+        exception_class,
+        error_message: str,
+        comment_url: str,
+        marketplace_provider_offerings_retrieve_mock,
+        marketplace_offering_users_begin_creating_mock,
+        set_pending_method_mock,
     ):
         """Helper method to setup common mocks for error handling tests."""
         # Use AbstractUsernameManagementBackend instead of UnknownUsernameManagementBackend
@@ -115,20 +152,18 @@ class TestOfferingUserUpdate(unittest.TestCase):
             error_message, comment_url=comment_url
         )
 
-        # Mock the API endpoints
-        respx.get(
-            f"{self.BASE_URL}/api/marketplace-provider-offerings/{self.offering.uuid}/"
-        ).respond(200, json=self.provider_offering_details.to_dict())
+        # Mock the API calls directly instead of using respx
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
 
-        respx.post(
-            f"{self.BASE_URL}/api/marketplace-offering-users/{self.offering_users[0].uuid}/begin_creating/"
-        ).respond(200, json={})
+        # Create mock response objects with required attributes
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
 
-        set_pending_mock = respx.post(
-            f"{self.BASE_URL}/api/marketplace-offering-users/{self.offering_users[0].uuid}/{endpoint_path}/"
-        ).respond(200, json={})
+        marketplace_offering_users_begin_creating_mock.return_value = mock_response
+        set_pending_method_mock.return_value = mock_response
 
-        return username_management_backend_mock, set_pending_mock
+        return username_management_backend_mock, set_pending_method_mock
 
     def _verify_error_test_results(
         self,
@@ -144,15 +179,31 @@ class TestOfferingUserUpdate(unittest.TestCase):
         )
 
         # Verify the API was called with separate comment and comment_url fields
-        assert set_pending_mock.called
-        request_body = set_pending_mock.calls[0].request.content.decode()
-        payload = json.loads(request_body)
-        self.assertEqual(payload["comment"], expected_comment)
-        self.assertEqual(payload["comment_url"], expected_url)
+        set_pending_mock.assert_called_once()
+        call_args = set_pending_mock.call_args
+
+        # The API method is called with: sync_detailed(uuid, client=client, body=request_body)
+        # We need to check the body parameter
+        body = call_args.kwargs["body"]
+        self.assertEqual(body.comment, expected_comment)
+        self.assertEqual(body.comment_url, expected_url)
 
     @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_begin_creating.sync_detailed"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_pending_account_linking.sync_detailed"
+    )
     def test_offering_user_update_with_account_linking_error(
-        self, get_username_management_backend_mock
+        self,
+        marketplace_offering_users_set_pending_account_linking_mock,
+        marketplace_offering_users_begin_creating_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
     ):
         """Test handling of OfferingUserAccountLinkingRequiredError with comment URL."""
         test_comment_url = "https://example.com/account-linking"
@@ -163,6 +214,9 @@ class TestOfferingUserUpdate(unittest.TestCase):
             backend_exceptions.OfferingUserAccountLinkingRequiredError,
             error_message,
             test_comment_url,
+            marketplace_provider_offerings_retrieve_mock,
+            marketplace_offering_users_begin_creating_mock,
+            marketplace_offering_users_set_pending_account_linking_mock,
         )
         get_username_management_backend_mock.return_value = username_management_backend_mock
 
@@ -174,7 +228,22 @@ class TestOfferingUserUpdate(unittest.TestCase):
         )
 
     @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
-    def test_offering_user_update_with_validation_error(self, get_username_management_backend_mock):
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_begin_creating.sync_detailed"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_pending_additional_validation.sync_detailed"
+    )
+    def test_offering_user_update_with_validation_error(
+        self,
+        marketplace_offering_users_set_pending_additional_validation_mock,
+        marketplace_offering_users_begin_creating_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
         """Test handling of OfferingUserAdditionalValidationRequiredError with comment URL."""
         test_comment_url = "https://example.com/validation-form"
         error_message = "Additional documents required"
@@ -184,6 +253,9 @@ class TestOfferingUserUpdate(unittest.TestCase):
             backend_exceptions.OfferingUserAdditionalValidationRequiredError,
             error_message,
             test_comment_url,
+            marketplace_provider_offerings_retrieve_mock,
+            marketplace_offering_users_begin_creating_mock,
+            marketplace_offering_users_set_pending_additional_validation_mock,
         )
         get_username_management_backend_mock.return_value = username_management_backend_mock
 
@@ -195,17 +267,18 @@ class TestOfferingUserUpdate(unittest.TestCase):
         )
 
     @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
     def test_unknown_username_management_backend_early_exit(
-        self, get_username_management_backend_mock
+        self, marketplace_provider_offerings_retrieve_mock, get_username_management_backend_mock
     ):
         """Test that UnknownUsernameManagementBackend triggers early exit behavior."""
         # Return an actual UnknownUsernameManagementBackend instance
         get_username_management_backend_mock.return_value = UnknownUsernameManagementBackend()
 
-        # Mock the offering details API call (should still be called)
-        respx.get(
-            f"{self.BASE_URL}/api/marketplace-provider-offerings/{self.offering.uuid}/"
-        ).respond(200, json=self.provider_offering_details.to_dict())
+        # Mock the offering details API call directly instead of using respx
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
 
         # Call the function
         result = utils.update_offering_users(self.offering, self.waldur_client, self.offering_users)
@@ -217,6 +290,11 @@ class TestOfferingUserUpdate(unittest.TestCase):
         self.assertEqual(self.offering_users[0].username, "")
         self.assertEqual(self.offering_users[1].username, "")
         self.assertEqual(self.offering_users[2].username, "")
+
+        # Verify the API call was made to check username generation policy
+        marketplace_provider_offerings_retrieve_mock.assert_called_once_with(
+            client=self.waldur_client, uuid=self.offering.uuid
+        )
 
     @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
     def test_empty_offering_users_list(self, get_username_management_backend_mock):

@@ -6,7 +6,8 @@ from zoneinfo import ZoneInfo
 
 import respx
 from freezegun import freeze_time
-
+from waldur_api_client import AuthenticatedClient
+from waldur_api_client.models import ServiceProvider
 from waldur_site_agent.backend.utils import format_current_month, get_current_time_in_timezone
 from waldur_site_agent_slurm import backend
 from waldur_site_agent.common.processors import OfferingReportProcessor
@@ -96,7 +97,13 @@ class ProcessorTimezoneTest(unittest.TestCase):
             "uuid": self.offering_uuid.hex,
             "name": "test",
             "description": "test",
+            "customer_uuid": uuid.uuid4().hex,
         }
+        self.mock_client = AuthenticatedClient(
+            base_url=BASE_URL,
+            token=self.waldur_offering.api_token,
+            headers={},
+        )
 
     def tearDown(self) -> None:
         respx.stop()
@@ -107,8 +114,12 @@ class ProcessorTimezoneTest(unittest.TestCase):
         respx.get(
             f"{BASE_URL}/api/marketplace-provider-offerings/{self.offering_uuid.hex}/"
         ).respond(200, json=self.waldur_offering_response)
+        service_provider = ServiceProvider(uuid=uuid.uuid4())
+        respx.get(
+            f"{BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering_response['customer_uuid']}"
+        ).respond(200, json=[service_provider.to_dict()])
 
-        processor = OfferingReportProcessor(self.waldur_offering, "test-agent", "UTC")
+        processor = OfferingReportProcessor(self.waldur_offering, self.mock_client, "UTC")
         assert processor.timezone == "UTC"
 
     def test_processor_constructor_timezone_empty(self, mock_print_user) -> None:
@@ -118,7 +129,12 @@ class ProcessorTimezoneTest(unittest.TestCase):
             f"{BASE_URL}/api/marketplace-provider-offerings/{self.offering_uuid.hex}/"
         ).respond(200, json=self.waldur_offering_response)
 
-        processor = OfferingReportProcessor(self.waldur_offering, "test-agent", "")
+        service_provider = ServiceProvider(uuid=uuid.uuid4())
+        respx.get(
+            f"{BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering_response['customer_uuid']}"
+        ).respond(200, json=[service_provider.to_dict()])
+
+        processor = OfferingReportProcessor(self.waldur_offering, self.mock_client, "")
         assert processor.timezone == ""
 
 
@@ -172,6 +188,7 @@ class TimezoneIntegrationTest(unittest.TestCase):
             "uuid": self.offering_uuid.hex,
             "name": "test",
             "description": "test",
+            "customer_uuid": uuid.uuid4().hex,
         }
         self.waldur_user = {
             "username": "test",
@@ -179,6 +196,12 @@ class TimezoneIntegrationTest(unittest.TestCase):
             "full_name": "Test User",
             "is_staff": False,
         }
+
+        self.mock_client = AuthenticatedClient(
+            base_url=BASE_URL,
+            token=self.waldur_offering.api_token,
+            headers={},
+        )
 
     def tearDown(self) -> None:
         respx.stop()
@@ -190,5 +213,9 @@ class TimezoneIntegrationTest(unittest.TestCase):
         respx.get(
             f"{BASE_URL}/api/marketplace-provider-offerings/{self.offering_uuid.hex}/"
         ).respond(200, json=self.waldur_offering_response)
-        processor = OfferingReportProcessor(self.waldur_offering, "test-agent", "UTC")
+        service_provider = ServiceProvider(uuid=uuid.uuid4())
+        respx.get(
+            f"{BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering_response['customer_uuid']}"
+        ).respond(200, json=[service_provider.to_dict()])
+        processor = OfferingReportProcessor(self.waldur_offering, self.mock_client, "UTC")
         assert processor.timezone == "UTC"

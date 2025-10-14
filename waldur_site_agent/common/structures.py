@@ -98,6 +98,7 @@ class WaldurAgentConfiguration:
     waldur_site_agent_version: str = ""
     sentry_dsn: str = ""
     timezone: str = ""
+    config_file_path: str = ""
 
 
 class AccountType(Enum):

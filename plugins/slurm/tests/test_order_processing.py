@@ -7,7 +7,7 @@ from unittest import mock
 import respx
 import httpx
 from waldur_api_client import AuthenticatedClient, models
-from waldur_api_client.models import ResourceState
+from waldur_api_client.models import ResourceState, ServiceProvider
 from waldur_api_client.models.merged_plugin_options import MergedPluginOptions
 from waldur_api_client.models.offering_state import OfferingState
 from waldur_api_client.models.order_state import OrderState
@@ -70,6 +70,10 @@ def setup_common_respx_mocks(
         respx.get(
             f"{base_url}/api/marketplace-provider-offerings/{waldur_offering_users['offering_uuid']}/"
         ).respond(200, json=waldur_offering)
+    service_provider = ServiceProvider(uuid=uuid.uuid4())
+    respx.get(
+        f"{base_url}/api/marketplace-service-providers/?customer_uuid={waldur_offering['customer_uuid']}"
+    ).respond(200, json=[service_provider.to_dict()])
 
 
 def setup_order_respx_mocks(base_url: str, order_uuid: str, waldur_order: dict):
@@ -155,6 +159,7 @@ class CreationOrderTest(unittest.TestCase):
             plugin_options=MergedPluginOptions(
                 username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
             ),
+            customer_uuid=uuid.uuid4().hex,
         ).to_dict()
 
         self.waldur_resource = models.Resource(
@@ -207,7 +212,6 @@ class CreationOrderTest(unittest.TestCase):
             token=OFFERING.api_token,
             headers={},
         )
-        self.mock_get_client.return_value = self.mock_client
 
     def tearDown(self) -> None:
         respx.stop()
@@ -241,7 +245,7 @@ class CreationOrderTest(unittest.TestCase):
         )
         slurm_client = setup_slurm_client_mocks(slurm_client_class)
 
-        processor = OfferingOrderProcessor(OFFERING)
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
         processor.process_offering()
 
         assert request_order_set_as_error.call_count == 0
@@ -292,7 +296,7 @@ class CreationOrderTest(unittest.TestCase):
             slurm_client_class, [None, None, None, "account", None]
         )
 
-        processor = OfferingOrderProcessor(OFFERING)
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
         processor.process_offering()
 
         assert slurm_client.create_resource.call_count == 3
@@ -339,7 +343,7 @@ class CreationOrderTest(unittest.TestCase):
         )
         slurm_client = setup_slurm_client_mocks(slurm_client_class)
 
-        processor = OfferingOrderProcessor(OFFERING)
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
 
         processor.process_offering()
 
@@ -379,7 +383,7 @@ class CreationOrderTest(unittest.TestCase):
         )
         slurm_client = setup_slurm_client_mocks(slurm_client_class)
 
-        processor = OfferingOrderProcessor(OFFERING)
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
 
         # Process offering - should catch BackendError and mark order as erred
         processor.process_offering()
@@ -455,6 +459,7 @@ class TerminationOrderTest(unittest.TestCase):
             plugin_options=MergedPluginOptions(
                 username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
             ),
+            customer_uuid=uuid.uuid4().hex,
         ).to_dict()
 
         self.client_patcher = mock.patch("waldur_site_agent.common.utils.get_client")
@@ -466,7 +471,6 @@ class TerminationOrderTest(unittest.TestCase):
             timeout=600,
             headers={},
         )
-        self.mock_get_client.return_value = self.mock_client
 
     def tearDown(self) -> None:
         respx.stop()
@@ -504,7 +508,7 @@ class TerminationOrderTest(unittest.TestCase):
         slurm_client.list_resources.return_value = []
         slurm_client._execute_command.return_value = ""
 
-        processor = OfferingOrderProcessor(OFFERING)
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
         processor.process_offering()
         assert erred_response.call_count == 0
         # The method was called twice: for project account and for allocation account
@@ -588,6 +592,7 @@ class UpdateOrderTest(unittest.TestCase):
             plugin_options=MergedPluginOptions(
                 username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
             ),
+            customer_uuid=uuid.uuid4().hex,
         ).to_dict()
 
         self.client_patcher = mock.patch("waldur_site_agent.common.utils.get_client")
@@ -599,7 +604,6 @@ class UpdateOrderTest(unittest.TestCase):
             timeout=600,
             headers={},
         )
-        self.mock_get_client.return_value = self.mock_client
 
     def tearDown(self) -> None:
         respx.stop()
@@ -626,11 +630,15 @@ class UpdateOrderTest(unittest.TestCase):
         erred_response = respx.post(
             f"{self.base_url}/api/marketplace-orders/{self.order_uuid}/set_state_erred/"
         ).respond(200, json={})
+        service_provider = ServiceProvider(uuid=uuid.uuid4())
+        respx.get(
+            f"{self.base_url}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering['customer_uuid']}"
+        ).respond(200, json=[service_provider.to_dict()])
 
         slurm_client = slurm_client_class.return_value
         slurm_client.set_resource_limits = mock.Mock()
 
-        processor = OfferingOrderProcessor(OFFERING)
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
         processor.process_offering()
         assert slurm_client.set_resource_limits.call_count == 1
         assert erred_response.call_count == 0

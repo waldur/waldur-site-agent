@@ -13,6 +13,7 @@ from tests.fixtures import OFFERING
 from waldur_site_agent_mup.client import MUPError
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingOrderProcessor
+from waldur_site_agent.common.utils import get_client
 
 MUP_OFFERING = replace(
     OFFERING,
@@ -54,6 +55,7 @@ class BaseMUPOrderTest(unittest.TestCase):
         self.marketplace_resource_uuid = self.resource_uuid
         self.project_uuid = uuid.uuid4().hex
         self.order_uuid = uuid.uuid4().hex
+        self.customer_uuid = uuid.uuid4().hex
 
         self.mock_client = AuthenticatedClient(
             base_url=BASE_URL,
@@ -61,6 +63,7 @@ class BaseMUPOrderTest(unittest.TestCase):
             timeout=600,
             headers={},
         )
+        self.waldur_rest_client = get_client(OFFERING.api_url, OFFERING.api_token)
         self.client_patcher = mock.patch("waldur_site_agent.common.utils.get_client")
         self.mock_get_client = self.client_patcher.start()
         self.mock_get_client.return_value = self.mock_client
@@ -75,6 +78,13 @@ class BaseMUPOrderTest(unittest.TestCase):
             "uuid": MUP_OFFERING.uuid,
             "name": MUP_OFFERING.name,
             "description": "test description",
+            "customer_uuid": self.customer_uuid,
+            "components": [],
+        }
+        self.service_provider = {
+            "uuid": uuid.uuid4().hex,
+            "customer_uuid": self.customer_uuid,
+            "customer_name": "Test Provider",
         }
 
     def tearDown(self) -> None:
@@ -87,6 +97,10 @@ class BaseMUPOrderTest(unittest.TestCase):
         respx.get(
             f"{BASE_URL}/api/marketplace-provider-offerings/{MUP_OFFERING.uuid}/"
         ).respond(200, json=self.waldur_offering_response)
+        # Use URL matching with regex for query parameters to handle different formats
+        respx.get(url__regex=r".*/api/marketplace-service-providers/.*").respond(
+            200, json=[self.service_provider]
+        )
 
     def _setup_order_mocks(
         self, order_uuid, marketplace_resource_uuid, order_data, order_states=None
@@ -311,7 +325,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             marketplace_resource_uuid, self.waldur_resource_team
         )
 
-        processor = OfferingOrderProcessor(MUP_OFFERING)
+        processor = OfferingOrderProcessor(MUP_OFFERING, self.waldur_rest_client)
         processor.process_offering()
 
         # Verify MUP operations were called
@@ -351,7 +365,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             marketplace_resource_uuid, self.waldur_resource_team
         )
 
-        processor = OfferingOrderProcessor(MUP_OFFERING)
+        processor = OfferingOrderProcessor(MUP_OFFERING, self.waldur_rest_client)
         processor.process_offering()
 
         # Verify user creation is called for default PI but not for existing user
@@ -411,7 +425,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         mup_client.create_allocation.return_value = created_allocation
         mup_client.get_project_allocations.return_value = [created_allocation]
 
-        processor = OfferingOrderProcessor(MUP_OFFERING)
+        processor = OfferingOrderProcessor(MUP_OFFERING, self.waldur_rest_client)
         processor.process_offering()
 
         # Verify project was not created (already exists) but was activated
@@ -447,7 +461,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             marketplace_resource_uuid, self.waldur_resource_team
         )
 
-        processor = OfferingOrderProcessor(MUP_OFFERING)
+        processor = OfferingOrderProcessor(MUP_OFFERING, self.waldur_rest_client)
 
         # The processor should handle the error gracefully and not crash
         processor.process_offering()
@@ -478,7 +492,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             marketplace_resource_uuid, self.waldur_resource_team
         )
 
-        processor = OfferingOrderProcessor(MUP_OFFERING)
+        processor = OfferingOrderProcessor(MUP_OFFERING, self.waldur_rest_client)
 
         # The processor should handle the error gracefully and not crash
         processor.process_offering()
@@ -550,7 +564,7 @@ class MUPTerminationOrderTest(BaseMUPOrderTest):
         mup_client.get_projects.return_value = [existing_project]
         mup_client.deactivate_project.return_value = {"status": "deactivated"}
 
-        processor = OfferingOrderProcessor(MUP_OFFERING)
+        processor = OfferingOrderProcessor(MUP_OFFERING, self.waldur_rest_client)
         processor.process_offering()
 
         # Verify delete_resource was called (which should deactivate the project)
@@ -636,7 +650,7 @@ class MUPUpdateOrderTest(BaseMUPOrderTest):
         mup_client.get_project_allocations.return_value = [existing_allocation]
         mup_client.update_allocation.return_value = existing_allocation
 
-        processor = OfferingOrderProcessor(MUP_OFFERING)
+        processor = OfferingOrderProcessor(MUP_OFFERING, self.waldur_rest_client)
         processor.process_offering()
 
         # Verify allocation was updated with new limits

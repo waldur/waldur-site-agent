@@ -9,19 +9,23 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Union
 
+import httpx
 import paho.mqtt.client as mqtt
-import stomp
+from waldur_api_client import errors
 from waldur_api_client.api.marketplace_orders import marketplace_orders_list
+from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 
 from waldur_site_agent.backend import logger
+from waldur_site_agent.common import agent_identity_management
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
+from waldur_site_agent.common.utils import get_client
 from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.event_subscription_manager import EventSubscriptionManager
 from waldur_site_agent.event_processing.structures import (
-    EventSubscription,
     MqttConsumer,
     MqttConsumersMap,
+    StompConsumer,
     StompConsumersMap,
     UserData,
 )
@@ -52,13 +56,13 @@ def on_connect(
 
 def setup_stomp_offering_subscriptions(
     waldur_offering: common_structures.Offering, waldur_user_agent: str
-) -> list[stomp.WSStompConnection]:
+) -> list[StompConsumer]:
     """Set up STOMP subscriptions for the specified offering."""
-    stomp_connections: list[stomp.WSStompConnection] = []
+    stomp_connections: list[StompConsumer] = []
     object_types = []
 
     if waldur_offering.order_processing_backend:
-        object_types.append("order")
+        object_types.append(ObservableObjectTypeEnum.ORDER)
     else:
         logger.info(
             "Order processing is disabled for offering %s, skipping start of STOMP connections",
@@ -66,7 +70,14 @@ def setup_stomp_offering_subscriptions(
         )
 
     if waldur_offering.membership_sync_backend:
-        object_types.extend(["user_role", "resource", "service_account", "course_account"])
+        object_types.extend(
+            [
+                ObservableObjectTypeEnum.USER_ROLE,
+                ObservableObjectTypeEnum.RESOURCE,
+                ObservableObjectTypeEnum.SERVICE_ACCOUNT,
+                ObservableObjectTypeEnum.COURSE_ACCOUNT,
+            ]
+        )
     else:
         logger.info(
             "Membership sync is disabled for offering %s, skipping start of STOMP connections",
@@ -74,52 +85,70 @@ def setup_stomp_offering_subscriptions(
         )
 
     if waldur_offering.resource_import_enabled:
-        object_types.append("importable_resources")
+        object_types.append(ObservableObjectTypeEnum.IMPORTABLE_RESOURCES)
     else:
         logger.info(
             "Resource import is disabled for offering %s, skipping start of STOMP connections",
             waldur_offering.name,
         )
 
-    for object_type in object_types:
-        event_subscription_manager = EventSubscriptionManager(
-            waldur_offering, None, None, waldur_user_agent, object_type
-        )
-        event_subscription: EventSubscription | None = (
-            event_subscription_manager.get_or_create_event_subscription()
-        )
-        if event_subscription is None:
-            logger.error(
-                "Failed to create event subscription for the offering %s (%s), object type %s",
-                waldur_offering.name,
-                waldur_offering.uuid,
-                object_type,
-            )
-            continue
-        connection = event_subscription_manager.start_stomp_connection(event_subscription)
-        if connection is None:
-            logger.error(
-                "Failed to start STOMP connection for the offering %s (%s), object type %s",
-                waldur_offering.name,
-                waldur_offering.uuid,
-                object_type,
-            )
-            event_subscription_manager.delete_event_subscription(event_subscription)
-            continue
+    waldur_rest_client = get_client(
+        waldur_offering.api_url,
+        waldur_offering.api_token,
+        waldur_user_agent,
+        verify_ssl=waldur_offering.verify_ssl,
+    )
 
-        stomp_connections.append((connection, event_subscription, waldur_offering))
+    agent_identity_manager = agent_identity_management.AgentIdentityManager(
+        waldur_offering, waldur_rest_client
+    )
+    identity_name = f"agent-{waldur_offering.uuid}"
+    try:
+        agent_identity = agent_identity_manager.register_identity(identity_name)
+    except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
+        logger.exception(
+            "Failed to register identity for the offering %s: %s", waldur_offering.name, e
+        )
+        return stomp_connections
+
+    for object_type in object_types:
+        try:
+            event_subscription = agent_identity_manager.register_event_subscription(
+                agent_identity, object_type
+            )
+            event_subscription_manager = EventSubscriptionManager(
+                waldur_offering, None, None, waldur_user_agent, object_type
+            )
+            connection = event_subscription_manager.start_stomp_connection(event_subscription)
+            if connection is None:
+                logger.error(
+                    "Failed to start STOMP connection for the offering %s (%s), object type %s",
+                    waldur_offering.name,
+                    waldur_offering.uuid,
+                    object_type,
+                )
+                continue
+
+            stomp_connections.append((connection, event_subscription, waldur_offering))
+        except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
+            logger.exception(
+                "Unable to register event subscription for offering %s object type %s: %s",
+                waldur_offering.name,
+                object_type,
+                e,
+            )
 
     return stomp_connections
 
 
-def setup_offering_subscriptions(
+def setup_mqtt_offering_subscriptions(
     waldur_offering: common_structures.Offering, waldur_user_agent: str
 ) -> list[MqttConsumer]:
     """Set up MQTT subscriptions for the specified offering."""
     object_type_to_handler = {}
 
     if waldur_offering.order_processing_backend:
-        object_type_to_handler["order"] = handlers.on_order_message_mqtt
+        object_type_to_handler[ObservableObjectTypeEnum.ORDER] = handlers.on_order_message_mqtt
     else:
         logger.info(
             "Order processing is disabled for offering %s, skipping start of MQTT consumers",
@@ -129,10 +158,10 @@ def setup_offering_subscriptions(
     if waldur_offering.membership_sync_backend:
         object_type_to_handler.update(
             {
-                "user_role": handlers.on_user_role_message_mqtt,
-                "resource": handlers.on_resource_message_mqtt,
-                "service_account": handlers.on_account_message_mqtt,
-                "course_account": handlers.on_account_message_mqtt,
+                ObservableObjectTypeEnum.USER_ROLE: handlers.on_user_role_message_mqtt,
+                ObservableObjectTypeEnum.RESOURCE: handlers.on_resource_message_mqtt,
+                ObservableObjectTypeEnum.SERVICE_ACCOUNT: handlers.on_account_message_mqtt,
+                ObservableObjectTypeEnum.COURSE_ACCOUNT: handlers.on_account_message_mqtt,
             }
         )
     else:
@@ -141,32 +170,53 @@ def setup_offering_subscriptions(
             waldur_offering.name,
         )
 
+    waldur_rest_client = get_client(
+        waldur_offering.api_url,
+        waldur_offering.api_token,
+        waldur_user_agent,
+        verify_ssl=waldur_offering.verify_ssl,
+    )
     event_subscriptions: list[MqttConsumer] = []
-    for object_type, on_message_handler in object_type_to_handler.items():
-        event_subscription_manager = EventSubscriptionManager(
-            waldur_offering, on_connect, on_message_handler, waldur_user_agent, object_type
-        )
-        event_subscription = event_subscription_manager.create_event_subscription()
-        if event_subscription is None:
-            logger.error(
-                "Failed to create event subscription for the offering %s (%s), object type %s",
-                waldur_offering.name,
-                waldur_offering.uuid,
-                object_type,
-            )
-            continue
-        consumer = event_subscription_manager.start_mqtt_consumer(event_subscription)
-        if consumer is None:
-            logger.error(
-                "Failed to start mqtt consumer for the offering %s (%s), object type %s",
-                waldur_offering.name,
-                waldur_offering.uuid,
-                object_type,
-            )
-            event_subscription_manager.delete_event_subscription(event_subscription)
-            continue
+    agent_identity_manager = agent_identity_management.AgentIdentityManager(
+        waldur_offering, waldur_rest_client
+    )
+    identity_name = f"agent-{waldur_offering.uuid}"
 
-        event_subscriptions.append((consumer, event_subscription, waldur_offering))
+    try:
+        agent_identity = agent_identity_manager.register_identity(identity_name)
+    except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
+        logger.exception(
+            "Failed to register identity for the offering %s: %s", waldur_offering.name, e
+        )
+        return event_subscriptions
+
+    for object_type, on_message_handler in object_type_to_handler.items():
+        try:
+            event_subscription = agent_identity_manager.register_event_subscription(
+                agent_identity, object_type
+            )
+            event_subscription_manager = EventSubscriptionManager(
+                waldur_offering, on_connect, on_message_handler, waldur_user_agent, object_type
+            )
+            consumer = event_subscription_manager.start_mqtt_consumer(event_subscription)
+            if consumer is None:
+                logger.error(
+                    "Failed to start mqtt consumer for the offering %s (%s), object type %s",
+                    waldur_offering.name,
+                    waldur_offering.uuid,
+                    object_type,
+                )
+                event_subscription_manager.delete_event_subscription(event_subscription)
+                continue
+
+            event_subscriptions.append((consumer, event_subscription, waldur_offering))
+        except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
+            logger.exception(
+                "Unable to register event subscription for offering %s object type %s: %s",
+                waldur_offering.name,
+                object_type,
+                e,
+            )
 
     return event_subscriptions
 
@@ -209,7 +259,9 @@ def stop_stomp_consumers(
                     "Stopping STOMP connection for %s (%s), observable object type: %s",
                     offering_name,
                     offering_uuid,
-                    event_subscription["observable_objects"][0]["object_type"],
+                    event_subscription.observable_objects[0]["object_type"]
+                    if event_subscription.observable_objects
+                    else "N/A",
                 )
                 event_subscription_manager.stop_stomp_connection(connection)
             except Exception as exc:
@@ -228,7 +280,7 @@ def start_mqtt_consumers(
             continue
 
         logger.info("Setting up MQTT consumers for offering %s", waldur_offering.name)
-        event_subscriptions = setup_offering_subscriptions(waldur_offering, waldur_user_agent)
+        event_subscriptions = setup_mqtt_offering_subscriptions(waldur_offering, waldur_user_agent)
         if event_subscriptions:
             mqtt_consumers_map[(waldur_offering.name, waldur_offering.uuid)] = event_subscriptions
 
@@ -316,15 +368,32 @@ def process_offering(offering: common_structures.Offering, user_agent: str = "")
     """Processes the specified offering."""
     logger.info("Processing offering %s (%s)", offering.name, offering.uuid)
 
+    waldur_rest_client = get_client(
+        offering.api_url, offering.api_token, user_agent, verify_ssl=offering.verify_ssl
+    )
+    agent_identity_manager = agent_identity_management.AgentIdentityManager(
+        offering, waldur_rest_client
+    )
+    agent_identity = agent_identity_manager.register_identity(f"agent-{offering.uuid}")
+    agent_service = agent_identity_manager.register_service(
+        agent_identity,
+        "initial-offering-process",
+        common_structures.AgentMode.EVENT_PROCESS.value,
+    )
+
     if offering.order_processing_backend:
-        order_processor = common_processors.OfferingOrderProcessor(offering, user_agent)
+        order_processor = common_processors.OfferingOrderProcessor(offering, waldur_rest_client)
+        order_processor.register(agent_service)
         logger.info("Running offering order process")
         order_processor.process_offering()
     else:
         logger.info("Order processing is disabled for this offering, skipping it")
 
     if offering.membership_sync_backend:
-        membership_processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        membership_processor = common_processors.OfferingMembershipProcessor(
+            offering, waldur_rest_client
+        )
+        membership_processor.register(agent_service)
         logger.info("Running offering membership process")
         membership_processor.process_offering()
     else:
@@ -335,7 +404,10 @@ def send_agent_health_checks(offerings: list[common_structures.Offering], user_a
     """Sends agent health checks for the specified offerings."""
     for offering in offerings:
         try:
-            processor = common_processors.OfferingOrderProcessor(offering, user_agent)
+            waldur_rest_client = get_client(
+                offering.api_url, offering.api_token, user_agent, verify_ssl=offering.verify_ssl
+            )
+            processor = common_processors.OfferingOrderProcessor(offering, waldur_rest_client)
             marketplace_orders_list.sync(
                 client=processor.waldur_rest_client, offering_uuid=offering.uuid
             )
