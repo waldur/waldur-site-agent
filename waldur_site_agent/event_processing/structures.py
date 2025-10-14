@@ -6,6 +6,7 @@ from typing import TypedDict
 
 import paho.mqtt.client as mqtt
 import stomp
+from waldur_api_client.models.event_subscription import EventSubscription
 
 from waldur_site_agent.common import structures as common_structures
 
@@ -21,14 +22,6 @@ class ObservableObject(TypedDict):
 
     object_type: str
     object_uuid: str
-
-
-class EventSubscription(TypedDict):
-    """Represents an event subscription."""
-
-    uuid: str
-    user_uuid: str
-    observable_objects: list[ObservableObject]
 
 
 # A tuple containing MQTT client, subscription, and offering information.

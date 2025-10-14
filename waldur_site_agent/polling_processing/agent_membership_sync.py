@@ -3,9 +3,13 @@
 from time import sleep
 
 from waldur_site_agent.backend import logger
-from waldur_site_agent.common import WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES
+from waldur_site_agent.common import (
+    WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES,
+    agent_identity_management,
+)
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
+from waldur_site_agent.common import utils as common_utils
 
 
 def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
@@ -24,7 +28,34 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
                     )
                     continue
 
-                processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+                waldur_rest_client = common_utils.get_client(
+                    offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+                )
+
+                agent_identity_manager = agent_identity_management.AgentIdentityManager(
+                    offering, waldur_rest_client
+                )
+                identity_name = f"agent-{offering.uuid}"
+                agent_identity = agent_identity_manager.register_identity(identity_name)
+                agent_service = agent_identity_manager.register_service(
+                    agent_identity,
+                    configuration.waldur_site_agent_mode,
+                    configuration.waldur_site_agent_mode,
+                )
+
+                # Create backend instance for dependency injection
+                resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
+                    offering, "membership_sync_backend"
+                )
+
+                processor = common_processors.OfferingMembershipProcessor(
+                    offering,
+                    waldur_rest_client,
+                    resource_backend=resource_backend,
+                    resource_backend_version=resource_backend_version,
+                )
+                processor.register(agent_service)
+
                 processor.process_offering()
             except Exception as e:
                 logger.exception("Unable to process the offering due to the error: %s", e)

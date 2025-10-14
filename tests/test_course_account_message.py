@@ -3,6 +3,7 @@ from unittest import mock, TestCase
 import json
 
 from stomp.constants import HDR_DESTINATION
+from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models import (
     CourseAccount,
     Resource,
@@ -33,6 +34,12 @@ class CourseAccountMessageTest(TestCase):
             api_url=f"{self.BASE_URL}/api",
             api_token="test_token",
         )
+        self.waldur_rest_client = AuthenticatedClient(
+            base_url=self.BASE_URL,
+            token="test_token",
+            timeout=600,
+            headers={},
+        )
         self.waldur_resource = Resource(
             uuid=uuid.uuid4(),
             name="test-alloc-01",
@@ -61,6 +68,9 @@ class CourseAccountMessageTest(TestCase):
             project_start_date=datetime.now(),
             project_end_date=datetime.now(),
         )
+
+    def tearDown(self) -> None:
+        respx.stop()
 
     def _setup_common_mocks(self):
         respx.get(f"{self.BASE_URL}/api/users/me/").respond(
@@ -91,11 +101,11 @@ class CourseAccountMessageTest(TestCase):
         mock_backend = backends.UnknownBackend()
         mock_backend.backend_type = "test"
         mock_backend.add_users_to_resource = mock.Mock(return_value={})
-        mock_get_backend_for_offering.return_value = mock_backend
+        mock_get_backend_for_offering.return_value = (mock_backend, "1.0.0")
 
         self._setup_common_mocks()
 
-        processor = OfferingMembershipProcessor(self.offering)
+        processor = OfferingMembershipProcessor(self.offering, self.waldur_rest_client)
         processor.process_account_creation(self.course_account.username, AccountType.COURSE_ACCOUNT)
 
         mock_backend.add_users_to_resource.assert_called_once()
@@ -105,11 +115,11 @@ class CourseAccountMessageTest(TestCase):
         mock_backend = backends.UnknownBackend()
         mock_backend.backend_type = "test"
         mock_backend.remove_users_from_resource = mock.Mock(return_value={})
-        mock_get_backend_for_offering.return_value = mock_backend
+        mock_get_backend_for_offering.return_value = (mock_backend, "1.0.0")
 
         self._setup_common_mocks()
 
-        processor = OfferingMembershipProcessor(self.offering)
+        processor = OfferingMembershipProcessor(self.offering, self.waldur_rest_client)
         processor.process_account_removal(
             self.course_account.username, self.waldur_resource.project_uuid.hex
         )
@@ -119,9 +129,37 @@ class CourseAccountMessageTest(TestCase):
         )
 
     @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_register_service"
+    )
+    @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_create"
+    )
+    @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_list"
+    )
+    @mock.patch(
         "waldur_site_agent.event_processing.handlers.common_processors.OfferingMembershipProcessor"
     )
-    def test_mqtt_handler_create_action(self, mock_processor_class):
+    def test_mqtt_handler_create_action(
+        self,
+        mock_processor_class,
+        mock_list_identities,
+        mock_create_identity,
+        mock_register_service,
+    ):
+        # Setup mocks for agent identity registration
+        mock_agent_identity = mock.Mock()
+        mock_agent_identity.uuid = uuid.uuid4()
+        mock_agent_identity.name = f"agent-{self.offering_uuid}"
+        mock_list_identities.sync.return_value = []  # No existing identity
+        mock_create_identity.sync.return_value = mock_agent_identity
+
+        mock_agent_service = mock.Mock()
+        mock_agent_service.uuid = uuid.uuid4()
+        mock_agent_service.name = "event_process"
+        mock_register_service.sync.return_value = mock_agent_service
+
+        # Setup processor mock
         mock_processor = mock.Mock()
         mock_processor_class.return_value = mock_processor
 
@@ -144,14 +182,51 @@ class CourseAccountMessageTest(TestCase):
 
         handlers.on_account_message_mqtt(mock_client, userdata, mock_msg)
 
+        # Verify agent identity was checked/created
+        mock_list_identities.sync.assert_called_once()
+        mock_create_identity.sync.assert_called_once()
+
+        # Verify agent service was registered
+        mock_register_service.sync.assert_called_once()
+
+        # Verify processor was called
+        mock_processor.register.assert_called_once_with(mock_agent_service)
         mock_processor.process_account_creation.assert_called_once_with(
             self.course_account.username, AccountType.COURSE_ACCOUNT
         )
 
     @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_register_service"
+    )
+    @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_create"
+    )
+    @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_list"
+    )
+    @mock.patch(
         "waldur_site_agent.event_processing.handlers.common_processors.OfferingMembershipProcessor"
     )
-    def test_mqtt_handler_remove_action(self, mock_processor_class):
+    def test_mqtt_handler_remove_action(
+        self,
+        mock_processor_class,
+        mock_list_identities,
+        mock_create_identity,
+        mock_register_service,
+    ):
+        # Setup mocks for agent identity registration
+        mock_agent_identity = mock.Mock()
+        mock_agent_identity.uuid = uuid.uuid4()
+        mock_agent_identity.name = f"agent-{self.offering_uuid}"
+        mock_list_identities.sync.return_value = []  # No existing identity
+        mock_create_identity.sync.return_value = mock_agent_identity
+
+        mock_agent_service = mock.Mock()
+        mock_agent_service.uuid = uuid.uuid4()
+        mock_agent_service.name = "event_process"
+        mock_register_service.sync.return_value = mock_agent_service
+
+        # Setup processor mock
         mock_processor = mock.Mock()
         mock_processor_class.return_value = mock_processor
 
@@ -174,14 +249,51 @@ class CourseAccountMessageTest(TestCase):
 
         handlers.on_account_message_mqtt(mock_client, userdata, mock_msg)
 
+        # Verify agent identity was checked/created
+        mock_list_identities.sync.assert_called_once()
+        mock_create_identity.sync.assert_called_once()
+
+        # Verify agent service was registered
+        mock_register_service.sync.assert_called_once()
+
+        # Verify processor was called
+        mock_processor.register.assert_called_once_with(mock_agent_service)
         mock_processor.process_account_removal.assert_called_once_with(
             self.course_account.username, self.waldur_resource.project_uuid.hex
         )
 
     @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_register_service"
+    )
+    @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_create"
+    )
+    @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_list"
+    )
+    @mock.patch(
         "waldur_site_agent.event_processing.handlers.common_processors.OfferingMembershipProcessor"
     )
-    def test_stomp_handler_create_action(self, mock_processor_class):
+    def test_stomp_handler_create_action(
+        self,
+        mock_processor_class,
+        mock_list_identities,
+        mock_create_identity,
+        mock_register_service,
+    ):
+        # Setup mocks for agent identity registration
+        mock_agent_identity = mock.Mock()
+        mock_agent_identity.uuid = uuid.uuid4()
+        mock_agent_identity.name = f"agent-{self.offering_uuid}"
+        mock_list_identities.sync.return_value = []  # No existing identity
+        mock_create_identity.sync.return_value = mock_agent_identity
+
+        mock_agent_service = mock.Mock()
+        mock_agent_service.uuid = uuid.uuid4()
+        mock_agent_service.name = "event_process"
+        mock_register_service.sync.return_value = mock_agent_service
+
+        # Setup processor mock
         mock_processor = mock.Mock()
         mock_processor_class.return_value = mock_processor
 
@@ -200,14 +312,51 @@ class CourseAccountMessageTest(TestCase):
 
         handlers.on_account_message_stomp(test_frame, self.offering, "test-agent")
 
+        # Verify agent identity was checked/created
+        mock_list_identities.sync.assert_called_once()
+        mock_create_identity.sync.assert_called_once()
+
+        # Verify agent service was registered
+        mock_register_service.sync.assert_called_once()
+
+        # Verify processor was called
+        mock_processor.register.assert_called_once_with(mock_agent_service)
         mock_processor.process_account_creation.assert_called_once_with(
             self.course_account.username, AccountType.COURSE_ACCOUNT
         )
 
     @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_register_service"
+    )
+    @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_create"
+    )
+    @mock.patch(
+        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_list"
+    )
+    @mock.patch(
         "waldur_site_agent.event_processing.handlers.common_processors.OfferingMembershipProcessor"
     )
-    def test_stomp_handler_remove_action(self, mock_processor_class):
+    def test_stomp_handler_remove_action(
+        self,
+        mock_processor_class,
+        mock_list_identities,
+        mock_create_identity,
+        mock_register_service,
+    ):
+        # Setup mocks for agent identity registration
+        mock_agent_identity = mock.Mock()
+        mock_agent_identity.uuid = uuid.uuid4()
+        mock_agent_identity.name = f"agent-{self.offering_uuid}"
+        mock_list_identities.sync.return_value = []  # No existing identity
+        mock_create_identity.sync.return_value = mock_agent_identity
+
+        mock_agent_service = mock.Mock()
+        mock_agent_service.uuid = uuid.uuid4()
+        mock_agent_service.name = "event_process"
+        mock_register_service.sync.return_value = mock_agent_service
+
+        # Setup processor mock
         mock_processor = mock.Mock()
         mock_processor_class.return_value = mock_processor
 
@@ -225,6 +374,15 @@ class CourseAccountMessageTest(TestCase):
         )
         handlers.on_account_message_stomp(test_frame, self.offering, "test-agent")
 
+        # Verify agent identity was checked/created
+        mock_list_identities.sync.assert_called_once()
+        mock_create_identity.sync.assert_called_once()
+
+        # Verify agent service was registered
+        mock_register_service.sync.assert_called_once()
+
+        # Verify processor was called
+        mock_processor.register.assert_called_once_with(mock_agent_service)
         mock_processor.process_account_removal.assert_called_once_with(
             self.course_account.username, self.waldur_resource.project_uuid.hex
         )
@@ -237,7 +395,7 @@ class CourseAccountMessageTest(TestCase):
         mock_backend.backend_type = "test"
         mock_backend.add_users_to_resource = mock.Mock(return_value={})
         mock_backend.remove_users_from_resource = mock.Mock(return_value={})
-        mock_get_backend_for_offering.return_value = mock_backend
+        mock_get_backend_for_offering.return_value = (mock_backend, "1.0.0")
 
         self._setup_common_mocks()
 
@@ -285,7 +443,7 @@ class CourseAccountMessageTest(TestCase):
             f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}&page_size=100&page=1",
         ).respond(200, json=[active_account.to_dict(), closed_account.to_dict()])
 
-        processor = OfferingMembershipProcessor(self.offering)
+        processor = OfferingMembershipProcessor(self.offering, self.waldur_rest_client)
         processor._sync_resource_course_accounts(self.waldur_resource)
 
         mock_backend.add_users_to_resource.assert_called_once_with(
@@ -301,11 +459,11 @@ class CourseAccountMessageTest(TestCase):
         mock_backend.backend_type = "test"
         mock_backend.add_users_to_resource = mock.Mock(return_value={})
         mock_backend.remove_users_from_resource = mock.Mock(return_value={})
-        mock_get_backend_for_offering.return_value = mock_backend
+        mock_get_backend_for_offering.return_value = (mock_backend, "1.0.0")
 
         self._setup_common_mocks()
 
-        processor = OfferingMembershipProcessor(self.offering)
+        processor = OfferingMembershipProcessor(self.offering, self.waldur_rest_client)
         processor.service_provider = None
         processor._sync_resource_course_accounts(self.waldur_resource)
 
@@ -318,7 +476,7 @@ class CourseAccountMessageTest(TestCase):
         mock_backend.backend_type = "test"
         mock_backend.add_users_to_resource = mock.Mock(return_value={})
         mock_backend.remove_users_from_resource = mock.Mock(return_value={})
-        mock_get_backend_for_offering.return_value = mock_backend
+        mock_get_backend_for_offering.return_value = (mock_backend, "1.0.0")
 
         self._setup_common_mocks()
 
@@ -346,7 +504,7 @@ class CourseAccountMessageTest(TestCase):
             f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"
         ).respond(200, json=[account_without_username.to_dict()])
 
-        processor = OfferingMembershipProcessor(self.offering)
+        processor = OfferingMembershipProcessor(self.offering, self.waldur_rest_client)
         processor._sync_resource_course_accounts(self.waldur_resource)
 
         mock_backend.add_users_to_resource.assert_called_once_with(

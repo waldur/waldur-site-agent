@@ -6,12 +6,14 @@ import paho.mqtt.client as mqtt
 import stomp
 import stomp.utils
 from stomp.constants import HDR_DESTINATION
+from waldur_api_client import AuthenticatedClient
 from waldur_api_client.models import OrderState
+from waldur_api_client.models.agent_service import AgentService
 
 from waldur_site_agent.backend import logger
+from waldur_site_agent.common import agent_identity_management, structures
 from waldur_site_agent.common import processors as common_processors
-from waldur_site_agent.common import structures
-from waldur_site_agent.common.structures import AccountType
+from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.event_processing.structures import (
     AccountMessage,
     BackendResourceRequestMessage,
@@ -20,6 +22,29 @@ from waldur_site_agent.event_processing.structures import (
     UserData,
     UserRoleMessage,
 )
+
+
+def register_event_process_service(
+    offering: structures.Offering, waldur_rest_client: AuthenticatedClient
+) -> AgentService:
+    """A shortcut for initialization of the event_process service.
+
+    Args:
+        offering (structures.Offering): Waldur offering
+        waldur_rest_client (AuthenticatedClient): Waldur API client
+
+    Returns:
+        AgentService: Registered agent service
+    """
+    agent_identity_manager = agent_identity_management.AgentIdentityManager(
+        offering, waldur_rest_client
+    )
+    agent_identity = agent_identity_manager.register_identity(f"agent-{offering.uuid}")
+    return agent_identity_manager.register_service(
+        agent_identity,
+        structures.AgentMode.EVENT_PROCESS.value,
+        structures.AgentMode.EVENT_PROCESS.value,
+    )
 
 
 def on_order_message_mqtt(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
@@ -40,7 +65,24 @@ def on_order_message_mqtt(client: mqtt.Client, userdata: UserData, msg: mqtt.MQT
         return
 
     try:
-        processor = common_processors.OfferingOrderProcessor(offering, user_agent)
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
+        agent_service = register_event_process_service(offering, waldur_rest_client)
+
+        # Create backend instance for dependency injection
+        resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
+            offering, "order_processing_backend"
+        )
+
+        processor = common_processors.OfferingOrderProcessor(
+            offering,
+            waldur_rest_client,
+            resource_backend=resource_backend,
+            resource_backend_version=resource_backend_version,
+        )
+        processor.register(agent_service)
+
         order = processor.get_order_info(order_uuid)
         if order is None:
             logger.error("Failed to process order %s", order_uuid)
@@ -65,7 +107,23 @@ def on_user_role_message_mqtt(
     project_uuid = message["project_uuid"]
 
     try:
-        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
+        agent_service = register_event_process_service(offering, waldur_rest_client)
+
+        # Create backend instance for dependency injection
+        resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
+            offering, "membership_sync_backend"
+        )
+
+        processor = common_processors.OfferingMembershipProcessor(
+            offering,
+            waldur_rest_client,
+            resource_backend=resource_backend,
+            resource_backend_version=resource_backend_version,
+        )
+        processor.register(agent_service)
         if user_uuid:
             user_username = message["user_username"]
             role_granted = message["granted"]
@@ -84,7 +142,6 @@ def on_user_role_message_mqtt(
                 project_name,
             )
             processor.process_project_user_sync(project_uuid)
-
     except Exception as e:
         if user_uuid:
             logger.error(
@@ -117,7 +174,14 @@ def on_resource_message_mqtt(
     resource_uuid = message["resource_uuid"]
 
     try:
-        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
+
+        agent_service = register_event_process_service(offering, waldur_rest_client)
+
+        processor = common_processors.OfferingMembershipProcessor(offering, waldur_rest_client)
+        processor.register(agent_service)
         processor.process_resource_by_uuid(resource_uuid)
     except Exception as e:
         logger.error("Failed to process resource %s: %s", resource_uuid, e)
@@ -126,7 +190,7 @@ def on_resource_message_mqtt(
 def process_account_message(
     message: AccountMessage,
     offering: structures.Offering,
-    account_type: AccountType,
+    account_type: structures.AccountType,
     user_agent: str = "",
 ) -> None:
     """Process generic account message."""
@@ -135,7 +199,14 @@ def process_account_message(
     project_uuid = message["project_uuid"]
     action = message.get("action", "create")
     try:
-        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
+
+        agent_service = register_event_process_service(offering, waldur_rest_client)
+
+        processor = common_processors.OfferingMembershipProcessor(offering, waldur_rest_client)
+        processor.register(agent_service)
         if action == "create":
             processor.process_account_creation(account_username, account_type)
         elif action == "delete":
@@ -161,9 +232,9 @@ def on_account_message_mqtt(client: mqtt.Client, userdata: UserData, msg: mqtt.M
     offering = userdata["offering"]
     user_agent = userdata["user_agent"]
     account_type_raw = msg.topic.split("/")[-1]
-    account_type = AccountType.SERVICE_ACCOUNT
-    if account_type_raw == AccountType.COURSE_ACCOUNT.value:
-        account_type = AccountType.COURSE_ACCOUNT
+    account_type = structures.AccountType.SERVICE_ACCOUNT
+    if account_type_raw == structures.AccountType.COURSE_ACCOUNT.value:
+        account_type = structures.AccountType.COURSE_ACCOUNT
     process_account_message(message, offering, account_type, user_agent)
 
 
@@ -182,7 +253,24 @@ def on_order_message_stomp(
         return
 
     try:
-        processor = common_processors.OfferingOrderProcessor(offering, user_agent)
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
+        agent_service = register_event_process_service(offering, waldur_rest_client)
+
+        # Create backend instance for dependency injection
+        resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
+            offering, "order_processing_backend"
+        )
+
+        processor = common_processors.OfferingOrderProcessor(
+            offering,
+            waldur_rest_client,
+            resource_backend=resource_backend,
+            resource_backend_version=resource_backend_version,
+        )
+        processor.register(agent_service)
+
         order = processor.get_order_info(order_uuid)
         if order is None:
             logger.error("Failed to process order %s", order_uuid)
@@ -203,7 +291,23 @@ def on_user_role_message_stomp(
     project_uuid = message["project_uuid"]
 
     try:
-        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
+        agent_service = register_event_process_service(offering, waldur_rest_client)
+
+        # Create backend instance for dependency injection
+        resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
+            offering, "membership_sync_backend"
+        )
+
+        processor = common_processors.OfferingMembershipProcessor(
+            offering,
+            waldur_rest_client,
+            resource_backend=resource_backend,
+            resource_backend_version=resource_backend_version,
+        )
+        processor.register(agent_service)
         if user_uuid:
             user_username = message["user_username"]
             role_granted = message["granted"]
@@ -248,7 +352,14 @@ def on_resource_message_stomp(
     resource_uuid = message["resource_uuid"]
 
     try:
-        processor = common_processors.OfferingMembershipProcessor(offering, user_agent)
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
+
+        agent_service = register_event_process_service(offering, waldur_rest_client)
+        processor = common_processors.OfferingMembershipProcessor(offering, waldur_rest_client)
+        processor.register(agent_service)
+
         processor.process_resource_by_uuid(resource_uuid)
     except Exception as e:
         logger.error("Failed to process resource %s: %s", resource_uuid, e)
@@ -261,7 +372,25 @@ def on_importable_resources_message_stomp(
     message: BackendResourceRequestMessage = json.loads(frame.body)
     request_uuid = message["backend_resource_request_uuid"]
     try:
-        processor = common_processors.OfferingImportableResourcesProcessor(offering, user_agent)
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
+
+        agent_service = register_event_process_service(offering, waldur_rest_client)
+
+        # Create backend instance for dependency injection
+        resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
+            offering, "order_processing_backend"
+        )
+
+        processor = common_processors.OfferingImportableResourcesProcessor(
+            offering,
+            waldur_rest_client,
+            resource_backend=resource_backend,
+            resource_backend_version=resource_backend_version,
+        )
+        processor.register(agent_service)
+
         processor.process_request(request_uuid)
     except Exception as e:
         logger.error("Failed to process importable resource list request %s: %s", request_uuid, e)
@@ -275,7 +404,7 @@ def on_account_message_stomp(
     queue: str = frame.headers[HDR_DESTINATION]
     queue_parts = queue.split("_")
     account_type_raw = f"{queue_parts[-2]}_{queue_parts[-1]}"
-    account_type = AccountType.SERVICE_ACCOUNT
-    if account_type_raw == AccountType.COURSE_ACCOUNT.value:
-        account_type = AccountType.COURSE_ACCOUNT
+    account_type = structures.AccountType.SERVICE_ACCOUNT
+    if account_type_raw == structures.AccountType.COURSE_ACCOUNT.value:
+        account_type = structures.AccountType.COURSE_ACCOUNT
     process_account_message(message, offering, account_type, user_agent)

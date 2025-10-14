@@ -72,6 +72,8 @@ from waldur_api_client.models import (
     ResourceSetLimitsRequest,
     ServiceAccountState,
 )
+from waldur_api_client.models.agent_processor import AgentProcessor
+from waldur_api_client.models.agent_service import AgentService
 from waldur_api_client.models.backend_resource_request import BackendResourceRequest
 from waldur_api_client.models.backend_resource_request_set_erred_request import (
     BackendResourceRequestSetErredRequest,
@@ -112,9 +114,10 @@ from waldur_api_client.types import Unset
 from waldur_site_agent.backend import BackendType, logger
 from waldur_site_agent.backend import exceptions as backend_exceptions
 from waldur_site_agent.backend import utils as backend_utils
+from waldur_site_agent.backend.backends import BaseBackend
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
-from waldur_site_agent.common import pagination, structures, utils
+from waldur_site_agent.common import agent_identity_management, pagination, structures, utils
 from waldur_site_agent.common.structures import AccountType
 
 
@@ -161,24 +164,40 @@ class OfferingBaseProcessor(abc.ABC):
     BACKEND_TYPE_KEY = "abstract"
 
     def __init__(
-        self, offering: structures.Offering, user_agent: str = "", timezone: str = ""
+        self,
+        offering: structures.Offering,
+        waldur_rest_client: utils.AuthenticatedClient,
+        timezone: str = "",
+        resource_backend: Optional[BaseBackend] = None,
+        resource_backend_version: Optional[str] = None,
     ) -> None:
         """Initialize the offering processor.
 
         Args:
             offering: The offering configuration to process
-            user_agent: HTTP User-Agent string for API requests
+            waldur_rest_client: HTTP Client for Waldur API
             timezone: Timezone for billing period calculations (defaults to UTC)
+            resource_backend: Backend instance for resource operations
+                (optional, will be created if not provided)
+            resource_backend_version: Version of the resource backend
+                (optional, will be determined if not provided)
 
         Raises:
             BackendError: If unable to create a backend for the offering
         """
         self.offering: structures.Offering = offering
         self.timezone: str = timezone
-        self.waldur_rest_client: utils.AuthenticatedClient = utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
-        self.resource_backend = utils.get_backend_for_offering(offering, self.BACKEND_TYPE_KEY)
+        self.waldur_rest_client = waldur_rest_client
+
+        # Use dependency injection if backend is provided, otherwise create it
+        if resource_backend is not None:
+            self.resource_backend = resource_backend
+            self.resource_backend_version = resource_backend_version or "unknown"
+        else:
+            self.resource_backend, self.resource_backend_version = utils.get_backend_for_offering(
+                offering, self.BACKEND_TYPE_KEY
+            )
+
         if self.resource_backend.backend_type == BackendType.UNKNOWN.value:
             raise backend_exceptions.BackendError(f"Unable to create backend for {self.offering}")
 
@@ -188,6 +207,13 @@ class OfferingBaseProcessor(abc.ABC):
             client=self.waldur_rest_client, uuid=self.offering.uuid
         )
         utils.extend_backend_components(self.offering, self.waldur_offering.components)
+
+        service_providers = marketplace_service_providers_list.sync(
+            customer_uuid=self.waldur_offering.customer_uuid.hex,
+            client=self.waldur_rest_client,
+        )
+
+        self.service_provider = service_providers[0]
 
     def _print_current_user(self) -> None:
         """Log information about the current authenticated Waldur user."""
@@ -209,6 +235,21 @@ class OfferingBaseProcessor(abc.ABC):
             offering_users: List of offering users to process
         """
         return utils.update_offering_users(self.offering, self.waldur_rest_client, offering_users)
+
+    def register(self, service: AgentService) -> AgentProcessor:
+        """Register this processor in Waldur."""
+        agent_identity_manager = agent_identity_management.AgentIdentityManager(
+            self.offering, self.waldur_rest_client
+        )
+        processor_name = self.__class__.__name__
+        backend_type = (
+            self.resource_backend.__class__.__module__
+            + "."
+            + self.resource_backend.__class__.__name__
+        )
+        return agent_identity_manager.register_processor(
+            service, processor_name, backend_type, self.resource_backend_version
+        )
 
 
 class OfferingOrderProcessor(OfferingBaseProcessor):
@@ -744,21 +785,6 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     """
 
     BACKEND_TYPE_KEY = "membership_sync_backend"
-
-    def __init__(
-        self, offering: structures.Offering, user_agent: str = "", timezone: str = ""
-    ) -> None:
-        """Constructor.
-
-        Overrides the default constructor and adds service provider details to the instance.
-        """
-        super().__init__(offering, user_agent, timezone)
-        service_providers = marketplace_service_providers_list.sync(
-            customer_uuid=self.waldur_offering.customer_uuid.hex,
-            client=self.waldur_rest_client,
-        )
-
-        self.service_provider = service_providers[0]
 
     def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[WaldurResource]:
         """Fetch Waldur resources for this offering, optionally filtered by project.

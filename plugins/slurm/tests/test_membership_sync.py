@@ -24,6 +24,7 @@ from waldur_site_agent_slurm import backend
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingMembershipProcessor
+from waldur_site_agent.common.utils import get_client
 
 waldur_client_mock = mock.Mock()
 slurm_backend_mock = mock.Mock()
@@ -86,9 +87,10 @@ class MembershipSyncTest(unittest.TestCase):
 
         self.waldur_user_uuid = uuid.uuid4()
         self.plan_period_uuid = uuid.uuid4().hex
+        self.offering = OFFERING
         self.waldur_offering = models.ProviderOfferingDetails(
-            uuid=OFFERING.uuid,
-            name=OFFERING.name,
+            uuid=self.offering.uuid,
+            name=self.offering.name,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             state=OfferingState.ACTIVE,
             type_=MARKETPLACE_SLURM_OFFERING_TYPE,
@@ -98,7 +100,6 @@ class MembershipSyncTest(unittest.TestCase):
             ),
             customer_uuid=uuid.uuid4(),
         )
-        self.offering = OFFERING
         self.client_patcher = mock.patch("waldur_site_agent.common.utils.get_client")
         self.mock_get_client = self.client_patcher.start()
         self.waldur_user = models.User(
@@ -123,18 +124,17 @@ class MembershipSyncTest(unittest.TestCase):
         self.waldur_offering_user = models.OfferingUser(
             username="test-offering-user-01",
             user_uuid=self.team_member["uuid"],
-            offering_uuid=OFFERING.uuid,
+            offering_uuid=self.offering.uuid,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
         ).to_dict()
         self.waldur_resource_team = [self.team_member]
         self.mock_client = AuthenticatedClient(
             base_url=self.BASE_URL,
-            token=OFFERING.api_token,
+            token=self.offering.api_token,
             timeout=600,
             headers={},
         )
-        self.mock_get_client.return_value = self.mock_client
 
     def tearDown(self) -> None:
         respx.stop()
@@ -143,15 +143,15 @@ class MembershipSyncTest(unittest.TestCase):
     def _setup_common_mocks(self) -> Route:
         """Setup common respx mocks used across all tests."""
         respx.post(
-            f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_as_erred/"
+            f"{self.BASE_URL}api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_as_erred/"
         ).respond(200, json={})
         respx.post(
-            f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/refresh_last_sync/"
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/refresh_last_sync/"
         ).respond(200, json={})
-        respx.get("https://waldur.example.com/api/users/me/").respond(200, json=self.waldur_user)
-        respx.get(f"{self.BASE_URL}/api/marketplace-provider-offerings/{OFFERING.uuid}/").respond(
-            200, json=self.waldur_offering.to_dict()
-        )
+        respx.get(f"{self.BASE_URL}/api/users/me/").respond(200, json=self.waldur_user)
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-provider-offerings/{self.offering.uuid}/"
+        ).respond(200, json=self.waldur_offering.to_dict())
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-resources/",
             params={
@@ -226,7 +226,7 @@ class MembershipSyncTest(unittest.TestCase):
             offering_users_data = [self.waldur_offering_user]
         respx.get(
             f"{self.BASE_URL}/api/marketplace-offering-users/",
-            params={"offering_uuid": OFFERING.uuid, "is_restricted": False},
+            params={"offering_uuid": self.offering.uuid, "is_restricted": False},
         ).respond(200, json=offering_users_data)
 
     def _setup_offering_details_mock(self, offering_user_data=None) -> None:
@@ -283,7 +283,7 @@ class MembershipSyncTest(unittest.TestCase):
             f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_backend_metadata/"
         ).respond(200, json={"status": "OK"})
 
-        processor = OfferingMembershipProcessor(self.offering)
+        processor = OfferingMembershipProcessor(self.offering, self.mock_client)
         processor.process_offering()
 
         assert self.mock_add_users_to_resource.call_count == 3
@@ -308,7 +308,7 @@ class MembershipSyncTest(unittest.TestCase):
         slurm_client.get_association.return_value = "exists"
         slurm_client.delete_association.return_value = "done"
 
-        processor = OfferingMembershipProcessor(self.offering)
+        processor = OfferingMembershipProcessor(self.offering, self.mock_client)
         processor.process_offering()
 
         self.mock_list_active_user_jobs.assert_called_once()
@@ -329,7 +329,7 @@ class MembershipSyncTest(unittest.TestCase):
         self._setup_offering_details_mock()
         self._setup_slurm_mock()
 
-        processor = OfferingMembershipProcessor(self.offering)
+        processor = OfferingMembershipProcessor(self.offering, self.mock_client)
         processor.process_offering()
 
         self.mock_downscale_resource.assert_called_once()
@@ -343,7 +343,7 @@ class MembershipSyncTest(unittest.TestCase):
         self._setup_offering_users_mock(offering_users_data=[self.waldur_offering_user])
         self._setup_slurm_mock()
 
-        processor = OfferingMembershipProcessor(self.offering)
+        processor = OfferingMembershipProcessor(self.offering, self.mock_client)
         processor.process_offering()
 
         self.mock_get_resource_metadata.assert_called_once()

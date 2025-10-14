@@ -10,22 +10,17 @@ import stomp
 import urllib3.util
 import yaml
 from waldur_api_client.api.event_subscriptions import (
-    event_subscriptions_create,
     event_subscriptions_destroy,
-    event_subscriptions_retrieve,
 )
 from waldur_api_client.errors import UnexpectedStatus
-from waldur_api_client.models.event_subscription import (
-    EventSubscription as ClientEventSubscriptionObject,
-)
-from waldur_api_client.models.event_subscription_request import EventSubscriptionRequest
+from waldur_api_client.models.event_subscription import EventSubscription
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import utils
 from waldur_site_agent.common.structures import Offering
 from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.listener import WaldurListener, connect_to_stomp_server
-from waldur_site_agent.event_processing.structures import EventSubscription, UserData
+from waldur_site_agent.event_processing.structures import UserData
 
 WALDUR_LISTENER_NAME = "waldur-listener"
 OBJECT_TYPE_TO_HANDLER_STOMP = {
@@ -96,75 +91,6 @@ class EventSubscriptionManager:
         with Path(PID_FILE_PATH).open("w+", encoding="utf-8") as pid_file:
             yaml.dump(pid_file_content, pid_file)
 
-    def create_event_subscription(self) -> Optional[EventSubscription]:
-        """Create event subscription."""
-        try:
-            logger.info(
-                "Creating event subscription for offering %s (%s), object type: %s",
-                self.offering.name,
-                self.offering.uuid,
-                self.observable_object_type,
-            )
-            request_body = EventSubscriptionRequest(
-                description=(
-                    f"Event subscription for waldur site agent {self.user_agent}, "
-                    f"observable object type: {self.observable_object_type}"
-                ),
-                observable_objects=[
-                    {
-                        "object_type": self.observable_object_type,
-                    }
-                ],
-            )
-            event_subscription = event_subscriptions_create.sync(
-                client=self.waldur_rest_client, body=request_body
-            )
-
-        except UnexpectedStatus as e:
-            logger.error("Failed to create event subscription: %s", e)
-            return None
-        else:
-            logger.info(
-                "Event subscription created: %s (%s)",
-                event_subscription.uuid.hex,
-                self.observable_object_type,
-            )
-            return EventSubscription(
-                uuid=event_subscription.uuid.hex,
-                user_uuid=event_subscription.user_uuid.hex,
-                observable_objects=list(event_subscription.observable_objects),
-            )
-
-    def get_or_create_event_subscription(self) -> Optional[EventSubscription]:
-        """Ger or create event subscription."""
-        try:
-            pid_file_content = self._read_pid_file()
-            event_subscription_uuid = pid_file_content.get(self.observable_object_type)
-            if event_subscription_uuid is not None:
-                logger.info(
-                    "Fetching the existing event subscription %s (%s) info",
-                    event_subscription_uuid,
-                    self.observable_object_type,
-                )
-                # Get the event subscription
-                event_subscription: ClientEventSubscriptionObject = (
-                    event_subscriptions_retrieve.sync(
-                        client=self.waldur_rest_client, uuid=event_subscription_uuid
-                    )
-                )
-                return EventSubscription(
-                    uuid=event_subscription.uuid.hex,
-                    user_uuid=event_subscription.user_uuid.hex,
-                    observable_objects=list(event_subscription.observable_objects),
-                )
-        except Exception as e:
-            logger.warning("Unable to get an event subscription %s: %s", event_subscription_uuid, e)
-
-        event_subscription = self.create_event_subscription()
-        if event_subscription:
-            self._write_event_subscription_info_to_pidfile(event_subscription)
-        return event_subscription
-
     def _setup_mqtt_consumer(self, event_subscription: EventSubscription) -> mqtt.Client:
         logger.info(
             "Setting up MQTT consumer for event subscription %s",
@@ -207,11 +133,11 @@ class EventSubscriptionManager:
     ) -> stomp.WSStompConnection:
         logger.info(
             "Setting up STOMP connection for event subscription %s",
-            event_subscription["uuid"],
+            event_subscription.uuid.hex,
         )
         # Mapped to a vhost in RabbitMQ bound to a Waldur User object
-        vhost_name = event_subscription["user_uuid"]
-        event_subscription_uuid = event_subscription["uuid"]
+        vhost_name = event_subscription.user_uuid.hex
+        event_subscription_uuid = event_subscription.uuid.hex
         # Mapped to a username in RabbitMQ bound to the Waldur EventSubscription object
         username = event_subscription_uuid
         queue_name = (
@@ -262,9 +188,11 @@ class EventSubscriptionManager:
         try:
             logger.info(
                 "Starting STOMP connection for event subscription %s",
-                event_subscription["uuid"],
+                event_subscription.uuid.hex,
             )
-            connect_to_stomp_server(connection, event_subscription["uuid"], self.offering.api_token)
+            connect_to_stomp_server(
+                connection, event_subscription.uuid.hex, self.offering.api_token
+            )
         except Exception as e:
             logger.error("Failed to start STOMP connection: %s", e)
             return None

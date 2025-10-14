@@ -5,12 +5,14 @@ from unittest import mock
 import respx
 from freezegun import freeze_time
 from waldur_api_client.client import AuthenticatedClient
+from waldur_api_client.models import ServiceProvider
 from waldur_site_agent_slurm import backend
 
 from tests.fixtures import OFFERING
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingReportProcessor
+from waldur_site_agent.common.utils import get_client
 
 waldur_client_mock = mock.Mock()
 slurm_backend_mock = mock.Mock()
@@ -54,7 +56,8 @@ class ReportingTest(unittest.TestCase):
             "components": [
                 {"type": "cpu"},
                 {"type": "mem"},
-            ]
+            ],
+            "customer_uuid": uuid.uuid4().hex,
         }
         self.offering = OFFERING
         self.plan_period_uuid = uuid.uuid4().hex
@@ -66,7 +69,6 @@ class ReportingTest(unittest.TestCase):
             token=OFFERING.api_token,
             headers={},
         )
-        self.mock_get_client.return_value = self.mock_client
         self.allocation_slurm = BackendResourceInfo(
             backend_id="test-allocation-01",
             users=["user-01"],
@@ -151,7 +153,12 @@ class ReportingTest(unittest.TestCase):
             f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/set_as_erred/"
         ).respond(200, json={})
 
-        processor = OfferingReportProcessor(self.offering)
+        service_provider = ServiceProvider(uuid=uuid.uuid4())
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering['customer_uuid']}"
+        ).respond(200, json=[service_provider.to_dict()])
+
+        processor = OfferingReportProcessor(self.offering, self.mock_client)
         processor.process_offering()
 
         assert set_usage_response.call_count == 1
@@ -215,7 +222,12 @@ class ReportingTest(unittest.TestCase):
             f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/set_as_erred/"
         ).respond(200, json={})
 
-        processor = OfferingReportProcessor(self.offering)
+        service_provider = ServiceProvider(uuid=uuid.uuid4())
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering['customer_uuid']}"
+        ).respond(200, json=[service_provider.to_dict()])
+
+        processor = OfferingReportProcessor(self.offering, self.mock_client)
         processor.process_offering()
 
         assert set_usage_response.call_count == 0

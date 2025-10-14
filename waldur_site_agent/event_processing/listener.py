@@ -54,7 +54,6 @@ class WaldurListener(stomp.ConnectionListener):
         self.password = password
         self.conn = conn
         self.on_message_callback = on_message_callback
-        self.queue = queue
         self.offering = offering
         self.user_agent = user_agent
 
