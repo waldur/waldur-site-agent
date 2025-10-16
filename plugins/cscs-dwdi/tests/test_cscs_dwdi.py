@@ -94,7 +94,7 @@ class TestCSCSDWDIClient:
         call_args = mock_get.call_args
 
         # Check URL
-        assert call_args[0][0] == "https://api.example.com/api/v1/compute/usage-month-multiaccount"
+        assert call_args[0][0] == "https://api.example.com/compute/usage-month/account"
 
         # Check params
         assert call_args.kwargs["params"]["from"] == "2025-01"

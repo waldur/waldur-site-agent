@@ -100,7 +100,11 @@ USERNAME_BACKENDS: dict[str, type[AbstractUsernameManagementBackend]] = {
 
 
 def get_client(
-    api_url: str, access_token: str, agent_header: Optional[str] = None, verify_ssl: bool = True
+    api_url: str,
+    access_token: str,
+    agent_header: Optional[str] = None,
+    verify_ssl: bool = True,
+    proxy: Optional[str] = None,
 ) -> AuthenticatedClient:
     """Create an authenticated Waldur API client.
 
@@ -109,18 +113,26 @@ def get_client(
         access_token: Authentication token for API access
         agent_header: Optional User-Agent string for HTTP requests
         verify_ssl: Whether or not to verify SSL certificates
+        proxy: Optional proxy URL (e.g., 'socks5://localhost:12345')
 
     Returns:
         Configured AuthenticatedClient instance ready for API calls
     """
     headers = {"User-Agent": agent_header} if agent_header else {}
     url = api_url.rstrip("/api")
+
+    # Configure httpx args with proxy if specified
+    httpx_args = {}
+    if proxy:
+        httpx_args["proxy"] = proxy
+
     return AuthenticatedClient(
         base_url=url,
         token=access_token,
         timeout=600,
         headers=headers,
         verify_ssl=verify_ssl,
+        httpx_args=httpx_args,
     )
 
 
@@ -196,6 +208,10 @@ def load_configuration(
 
         timezone = config.get("timezone", "UTC")
         configuration.timezone = timezone
+
+        # Handle global proxy configuration
+        global_proxy = config.get("global_proxy", "")
+        configuration.global_proxy = global_proxy
 
     # Set version and user agent for all configurations
     waldur_site_agent_version = version("waldur-site-agent")
@@ -342,6 +358,7 @@ def load_offering_components() -> None:
             offering.api_token,
             configuration.waldur_user_agent,
             offering.verify_ssl,
+            configuration.global_proxy,
         )
 
         load_components_to_waldur(
@@ -621,6 +638,7 @@ def create_homedirs_for_offering_users() -> None:
             offering.api_token,
             configuration.waldur_user_agent,
             offering.verify_ssl,
+            configuration.global_proxy,
         )
         offering_users = pagination.get_all_paginated(
             marketplace_offering_users_list.sync,
@@ -945,6 +963,7 @@ def sync_offering_users() -> None:
             offering.api_token,
             configuration.waldur_user_agent,
             offering.verify_ssl,
+            configuration.global_proxy,
         )
         offering_users = pagination.get_all_paginated(
             marketplace_offering_users_list.sync,
@@ -1006,6 +1025,7 @@ def sync_resource_limits() -> None:
             offering.api_token,
             configuration.waldur_user_agent,
             offering.verify_ssl,
+            configuration.global_proxy,
         )
         resources = pagination.get_all_paginated(
             marketplace_resources_list.sync,

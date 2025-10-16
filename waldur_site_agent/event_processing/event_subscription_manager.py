@@ -44,10 +44,11 @@ class EventSubscriptionManager:
         on_message_callback: Optional[Callable] = None,
         user_agent: str = "",
         observable_object_type: str = "",
+        global_proxy: str = "",
     ) -> None:
         """Constructor."""
         self.waldur_rest_client = utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl, global_proxy
         )
         self.offering = offering
         self.user_agent = user_agent

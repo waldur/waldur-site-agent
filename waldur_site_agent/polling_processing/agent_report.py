@@ -22,7 +22,11 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
         for offering in waldur_offerings:
             try:
                 waldur_rest_client = utils.get_client(
-                    offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+                    offering.api_url,
+                    offering.api_token,
+                    user_agent,
+                    offering.verify_ssl,
+                    configuration.global_proxy,
                 )
 
                 agent_identity_manager = agent_identity_management.AgentIdentityManager(
