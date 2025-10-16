@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.types import Unset
 
+from waldur_site_agent.backend import structures
 from waldur_site_agent.backend.backends import BaseBackend
 
 from .client import CSCSDWDIClient
@@ -59,6 +61,21 @@ class CSCSDWDIComputeBackend(BaseBackend):
         if self.socks_proxy:
             logger.info("CSCS-DWDI Compute Backend: Using SOCKS proxy: %s", self.socks_proxy)
 
+    def pull_resource(
+        self, waldur_resource: WaldurResource
+    ) -> Optional[structures.BackendResourceInfo]:
+        """Pull resource from backend with cluster filtering support."""
+        try:
+            backend_id = waldur_resource.backend_id
+            backend_resource_info = self._pull_backend_resource(backend_id, waldur_resource)
+            if backend_resource_info is None:
+                return None
+        except Exception:
+            logger.exception("Error while pulling resource [%s]", backend_id)
+            return None
+        else:
+            return backend_resource_info
+
     def ping(self, raise_exception: bool = False) -> bool:  # noqa: ARG002
         """Check if CSCS-DWDI API is accessible.
 
@@ -71,7 +88,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
         return self.cscs_client.ping()
 
     def _get_usage_report(
-        self, resource_backend_ids: list[str]
+        self, resource_backend_ids: list[str], clusters: Optional[list[str]] = None
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Get usage report for specified resources.
 
@@ -80,6 +97,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
         Args:
             resource_backend_ids: List of account identifiers to report on
+            clusters: Optional list of cluster names to filter by
 
         Returns:
             Dictionary mapping account names to usage data:
@@ -120,6 +138,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
                 accounts=resource_backend_ids,
                 from_date=from_date,
                 to_date=to_date,
+                clusters=clusters,
             )
 
             # Process the response
@@ -261,6 +280,69 @@ class CSCSDWDIComputeBackend(BaseBackend):
             usage[component_name] = converted_value
 
         return usage
+
+    def _pull_backend_resource(
+        self, resource_backend_id: str, waldur_resource: Optional[WaldurResource] = None
+    ) -> Optional[structures.BackendResourceInfo]:
+        """Pull resource data from the DWDI backend for usage reporting.
+
+        For DWDI, we treat the resource_backend_id as an account name
+        and fetch usage data for that account from the DWDI API.
+
+        Args:
+            resource_backend_id: Account name (e.g., 'g207')
+            waldur_resource: Optional Waldur resource object for filtering
+
+        Returns:
+            BackendResourceInfo with usage data or None if account not found
+        """
+        logger.info("Pulling resource %s", resource_backend_id)
+
+        # For DWDI, the resource_backend_id is the account name
+        account_name = resource_backend_id
+
+        # Extract cluster from offering_slug for filtering (always lowercase)
+        clusters = None
+        if (
+            waldur_resource
+            and hasattr(waldur_resource, "offering_slug")
+            and waldur_resource.offering_slug
+            and not isinstance(waldur_resource.offering_slug, Unset)
+        ):
+            # Use offering_slug as cluster name, converted to lowercase
+            cluster_name = waldur_resource.offering_slug.lower()
+            clusters = [cluster_name]
+            logger.info(
+                "Filtering DWDI query by cluster: %s (lowercase from offering_slug)",
+                cluster_name,
+            )
+
+        # Get usage data for this account
+        try:
+            usage_report = self._get_usage_report([account_name], clusters=clusters)
+
+            if account_name not in usage_report:
+                logger.warning("There is no account with ID %s in the DWDI backend", account_name)
+                return None
+
+            # Extract usage data for this account
+            account_usage = usage_report[account_name]
+
+            # Extract users (everyone except TOTAL_ACCOUNT_USAGE)
+            users = [username for username in account_usage if username != "TOTAL_ACCOUNT_USAGE"]
+
+            logger.info(
+                "Found usage data for account %s with %d users: %s", account_name, len(users), users
+            )
+
+            return structures.BackendResourceInfo(
+                users=users,
+                usage=account_usage,
+            )
+
+        except Exception:
+            logger.exception("Error while pulling account %s from DWDI", account_name)
+            return None
 
     # Methods not implemented for reporting-only backend
     def get_account(self, account_name: str) -> Optional[dict[str, Any]]:

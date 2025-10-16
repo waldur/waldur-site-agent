@@ -90,6 +90,7 @@ class WaldurAgentConfiguration:
         waldur_site_agent_version: Version of the agent software
         sentry_dsn: Sentry DSN for error reporting (optional)
         timezone: Timezone for billing period calculations
+        global_proxy: Global proxy URL for all API connections (optional)
     """
 
     waldur_offerings: list = field(default_factory=list)
@@ -99,6 +100,7 @@ class WaldurAgentConfiguration:
     sentry_dsn: str = ""
     timezone: str = ""
     config_file_path: str = ""
+    global_proxy: str = ""
 
 
 class AccountType(Enum):

@@ -55,7 +55,7 @@ def on_connect(
 
 
 def setup_stomp_offering_subscriptions(
-    waldur_offering: common_structures.Offering, waldur_user_agent: str
+    waldur_offering: common_structures.Offering, waldur_user_agent: str, global_proxy: str = ""
 ) -> list[StompConsumer]:
     """Set up STOMP subscriptions for the specified offering."""
     stomp_connections: list[StompConsumer] = []
@@ -97,6 +97,7 @@ def setup_stomp_offering_subscriptions(
         waldur_offering.api_token,
         waldur_user_agent,
         verify_ssl=waldur_offering.verify_ssl,
+        proxy=global_proxy,
     )
 
     agent_identity_manager = agent_identity_management.AgentIdentityManager(
@@ -117,7 +118,7 @@ def setup_stomp_offering_subscriptions(
                 agent_identity, object_type
             )
             event_subscription_manager = EventSubscriptionManager(
-                waldur_offering, None, None, waldur_user_agent, object_type
+                waldur_offering, None, None, waldur_user_agent, object_type, global_proxy
             )
             connection = event_subscription_manager.start_stomp_connection(event_subscription)
             if connection is None:
@@ -142,7 +143,7 @@ def setup_stomp_offering_subscriptions(
 
 
 def setup_mqtt_offering_subscriptions(
-    waldur_offering: common_structures.Offering, waldur_user_agent: str
+    waldur_offering: common_structures.Offering, waldur_user_agent: str, global_proxy: str = ""
 ) -> list[MqttConsumer]:
     """Set up MQTT subscriptions for the specified offering."""
     object_type_to_handler = {}
@@ -175,6 +176,7 @@ def setup_mqtt_offering_subscriptions(
         waldur_offering.api_token,
         waldur_user_agent,
         verify_ssl=waldur_offering.verify_ssl,
+        proxy=global_proxy,
     )
     event_subscriptions: list[MqttConsumer] = []
     agent_identity_manager = agent_identity_management.AgentIdentityManager(
@@ -224,6 +226,7 @@ def setup_mqtt_offering_subscriptions(
 def start_stomp_consumers(
     waldur_offerings: list[common_structures.Offering],
     waldur_user_agent: str,
+    global_proxy: str = "",
 ) -> StompConsumersMap:
     """Start multiple STOMP consumers."""
     stomp_consumers_map: StompConsumersMap = {}
@@ -233,7 +236,9 @@ def start_stomp_consumers(
             continue
 
         logger.info("Starting STOMP consumers for offering %s", waldur_offering.name)
-        stomp_connections = setup_stomp_offering_subscriptions(waldur_offering, waldur_user_agent)
+        stomp_connections = setup_stomp_offering_subscriptions(
+            waldur_offering, waldur_user_agent, global_proxy
+        )
         if stomp_connections:
             stomp_consumers_map[(waldur_offering.name, waldur_offering.uuid)] = stomp_connections
 
@@ -271,6 +276,7 @@ def stop_stomp_consumers(
 def start_mqtt_consumers(
     waldur_offerings: list[common_structures.Offering],
     waldur_user_agent: str,
+    global_proxy: str = "",
 ) -> MqttConsumersMap:
     """Start multiple MQTT consumers."""
     mqtt_consumers_map: MqttConsumersMap = {}
@@ -280,7 +286,9 @@ def start_mqtt_consumers(
             continue
 
         logger.info("Setting up MQTT consumers for offering %s", waldur_offering.name)
-        event_subscriptions = setup_mqtt_offering_subscriptions(waldur_offering, waldur_user_agent)
+        event_subscriptions = setup_mqtt_offering_subscriptions(
+            waldur_offering, waldur_user_agent, global_proxy
+        )
         if event_subscriptions:
             mqtt_consumers_map[(waldur_offering.name, waldur_offering.uuid)] = event_subscriptions
 

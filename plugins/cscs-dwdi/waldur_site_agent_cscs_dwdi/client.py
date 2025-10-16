@@ -126,7 +126,11 @@ class CSCSDWDIClient:
             return self._token
 
     def get_usage_for_month(
-        self, accounts: list[str], from_date: date, to_date: date
+        self,
+        accounts: list[str],
+        from_date: date,
+        to_date: date,
+        clusters: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """Get usage data for multiple accounts for a month range.
 
@@ -134,6 +138,7 @@ class CSCSDWDIClient:
             accounts: List of account identifiers to query
             from_date: Start date (beginning of month)
             to_date: End date (end of month)
+            clusters: Optional list of cluster names to filter by
 
         Returns:
             API response with usage data grouped by account
@@ -156,9 +161,13 @@ class CSCSDWDIClient:
         if accounts:
             params["account"] = accounts
 
+        # Add cluster filters if provided
+        if clusters:
+            params["cluster"] = clusters
+
         headers = {"Authorization": f"Bearer {token}"}
 
-        url = f"{self.api_url}/api/v1/compute/usage-month-multiaccount"
+        url = f"{self.api_url}/compute/usage-month/account"
 
         logger.debug(
             "Fetching usage for accounts %s from %s to %s",
@@ -179,7 +188,11 @@ class CSCSDWDIClient:
             return response.json()
 
     def get_usage_for_days(
-        self, accounts: list[str], from_date: date, to_date: date
+        self,
+        accounts: list[str],
+        from_date: date,
+        to_date: date,
+        clusters: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """Get usage data for multiple accounts for a day range.
 
@@ -187,6 +200,7 @@ class CSCSDWDIClient:
             accounts: List of account identifiers to query
             from_date: Start date
             to_date: End date
+            clusters: Optional list of cluster names to filter by
 
         Returns:
             API response with usage data grouped by account
@@ -209,9 +223,13 @@ class CSCSDWDIClient:
         if accounts:
             params["account"] = accounts
 
+        # Add cluster filters if provided
+        if clusters:
+            params["cluster"] = clusters
+
         headers = {"Authorization": f"Bearer {token}"}
 
-        url = f"{self.api_url}/api/v1/compute/usage-day-multiaccount"
+        url = f"{self.api_url}/compute/usage-day/account"
 
         logger.debug(
             "Fetching daily usage for accounts %s from %s to %s",
@@ -272,7 +290,7 @@ class CSCSDWDIClient:
 
         headers = {"Authorization": f"Bearer {token}"}
 
-        url = f"{self.api_url}/api/v1/storage/usage-month/filesystem_name/data_type"
+        url = f"{self.api_url}/storage/usage-month/{filesystem}/{data_type}"
 
         logger.debug(
             "Fetching storage usage for paths %s for month %s",
@@ -332,7 +350,7 @@ class CSCSDWDIClient:
 
         headers = {"Authorization": f"Bearer {token}"}
 
-        url = f"{self.api_url}/api/v1/storage/usage-day/filesystem_name/data_type"
+        url = f"{self.api_url}/storage/usage-day/{filesystem}/{data_type}"
 
         logger.debug(
             "Fetching storage usage for paths %s for date %s",
@@ -368,7 +386,7 @@ class CSCSDWDIClient:
                 "to": today.strftime("%Y-%m-%d"),
             }
 
-            url = f"{self.api_url}/api/v1/compute/usage-day-multiaccount"
+            url = f"{self.api_url}/compute/usage-day"
 
             # Configure httpx client with SOCKS proxy if specified
             client_args: dict[str, Any] = {"timeout": 10.0}
@@ -399,7 +417,10 @@ class CSCSDWDIClient:
                 "exact-date": today.strftime("%Y-%m-%d"),
             }
 
-            url = f"{self.api_url}/api/v1/storage/usage-day/filesystem_name/data_type"
+            # Use default values for ping test
+            filesystem = "lustre"
+            data_type = "projects"
+            url = f"{self.api_url}/storage/usage-day/{filesystem}/{data_type}"
 
             # Configure httpx client with SOCKS proxy if specified
             client_args: dict[str, Any] = {"timeout": 10.0}
