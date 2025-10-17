@@ -76,7 +76,7 @@ from waldur_site_agent.backend.backends import (
     UnknownUsernameManagementBackend,
 )
 from waldur_site_agent.backend.exceptions import BackendError
-from waldur_site_agent.common import pagination, structures
+from waldur_site_agent.common import WALDUR_SITE_AGENT_VERSION, pagination, structures
 
 # Handle different Python versions
 if sys.version_info >= (3, 10):
@@ -85,18 +85,41 @@ else:
     from importlib_metadata import entry_points, version
 
 
-BACKENDS: dict[str, tuple[type[BaseBackend], str]] = {
+BACKENDS: dict[str, tuple[type[BaseBackend], str, str]] = {
     entry_point.name: (
         entry_point.load(),
+        entry_point.dist.name if entry_point.dist else entry_point.name,
         version(entry_point.dist.name) if entry_point.dist else "unknown",
     )
     for entry_point in entry_points(group="waldur_site_agent.backends")
 }
 
-USERNAME_BACKENDS: dict[str, type[AbstractUsernameManagementBackend]] = {
-    entry_point.name: entry_point.load()
+USERNAME_BACKENDS: dict[str, tuple[type[AbstractUsernameManagementBackend], str, str]] = {
+    entry_point.name: (
+        entry_point.load(),
+        entry_point.dist.name if entry_point.dist else entry_point.name,
+        version(entry_point.dist.name) if entry_point.dist else "unknown",
+    )
     for entry_point in entry_points(group="waldur_site_agent.username_management_backends")
 }
+
+backend_packages = [
+    {"package": package_distro, "entry_point": package_name, "version": package_version}
+    for package_name, (_, package_distro, package_version) in BACKENDS.items()
+]
+username_backend_packages = [
+    {"package": package_distro, "entry_point": package_name, "version": package_version}
+    for package_name, (_, package_distro, package_version) in USERNAME_BACKENDS.items()
+]
+waldur_api_client_info = [
+    {
+        "package": "waldur-api-client",
+        "entry_point": "waldur-api-client",
+        "version": version("waldur-api-client"),
+    }
+]
+
+DEPENDENCIES = backend_packages + username_backend_packages + waldur_api_client_info
 
 
 def get_client(
@@ -214,10 +237,9 @@ def load_configuration(
         configuration.global_proxy = global_proxy
 
     # Set version and user agent for all configurations
-    waldur_site_agent_version = version("waldur-site-agent")
-    configuration.waldur_site_agent_version = waldur_site_agent_version
+    configuration.waldur_site_agent_version = WALDUR_SITE_AGENT_VERSION
     configuration.waldur_user_agent = (
-        f"waldur-site-agent-{user_agent_suffix}/{waldur_site_agent_version}"
+        f"waldur-site-agent-{user_agent_suffix}/{WALDUR_SITE_AGENT_VERSION}"
     )
     configuration.config_file_path = config_file_path
 
@@ -297,11 +319,12 @@ def get_backend_for_offering(
         logger.error("Unsupported backend type for %s: %s", backend_type_key, backend_type)
         return UnknownBackend(), "unknown"
 
-    backend_class, dist_version = backend_info
+    backend_class, dist_name, dist_version = backend_info
 
     logger.info(
-        "Using %s backend (version %s) for %s offering",
+        "Using %s backend (distro %s, version %s) for %s offering",
         backend_type,
+        dist_name,
         dist_version,
         offering.name,
     )
@@ -685,7 +708,7 @@ def print_current_user(current_user: User) -> None:
 
 def get_username_management_backend(
     offering: structures.Offering,
-) -> AbstractUsernameManagementBackend:
+) -> tuple[AbstractUsernameManagementBackend, str]:
     """Create username management backend instance for the offering.
 
     Uses the plugin discovery system to instantiate the appropriate
@@ -705,9 +728,20 @@ def get_username_management_backend(
             "No username_management_backend is set for offering %s, using the default one",
             offering.name,
         )
-        return UnknownUsernameManagementBackend()
+        return UnknownUsernameManagementBackend(), "unknown"
 
-    return USERNAME_BACKENDS[username_management_setting]()
+    backend_info = USERNAME_BACKENDS[username_management_setting]
+    backend_class, dist_name, dist_version = backend_info
+
+    logger.info(
+        "Using %s backend (distro %s, version %s) for %s offering",
+        username_management_setting,
+        dist_name,
+        dist_version,
+        offering.name,
+    )
+
+    return backend_class(), dist_version
 
 
 def update_offering_users(
@@ -735,7 +769,7 @@ def update_offering_users(
     if not _can_generate_usernames(offering, waldur_rest_client):
         return False
 
-    username_management_backend = get_username_management_backend(offering)
+    username_management_backend, _ = get_username_management_backend(offering)
 
     # Skip processing if we have an unknown username management backend
     if isinstance(username_management_backend, UnknownUsernameManagementBackend):

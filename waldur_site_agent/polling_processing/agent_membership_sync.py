@@ -2,6 +2,8 @@
 
 from time import sleep
 
+from waldur_api_client.models import AgentIdentity
+
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import (
     WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES,
@@ -16,6 +18,8 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
     """Starts the main loop for offering processing."""
     waldur_offerings = configuration.waldur_offerings
     user_agent = configuration.waldur_user_agent
+    # Local cache for agent identities per offering
+    agent_identities: dict[str, AgentIdentity] = {}
     while True:
         logger.info("Number of offerings to process: %s", len(waldur_offerings))
         for offering in waldur_offerings:
@@ -39,8 +43,15 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
                 agent_identity_manager = agent_identity_management.AgentIdentityManager(
                     offering, waldur_rest_client
                 )
+
                 identity_name = f"agent-{offering.uuid}"
-                agent_identity = agent_identity_manager.register_identity(identity_name)
+
+                # Get an identity from the local cache
+                agent_identity = agent_identities.get(offering.uuid)
+                if agent_identity is None:
+                    # If no identities found locally, registering one
+                    agent_identity = agent_identity_manager.register_identity(identity_name)
+
                 agent_service = agent_identity_manager.register_service(
                     agent_identity,
                     configuration.waldur_site_agent_mode,

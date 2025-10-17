@@ -130,9 +130,6 @@ class ServiceAccountMessageTest(TestCase):
         "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_register_service"
     )
     @mock.patch(
-        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_create"
-    )
-    @mock.patch(
         "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_list"
     )
     @mock.patch(
@@ -142,15 +139,13 @@ class ServiceAccountMessageTest(TestCase):
         self,
         mock_processor_class,
         mock_list_identities,
-        mock_create_identity,
         mock_register_service,
     ):
         # Setup mocks for agent identity registration
         mock_agent_identity = mock.Mock()
         mock_agent_identity.uuid = uuid.uuid4()
         mock_agent_identity.name = f"agent-{self.offering_uuid}"
-        mock_list_identities.sync.return_value = []  # No existing identity
-        mock_create_identity.sync.return_value = mock_agent_identity
+        mock_list_identities.sync.return_value = [mock_agent_identity]
 
         mock_agent_service = mock.Mock()
         mock_agent_service.uuid = uuid.uuid4()
@@ -182,7 +177,6 @@ class ServiceAccountMessageTest(TestCase):
 
         # Verify agent identity was checked/created
         mock_list_identities.sync.assert_called_once()
-        mock_create_identity.sync.assert_called_once()
 
         # Verify agent service was registered
         mock_register_service.sync.assert_called_once()
@@ -197,9 +191,6 @@ class ServiceAccountMessageTest(TestCase):
         "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_register_service"
     )
     @mock.patch(
-        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_create"
-    )
-    @mock.patch(
         "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_list"
     )
     @mock.patch(
@@ -209,15 +200,13 @@ class ServiceAccountMessageTest(TestCase):
         self,
         mock_processor_class,
         mock_list_identities,
-        mock_create_identity,
         mock_register_service,
     ):
         # Setup mocks for agent identity registration
         mock_agent_identity = mock.Mock()
         mock_agent_identity.uuid = uuid.uuid4()
         mock_agent_identity.name = f"agent-{self.offering_uuid}"
-        mock_list_identities.sync.return_value = []  # No existing identity
-        mock_create_identity.sync.return_value = mock_agent_identity
+        mock_list_identities.sync.return_value = [mock_agent_identity]
 
         mock_agent_service = mock.Mock()
         mock_agent_service.uuid = uuid.uuid4()
@@ -249,7 +238,6 @@ class ServiceAccountMessageTest(TestCase):
 
         # Verify agent identity was checked/created
         mock_list_identities.sync.assert_called_once()
-        mock_create_identity.sync.assert_called_once()
 
         # Verify agent service was registered
         mock_register_service.sync.assert_called_once()
@@ -264,9 +252,6 @@ class ServiceAccountMessageTest(TestCase):
         "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_register_service"
     )
     @mock.patch(
-        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_create"
-    )
-    @mock.patch(
         "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_list"
     )
     @mock.patch(
@@ -276,15 +261,13 @@ class ServiceAccountMessageTest(TestCase):
         self,
         mock_processor_class,
         mock_list_identities,
-        mock_create_identity,
         mock_register_service,
     ):
         # Setup mocks for agent identity registration
         mock_agent_identity = mock.Mock()
         mock_agent_identity.uuid = uuid.uuid4()
         mock_agent_identity.name = f"agent-{self.offering_uuid}"
-        mock_list_identities.sync.return_value = []  # No existing identity
-        mock_create_identity.sync.return_value = mock_agent_identity
+        mock_list_identities.sync.return_value = [mock_agent_identity]
 
         mock_agent_service = mock.Mock()
         mock_agent_service.uuid = uuid.uuid4()
@@ -312,7 +295,6 @@ class ServiceAccountMessageTest(TestCase):
 
         # Verify agent identity was checked/created
         mock_list_identities.sync.assert_called_once()
-        mock_create_identity.sync.assert_called_once()
 
         # Verify agent service was registered
         mock_register_service.sync.assert_called_once()
@@ -327,9 +309,6 @@ class ServiceAccountMessageTest(TestCase):
         "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_register_service"
     )
     @mock.patch(
-        "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_create"
-    )
-    @mock.patch(
         "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_list"
     )
     @mock.patch(
@@ -339,15 +318,13 @@ class ServiceAccountMessageTest(TestCase):
         self,
         mock_processor_class,
         mock_list_identities,
-        mock_create_identity,
         mock_register_service,
     ):
         # Setup mocks for agent identity registration
         mock_agent_identity = mock.Mock()
         mock_agent_identity.uuid = uuid.uuid4()
         mock_agent_identity.name = f"agent-{self.offering_uuid}"
-        mock_list_identities.sync.return_value = []  # No existing identity
-        mock_create_identity.sync.return_value = mock_agent_identity
+        mock_list_identities.sync.return_value = [mock_agent_identity]
 
         mock_agent_service = mock.Mock()
         mock_agent_service.uuid = uuid.uuid4()
@@ -374,7 +351,6 @@ class ServiceAccountMessageTest(TestCase):
 
         # Verify agent identity was checked/created
         mock_list_identities.sync.assert_called_once()
-        mock_create_identity.sync.assert_called_once()
 
         # Verify agent service was registered
         mock_register_service.sync.assert_called_once()

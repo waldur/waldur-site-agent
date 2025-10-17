@@ -850,6 +850,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             waldur_resource.backend_id,
         )
         resource_report = self.resource_backend.pull_resources([waldur_resource])
+        if not resource_report:
+            return
         self._process_resources(resource_report)
 
     def process_offering(self) -> None:

@@ -1,29 +1,39 @@
 """Classes for managing agent identities, event subscriptions, services, and processors."""
 
+import datetime
+
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_site_agent_identities import (
     marketplace_site_agent_identities_create,
     marketplace_site_agent_identities_list,
     marketplace_site_agent_identities_register_event_subscription,
     marketplace_site_agent_identities_register_service,
+    marketplace_site_agent_identities_update,
 )
 from waldur_api_client.api.marketplace_site_agent_services import (
     marketplace_site_agent_services_register_processor,
 )
+from waldur_api_client.models import (
+    AgentIdentity,
+    AgentIdentityRequest,
+    AgentProcessor,
+    AgentProcessorCreateRequest,
+    AgentService,
+    AgentServiceCreateRequest,
+    EventSubscription,
+    ObservableObjectTypeEnum,
+)
 from waldur_api_client.models.agent_event_subscription_create_request import (
     AgentEventSubscriptionCreateRequest,
 )
-from waldur_api_client.models.agent_identity import AgentIdentity
-from waldur_api_client.models.agent_identity_request import AgentIdentityRequest
-from waldur_api_client.models.agent_processor import AgentProcessor
-from waldur_api_client.models.agent_processor_create_request import AgentProcessorCreateRequest
-from waldur_api_client.models.agent_service import AgentService
-from waldur_api_client.models.agent_service_create_request import AgentServiceCreateRequest
-from waldur_api_client.models.event_subscription import EventSubscription
-from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 
 from waldur_site_agent.backend import logger
+from waldur_site_agent.common import WALDUR_SITE_AGENT_VERSION, utils
 from waldur_site_agent.common.structures import Offering
+
+
+class AgentIdentityDoesNotExistError(Exception):
+    """Error for a missing agent identity."""
 
 
 class AgentIdentityManager:
@@ -34,8 +44,38 @@ class AgentIdentityManager:
         self.offering = offering
         self.waldur_rest_client = waldur_rest_client
 
+    def get_identity(self, name: str) -> AgentIdentity:
+        """Get an existing identity for the agent.
+
+        Expected to call this method after agent registration and before processing.
+
+        Args:
+            name (str): Agent identity name
+
+        Raises:
+            AgentIdentityDoesNotExist: The expected identity doesn't exist
+
+        Returns:
+            AgentIdentity: The existing agent identity
+        """
+        logger.info("Fetching the existing identity %s", name)
+        existing_identities = marketplace_site_agent_identities_list.sync(
+            client=self.waldur_rest_client, name=name
+        )
+        if len(existing_identities) == 0:
+            message = f"Unable to get the identity {name}"
+            logger.error(message)
+            raise AgentIdentityDoesNotExistError(message)
+
+        existing_identity = existing_identities[0]
+        logger.info("Successfully fetched the identity %s", existing_identity.uuid.hex)
+
+        return existing_identity
+
     def register_identity(self, name: str) -> AgentIdentity:
         """Register and agent identity for the offering.
+
+        Expected to call this method right after startup of the agent.
 
         Args:
             name (str): Unique name of the agent within the offering
@@ -47,24 +87,43 @@ class AgentIdentityManager:
             "Registering a new identity for offering %s with name %s", self.offering.name, name
         )
 
+        last_restarted = datetime.datetime.now()
+
         existing_identities = marketplace_site_agent_identities_list.sync(
             client=self.waldur_rest_client, name=name
         )
         if len(existing_identities) > 0:
-            logger.info("Identity with name %s already exists, skipping creation", name)
-            return existing_identities[0]
+            logger.info("Identity %s already exists, updating it", name)
+            existing_identity = existing_identities[0]
+            updated_identity = marketplace_site_agent_identities_update.sync(
+                uuid=existing_identity.uuid.hex,
+                body=AgentIdentityRequest(
+                    offering=self.offering.uuid,
+                    name=name,
+                    last_restarted=last_restarted,
+                    dependencies=utils.DEPENDENCIES,
+                    version=WALDUR_SITE_AGENT_VERSION,
+                    config_file_path="",
+                    config_file_content="",
+                ),
+                client=self.waldur_rest_client,
+            )
+            logger.info("Updated the identity %s, UUID %s", name, updated_identity.uuid.hex)
+            return updated_identity
 
         body = AgentIdentityRequest(
             offering=self.offering.uuid,
             name=name,
-            dependencies=[],
+            version=WALDUR_SITE_AGENT_VERSION,
+            last_restarted=last_restarted,
+            dependencies=utils.DEPENDENCIES,
             config_file_path="",
             config_file_content="",
         )
         identity = marketplace_site_agent_identities_create.sync(
             body=body, client=self.waldur_rest_client
         )
-        logger.info("Registered new identity %s with UUID %s", identity.name, identity.uuid.hex)
+        logger.info("Registered new identity %s, UUID %s", identity.name, identity.uuid.hex)
         return identity
 
     def register_event_subscription(
