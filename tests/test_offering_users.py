@@ -105,7 +105,7 @@ class TestOfferingUserUpdate(unittest.TestCase):
         username_management_backend_mock.get_or_create_username = mock.Mock(
             side_effect=[new_requested_username, new_pending_username, new_creating_username]
         )
-        get_username_management_backend_mock.return_value = username_management_backend_mock
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
 
         # Mock all API calls directly instead of using respx
         marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
@@ -218,7 +218,7 @@ class TestOfferingUserUpdate(unittest.TestCase):
             marketplace_offering_users_begin_creating_mock,
             marketplace_offering_users_set_pending_account_linking_mock,
         )
-        get_username_management_backend_mock.return_value = username_management_backend_mock
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
 
         # This should not raise an exception and should handle the error gracefully
         utils.update_offering_users(self.offering, self.waldur_client, [self.offering_users[0]])
@@ -257,7 +257,7 @@ class TestOfferingUserUpdate(unittest.TestCase):
             marketplace_offering_users_begin_creating_mock,
             marketplace_offering_users_set_pending_additional_validation_mock,
         )
-        get_username_management_backend_mock.return_value = username_management_backend_mock
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
 
         # This should not raise an exception and should handle the error gracefully
         utils.update_offering_users(self.offering, self.waldur_client, [self.offering_users[0]])
@@ -275,7 +275,7 @@ class TestOfferingUserUpdate(unittest.TestCase):
     ):
         """Test that UnknownUsernameManagementBackend triggers early exit behavior."""
         # Return an actual UnknownUsernameManagementBackend instance
-        get_username_management_backend_mock.return_value = UnknownUsernameManagementBackend()
+        get_username_management_backend_mock.return_value = (UnknownUsernameManagementBackend(), "")
 
         # Mock the offering details API call directly instead of using respx
         marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details

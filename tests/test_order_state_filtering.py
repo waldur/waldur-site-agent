@@ -102,8 +102,7 @@ class TestOrderStateFiltering(unittest.TestCase):
     ):
         """Test that MQTT handler processes orders in 'pending-provider' state."""
         # Configure mocks for agent identity management
-        mock_identity_list.sync.return_value = []  # No existing identity
-        mock_identity_create.sync.return_value = self.mock_identity
+        mock_identity_list.sync.return_value = [self.mock_identity]
         mock_service_register.sync.return_value = self.mock_service
 
         message = {"order_uuid": self.order_uuid, "order_state": "pending-provider"}
@@ -130,7 +129,7 @@ class TestOrderStateFiltering(unittest.TestCase):
 
         # Verify agent identity registration flow
         mock_identity_list.sync.assert_called_once()
-        mock_identity_create.sync.assert_called_once()
+        mock_identity_create.sync.assert_not_called()
         mock_service_register.sync.assert_called_once()
 
         # Verify order processing
@@ -170,8 +169,7 @@ class TestOrderStateFiltering(unittest.TestCase):
     ):
         """Test that STOMP handler processes orders in 'executing' state."""
         # Configure mocks for agent identity management
-        mock_identity_list.sync.return_value = []  # No existing identity
-        mock_identity_create.sync.return_value = self.mock_identity
+        mock_identity_list.sync.return_value = [self.mock_identity]
         mock_service_register.sync.return_value = self.mock_service
 
         message = {"order_uuid": self.order_uuid, "order_state": "executing"}
@@ -195,7 +193,7 @@ class TestOrderStateFiltering(unittest.TestCase):
 
         # Verify agent identity registration flow
         mock_identity_list.sync.assert_called_once()
-        mock_identity_create.sync.assert_called_once()
+        mock_identity_create.sync.assert_not_called()
         mock_service_register.sync.assert_called_once()
 
         # Verify order processing
@@ -212,8 +210,7 @@ class TestOrderStateFiltering(unittest.TestCase):
     ):
         """Test that handlers process orders with valid states."""
         # Configure mocks for agent identity management
-        mock_identity_list.sync.return_value = []  # No existing identity
-        mock_identity_create.sync.return_value = self.mock_identity
+        mock_identity_list.sync.return_value = [self.mock_identity]
         mock_service_register.sync.return_value = self.mock_service
 
         message = {"order_uuid": self.order_uuid, "order_state": "pending-provider"}
@@ -240,7 +237,7 @@ class TestOrderStateFiltering(unittest.TestCase):
 
         # Verify agent identity registration flow
         mock_identity_list.sync.assert_called_once()
-        mock_identity_create.sync.assert_called_once()
+        mock_identity_create.sync.assert_not_called()
         mock_service_register.sync.assert_called_once()
 
         # Verify order processing

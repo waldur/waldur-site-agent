@@ -39,7 +39,8 @@ def register_event_process_service(
     agent_identity_manager = agent_identity_management.AgentIdentityManager(
         offering, waldur_rest_client
     )
-    agent_identity = agent_identity_manager.register_identity(f"agent-{offering.uuid}")
+    agent_identity_name = f"agent-{offering.uuid}"
+    agent_identity = agent_identity_manager.get_identity(agent_identity_name)
     return agent_identity_manager.register_service(
         agent_identity,
         structures.AgentMode.EVENT_PROCESS.value,
