@@ -1,0 +1,67 @@
+# Test values for event-based processing (combination 1)
+
+# Test combination 1: Event-based processing (default)
+agents:
+  orderProcess:
+    enabled: false
+
+  report:
+    enabled: true
+    replicas: 1
+
+  membershipSync:
+    enabled: false
+
+  eventProcess:
+    enabled: true
+    replicas: 1
+
+
+# Test configuration for event processing
+secret:
+  create: true
+  data:
+    config.yaml: |
+      sentry_dsn: ""
+      timezone: "UTC"
+      offerings:
+        - name: "Test Event Processing Offering"
+          waldur_api_url: "http://test-waldur:8081/api/"
+          waldur_api_token: "test-token-123"
+          waldur_offering_uuid: "test-uuid-123"
+          username_management_backend: "base"
+          order_processing_backend: "slurm"
+          membership_sync_backend: "slurm"
+          reporting_backend: "slurm"
+          resource_import_enabled: false
+          mqtt_enabled: true
+          stomp_enabled: false
+          websocket_use_tls: true
+          backend_type: "slurm"
+          backend_settings:
+            default_account: "root"
+            customer_prefix: "test_"
+            project_prefix: "test_"
+            allocation_prefix: "test_"
+          backend_components:
+            cpu:
+              limit: 10
+              measured_unit: "k-Hours"
+              unit_factor: 60000
+              accounting_type: "usage"
+              label: "CPU"
+
+# Test with reduced resources
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# Enable health checks for testing
+healthCheck:
+  enabled: true
+  initialDelaySeconds: 15
+  periodSeconds: 30

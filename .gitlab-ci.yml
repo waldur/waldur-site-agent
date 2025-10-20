@@ -23,6 +23,44 @@ include:
 variables:
   COMPONENT_VERSION: "latest"
 
+# Helm linting and validation
+Lint helm chart:
+  image:
+    name: "registry.hpc.ut.ee/mirror/alpine/helm:3.12.3"
+    entrypoint: [""]
+  stage: test
+  interruptible: true
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: $CI_COMMIT_TAG
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - helm/**/*
+  before_script:
+    - apk update
+    - apk add jq python3
+    - apk add -X http://dl-cdn.alpinelinux.org/alpine/edge/community -u alpine-keys
+    - apk add yq --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community
+  script:
+    - helm lint helm/waldur-site-agent/
+    - helm lint helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values.yaml
+    - helm lint helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values-event.yaml
+    - helm template waldur-site-agent helm/waldur-site-agent/ --debug
+    - helm template waldur-site-agent helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values.yaml --debug
+    - helm template waldur-site-agent helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values-event.yaml --debug
+    - mkdir rendered-templates && helm template waldur-site-agent helm/waldur-site-agent/ --output-dir rendered-templates/ --debug
+    - mkdir -p rendered-templates/test-polling && helm template waldur-site-agent helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values.yaml --output-dir rendered-templates/test-polling/ --debug
+    - mkdir -p rendered-templates/test-event && helm template waldur-site-agent helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values-event.yaml --output-dir rendered-templates/test-event/ --debug
+  artifacts:
+    expire_in: 1 week
+    when: always
+    paths:
+      - rendered-templates
+
 .Run tests template:
   stage: test
   interruptible: true
@@ -241,6 +279,58 @@ Publish python module tagged release with uv:
     - sed -i "s/^    \"waldur-site-agent==.*\"$/    \"waldur-site-agent==$CI_COMMIT_TAG\"/" plugins/harbor/pyproject.toml
     - uv build --all-packages
     - uv publish
+
+Publish new chart version and update docs on github:
+  image:
+    name: "registry.hpc.ut.ee/mirror/alpine/helm:3.12.3"
+    entrypoint: [""]
+  stage: release
+  interruptible: true
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    # Configure git
+    - apk update && apk add git
+    - git remote -v
+    - git remote remove github-origin || true # Cleanup previous session
+    - git remote add github-origin https://opennode-jenkins:$OPENNODE_JENKINS_GITHUB_TOKEN@github.com/waldur/waldur-site-agent.git
+    - git remote -v
+    - git config user.name "Opennode Jenkins"
+    - git config user.email jenkins@opennodecloud.com
+    - git fetch github-origin
+    # Add version-specific docs
+    - cp README.md helm/waldur-site-agent/
+    - cp -r docs/ helm/waldur-site-agent/ || true
+    # Add correct version to Chart.yaml
+    - |
+      sed -i -E -e "s/^version: ('.*'|.*)$/version: $CI_COMMIT_TAG/" helm/waldur-site-agent/Chart.yaml
+    - |
+      sed -i -E -e "s/^appVersion: ('.*'|.*)$/appVersion: \"$CI_COMMIT_TAG\"/" helm/waldur-site-agent/Chart.yaml
+    - |
+      sed -i -E -e "s/^  tag: \"latest\"$/  tag: \"$CI_COMMIT_TAG\"/" helm/waldur-site-agent/values.yaml
+    # Package Waldur Site Agent chart with a new version
+    - helm package helm/waldur-site-agent/
+    - ls waldur-site-agent-*.tgz
+    - git status
+    - git stash
+    # Checkout to gh-pages branch
+    - git checkout gh-pages || git checkout --orphan gh-pages
+    - git pull github-origin gh-pages || true
+    # Update docs
+    - git checkout $CI_COMMIT_TAG -- README.md || true
+    - git checkout $CI_COMMIT_TAG -- docs/ || true
+    - git add README.md || true
+    - git add docs/ || true
+    # Move archive to directory and update index
+    - mkdir charts/ || true
+    - mv waldur-site-agent-$CI_COMMIT_TAG.tgz charts/
+    - helm repo index .
+    - git add charts/
+    - git add index.yaml
+    # Push changes
+    - git status
+    - git commit -m "Release $CI_COMMIT_TAG"
+    - git push github-origin gh-pages
 
 Publish multiarch waldur-site-agent docker image latest:
   extends: .Publish multiarch latest docker image template

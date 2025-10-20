@@ -1,0 +1,64 @@
+1. Get the deployed agents:
+{{- if .Values.agents.orderProcess.enabled }}
+   kubectl get deployment {{ include "waldur-site-agent.fullname" . }}-order-process -n {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.agents.report.enabled }}
+   kubectl get deployment {{ include "waldur-site-agent.fullname" . }}-report -n {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.agents.membershipSync.enabled }}
+   kubectl get deployment {{ include "waldur-site-agent.fullname" . }}-membership-sync -n {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.agents.eventProcess.enabled }}
+   kubectl get deployment {{ include "waldur-site-agent.fullname" . }}-event-process -n {{ .Release.Namespace }}
+{{- end }}
+
+2. Check agent logs:
+{{- if .Values.agents.orderProcess.enabled }}
+   kubectl logs deployment/{{ include "waldur-site-agent.fullname" . }}-order-process -n {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.agents.report.enabled }}
+   kubectl logs deployment/{{ include "waldur-site-agent.fullname" . }}-report -n {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.agents.membershipSync.enabled }}
+   kubectl logs deployment/{{ include "waldur-site-agent.fullname" . }}-membership-sync -n {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.agents.eventProcess.enabled }}
+   kubectl logs deployment/{{ include "waldur-site-agent.fullname" . }}-event-process -n {{ .Release.Namespace }}
+{{- end }}
+
+3. Configuration:
+   - All configuration is stored in secret: {{ include "waldur-site-agent.secretName" . }}
+
+4. Deployed agent combination:
+{{- if and .Values.agents.orderProcess.enabled .Values.agents.membershipSync.enabled .Values.agents.report.enabled (not .Values.agents.eventProcess.enabled) }}
+   ✅ Combination 1: Polling-based processing (order-process + membership-sync + report)
+{{- else if and .Values.agents.eventProcess.enabled .Values.agents.report.enabled (not .Values.agents.orderProcess.enabled) (not .Values.agents.membershipSync.enabled) }}
+   ✅ Combination 2: Event-based processing (event-process + report)
+{{- else }}
+   ⚠️  Custom combination - ensure compatibility per documentation
+{{- end }}
+
+5. Agent operation:
+   Each agent runs continuously as a separate deployment with internal scheduling:
+{{- if .Values.agents.orderProcess.enabled }}
+   - order-process: Polls for orders from Waldur periodically
+{{- end }}
+{{- if .Values.agents.report.enabled }}
+   - report: Reports usage data to Waldur on schedule
+{{- end }}
+{{- if .Values.agents.membershipSync.enabled }}
+   - membership-sync: Syncs memberships between Waldur and backend
+{{- end }}
+{{- if .Values.agents.eventProcess.enabled }}
+   - event-process: Listens to MQTT/STOMP events continuously
+{{- end }}
+
+{{- if and .Values.secret.create (not .Values.secret.data) }}
+
+⚠️  WARNING: You need to update the secret with your actual configuration!
+
+Update the secret with your Waldur API configuration:
+kubectl patch secret {{ include "waldur-site-agent.secretName" . }} -n {{ .Release.Namespace }} --patch='{"data":{"config.yaml":"<base64-encoded-config>"}}'
+
+Or use helm upgrade with proper values.
+{{- end }}
