@@ -6,9 +6,22 @@ include:
   - project: "waldur/waldur-pipelines"
     file: "/templates/test/python-tests.yml"
   - project: "waldur/waldur-pipelines"
-    file: "/templates/sbom/generate-python-codebase-sbom.yml"
+    file: "/templates/release/publish-multiarch.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/lint-docker-image.yaml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/lint-dockerfile.yaml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/lint-md-files.yml"
   - project: "waldur/waldur-pipelines"
     file: "/templates/sbom/upload-sboms-to-docs.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/sbom/generate-image-sbom.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/sbom/generate-python-codebase-sbom.yml"
+
+variables:
+  COMPONENT_VERSION: "latest"
 
 .Run tests template:
   stage: test
@@ -117,6 +130,23 @@ Run python v3.13 tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.13"
   extends: .Test template
 
+Lint docker image:
+  extends: .Lint docker image template
+  variables:
+    IMAGE: opennode/waldur-site-agent:latest
+    RUN_IMAGE_LINT: "true"
+
+Lint dockerfile:
+  extends: .Lint dockerfile template
+  variables:
+    DOCKERFILE: Dockerfile
+    HADOLINT_CONFIG: |
+      ignored:
+        - DL3018 # "versions for `apk add`" warning
+        - DL3008 # "versions for `apt-get install`" warning
+        - DL3009 # "Delete apt-get lists" warning (handled in same RUN)
+
+
 
 .Generate Codebase SBOM template:
   image:
@@ -212,6 +242,11 @@ Publish python module tagged release with uv:
     - uv build --all-packages
     - uv publish
 
+Publish multiarch waldur-site-agent docker image latest:
+  extends: .Publish multiarch latest docker image template
+
+Publish multiarch waldur-site-agent docker image with version:
+  extends: .Publish multiarch docker image with specific version template
 
 Publish multiarch latest docker image:
   stage: release
