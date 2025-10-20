@@ -1,0 +1,130 @@
+# Default values for waldur-site-agent.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  registry: ""
+  repository: opennode/waldur-site-agent
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 1024Mi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Agent deployment modes - enable specific agents
+agents:
+  # Event-based processing (default configuration)
+  eventProcess:
+    enabled: true
+    replicas: 1
+
+  report:
+    enabled: true
+    replicas: 1
+
+  # Polling-based processing
+
+  orderProcess:
+    enabled: false
+    replicas: 1
+
+  membershipSync:
+    enabled: false
+    replicas: 1
+
+
+# Secret configuration (all agent configuration)
+secret:
+  create: true
+  name: ""
+  data:
+    # Complete offerings configuration including API tokens
+    # This should be a complete YAML configuration
+    config.yaml: |
+      sentry_dsn: ""
+      timezone: "UTC"
+      offerings:
+        - name: "Example SLURM Offering"
+          waldur_api_url: "http://localhost:8081/api/"
+          waldur_api_token: ""
+          waldur_offering_uuid: ""
+          username_management_backend: "base"
+          order_processing_backend: "slurm"
+          membership_sync_backend: "slurm"
+          reporting_backend: "slurm"
+          resource_import_enabled: false
+          mqtt_enabled: true
+          stomp_enabled: false
+          websocket_use_tls: true
+          backend_type: "slurm"
+          backend_settings:
+            default_account: "root"
+            customer_prefix: "hpc_"
+            project_prefix: "hpc_"
+            allocation_prefix: "hpc_"
+            qos_downscaled: "limited"
+            qos_paused: "paused"
+            qos_default: "normal"
+            enable_user_homedir_account_creation: true
+            homedir_umask: "0700"
+          backend_components:
+            cpu:
+              limit: 10
+              measured_unit: "k-Hours"
+              unit_factor: 60000
+              accounting_type: "usage"
+              label: "CPU"
+            mem:
+              limit: 10
+              measured_unit: "gb-Hours"
+              unit_factor: 61440
+              accounting_type: "usage"
+              label: "RAM"
+
+# Deployment strategy
+strategy:
+  type: Recreate
+
+
+
+# Health check configuration
+healthCheck:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 60
+  timeoutSeconds: 10
+  failureThreshold: 3
+  successThreshold: 1

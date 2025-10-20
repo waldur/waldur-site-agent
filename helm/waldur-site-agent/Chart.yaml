@@ -1,0 +1,25 @@
+apiVersion: v2
+name: waldur-site-agent
+description: A Helm chart for Waldur Site Agent - a stateless application that synchronizes data between Waldur and service provider backends
+
+# Chart version
+version: 0.1.0
+
+# Application version
+appVersion: "latest"
+
+keywords:
+- waldur
+- site-agent
+- slurm
+- moab
+- mup
+- synchronization
+
+home: https://waldur.com/
+sources:
+- https://github.com/waldur/waldur-site-agent
+
+maintainers:
+- name: Waldur Team
+  email: info@waldur.com

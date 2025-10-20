@@ -20,7 +20,7 @@ COPY . .
 RUN uv sync --all-packages --no-dev
 
 # Create non-root user
-RUN useradd --create-home --shell /bin/bash waldur
+RUN adduser -D -s /bin/sh waldur
 
 # Set ownership
 RUN chown -R waldur:waldur /app
