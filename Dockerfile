@@ -1,5 +1,5 @@
 FROM ghcr.io/astral-sh/uv:0.9.4 AS uv
-FROM python:3.13-alpine
+FROM python:3.13.0-alpine3.20
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -31,6 +31,10 @@ USER waldur
 # Set environment variables
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app"
+
+# Add healthcheck
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD waldur_site_diagnostics || exit 1
 
 # Set entrypoint and default command
 ENTRYPOINT ["waldur_site_agent"]

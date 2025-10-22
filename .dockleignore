@@ -1,0 +1,5 @@
+# Ignore issues from Python base image build process
+DKL-DI-0004
+
+# Allow informational messages
+CIS-DI-0005
