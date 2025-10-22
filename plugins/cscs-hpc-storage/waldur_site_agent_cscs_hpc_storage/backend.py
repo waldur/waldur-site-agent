@@ -2166,6 +2166,31 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 logger.info("Processing resource %d/%d", processed_count, len(resources))
                 logger.info("Resource %s / %s", resource.uuid, resource.name)
 
+                # Display order URL for resources in transitional state
+                if (
+                    hasattr(resource, "state")
+                    and not isinstance(resource.state, Unset)
+                    and resource.state in ["Creating", "Terminating", "Updating"]
+                    and hasattr(resource, "order_in_progress")
+                    and not isinstance(resource.order_in_progress, Unset)
+                    and resource.order_in_progress is not None
+                ):
+                    # Use the direct url field from order_in_progress
+                    if hasattr(resource.order_in_progress, "url") and not isinstance(
+                        resource.order_in_progress.url, Unset
+                    ):
+                        logger.info(
+                            "Resource in transitional state (%s) - Order URL: %s",
+                            resource.state,
+                            resource.order_in_progress.url,
+                        )
+                    else:
+                        # Log that URL field is not available
+                        logger.warning(
+                            "Resource in transitional state (%s) but order URL not available",
+                            resource.state,
+                        )
+
                 try:
                     storage_system_name = resource.offering_slug
                     logger.debug(
@@ -2178,7 +2203,6 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                         storage_data_type = resource.attributes.additional_properties.get(
                             "storage_data_type", storage_data_type
                         )
-
                     # Get tenant information
                     tenant_id = resource.provider_slug
                     tenant_name = (
