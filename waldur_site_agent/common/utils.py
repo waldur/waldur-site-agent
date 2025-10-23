@@ -211,6 +211,9 @@ def load_configuration(
                 mqtt_enabled=offering_info.get("mqtt_enabled", False),
                 stomp_enabled=offering_info.get("stomp_enabled", False),
                 websocket_use_tls=offering_info.get("websocket_use_tls", True),
+                stomp_ws_host=offering_info.get("stomp_ws_host"),
+                stomp_ws_port=offering_info.get("stomp_ws_port"),
+                stomp_ws_path=offering_info.get("stomp_ws_path"),
                 username_management_backend=offering_info.get(
                     "username_management_backend", "base"
                 ),

@@ -120,8 +120,16 @@ def setup_stomp_offering_subscriptions(
             event_subscription_manager = EventSubscriptionManager(
                 waldur_offering, None, None, waldur_user_agent, object_type, global_proxy
             )
-            connection = event_subscription_manager.start_stomp_connection(event_subscription)
-            if connection is None:
+            connection = event_subscription_manager.setup_stomp_connection(
+                event_subscription,
+                waldur_offering.stomp_ws_host,
+                waldur_offering.stomp_ws_port,
+                waldur_offering.stomp_ws_path,
+            )
+            connected = event_subscription_manager.start_stomp_connection(
+                event_subscription, connection
+            )
+            if not connected:
                 logger.error(
                     "Failed to start STOMP connection for the offering %s (%s), object type %s",
                     waldur_offering.name,
