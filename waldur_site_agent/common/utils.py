@@ -61,6 +61,9 @@ from waldur_api_client.models.offering_user_state_transition_request import (
 )
 from waldur_api_client.models.patched_offering_user_request import PatchedOfferingUserRequest
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.models.update_offering_component_request import (
+    UpdateOfferingComponentRequest,
+)
 from waldur_api_client.models.user import User
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
 
@@ -455,7 +458,7 @@ def load_components_to_waldur(
     waldur_offering = marketplace_provider_offerings_retrieve.sync(
         client=waldur_rest_client, uuid=offering_uuid
     )
-    waldur_offering_components = {
+    waldur_offering_components: dict[str, OfferingComponent] = {
         component.type_: component for component in waldur_offering.components
     }
     for component_type, component_info in components.items():
@@ -464,13 +467,6 @@ def load_components_to_waldur(
             accounting_type = component_info["accounting_type"]
             label = component_info["label"]
 
-            component = OfferingComponentRequest(
-                billing_type=BillingTypeEnum(accounting_type),
-                type_=component_type,
-                name=label,
-                measured_unit=component_info["measured_unit"],
-                limit_amount=limit_amount,
-            )
             if component_type in waldur_offering_components:
                 if component_info["accounting_type"] == "usage":
                     existing_component = waldur_offering_components[component_type]
@@ -481,8 +477,18 @@ def load_components_to_waldur(
                         component_info.get("limit"),
                         component_info["measured_unit"],
                     )
+                    component_update_body = UpdateOfferingComponentRequest(
+                        uuid=existing_component.uuid.hex,
+                        billing_type=BillingTypeEnum(accounting_type),
+                        type_=component_type,
+                        name=label,
+                        measured_unit=component_info["measured_unit"],
+                        limit_amount=limit_amount,
+                    )
                     marketplace_provider_offerings_update_offering_component.sync_detailed(
-                        client=waldur_rest_client, uuid=existing_component.uuid, body=component
+                        client=waldur_rest_client,
+                        uuid=existing_component.uuid,
+                        body=component_update_body,
                     )
                 else:
                     logger.info(
@@ -496,6 +502,13 @@ def load_components_to_waldur(
                     component_info["accounting_type"],
                     component_info.get("limit"),
                     component_info["measured_unit"],
+                )
+                component = OfferingComponentRequest(
+                    billing_type=BillingTypeEnum(accounting_type),
+                    type_=component_type,
+                    name=label,
+                    measured_unit=component_info["measured_unit"],
+                    limit_amount=limit_amount,
                 )
                 marketplace_provider_offerings_create_offering_component.sync_detailed(
                     client=waldur_rest_client, uuid=offering_uuid, body=component
