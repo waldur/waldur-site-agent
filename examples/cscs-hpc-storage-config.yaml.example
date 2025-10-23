@@ -1,0 +1,43 @@
+sentry_dsn: "" # Data Source Name for Sentry (more info https://docs.sentry.io/product/sentry-basics/dsn-explainer/).
+timezone: "UTC" # Timezone for billing period calculations (e.g. "UTC", "Europe/Tallinn"). Defaults to system timezone if not specified.
+offerings: # Settings for offerings
+  - name: "CSCS HPC Storage Offering" # offering name
+    waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
+    waldur_api_token: "" # Token to access the Waldur API.
+    verify_ssl: true # Whether to verify SSL cert for Waldur API.
+    waldur_offering_uuid: "" # UUID of the offering in Waldur.
+    order_processing_backend: "cscs-hpc-storage" # Name of the backend from entrypoints to use for order processing
+    reporting_backend: "cscs-hpc-storage" # Name of the backend from entrypoints to use for reporting
+
+    backend_type: "cscs-hpc-storage" # Backend type for CSCS HPC Storage
+    backend_settings: # CSCS HPC Storage backend-specific settings
+      output_directory: "cscs-storage-orders/" # Directory where JSON files will be generated
+      storage_file_system: "lustre" # Storage file system type (e.g., lustre, gpfs, nfs)
+      inode_soft_coefficient: 1.33 # Multiplier for soft inode limits (soft = storage_tb * 1M * coefficient)
+      inode_hard_coefficient: 2.0 # Multiplier for hard inode limits (hard = storage_tb * 1M * coefficient)
+      use_mock_target_items: false # Whether to use mock data for targetItem blocks (for development/testing)
+    backend_components: # Storage components with their settings
+      storage: # Storage component definition
+        measured_unit: "TB" # Storage measured in terabytes
+        accounting_type: "limit" # Component type - limit for storage quotas
+        label: "Storage" # Display label for the component in Waldur
+        unit_factor: 1 # Factor for conversion (TB to TB = 1)
+
+# Additional offering example with different storage system
+  - name: "Research Storage Offering"
+    waldur_api_url: "http://localhost:8081/api/"
+    waldur_api_token: ""
+    waldur_offering_uuid: ""
+    backend_type: "cscs-hpc-storage"
+    backend_settings:
+      output_directory: "research-storage-orders/"
+      storage_file_system: "gpfs" # Different file system
+      inode_soft_coefficient: 1.5 # Different inode coefficients
+      inode_hard_coefficient: 2.5
+      use_mock_target_items: true # Enable mock data for testing
+    backend_components:
+      storage:
+        measured_unit: "TB"
+        accounting_type: "limit"
+        label: "Research Storage"
+        unit_factor: 1

@@ -1,0 +1,12 @@
+[Unit]
+Description=Waldur site agent reporting usage to Waldur
+
+[Service]
+User=root
+Group=root
+ExecStart=waldur_site_agent -m report -c /etc/waldur/waldur-site-agent-config.yaml
+StandardOutput=append:/var/log/waldur-site-agent-report.log
+StandardError=append:/var/log/waldur-site-agent-report-error.log
+
+[Install]
+WantedBy=multi-user.target

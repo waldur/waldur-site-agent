@@ -1,0 +1,363 @@
+include:
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/stages.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/python-linters.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/python-tests.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/release/publish-multiarch.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/lint-docker-image.yaml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/lint-dockerfile.yaml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/lint-md-files.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/sbom/upload-sboms-to-docs.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/sbom/generate-image-sbom.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/sbom/generate-python-codebase-sbom.yml"
+
+variables:
+  COMPONENT_VERSION: "latest"
+
+# Helm linting and validation
+Lint helm chart:
+  image:
+    name: "registry.hpc.ut.ee/mirror/alpine/helm:3.12.3"
+    entrypoint: [""]
+  stage: test
+  interruptible: true
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: $CI_COMMIT_TAG
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - helm/**/*
+  before_script:
+    - apk update
+    - apk add jq python3
+    - apk add -X http://dl-cdn.alpinelinux.org/alpine/edge/community -u alpine-keys
+    - apk add yq --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community
+  script:
+    - helm lint helm/waldur-site-agent/
+    - helm lint helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values.yaml
+    - helm lint helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values-event.yaml
+    - helm template waldur-site-agent helm/waldur-site-agent/ --debug
+    - helm template waldur-site-agent helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values.yaml --debug
+    - helm template waldur-site-agent helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values-event.yaml --debug
+    - mkdir rendered-templates && helm template waldur-site-agent helm/waldur-site-agent/ --output-dir rendered-templates/ --debug
+    - mkdir -p rendered-templates/test-polling && helm template waldur-site-agent helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values.yaml --output-dir rendered-templates/test-polling/ --debug
+    - mkdir -p rendered-templates/test-event && helm template waldur-site-agent helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values-event.yaml --output-dir rendered-templates/test-event/ --debug
+  artifacts:
+    expire_in: 1 week
+    when: always
+    paths:
+      - rendered-templates
+
+.Run tests template:
+  stage: test
+  interruptible: true
+  rules:
+    # Skip tests if specified
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    # If tagged release
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    # If event is related to a created merge request
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/**/*
+        - tests/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --junitxml=report.xml plugins/ tests/
+    - coverage xml
+    - coverage report
+
+Run python v3.9 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.9' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+Run python v3.10 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.10' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+Run python v3.11 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.11' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+Run python v3.12 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.12' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+Run python v3.13 linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Run linters template
+  before_script:
+    - |
+      echo 'default_language_version:' >> .pre-commit-config.yaml
+      echo '  python: python3.13' >> .pre-commit-config.yaml
+    - cat .pre-commit-config.yaml
+
+.Test template:
+  extends: .Run tests template
+  before_script:
+  - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+
+
+Run python v3.9 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Test template
+
+Run python v3.10 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Test template
+
+Run python v3.11 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Test template
+
+Run python v3.12 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Test template
+
+Run python v3.13 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Test template
+
+Lint docker image:
+  extends: .Lint docker image template
+  variables:
+    IMAGE: opennode/waldur-site-agent:latest
+    RUN_IMAGE_LINT: "true"
+
+Lint dockerfile:
+  extends: .Lint dockerfile template
+  variables:
+    DOCKERFILE: Dockerfile
+    HADOLINT_CONFIG: |
+      ignored:
+        - DL3018 # "versions for `apk add`" warning
+        - DL3008 # "versions for `apt-get install`" warning
+        - DL3009 # "Delete apt-get lists" warning (handled in same RUN)
+
+
+
+.Generate Codebase SBOM template:
+  image:
+    name: "registry.hpc.ut.ee/mirror/library/python:3.11-bullseye"
+  stage: build
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+  before_script:
+    - apt-get update
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - uv pip install cyclonedx-bom
+    - uv run cyclonedx-py environment "$(which python )" -o ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
+    - echo "SBOM generated. Size:"
+    - du -h ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
+    - tar -czf ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
+    - echo "SBOM archived. Size:"
+    - du -h ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz
+  artifacts:
+    paths:
+      - ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz
+    expire_in: 1 day
+
+Generate Codebase SBOM:
+  extends: .Generate Codebase SBOM template
+  variables:
+    PROJECT_NAME: "waldur-site-agent"
+
+Upload Source SBOM:
+  extends: .Upload SBOM template
+  needs:
+    - Generate Codebase SBOM
+  variables:
+    PROJECT_NAME: "waldur-site-agent"
+    SBOM_TYPE: "source"
+    SBOM_DIR: "source"
+
+Upload docs:
+  image:
+    name: registry.hpc.ut.ee/mirror/alpine/git:v2.30.2
+    entrypoint: [""]
+  stage: deploy
+  interruptible: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "schedule"'
+  script:
+    - cd /tmp/
+    - git clone "https://gitlab-ci-token:$GITLAB_TOKEN@$CI_SERVER_HOST/waldur/waldur-docs.git"
+    - git config --global user.name "$GITLAB_USER_NAME"
+    - git config --global user.email "$GITLAB_USER_EMAIL"
+    - cd waldur-docs/
+    - ls docs/admin-guide/providers/
+    - cp -v $CI_PROJECT_DIR/README.md docs/admin-guide/providers/waldur-site-agent.md
+    - mkdir docs/admin-guide/providers/examples || true
+    - cp -rv $CI_PROJECT_DIR/examples/* docs/admin-guide/providers/examples/
+    - mkdir docs/admin-guide/providers/systemd-conf/ || true
+    - cp -rv $CI_PROJECT_DIR/systemd-conf/* docs/admin-guide/providers/systemd-conf/
+    - mkdir docs/admin-guide/providers/docs || true
+    - cp -rv $CI_PROJECT_DIR/docs/* docs/admin-guide/providers/docs/
+    - git add docs/admin-guide/providers/
+    - git commit -m 'Update Waldur Site Agent docs' || exit 0
+    - git branch new-site-agent-docs
+    - git push --set-upstream origin new-site-agent-docs:master
+
+Publish python module tagged release with uv:
+  image: ghcr.io/astral-sh/uv:python3.13-alpine
+  stage: release
+  interruptible: true
+  variables:
+    UV_PUBLISH_USERNAME: $PYPI_USERNAME
+    UV_PUBLISH_PASSWORD: $PYPI_PASSWORD
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+  script:
+    - sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" pyproject.toml
+    - sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" plugins/slurm/pyproject.toml
+    - sed -i "s/^    \"waldur-site-agent==.*\"$/    \"waldur-site-agent==$CI_COMMIT_TAG\"/" plugins/slurm/pyproject.toml
+    - sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" plugins/moab/pyproject.toml
+    - sed -i "s/^    \"waldur-site-agent==.*\"$/    \"waldur-site-agent==$CI_COMMIT_TAG\"/" plugins/moab/pyproject.toml
+    - sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" plugins/mup/pyproject.toml
+    - sed -i "s/^    \"waldur-site-agent==.*\"$/    \"waldur-site-agent==$CI_COMMIT_TAG\"/" plugins/mup/pyproject.toml
+    - sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" plugins/basic_username_management/pyproject.toml
+    - sed -i "s/^    \"waldur-site-agent==.*\"$/    \"waldur-site-agent==$CI_COMMIT_TAG\"/" plugins/basic_username_management/pyproject.toml
+    - sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" plugins/cscs-dwdi/pyproject.toml
+    - sed -i "s/^    \"waldur-site-agent==.*\"$/    \"waldur-site-agent==$CI_COMMIT_TAG\"/" plugins/cscs-dwdi/pyproject.toml
+    - sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" plugins/cscs-hpc-storage/pyproject.toml
+    - sed -i "s/^    \"waldur-site-agent==.*\"$/    \"waldur-site-agent==$CI_COMMIT_TAG\"/" plugins/cscs-hpc-storage/pyproject.toml
+    - sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" plugins/harbor/pyproject.toml
+    - sed -i "s/^    \"waldur-site-agent==.*\"$/    \"waldur-site-agent==$CI_COMMIT_TAG\"/" plugins/harbor/pyproject.toml
+    - sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" plugins/okd/pyproject.toml
+    - sed -i "s/^    \"waldur-site-agent==.*\"$/    \"waldur-site-agent==$CI_COMMIT_TAG\"/" plugins/okd/pyproject.toml
+    - uv build --all-packages
+    - uv publish
+
+Publish new chart version and update docs on github:
+  image:
+    name: "registry.hpc.ut.ee/mirror/alpine/helm:3.12.3"
+    entrypoint: [""]
+  stage: release
+  interruptible: true
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    # Configure git
+    - apk update && apk add git
+    - git remote -v
+    - git remote remove github-origin || true # Cleanup previous session
+    - git remote add github-origin https://opennode-jenkins:$OPENNODE_JENKINS_GITHUB_TOKEN@github.com/waldur/waldur-site-agent.git
+    - git remote -v
+    - git config user.name "Opennode Jenkins"
+    - git config user.email jenkins@opennodecloud.com
+    - git fetch github-origin
+    # Add version-specific docs
+    - cp README.md helm/waldur-site-agent/
+    - cp -r docs/ helm/waldur-site-agent/ || true
+    # Add correct version to Chart.yaml
+    - |
+      sed -i -E -e "s/^version: ('.*'|.*)$/version: $CI_COMMIT_TAG/" helm/waldur-site-agent/Chart.yaml
+    - |
+      sed -i -E -e "s/^appVersion: ('.*'|.*)$/appVersion: \"$CI_COMMIT_TAG\"/" helm/waldur-site-agent/Chart.yaml
+    - |
+      sed -i -E -e "s/^  tag: \"latest\"$/  tag: \"$CI_COMMIT_TAG\"/" helm/waldur-site-agent/values.yaml
+    # Package Waldur Site Agent chart with a new version
+    - helm package helm/waldur-site-agent/
+    - ls waldur-site-agent-*.tgz
+    - git status
+    - git stash
+    # Checkout to gh-pages branch
+    - git checkout gh-pages || git checkout --orphan gh-pages
+    - git pull github-origin gh-pages || true
+    # Update docs
+    - git checkout $CI_COMMIT_TAG -- README.md || true
+    - git checkout $CI_COMMIT_TAG -- docs/ || true
+    - git add README.md || true
+    - git add docs/ || true
+    # Move archive to directory and update index
+    - mkdir charts/ || true
+    - mv waldur-site-agent-$CI_COMMIT_TAG.tgz charts/
+    - helm repo index .
+    - git add charts/
+    - git add index.yaml
+    # Push changes
+    - git status
+    - git commit -m "Release $CI_COMMIT_TAG"
+    - git push github-origin gh-pages
+
+Publish multiarch waldur-site-agent docker image latest:
+  extends: .Publish multiarch latest docker image template
+
+Publish multiarch waldur-site-agent docker image with version:
+  extends: .Publish multiarch docker image with specific version template
+
+Publish multiarch latest docker image:
+  stage: release
+  interruptible: true
+  image: registry.hpc.ut.ee/mirror/docker:latest
+  services:
+    - name: public.ecr.aws/docker/library/docker:dind
+      command: ["--mtu=1400"]
+      alias: docker
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  before_script:
+    - apk update
+    - apk add --no-cache gcc python3-dev musl-dev linux-headers openldap-dev openssl libffi-dev libjpeg-turbo-dev libxml2-dev libxslt-dev
+    - echo "$WALDUR_DOCKER_HUB_PASSWORD" | docker login $DOCKER_HUB_REGISTRY --username "$WALDUR_DOCKER_HUB_USER" --password-stdin
+  script:
+    - docker context create builder
+    - docker buildx version
+    - docker buildx create builder --use
+    - docker buildx build --platform linux/amd64,linux/arm64 --build-arg DOCKER_REGISTRY=${DOCKER_REGISTRY} -f Dockerfile.waldur-storage-proxy -t opennode/waldur-cscs-storage-proxy:latest --push .

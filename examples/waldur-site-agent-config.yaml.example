@@ -1,0 +1,80 @@
+sentry_dsn: "" # Data Source Name for Sentry (more info https://docs.sentry.io/product/sentry-basics/dsn-explainer/).
+timezone: "UTC" # Timezone for billing period calculations (e.g. "UTC", "Europe/Tallinn"). Defaults to system timezone if not specified.
+offerings: # Settings for offerings
+  - name: "Example SLURM Offering" # offering name
+    waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
+    waldur_api_token: "" # Token to access the Waldur API.
+    waldur_offering_uuid: "" # UUID of the offering in Waldur.
+    username_management_backend: "base" # Name of the backend from entrypoints to use for username management
+    order_processing_backend: "slurm" # Name of the backend from entrypoints to use for order processing
+    membership_sync_backend: "slurm" # Name of the backend from entrypoints to use for membership syncing
+    reporting_backend: "slurm" # Name of the backend from entrypoints to use for reporting
+    resource_import_enabled: false # Whether to expose importable resources to Waldur
+    mqtt_enabled: false # MQTT feature toggler
+    stomp_enabled: false # STOMP feature toggler
+    websocket_use_tls: true # Whether to use TLS for MQTT connection
+    backend_type: "slurm" # type of backend, for now only `slurm` is supported
+    backend_settings: # backend-specific settings
+      default_account: "root" # Default parent account name in SLURM cluster
+        # for new ones
+      customer_prefix: "hpc_" # Prefix for customer's accounts.
+      project_prefix: "hpc_" # Prefix for project's accounts.
+      allocation_prefix: "hpc_" # Prefix used for allocation's accounts.
+        # created by the agent.
+      qos_downscaled: "limited" # The QoS set to an account after downscaling
+      qos_paused: "paused" # The QoS set to an account after pausing
+      qos_default: "normal" # The default QoS for account in the SLURM cluster
+      enable_user_homedir_account_creation: true # Whether to create home directories
+        # for users associated to accounts.
+      homedir_umask: "0700" # A umask for created homedirs
+    backend_components: # Computing components on backend with accounting data
+      cpu: # Type of the component, for example `cpu`
+        limit: 10 # Amount of measured units for Waldur (SLURM measured unit is CPU-minutes)
+        measured_unit: "k-Hours" # Waldur measured unit for accounting.
+          # For example `k-Hours` for CPU
+        unit_factor: 60000 # Factor for conversion from measured unit
+          # to backend ones.
+          # For example 60000 (60 * 1000) for CPU in SLURM,
+          # which uses cpu-minutes for accounting
+        accounting_type: "usage" # Can be either `usage` or `limit`
+        label: "CPU" # A label for the component in Waldur
+      mem:
+        limit: 10 # Amount of measured units for Waldur (SLURM measured unit is MB-minutes)
+        measured_unit: 'gb-Hours' # Waldur measured unit for accounting
+        unit_factor: 61440 # Unit factor for conversion from measured unit
+          # to SLURM units (60 * 1024)
+        accounting_type: "usage" # Can be usage or limit
+        label: RAM # A label for a component in Waldur
+  - name: "Example MOAB Offering"
+    waldur_api_url: "http://localhost:8081/api/"
+    waldur_api_token: ""
+    waldur_offering_uuid: ""
+    backend_type: "moab"
+    backend_settings:
+      default_account: root
+      customer_prefix: "c_"
+      project_prefix: "p_"
+      allocation_prefix: "a_"
+      enable_user_homedir_account_creation: true
+    backend_components: # For MOAB backend, only "deposit" is supported
+      deposit:
+        measured_unit: 'EUR'
+        accounting_type: limit
+        label: Deposit (EUR)
+  - name: "Example CSCS HPC Storage Offering"
+    waldur_api_url: "http://localhost:8081/api/"
+    waldur_api_token: ""
+    waldur_offering_uuid: ""
+    backend_type: "cscs-hpc-storage" # Backend type for CSCS HPC Storage
+    backend_settings:
+      output_directory: "cscs-storage-orders/" # Directory for JSON output files
+      storage_file_system: "lustre" # Storage file system type
+      inode_soft_coefficient: 1.33 # Soft inode limit multiplier
+      inode_hard_coefficient: 2.0 # Hard inode limit multiplier
+      use_mock_target_items: false # Use real targetItem data from backend_metadata
+    backend_components:
+      storage: # Storage component for quota management
+        measured_unit: "TB" # Storage measured in terabytes
+        accounting_type: "limit" # Limit-based accounting
+        label: "Storage" # Component label in Waldur
+        unit_factor: 1 # TB to TB conversion factor

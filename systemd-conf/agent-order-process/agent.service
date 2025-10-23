@@ -1,0 +1,10 @@
+[Unit]
+Description=Waldur site agent processing orders from Waldur
+
+[Service]
+User=root
+Group=root
+ExecStart=waldur_site_agent -m order_process -c /etc/waldur/waldur-site-agent-config.yaml
+
+[Install]
+WantedBy=multi-user.target

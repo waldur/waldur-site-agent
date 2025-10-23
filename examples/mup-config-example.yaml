@@ -1,0 +1,81 @@
+# Example configuration for MUP backend in waldur-site-agent
+# Save this as waldur-site-agent-config.yaml
+
+sentry_dsn: ""
+
+offerings:
+  - name: "MUP HPC Allocation"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "your_waldur_api_token_here"
+    waldur_offering_uuid: "uuid_of_your_marketplace_offering"
+
+    # STOMP/WebSocket settings for real-time events
+    stomp_enabled: true
+    mqtt_enabled: false
+    websocket_use_tls: false
+
+    # Backend type
+    backend_type: "mup"
+
+    # MUP-specific backend settings
+    backend_settings:
+      # MUP API connection details
+      api_url: "https://mupdevb.macc.fccn.pt/"
+      username: "your_mup_username"
+      password: "your_mup_password"
+
+      # Default settings for project/allocation creation
+      default_research_field: 1  # Default research field ID in MUP
+      default_agency: "FCT"  # Default funding agency
+      project_prefix: "waldur_"  # Prefix for project grant numbers
+      allocation_prefix: "alloc_"  # Prefix for allocation identifiers
+      default_storage_limit: 1000  # Default storage limit in GB
+
+      # User creation defaults - customize these for your institution/country
+      # These settings are used when creating user requests in MUP for team members
+      # who don't already exist in the MUP system
+      default_user_salutation: "Dr."  # Default academic title for created users
+      default_user_gender: "Other"  # Default gender (options: Male, Female, Other)
+      default_user_birth_year: 1990  # Default birth year for created users
+      default_user_country: "Portugal"  # Full country name (not abbreviation)
+      default_user_institution_type: "Academic"  # Type of institution (Academic, Industry, Government)
+      default_user_institution: "Research Institution"  # Default institution name
+      default_user_biography: "Researcher using Waldur site agent for resource allocation"
+      user_funding_agency_prefix: "WALDUR-SITE-AGENT-"  # Prefix for auto-generated grant IDs
+
+      # NOTE: Created users will be in "pending approval" status and may require
+      # manual approval by MUP administrators before they can be added to projects.
+      # Check your MUP admin interface for pending user requests.
+
+    # Component mapping between Waldur and MUP
+    # This defines how Waldur marketplace components map to MUP allocation types
+    # Each component with limits > 0 will create a separate allocation in MUP
+    # with the specified mup_allocation_type
+    backend_components:
+      cpu:
+        measured_unit: "core-hours"
+        unit_factor: 1
+        accounting_type: "limit"  # MUP only supports limit-based accounting
+        label: "CPU Core Hours"
+        mup_allocation_type: "Deucalion x86_64"  # MUP allocation type for x86_64 CPU cores
+
+      gpu:
+        measured_unit: "gpu-hours"
+        unit_factor: 1
+        accounting_type: "limit"  # MUP only supports limit-based accounting
+        label: "GPU Hours"
+        mup_allocation_type: "Deucalion gpu"  # MUP allocation type for GPU resources
+
+      arm_cpu:
+        measured_unit: "core-hours"
+        unit_factor: 1
+        accounting_type: "limit"  # MUP only supports limit-based accounting
+        label: "ARM CPU Hours"
+        mup_allocation_type: "Deucalion aarch64"  # MUP allocation type for ARM64 CPU cores
+
+      storage:
+        measured_unit: "GB"
+        unit_factor: 1
+        accounting_type: "limit"  # MUP only supports limit-based accounting
+        label: "Storage"
+        mup_allocation_type: "storage"  # MUP allocation type for storage resources

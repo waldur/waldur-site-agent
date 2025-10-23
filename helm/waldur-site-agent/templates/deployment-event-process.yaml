@@ -1,0 +1,91 @@
+{{- if .Values.agents.eventProcess.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "waldur-site-agent.fullname" . }}-event-process
+  labels:
+    {{- include "waldur-site-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: event-process
+spec:
+  replicas: {{ .Values.agents.eventProcess.replicas }}
+  {{- with .Values.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "waldur-site-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: event-process
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "waldur-site-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: event-process
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: event-process
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--mode"
+            - "event_process"
+            - "--config"
+            - "/etc/waldur-site-agent/config.yaml"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/waldur-site-agent
+              readOnly: true
+          {{- if .Values.healthCheck.enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - waldur_site_diagnostics
+                - --config
+                - /etc/waldur-site-agent/config.yaml
+            initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthCheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
+            failureThreshold: {{ .Values.healthCheck.failureThreshold }}
+          readinessProbe:
+            exec:
+              command:
+                - waldur_site_diagnostics
+                - --config
+                - /etc/waldur-site-agent/config.yaml
+            initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthCheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
+            successThreshold: {{ .Values.healthCheck.successThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "waldur-site-agent.secretName" . }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

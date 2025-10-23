@@ -1,0 +1,54 @@
+# CSCS Storage Proxy Configuration
+# This configuration is used by the waldur_storage_proxy API service
+
+# Waldur API Connection Settings
+waldur_api_url: "https://portal.tds.cscs.ch/api/"  # URL of Waldur API
+waldur_api_token: "YOUR_API_TOKEN_HERE"  # Token to access the Waldur API
+waldur_verify_ssl: true  # Whether to verify SSL certificates for Waldur API
+
+# Storage Backend Settings
+backend_settings:
+  output_directory: "cscs-storage-orders/"  # Output directory for JSON files
+  storage_file_system: "lustre"  # Storage file system type
+  inode_soft_coefficient: 1.33  # Multiplier for soft inode limits
+  inode_hard_coefficient: 2.0  # Multiplier for hard inode limits
+  use_mock_target_items: false  # Enable mock data for development
+
+# Backend Components Configuration
+# All offerings must have exactly the same backend_components
+backend_components:
+  storage:
+    measured_unit: "TB"  # Storage unit (terabytes)
+    accounting_type: "limit"  # Accounting type for quotas
+    label: "Storage"  # Display label in Waldur
+    unit_factor: 1  # Conversion factor (TB to TB)
+
+# Storage systems configuration - maps storage_system names to offering slugs
+# The API will fetch resources from all configured offering slugs
+# The storage_system filter should match one of the keys
+storage_systems:
+  capstor: "capstor"
+  vast: "vast"
+  iopsstor: "iopsstor"
+
+# Authentication Settings (for API access control)
+# These can also be set via environment variables:
+# DISABLE_AUTH, CSCS_KEYCLOAK_URL, CSCS_KEYCLOAK_REALM,
+# CSCS_KEYCLOAK_CLIENT_ID, CSCS_KEYCLOAK_CLIENT_SECRET
+auth:
+  disable_auth: false  # Set to true for development only
+  keycloak_url: "https://auth-tds.cscs.ch/auth/"
+  keycloak_realm: "cscs"
+  keycloak_client_id: "YOUR_CLIENT_ID"
+  keycloak_client_secret: "YOUR_CLIENT_SECRET"
+
+# HPC User API Configuration (optional)
+# External service for retrieving Unix GID values for storage accounts
+# If not configured, mock GID values will be used
+hpc_user_api:
+  api_url: "https://hpc-user-api.example.com"  # Base URL of HPC User API
+  client_id: "YOUR_HPC_CLIENT_ID"  # OAuth2 client ID
+  client_secret: "YOUR_HPC_CLIENT_SECRET"  # OAuth2 client secret
+  oidc_token_url: "https://auth.example.com/token"  # OAuth2 token endpoint
+  oidc_scope: "openid"  # OAuth2 scope for authentication
+  # socks_proxy: "socks5://localhost:12345"  # SOCKS proxy URL (optional, uncomment if API is behind proxy)
