@@ -129,9 +129,27 @@ class EventSubscriptionManager:
         mqtt_client.user_data_set(userdata)
         return mqtt_client
 
-    def _setup_stomp_connection(
-        self, event_subscription: EventSubscription
+    def setup_stomp_connection(
+        self,
+        event_subscription: EventSubscription,
+        custom_stomp_ws_host: Optional[str] = None,
+        custom_stomp_ws_port: Optional[int] = None,
+        custom_stomp_ws_path: Optional[str] = None,
     ) -> stomp.WSStompConnection:
+        """Create a STOMP connection with the given parameters.
+
+        Args:
+            event_subscription (EventSubscription): Event subscription.
+            custom_stomp_ws_host (Optional[str], optional): Custom host of the STOMP server.
+                Defaults to None.
+            custom_stomp_ws_port (Optional[int], optional): Custom port of the STOMP server.
+                Defaults to None.
+            custom_stomp_ws_path (Optional[str], optional): Custom path of the STOMP server.
+                Defaults to None.
+
+        Returns:
+            stomp.WSStompConnection: The constructed connection
+        """
         logger.info(
             "Setting up STOMP connection for event subscription %s",
             event_subscription.uuid.hex,
@@ -145,11 +163,16 @@ class EventSubscriptionManager:
             f"subscription_{event_subscription_uuid}_"
             f"offering_{self.offering.uuid}_{self.observable_object_type}"
         )
-        stomp_host = urllib3.util.parse_url(self.offering.api_url).host
-        stomp_port = 443
+
+        stomp_host = custom_stomp_ws_host or urllib3.util.parse_url(self.offering.api_url).host
+        stomp_port = (
+            custom_stomp_ws_port or 443 if self.waldur_rest_client._verify_ssl else 80
+        )  # TODO: Temporary workaround, improve later
+        ws_path = custom_stomp_ws_path or "/rmqws-stomp"
+
         password = self.offering.api_token
         connection = stomp.WSStompConnection(
-            host_and_ports=[(stomp_host, stomp_port)], ws_path="/rmqws-stomp", vhost=vhost_name
+            host_and_ports=[(stomp_host, stomp_port)], ws_path=ws_path, vhost=vhost_name
         )
         if self.offering.websocket_use_tls:
             connection.set_ssl(for_hosts=[(stomp_host, stomp_port)])
@@ -182,10 +205,11 @@ class EventSubscriptionManager:
         return connection
 
     def start_stomp_connection(
-        self, event_subscription: EventSubscription
-    ) -> Optional[stomp.Connection]:
+        self,
+        event_subscription: EventSubscription,
+        connection: stomp.WSStompConnection,
+    ) -> bool:
         """Start STOMP connection."""
-        connection = self._setup_stomp_connection(event_subscription)
         try:
             logger.info(
                 "Starting STOMP connection for event subscription %s",
@@ -196,9 +220,9 @@ class EventSubscriptionManager:
             )
         except Exception as e:
             logger.error("Failed to start STOMP connection: %s", e)
-            return None
+            return False
         else:
-            return connection
+            return True
 
     def stop_stomp_connection(self, connection: stomp.WSStompConnection) -> None:
         """Stop the STOMP connection."""

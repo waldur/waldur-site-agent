@@ -48,6 +48,9 @@ class Offering:
     backend_components: dict = field(default_factory=dict)
     mqtt_enabled: bool = False
     websocket_use_tls: bool = True
+    stomp_ws_host: Optional[str] = None
+    stomp_ws_port: Optional[int] = None
+    stomp_ws_path: Optional[str] = None
     stomp_enabled: bool = False
     order_processing_backend: Optional[str] = ""
     membership_sync_backend: Optional[str] = ""
