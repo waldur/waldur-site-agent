@@ -859,7 +859,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             return None
 
         # Create JSON structure
-        return {
+        storage_json = {
             "itemId": waldur_resource.uuid.hex,
             "status": cscs_status,
             "mountPoint": {"default": mount_point},
@@ -918,6 +918,23 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             },
             "parentItemId": None,  # Will be set for hierarchical resources
         }
+
+        # Add order_url if available from order_in_progress
+        if (
+            hasattr(waldur_resource, "order_in_progress")
+            and not isinstance(waldur_resource.order_in_progress, Unset)
+            and waldur_resource.order_in_progress is not None
+            and hasattr(waldur_resource.order_in_progress, "url")
+            and not isinstance(waldur_resource.order_in_progress.url, Unset)
+        ):
+            storage_json["order_url"] = waldur_resource.order_in_progress.url
+            logger.debug(
+                "Added order_url to storage resource JSON for resource %s: %s",
+                waldur_resource.uuid,
+                waldur_resource.order_in_progress.url,
+            )
+
+        return storage_json
 
     def _create_tenant_storage_resource_json(
         self,
