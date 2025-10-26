@@ -624,7 +624,10 @@ class CscsHpcStorageBackend(backends.BaseBackend):
         }
 
     def _create_storage_resource_json(
-        self, waldur_resource: WaldurResource, storage_system: str
+        self,
+        waldur_resource: WaldurResource,
+        storage_system: str,
+        client: Optional[AuthenticatedClient] = None,
     ) -> Optional[dict]:
         """Create JSON structure for a single storage resource."""
         logger.debug("Creating storage resource JSON for resource %s", waldur_resource.uuid)
@@ -919,19 +922,37 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             "parentItemId": None,  # Will be set for hierarchical resources
         }
 
-        # Add order_url if available from order_in_progress
+        # Add provider action URLs if order is available from order_in_progress
         if (
             hasattr(waldur_resource, "order_in_progress")
             and not isinstance(waldur_resource.order_in_progress, Unset)
             and waldur_resource.order_in_progress is not None
-            and hasattr(waldur_resource.order_in_progress, "url")
-            and not isinstance(waldur_resource.order_in_progress.url, Unset)
+            and hasattr(waldur_resource.order_in_progress, "uuid")
+            and not isinstance(waldur_resource.order_in_progress.uuid, Unset)
         ):
-            storage_json["order_url"] = waldur_resource.order_in_progress.url
+            order_uuid = waldur_resource.order_in_progress.uuid
+
+            # Get base URL from client if available
+            base_url = ""
+            if client:
+                try:
+                    httpx_client = client.get_httpx_client()
+                    base_url = str(httpx_client.base_url).rstrip("/")
+                except Exception as e:
+                    logger.warning("Failed to get base URL from client: %s", e)
+
+            storage_json["approve_by_provider_url"] = (
+                f"{base_url}/marketplace-orders/{order_uuid}/approve_by_provider/"
+            )
+            storage_json["reject_by_provider_url"] = (
+                f"{base_url}/marketplace-orders/{order_uuid}/reject_by_provider/"
+            )
             logger.debug(
-                "Added order_url to storage resource JSON for resource %s: %s",
+                "Added provider action URLs to storage resource JSON for resource %s with order %s "
+                "(base_url: %s)",
                 waldur_resource.uuid,
-                waldur_resource.order_in_progress.url,
+                order_uuid,
+                base_url,
             )
 
         return storage_json
@@ -1282,8 +1303,63 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                         parent_tenant_id,
                     )
 
+                # Check transitional state and skip if order is not pending-provider
+                if (
+                    hasattr(resource, "state")
+                    and not isinstance(resource.state, Unset)
+                    and resource.state in ["Creating", "Terminating", "Updating"]
+                ):
+                    # For transitional resources, only process if order is in pending-provider state
+                    if (
+                        hasattr(resource, "order_in_progress")
+                        and not isinstance(resource.order_in_progress, Unset)
+                        and resource.order_in_progress is not None
+                    ):
+                        # Check order state
+                        if (
+                            hasattr(resource.order_in_progress, "state")
+                            and not isinstance(resource.order_in_progress.state, Unset)
+                            and resource.order_in_progress.state != "pending-provider"
+                        ):
+                            logger.info(
+                                "Skipping resource %s in transitional state (%s) - "
+                                "order state is %s, not pending-provider",
+                                resource.uuid,
+                                resource.state,
+                                resource.order_in_progress.state,
+                            )
+                            continue
+
+                        # Display order URL for transitional resources with pending-provider order
+                        if hasattr(resource.order_in_progress, "url") and not isinstance(
+                            resource.order_in_progress.url, Unset
+                        ):
+                            logger.info(
+                                "Resource in transitional state (%s) with pending-provider order - "
+                                "Order URL: %s",
+                                resource.state,
+                                resource.order_in_progress.url,
+                            )
+                        else:
+                            # Log that URL field is not available
+                            logger.warning(
+                                "Resource in transitional state (%s) with pending-provider order "
+                                "but order URL not available",
+                                resource.state,
+                            )
+                    else:
+                        # No order in progress for transitional resource - skip it
+                        logger.info(
+                            "Skipping resource %s in transitional state (%s) - no order",
+                            resource.uuid,
+                            resource.state,
+                        )
+                        continue
+
                 # Create project-level resource (the original resource)
-                storage_resource = self._create_storage_resource_json(resource, storage_system_name)
+                storage_resource = self._create_storage_resource_json(
+                    resource, storage_system_name, client
+                )
                 if storage_resource is not None:
                     # Set parent reference if customer entry exists
                     if customer_key in customer_entries:
@@ -2064,7 +2140,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
                         # Create project-level resource (the original resource)
                         storage_resource = self._create_storage_resource_json(
-                            resource, resource.offering_slug
+                            resource, resource.offering_slug, client
                         )
                         if storage_resource is not None:
                             # Set parent reference if customer entry exists
@@ -2183,30 +2259,58 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 logger.info("Processing resource %d/%d", processed_count, len(resources))
                 logger.info("Resource %s / %s", resource.uuid, resource.name)
 
-                # Display order URL for resources in transitional state
+                # Check transitional state and skip if order is not pending-provider
                 if (
                     hasattr(resource, "state")
                     and not isinstance(resource.state, Unset)
                     and resource.state in ["Creating", "Terminating", "Updating"]
-                    and hasattr(resource, "order_in_progress")
-                    and not isinstance(resource.order_in_progress, Unset)
-                    and resource.order_in_progress is not None
                 ):
-                    # Use the direct url field from order_in_progress
-                    if hasattr(resource.order_in_progress, "url") and not isinstance(
-                        resource.order_in_progress.url, Unset
+                    # For transitional resources, only process if order is in pending-provider state
+                    if (
+                        hasattr(resource, "order_in_progress")
+                        and not isinstance(resource.order_in_progress, Unset)
+                        and resource.order_in_progress is not None
                     ):
-                        logger.info(
-                            "Resource in transitional state (%s) - Order URL: %s",
-                            resource.state,
-                            resource.order_in_progress.url,
-                        )
+                        # Check order state
+                        if (
+                            hasattr(resource.order_in_progress, "state")
+                            and not isinstance(resource.order_in_progress.state, Unset)
+                            and resource.order_in_progress.state != "pending-provider"
+                        ):
+                            logger.info(
+                                "Skipping resource %s in transitional state (%s) - "
+                                "order state is %s, not pending-provider",
+                                resource.uuid,
+                                resource.state,
+                                resource.order_in_progress.state,
+                            )
+                            continue
+
+                        # Display order URL for transitional resources with pending-provider order
+                        if hasattr(resource.order_in_progress, "url") and not isinstance(
+                            resource.order_in_progress.url, Unset
+                        ):
+                            logger.info(
+                                "Resource in transitional state (%s) with pending-provider order - "
+                                "Order URL: %s",
+                                resource.state,
+                                resource.order_in_progress.url,
+                            )
+                        else:
+                            # Log that URL field is not available
+                            logger.warning(
+                                "Resource in transitional state (%s) with pending-provider order "
+                                "but order URL not available",
+                                resource.state,
+                            )
                     else:
-                        # Log that URL field is not available
-                        logger.warning(
-                            "Resource in transitional state (%s) but order URL not available",
+                        # No order in progress for transitional resource - skip it
+                        logger.info(
+                            "Skipping resource %s in transitional state (%s) - no order",
+                            resource.uuid,
                             resource.state,
                         )
+                        continue
 
                 try:
                     storage_system_name = resource.offering_slug
@@ -2283,7 +2387,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
 
                     # Create project-level resource (the original resource)
                     storage_resource = self._create_storage_resource_json(
-                        resource, storage_system_name
+                        resource, storage_system_name, client
                     )
                     if storage_resource is not None:
                         # Set parent reference if customer entry exists
