@@ -1,7 +1,16 @@
 # CSCS-DWDI Plugin for Waldur Site Agent
 
 This plugin provides integration with the CSCS Data Warehouse Data Intelligence (DWDI) system to report both
-computational and storage usage data to Waldur.
+computational and storage usage data to Waldur. The plugin supports secure OIDC authentication and optional
+SOCKS proxy connectivity for accessing DWDI API endpoints from restricted networks.
+
+## Features
+
+- **Dual Backend Support**: Separate backends for compute and storage resource usage reporting
+- **OIDC Authentication**: Secure client credentials flow with automatic token refresh
+- **Proxy Support**: SOCKS and HTTP proxy support for network-restricted environments
+- **Flexible Configuration**: Configurable unit conversions and component mappings
+- **Production Ready**: Comprehensive error handling and logging
 
 ## Overview
 
@@ -103,12 +112,24 @@ backend_components:
 
 ## Authentication
 
-Both backends use OIDC client credentials flow for authentication with the DWDI API. You need:
+Both backends use OIDC client credentials flow for authentication with the DWDI API. The authentication tokens are
+automatically managed with refresh capabilities.
+
+### Required Settings
 
 - `cscs_dwdi_client_id`: OIDC client identifier
 - `cscs_dwdi_client_secret`: OIDC client secret
 - `cscs_dwdi_oidc_token_url`: OIDC token endpoint URL
-- `cscs_dwdi_oidc_scope`: OIDC scope (optional, defaults to "openid")
+
+### Optional Settings
+
+- `cscs_dwdi_oidc_scope`: OIDC scope (defaults to "openid")
+
+### Token Management
+
+- Tokens are automatically acquired and cached
+- Automatic token refresh before expiration
+- Error handling for authentication failures
 
 ## SOCKS Proxy Support
 
@@ -187,18 +208,51 @@ See the `examples/` directory for complete configuration examples:
 
 The plugin is automatically discovered when the waldur-site-agent-cscs-dwdi package is installed alongside waldur-site-agent.
 
+### UV Workspace Installation
+
 ```bash
 # Install all workspace packages including cscs-dwdi plugin
 uv sync --all-packages
+
+# Or install specific plugin dependencies only
+uv sync --extra cscs-dwdi
+```
+
+### Manual Installation
+
+```bash
+# Install from PyPI (when published)
+pip install waldur-site-agent-cscs-dwdi
+
+# Install from source
+pip install -e plugins/cscs-dwdi/
 ```
 
 ## Testing
 
-Run the test suite:
+### Running Tests
 
 ```bash
+# Run all cscs-dwdi tests
 uv run pytest plugins/cscs-dwdi/tests/
+
+# Run with coverage
+uv run pytest plugins/cscs-dwdi/tests/ --cov=waldur_site_agent_cscs_dwdi
+
+# Run specific test files
+uv run pytest plugins/cscs-dwdi/tests/test_cscs_dwdi.py -v
 ```
+
+### Test Coverage
+
+The test suite covers:
+
+- Client initialization and configuration
+- OIDC authentication flow
+- API endpoint calls (mocked)
+- Usage data processing
+- Error handling scenarios
+- Backend initialization and validation
 
 ## API Compatibility
 
@@ -218,29 +272,74 @@ This plugin is compatible with DWDI API version 1 (`/api/v1/`). It requires the 
 
 ### Authentication Issues
 
+**Problem**: Authentication failures or token errors
+
+**Solutions**:
 - Verify OIDC client credentials are correct
 - Check that the token endpoint URL is accessible
-- Ensure the client has appropriate scopes
+- Ensure the client has appropriate scopes for DWDI API access
+- Verify network connectivity to the OIDC provider
+- Check logs for specific authentication error messages
+
+**Testing authentication**:
+
+```bash
+# Test OIDC token acquisition manually
+curl -X POST "https://auth.cscs.ch/realms/cscs/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials&client_id=YOUR_CLIENT_ID&client_secret=YOUR_SECRET&scope=openid"
+```
 
 ### Storage Backend Issues
 
+**Problem**: Storage usage data not found or incorrect
+
+**Solutions**:
 - Verify `storage_filesystem` and `storage_data_type` match available values in DWDI
 - Check `storage_path_mapping` if using custom resource IDs
 - Ensure storage paths exist in the DWDI system
+- Validate that the paths have usage data for the requested time period
 
 ### Connection Issues
 
+**Problem**: Network connectivity or API access failures
+
+**Solutions**:
 - Use the `ping()` method to test API connectivity
 - Check network connectivity to the DWDI API endpoint
-- Verify SSL/TLS configuration
+- Verify SSL/TLS configuration and certificates
 - If behind a firewall, configure SOCKS proxy (`socks_proxy` setting)
+- Check DNS resolution for the API hostname
 
 ### Proxy Issues
 
+**Problem**: SOCKS or HTTP proxy connection failures
+
+**Solutions**:
 - Verify proxy server is running and accessible
 - Check proxy authentication if required
 - Test proxy connectivity manually: `curl --proxy socks5://localhost:12345 https://dwdi.cscs.ch`
 - Ensure proxy supports the required protocol (SOCKS4/5, HTTP)
+- Verify proxy URL format is correct (e.g., `socks5://hostname:port`)
+
+### Debugging Tips
+
+**Enable debug logging**:
+
+```python
+import logging
+logging.getLogger('waldur_site_agent_cscs_dwdi').setLevel(logging.DEBUG)
+```
+
+**Test API connectivity**:
+
+```bash
+# Test direct API access
+curl -H "Authorization: Bearer YOUR_TOKEN" https://dwdi.cscs.ch/api/v1/
+
+# Test through proxy
+curl --proxy socks5://localhost:12345 -H "Authorization: Bearer YOUR_TOKEN" https://dwdi.cscs.ch/api/v1/
+```
 
 ## Development
 
@@ -263,7 +362,14 @@ plugins/cscs-dwdi/
 
 - **`CSCSDWDIComputeBackend`**: Compute usage reporting backend
 - **`CSCSDWDIStorageBackend`**: Storage usage reporting backend
-- **`CSCSDWDIClient`**: HTTP client for CSCS-DWDI API communication
+- **`CSCSDWDIClient`**: HTTP client for CSCS-DWDI API communication with OIDC authentication
+
+### Key Features
+
+- **Automatic Token Management**: OIDC tokens are cached and refreshed automatically
+- **Proxy Support**: Built-in SOCKS and HTTP proxy support using httpx
+- **Error Handling**: Comprehensive error handling with detailed logging
+- **Flexible Configuration**: Support for custom unit conversions and component mappings
 
 ### Extension Points
 
@@ -272,3 +378,13 @@ To extend the plugin:
 1. **Additional Endpoints**: Modify `CSCSDWDIClient` to support more API endpoints
 2. **Authentication Methods**: Update authentication logic in `client.py`
 3. **Data Processing**: Enhance response processing methods for additional data formats
+4. **Proxy Types**: Extend proxy support for additional proxy protocols
+
+### Contributing
+
+When contributing to this plugin:
+
+1. Follow the existing code style and patterns
+2. Add tests for new functionality
+3. Update documentation for new features
+4. Ensure backward compatibility with existing configurations

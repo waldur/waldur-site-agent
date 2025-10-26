@@ -152,7 +152,7 @@ class TestCscsHpcStorageBackend:
         mock_attributes.additional_properties = {"permissions": "2770"}
         mock_resource.attributes = mock_attributes
 
-        storage_json = self.backend._create_storage_resource_json(mock_resource, "lustre-fs")
+        storage_json = self.backend._create_storage_resource_json(mock_resource, "lustre-fs", None)
 
         assert storage_json["itemId"] == mock_resource.uuid.hex
         assert storage_json["status"] == "pending"
@@ -163,6 +163,133 @@ class TestCscsHpcStorageBackend:
         assert len(storage_json["quotas"]) == 4  # 2 space + 2 inode quotas
         assert storage_json["storageSystem"]["key"] == "lustre-fs"
         assert storage_json["storageFileSystem"]["key"] == "lustre"
+
+    def test_create_storage_resource_json_with_provider_action_urls(self):
+        """Test storage resource JSON creation includes provider action URLs when available."""
+        mock_resource = Mock()
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = str(uuid4())
+        mock_resource.name = "Test Storage"
+        mock_resource.slug = "test-storage"
+        mock_resource.provider_slug = "cscs"
+        mock_resource.customer_slug = "university"
+        mock_resource.customer_name = "University"
+        mock_resource.customer_uuid = Mock()
+        mock_resource.customer_uuid.hex = str(uuid4())
+        mock_resource.project_slug = "physics-dept"
+        mock_resource.project_name = "Physics Department"
+        mock_resource.project_uuid = Mock()
+        mock_resource.project_uuid.hex = str(uuid4())
+
+        # Create mock limits with additional_properties
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 150}  # 150TB
+        mock_resource.limits = mock_limits
+
+        # Create mock attributes with additional_properties
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {"permissions": "2770"}
+        mock_resource.attributes = mock_attributes
+
+        # Create mock order_in_progress with UUID
+        order_uuid = str(uuid4())
+        mock_order = Mock()
+        mock_order.uuid = order_uuid
+        mock_resource.order_in_progress = mock_order
+
+        # Create mock client with base URL
+        mock_client = Mock()
+        mock_httpx_client = Mock()
+        mock_httpx_client.base_url = "https://waldur.example.com/api"
+        mock_client.get_httpx_client.return_value = mock_httpx_client
+
+        storage_json = self.backend._create_storage_resource_json(
+            mock_resource, "lustre-fs", mock_client
+        )
+
+        assert storage_json["itemId"] == mock_resource.uuid.hex
+        assert (
+            storage_json["approve_by_provider_url"]
+            == f"https://waldur.example.com/api/marketplace-orders/{order_uuid}/approve_by_provider/"
+        )
+        assert (
+            storage_json["reject_by_provider_url"]
+            == f"https://waldur.example.com/api/marketplace-orders/{order_uuid}/reject_by_provider/"
+        )
+
+    def test_create_storage_resource_json_without_provider_action_urls(self):
+        """Test storage resource JSON creation without provider action URLs when not available."""
+        mock_resource = Mock()
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = str(uuid4())
+        mock_resource.name = "Test Storage"
+        mock_resource.slug = "test-storage"
+        mock_resource.provider_slug = "cscs"
+        mock_resource.customer_slug = "university"
+        mock_resource.customer_name = "University"
+        mock_resource.customer_uuid = Mock()
+        mock_resource.customer_uuid.hex = str(uuid4())
+        mock_resource.project_slug = "physics-dept"
+        mock_resource.project_name = "Physics Department"
+        mock_resource.project_uuid = Mock()
+        mock_resource.project_uuid.hex = str(uuid4())
+
+        # Create mock limits with additional_properties
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 150}  # 150TB
+        mock_resource.limits = mock_limits
+
+        # Create mock attributes with additional_properties
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {"permissions": "2770"}
+        mock_resource.attributes = mock_attributes
+
+        # No order_in_progress
+        mock_resource.order_in_progress = Unset()
+
+        storage_json = self.backend._create_storage_resource_json(mock_resource, "lustre-fs", None)
+
+        assert storage_json["itemId"] == mock_resource.uuid.hex
+        assert "approve_by_provider_url" not in storage_json
+        assert "reject_by_provider_url" not in storage_json
+
+    def test_create_storage_resource_json_with_order_but_no_uuid(self):
+        """Test storage resource JSON creation when order exists but has no UUID."""
+        mock_resource = Mock()
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = str(uuid4())
+        mock_resource.name = "Test Storage"
+        mock_resource.slug = "test-storage"
+        mock_resource.provider_slug = "cscs"
+        mock_resource.customer_slug = "university"
+        mock_resource.customer_name = "University"
+        mock_resource.customer_uuid = Mock()
+        mock_resource.customer_uuid.hex = str(uuid4())
+        mock_resource.project_slug = "physics-dept"
+        mock_resource.project_name = "Physics Department"
+        mock_resource.project_uuid = Mock()
+        mock_resource.project_uuid.hex = str(uuid4())
+
+        # Create mock limits with additional_properties
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 150}  # 150TB
+        mock_resource.limits = mock_limits
+
+        # Create mock attributes with additional_properties
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {"permissions": "2770"}
+        mock_resource.attributes = mock_attributes
+
+        # Create mock order_in_progress without UUID
+        mock_order = Mock()
+        mock_order.uuid = Unset()
+        mock_resource.order_in_progress = mock_order
+
+        storage_json = self.backend._create_storage_resource_json(mock_resource, "lustre-fs", None)
+
+        assert storage_json["itemId"] == mock_resource.uuid.hex
+        assert "approve_by_provider_url" not in storage_json
+        assert "reject_by_provider_url" not in storage_json
 
     @patch("waldur_site_agent_cscs_hpc_storage.backend.marketplace_resources_list")
     def test_get_all_storage_resources_with_pagination(self, mock_list):
@@ -212,8 +339,11 @@ class TestCscsHpcStorageBackend:
         mock_response.headers = mock_headers
         mock_list.sync_detailed.return_value = mock_response
 
-        # Mock API client
+        # Mock API client with base URL
         mock_client = Mock()
+        mock_httpx_client = Mock()
+        mock_httpx_client.base_url = "https://waldur.example.com/api"
+        mock_client.get_httpx_client.return_value = mock_httpx_client
 
         # Test the method with pagination parameters
         resources, pagination_info = self.backend._get_all_storage_resources(
@@ -1185,3 +1315,301 @@ class TestCscsHpcStorageBackend:
         result = backend.diagnostics()
 
         assert result is True
+
+    @patch("waldur_site_agent_cscs_hpc_storage.backend.marketplace_resources_list")
+    @patch(
+        "waldur_site_agent_cscs_hpc_storage.backend.marketplace_provider_offerings_customers_list"
+    )
+    def test_transitional_resource_with_pending_provider_order_included(
+        self, mock_customers, mock_list
+    ):
+        """Test that transitional resources with pending-provider orders are included."""
+        # Mock resource in transitional state with pending-provider order
+        mock_resource = Mock()
+        mock_resource.offering_name = "Test Storage"
+        mock_resource.offering_slug = "test-storage"
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = "test-uuid-1"
+        mock_resource.slug = "resource-1"
+        mock_resource.customer_slug = "university"
+        mock_resource.customer_name = "University"
+        mock_resource.customer_uuid = Mock()
+        mock_resource.customer_uuid.hex = str(uuid4())
+        mock_resource.project_slug = "physics"
+        mock_resource.project_name = "Physics Department"
+        mock_resource.project_uuid = Mock()
+        mock_resource.project_uuid.hex = str(uuid4())
+        mock_resource.provider_slug = "cscs"
+        mock_resource.provider_name = "CSCS"
+        mock_resource.offering_uuid = Mock()
+        mock_resource.offering_uuid.hex = str(uuid4())
+        mock_resource.state = "Creating"  # Transitional state
+
+        # Create mock order_in_progress with pending-provider state
+        order_uuid = str(uuid4())
+        mock_order = Mock()
+        mock_order.state = "pending-provider"
+        mock_order.uuid = order_uuid
+        mock_resource.order_in_progress = mock_order
+
+        # Create mock limits and attributes
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 100}
+        mock_resource.limits = mock_limits
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {}
+        mock_resource.attributes = mock_attributes
+        # Mock options as well (required for validation)
+        mock_resource.options = {}
+
+        # Mock the sync_detailed response
+        mock_response = Mock()
+        mock_response.parsed = [mock_resource]
+        mock_headers = Mock()
+        mock_headers.get = Mock(return_value="1")
+        mock_response.headers = mock_headers
+        mock_list.sync_detailed.return_value = mock_response
+
+        # Mock customers response
+        mock_customers.sync_detailed.return_value = Mock(parsed=[])
+
+        # Mock API client with base URL
+        mock_client = Mock()
+        mock_httpx_client = Mock()
+        mock_httpx_client.base_url = "https://waldur.example.com/api"
+        mock_client.get_httpx_client.return_value = mock_httpx_client
+
+        # Test the method
+        resources, _ = self.backend._get_all_storage_resources("test-offering-uuid", mock_client)
+
+        # Should include the resource since order is in pending-provider state
+        assert len(resources) >= 1
+
+        # Find the project-level resource (with itemId matching our resource UUID)
+        project_resources = [r for r in resources if r.get("itemId") == "test-uuid-1"]
+        assert len(project_resources) >= 1, f"No project resource found with itemId 'test-uuid-1'"
+        project_resource = project_resources[0]
+        assert (
+            project_resource["approve_by_provider_url"]
+            == f"https://waldur.example.com/api/marketplace-orders/{order_uuid}/approve_by_provider/"
+        )
+        assert (
+            project_resource["reject_by_provider_url"]
+            == f"https://waldur.example.com/api/marketplace-orders/{order_uuid}/reject_by_provider/"
+        )
+
+    @patch("waldur_site_agent_cscs_hpc_storage.backend.marketplace_resources_list")
+    @patch(
+        "waldur_site_agent_cscs_hpc_storage.backend.marketplace_provider_offerings_customers_list"
+    )
+    def test_transitional_resource_with_non_pending_provider_order_skipped(
+        self, mock_customers, mock_list
+    ):
+        """Test that transitional resources with non-pending-provider orders are skipped."""
+        # Mock resource in transitional state with non-pending-provider order
+        mock_resource = Mock()
+        mock_resource.offering_name = "Test Storage"
+        mock_resource.offering_slug = "test-storage"
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = "test-uuid-1"
+        mock_resource.slug = "resource-1"
+        mock_resource.customer_slug = "university"
+        mock_resource.customer_name = "University"
+        mock_resource.customer_uuid = Mock()
+        mock_resource.customer_uuid.hex = str(uuid4())
+        mock_resource.project_slug = "physics"
+        mock_resource.project_name = "Physics Department"
+        mock_resource.project_uuid = Mock()
+        mock_resource.project_uuid.hex = str(uuid4())
+        mock_resource.provider_slug = "cscs"
+        mock_resource.provider_name = "CSCS"
+        mock_resource.offering_uuid = Mock()
+        mock_resource.offering_uuid.hex = str(uuid4())
+        mock_resource.state = "Creating"  # Transitional state
+
+        # Create mock order_in_progress with non-pending-provider state
+        order_uuid = str(uuid4())
+        mock_order = Mock()
+        mock_order.state = "executing"  # Not pending-provider
+        mock_order.uuid = order_uuid
+        mock_resource.order_in_progress = mock_order
+
+        # Create mock limits and attributes
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 100}
+        mock_resource.limits = mock_limits
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {}
+        mock_resource.attributes = mock_attributes
+        # Mock options as well (required for validation)
+        mock_resource.options = {}
+
+        # Mock the sync_detailed response
+        mock_response = Mock()
+        mock_response.parsed = [mock_resource]
+        mock_headers = Mock()
+        mock_headers.get = Mock(return_value="1")
+        mock_response.headers = mock_headers
+        mock_list.sync_detailed.return_value = mock_response
+
+        # Mock customers response
+        mock_customers.sync_detailed.return_value = Mock(parsed=[])
+
+        # Mock API client with base URL
+        mock_client = Mock()
+        mock_httpx_client = Mock()
+        mock_httpx_client.base_url = "https://waldur.example.com/api"
+        mock_client.get_httpx_client.return_value = mock_httpx_client
+
+        # Test the method
+        resources, _ = self.backend._get_all_storage_resources("test-offering-uuid", mock_client)
+
+        # Should not include the resource since order is not in pending-provider state
+        # Find the project-level resource (with itemId matching our resource UUID)
+        project_resources = [r for r in resources if r.get("itemId") == "test-uuid-1"]
+        assert len(project_resources) == 0
+
+    @patch("waldur_site_agent_cscs_hpc_storage.backend.marketplace_resources_list")
+    @patch(
+        "waldur_site_agent_cscs_hpc_storage.backend.marketplace_provider_offerings_customers_list"
+    )
+    def test_transitional_resource_without_order_skipped(self, mock_customers, mock_list):
+        """Test that transitional resources without orders are skipped."""
+        # Mock resource in transitional state without order
+        mock_resource = Mock()
+        mock_resource.offering_name = "Test Storage"
+        mock_resource.offering_slug = "test-storage"
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = "test-uuid-1"
+        mock_resource.slug = "resource-1"
+        mock_resource.customer_slug = "university"
+        mock_resource.customer_name = "University"
+        mock_resource.customer_uuid = Mock()
+        mock_resource.customer_uuid.hex = str(uuid4())
+        mock_resource.project_slug = "physics"
+        mock_resource.project_name = "Physics Department"
+        mock_resource.project_uuid = Mock()
+        mock_resource.project_uuid.hex = str(uuid4())
+        mock_resource.provider_slug = "cscs"
+        mock_resource.provider_name = "CSCS"
+        mock_resource.offering_uuid = Mock()
+        mock_resource.offering_uuid.hex = str(uuid4())
+        mock_resource.state = "Creating"  # Transitional state
+
+        # No order_in_progress
+        mock_resource.order_in_progress = Unset()
+
+        # Create mock limits and attributes
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 100}
+        mock_resource.limits = mock_limits
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {}
+        mock_resource.attributes = mock_attributes
+        # Mock options as well (required for validation)
+        mock_resource.options = {}
+
+        # Mock the sync_detailed response
+        mock_response = Mock()
+        mock_response.parsed = [mock_resource]
+        mock_headers = Mock()
+        mock_headers.get = Mock(return_value="1")
+        mock_response.headers = mock_headers
+        mock_list.sync_detailed.return_value = mock_response
+
+        # Mock customers response
+        mock_customers.sync_detailed.return_value = Mock(parsed=[])
+
+        # Mock API client with base URL
+        mock_client = Mock()
+        mock_httpx_client = Mock()
+        mock_httpx_client.base_url = "https://waldur.example.com/api"
+        mock_client.get_httpx_client.return_value = mock_httpx_client
+
+        # Test the method
+        resources, _ = self.backend._get_all_storage_resources("test-offering-uuid", mock_client)
+
+        # Should not include the resource since there's no order
+        # Find the project-level resource (with itemId matching our resource UUID)
+        project_resources = [r for r in resources if r.get("itemId") == "test-uuid-1"]
+        assert len(project_resources) == 0
+
+    @patch("waldur_site_agent_cscs_hpc_storage.backend.marketplace_resources_list")
+    @patch(
+        "waldur_site_agent_cscs_hpc_storage.backend.marketplace_provider_offerings_customers_list"
+    )
+    def test_non_transitional_resource_always_included(self, mock_customers, mock_list):
+        """Test that non-transitional resources are always included regardless of order state."""
+        # Mock resource in non-transitional state
+        mock_resource = Mock()
+        mock_resource.offering_name = "Test Storage"
+        mock_resource.offering_slug = "test-storage"
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = "test-uuid-1"
+        mock_resource.slug = "resource-1"
+        mock_resource.customer_slug = "university"
+        mock_resource.customer_name = "University"
+        mock_resource.customer_uuid = Mock()
+        mock_resource.customer_uuid.hex = str(uuid4())
+        mock_resource.project_slug = "physics"
+        mock_resource.project_name = "Physics Department"
+        mock_resource.project_uuid = Mock()
+        mock_resource.project_uuid.hex = str(uuid4())
+        mock_resource.provider_slug = "cscs"
+        mock_resource.provider_name = "CSCS"
+        mock_resource.offering_uuid = Mock()
+        mock_resource.offering_uuid.hex = str(uuid4())
+        mock_resource.state = "OK"  # Non-transitional state
+
+        # Create mock order_in_progress with any state (shouldn't matter)
+        order_uuid = str(uuid4())
+        mock_order = Mock()
+        mock_order.state = "executing"
+        mock_order.uuid = order_uuid
+        mock_resource.order_in_progress = mock_order
+
+        # Create mock limits and attributes
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 100}
+        mock_resource.limits = mock_limits
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {}
+        mock_resource.attributes = mock_attributes
+        # Mock options as well (required for validation)
+        mock_resource.options = {}
+
+        # Mock the sync_detailed response
+        mock_response = Mock()
+        mock_response.parsed = [mock_resource]
+        mock_headers = Mock()
+        mock_headers.get = Mock(return_value="1")
+        mock_response.headers = mock_headers
+        mock_list.sync_detailed.return_value = mock_response
+
+        # Mock customers response
+        mock_customers.sync_detailed.return_value = Mock(parsed=[])
+
+        # Mock API client with base URL
+        mock_client = Mock()
+        mock_httpx_client = Mock()
+        mock_httpx_client.base_url = "https://waldur.example.com/api"
+        mock_client.get_httpx_client.return_value = mock_httpx_client
+
+        # Test the method
+        resources, _ = self.backend._get_all_storage_resources("test-offering-uuid", mock_client)
+
+        # Should include the resource since it's not in transitional state
+        assert len(resources) >= 1
+
+        # Find the project-level resource (with itemId matching our resource UUID)
+        project_resources = [r for r in resources if r.get("itemId") == "test-uuid-1"]
+        assert len(project_resources) >= 1
+        project_resource = project_resources[0]
+        assert (
+            project_resource["approve_by_provider_url"]
+            == f"https://waldur.example.com/api/marketplace-orders/{order_uuid}/approve_by_provider/"
+        )
+        assert (
+            project_resource["reject_by_provider_url"]
+            == f"https://waldur.example.com/api/marketplace-orders/{order_uuid}/reject_by_provider/"
+        )
