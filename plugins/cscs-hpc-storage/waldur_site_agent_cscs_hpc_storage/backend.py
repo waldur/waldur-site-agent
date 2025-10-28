@@ -941,11 +941,13 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 except Exception as e:
                     logger.warning("Failed to get base URL from client: %s", e)
 
+            # Ensure /api/ is in the URL but don't duplicate it
+            api_path = "/api" if not base_url.endswith("/api") else ""
             storage_json["approve_by_provider_url"] = (
-                f"{base_url}/api/marketplace-orders/{order_uuid}/approve_by_provider/"
+                f"{base_url}{api_path}/marketplace-orders/{order_uuid}/approve_by_provider/"
             )
             storage_json["reject_by_provider_url"] = (
-                f"{base_url}/api/marketplace-orders/{order_uuid}/reject_by_provider/"
+                f"{base_url}{api_path}/marketplace-orders/{order_uuid}/reject_by_provider/"
             )
             logger.debug(
                 "Added provider action URLs to storage resource JSON for resource %s with order %s "
