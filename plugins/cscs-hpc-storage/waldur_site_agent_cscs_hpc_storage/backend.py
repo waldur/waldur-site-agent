@@ -942,10 +942,10 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                     logger.warning("Failed to get base URL from client: %s", e)
 
             storage_json["approve_by_provider_url"] = (
-                f"{base_url}/marketplace-orders/{order_uuid}/approve_by_provider/"
+                f"{base_url}/api/marketplace-orders/{order_uuid}/approve_by_provider/"
             )
             storage_json["reject_by_provider_url"] = (
-                f"{base_url}/marketplace-orders/{order_uuid}/reject_by_provider/"
+                f"{base_url}/api/marketplace-orders/{order_uuid}/reject_by_provider/"
             )
             logger.debug(
                 "Added provider action URLs to storage resource JSON for resource %s with order %s "
@@ -2259,11 +2259,11 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                 logger.info("Processing resource %d/%d", processed_count, len(resources))
                 logger.info("Resource %s / %s", resource.uuid, resource.name)
 
-                # Check transitional state and skip if order is not pending-provider
+                # Check transitional state and skip if order is not pending-provider on creation
                 if (
                     hasattr(resource, "state")
                     and not isinstance(resource.state, Unset)
-                    and resource.state in ["Creating", "Terminating", "Updating"]
+                    and resource.state in ["Creating"]
                 ):
                     # For transitional resources, only process if order is in pending-provider state
                     if (
