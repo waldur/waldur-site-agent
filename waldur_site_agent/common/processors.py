@@ -844,6 +844,19 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         )
         if not waldur_resource:
             raise ObjectNotFoundError(f"Waldur resource {resource_uuid} not found")
+
+        if waldur_resource.state not in [
+            ResourceState.OK,
+            ResourceState.ERRED,
+        ]:
+            logger.info(
+                "Resource %s (%s) is in state %s, skipping processing",
+                waldur_resource.name,
+                waldur_resource.uuid,
+                waldur_resource.state,
+            )
+            return
+
         logger.info(
             "Pulling resource %s (%s) from backend",
             waldur_resource.name,
@@ -1430,10 +1443,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             marketplace_provider_resources_list.sync,
             client=self.waldur_rest_client,
             offering_uuid=[self.offering.uuid],
-            state=[
-                MarketplaceProviderResourcesListStateItem.OK,
-                MarketplaceProviderResourcesListStateItem.ERRED,
-            ],
         )
         if not waldur_resources:
             logger.info("No resources to process")
@@ -1451,15 +1460,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     "Error while processing allocation %s: %s",
                     waldur_resource.backend_id,
                     e,
-                )
-                error_traceback = traceback.format_exc()
-                utils.mark_waldur_resources_as_erred(
-                    self.waldur_rest_client,
-                    [waldur_resource],
-                    error_details={
-                        "error_message": str(e),
-                        "error_traceback": error_traceback,
-                    },
                 )
 
     def _process_resource_with_retries(
@@ -1659,17 +1659,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         logger.info("Pulling resource %s (%s)", waldur_resource.name, resource_backend_id)
         backend_resource_info = self.resource_backend.pull_resource(waldur_resource)
         if backend_resource_info is None:
-            logger.info("The resource %s is missing in backend", resource_backend_id)
-            if waldur_resource.state != ResourceState.ERRED:
-                logger.info("Marking resource %s as erred in Waldur", resource_backend_id)
-                utils.mark_waldur_resources_as_erred(
-                    self.waldur_rest_client,
-                    [waldur_resource],
-                    {
-                        "error_message": f"The resource {resource_backend_id} "
-                        "is missing on the backend"
-                    },
-                )
+            logger.warning("The resource %s is missing in backend", resource_backend_id)
             return
 
         # Invalidate cache of Waldur resource
@@ -1679,25 +1669,6 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_resource_info: WaldurResource = marketplace_provider_resources_retrieve.sync(
             client=self.waldur_rest_client, uuid=waldur_resource.uuid.hex
         )
-
-        if waldur_resource_info.state not in [
-            MarketplaceProviderResourcesListStateItem.OK,
-            MarketplaceProviderResourcesListStateItem.ERRED,
-        ]:
-            logger.error(
-                "Waldur resource %s (%s) has incorrect state %s, skipping processing",
-                waldur_resource_info.name,
-                waldur_resource_info.backend_id,
-                waldur_resource_info.state,
-            )
-            return
-        # Set resource state OK if it is erred
-        if waldur_resource_info.state == ResourceState.ERRED:
-            marketplace_provider_resources_set_as_ok.sync_detailed(
-                uuid=waldur_resource_info.uuid,
-                client=self.waldur_rest_client,
-            )
-
         usages: dict[str, dict[str, float]] = backend_resource_info.usage
 
         # Submit usage
