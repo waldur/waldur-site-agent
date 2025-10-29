@@ -223,33 +223,6 @@ Upload Source SBOM:
     SBOM_TYPE: "source"
     SBOM_DIR: "source"
 
-Upload docs:
-  image:
-    name: registry.hpc.ut.ee/mirror/alpine/git:v2.30.2
-    entrypoint: [""]
-  stage: deploy
-  interruptible: true
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "schedule"'
-  script:
-    - cd /tmp/
-    - git clone "https://gitlab-ci-token:$GITLAB_TOKEN@$CI_SERVER_HOST/waldur/waldur-docs.git"
-    - git config --global user.name "$GITLAB_USER_NAME"
-    - git config --global user.email "$GITLAB_USER_EMAIL"
-    - cd waldur-docs/
-    - ls docs/admin-guide/providers/
-    - cp -v $CI_PROJECT_DIR/README.md docs/admin-guide/providers/waldur-site-agent.md
-    - mkdir docs/admin-guide/providers/examples || true
-    - cp -rv $CI_PROJECT_DIR/examples/* docs/admin-guide/providers/examples/
-    - mkdir docs/admin-guide/providers/systemd-conf/ || true
-    - cp -rv $CI_PROJECT_DIR/systemd-conf/* docs/admin-guide/providers/systemd-conf/
-    - mkdir docs/admin-guide/providers/docs || true
-    - cp -rv $CI_PROJECT_DIR/docs/* docs/admin-guide/providers/docs/
-    - git add docs/admin-guide/providers/
-    - git commit -m 'Update Waldur Site Agent docs' || exit 0
-    - git branch new-site-agent-docs
-    - git push --set-upstream origin new-site-agent-docs:master
-
 Publish python module tagged release with uv:
   image: ghcr.io/astral-sh/uv:python3.13-alpine
   stage: release
