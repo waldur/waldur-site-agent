@@ -106,7 +106,6 @@ class ReportingTest(unittest.TestCase):
             f"{self.BASE_URL}/api/marketplace-provider-resources/",
             params={
                 "offering_uuid": self.offering.uuid,
-                "state": ["OK", "Erred"],
             },
         ).respond(200, json=[self.waldur_resource])
         respx.get(
