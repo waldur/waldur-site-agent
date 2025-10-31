@@ -49,6 +49,9 @@ from waldur_api_client.models import (
     ResourceSetStateErredRequest,
 )
 from waldur_api_client.models.billing_type_enum import BillingTypeEnum
+from waldur_api_client.models.marketplace_offering_users_list_state_item import (
+    MarketplaceOfferingUsersListStateItem,
+)
 from waldur_api_client.models.marketplace_orders_list_state_item import (
     MarketplaceOrdersListStateItem,
 )
@@ -679,11 +682,11 @@ def create_homedirs_for_offering_users() -> None:
             offering.verify_ssl,
             configuration.global_proxy,
         )
-        offering_users = pagination.get_all_paginated(
-            marketplace_offering_users_list.sync,
+        offering_users: list[OfferingUser] = pagination.get_all_paginated(
+            marketplace_offering_users_list.sync_detailed,
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
-            state=[OfferingUserState.OK],
+            state=[MarketplaceOfferingUsersListStateItem.OK],
             is_restricted=False,
         )
 
@@ -1015,8 +1018,8 @@ def sync_offering_users() -> None:
             offering.verify_ssl,
             configuration.global_proxy,
         )
-        offering_users = pagination.get_all_paginated(
-            marketplace_offering_users_list.sync,
+        offering_users: list[OfferingUser] = pagination.get_all_paginated(
+            marketplace_offering_users_list.sync_detailed,
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
             is_restricted=False,
@@ -1077,8 +1080,8 @@ def sync_resource_limits() -> None:
             offering.verify_ssl,
             configuration.global_proxy,
         )
-        resources = pagination.get_all_paginated(
-            marketplace_resources_list.sync,
+        resources: list[WaldurResource] = pagination.get_all_paginated(
+            marketplace_resources_list.sync_detailed,
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
             state=[MarketplaceResourcesListStateItem.OK, MarketplaceResourcesListStateItem.ERRED],
