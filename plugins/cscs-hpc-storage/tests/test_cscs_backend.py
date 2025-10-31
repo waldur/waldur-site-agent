@@ -1402,11 +1402,9 @@ class TestCscsHpcStorageBackend:
     @patch(
         "waldur_site_agent_cscs_hpc_storage.backend.marketplace_provider_offerings_customers_list"
     )
-    def test_transitional_resource_with_non_pending_provider_order_skipped(
-        self, mock_customers, mock_list
-    ):
-        """Test that transitional resources with non-pending-provider orders are skipped."""
-        # Mock resource in transitional state with non-pending-provider order
+    def test_transitional_resource_with_executing_order_included(self, mock_customers, mock_list):
+        """Test that transitional resources with executing orders are included."""
+        # Mock resource in transitional state with executing order
         mock_resource = Mock()
         mock_resource.offering_name = "Test Storage"
         mock_resource.offering_slug = "test-storage"
@@ -1427,10 +1425,10 @@ class TestCscsHpcStorageBackend:
         mock_resource.offering_uuid.hex = str(uuid4())
         mock_resource.state = "Creating"  # Transitional state
 
-        # Create mock order_in_progress with non-pending-provider state
+        # Create mock order_in_progress with executing state
         order_uuid = str(uuid4())
         mock_order = Mock()
-        mock_order.state = "executing"  # Not pending-provider
+        mock_order.state = "executing"  # Should be included
         mock_order.uuid = order_uuid
         mock_resource.order_in_progress = mock_order
 
@@ -1464,10 +1462,10 @@ class TestCscsHpcStorageBackend:
         # Test the method
         resources, _ = self.backend._get_all_storage_resources("test-offering-uuid", mock_client)
 
-        # Should not include the resource since order is not in pending-provider state
+        # Should include the resource since order is in executing state
         # Find the project-level resource (with itemId matching our resource UUID)
         project_resources = [r for r in resources if r.get("itemId") == "test-uuid-1"]
-        assert len(project_resources) == 0
+        assert len(project_resources) == 1
 
     @patch("waldur_site_agent_cscs_hpc_storage.backend.marketplace_resources_list")
     @patch(
@@ -1530,6 +1528,80 @@ class TestCscsHpcStorageBackend:
         resources, _ = self.backend._get_all_storage_resources("test-offering-uuid", mock_client)
 
         # Should not include the resource since there's no order
+        # Find the project-level resource (with itemId matching our resource UUID)
+        project_resources = [r for r in resources if r.get("itemId") == "test-uuid-1"]
+        assert len(project_resources) == 0
+
+    @patch("waldur_site_agent_cscs_hpc_storage.backend.marketplace_resources_list")
+    @patch(
+        "waldur_site_agent_cscs_hpc_storage.backend.marketplace_provider_offerings_customers_list"
+    )
+    @pytest.mark.parametrize(
+        "order_state", ["pending-consumer", "pending-project", "pending-start-date"]
+    )
+    def test_transitional_resource_with_skipped_order_states(
+        self, mock_customers, mock_list, order_state
+    ):
+        """Test that transitional resources with specific order states are skipped."""
+        # Mock resource in transitional state with order in skip state
+        mock_resource = Mock()
+        mock_resource.offering_name = "Test Storage"
+        mock_resource.offering_slug = "test-storage"
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = "test-uuid-1"
+        mock_resource.slug = "resource-1"
+        mock_resource.customer_slug = "university"
+        mock_resource.customer_name = "University"
+        mock_resource.customer_uuid = Mock()
+        mock_resource.customer_uuid.hex = str(uuid4())
+        mock_resource.project_slug = "physics"
+        mock_resource.project_name = "Physics Department"
+        mock_resource.project_uuid = Mock()
+        mock_resource.project_uuid.hex = str(uuid4())
+        mock_resource.provider_slug = "cscs"
+        mock_resource.provider_name = "CSCS"
+        mock_resource.offering_uuid = Mock()
+        mock_resource.offering_uuid.hex = str(uuid4())
+        mock_resource.state = "Creating"  # Transitional state
+
+        # Create mock order_in_progress with skip state
+        order_uuid = str(uuid4())
+        mock_order = Mock()
+        mock_order.state = order_state  # Should be skipped
+        mock_order.uuid = order_uuid
+        mock_resource.order_in_progress = mock_order
+
+        # Create mock limits and attributes
+        mock_limits = Mock()
+        mock_limits.additional_properties = {"storage": 100}
+        mock_resource.limits = mock_limits
+        mock_attributes = Mock()
+        mock_attributes.additional_properties = {}
+        mock_resource.attributes = mock_attributes
+        # Mock options as well (required for validation)
+        mock_resource.options = {}
+
+        # Mock the sync_detailed response
+        mock_response = Mock()
+        mock_response.parsed = [mock_resource]
+        mock_headers = Mock()
+        mock_headers.get = Mock(return_value="1")
+        mock_response.headers = mock_headers
+        mock_list.sync_detailed.return_value = mock_response
+
+        # Mock customers response
+        mock_customers.sync_detailed.return_value = Mock(parsed=[])
+
+        # Mock API client with base URL
+        mock_client = Mock()
+        mock_httpx_client = Mock()
+        mock_httpx_client.base_url = "https://waldur.example.com/api"
+        mock_client.get_httpx_client.return_value = mock_httpx_client
+
+        # Test the method
+        resources, _ = self.backend._get_all_storage_resources("test-offering-uuid", mock_client)
+
+        # Should not include the resource since order is in skip state
         # Find the project-level resource (with itemId matching our resource UUID)
         project_resources = [r for r in resources if r.get("itemId") == "test-uuid-1"]
         assert len(project_resources) == 0
