@@ -49,6 +49,17 @@ waldur_verify_ssl = os.getenv("WALDUR_VERIFY_SSL")
 if waldur_verify_ssl is not None:
     config.waldur_verify_ssl = waldur_verify_ssl.lower() in ("true", "yes", "1")
 
+# Override proxy from environment if set
+waldur_socks_proxy = os.getenv("WALDUR_SOCKS_PROXY")
+if waldur_socks_proxy is not None:
+    config.waldur_socks_proxy = waldur_socks_proxy
+
+# Log proxy configuration
+if config.waldur_socks_proxy:
+    logger.info("Using SOCKS proxy for Waldur API connections: %s", config.waldur_socks_proxy)
+else:
+    logger.info("No SOCKS proxy configured for Waldur API connections")
+
 # Create Waldur API client
 WALDUR_API_TOKEN = os.getenv("WALDUR_API_TOKEN", "")
 if not WALDUR_API_TOKEN and config.waldur_api_token:
@@ -58,6 +69,7 @@ waldur_client = get_client(
     api_url=config.waldur_api_url,
     access_token=WALDUR_API_TOKEN,
     verify_ssl=config.waldur_verify_ssl,
+    proxy=config.waldur_socks_proxy,
 )
 
 # Initialize backend with configuration

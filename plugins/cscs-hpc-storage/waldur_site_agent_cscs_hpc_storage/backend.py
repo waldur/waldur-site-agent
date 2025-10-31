@@ -1321,11 +1321,12 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                         if (
                             hasattr(resource.order_in_progress, "state")
                             and not isinstance(resource.order_in_progress.state, Unset)
-                            and resource.order_in_progress.state != "pending-provider"
+                            and resource.order_in_progress.state
+                            not in ["pending-provider", "executing"]
                         ):
                             logger.info(
                                 "Skipping resource %s in transitional state (%s) - "
-                                "order state is %s, not pending-provider",
+                                "order state is %s, not pending-provider or executing",
                                 resource.uuid,
                                 resource.state,
                                 resource.order_in_progress.state,
@@ -2277,11 +2278,12 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                         if (
                             hasattr(resource.order_in_progress, "state")
                             and not isinstance(resource.order_in_progress.state, Unset)
-                            and resource.order_in_progress.state != "pending-provider"
+                            and resource.order_in_progress.state
+                            not in ["pending-provider", "executing"]
                         ):
                             logger.info(
                                 "Skipping resource %s in transitional state (%s) - "
-                                "order state is %s, not pending-provider",
+                                "order state is %s, not pending-provider or executing",
                                 resource.uuid,
                                 resource.state,
                                 resource.order_in_progress.state,

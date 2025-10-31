@@ -44,6 +44,7 @@ class StorageProxyConfig:
     backend_components: dict[str, dict[str, Any]]
     storage_systems: dict[str, str]
     waldur_verify_ssl: bool = True
+    waldur_socks_proxy: Optional[str] = None  # SOCKS proxy URL for Waldur API connections
     auth: Optional[AuthConfig] = None
     hpc_user_api: Optional[HpcUserApiConfig] = None
 
@@ -91,6 +92,7 @@ class StorageProxyConfig:
             waldur_api_url=data["waldur_api_url"],
             waldur_api_token=data["waldur_api_token"],
             waldur_verify_ssl=data.get("waldur_verify_ssl", True),
+            waldur_socks_proxy=data.get("waldur_socks_proxy"),
             backend_settings=data.get("backend_settings", {}),
             backend_components=data.get("backend_components", {}),
             storage_systems=data.get("storage_systems", {}),
