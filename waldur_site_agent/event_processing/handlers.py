@@ -7,7 +7,7 @@ import stomp
 import stomp.utils
 from stomp.constants import HDR_DESTINATION
 from waldur_api_client import AuthenticatedClient
-from waldur_api_client.models import OrderState
+from waldur_api_client.models import ObservableObjectTypeEnum, OrderState
 from waldur_api_client.models.agent_service import AgentService
 
 from waldur_site_agent.backend import logger
@@ -25,13 +25,16 @@ from waldur_site_agent.event_processing.structures import (
 
 
 def register_event_process_service(
-    offering: structures.Offering, waldur_rest_client: AuthenticatedClient
+    offering: structures.Offering,
+    waldur_rest_client: AuthenticatedClient,
+    observable_object: ObservableObjectTypeEnum,
 ) -> AgentService:
     """A shortcut for initialization of the event_process service.
 
     Args:
         offering (structures.Offering): Waldur offering
         waldur_rest_client (AuthenticatedClient): Waldur API client
+        observable_object (ObservableObjectTypeEnum): Type of observable object
 
     Returns:
         AgentService: Registered agent service
@@ -41,9 +44,10 @@ def register_event_process_service(
     )
     agent_identity_name = f"agent-{offering.uuid}"
     agent_identity = agent_identity_manager.get_identity(agent_identity_name)
+    service_name = f"{structures.AgentMode.EVENT_PROCESS.value}-{observable_object}"
     return agent_identity_manager.register_service(
         agent_identity,
-        structures.AgentMode.EVENT_PROCESS.value,
+        service_name,
         structures.AgentMode.EVENT_PROCESS.value,
     )
 
@@ -69,7 +73,9 @@ def on_order_message_mqtt(client: mqtt.Client, userdata: UserData, msg: mqtt.MQT
         waldur_rest_client = common_utils.get_client(
             offering.api_url, offering.api_token, user_agent, offering.verify_ssl
         )
-        agent_service = register_event_process_service(offering, waldur_rest_client)
+        agent_service = register_event_process_service(
+            offering, waldur_rest_client, ObservableObjectTypeEnum.ORDER
+        )
 
         # Create backend instance for dependency injection
         resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
@@ -111,7 +117,9 @@ def on_user_role_message_mqtt(
         waldur_rest_client = common_utils.get_client(
             offering.api_url, offering.api_token, user_agent, offering.verify_ssl
         )
-        agent_service = register_event_process_service(offering, waldur_rest_client)
+        agent_service = register_event_process_service(
+            offering, waldur_rest_client, ObservableObjectTypeEnum.USER_ROLE
+        )
 
         # Create backend instance for dependency injection
         resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
@@ -179,7 +187,9 @@ def on_resource_message_mqtt(
             offering.api_url, offering.api_token, user_agent, offering.verify_ssl
         )
 
-        agent_service = register_event_process_service(offering, waldur_rest_client)
+        agent_service = register_event_process_service(
+            offering, waldur_rest_client, ObservableObjectTypeEnum.RESOURCE
+        )
 
         processor = common_processors.OfferingMembershipProcessor(offering, waldur_rest_client)
         processor.register(agent_service)
@@ -192,6 +202,7 @@ def process_account_message(
     message: AccountMessage,
     offering: structures.Offering,
     account_type: structures.AccountType,
+    observable_object: ObservableObjectTypeEnum,
     user_agent: str = "",
 ) -> None:
     """Process generic account message."""
@@ -204,7 +215,9 @@ def process_account_message(
             offering.api_url, offering.api_token, user_agent, offering.verify_ssl
         )
 
-        agent_service = register_event_process_service(offering, waldur_rest_client)
+        agent_service = register_event_process_service(
+            offering, waldur_rest_client, observable_object
+        )
 
         processor = common_processors.OfferingMembershipProcessor(offering, waldur_rest_client)
         processor.register(agent_service)
@@ -234,9 +247,11 @@ def on_account_message_mqtt(client: mqtt.Client, userdata: UserData, msg: mqtt.M
     user_agent = userdata["user_agent"]
     account_type_raw = msg.topic.split("/")[-1]
     account_type = structures.AccountType.SERVICE_ACCOUNT
+    observable_object = ObservableObjectTypeEnum.SERVICE_ACCOUNT
     if account_type_raw == structures.AccountType.COURSE_ACCOUNT.value:
         account_type = structures.AccountType.COURSE_ACCOUNT
-    process_account_message(message, offering, account_type, user_agent)
+        observable_object = ObservableObjectTypeEnum.COURSE_ACCOUNT
+    process_account_message(message, offering, account_type, observable_object, user_agent)
 
 
 def on_order_message_stomp(
@@ -253,11 +268,17 @@ def on_order_message_stomp(
         logger.info("Skipping order %s with finished state %s", order_uuid, order_state)
         return
 
+    if order_state == OrderState.PENDING_CONSUMER:
+        logger.info("Skipping order %s with state %s", order_uuid, order_state)
+        return
+
     try:
         waldur_rest_client = common_utils.get_client(
             offering.api_url, offering.api_token, user_agent, offering.verify_ssl
         )
-        agent_service = register_event_process_service(offering, waldur_rest_client)
+        agent_service = register_event_process_service(
+            offering, waldur_rest_client, ObservableObjectTypeEnum.ORDER
+        )
 
         # Create backend instance for dependency injection
         resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
@@ -295,7 +316,9 @@ def on_user_role_message_stomp(
         waldur_rest_client = common_utils.get_client(
             offering.api_url, offering.api_token, user_agent, offering.verify_ssl
         )
-        agent_service = register_event_process_service(offering, waldur_rest_client)
+        agent_service = register_event_process_service(
+            offering, waldur_rest_client, ObservableObjectTypeEnum.USER_ROLE
+        )
 
         # Create backend instance for dependency injection
         resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
@@ -357,7 +380,9 @@ def on_resource_message_stomp(
             offering.api_url, offering.api_token, user_agent, offering.verify_ssl
         )
 
-        agent_service = register_event_process_service(offering, waldur_rest_client)
+        agent_service = register_event_process_service(
+            offering, waldur_rest_client, ObservableObjectTypeEnum.RESOURCE
+        )
         processor = common_processors.OfferingMembershipProcessor(offering, waldur_rest_client)
         processor.register(agent_service)
 
@@ -377,7 +402,9 @@ def on_importable_resources_message_stomp(
             offering.api_url, offering.api_token, user_agent, offering.verify_ssl
         )
 
-        agent_service = register_event_process_service(offering, waldur_rest_client)
+        agent_service = register_event_process_service(
+            offering, waldur_rest_client, ObservableObjectTypeEnum.IMPORTABLE_RESOURCES
+        )
 
         # Create backend instance for dependency injection
         resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
@@ -406,6 +433,8 @@ def on_account_message_stomp(
     queue_parts = queue.split("_")
     account_type_raw = f"{queue_parts[-2]}_{queue_parts[-1]}"
     account_type = structures.AccountType.SERVICE_ACCOUNT
+    observable_object = ObservableObjectTypeEnum.SERVICE_ACCOUNT
     if account_type_raw == structures.AccountType.COURSE_ACCOUNT.value:
         account_type = structures.AccountType.COURSE_ACCOUNT
-    process_account_message(message, offering, account_type, user_agent)
+        observable_object = ObservableObjectTypeEnum.COURSE_ACCOUNT
+    process_account_message(message, offering, account_type, observable_object, user_agent)
