@@ -1,0 +1,33 @@
+[project]
+name = "waldur-site-agent-croit-s3"
+version = "0.1.0"
+description = "Croit S3 storage plugin for Waldur Site Agent"
+readme = "README.md"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9, <4"
+dependencies = [
+    "waldur-site-agent>=0.7.0",
+    "requests>=2.25.0",
+    "urllib3>=1.26.0"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+
+# Entry points for exporting backends
+[project.entry-points."waldur_site_agent.backends"]
+croit_s3 = "waldur_site_agent_croit_s3.backend:CroitS3Backend"
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**/*.py" = [
+  "S101",   # we can (and MUST!) use 'assert' in test files.
+  "ANN001", # annotations for fixtures are sometimes a pain for test files
+  "PLR2004", # magic values are OK in tests
+  "PT011",   # pytest.raises can be broad in tests
+  "S106",    # hardcoded passwords are OK in test fixtures
+  "ARG002",  # unused arguments from mock decorators are OK
+]
