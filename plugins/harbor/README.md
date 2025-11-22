@@ -158,6 +158,7 @@ offerings:
 ### Robot Account Permissions
 
 **Critical**: The Harbor robot account must have the following permissions:
+
 - ✅ **Project creation** (`POST /api/v2.0/projects`)
 - ✅ **Project deletion** (`DELETE /api/v2.0/projects/{id}`) - **REQUIRED for proper resource lifecycle**
 - ✅ **Quota management** (`GET/PUT /api/v2.0/quotas`)
@@ -316,11 +317,13 @@ response = requests.post(url, auth=auth, json=data)
 #### 2. **Robot Account Permissions**
 
 **Symptoms**:
+
 - Can list projects but cannot create them
 - Can create projects but cannot set quotas
 - Cannot create OIDC groups
 
 **✅ Solution**: Ensure robot account has system-level permissions:
+
 1. Login to Harbor as admin
 2. Go to Administration → Robot Accounts
 3. Edit your robot account
@@ -461,8 +464,34 @@ plugins/harbor/
 
 This plugin is part of the Waldur Site Agent project and follows the same licensing terms.
 
+## Related Plugins
+
+### Compute & HPC Plugins
+
+- [SLURM Plugin](../slurm/README.md) - SLURM cluster management
+- [MOAB Plugin](../moab/README.md) - MOAB cluster management
+- [MUP Plugin](../mup/README.md) - MUP portal integration
+
+### Container & Cloud Plugins
+
+- [OpenShift/OKD Plugin](../okd/README.md) - OpenShift and OKD container platform management
+
+### Storage Plugins
+
+- [Croit S3 Plugin](../croit-s3/README.md) - Croit S3 storage management
+- [CSCS HPC Storage Plugin](../cscs-hpc-storage/README.md) - CSCS HPC storage management
+
+### Accounting Plugins
+
+- [CSCS DWDI Plugin](../cscs-dwdi/README.md) - CSCS DWDI accounting integration
+
+### Utility Plugins
+
+- [Basic Username Management Plugin](../basic_username_management/README.md) - Username generation and management
+
 ## Support
 
 For issues and questions:
+
 - Create an issue in the Waldur Site Agent repository
 - Contact the OpenNode team

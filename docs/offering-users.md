@@ -60,6 +60,7 @@ uv run waldur_sync_offering_users -c config.yaml
 Core processing function that handles username generation and state transitions.
 
 **Process**:
+
 1. Early validation checks (empty users list, username generation policy)
 2. Username management backend validation (skips if UnknownUsernameManagementBackend)
 3. Efficient user grouping by state (single pass through users)
@@ -68,6 +69,7 @@ Core processing function that handles username generation and state transitions.
 6. Manages state transitions and centralized error handling
 
 **New Architecture**: The function has been refactored into focused sub-functions:
+
 - `_can_generate_usernames()`: Policy validation
 - `_group_users_by_state()`: Efficient user categorization
 - `_process_requested_users()`: Handle new username requests
@@ -162,6 +164,7 @@ The async user creation system is seamlessly integrated with the agent's order p
 ### Automatic Processing
 
 Username generation is automatically triggered during:
+
 - Resource creation orders
 - User addition to existing resources
 - Membership synchronization operations
@@ -194,6 +197,7 @@ valid_usernames = {
 ```
 
 **Performance Improvements**:
+
 - Conditional refresh only when usernames are actually updated
 - Early validation prevents unnecessary processing
 - Efficient user state grouping reduces multiple iterations
@@ -214,6 +218,7 @@ other resources needed for error resolution.
 ### Error Recovery
 
 When exceptions occur:
+
 1. User state transitions to appropriate pending state
 2. Error details are logged with context
 3. Comment field is updated with error message and comment_url field with any provided URL

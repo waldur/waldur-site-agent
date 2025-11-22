@@ -257,6 +257,7 @@ BACKENDS = {
 ```
 
 This enables:
+
 - **Zero-configuration discovery**: Plugins are found automatically when installed
 - **Dynamic loading**: Plugin classes are loaded on-demand
 - **Flexible deployment**: Different plugin combinations for different environments
@@ -277,6 +278,7 @@ offerings:
 ```
 
 This allows:
+
 - **Mixed backend usage**: Different backends for different operations
 - **Gradual migration**: Transition between backends incrementally
 - **Specialized backends**: Use purpose-built backends for specific tasks
