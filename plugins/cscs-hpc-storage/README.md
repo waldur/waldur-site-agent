@@ -76,6 +76,7 @@ hpc_user_api:
 ```
 
 **HPC User API Features:**
+
 - **OAuth2 authentication**: Automatic token acquisition and refresh
 - **GID caching**: Project GID values are cached in memory until server restart
 - **SOCKS proxy support**: Configurable SOCKS proxy for accessing APIs behind firewalls
@@ -83,6 +84,7 @@ hpc_user_api:
 - **Cache statistics**: Available via `get_gid_cache_stats()` method for monitoring
 
 **SOCKS Proxy Support:**
+
 - Use `socks_proxy` field to configure SOCKS proxy access to the HPC User API
 - Format: `socks5://host:port` or `socks4://host:port`
 - Useful when the HPC User API is behind a firewall or requires proxy access
@@ -195,11 +197,13 @@ The three-tier hierarchy maps specific Waldur resource attributes to storage org
 **Target Type:** `tenant`
 
 **Waldur Source Attributes:**
+
 - `resource.provider_slug`
 - `resource.provider_name`
 - `resource.offering_uuid`
 
 **Generated Fields:**
+
 - `itemId`: `str(resource.offering_uuid)`
 - `key`: `resource.provider_slug`
 - `name`: `resource.provider_name`
@@ -210,11 +214,13 @@ The three-tier hierarchy maps specific Waldur resource attributes to storage org
 **Target Type:** `customer`
 
 **Waldur Source Attributes:**
+
 - `resource.customer_slug`
 - `customer_info.name` (from API)
 - `customer_info.uuid` (from API)
 
 **Generated Fields:**
+
 - `itemId`: deterministic UUID from customer data
 - `key`: `resource.customer_slug`
 - `name`: `customer_info.name`
@@ -225,12 +231,14 @@ The three-tier hierarchy maps specific Waldur resource attributes to storage org
 **Target Type:** `project`
 
 **Waldur Source Attributes:**
+
 - `resource.project_slug`
 - `resource.project_name`
 - `resource.uuid`
 - `resource.limits`
 
 **Generated Fields:**
+
 - `itemId`: `str(resource.uuid)`
 - `key`: `resource.project_slug`
 - `name`: `resource.project_name`
@@ -278,6 +286,7 @@ Mount points are generated at three levels:
 #### Path Components
 
 Where each component is derived from Waldur resource data:
+
 - `storage_system`: From offering slug (`waldur_resource.offering_slug`)
 - `data_type`: Storage data type (e.g., `store`, `users`, `scratch`, `archive`)
 - `tenant`: Offering customer slug (`waldur_resource.provider_slug`)
@@ -302,10 +311,12 @@ The backend extracts the following attributes from `waldur_resource.attributes.a
 | `storage_data_type` | string | No | `"store"` | Storage data type classification. Determines target type mapping |
 
 **Storage System Source:**
+
 - The `storageSystem` value comes from the `offering_slug` field, not from resource attributes
 - Each offering represents a different storage system (e.g., offering with slug "capstor" = capstor storage system)
 
 **Validation Rules:**
+
 - All attributes must be strings if provided (non-string values raise `TypeError`)
 - Unknown `storage_data_type` values fall back to `"project"` target type with warning
 - Empty or missing attributes use their respective default values
@@ -511,6 +522,7 @@ storage JSON format. This is useful for troubleshooting and understanding the so
 ```
 
 **Debug Mode Features:**
+
 - **Separate configurations**: Shows both agent's offering config and live Waldur offering details
 - **Agent offering config**: Configuration from the agent's YAML file (excludes `secret_options`)
 - **Waldur offering details**: Complete live offering data from Waldur API with all available attributes
@@ -565,21 +577,25 @@ Resolved data_type filtering issues that affected multi-storage-system queries:
 ### Common Issues
 
 **Data type filtering not working:**
+
 - Ensure you're using lowercase values: `data_type=archive` not `data_type=Archive`
 - Check that the storage system has resources with the specified data type
 - Use `debug=true` to inspect raw data and verify data type values
 
 **SOCKS proxy connection issues:**
+
 - Verify the proxy is running: `netstat -an | grep 12345`
 - Check proxy format: use `socks5://localhost:12345` not just `localhost:12345`
 - Ensure httpx[socks] dependency is installed: `uv add "httpx[socks]"`
 
 **GID cache not working:**
+
 - Cache statistics available via backend's `get_gid_cache_stats()` method
 - Cache persists until server restart (no TTL-based expiration)
 - Mock values are used if HPC User API is unavailable
 
 **Empty filter results:**
+
 - Verify filter values match exactly (case-sensitive)
 - Use `debug=true` to see available values in raw data
 - Check that storage system configuration matches offering slugs
@@ -590,3 +606,28 @@ Resolved data_type filtering issues that affected multi-storage-system queries:
 - **Multi-offering efficiency**: Single API call to Waldur with comma-separated offering slugs
 - **Pagination**: Applied after filtering to ensure accurate page counts
 - **SOCKS proxy overhead**: Minimal latency impact for accessing external APIs
+
+## Related Plugins
+
+### Compute & HPC Plugins
+
+- [SLURM Plugin](../slurm/README.md) - SLURM cluster management
+- [MOAB Plugin](../moab/README.md) - MOAB cluster management
+- [MUP Plugin](../mup/README.md) - MUP portal integration
+
+### Container & Cloud Plugins
+
+- [OpenShift/OKD Plugin](../okd/README.md) - OpenShift and OKD container platform management
+- [Harbor Plugin](../harbor/README.md) - Harbor container registry management
+
+### Storage Plugins
+
+- [Croit S3 Plugin](../croit-s3/README.md) - Croit S3 storage management
+
+### Accounting Plugins
+
+- [CSCS DWDI Plugin](../cscs-dwdi/README.md) - CSCS DWDI accounting integration
+
+### Utility Plugins
+
+- [Basic Username Management Plugin](../basic_username_management/README.md) - Username generation and management

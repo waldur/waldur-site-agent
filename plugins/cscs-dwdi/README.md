@@ -275,6 +275,7 @@ This plugin is compatible with DWDI API version 1 (`/api/v1/`). It requires the 
 **Problem**: Authentication failures or token errors
 
 **Solutions**:
+
 - Verify OIDC client credentials are correct
 - Check that the token endpoint URL is accessible
 - Ensure the client has appropriate scopes for DWDI API access
@@ -295,6 +296,7 @@ curl -X POST "https://auth.cscs.ch/realms/cscs/protocol/openid-connect/token" \
 **Problem**: Storage usage data not found or incorrect
 
 **Solutions**:
+
 - Verify `storage_filesystem` and `storage_data_type` match available values in DWDI
 - Check `storage_path_mapping` if using custom resource IDs
 - Ensure storage paths exist in the DWDI system
@@ -305,6 +307,7 @@ curl -X POST "https://auth.cscs.ch/realms/cscs/protocol/openid-connect/token" \
 **Problem**: Network connectivity or API access failures
 
 **Solutions**:
+
 - Use the `ping()` method to test API connectivity
 - Check network connectivity to the DWDI API endpoint
 - Verify SSL/TLS configuration and certificates
@@ -316,6 +319,7 @@ curl -X POST "https://auth.cscs.ch/realms/cscs/protocol/openid-connect/token" \
 **Problem**: SOCKS or HTTP proxy connection failures
 
 **Solutions**:
+
 - Verify proxy server is running and accessible
 - Check proxy authentication if required
 - Test proxy connectivity manually: `curl --proxy socks5://localhost:12345 https://dwdi.cscs.ch`
@@ -388,3 +392,25 @@ When contributing to this plugin:
 2. Add tests for new functionality
 3. Update documentation for new features
 4. Ensure backward compatibility with existing configurations
+
+## Related Plugins
+
+### Compute & HPC Plugins
+
+- [SLURM Plugin](../slurm/README.md) - SLURM cluster management
+- [MOAB Plugin](../moab/README.md) - MOAB cluster management
+- [MUP Plugin](../mup/README.md) - MUP portal integration
+
+### Container & Cloud Plugins
+
+- [OpenShift/OKD Plugin](../okd/README.md) - OpenShift and OKD container platform management
+- [Harbor Plugin](../harbor/README.md) - Harbor container registry management
+
+### Storage Plugins
+
+- [Croit S3 Plugin](../croit-s3/README.md) - Croit S3 storage management
+- [CSCS HPC Storage Plugin](../cscs-hpc-storage/README.md) - CSCS HPC storage management
+
+### Utility Plugins
+
+- [Basic Username Management Plugin](../basic_username_management/README.md) - Username generation and management
