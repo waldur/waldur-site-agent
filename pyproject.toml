@@ -20,8 +20,6 @@ dependencies = [
     "stomp-py>=8.2.0,<9",
     "importlib-metadata>=8.7.0 ; python_full_version == '3.9.*'",
     "waldur-api-client==7.8.5",
-    "waldur-site-agent-croit-s3",
-    "boto3>=1.40.71",
     "mypy>=1.18.2",
 ]
 
@@ -143,8 +141,6 @@ members = [
     "plugins/*",
 ]
 
-[tool.uv.sources]
-waldur-site-agent-croit-s3 = { workspace = true }
 
 [tool.mypy]
 explicit_package_bases = true
