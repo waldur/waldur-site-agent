@@ -271,7 +271,217 @@ SLURM Cluster → sacct command → Usage aggregation → Unit conversion → Wa
 3. **Network**: Ensure secure connection to Waldur Mastermind (HTTPS)
 4. **Logging**: Avoid logging sensitive data, configure log rotation
 
-## Integration Notes
+## Historical Usage Loading
+
+In addition to regular usage reporting, the SLURM plugin supports loading historical usage data into Waldur.
+This is useful for:
+
+- Migrating existing SLURM usage data when first deploying Waldur
+- Backfilling missing usage data due to outages or configuration issues
+- Reconciling billing periods with historical SLURM accounting records
+
+### Prerequisites for Historical Loading
+
+**Staff User Requirements:**
+
+- Historical usage loading requires a **staff user API token**
+- Regular offering API tokens cannot submit historical data
+- The staff user must have appropriate permissions in Waldur
+
+**Data Requirements:**
+
+- SLURM accounting database must contain historical data for the requested periods
+- Resources must already exist in Waldur (historical loading cannot create resources)
+- Offering users must be configured in Waldur for user-level usage attribution
+
+### Historical Usage Command
+
+```bash
+# Load usage for specific date range
+waldur_site_load_historical_usage \
+  --config /etc/waldur/waldur-site-agent-config.yaml \
+  --offering-uuid 12345678-1234-1234-1234-123456789abc \
+  --user-token staff-user-api-token-here \
+  --start-date 2024-01-01 \
+  --end-date 2024-03-31
+```
+
+#### Command Parameters
+
+- `--config`: Path to agent configuration file (same as regular usage reporting)
+- `--offering-uuid`: UUID of the Waldur offering to load data for
+- `--user-token`: **Staff user API token** (not the offering's regular API token)
+- `--start-date`: Start date in YYYY-MM-DD format
+- `--end-date`: End date in YYYY-MM-DD format
+
+#### Processing Behavior
+
+**Monthly Processing:**
+
+- Historical usage is always processed **monthly** to align with Waldur's billing model
+- Date ranges are automatically split into monthly billing periods
+- Each month is processed independently for reliability and progress tracking
+
+**Data Attribution:**
+
+- Usage data is attributed to the first day of each billing month
+- User usage includes both username and offering user URL when available
+- Resource-level usage totals are calculated and submitted separately
+
+**Error Handling:**
+
+- Failed months are logged but don't stop processing of other months
+- Individual user usage failures don't affect resource-level usage submission
+- Progress is displayed: "Processing month 3/12: 2024-03"
+
+### Usage Examples
+
+#### Load Full Year of Data
+
+```bash
+# Load all of 2024
+waldur_site_load_historical_usage \
+  --config /etc/waldur/waldur-site-agent-config.yaml \
+  --offering-uuid 12345678-1234-1234-1234-123456789abc \
+  --user-token your-staff-token \
+  --start-date 2024-01-01 \
+  --end-date 2024-12-31
+```
+
+#### Load Specific Quarter
+
+```bash
+# Load Q1 2024
+waldur_site_load_historical_usage \
+  --config /etc/waldur/waldur-site-agent-config.yaml \
+  --offering-uuid 12345678-1234-1234-1234-123456789abc \
+  --user-token your-staff-token \
+  --start-date 2024-01-01 \
+  --end-date 2024-03-31
+```
+
+#### Load Single Month
+
+```bash
+# Load just January 2024
+waldur_site_load_historical_usage \
+  --config /etc/waldur/waldur-site-agent-config.yaml \
+  --offering-uuid 12345678-1234-1234-1234-123456789abc \
+  --user-token your-staff-token \
+  --start-date 2024-01-01 \
+  --end-date 2024-01-31
+```
+
+### Monitoring Historical Loads
+
+#### Progress Tracking
+
+The command provides detailed progress information:
+
+```text
+🚀 Starting historical usage loading
+📊 Will process 12 months of data
+📅 Processing month 1/12: 2024-01
+📋 Found 5 active resources to process
+📊 Processing usage data for 5 accounts
+📤 Submitted usage for resource project1_allocation: {'cpu': 15000, 'mem': 25000}
+✅ Completed processing 2024-01 (5 resources)
+📅 Processing month 2/12: 2024-02
+...
+🎉 Historical usage loading completed successfully!
+Processed 12 months from 2024-01-01 to 2024-12-31
+```
+
+#### Log Files
+
+For production use, redirect output to log files:
+
+```bash
+waldur_site_load_historical_usage \
+  --config /etc/waldur/waldur-site-agent-config.yaml \
+  --offering-uuid 12345678-1234-1234-1234-123456789abc \
+  --user-token your-staff-token \
+  --start-date 2024-01-01 \
+  --end-date 2024-12-31 \
+  > historical_load_2024.log 2>&1
+```
+
+### Troubleshooting Historical Loads
+
+#### Error Messages and Solutions
+
+**No Staff Privileges:**
+
+```text
+❌ Historical usage loading requires staff user privileges
+```
+
+- Solution: Use an API token from a user with `is_staff=True` in Waldur
+
+**No Resources Found:**
+
+```text
+ℹ️ No active resources found for offering, skipping month
+```
+
+- Solution: Ensure resources exist in Waldur and have `backend_id` values set
+
+**No Usage Data:**
+
+```text
+ℹ️ No usage data found for 2024-01
+```
+
+- Solution: Check SLURM accounting database has data for that period
+- Verify SLURM account names match Waldur resource `backend_id` values
+
+**Backend Not Supported:**
+
+```text
+❌ Backend does not support historical usage reporting
+```
+
+- Solution: Ensure you're using the SLURM backend and have updated code
+
+#### Performance Considerations
+
+**Large Date Ranges:**
+
+- Historical loads can take hours for multi-year ranges
+- Each month requires multiple API calls to Waldur
+- SLURM database queries may be slow for old data
+
+**Rate Limiting:**
+
+- Waldur may rate limit API calls during bulk submission
+- Consider adding delays between months if encountering 429 errors
+
+**Database Impact:**
+
+- Large historical queries may impact SLURM cluster performance
+- Consider running during maintenance windows for multi-year loads
+
+#### Validation and Verification
+
+**Verify Data in Waldur:**
+
+1. Check resource usage in Waldur marketplace
+2. Verify billing calculations include historical periods
+3. Confirm user-level usage attribution is correct
+
+**Cross-Reference with SLURM:**
+
+```bash
+# Verify SLURM usage data matches what was submitted
+sacct --accounts=project1_allocation \
+      --starttime=2024-01-01 \
+      --endtime=2024-01-31 \
+      --allocations \
+      --allusers \
+      --format=Account,ReqTRES,Elapsed,User
+```
+
+### Integration Notes
 
 This setup is designed for **usage reporting only**. For a complete Waldur Site Agent deployment that includes:
 
@@ -280,3 +490,9 @@ This setup is designed for **usage reporting only**. For a complete Waldur Site 
 - Event processing
 
 You would need additional agent instances or a multi-mode configuration with different service files for each mode.
+
+**Historical Loading Integration:**
+
+- Historical loading is a separate command, not part of regular agent operation
+- Run historical loads **before** starting regular usage reporting to avoid conflicts
+- Historical data submission requires staff tokens, regular reporting uses offering tokens

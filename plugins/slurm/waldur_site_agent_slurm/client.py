@@ -170,6 +170,36 @@ class SlurmClient(clients.BaseClient):
             SlurmReportLine(line, self.slurm_tres) for line in output.splitlines() if "|" in line
         ]
 
+    def get_historical_usage_report(
+        self, resource_ids: list[str], year: int, month: int
+    ) -> list[SlurmReportLine]:
+        """Generates per-user usage report for the accounts for a specific month.
+
+        Args:
+            resource_ids: List of SLURM account names to query
+            year: Year to query (e.g., 2024)
+            month: Month to query (1-12)
+
+        Returns:
+            List of SlurmReportLine objects containing usage data for the specified month
+        """
+        month_start, month_end = backend_utils.format_month_period(year, month)
+
+        args = [
+            "--noconvert",
+            "--truncate",
+            "--allocations",
+            "--allusers",
+            f"--starttime={month_start}",
+            f"--endtime={month_end}",
+            f"--accounts={','.join(resource_ids)}",
+            "--format=Account,ReqTRES,Elapsed,User",
+        ]
+        output = self._execute_command(args, "sacct", immediate=False)
+        return [
+            SlurmReportLine(line, self.slurm_tres) for line in output.splitlines() if "|" in line
+        ]
+
     def get_resource_limits(self, resource_id: str) -> dict[str, int]:
         """Returns limits for the account."""
         args = [
