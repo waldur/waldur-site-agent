@@ -1589,7 +1589,6 @@ name = "waldur-site-agent"
 version = "0.7.0"
 source = { editable = "." }
 dependencies = [
-    { name = "boto3" },
     { name = "mypy" },
     { name = "paho-mqtt" },
     { name = "pyyaml" },
@@ -1598,7 +1597,6 @@ dependencies = [
     { name = "stomp-py" },
     { name = "types-pyyaml" },
     { name = "waldur-api-client" },
-    { name = "waldur-site-agent-croit-s3" },
 ]
 
 [package.dev-dependencies]
@@ -1614,7 +1612,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "boto3", specifier = ">=1.40.71" },
     { name = "importlib-metadata", marker = "python_full_version == '3.9.*'", specifier = ">=8.7.0" },
     { name = "mypy", specifier = ">=1.18.2" },
     { name = "paho-mqtt", specifier = "==2.1.0" },
@@ -1624,7 +1621,6 @@ requires-dist = [
     { name = "stomp-py", specifier = ">=8.2.0,<9" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20240311,<7" },
     { name = "waldur-api-client", specifier = "==7.8.5" },
-    { name = "waldur-site-agent-croit-s3", editable = "plugins/croit-s3" },
 ]
 
 [package.metadata.requires-dev]
@@ -1654,6 +1650,7 @@ name = "waldur-site-agent-croit-s3"
 version = "0.1.0"
 source = { editable = "plugins/croit-s3" }
 dependencies = [
+    { name = "boto3" },
     { name = "requests" },
     { name = "urllib3" },
     { name = "waldur-site-agent" },
@@ -1661,6 +1658,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "boto3", specifier = ">=1.40.71" },
     { name = "requests", specifier = ">=2.25.0" },
     { name = "urllib3", specifier = ">=1.26.0" },
     { name = "waldur-site-agent", editable = "." },
