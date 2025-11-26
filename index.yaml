@@ -2,8 +2,31 @@ apiVersion: v1
 entries:
   waldur-site-agent:
   - apiVersion: v2
+    appVersion: 0.7.9
+    created: "2025-11-26T13:08:54.828189013Z"
+    description: A Helm chart for Waldur Site Agent - a stateless application that
+      synchronizes data between Waldur and service provider backends
+    digest: c06a337f65fe2aeb5c7e34e905a18f46e559dab51714c834a3ccfa8783de3b27
+    home: https://waldur.com/
+    keywords:
+    - waldur
+    - site-agent
+    - slurm
+    - moab
+    - mup
+    - synchronization
+    maintainers:
+    - email: info@waldur.com
+      name: Waldur Team
+    name: waldur-site-agent
+    sources:
+    - https://github.com/waldur/waldur-site-agent
+    urls:
+    - charts/waldur-site-agent-0.7.9.tgz
+    version: 0.7.9
+  - apiVersion: v2
     appVersion: 0.7.8
-    created: "2025-10-31T11:12:08.458222522Z"
+    created: "2025-11-26T13:08:54.812678448Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: a1748a967d16b01fd1fd586da7858d138b0366ea1148fe5d21bcaa2be74d07e6
@@ -26,7 +49,7 @@ entries:
     version: 0.7.8
   - apiVersion: v2
     appVersion: 0.7.7
-    created: "2025-10-31T11:12:08.45163616Z"
+    created: "2025-11-26T13:08:54.795321323Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: 30129aa5ff468e5a43571400f1750b40045a19e633de6bea68ae8a7ba86c45f9
@@ -49,7 +72,7 @@ entries:
     version: 0.7.7
   - apiVersion: v2
     appVersion: 0.7.6
-    created: "2025-10-31T11:12:08.444058859Z"
+    created: "2025-11-26T13:08:54.781458297Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: 9214dd8ea564d78e744d1b86d4be7d5274317aded9fdbe1762e3ab8b09e7e792
@@ -70,4 +93,4 @@ entries:
     urls:
     - charts/waldur-site-agent-0.7.6.tgz
     version: 0.7.6
-generated: "2025-10-31T11:12:08.437144117Z"
+generated: "2025-11-26T13:08:54.774973477Z"
