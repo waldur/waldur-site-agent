@@ -122,9 +122,14 @@ class ServiceAccountMessageTest(TestCase):
             self.service_account.username, self.waldur_resource.project_uuid.hex
         )
 
-        mock_backend.remove_users_from_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, {self.service_account.username}
-        )
+        # Check that remove_users_from_resource was called with the resource and username
+        mock_backend.remove_users_from_resource.assert_called_once()
+        args, kwargs = mock_backend.remove_users_from_resource.call_args
+        assert len(args) == 2
+        # Check that the resource has the expected backend_id
+        assert args[0].backend_id == self.waldur_resource.backend_id
+        # Check that the username set is correct
+        assert args[1] == {self.service_account.username}
 
     @mock.patch(
         "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_register_service"
@@ -417,10 +422,10 @@ class ServiceAccountMessageTest(TestCase):
         processor._sync_resource_service_accounts(self.waldur_resource)
 
         mock_backend.add_users_to_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, {"svc-active-account"}
+            self.waldur_resource, {"svc-active-account"}
         )
         mock_backend.remove_users_from_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, {"svc-closed-account"}
+            self.waldur_resource, {"svc-closed-account"}
         )
 
     @mock.patch("waldur_site_agent.common.processors.utils.get_backend_for_offering")
@@ -477,9 +482,5 @@ class ServiceAccountMessageTest(TestCase):
         processor = OfferingMembershipProcessor(self.offering, self.waldur_rest_client)
         processor._sync_resource_service_accounts(self.waldur_resource)
 
-        mock_backend.add_users_to_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, set()
-        )
-        mock_backend.remove_users_from_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, set()
-        )
+        mock_backend.add_users_to_resource.assert_called_once_with(self.waldur_resource, set())
+        mock_backend.remove_users_from_resource.assert_called_once_with(self.waldur_resource, set())

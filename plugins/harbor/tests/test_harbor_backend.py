@@ -310,16 +310,16 @@ class TestHarborBackend:
         assert metadata["storage_used_bytes"] == 5368709120
         assert "harbor_url" in metadata
 
-    def test_add_users_to_resource_noop(self, harbor_backend):
+    def test_add_users_to_resource_noop(self, harbor_backend, waldur_resource):
         """Test adding users (no-op for Harbor)."""
         result = harbor_backend.add_users_to_resource(
-            "test-project", {"user1", "user2"}
+            waldur_resource, {"user1", "user2"}
         )
         assert result == set()
 
-    def test_remove_users_from_resource_noop(self, harbor_backend):
+    def test_remove_users_from_resource_noop(self, harbor_backend, waldur_resource):
         """Test removing users (no-op for Harbor)."""
         result = harbor_backend.remove_users_from_resource(
-            "test-project", {"user1", "user2"}
+            waldur_resource, {"user1", "user2"}
         )
         assert result == []

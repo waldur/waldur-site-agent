@@ -862,13 +862,14 @@ class MUPBackend(backends.BaseBackend):
         return None
 
     def add_users_to_resource(
-        self, resource_backend_id: str, user_ids: set[str], **_kwargs: dict
+        self, waldur_resource: WaldurResource, user_ids: set[str], **_kwargs: dict
     ) -> set[str]:
         """Add specified users to the MUP project.
 
         Note: Most users are already added during resource creation. This method
         handles additional users that may be added later.
         """
+        resource_backend_id = waldur_resource.backend_id
         logger.info(
             "Adding users to MUP project for resource %s: %s",
             resource_backend_id,

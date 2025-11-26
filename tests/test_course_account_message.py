@@ -124,9 +124,14 @@ class CourseAccountMessageTest(TestCase):
             self.course_account.username, self.waldur_resource.project_uuid.hex
         )
 
-        mock_backend.remove_users_from_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, {self.course_account.username}
-        )
+        # Check that remove_users_from_resource was called with the resource and username
+        mock_backend.remove_users_from_resource.assert_called_once()
+        args, kwargs = mock_backend.remove_users_from_resource.call_args
+        assert len(args) == 2
+        # Check that the resource has the expected backend_id
+        assert args[0].backend_id == self.waldur_resource.backend_id
+        # Check that the username set is correct
+        assert args[1] == {self.course_account.username}
 
     @mock.patch(
         "waldur_site_agent.event_processing.handlers.agent_identity_management.marketplace_site_agent_identities_register_service"
@@ -422,12 +427,17 @@ class CourseAccountMessageTest(TestCase):
         processor = OfferingMembershipProcessor(self.offering, self.waldur_rest_client)
         processor._sync_resource_course_accounts(self.waldur_resource)
 
-        mock_backend.add_users_to_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, {"course-active-account"}
-        )
-        mock_backend.remove_users_from_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, {"course-closed-account"}
-        )
+        # Check that add_users_to_resource was called correctly
+        mock_backend.add_users_to_resource.assert_called_once()
+        add_args, _ = mock_backend.add_users_to_resource.call_args
+        assert add_args[0].backend_id == self.waldur_resource.backend_id
+        assert add_args[1] == {"course-active-account"}
+
+        # Check that remove_users_from_resource was called correctly
+        mock_backend.remove_users_from_resource.assert_called_once()
+        remove_args, _ = mock_backend.remove_users_from_resource.call_args
+        assert remove_args[0].backend_id == self.waldur_resource.backend_id
+        assert remove_args[1] == {"course-closed-account"}
 
     @mock.patch("waldur_site_agent.common.processors.utils.get_backend_for_offering")
     def test_sync_resource_course_accounts_no_service_provider(self, mock_get_backend_for_offering):
@@ -483,9 +493,14 @@ class CourseAccountMessageTest(TestCase):
         processor = OfferingMembershipProcessor(self.offering, self.waldur_rest_client)
         processor._sync_resource_course_accounts(self.waldur_resource)
 
-        mock_backend.add_users_to_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, set()
-        )
-        mock_backend.remove_users_from_resource.assert_called_once_with(
-            self.waldur_resource.backend_id, set()
-        )
+        # Check that add_users_to_resource was called correctly with empty set
+        mock_backend.add_users_to_resource.assert_called_once()
+        add_args, _ = mock_backend.add_users_to_resource.call_args
+        assert add_args[0].backend_id == self.waldur_resource.backend_id
+        assert add_args[1] == set()
+
+        # Check that remove_users_from_resource was called correctly with empty set
+        mock_backend.remove_users_from_resource.assert_called_once()
+        remove_args, _ = mock_backend.remove_users_from_resource.call_args
+        assert remove_args[0].backend_id == self.waldur_resource.backend_id
+        assert remove_args[1] == set()
