@@ -10,6 +10,7 @@ class ClientResource:
     name: str = ""
     description: str = ""
     organization: str = ""
+    backend_id: str = ""
 
 
 @dataclass

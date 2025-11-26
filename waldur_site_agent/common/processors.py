@@ -617,7 +617,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             return
 
         self.resource_backend.add_users_to_resource(
-            waldur_resource.backend_id,
+            waldur_resource,
             offering_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
@@ -951,9 +951,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     if waldur_resource.restrict_member_access:
                         logger.info("The resource is restricted, skipping new role.")
                         continue
-                    self.resource_backend.add_user(waldur_resource.backend_id, username)
+                    self.resource_backend.add_user(waldur_resource, username)
                 else:
-                    self.resource_backend.remove_user(waldur_resource.backend_id, username)
+                    self.resource_backend.remove_user(waldur_resource, username)
             except Exception as exc:
                 logger.error(
                     "Unable to add user %s to the resource %s, error: %s",
@@ -1112,19 +1112,17 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 "Resource is restricted for members, removing all the existing associations"
             )
 
-            self.resource_backend.remove_users_from_resource(
-                waldur_resource.backend_id, existing_usernames
-            )
+            self.resource_backend.remove_users_from_resource(waldur_resource, existing_usernames)
             return set()
 
         added_usernames = self.resource_backend.add_users_to_resource(
-            waldur_resource.backend_id,
+            waldur_resource,
             new_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
         )
 
         self.resource_backend.remove_users_from_resource(
-            waldur_resource.backend_id,
+            waldur_resource,
             stale_usernames,
         )
 
@@ -1250,16 +1248,14 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             for account in service_accounts
             if account.username and account.state == ServiceAccountState.OK
         }
-        self.resource_backend.add_users_to_resource(waldur_resource.backend_id, usernames_active)
+        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
 
         usernames_closed = {
             account.username
             for account in service_accounts
             if account.username and account.state == ServiceAccountState.CLOSED
         }
-        self.resource_backend.remove_users_from_resource(
-            waldur_resource.backend_id, usernames_closed
-        )
+        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
 
     def _sync_resource_course_accounts(self, waldur_resource: WaldurResource) -> None:
         """Sync course accounts between Waldur and the backend resource."""
@@ -1283,16 +1279,14 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             for account in course_accounts
             if account.username and account.state == ServiceAccountState.OK
         }
-        self.resource_backend.add_users_to_resource(waldur_resource.backend_id, usernames_active)
+        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
 
         usernames_closed = {
             account.username
             for account in course_accounts
             if account.username and account.state == ServiceAccountState.CLOSED
         }
-        self.resource_backend.remove_users_from_resource(
-            waldur_resource.backend_id, usernames_closed
-        )
+        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
 
     def _process_resources(
         self,
@@ -1375,7 +1369,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         resources = self._get_waldur_resources(account.project_uuid.hex)
         for resource in resources:
             try:
-                self.resource_backend.add_users_to_resource(resource.backend_id, {account_username})
+                self.resource_backend.add_users_to_resource(resource, {account_username})
             except BackendError as e:
                 logger.error(
                     "Unable to add the account %s to resource %s, reason: %s",
@@ -1389,9 +1383,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         resources = self._get_waldur_resources(project_uuid)
         for resource in resources:
             try:
-                self.resource_backend.remove_users_from_resource(
-                    resource.backend_id, {account_username}
-                )
+                self.resource_backend.remove_users_from_resource(resource, {account_username})
             except BackendError as e:
                 logger.error(
                     "Unable to remove the account %s from resource %s, reason: %s",

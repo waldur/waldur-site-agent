@@ -186,10 +186,10 @@ class SlurmBackend(backends.BaseBackend):
         return allocation_limits, waldur_resource_limits
 
     def add_users_to_resource(
-        self, resource_backend_id: str, user_ids: set[str], **kwargs: dict
+        self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
     ) -> set[str]:
         """Add specified users to the allocations on the SLURM cluster."""
-        added_users = super().add_users_to_resource(resource_backend_id, user_ids)
+        added_users = super().add_users_to_resource(waldur_resource, user_ids)
 
         if self.backend_settings.get("enable_user_homedir_account_creation", True):
             umask: str = str(kwargs.get("homedir_umask", "0700"))

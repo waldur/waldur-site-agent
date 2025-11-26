@@ -1,0 +1,50 @@
+# Basic Rancher Plugin Configuration (without Keycloak)
+# This creates one Rancher project per Waldur project without OIDC group integration
+
+# Waldur API configuration
+waldur:
+  api_url: "https://waldur.example.com/api/"
+  token: "your-waldur-api-token-here"
+
+offerings:
+  - name: "rancher-projects"
+    uuid: "12345678-1234-5678-9abc-123456789012"
+
+    # Backend type - must be 'rancher'
+    backend_type: "rancher"
+
+    # Backend configuration
+    backend:
+      # Rancher server configuration (matches waldur-mastermind format)
+      backend_url: "https://rancher.example.com"
+      username: "your-rancher-access-key"
+      password: "your-rancher-secret-key"
+      cluster_id: "c-m-1234abcd"  # Just the cluster ID, not project reference
+      verify_cert: true
+
+      # Project naming configuration
+      project_prefix: "waldur-"
+      default_role: "project-member"
+
+      # Keycloak disabled
+      keycloak_enabled: false
+
+    # Component definitions for resource management
+    components:
+      cpu:
+        type: "cpu"
+        name: "CPU"
+        measured_unit: "cores"
+        billing_type: "limit"
+
+      memory:
+        type: "ram"
+        name: "RAM"
+        measured_unit: "GB"
+        billing_type: "limit"
+
+      storage:
+        type: "storage"
+        name: "Storage"
+        measured_unit: "GB"
+        billing_type: "limit"

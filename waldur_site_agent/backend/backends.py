@@ -306,10 +306,11 @@ class BaseBackend(ABC):
         del resource, waldur_resource, user_context  # Not used in base implementation
 
     def add_users_to_resource(
-        self, resource_backend_id: str, user_ids: set[str], **kwargs: dict
+        self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
     ) -> set[str]:
         """Add specified users to the resource on the backend."""
         del kwargs
+        resource_backend_id = waldur_resource.backend_id
         if len(user_ids) < 1:
             logger.info("No new users to add")
             return set()
@@ -323,7 +324,7 @@ class BaseBackend(ABC):
         added_users = set()
         for username in user_ids:
             try:
-                succeeded = self.add_user(resource_backend_id, username)
+                succeeded = self.add_user(waldur_resource, username)
                 if succeeded:
                     added_users.add(username)
             except BackendError as e:
@@ -336,8 +337,9 @@ class BaseBackend(ABC):
 
         return added_users
 
-    def add_user(self, resource_backend_id: str, username: str) -> bool:
+    def add_user(self, waldur_resource: WaldurResource, username: str) -> bool:
         """Add association between user and backend resource if it doesn't exists."""
+        resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             message = "Empty backend ID for resource"
             raise BackendError(message)
@@ -364,9 +366,10 @@ class BaseBackend(ABC):
         return True
 
     def remove_users_from_resource(
-        self, resource_backend_id: str, usernames: set[str]
+        self, waldur_resource: WaldurResource, usernames: set[str]
     ) -> list[str]:
         """Remove specified users from the resource on the backend."""
+        resource_backend_id = waldur_resource.backend_id
         if len(usernames) < 1:
             logger.info("No users to remove")
             return []
@@ -380,7 +383,7 @@ class BaseBackend(ABC):
         removed_users = []
         for username in usernames:
             try:
-                succeeded = self.remove_user(resource_backend_id, username)
+                succeeded = self.remove_user(waldur_resource, username)
                 if succeeded:
                     removed_users.append(username)
             except BackendError as e:
@@ -396,8 +399,9 @@ class BaseBackend(ABC):
         """Perform actions before removing the user from the resource."""
         del resource_backend_id, username
 
-    def remove_user(self, resource_backend_id: str, username: str) -> bool:
+    def remove_user(self, waldur_resource: WaldurResource, username: str) -> bool:
         """Delete association between user and backend resource if it exists."""
+        resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             message = "Empty resource backend ID"
             raise BackendError(message)
@@ -508,10 +512,10 @@ class UnknownBackend(BaseBackend):
         return {}
 
     def add_users_to_resource(
-        self, resource_backend_id: str, user_ids: set[str], **kwargs: dict
+        self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
     ) -> set[str]:
         """Placeholder."""
-        del kwargs, resource_backend_id
+        del kwargs, waldur_resource
         return user_ids
 
     def set_resource_limits(self, _: str, limits: dict[str, int]) -> None:

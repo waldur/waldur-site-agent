@@ -540,9 +540,12 @@ class MUPBackendTest(unittest.TestCase):
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
         user_ids = {"newuser@example.com"}
-        resource_backend_id = "1"
+        # Set backend_id on the resource for the test
+        self.sample_waldur_resource.backend_id = "1"
 
-        added_users = backend.add_users_to_resource(resource_backend_id, user_ids)
+        added_users = backend.add_users_to_resource(
+            self.sample_waldur_resource, user_ids
+        )
 
         assert added_users == user_ids
         mock_client.add_project_member.assert_called_once()

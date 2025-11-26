@@ -1,0 +1,59 @@
+# Rancher Plugin Configuration Example
+# This configuration shows how to set up the Rancher plugin for Waldur Site Agent
+# The plugin creates one Rancher project per Waldur resource with optional Keycloak integration
+
+# Waldur API configuration
+waldur:
+  api_url: "https://waldur.example.com/api/"
+  token: "your-waldur-api-token-here"
+
+offerings:
+  - name: "rancher-kubernetes"
+    uuid: "12345678-1234-5678-9abc-123456789012"
+
+    # Backend type - must be 'rancher'
+    backend_type: "rancher"
+
+    # Backend configuration
+    backend:
+      # Rancher server configuration (matches waldur-mastermind format)
+      backend_url: "https://rancher.example.com"  # Base Rancher URL (without /v3)
+      username: "your-rancher-access-key"         # Rancher access key (called username in waldur-mastermind)
+      password: "your-rancher-secret-key"         # Rancher secret key
+      cluster_id: "c-m-1234abcd"  # Just the cluster ID, not project reference
+      verify_cert: true
+
+      # Project naming configuration
+      # Each Waldur project will create a Rancher project named: {project_prefix}{waldur_project_slug}
+      project_prefix: "waldur-"
+      default_role: "project-member"  # Default role for users in Rancher projects
+
+      # Keycloak integration (optional) - matches waldur-mastermind format
+      keycloak_enabled: true
+      keycloak_role_name: "project-member"  # Role name for Keycloak group: project_{uuid}_{role_name}
+      keycloak_url: "https://keycloak.example.com/auth/"
+      keycloak_realm: "waldur"
+      keycloak_user_realm: "master"
+      keycloak_username: "keycloak-admin"
+      keycloak_password: "your-keycloak-admin-password"
+      keycloak_ssl_verify: true
+
+    # Component definitions for resource management
+    components:
+      cpu:
+        type: "cpu"
+        name: "CPU"
+        measured_unit: "cores"
+        billing_type: "limit"
+
+      memory:
+        type: "ram"
+        name: "RAM"
+        measured_unit: "GB"
+        billing_type: "limit"
+
+      storage:
+        type: "storage"
+        name: "Storage"
+        measured_unit: "GB"
+        billing_type: "limit"

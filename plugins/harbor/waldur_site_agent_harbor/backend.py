@@ -421,7 +421,7 @@ class HarborBackend(backends.BaseBackend):
         return self.client.get_resource_limits(resource_backend_id)
 
     def add_users_to_resource(
-        self, resource_backend_id: str, user_ids: set[str], **kwargs: dict
+        self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
     ) -> set[str]:
         """Add users to Harbor project (not directly supported).
 
@@ -429,13 +429,14 @@ class HarborBackend(backends.BaseBackend):
         user associations. This method is a no-op for Harbor.
 
         Args:
-            resource_backend_id: Harbor project name
+            waldur_resource: Waldur resource containing project information
             user_ids: Set of usernames to add
             **kwargs: Additional arguments
 
         Returns:
             Empty set (no users added individually)
         """
+        resource_backend_id = waldur_resource.backend_id
         logger.info(
             "User management is handled through OIDC groups for Harbor project %s",
             resource_backend_id,
