@@ -1104,6 +1104,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-asyncio"
+version = "0.23.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/de/b4/0b378b7bf26a8ae161c3890c0b48a91a04106c5713ce81b4b080ea2f4f18/pytest_asyncio-0.23.8.tar.gz", hash = "sha256:759b10b33a6dc61cce40a8bd5205e302978bbbcc00e279a8b61d9a6a3c82e4d3", size = 46920, upload-time = "2024-07-17T17:39:34.617Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ee/82/62e2d63639ecb0fbe8a7ee59ef0bc69a4669ec50f6d3459f74ad4e4189a2/pytest_asyncio-0.23.8-py3-none-any.whl", hash = "sha256:50265d892689a5faefb84df80819d1ecef566eb3549cf915dfb33569359d1ce2", size = 17663, upload-time = "2024-07-17T17:39:32.478Z" },
+]
+
+[[package]]
 name = "pytest-cov"
 version = "3.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1356,6 +1368,23 @@ wheels = [
 ]
 
 [[package]]
+name = "slurm-emulator"
+version = "0.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "pyyaml" },
+    { name = "uvicorn" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/27/1978df57f5bdf358675d07078c7a929e372c8294e7275f9a993dc5347ff3/slurm_emulator-0.0.1.tar.gz", hash = "sha256:b7a522a5e32b01c5b1b930e506404bcbfaa58d80cc5b192c242f28299575b1d5", size = 68238, upload-time = "2025-11-06T21:57:42.069Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/55/04/1526caf1d7c8f1d1e1773e5271cae3697e270116ea5c583266a351d6c634/slurm_emulator-0.0.1-py3-none-any.whl", hash = "sha256:d8f3e8233ed0c15f3a8a10259ce25acc528dbea779f173c008c07767571bf653", size = 78407, upload-time = "2025-11-06T21:57:40.2Z" },
+]
+
+[[package]]
 name = "sniffio"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1572,16 +1601,16 @@ wheels = [
 
 [[package]]
 name = "waldur-api-client"
-version = "7.8.5"
+version = "7.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "httpx" },
     { name = "python-dateutil" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9d/c0/8eef12ff14b150a8d9d3591e926cb5620691842cefc49479ed0dca6af0db/waldur_api_client-7.8.5.tar.gz", hash = "sha256:dc76eb2d60a9f90cc166bcc0488926af7dc1d7d7437c0c46c0460992396369d6", size = 1016858, upload-time = "2025-10-26T21:03:32.495Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/37/4b599dfb6b017f2cca712ef1afaabe38fd6f0f6fa3d5f53d4a3684143d31/waldur_api_client-7.9.0.tar.gz", hash = "sha256:dc2a6055597c09af3e78d467958df9383dc52616a84638fbf23b1455e8986ea5", size = 1133391, upload-time = "2025-11-26T17:05:11.062Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6f/29/76f6559a51ce447179fc66e48bea4e7351136a403de7f73551704aafce1b/waldur_api_client-7.8.5-py3-none-any.whl", hash = "sha256:473a2c87db8e11ebf7f8546be72aecc266e3f1f007daad69593aefad77adc12f", size = 3864636, upload-time = "2025-10-26T21:03:30.838Z" },
+    { url = "https://files.pythonhosted.org/packages/68/67/76c4fc7ef66429c7c085a1311a8a04b87a5f904bc65be3afedfb4075ea90/waldur_api_client-7.9.0-py3-none-any.whl", hash = "sha256:43eaf7326a1588b74768187a282e6bc0de896dd40397d288eb33e7b4fda17e75", size = 4216500, upload-time = "2025-11-26T17:05:09.058Z" },
 ]
 
 [[package]]
@@ -1620,7 +1649,7 @@ requires-dist = [
     { name = "sentry-sdk", specifier = "==2.3.1" },
     { name = "stomp-py", specifier = ">=8.2.0,<9" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20240311,<7" },
-    { name = "waldur-api-client", specifier = "==7.8.5" },
+    { name = "waldur-api-client", specifier = "==7.9.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -1777,8 +1806,22 @@ dependencies = [
     { name = "waldur-site-agent" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "slurm-emulator" },
+]
+
 [package.metadata]
 requires-dist = [{ name = "waldur-site-agent", editable = "." }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=7.1.0" },
+    { name = "pytest-asyncio", specifier = ">=0.21.0" },
+    { name = "slurm-emulator", specifier = ">=0.0.1" },
+]
 
 [[package]]
 name = "watchfiles"

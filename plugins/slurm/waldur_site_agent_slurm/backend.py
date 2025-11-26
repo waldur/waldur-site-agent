@@ -320,6 +320,46 @@ class SlurmBackend(backends.BaseBackend):
 
         return report_converted
 
+    def get_historical_usage_report(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Generate historical usage report for a specific month.
+
+        Args:
+            resource_backend_ids: List of SLURM account names to query
+            year: Year to query (e.g., 2024)
+            month: Month to query (1-12)
+
+        Returns:
+            Dictionary with same structure as _get_usage_report() but for historical data
+        """
+        report: dict[str, dict[str, dict[str, int]]] = {}
+        lines = self.client.get_historical_usage_report(resource_backend_ids, year, month)
+
+        for line in lines:
+            report.setdefault(line.account, {}).setdefault(line.user, {})
+            tres_usage = line.tres_usage
+            user_usage_existing = report[line.account][line.user]
+            user_usage_new = backend_utils.sum_dicts([user_usage_existing, tres_usage])
+            report[line.account][line.user] = user_usage_new
+
+        for account_usage in report.values():
+            usages_per_user = list(account_usage.values())
+            total = backend_utils.sum_dicts(usages_per_user)
+            account_usage["TOTAL_ACCOUNT_USAGE"] = total
+
+        # Convert SLURM units to Waldur ones
+        report_converted: dict[str, dict[str, dict[str, int]]] = {}
+        for account, account_usage in report.items():
+            report_converted[account] = {}
+            for username, usage_dict in account_usage.items():
+                converted_usage_dict = utils.convert_slurm_units_to_waldur_ones(
+                    self.backend_components, usage_dict
+                )
+                report_converted[account][username] = converted_usage_dict
+
+        return report_converted
+
     def list_active_user_jobs(self, account: str, user: str) -> list[str]:
         """List active jobs for account and user."""
         logger.info("Listing jobs for account %s and user %s", account, user)

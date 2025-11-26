@@ -46,8 +46,8 @@ uv sync --all-packages
 #### Required Rancher Credentials
 
 1. **Rancher Server**: Accessible Rancher instance
-1. **API Access**: Unscoped API token with cluster access
-1. **Cluster ID**: Target cluster ID (format: `c-xxxxx`, not `c-xxxxx:p-xxxxx`)
+2. **API Access**: Unscoped API token with cluster access
+3. **Cluster ID**: Target cluster ID (format: `c-xxxxx`, not `c-xxxxx:p-xxxxx`)
 
 #### Creating Rancher API Tokens
 
@@ -360,6 +360,7 @@ The plugin follows the waldur-mastermind Rancher plugin naming patterns:
 - **Keycloak Child Group**: `project_{project_uuid_hex}_{role_name}` (project + role access)
 
 Where:
+
 - `{project_prefix}` is configurable (default: `waldur-`)
 - `{waldur_resource_slug}` is the Waldur resource slug (more specific than project slug)
 - `{cluster_uuid_hex}` is the cluster UUID in hex format
@@ -377,11 +378,14 @@ The plugin supports the following resource components (all with `billing_type: "
 ### Accounting Model
 
 **Project Limits (Quotas)**:
+
 - Only **CPU and memory limits** are set as Rancher project quotas
 - Storage is not enforced as quotas (reported only)
 
 **Usage Reporting** (for all components):
+
 All components report **actual allocated resources**:
+
 - **CPU**: Sum of all container CPU requests in the project
 - **Memory**: Sum of all container memory requests in the project
 - **Storage**: Sum of all persistent volume claims in the project
@@ -464,6 +468,7 @@ reporting_backend: "rancher"
 ```
 
 **Solutions**:
+
 - Verify access key and secret key are correct
 - Ensure token is **unscoped** (not cluster-specific)
 - Check token hasn't expired
@@ -476,6 +481,7 @@ reporting_backend: "rancher"
 ```
 
 **Solutions**:
+
 - Verify Keycloak URL (try with/without `/auth/` suffix)
 - Check realm name is correct
 - Ensure user exists in the specified realm
@@ -487,6 +493,7 @@ reporting_backend: "rancher"
 ```
 
 **Solution**: Grant user `manage-users` role:
+
 - **Realm**: Select target realm
 - **Users** → Your service user
 - **Role Mappings** → **Client Roles** → `realm-management`
@@ -499,6 +506,7 @@ Cluster not found or invalid cluster ID
 ```
 
 **Solution**: Use correct format:
+
 - ✅ **Correct**: `c-j8276` (cluster ID only)
 - ❌ **Incorrect**: `c-j8276:p-xxxxx` (project reference)
 
@@ -538,6 +546,7 @@ uv run waldur_site_diagnostics -c your-config.yaml
 ```
 
 This will test:
+
 - Rancher API connectivity and authentication
 - Keycloak connectivity and permissions (if enabled)
 - Project listing capabilities
