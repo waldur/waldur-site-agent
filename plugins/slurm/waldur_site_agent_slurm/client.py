@@ -134,6 +134,7 @@ class SlurmClient(clients.BaseClient):
                 username,
                 f"account={resource_id}",
                 f"DefaultAccount={default_account}",
+                "Share=parent",  # Inherits fairshare value from the parent account
             ]
         )
 
