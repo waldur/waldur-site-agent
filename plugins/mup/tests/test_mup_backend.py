@@ -64,8 +64,10 @@ class MUPBackendTest(unittest.TestCase):
 
         self.sample_waldur_resource = WaldurResource(
             uuid=self.resource_uuid,
+            slug=f"resource-{self.resource_uuid.hex[:8]}",
             name="test-resource",
             project_uuid=self.project_uuid,
+            project_slug=f"project-{self.project_uuid.hex[:8]}",
             project_name="Test Project",
             offering_uuid=uuid.uuid4(),
             offering_name="MUP Offering",
@@ -370,6 +372,7 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.get_users.return_value = []  # No existing users
         mock_client.create_user_request.return_value = {"id": 1}
         mock_client.get_projects.return_value = [self.sample_mup_project]
+        mock_client.get_resource.return_value = None  # Resource doesn't exist initially
         mock_client.create_allocation.return_value = self.sample_mup_allocation
         mock_client.add_project_member.return_value = {"status": "success"}
 
@@ -379,7 +382,7 @@ class MUPBackendTest(unittest.TestCase):
         )
 
         assert isinstance(result, BackendResourceInfo)
-        assert result.backend_id == "1"
+        assert result.backend_id == f"alloc_{self.sample_waldur_resource.slug}"
         assert result.limits["cpu"] == 10
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
@@ -407,6 +410,7 @@ class MUPBackendTest(unittest.TestCase):
         inactive_project = self.sample_mup_project.copy()
         inactive_project["active"] = False
         mock_client.get_projects.return_value = [inactive_project]
+        mock_client.get_resource.return_value = None  # Resource doesn't exist initially
         mock_client.activate_project.return_value = {"status": "activated"}
         mock_client.create_allocation.return_value = self.sample_mup_allocation
         mock_client.add_project_member.return_value = {"status": "success"}
@@ -426,6 +430,7 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.get_users.return_value = []  # No existing users
         mock_client.create_user_request.return_value = {"id": 1}
         mock_client.get_projects.return_value = []  # No existing project
+        mock_client.get_resource.return_value = None  # Resource doesn't exist initially
         mock_client.create_project.return_value = self.sample_mup_project
         mock_client.create_allocation.return_value = self.sample_mup_allocation
         mock_client.add_project_member.return_value = {"status": "success"}
@@ -452,6 +457,7 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.get_users.return_value = []
         mock_client.create_user_request.return_value = {"id": 1}
         mock_client.get_projects.return_value = []  # No existing project
+        mock_client.get_resource.return_value = None  # Resource doesn't exist initially
         mock_client.create_project.return_value = self.sample_mup_project
         mock_client.create_allocation.return_value = self.sample_mup_allocation
 

@@ -325,15 +325,15 @@ class MUPClient(BaseClient):
 
     def create_resource(
         self,
-        resource_id: str,
-        _description: str,
-        _organization: str,
-        _parent_name: Optional[str] = None,
+        name: str,
+        description: str,
+        organization: str,
+        parent_name: Optional[str] = None,
     ) -> str:
         """Create account in MUP - creates a project."""
         # This is handled by the backend create_resource method
         # Return the name to satisfy interface
-        return resource_id
+        return name
 
     def delete_resource(self, name: str) -> str:
         """Delete account from MUP - deactivate project."""

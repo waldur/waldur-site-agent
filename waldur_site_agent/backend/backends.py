@@ -222,22 +222,12 @@ class BaseBackend(ABC):
             user_context: Optional user context including team members and offering users
         """
         logger.info("Creating resource in the backend")
-        # Note: user_context is available for backends that need it during creation
-        # Actions prior to resource creation
-        self._pre_create_resource(waldur_resource, user_context)
 
-        # Create resource in the backend
-        backend_resource_id = self._create_resource_in_backend(waldur_resource)
+        # Generate backend ID
+        resource_backend_id = self._get_resource_backend_id(waldur_resource.slug)
 
-        # # Setup limits
-        waldur_limits = self._setup_resource_limits(backend_resource_id, waldur_resource)
-        backend_resource_info = structures.BackendResourceInfo(
-            backend_id=backend_resource_id,
-            limits=waldur_limits,
-        )
-        # Actions after resource creation
-        self.post_create_resource(backend_resource_info, waldur_resource, user_context)
-        return backend_resource_info
+        # Create resource with generated ID
+        return self.create_resource_with_id(waldur_resource, resource_backend_id, user_context)
 
     @abstractmethod
     def _pre_create_resource(
@@ -245,35 +235,51 @@ class BaseBackend(ABC):
     ) -> None:
         """Perform actions prior to resource creation."""
 
-    def _create_resource_in_backend(self, waldur_resource: WaldurResource) -> str:
-        """Create backend resource with retry logic for name generation."""
+    def create_resource_with_id(
+        self,
+        waldur_resource: WaldurResource,
+        resource_backend_id: str,
+        user_context: Optional[dict] = None,
+    ) -> structures.BackendResourceInfo:
+        """Create resource with a specific backend ID.
+
+        This method creates a resource with a predetermined backend ID,
+        without any retry logic or uniqueness checking. The calling code
+        (typically the processor) is responsible for ensuring the ID is unique.
+
+        Args:
+            waldur_resource: Resource data from Waldur marketplace
+            resource_backend_id: The specific backend ID to use for the resource
+            user_context: Optional user context including team members and offering users
+
+        Returns:
+            Created backend resource information
+
+        Raises:
+            BackendError: If resource creation fails
+        """
+        logger.info("Creating resource in the backend with ID: %s", resource_backend_id)
+
+        # Actions prior to resource creation
+        self._pre_create_resource(waldur_resource, user_context)
+
+        # Create resource with specific ID
         project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
+        if not self._create_backend_resource(
+            resource_backend_id, waldur_resource.name, project_backend_id, project_backend_id
+        ):
+            raise BackendError(f"Failed to create backend resource with ID: {resource_backend_id}")
 
-        # Determine resource name generation strategy
-        use_project_slug = (
-            waldur_resource.offering_plugin_options.get("account_name_generation_policy")
-            == "project_slug"
+        # Setup limits
+        waldur_limits = self._setup_resource_limits(resource_backend_id, waldur_resource)
+        backend_resource_info = structures.BackendResourceInfo(
+            backend_id=resource_backend_id,
+            limits=waldur_limits,
         )
 
-        resource_base_id = (
-            waldur_resource.project_slug if use_project_slug else waldur_resource.slug
-        )
-        max_retries = 10 if use_project_slug else 1
-
-        # Try creating resource with generated IDs
-        for retry in range(max_retries):
-            resource_backend_id = self._get_resource_backend_id(resource_base_id)
-            if self._create_backend_resource(
-                resource_backend_id, waldur_resource.name, project_backend_id, project_backend_id
-            ):
-                return resource_backend_id
-
-            if use_project_slug:
-                resource_base_id = f"{waldur_resource.project_slug}-{retry}"
-
-        raise BackendError(
-            f"Unable to create an resource: {resource_backend_id} already exists in the cluster"
-        )
+        # Actions after resource creation
+        self.post_create_resource(backend_resource_info, waldur_resource, user_context)
+        return backend_resource_info
 
     def _setup_resource_limits(
         self, resource_backend_id: str, waldur_resource: WaldurResource

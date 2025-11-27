@@ -279,7 +279,7 @@ class CreationOrderTest(unittest.TestCase):
         offering_user_username = "test-offering-user-01"
 
         project_account = "hpc_project-1"
-        allocation_account = f"{project_account}-0"
+        allocation_account = project_account  # With project_slug policy, use project-based name
 
         # Setup common mocks
         setup_common_respx_mocks(
@@ -292,9 +292,7 @@ class CreationOrderTest(unittest.TestCase):
             allocation_account,
         )
         setup_order_respx_mocks(self.BASE_URL, self.order_uuid, self.waldur_order)
-        slurm_client = setup_slurm_client_mocks(
-            slurm_client_class, [None, None, None, "account", None]
-        )
+        slurm_client = setup_slurm_client_mocks(slurm_client_class)
 
         processor = OfferingOrderProcessor(OFFERING, self.mock_client)
         processor.process_offering()

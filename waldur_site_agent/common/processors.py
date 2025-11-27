@@ -44,6 +44,7 @@ from waldur_api_client.api.marketplace_orders import (
     marketplace_orders_set_state_erred,
 )
 from waldur_api_client.api.marketplace_provider_offerings import (
+    marketplace_provider_offerings_check_unique_backend_id,
     marketplace_provider_offerings_retrieve,
 )
 from waldur_api_client.api.marketplace_provider_resources import (
@@ -79,6 +80,7 @@ from waldur_api_client.models.backend_resource_request import BackendResourceReq
 from waldur_api_client.models.backend_resource_request_set_erred_request import (
     BackendResourceRequestSetErredRequest,
 )
+from waldur_api_client.models.check_unique_backend_id_request import CheckUniqueBackendIDRequest
 from waldur_api_client.models.component_usage import ComponentUsage
 from waldur_api_client.models.component_user_usage_create_request import (
     ComponentUserUsageCreateRequest,
@@ -220,6 +222,117 @@ class OfferingBaseProcessor(abc.ABC):
         """Log information about the current authenticated Waldur user."""
         current_user = utils.get_current_user_from_client(self.waldur_rest_client)
         utils.print_current_user(current_user)
+
+    def _check_backend_id_uniqueness(self, backend_id: str) -> bool:
+        """Check if backend_id is unique across offering history.
+
+        Uses backend_settings to configure the uniqueness check:
+        - check_backend_id_uniqueness: Enable/disable the check (default: False)
+        - check_all_offerings: Check across all customer offerings vs. single offering
+          (default: False)
+
+        Args:
+            backend_id: The backend ID to check
+
+        Returns:
+            True if the backend_id is unique, False if already used
+        """
+        if not self.offering.backend_settings.get("check_backend_id_uniqueness", False):
+            return True  # Skip check if not enabled
+
+        try:
+            check_all_offerings = self.offering.backend_settings.get("check_all_offerings", False)
+            logger.info(
+                "Checking backend_id uniqueness for: %s (check_all_offerings: %s)",
+                backend_id,
+                check_all_offerings,
+            )
+            request = CheckUniqueBackendIDRequest(
+                backend_id=backend_id, check_all_offerings=check_all_offerings
+            )
+            response = marketplace_provider_offerings_check_unique_backend_id.sync(
+                uuid=self.offering.uuid,
+                client=self.waldur_rest_client,
+                body=request,
+            )
+
+            is_unique = response.is_unique
+            if not is_unique:
+                logger.warning("Backend ID %s is not unique in offering history", backend_id)
+            return is_unique
+
+        except Exception as e:
+            logger.warning("Failed to check backend_id uniqueness: %s", e)
+            return True  # Continue with creation if check fails
+
+    def _create_resource_with_uniqueness_check(
+        self, waldur_resource: WaldurResource, user_context: dict
+    ) -> BackendResourceInfo:
+        """Create resource with uniqueness checking and retry logic.
+
+        This method implements the retry logic with backend_id uniqueness checking
+        that was previously embedded in the BaseBackend.create_resource method.
+
+        Args:
+            waldur_resource: Waldur resource information
+            user_context: User context containing team and offering user data
+
+        Returns:
+            Created backend resource information
+
+        Raises:
+            BackendError: If resource creation fails after all retries
+        """
+        # Determine resource name generation strategy
+        use_project_slug = (
+            waldur_resource.offering_plugin_options.get("account_name_generation_policy")
+            == "project_slug"
+        )
+
+        resource_base_id = (
+            waldur_resource.project_slug if use_project_slug else waldur_resource.slug
+        )
+
+        # Use 10 retries if uniqueness checking is enabled or project_slug naming is used
+        uniqueness_check_enabled = self.offering.backend_settings.get(
+            "check_backend_id_uniqueness", False
+        )
+        max_retries = 10 if (use_project_slug or uniqueness_check_enabled) else 1
+
+        # Try creating resource with generated IDs
+        for retry in range(max_retries):
+            resource_backend_id = self.resource_backend._get_resource_backend_id(resource_base_id)
+
+            # Check backend_id uniqueness if enabled
+            if not self._check_backend_id_uniqueness(resource_backend_id):
+                logger.info(
+                    "Backend ID %s is not unique, trying next iteration", resource_backend_id
+                )
+                if use_project_slug:
+                    resource_base_id = f"{waldur_resource.project_slug}-{retry}"
+                continue
+
+            # Try to create the resource in backend with this ID
+            try:
+                return self.resource_backend.create_resource_with_id(
+                    waldur_resource, resource_backend_id, user_context
+                )
+            except backend_exceptions.BackendError as e:
+                if "already exists" in str(e).lower() and use_project_slug:
+                    # Resource already exists, try next iteration
+                    logger.info(
+                        "Resource %s already exists, trying next iteration", resource_backend_id
+                    )
+                    resource_base_id = f"{waldur_resource.project_slug}-{retry}"
+                    continue
+                # Some other error, re-raise it
+                raise
+
+        # If we get here, all retries failed
+        raise backend_exceptions.BackendError(
+            f"Unable to create resource: after {max_retries} attempts, "
+            "all generated names already exist or uniqueness check failed"
+        )
 
     @abc.abstractmethod
     def process_offering(self) -> None:
@@ -481,7 +594,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         logger.info("Creating resource %s", waldur_resource.name)
 
         # Use the provided user context for resource creation
-        backend_resource_info = self.resource_backend.create_resource(waldur_resource, user_context)
+        backend_resource_info = self._create_resource_with_uniqueness_check(
+            waldur_resource, user_context
+        )
         if backend_resource_info.backend_id == "":
             msg = f"Unable to create a backend resource for offering {self.offering}"
             raise backend_exceptions.BackendError(msg)

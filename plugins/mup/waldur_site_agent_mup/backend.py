@@ -18,6 +18,7 @@ from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_limits import ResourceLimits
 
 from waldur_site_agent.backend import BackendType, backends
+from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_mup.client import MUPClient, MUPError
 
@@ -536,10 +537,87 @@ class MUPBackend(backends.BaseBackend):
         if user_context:
             self._create_and_add_users_from_context(mup_project["id"], user_context)
 
+    def post_create_resource(
+        self,
+        backend_resource_info: BackendResourceInfo,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
+    ) -> None:
+        """Perform actions after resource creation - create allocations."""
+        # Get the project for allocation creation
+        mup_project = self._get_project_by_waldur_id(waldur_resource.uuid.hex)
+        if not mup_project:
+            logger.error(
+                "No MUP project found for resource %s", waldur_resource.uuid.hex
+            )
+            return
+
+        # Create allocations for each component
+        limits = backend_resource_info.limits
+        created_allocations = []
+
+        for component_key, component_limit in limits.items():
+            if component_limit <= 0:
+                continue
+
+            component_config = self.backend_components.get(component_key, {})
+            allocation_type = component_config.get(
+                "mup_allocation_type",
+                "Deucalion x86_64",  # Default fallback
+            )
+
+            # Apply unit factor for the allocation size
+            unit_factor = component_config.get("unit_factor", 1)
+            allocation_size = int(component_limit * unit_factor)
+
+            allocation_data = {
+                "type": allocation_type,
+                "identifier": (
+                    f"{self.allocation_prefix}{waldur_resource.uuid.hex}_{component_key}"
+                ),
+                "size": allocation_size,
+                "used": 0,
+                "active": True,
+                "project": mup_project["id"],
+            }
+
+            try:
+                result = self.client.create_allocation(
+                    mup_project["id"], allocation_data
+                )
+                created_allocations.append(
+                    {
+                        "id": result["id"],
+                        "component": component_key,
+                        "type": allocation_type,
+                        "identifier": allocation_data["identifier"],
+                    }
+                )
+
+                logger.info(
+                    "Created MUP allocation %s (%s) for resource %s",
+                    result["id"],
+                    allocation_type,
+                    waldur_resource.uuid.hex,
+                )
+
+            except MUPError as e:
+                logger.error(
+                    "Failed to create allocation for component %s: %s",
+                    component_key,
+                    e,
+                )
+
+        logger.info(
+            "Created %d allocations for resource %s",
+            len(created_allocations),
+            waldur_resource.uuid.hex,
+        )
+
     def _setup_resource_limits(
         self, resource_backend_id: str, waldur_resource: WaldurResource
     ) -> dict[str, int]:
-        """Skip this step for MUP."""
+        """Setup resource limits from Waldur resource."""
         del resource_backend_id
         return waldur_resource.limits.to_dict()
 
