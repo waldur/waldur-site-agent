@@ -31,6 +31,10 @@ offerings:
       allocation_prefix: "alloc_"  # Prefix for allocation identifiers
       default_storage_limit: 1000  # Default storage limit in GB
 
+      # Backend ID uniqueness checking (optional, defaults to False)
+      check_backend_id_uniqueness: false  # Set to true to check if backend_id is unique in offering history
+      check_all_offerings: false  # Set to true to check uniqueness across all customer offerings (defaults to False)
+
       # User creation defaults - customize these for your institution/country
       # These settings are used when creating user requests in MUP for team members
       # who don't already exist in the MUP system

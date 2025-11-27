@@ -168,6 +168,12 @@ class BaseMUPOrderTest(unittest.TestCase):
             f"{BASE_URL}/api/marketplace-provider-resources/{marketplace_resource_uuid}/set_backend_id/"
         ).respond(200, json={"status": "OK"})
 
+    def _setup_set_limits_mock(self, marketplace_resource_uuid):
+        """Setup set_limits mock for resource limit setting."""
+        return respx.post(
+            f"{BASE_URL}/api/marketplace-provider-resources/{marketplace_resource_uuid}/set_limits/"
+        ).respond(200, json={"status": "OK"})
+
 
 @mock.patch(
     "waldur_site_agent_mup.backend.MUPClient",
@@ -269,6 +275,9 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
 
         # Mock user creation
         mup_client.create_user_request.return_value = {"id": 1}
+
+        # Mock get_resource to return None (resource doesn't exist initially)
+        mup_client.get_resource.return_value = None
 
         # Mock project creation first (empty projects list initially)
         created_project = {
@@ -392,6 +401,15 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         self._setup_offering_users_mock([self.waldur_offering_user])
         self._setup_resource_team_mock(
             str(marketplace_resource_uuid), self.waldur_resource_team
+        )
+        self._setup_set_limits_mock(str(marketplace_resource_uuid))
+
+        # Setup order state change mocks for any order UUID
+        respx.post(url__regex=r".*/api/marketplace-orders/.*/set_state_done/").respond(
+            200, json={}
+        )
+        respx.post(url__regex=r".*/api/marketplace-orders/.*/set_state_erred/").respond(
+            200, json={}
         )
 
         # Mock existing project (inactive) - use the correct resource UUID
