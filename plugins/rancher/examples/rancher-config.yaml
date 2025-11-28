@@ -26,11 +26,10 @@ offerings:
       # Project naming configuration
       # Each Waldur project will create a Rancher project named: {project_prefix}{waldur_project_slug}
       project_prefix: "waldur-"
-      default_role: "project-member"  # Default role for users in Rancher projects
 
       # Keycloak integration (optional) - matches waldur-mastermind format
       keycloak_enabled: true
-      keycloak_role_name: "project-member"  # Role name for Keycloak group: project_{uuid}_{role_name}
+      keycloak_role_name: "workloads-manage"  # Role name for Keycloak group: project_{uuid}_{role_name}
       keycloak_url: "https://keycloak.example.com/auth/"
       keycloak_realm: "waldur"
       keycloak_user_realm: "master"

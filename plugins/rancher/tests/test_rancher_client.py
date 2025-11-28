@@ -187,42 +187,50 @@ class TestRancherClient:
         assert quotas["memory"] == 8.0
 
     @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
-    def test_set_project_quotas(self, mock_session, rancher_settings):
-        """Test setting project quotas by updating project object."""
-        # Mock project object response
-        mock_project = {
-            "id": "project-123",
-            "name": "test-project",
-            "clusterId": "c-test",
-            "type": "project",
-        }
-
-        mock_get_response = MagicMock()
-        mock_get_response.json.return_value = mock_project
-
-        mock_put_response = MagicMock()
-        mock_put_response.json.return_value = mock_project
+    def test_set_namespace_custom_resource_quotas(self, mock_session, rancher_settings):
+        """Test setting namespace custom resource quotas via YAML import."""
+        mock_post_response = MagicMock()
+        mock_post_response.json.return_value = {"status": "success"}
 
         mock_login_response = MagicMock()
         mock_login_response.json.return_value = {}
 
         mock_session_instance = MagicMock()
-        mock_session_instance.post.return_value = mock_login_response  # For login
-        mock_session_instance.get.return_value = mock_get_response
-        mock_session_instance.put.return_value = mock_put_response
+        mock_session_instance.post.return_value = mock_login_response
         mock_session.return_value = mock_session_instance
 
+        # After client initialization, set the POST response for importYaml
         client = RancherClient(rancher_settings)
-        client.set_project_quotas("project-123", {"cpu": 4, "memory": 8})
+        mock_session_instance.post.return_value = mock_post_response
 
-        # Check that project was updated with correct quota data
-        put_call_args = mock_session_instance.put.call_args
-        updated_project = put_call_args[1]["json"]
+        # Test setting quotas for a namespace
+        limits = {"cpu": 4, "memory": 8, "storage": 100}
+        client.set_namespace_custom_resource_quotas("test-namespace", limits)
 
-        assert "resourceQuota" in updated_project
-        assert updated_project["resourceQuota"]["limit"]["limitsCpu"] == "4000m"
-        assert updated_project["resourceQuota"]["limit"]["limitsMemory"] == "8192Mi"
-        assert "namespaceDefaultResourceQuota" in updated_project
+        # Verify POST was called with correct URL
+        post_calls = list(mock_session_instance.post.call_args_list)
+        # Should have at least 2 calls: login + importYaml
+        min_expected_calls = 2
+        assert len(post_calls) >= min_expected_calls
+
+        # Check the importYaml call (last call)
+        import_yaml_call = post_calls[-1]
+        url = import_yaml_call[0][0]
+        payload = import_yaml_call[1]["json"]
+
+        assert "importYaml" in url
+        assert "yaml" in payload
+        assert "namespace" in payload
+        assert payload["namespace"] == "test-namespace"
+
+        # Verify YAML contains proper quota format
+        yaml_content = payload["yaml"]
+        assert "ResourceQuota" in yaml_content
+        assert "custom-resource-quota" in yaml_content
+        assert "test-namespace" in yaml_content
+        assert "4000m" in yaml_content  # CPU in millicores
+        assert "8192Mi" in yaml_content  # Memory in Mi
+        assert "102400Mi" in yaml_content  # Storage in Mi
 
     @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
     def test_get_project_usage(self, mock_session, rancher_settings):
@@ -309,28 +317,6 @@ class TestRancherClient:
         assert len(users) == 2
 
     @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
-    def test_add_project_user(self, mock_session, rancher_settings):
-        """Test adding user to project."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"id": "binding-123"}
-
-        mock_session_instance = MagicMock()
-        mock_session_instance.post.return_value = mock_response
-        mock_session.return_value = mock_session_instance
-
-        client = RancherClient(rancher_settings)
-        client.add_project_user("project-123", "testuser", "project-member")
-
-        # Check that binding was created with correct data
-        call_args = mock_session_instance.post.call_args
-        posted_data = call_args[1]["json"]
-
-        assert posted_data["type"] == "projectRoleTemplateBinding"
-        assert posted_data["projectId"] == "project-123"
-        assert posted_data["userId"] == "testuser"
-        assert posted_data["roleTemplateId"] == "project-member"
-
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
     def test_remove_project_user(self, mock_session, rancher_settings):
         """Test removing user from project."""
         # First call (get bindings) returns user binding
@@ -411,3 +397,38 @@ class TestRancherClient:
 
         # Client should still be created
         assert client.access_key == rancher_settings["username"]
+
+    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    def test_create_namespace(self, mock_session, rancher_settings):
+        """Test namespace creation without quotas."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"id": "namespace-123", "name": "test-namespace"}
+
+        mock_session_instance = MagicMock()
+        mock_session_instance.post.return_value = mock_response
+        mock_session.return_value = mock_session_instance
+
+        client = RancherClient(rancher_settings)
+        client.create_namespace("c-m-test:p-test", "test-namespace")
+
+        # Check that the correct POST request was made
+        call_args = mock_session_instance.post.call_args
+        posted_data = call_args[1]["json"]
+
+        assert posted_data["type"] == "namespace"
+        assert posted_data["name"] == "test-namespace"
+        assert posted_data["projectId"] == "c-m-test:p-test"
+        assert posted_data["annotations"]["waldur/managed"] == "true"
+        assert "resourceQuota" not in posted_data
+
+    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    def test_create_namespace_failure(self, mock_session, rancher_settings):
+        """Test namespace creation failure handling."""
+        mock_session_instance = MagicMock()
+        mock_session_instance.post.side_effect = requests.exceptions.HTTPError("400 Bad Request")
+        mock_session.return_value = mock_session_instance
+
+        client = RancherClient(rancher_settings)
+
+        with pytest.raises(BackendError):
+            client.create_namespace("c-m-test:p-test", "test-namespace")

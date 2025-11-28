@@ -22,7 +22,7 @@ class RancherBackend(backends.BaseBackend):
 
         # Initialize clients
         self.rancher_client = RancherClient(rancher_settings)
-        self.client = self.rancher_client  # Base backend expects self.client
+        self.client: RancherClient = self.rancher_client  # Base backend expects self.client
 
         # Initialize Keycloak client if configured
         self.keycloak_client = None
@@ -39,8 +39,7 @@ class RancherBackend(backends.BaseBackend):
         # Rancher-specific settings
         self.project_prefix = rancher_settings.get("project_prefix", "waldur-")
         self.cluster_id = rancher_settings.get("cluster_id", "")
-        self.default_role = rancher_settings.get("default_role", "project-member")
-        self.keycloak_role_name = rancher_settings.get("keycloak_role_name", "project-member")
+        self.keycloak_role_name = rancher_settings.get("keycloak_role_name", "workloads-manage")
         self.keycloak_use_user_id = rancher_settings.get(
             "keycloak_use_user_id", True
         )  # Default: lookup by ID
@@ -88,7 +87,6 @@ class RancherBackend(backends.BaseBackend):
         )
         logger.info(format_string.format("Cluster ID", self.cluster_id))
         logger.info(format_string.format("Project prefix", self.project_prefix))
-        logger.info(format_string.format("Default role", self.default_role))
         logger.info(
             format_string.format(
                 "SSL verification", str(self.backend_settings.get("verify_cert", True))
@@ -191,7 +189,7 @@ class RancherBackend(backends.BaseBackend):
     def _create_rancher_project(
         self,
         waldur_resource: WaldurResource,
-    ) -> str:
+    ) -> tuple[str, str]:
         """Create a Rancher project for the Waldur resource."""
         project_name = self._get_rancher_project_name(waldur_resource)
 
@@ -216,11 +214,10 @@ class RancherBackend(backends.BaseBackend):
                 project_slug=waldur_resource.project_slug,
             )
 
-            logger.info(f"Created Rancher project: {project_name} (ID: {project_id})")
-            return project_id
+            return project_id, project_name
 
         except Exception as e:
-            logger.error(f"Failed to create Rancher project {project_name}: {e}")
+            logger.error("Failed to create Rancher project %s: %s", project_name, e)
             raise BackendError(f"Failed to create Rancher project: {e}") from e
 
     def _create_keycloak_groups(
@@ -339,17 +336,21 @@ class RancherBackend(backends.BaseBackend):
         except Exception as e:
             logger.warning(f"Failed to cleanup empty groups: {e}")
 
-    def create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+    def create_resource_with_id(
+        self,
+        waldur_resource: WaldurResource,
+        resource_backend_id: str,
+        user_context: Optional[dict] = None,
     ) -> BackendResourceInfo:
         """Create Rancher project and Keycloak groups for the Waldur project."""
+        del resource_backend_id
         self._pre_create_resource(waldur_resource, user_context)
 
         # Create Rancher project for the Waldur project
-        project_id = self._create_rancher_project(waldur_resource)
+        project_id, project_name = self._create_rancher_project(waldur_resource)
 
         # Create Keycloak groups (parent cluster group + child project/role group)
-        parent_group_id, child_group_id = self._create_keycloak_groups(waldur_resource)
+        _, child_group_id = self._create_keycloak_groups(waldur_resource)
 
         # Bind the child Keycloak group to the Rancher project role
         if child_group_id:
@@ -366,11 +367,12 @@ class RancherBackend(backends.BaseBackend):
         quota_components = self._filter_quota_components(waldur_limits)
         if quota_components:
             try:
-                self.rancher_client.set_project_quotas(project_id, quota_components)
+                # Create a namespace
+                self.client.create_namespace(project_id, project_name)
+                # Setup namespace resource quotas
+                self.client.set_namespace_custom_resource_quotas(project_name, quota_components)
             except Exception as e:
-                logger.warning(f"Failed to set project quotas: {e}")
-
-        # Group names are used in logging but not needed for return value
+                logger.warning("Failed to set project quotas: %s", e)
 
         return BackendResourceInfo(
             backend_id=project_id,
@@ -411,23 +413,7 @@ class RancherBackend(backends.BaseBackend):
         self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect current and requested resource limits."""
-        backend_limits = {}
-        waldur_limits = {}
-
-        # Get current limits from Rancher
-        if waldur_resource.backend_id:
-            try:
-                backend_limits = self.rancher_client.get_project_quotas(waldur_resource.backend_id)
-            except Exception as e:
-                logger.debug(f"Could not get current limits: {e}")
-
-        # Get requested limits from Waldur
-        for component_key in self.backend_components:
-            waldur_value = getattr(waldur_resource.limits, component_key, 0)
-            if waldur_value:
-                waldur_limits[component_key] = waldur_value
-
-        return backend_limits, waldur_limits
+        return {}, waldur_resource.limits.to_dict()
 
     def _filter_quota_components(self, limits: dict[str, int]) -> dict[str, int]:
         """Filter to only include components that should be set as Rancher project quotas."""
@@ -435,7 +421,7 @@ class RancherBackend(backends.BaseBackend):
 
         # Only CPU and memory should be set as Rancher project quotas
         # Storage and pods are reported from actual allocation, not enforced as limits
-        quota_component_types = {"cpu", "ram"}  # Types that get quotas
+        quota_component_types = {"cpu", "ram", "storage", "gpu"}  # Types that get quotas
 
         for component_key, component_config in self.backend_components.items():
             component_type = component_config.get("type", "")
@@ -456,8 +442,11 @@ class RancherBackend(backends.BaseBackend):
     ) -> None:
         """Set resource quotas for the Rancher project."""
         try:
-            self.rancher_client.set_project_quotas(resource_backend_id, limits)
-            logger.info(f"Set resource limits for project {resource_backend_id}")
+            # Setup namespace resource quotas
+            namespaces = self.client.get_project_namespaces(resource_backend_id)
+            if len(namespaces) > 0 and namespaces[0]:
+                namespace = namespaces[0]
+                self.client.set_namespace_custom_resource_quotas(namespace, limits)
         except Exception as e:
             logger.error(f"Failed to set limits for {resource_backend_id}: {e}")
             raise BackendError(f"Failed to set limits: {e}") from e
@@ -607,7 +596,7 @@ class RancherBackend(backends.BaseBackend):
                                 f"{resource_backend_id}"
                             )
                             # Create the missing group structure
-                            parent_id, child_id = self._create_keycloak_groups(waldur_resource)
+                            _, child_id = self._create_keycloak_groups(waldur_resource)
                             if child_id:
                                 # Bind the new group to the Rancher project
                                 self._bind_keycloak_group_to_rancher_project(
@@ -692,13 +681,21 @@ class RancherBackend(backends.BaseBackend):
                 "cpu": 1,  # 1 core
                 "memory": 1,  # 1 GB
                 "storage": 1,  # 1 GB
-                "pods": 1,  # Allow only 1 pod
             }
-            self.rancher_client.set_project_quotas(resource_backend_id, minimal_limits)
-            logger.info(f"Downscaled Rancher project {resource_backend_id}")
+            # Setup namespace resource quotas
+            namespaces = self.client.get_project_namespaces(resource_backend_id)
+            if len(namespaces) > 0 and namespaces[0]:
+                namespace = namespaces[0]
+                self.client.set_namespace_custom_resource_quotas(namespace, minimal_limits)
+                logger.info(
+                    "Downscaled Rancher project %s namespace %s: %s",
+                    resource_backend_id,
+                    namespace,
+                    minimal_limits,
+                )
             return True
         except Exception as e:
-            logger.error(f"Failed to downscale {resource_backend_id}: {e}")
+            logger.error("Failed to downscale %s: %s", resource_backend_id, e)
             return False
 
     def pause_resource(self, resource_backend_id: str) -> bool:
@@ -706,11 +703,15 @@ class RancherBackend(backends.BaseBackend):
         try:
             # Set zero limits to prevent any resource consumption
             zero_limits = {"cpu": 0, "memory": 0, "storage": 0, "pods": 0}
-            self.rancher_client.set_project_quotas(resource_backend_id, zero_limits)
-            logger.info(f"Paused Rancher project {resource_backend_id}")
+            # Setup namespace resource quotas
+            namespaces = self.client.get_project_namespaces(resource_backend_id)
+            if len(namespaces) > 0 and namespaces[0]:
+                namespace = namespaces[0]
+                self.client.set_namespace_custom_resource_quotas(namespace, zero_limits)
+                logger.info("Paused Rancher project %s", resource_backend_id)
             return True
         except Exception as e:
-            logger.error(f"Failed to pause {resource_backend_id}: {e}")
+            logger.error("Failed to pause %s: %s", resource_backend_id, e)
             return False
 
     def restore_resource(self, resource_backend_id: str) -> bool:
@@ -722,11 +723,14 @@ class RancherBackend(backends.BaseBackend):
                 "cpu": 10,  # 10 cores
                 "memory": 32,  # 32 GB
                 "storage": 100,  # 100 GB
-                "pods": 50,  # 50 pods
             }
-            self.rancher_client.set_project_quotas(resource_backend_id, default_limits)
-            logger.info(f"Restored Rancher project {resource_backend_id}")
+            # Setup namespace resource quotas
+            namespaces = self.client.get_project_namespaces(resource_backend_id)
+            if len(namespaces) > 0 and namespaces[0]:
+                namespace = namespaces[0]
+                self.client.set_namespace_custom_resource_quotas(namespace, default_limits)
+                logger.info("Restored Rancher project %s", resource_backend_id)
             return True
         except Exception as e:
-            logger.error(f"Failed to restore {resource_backend_id}: {e}")
+            logger.error("Failed to restore %s: %s", resource_backend_id, e)
             return False

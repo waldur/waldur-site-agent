@@ -24,7 +24,7 @@ offerings:
 
       # Project naming configuration
       project_prefix: "waldur-"
-      default_role: "project-member"
+      keycloak_role_name: "workloads-manage"
 
       # Keycloak disabled
       keycloak_enabled: false

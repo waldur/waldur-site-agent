@@ -7,7 +7,6 @@ from uuid import uuid4
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_site_agent_rancher.backend import RancherBackend
-from waldur_site_agent.backend.structures import BackendResourceInfo
 
 
 class MockResourceLimits:
@@ -18,6 +17,14 @@ class MockResourceLimits:
         self.memory = memory
         self.storage = storage
         self.pods = pods
+
+    def to_dict(self):
+        return {
+            "cpu": self.cpu,
+            "memory": self.memory,
+            "storage": self.storage,
+            "pods": self.pods,
+        }
 
 
 @pytest.fixture
@@ -30,9 +37,8 @@ def backend_settings():
         "cluster_id": "c-m-test123:p-test456",
         "verify_cert": False,
         "project_prefix": "waldur-",
-        "default_role": "project-member",
         "keycloak_enabled": True,
-        "keycloak_role_name": "project-member",
+        "keycloak_role_name": "workloads-manage",
         "keycloak_url": "https://keycloak.example.com/auth/",
         "keycloak_realm": "waldur",
         "keycloak_username": "admin",
@@ -87,7 +93,9 @@ class TestRancherIntegration:
         mock_rancher.ping.return_value = True
         mock_rancher.list_projects.return_value = []
         mock_rancher.create_project.return_value = "c-j8276:p-test123"
-        mock_rancher.set_project_quotas.return_value = None
+        mock_rancher.create_namespace.return_value = None
+        mock_rancher.get_project_namespaces.return_value = ["waldur-test-resource"]
+        mock_rancher.set_namespace_custom_resource_quotas.return_value = None
         mock_rancher.get_project_quotas.return_value = {"cpu": 4, "memory": 8}
         mock_rancher.delete_project.return_value = None
         mock_rancher_client.return_value = mock_rancher
@@ -121,20 +129,36 @@ class TestRancherIntegration:
         # Verify Keycloak groups were created
         assert mock_keycloak.create_group.call_count == 2
 
-        # Verify quotas were set (only CPU and memory)
-        quota_call_args = mock_rancher.set_project_quotas.call_args[0]
-        quota_components = quota_call_args[1]
-        assert "cpu" in quota_components
-        assert "memory" in quota_components
-        assert "storage" not in quota_components
-        assert "pods" not in quota_components
+        # Verify namespace was created
+        mock_rancher.create_namespace.assert_called_once()
+        namespace_call_args = mock_rancher.create_namespace.call_args
+        namespace_project_id = namespace_call_args[0][0]
+        namespace_name = namespace_call_args[0][1]
+
+        assert namespace_project_id == "c-j8276:p-test123"
+        assert namespace_name == expected_project_name
+
+        # Verify quotas were set on the namespace via set_namespace_custom_resource_quotas
+        # Should be called once during create_resource
+        assert mock_rancher.set_namespace_custom_resource_quotas.call_count >= 1
+        quota_call_args = mock_rancher.set_namespace_custom_resource_quotas.call_args_list[0]
+        quota_namespace = quota_call_args[0][0]
+        quota_limits = quota_call_args[0][1]
+
+        assert quota_namespace == expected_project_name
+        assert "cpu" in quota_limits
+        assert "memory" in quota_limits
+        assert "storage" in quota_limits  # Storage is now included in quotas
+        assert "pods" not in quota_limits  # Pods are not quota components
 
         # Test 2: Limit updates
         new_limits = {"cpu": 8, "memory": 16, "storage": 200, "pods": 100}
         backend.set_resource_limits(result.backend_id, new_limits)
 
-        # Verify set_project_quotas was called again
-        assert mock_rancher.set_project_quotas.call_count == 2
+        # Verify set_namespace_custom_resource_quotas was called
+        # Called once in create_resource and once in set_resource_limits
+        expected_call_count = 2
+        assert mock_rancher.set_namespace_custom_resource_quotas.call_count == expected_call_count
 
         # Test 3: Resource deletion
         backend.delete_resource(test_resource)
@@ -160,7 +184,6 @@ class TestRancherIntegration:
         mock_rancher.get_project.return_value = MagicMock(
             name=f"waldur-{test_resource.project_slug}", organization=test_resource.customer_slug
         )
-        mock_rancher.add_project_user.return_value = None
         mock_rancher.remove_project_user.return_value = None
         mock_rancher_client.return_value = mock_rancher
 
@@ -207,7 +230,8 @@ class TestRancherIntegration:
         mock_rancher.ping.return_value = True
         mock_rancher.list_projects.return_value = []
         mock_rancher.create_project.return_value = "project-123"
-        mock_rancher.set_project_quotas.return_value = None
+        mock_rancher.create_namespace.return_value = None
+        mock_rancher.set_namespace_custom_resource_quotas.return_value = None
         mock_rancher_client.return_value = mock_rancher
 
         backend = RancherBackend(backend_settings, components)
@@ -219,8 +243,9 @@ class TestRancherIntegration:
         result = backend.create_resource(test_resource)
         assert result.backend_id == "project-123"
 
-        # Verify only Rancher operations were called
+        # Verify Rancher operations were called
         mock_rancher.create_project.assert_called_once()
+        mock_rancher.create_namespace.assert_called_once()
 
     @patch("waldur_site_agent_rancher.backend.RancherClient")
     def test_quota_filtering_integration(self, mock_rancher_client, backend_settings, components):
@@ -234,15 +259,15 @@ class TestRancherIntegration:
         all_limits = {"cpu": 4, "memory": 8, "storage": 100, "pods": 50}
         quota_filtered = backend._filter_quota_components(all_limits)
 
-        # Verify only CPU and memory are included
-        expected = {"cpu": 4, "memory": 8}
+        # Verify CPU, memory, and storage are included (pods is excluded)
+        expected = {"cpu": 4, "memory": 8, "storage": 100}
         assert quota_filtered == expected
 
         # Test with empty limits
         empty_filtered = backend._filter_quota_components({})
         assert empty_filtered == {}
 
-        # Test with only storage/pods
-        non_quota_limits = {"storage": 100, "pods": 50}
+        # Test with only pods (non-quota component)
+        non_quota_limits = {"pods": 50}
         non_quota_filtered = backend._filter_quota_components(non_quota_limits)
         assert non_quota_filtered == {}
