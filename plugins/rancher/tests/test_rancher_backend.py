@@ -21,7 +21,6 @@ def rancher_settings():
         "cluster_id": "c-m-test:p-test",
         "verify_cert": False,
         "project_prefix": "waldur-",
-        "default_role": "project-member",
         "keycloak_enabled": False,
     }
 
@@ -36,7 +35,6 @@ def rancher_settings_with_keycloak():
         "cluster_id": "c-m-test:p-test",
         "verify_cert": False,
         "project_prefix": "waldur-",
-        "default_role": "project-member",
         "keycloak_enabled": True,
         "keycloak": {
             "keycloak_url": "https://keycloak.example.com/auth/",
@@ -68,6 +66,14 @@ class MockResourceLimits:
         self.memory = 8
         self.storage = 100
         self.pods = 50
+
+    def to_dict(self):
+        return {
+            "cpu": self.cpu,
+            "memory": self.memory,
+            "storage": self.storage,
+            "pods": self.pods,
+        }
 
 
 @pytest.fixture
@@ -104,7 +110,6 @@ class TestRancherBackend:
         assert backend.backend_type == "rancher"
         assert backend.project_prefix == "waldur-"
         assert backend.cluster_id == "c-m-test:p-test"
-        assert backend.default_role == "project-member"
         assert backend.keycloak_client is None
 
         mock_rancher_client.assert_called_once_with(rancher_settings)
@@ -230,7 +235,8 @@ class TestRancherBackend:
         mock_client = MagicMock()
         mock_client.list_projects.return_value = []
         mock_client.create_project.return_value = "project-123"
-        mock_client.set_project_quotas.return_value = None
+        mock_client.create_namespace.return_value = None
+        mock_client.set_namespace_custom_resource_quotas.return_value = None
         mock_rancher_client.return_value = mock_client
 
         backend = RancherBackend(rancher_settings, rancher_components)
@@ -268,7 +274,8 @@ class TestRancherBackend:
         mock_rancher = MagicMock()
         mock_rancher.list_projects.return_value = []
         mock_rancher.create_project.return_value = "project-123"
-        mock_rancher.set_project_quotas.return_value = None
+        mock_rancher.create_namespace.return_value = None
+        mock_rancher.set_namespace_custom_resource_quotas.return_value = None
         mock_rancher_client.return_value = mock_rancher
 
         mock_keycloak = MagicMock()
@@ -290,8 +297,8 @@ class TestRancherBackend:
         expected_calls = [
             call("c_cmtestpt", "Cluster access group for c-m-test:p-test"),
             call(
-                "project_test-project_project-member",
-                "Project test-project members with role project-member",
+                "project_test-project_workloads-manage",
+                "Project test-project members with role workloads-manage",
                 "group-123",
             ),
         ]
@@ -331,7 +338,7 @@ class TestRancherBackend:
         mock_keycloak = MagicMock()
         mock_keycloak.get_group_by_name.return_value = {
             "id": "group-456",
-            "name": "project_test-project_project-member",
+            "name": "project_test-project_workloads-manage",
         }
         mock_keycloak.delete_group.return_value = None
         mock_keycloak_client.return_value = mock_keycloak
@@ -345,33 +352,9 @@ class TestRancherBackend:
 
         # Check that keycloak group deletion was attempted
         mock_keycloak.get_group_by_name.assert_called_once_with(
-            "project_test-project_project-member"
+            "project_test-project_workloads-manage"
         )
         mock_keycloak.delete_group.assert_called_once_with("group-456")
-
-    @patch("waldur_site_agent_rancher.backend.RancherClient")
-    def test_create_user_association_basic(
-        self,
-        mock_rancher_client,
-        rancher_settings,
-        rancher_components,
-        offering_user,
-        waldur_resource,
-    ):
-        """Test user association creation without Keycloak."""
-        mock_client = MagicMock()
-        mock_rancher_client.return_value = mock_client
-
-        waldur_resource.backend_id = "project-123"
-        backend = RancherBackend(rancher_settings, rancher_components)
-
-        result = backend.add_user(waldur_resource, offering_user.username)
-
-        # When Keycloak is disabled, backend just logs and returns True
-        # OIDC handles actual access management
-        assert result is True
-        # No direct rancher client calls should be made when Keycloak is disabled
-        mock_client.add_project_user.assert_not_called()
 
     @patch("waldur_site_agent_rancher.backend.RancherClient")
     def test_create_user_association_dryrun(
@@ -419,7 +402,8 @@ class TestRancherBackend:
     def test_set_resource_limits(self, mock_rancher_client, rancher_settings, rancher_components):
         """Test setting resource limits."""
         mock_client = MagicMock()
-        mock_client.set_project_quotas.return_value = None
+        mock_client.get_project_namespaces.return_value = ["test-namespace"]
+        mock_client.set_namespace_custom_resource_quotas.return_value = None
         mock_rancher_client.return_value = mock_client
 
         backend = RancherBackend(rancher_settings, rancher_components)
@@ -427,8 +411,11 @@ class TestRancherBackend:
         limits = {"cpu": 4, "memory": 8, "storage": 100, "pods": 50}
         backend.set_resource_limits("project-123", limits)
 
-        # Should call set_project_quotas with the full limits dict (filtering happens in create_resource)
-        mock_client.set_project_quotas.assert_called_once_with("project-123", limits)
+        # Should call set_namespace_custom_resource_quotas with namespace and limits
+        mock_client.get_project_namespaces.assert_called_once_with("project-123")
+        mock_client.set_namespace_custom_resource_quotas.assert_called_once_with(
+            "test-namespace", limits
+        )
 
     @patch("waldur_site_agent_rancher.backend.RancherClient")
     def test_filter_quota_components(
@@ -441,14 +428,15 @@ class TestRancherBackend:
         all_limits = {"cpu": 4, "memory": 8, "storage": 100, "pods": 50}
         quota_only = backend._filter_quota_components(all_limits)
 
-        # Should only include CPU (type: cpu) and memory (type: ram)
+        # Should include CPU (type: cpu), memory (type: ram), and storage (type: storage)
         assert "cpu" in quota_only
         assert "memory" in quota_only
-        assert "storage" not in quota_only  # storage not quota component
+        assert "storage" in quota_only  # storage IS a quota component
         assert "pods" not in quota_only  # pods not quota component
 
         assert quota_only["cpu"] == 4
         assert quota_only["memory"] == 8
+        assert quota_only["storage"] == 100
 
     @patch("waldur_site_agent_rancher.backend.RancherClient")
     def test_filter_quota_components_empty(
@@ -457,38 +445,48 @@ class TestRancherBackend:
         """Test quota filtering with no matching components."""
         backend = RancherBackend(rancher_settings, rancher_components)
 
-        # Test with only non-quota components
-        non_quota_limits = {"storage": 100, "pods": 50}
+        # Test with only pods (non-quota component)
+        non_quota_limits = {"pods": 50}
         quota_only = backend._filter_quota_components(non_quota_limits)
 
-        # Should return empty dict
+        # Should return empty dict when only non-quota components present
         assert quota_only == {}
 
     @patch("waldur_site_agent_rancher.backend.RancherClient")
     def test_create_resource_quota_filtering(
         self, mock_rancher_client, rancher_settings, rancher_components, waldur_resource
     ):
-        """Test that create_resource only sets CPU and memory quotas."""
+        """Test that create_resource sets namespace quotas with filtered quota components."""
         mock_client = MagicMock()
         mock_client.list_projects.return_value = []
         mock_client.create_project.return_value = "project-123"
-        mock_client.set_project_quotas.return_value = None
+        mock_client.create_namespace.return_value = None
+        mock_client.set_namespace_custom_resource_quotas.return_value = None
         mock_rancher_client.return_value = mock_client
 
         backend = RancherBackend(rancher_settings, rancher_components)
 
         result = backend.create_resource(waldur_resource)
 
-        # Check that set_project_quotas was called with only CPU and memory
-        call_args = mock_client.set_project_quotas.call_args[0]
+        # Check that create_namespace was called
+        mock_client.create_namespace.assert_called_once()
+        call_args = mock_client.create_namespace.call_args[0]
         project_id = call_args[0]
-        quota_components = call_args[1]
+        namespace_name = call_args[1]
 
         assert project_id == "project-123"
+
+        # Check that set_namespace_custom_resource_quotas was called with filtered components
+        mock_client.set_namespace_custom_resource_quotas.assert_called_once()
+        quota_call_args = mock_client.set_namespace_custom_resource_quotas.call_args[0]
+        quota_namespace = quota_call_args[0]
+        quota_components = quota_call_args[1]
+
+        assert quota_namespace == namespace_name
         assert "cpu" in quota_components
         assert "memory" in quota_components
-        assert "storage" not in quota_components
-        assert "pods" not in quota_components
+        assert "storage" in quota_components  # storage IS a quota component
+        assert "pods" not in quota_components  # pods is NOT a quota component
 
     @patch("waldur_site_agent_rancher.backend.RancherClient")
     def test_get_usage_report(self, mock_rancher_client, rancher_settings, rancher_components):

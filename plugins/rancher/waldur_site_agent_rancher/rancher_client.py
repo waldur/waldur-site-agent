@@ -4,6 +4,7 @@ import ssl
 from typing import Any, Optional
 
 import requests
+import yaml
 from requests.adapters import HTTPAdapter
 
 from waldur_site_agent.backend import logger
@@ -213,6 +214,64 @@ class RancherClient(BaseClient):
             logger.error(f"Failed to delete project {project_id}: {e}")
             raise BackendError(f"Failed to delete project {project_id}: {e}") from e
 
+    def create_namespace(self, project_id: str, namespace: str) -> None:
+        """Create a namespace in a Rancher project with optional resource quotas.
+
+        Args:
+            project_id: The ID of the project to create the namespace in
+            namespace: The name of the namespace to create
+            quotas: Optional dictionary of resource quotas (e.g., {"cpu": 4.0, "memory": 8.0})
+
+        Raises:
+            BackendError: If namespace creation fails
+        """
+        try:
+            logger.info("Creating namespace '%s' in project %s", namespace, project_id)
+
+            # Extract cluster ID from project ID (format: "c-xxx:p-yyy")
+            cluster_id = project_id.split(":")[0] if ":" in project_id else self.cluster_id
+
+            namespace_data = {
+                "type": "namespace",
+                "name": namespace,
+                "projectId": project_id,
+                "annotations": {
+                    "waldur/managed": "true",
+                },
+            }
+
+            response = self._make_request(
+                "POST", f"clusters/{cluster_id}/namespaces", namespace_data
+            )
+            namespace_id = response.get("id", "")
+
+            logger.info(
+                "Created namespace '%s' in project %s (ID: %s)", namespace, project_id, namespace_id
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to create namespace '{namespace}' in project {project_id}: {e}")
+            raise BackendError(
+                f"Failed to create namespace '{namespace}' in project {project_id}: {e}"
+            ) from e
+
+    def get_project_namespaces(self, project_id: str) -> list[str]:
+        """List namespaces in the Rancher project."""
+        try:
+            endpoint = f"clusters/{self.cluster_id}/namespaces?projectId={project_id}"
+            response = self._make_request("GET", endpoint)
+
+            namespaces = []
+            for item in response.get("data", []):
+                namespace_name = item.get("name", "")
+                namespaces.append(namespace_name)
+
+            return namespaces
+
+        except Exception as e:
+            logger.error("Failed to list namespaces for project %s: %s", project_id, e)
+            raise BackendError(f"Failed to list namespaces for project {project_id}: {e}") from e
+
     def get_project_quotas(self, project_id: str) -> dict[str, float]:
         """Get resource quotas for the project."""
         try:
@@ -249,39 +308,6 @@ class RancherClient(BaseClient):
         except Exception as e:
             logger.debug(f"No quotas found for project {project_id}: {e}")
             return {}
-
-    def set_project_quotas(self, project_id: str, quotas: dict[str, int]) -> None:
-        """Set resource quotas for the project."""
-        try:
-            # First get the current project object
-            current_project = self._make_request("GET", f"projects/{project_id}")
-
-            # Prepare quota limits
-            quota_limits = {}
-
-            # Map component quotas to Rancher format
-            for component, value in quotas.items():
-                if component == "cpu":
-                    # Convert to millicores (e.g., 4 cores -> "4000m")
-                    quota_limits["limitsCpu"] = f"{int(value * 1000)}m"
-                elif component == "memory":
-                    # Convert to Mi (e.g., 8 GB -> "8192Mi")
-                    quota_limits["limitsMemory"] = f"{int(value * 1024)}Mi"
-
-            # Update the project object with quotas
-            updated_project = current_project.copy()
-            updated_project["resourceQuota"] = {"limit": quota_limits}
-            updated_project["namespaceDefaultResourceQuota"] = {"limit": quota_limits}
-
-            # Update the project using PUT with _replace=true
-            endpoint = f"projects/{project_id}?_replace=true"
-            self._make_request("PUT", endpoint, updated_project)
-
-            logger.info(f"Updated resource quotas for project {project_id}: {quota_limits}")
-
-        except Exception as e:
-            logger.error(f"Failed to set quotas for project {project_id}: {e}")
-            raise BackendError(f"Failed to set quotas: {e}") from e
 
     def get_project_usage(self, project_id: str) -> dict[str, float]:
         """Get actual allocated resources for the project (total allocated CPU, memory, storage)."""
@@ -364,23 +390,6 @@ class RancherClient(BaseClient):
         except Exception as e:
             logger.warning(f"Failed to list users for project {project_id}: {e}")
             return []
-
-    def add_project_user(self, project_id: str, user_id: str, role: str = "project-member") -> None:
-        """Add user to project with specified role."""
-        try:
-            binding_data = {
-                "type": "projectRoleTemplateBinding",
-                "projectId": project_id,
-                "userId": user_id,
-                "roleTemplateId": role,
-            }
-
-            self._make_request("POST", "/projectroletemplatebindings", binding_data)
-            logger.info(f"Added user {user_id} to project {project_id} with role {role}")
-
-        except Exception as e:
-            logger.error(f"Failed to add user {user_id} to project {project_id}: {e}")
-            raise BackendError(f"Failed to add user to project: {e}") from e
 
     def remove_project_user(self, project_id: str, user_id: str) -> None:
         """Remove user from project."""
@@ -470,3 +479,61 @@ class RancherClient(BaseClient):
         # However, we need the parent backend to provide the Keycloak client
         # For now, return empty list - the backend will override this
         return []
+
+    def set_namespace_custom_resource_quotas(
+        self, namespace: str, waldur_limits: dict[str, int]
+    ) -> None:
+        """Set resource quotas for a specific namespace.
+
+        The method excepts a quota dictionary with the Waldur resource limits
+        and applies it as resource quotas to the given namespace within the cluster.
+        """
+        logger.info(
+            "Setting resource quota for namespace '%s' in cluster %s: %s",
+            namespace,
+            self.cluster_id,
+            waldur_limits,
+        )
+
+        url = f"/clusters/{self.cluster_id}?action=importYaml"
+        hard_quotas = {}
+
+        # Map component quotas to Rancher format
+        for component, value in waldur_limits.items():
+            if component == "cpu":
+                # Convert to millicores (e.g., 4 cores -> "4000m")
+                hard_quotas["limits.cpu"] = f"{int(value * 1000)}m"
+            elif component == "memory":
+                # Convert to Mi (e.g., 8 GB -> "8192Mi")
+                hard_quotas["limits.memory"] = f"{int(value * 1024)}Mi"
+            elif component == "storage":
+                # Convert to Gi (e.g., 100 GB -> "100Gi")
+                hard_quotas["requests.storage"] = f"{int(value) * 1024}Mi"
+            elif component == "gpu":
+                hard_quotas["requests.nvidia.com/gpu"] = str(int(value))
+
+        if not hard_quotas:
+            logger.info("Custom quotas to set for namespace '%s'. Skipping.", namespace)
+            return
+
+        logger.info("Prepared hard quotas for namespace '%s': %s", namespace, hard_quotas)
+
+        quota_manifest = {
+            "apiVersion": "v1",
+            "kind": "ResourceQuota",
+            "metadata": {
+                "name": "custom-resource-quota",
+                "namespace": namespace,
+            },
+            "spec": {
+                "hard": hard_quotas,
+            },
+        }
+        quota_manifest_yaml = yaml.dump(quota_manifest)
+
+        payload = {"yaml": quota_manifest_yaml, "namespace": namespace}
+
+        response_data = self._make_request("POST", url, payload)
+        logger.info(
+            "Successfully set resource quota for namespace '%s': %s", namespace, response_data
+        )
