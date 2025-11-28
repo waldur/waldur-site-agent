@@ -1197,6 +1197,7 @@ class CscsHpcStorageBackend(backends.BaseBackend):
             filters = {}
             if state:
                 filters["state"] = state
+            filters["exclude_pending_transitional"] = True
 
             # Use sync_detailed to get both content and headers
             response = marketplace_resources_list.sync_detailed(
@@ -1377,60 +1378,6 @@ class CscsHpcStorageBackend(backends.BaseBackend):
                         customer_key,
                         parent_tenant_id,
                     )
-
-                # Check transitional state and skip if order is not pending-provider
-                if (
-                    hasattr(resource, "state")
-                    and not isinstance(resource.state, Unset)
-                    and resource.state in ["Creating", "Terminating", "Updating"]
-                ):
-                    # For transitional resources, only process if order is in pending-provider state
-                    if (
-                        hasattr(resource, "order_in_progress")
-                        and not isinstance(resource.order_in_progress, Unset)
-                        and resource.order_in_progress is not None
-                    ):
-                        # Check order state
-                        if (
-                            hasattr(resource.order_in_progress, "state")
-                            and not isinstance(resource.order_in_progress.state, Unset)
-                            and resource.order_in_progress.state
-                            in ["pending-consumer", "pending-project", "pending-start-date"]
-                        ):
-                            logger.info(
-                                "Skipping resource %s in transitional state (%s) - "
-                                "order state is %s, which is in early pending states",
-                                resource.uuid,
-                                resource.state,
-                                resource.order_in_progress.state,
-                            )
-                            continue
-
-                        # Display order URL for transitional resources with pending-provider order
-                        if hasattr(resource.order_in_progress, "url") and not isinstance(
-                            resource.order_in_progress.url, Unset
-                        ):
-                            logger.info(
-                                "Resource in transitional state (%s) with pending-provider order - "
-                                "Order URL: %s",
-                                resource.state,
-                                resource.order_in_progress.url,
-                            )
-                        else:
-                            # Log that URL field is not available
-                            logger.warning(
-                                "Resource in transitional state (%s) with pending-provider order "
-                                "but order URL not available",
-                                resource.state,
-                            )
-                    else:
-                        # No order in progress for transitional resource - skip it
-                        logger.info(
-                            "Skipping resource %s in transitional state (%s) - no order",
-                            resource.uuid,
-                            resource.state,
-                        )
-                        continue
 
                 # Create project-level resource (the original resource)
                 storage_resource = self._create_storage_resource_json(
