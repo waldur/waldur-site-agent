@@ -157,6 +157,7 @@ class MembershipSyncTest(unittest.TestCase):
             params={
                 "offering_uuid": self.offering.uuid,
                 "state": ["OK", "Erred"],
+                "page_size": 100,
             },
         ).respond(200, json=[self.waldur_resource.to_dict()])
         respx.post(
@@ -164,7 +165,8 @@ class MembershipSyncTest(unittest.TestCase):
         ).respond(200, json={"status": "OK"})
         service_provider = ServiceProvider(uuid=uuid.uuid4())
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering.customer_uuid.hex}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/",
+            params={"customer_uuid": self.waldur_offering.customer_uuid.hex},
         ).respond(200, json=[service_provider.to_dict()])
         service_account = ProjectServiceAccount(
             url="",
@@ -184,7 +186,8 @@ class MembershipSyncTest(unittest.TestCase):
             state=ServiceAccountState.OK,
         )
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/project_service_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/project_service_accounts/",
+            params={"project_uuid": self.waldur_resource.project_uuid.hex, "page_size": 100},
         ).respond(200, json=[service_account.to_dict()])
         course_account = CourseAccount(
             url="",
@@ -206,7 +209,8 @@ class MembershipSyncTest(unittest.TestCase):
             project_end_date=datetime.now(),
         )
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/course_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/course_accounts/",
+            params={"project_uuid": self.waldur_resource.project_uuid.hex, "page_size": 100},
         ).respond(200, json=[course_account.to_dict()])
         return respx.post(
             f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_limits/"

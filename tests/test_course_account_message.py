@@ -87,13 +87,15 @@ class CourseAccountMessageTest(TestCase):
             f"{self.BASE_URL}/api/marketplace-provider-offerings/{self.offering_uuid}/"
         ).respond(200, json={"customer_uuid": customer_uuid, "components": []})
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/?customer_uuid={customer_uuid}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/",
+            params={"customer_uuid": customer_uuid},
         ).respond(200, json=[self.service_provider.to_dict()])
         respx.get(url__regex=r".*/api/marketplace-provider-resources/.*").respond(
             200, json=[self.waldur_resource.to_dict()]
         )
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/?username={self.course_account.username}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/",
+            params={"username": self.course_account.username, "page_size": 100},
         ).respond(200, json=[self.course_account.to_dict()])
 
     @mock.patch("waldur_site_agent.common.processors.utils.get_backend_for_offering")
@@ -421,7 +423,8 @@ class CourseAccountMessageTest(TestCase):
         )
 
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}&page_size=100&page=1",
+            f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/",
+            params={"project_uuid": self.waldur_resource.project_uuid.hex, "page_size": 100},
         ).respond(200, json=[active_account.to_dict(), closed_account.to_dict()])
 
         processor = OfferingMembershipProcessor(self.offering, self.waldur_rest_client)
@@ -487,7 +490,8 @@ class CourseAccountMessageTest(TestCase):
         )
 
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/?project_uuid={self.waldur_resource.project_uuid.hex}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/{self.service_provider.uuid.hex}/course_accounts/",
+            params={"project_uuid": self.waldur_resource.project_uuid.hex, "page_size": 100},
         ).respond(200, json=[account_without_username.to_dict()])
 
         processor = OfferingMembershipProcessor(self.offering, self.waldur_rest_client)

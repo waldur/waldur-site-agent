@@ -65,7 +65,6 @@ from waldur_api_client.api.marketplace_service_providers import (
 from waldur_api_client.api.projects import projects_list
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
-    BackendResource,
     ComponentUsageCreateRequest,
     ComponentUsageItemRequest,
     CourseAccount,
@@ -85,7 +84,6 @@ from waldur_api_client.models.component_usage import ComponentUsage
 from waldur_api_client.models.component_user_usage_create_request import (
     ComponentUserUsageCreateRequest,
 )
-from waldur_api_client.models.component_user_usage_limit import ComponentUserUsageLimit
 from waldur_api_client.models.marketplace_orders_list_state_item import (
     MarketplaceOrdersListStateItem,
 )
@@ -120,7 +118,7 @@ from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.backends import BaseBackend
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
-from waldur_site_agent.common import agent_identity_management, pagination, structures, utils
+from waldur_site_agent.common import agent_identity_management, structures, utils
 from waldur_site_agent.common.structures import AccountType
 
 
@@ -413,14 +411,13 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             self.offering.name,
             self.offering.uuid,
         )
-        orders: list[OrderDetails] = marketplace_orders_list.sync(
+        orders = marketplace_orders_list.sync_all(
             client=self.waldur_rest_client,
             offering_uuid=self.offering.uuid,
             state=[
                 MarketplaceOrdersListStateItem.PENDING_PROVIDER,
                 MarketplaceOrdersListStateItem.EXECUTING,
             ],
-            page_size=100,
         )
 
         if not orders:
@@ -641,7 +638,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         try:
             logger.info("Fetching user context for resource %s", resource_uuid)
             # Get project team members
-            team: list[ProjectUser] | None = marketplace_provider_resources_team_list.sync(
+            team = marketplace_provider_resources_team_list.sync(
                 client=self.waldur_rest_client, uuid=resource_uuid
             )
 
@@ -651,8 +648,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             user_uuids = {user.uuid for user in team}
 
             # Get offering users
-            offering_users_all: list[OfferingUser] | None = pagination.get_all_paginated(
-                marketplace_offering_users_list.sync_detailed,
+            offering_users_all = marketplace_offering_users_list.sync_all(
                 client=self.waldur_rest_client,
                 offering_uuid=[self.offering.uuid],
                 is_restricted=False,
@@ -921,10 +917,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         if project_uuid is not None:
             filters["project_uuid"] = project_uuid
-        waldur_resources: list[WaldurResource] = pagination.get_all_paginated(
-            marketplace_provider_resources_list.sync_detailed,
+        waldur_resources = marketplace_provider_resources_list.sync_all(
             client=self.waldur_rest_client,
-            page_size=100,
             **filters,
         )
 
@@ -1019,10 +1013,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         filters: dict[str, Any] = {"user_uuid": user_uuid, "is_restricted": False}
         if offering_uuid is not None:
             filters["offering_uuid"] = [offering_uuid]
-        offering_users: list[OfferingUser] = marketplace_offering_users_list.sync(
-            client=self.waldur_rest_client, **filters
-        )
-        return offering_users
+        return marketplace_offering_users_list.sync_all(client=self.waldur_rest_client, **filters)
 
     def process_user_role_changed(self, user_uuid: str, project_uuid: str, granted: bool) -> None:
         """Process a user role change event.
@@ -1133,8 +1124,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             ObjectNotFoundError: If no offering users found
         """
         logger.info("Fetching Waldur offering users (OK and Requested)")
-        offering_users: list[OfferingUser] = pagination.get_all_paginated(
-            marketplace_offering_users_list.sync_detailed,
+        offering_users = marketplace_offering_users_list.sync_all(
             client=self.waldur_rest_client,
             offering_uuid=[self.offering.uuid],
             state=[
@@ -1312,7 +1302,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     username,
                     waldur_resource.uuid.hex,
                 )
-                user_limits: list[ComponentUserUsageLimit] = component_user_usage_limits_list.sync(
+                user_limits = component_user_usage_limits_list.sync_all(
                     client=self.waldur_rest_client,
                     resource_uuid=waldur_resource.uuid.hex,
                     username=username,
@@ -1352,8 +1342,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.warning("No service provider configured, skipping service accounts sync")
             return
 
-        service_accounts: list[ProjectServiceAccount] = pagination.get_all_paginated(
-            marketplace_service_providers_project_service_accounts_list.sync_detailed,
+        service_accounts = marketplace_service_providers_project_service_accounts_list.sync_all(
             service_provider_uuid=self.service_provider.uuid.hex,
             project_uuid=waldur_resource.project_uuid.hex,
             client=self.waldur_rest_client,
@@ -1383,8 +1372,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.warning("No service provider configured, skipping service accounts sync")
             return
 
-        course_accounts: list[CourseAccount] = pagination.get_all_paginated(
-            marketplace_service_providers_course_accounts_list.sync_detailed,
+        course_accounts = marketplace_service_providers_course_accounts_list.sync_all(
             service_provider_uuid=self.service_provider.uuid.hex,
             project_uuid=waldur_resource.project_uuid.hex,
             client=self.waldur_rest_client,
@@ -1466,9 +1454,11 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             "client": self.waldur_rest_client,
         }
         if account_type == AccountType.SERVICE_ACCOUNT:
-            accounts = marketplace_service_providers_project_service_accounts_list.sync(**params)
+            accounts = marketplace_service_providers_project_service_accounts_list.sync_all(
+                **params
+            )
         else:
-            accounts = marketplace_service_providers_course_accounts_list.sync(**params)
+            accounts = marketplace_service_providers_course_accounts_list.sync_all(**params)
 
         if len(accounts) == 0:
             logger.info(
@@ -1547,8 +1537,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 client=self.waldur_rest_client, uuid=self.offering.uuid
             )
         )
-        waldur_resources: list[WaldurResource] = pagination.get_all_paginated(
-            marketplace_provider_resources_list.sync_detailed,
+        waldur_resources = marketplace_provider_resources_list.sync_all(
             client=self.waldur_rest_client,
             offering_uuid=[self.offering.uuid],
         )
@@ -1672,7 +1661,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         current_time = backend_utils.get_current_time_in_timezone(self.timezone)
         month_start = backend_utils.month_start(current_time).date()
-        existing_usages: list[ComponentUsage] = marketplace_component_usages_list.sync(
+        existing_usages = marketplace_component_usages_list.sync_all(
             client=self.waldur_rest_client, resource_uuid=resource_uuid, billing_period=month_start
         )
         for component, amount in total_usage.items():
@@ -1795,12 +1784,10 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         if not usages:
             return
 
-        waldur_component_usages: list[ComponentUsage] | None = (
-            marketplace_component_usages_list.sync(
-                client=self.waldur_rest_client,
-                resource_uuid=waldur_resource_info.uuid.hex,
-                date_after=month_start,
-            )
+        waldur_component_usages = marketplace_component_usages_list.sync_all(
+            client=self.waldur_rest_client,
+            resource_uuid=waldur_resource_info.uuid.hex,
+            date_after=month_start,
         )
         logger.info("Setting per-user usages")
         for username, user_usage in usages.items():
@@ -1840,8 +1827,7 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
             )
             return
         waldur_project = waldur_projects[0]
-        existing_backend_resources: list[BackendResource] = pagination.get_all_paginated(
-            backend_resources_list.sync_detailed,
+        existing_backend_resources = backend_resources_list.sync_all(
             backend_id=local_resource_info.backend_id,
             project_uuid=waldur_project.uuid,
             offering_uuid=self.offering.uuid,
@@ -1889,8 +1875,7 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
         )
 
     def _get_waldur_resources(self) -> dict[str, WaldurResource]:
-        waldur_resources: list[WaldurResource] = pagination.get_all_paginated(
-            marketplace_provider_resources_list.sync_detailed,
+        waldur_resources = marketplace_provider_resources_list.sync_all(
             offering_uuid=[self.offering.uuid],
             state=[
                 MarketplaceProviderResourcesListStateItem.OK,

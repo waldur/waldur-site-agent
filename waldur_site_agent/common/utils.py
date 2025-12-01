@@ -82,7 +82,7 @@ from waldur_site_agent.backend.backends import (
     UnknownUsernameManagementBackend,
 )
 from waldur_site_agent.backend.exceptions import BackendError
-from waldur_site_agent.common import WALDUR_SITE_AGENT_VERSION, pagination, structures
+from waldur_site_agent.common import WALDUR_SITE_AGENT_VERSION, structures
 
 # Handle different Python versions
 if sys.version_info >= (3, 10):
@@ -631,14 +631,13 @@ def diagnostics() -> bool:
 
         logger.info("")
         try:
-            orders = marketplace_orders_list.sync(
+            orders = marketplace_orders_list.sync_all(
                 client=waldur_rest_client,
                 offering_uuid=offering_uuid,
                 state=[
                     MarketplaceOrdersListStateItem.PENDING_PROVIDER,
                     MarketplaceOrdersListStateItem.EXECUTING,
                 ],
-                page_size=100,
             )
             logger.info("Active orders:")
             format_string = "{:<10} {:<10} {:<10}"
@@ -682,8 +681,7 @@ def create_homedirs_for_offering_users() -> None:
             offering.verify_ssl,
             configuration.global_proxy,
         )
-        offering_users: list[OfferingUser] = pagination.get_all_paginated(
-            marketplace_offering_users_list.sync_detailed,
+        offering_users = marketplace_offering_users_list.sync_all(
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
             state=[MarketplaceOfferingUsersListStateItem.OK],
@@ -1018,8 +1016,7 @@ def sync_offering_users() -> None:
             offering.verify_ssl,
             configuration.global_proxy,
         )
-        offering_users: list[OfferingUser] = pagination.get_all_paginated(
-            marketplace_offering_users_list.sync_detailed,
+        offering_users = marketplace_offering_users_list.sync_all(
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
             is_restricted=False,
@@ -1080,8 +1077,7 @@ def sync_resource_limits() -> None:
             offering.verify_ssl,
             configuration.global_proxy,
         )
-        resources: list[WaldurResource] = pagination.get_all_paginated(
-            marketplace_resources_list.sync_detailed,
+        resources = marketplace_resources_list.sync_all(
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
             state=[MarketplaceResourcesListStateItem.OK, MarketplaceResourcesListStateItem.ERRED],
