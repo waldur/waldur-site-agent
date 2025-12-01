@@ -749,13 +749,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             logger.error("Error during order processing: Order is None")
             return False
 
-        waldur_resource: WaldurResource | None = marketplace_provider_resources_retrieve.sync(
+        waldur_resource = marketplace_provider_resources_retrieve.sync(
             uuid=order.marketplace_resource_uuid.hex, client=self.waldur_rest_client
         )
-        if not waldur_resource:
-            raise ObjectNotFoundError(
-                f"Waldur resource {order.marketplace_resource_uuid.hex} not found"
-            )
 
         create_resource = True
         if waldur_resource.backend_id != "":
@@ -803,11 +799,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         """
         logger.info("Updating limits for %s", order.resource_name)
         resource_uuid = order.marketplace_resource_uuid
-        waldur_resource: WaldurResource | None = marketplace_provider_resources_retrieve.sync(
+        waldur_resource = marketplace_provider_resources_retrieve.sync(
             uuid=resource_uuid, client=self.waldur_rest_client
         )
-        if not waldur_resource:
-            raise ObjectNotFoundError(f"Waldur resource {resource_uuid} not found")
 
         waldur_resource_backend_id = waldur_resource.backend_id
         new_limits: Unset | OrderDetailsLimits = order.limits
@@ -842,11 +836,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         """
         logger.info("Terminating resource %s", order.resource_name)
         resource_uuid = order.marketplace_resource_uuid
-        waldur_resource: WaldurResource | None = marketplace_provider_resources_retrieve.sync(
+        waldur_resource = marketplace_provider_resources_retrieve.sync(
             uuid=resource_uuid, client=self.waldur_rest_client
         )
-        if not waldur_resource:
-            raise ObjectNotFoundError(f"Waldur resource {resource_uuid} not found")
         project_slug = order.project_slug
 
         self.resource_backend.delete_resource(waldur_resource, project_slug=project_slug)
@@ -949,12 +941,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         """
         logger.info("Processing resource state and membership data, uuid: %s", resource_uuid)
         logger.info("Fetching resource from Waldur")
-        waldur_resource: WaldurResource | None = marketplace_provider_resources_retrieve.sync(
+        waldur_resource = marketplace_provider_resources_retrieve.sync(
             uuid=resource_uuid, client=self.waldur_rest_client
         )
-        if not waldur_resource:
-            raise ObjectNotFoundError(f"Waldur resource {resource_uuid} not found")
-
         if waldur_resource.state not in [
             ResourceState.OK,
             ResourceState.ERRED,
@@ -1532,10 +1521,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             self.offering.name,
             self.offering.uuid,
         )
-        waldur_offering: ProviderOfferingDetails | None = (
-            marketplace_provider_offerings_retrieve.sync(
-                client=self.waldur_rest_client, uuid=self.offering.uuid
-            )
+        waldur_offering = marketplace_provider_offerings_retrieve.sync(
+            client=self.waldur_rest_client, uuid=self.offering.uuid
         )
         waldur_resources = marketplace_provider_resources_list.sync_all(
             client=self.waldur_rest_client,
