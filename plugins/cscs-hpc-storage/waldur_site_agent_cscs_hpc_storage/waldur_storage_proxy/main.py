@@ -38,9 +38,7 @@ class StorageSystem(str, Enum):
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(
-    _request: Request, exc: RequestValidationError
-) -> JSONResponse:
+def validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
     """Custom validation error handler with helpful messages for storage_system validation."""
     # Check validation errors for storage_system parameter
     for error in exc.errors():
@@ -92,7 +90,7 @@ async def validation_exception_handler(
 
 
 @app.exception_handler(Exception)
-async def general_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+def general_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
     """Handle authentication and other general errors."""
     error_message = str(exc)
     logger.error("Unhandled exception in API: %s", exc, exc_info=True)
@@ -127,7 +125,7 @@ class User(BaseModel):
     preferred_username: str
 
 
-async def user_mapper(userinfo: dict) -> User:
+def user_mapper(userinfo: dict) -> User:
     """Maps user info to a custom user structure."""
     logger.info("Received userinfo in user_mapper: %s", userinfo)
     logger.info("Available userinfo keys: %s", list(userinfo.keys()) if userinfo else "None")
@@ -152,7 +150,7 @@ async def user_mapper(userinfo: dict) -> User:
     return User(preferred_username=preferred_username)
 
 
-async def mock_user() -> User:
+def mock_user() -> User:
     """Return a mock user when auth is disabled."""
     return User(preferred_username="dev_user")
 
@@ -208,7 +206,7 @@ OIDCUserDependency = Annotated[User, Depends(user_dependency)]
 
 
 @app.get("/api/storage-resources/")
-async def storage_resources(
+def storage_resources(
     user: OIDCUserDependency,
     storage_system: Annotated[
         Optional[StorageSystem], Query(description="Optional: Storage system filter")
