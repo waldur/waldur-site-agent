@@ -72,7 +72,8 @@ def setup_common_respx_mocks(
         ).respond(200, json=waldur_offering)
     service_provider = ServiceProvider(uuid=uuid.uuid4())
     respx.get(
-        f"{base_url}/api/marketplace-service-providers/?customer_uuid={waldur_offering['customer_uuid']}"
+        f"{base_url}/api/marketplace-service-providers/",
+        params={"customer_uuid": waldur_offering["customer_uuid"]},
     ).respond(200, json=[service_provider.to_dict()])
 
 
@@ -630,7 +631,8 @@ class UpdateOrderTest(unittest.TestCase):
         ).respond(200, json={})
         service_provider = ServiceProvider(uuid=uuid.uuid4())
         respx.get(
-            f"{self.base_url}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering['customer_uuid']}"
+            f"{self.base_url}/api/marketplace-service-providers/",
+            params={"customer_uuid": self.waldur_offering["customer_uuid"]},
         ).respond(200, json=[service_provider.to_dict()])
 
         slurm_client = slurm_client_class.return_value

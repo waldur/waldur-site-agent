@@ -116,7 +116,8 @@ class ProcessorTimezoneTest(unittest.TestCase):
         ).respond(200, json=self.waldur_offering_response)
         service_provider = ServiceProvider(uuid=uuid.uuid4())
         respx.get(
-            f"{BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering_response['customer_uuid']}"
+            f"{BASE_URL}/api/marketplace-service-providers/",
+            params={"customer_uuid": self.waldur_offering_response["customer_uuid"]},
         ).respond(200, json=[service_provider.to_dict()])
 
         processor = OfferingReportProcessor(self.waldur_offering, self.mock_client, "UTC")
@@ -131,7 +132,8 @@ class ProcessorTimezoneTest(unittest.TestCase):
 
         service_provider = ServiceProvider(uuid=uuid.uuid4())
         respx.get(
-            f"{BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering_response['customer_uuid']}"
+            f"{BASE_URL}/api/marketplace-service-providers/",
+            params={"customer_uuid": self.waldur_offering_response["customer_uuid"]},
         ).respond(200, json=[service_provider.to_dict()])
 
         processor = OfferingReportProcessor(self.waldur_offering, self.mock_client, "")
@@ -215,7 +217,8 @@ class TimezoneIntegrationTest(unittest.TestCase):
         ).respond(200, json=self.waldur_offering_response)
         service_provider = ServiceProvider(uuid=uuid.uuid4())
         respx.get(
-            f"{BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering_response['customer_uuid']}"
+            f"{BASE_URL}/api/marketplace-service-providers/",
+            params={"customer_uuid": self.waldur_offering_response["customer_uuid"]},
         ).respond(200, json=[service_provider.to_dict()])
         processor = OfferingReportProcessor(self.waldur_offering, self.mock_client, "UTC")
         assert processor.timezone == "UTC"

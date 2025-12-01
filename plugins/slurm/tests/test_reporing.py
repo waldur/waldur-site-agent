@@ -106,6 +106,7 @@ class ReportingTest(unittest.TestCase):
             f"{self.BASE_URL}/api/marketplace-provider-resources/",
             params={
                 "offering_uuid": self.offering.uuid,
+                "page_size": 100,
             },
         ).respond(200, json=[self.waldur_resource])
         respx.get(
@@ -178,7 +179,7 @@ class ReportingTest(unittest.TestCase):
             f"{self.BASE_URL}/api/marketplace-provider-resources/",
             params={
                 "offering_uuid": self.offering.uuid,
-                "state": ["OK", "Erred"],
+                "page_size": 100,
             },
         ).respond(200, json=[self.waldur_resource])
         respx.get(
