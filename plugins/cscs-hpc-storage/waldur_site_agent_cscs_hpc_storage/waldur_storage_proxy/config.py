@@ -22,18 +22,6 @@ class AuthConfig:
 
 
 @dataclass
-class HpcUserApiConfig:
-    """HPC User API configuration."""
-
-    api_url: Optional[str] = None
-    client_id: Optional[str] = None
-    client_secret: Optional[str] = None
-    oidc_token_url: Optional[str] = None
-    oidc_scope: Optional[str] = None
-    socks_proxy: Optional[str] = None  # SOCKS proxy URL (e.g., "socks5://localhost:12345")
-
-
-@dataclass
 class StorageProxyConfig:
     """Configuration for the CSCS Storage Proxy."""
 
@@ -46,7 +34,6 @@ class StorageProxyConfig:
     waldur_verify_ssl: bool = True
     waldur_socks_proxy: Optional[str] = None  # SOCKS proxy URL for Waldur API connections
     auth: Optional[AuthConfig] = None
-    hpc_user_api: Optional[HpcUserApiConfig] = None
 
     @property
     def offering_slugs(self) -> list[str]:
@@ -75,19 +62,6 @@ class StorageProxyConfig:
                 keycloak_client_secret=auth_data.get("keycloak_client_secret"),
             )
 
-        # Parse HPC User API config if present
-        hpc_user_api_config = None
-        if "hpc_user_api" in data:
-            hpc_api_data = data["hpc_user_api"]
-            hpc_user_api_config = HpcUserApiConfig(
-                api_url=hpc_api_data.get("api_url"),
-                client_id=hpc_api_data.get("client_id"),
-                client_secret=hpc_api_data.get("client_secret"),
-                oidc_token_url=hpc_api_data.get("oidc_token_url"),
-                oidc_scope=hpc_api_data.get("oidc_scope"),
-                socks_proxy=hpc_api_data.get("socks_proxy"),
-            )
-
         return cls(
             waldur_api_url=data["waldur_api_url"],
             waldur_api_token=data["waldur_api_token"],
@@ -97,7 +71,6 @@ class StorageProxyConfig:
             backend_components=data.get("backend_components", {}),
             storage_systems=data.get("storage_systems", {}),
             auth=auth_config,
-            hpc_user_api=hpc_user_api_config,
         )
 
     def validate(self) -> None:

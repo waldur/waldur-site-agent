@@ -41,14 +41,3 @@ auth:
   keycloak_realm: "cscs"
   keycloak_client_id: "YOUR_CLIENT_ID"
   keycloak_client_secret: "YOUR_CLIENT_SECRET"
-
-# HPC User API Configuration (optional)
-# External service for retrieving Unix GID values for storage accounts
-# If not configured, mock GID values will be used
-hpc_user_api:
-  api_url: "https://hpc-user-api.example.com"  # Base URL of HPC User API
-  client_id: "YOUR_HPC_CLIENT_ID"  # OAuth2 client ID
-  client_secret: "YOUR_HPC_CLIENT_SECRET"  # OAuth2 client secret
-  oidc_token_url: "https://auth.example.com/token"  # OAuth2 token endpoint
-  oidc_scope: "openid"  # OAuth2 scope for authentication
-  # socks_proxy: "socks5://localhost:12345"  # SOCKS proxy URL (optional, uncomment if API is behind proxy)

@@ -34,6 +34,13 @@ def backend():
     return CscsHpcStorageBackend(backend_settings, backend_components)
 
 
+@pytest.fixture(autouse=True)
+def mock_gid_lookup():
+    """Mock GID lookup for all tests in this module."""
+    with patch.object(CscsHpcStorageBackend, "_get_project_unix_gid", return_value=30000):
+        yield
+
+
 def create_mock_resource(
     resource_uuid: Optional[str] = None,
     customer_slug: str = "test-customer",
@@ -228,7 +235,8 @@ class TestProjectLevelGeneration:
             storage_limit=150.0,
         )
 
-        result = backend._create_storage_resource_json(resource, "capstor")
+        mock_client = Mock()
+        result = backend._create_storage_resource_json(resource, "capstor", mock_client)
 
         # Verify structure
         assert result["target"]["targetType"] == "project"
@@ -256,7 +264,10 @@ class TestProjectLevelGeneration:
         resource = create_mock_resource()
         resource.attributes.additional_properties["permissions"] = "0755"
 
-        result = backend._create_storage_resource_json(resource, "capstor")
+        resource.attributes.additional_properties["permissions"] = "0755"
+
+        mock_client = Mock()
+        result = backend._create_storage_resource_json(resource, "capstor", mock_client)
 
         assert result["permission"]["value"] == "0755"
 
@@ -353,7 +364,10 @@ class TestThreeTierHierarchyGeneration:
                     customer_entries[customer_key] = customer_resource["itemId"]
 
             # Create project entry
-            project_resource = backend._create_storage_resource_json(resource, storage_system_name)
+            mock_client = Mock()
+            project_resource = backend._create_storage_resource_json(
+                resource, storage_system_name, mock_client
+            )
             if project_resource and customer_key in customer_entries:
                 project_resource["parentItemId"] = customer_entries[customer_key]
             storage_resources.append(project_resource)
@@ -506,7 +520,6 @@ class TestEdgeCases:
             # Process with empty customer info
             storage_resources = []
             tenant_entries = {}
-            customer_entries = {}
 
             tenant_key = f"cscs-capstor-store"
             tenant_resource = backend._create_tenant_storage_resource_json(
@@ -518,12 +531,11 @@ class TestEdgeCases:
             storage_resources.append(tenant_resource)
             tenant_entries[tenant_key] = tenant_resource["itemId"]
 
-            # Customer creation should be skipped
-            customer_key = f"unknown-customer-capstor-store"
-            # No customer entry created
-
             # Project should still be created but without parent
-            project_resource = backend._create_storage_resource_json(resource, "capstor")
+            mock_client = Mock()
+            project_resource = backend._create_storage_resource_json(
+                resource, "capstor", mock_client
+            )
             if project_resource:
                 # No parent since customer doesn't exist
                 project_resource["parentItemId"] = None
@@ -639,7 +651,8 @@ class TestIntegrationScenarios:
                 customer_entries[customer_key] = customer["itemId"]
 
             # Create project
-            project = backend._create_storage_resource_json(resource, storage_system)
+            mock_client = Mock()
+            project = backend._create_storage_resource_json(resource, storage_system, mock_client)
             if project is not None:  # Check if project creation was successful
                 project["parentItemId"] = customer_entries[customer_key]
                 all_resources.append(project)
