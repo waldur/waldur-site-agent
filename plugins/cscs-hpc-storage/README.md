@@ -16,9 +16,10 @@ servers and storage management systems.
 - **Hierarchical storage structure**: Maps Waldur offering customer → resource customer → resource project to
   storage tenant → customer → project
 - **Configurable quotas**: Automatic inode quota calculation based on storage size
-- **External HPC User API integration**: Fetches Unix GID values for storage accounts with configurable SOCKS proxy support
-- **GID caching**: Project GID values are cached in memory until server restart to reduce external API calls
-- **Mock data support**: Development/testing mode with generated target item data
+- **UNIX GID from Waldur API**: Fetches project Unix GID values from Waldur project metadata
+- **GID caching**: Project GID values are cached in memory until server restart to reduce API calls
+- **Configurable GID field**: Specify custom backend_metadata field name for Unix GID lookup
+- **Mock data support**: Development/testing mode with generated target item data and fallback GID values
 - **Flexible configuration**: Customizable file system types and quota coefficients
 - **API Filtering**: Supports filtering by storage system, data type, status, and pagination
 
@@ -32,6 +33,8 @@ backend_settings:
   inode_soft_coefficient: 1.33                # Multiplier for soft inode limits
   inode_hard_coefficient: 2.0                 # Multiplier for hard inode limits
   use_mock_target_items: false                # Enable mock data for development
+  unix_gid_field: "unix_gid"                  # Field name in project backend_metadata for Unix GID (default: "unix_gid")
+  development_mode: false                     # Enable development mode with fallback mock GID values
 ```
 
 ### Backend Components
@@ -58,38 +61,6 @@ storage_systems:
   iopsstor: "iopsstor"                        # IOPSSTOR storage system
 ```
 
-### HPC User API Configuration
-
-The backend can integrate with an external HPC User API to retrieve Unix GID values for storage accounts.
-This configuration is optional - if not provided, mock GID values will be used.
-
-```yaml
-# HPC User API Configuration (optional)
-# External service for retrieving Unix GID values for storage accounts
-hpc_user_api:
-  api_url: "https://hpc-user-api.example.com"          # Base URL of HPC User API
-  client_id: "YOUR_HPC_CLIENT_ID"                      # OAuth2 client ID
-  client_secret: "YOUR_HPC_CLIENT_SECRET"              # OAuth2 client secret
-  oidc_token_url: "https://auth.example.com/token"     # OAuth2 token endpoint
-  oidc_scope: "openid"                                 # OAuth2 scope for authentication
-  socks_proxy: "socks5://localhost:12345"              # SOCKS proxy URL (optional)
-```
-
-**HPC User API Features:**
-
-- **OAuth2 authentication**: Automatic token acquisition and refresh
-- **GID caching**: Project GID values are cached in memory until server restart
-- **SOCKS proxy support**: Configurable SOCKS proxy for accessing APIs behind firewalls
-- **Fallback to mock data**: If API is unavailable, uses generated mock GID values
-- **Cache statistics**: Available via `get_gid_cache_stats()` method for monitoring
-
-**SOCKS Proxy Support:**
-
-- Use `socks_proxy` field to configure SOCKS proxy access to the HPC User API
-- Format: `socks5://host:port` or `socks4://host:port`
-- Useful when the HPC User API is behind a firewall or requires proxy access
-- Optional field - if not specified, direct connection is used
-
 ## Architecture
 
 The CSCS HPC Storage backend provides a REST API proxy that serves storage resource information:
@@ -106,19 +77,18 @@ graph TD
         BACKEND[CSCS Backend<br/>Data Processing]
         TRANSFORM[Data Transformation<br/>Waldur → CSCS Format]
         CACHE[GID Cache<br/>In-Memory Storage]
-        HPCCLIENT[HPC User Client<br/>OAuth2 + SOCKS Proxy]
+        GIDFETCH[GID Fetching<br/>Project Metadata]
     end
 
     subgraph "Waldur Integration"
         WM[Waldur Mastermind<br/>API Client]
         RESOURCES[Multi-Offering<br/>Resource Fetching]
+        PROJECTS[Project API<br/>backend_metadata]
     end
 
     subgraph "External Systems"
         CLIENT[Client Applications<br/>Web UI, Scripts]
         SMS[Storage Management<br/>System]
-        HPCAPI[HPC User API<br/>Unix GID Service]
-        PROXY[SOCKS Proxy<br/>localhost:12345]
     end
 
     %% API Flow
@@ -130,18 +100,18 @@ graph TD
     TRANSFORM --> RESOURCES
     RESOURCES --> WM
 
-    %% HPC API Flow
+    %% GID Fetching Flow
     BACKEND --> CACHE
-    CACHE --> HPCCLIENT
-    HPCCLIENT --> PROXY
-    PROXY --> HPCAPI
+    CACHE --> GIDFETCH
+    GIDFETCH --> PROJECTS
+    PROJECTS --> WM
 
     %% Response Flow
     WM --> RESOURCES
+    WM --> PROJECTS
+    PROJECTS --> GIDFETCH
+    GIDFETCH --> CACHE
     RESOURCES --> TRANSFORM
-    HPCAPI --> PROXY
-    PROXY --> HPCCLIENT
-    HPCCLIENT --> CACHE
     CACHE --> BACKEND
     TRANSFORM --> BACKEND
     BACKEND --> SP
@@ -159,9 +129,9 @@ graph TD
     classDef cache stroke:#e91e63,stroke-width:2px,color:#c2185b
 
     class SP,API,AUTH proxy
-    class BACKEND,TRANSFORM,HPCCLIENT plugin
-    class WM,RESOURCES waldur
-    class CLIENT,SMS,HPCAPI,PROXY external
+    class BACKEND,TRANSFORM,GIDFETCH plugin
+    class WM,RESOURCES,PROJECTS waldur
+    class CLIENT,SMS external
     class CACHE cache
 ```
 
@@ -554,14 +524,95 @@ The storage proxy now supports aggregating resources from multiple storage syste
 - **Consistent filtering**: Filters work across all storage systems or can target specific ones
 - **Resource aggregation**: Resources from multiple offerings are combined and properly paginated
 
-### HPC User API Integration
+### UNIX GID Fetching from Waldur API
 
-Integration with external HPC User API for Unix GID management:
+The backend fetches Unix GID values for projects directly from Waldur's project metadata:
 
-- **OAuth2 authentication**: Automatic token acquisition and management
-- **SOCKS proxy support**: Access APIs behind firewalls via configurable SOCKS proxy
-- **GID caching**: Project GID values cached in memory until server restart
-- **Graceful fallbacks**: Mock GID values used when API is unavailable
+```mermaid
+flowchart TD
+    START(["Backend needs Unix GID<br/>for project"]) --> CHECK_CACHE{"GID in<br/>cache?"}
+
+    CHECK_CACHE -->|Yes| RETURN_CACHED["Return cached GID"]
+    CHECK_CACHE -->|No| FETCH["Fetch project from<br/>Waldur API"]
+
+    FETCH --> API_CALL["GET /api/projects/{uuid}/<br/>with client credentials"]
+    API_CALL --> CHECK_META{"backend_metadata<br/>has GID field?"}
+
+    CHECK_META -->|Yes| EXTRACT["Extract GID from<br/>backend_metadata[unix_gid_field]"]
+    CHECK_META -->|No| CHECK_DEV{"Development<br/>mode enabled?"}
+
+    EXTRACT --> CACHE["Cache GID by<br/>project UUID"]
+    CACHE --> RETURN_FETCHED["Return GID"]
+
+    CHECK_DEV -->|Yes| MOCK["Generate deterministic<br/>mock GID from project slug<br/>(30000 + hash % 10000)"]
+    CHECK_DEV -->|No| ERROR["Raise BackendError:<br/>GID not found"]
+
+    MOCK --> CACHE
+
+    RETURN_CACHED --> END(["GID available for<br/>target item creation"])
+    RETURN_FETCHED --> END
+    ERROR --> END
+
+    style START fill:#e3f2fd
+    style END fill:#e8f5e9
+    style CHECK_CACHE fill:#fff9c4
+    style CHECK_META fill:#fff9c4
+    style CHECK_DEV fill:#fff9c4
+    style CACHE fill:#fce4ec
+    style ERROR fill:#ffebee
+    style MOCK fill:#f3e5f5
+```
+
+**Key Features:**
+
+- **Direct Waldur API integration**: Uses `projects_retrieve` endpoint to fetch project details
+- **Configurable field name**: The `unix_gid_field` setting
+  (default: `"unix_gid"`) specifies which field in `backend_metadata` contains the GID
+- **In-memory caching**: Project GID values are cached by UUID until server restart to minimize API calls
+- **Development mode fallback**: When `development_mode: true`, generates deterministic mock GID values if not found in metadata
+- **Production error handling**: In production mode, raises `BackendError` if GID is not found in project metadata
+- **Automatic cache key management**: Uses project UUID as cache key for consistent lookups
+
+**Configuration:**
+
+```yaml
+backend_settings:
+  unix_gid_field: "unix_gid"          # Field name in project.backend_metadata (default: "unix_gid")
+  development_mode: false             # Enable fallback to mock GID values (default: false)
+```
+
+**Project Metadata Structure:**
+
+The backend expects the Unix GID to be stored in the project's `backend_metadata`:
+
+```json
+{
+  "uuid": "project-uuid-here",
+  "name": "My Project",
+  "backend_metadata": {
+    "unix_gid": 30042
+  }
+}
+```
+
+**Custom Field Example:**
+
+If your Waldur deployment uses a different field name:
+
+```yaml
+backend_settings:
+  unix_gid_field: "custom_gid_field"
+```
+
+Then the backend will look for:
+
+```json
+{
+  "backend_metadata": {
+    "custom_gid_field": 30042
+  }
+}
+```
 
 ### Data Type Filtering Fix
 
@@ -582,17 +633,18 @@ Resolved data_type filtering issues that affected multi-storage-system queries:
 - Check that the storage system has resources with the specified data type
 - Use `debug=true` to inspect raw data and verify data type values
 
-**SOCKS proxy connection issues:**
+**GID not found errors:**
 
-- Verify the proxy is running: `netstat -an | grep 12345`
-- Check proxy format: use `socks5://localhost:12345` not just `localhost:12345`
-- Ensure httpx[socks] dependency is installed: `uv add "httpx[socks]"`
+- Ensure project has `backend_metadata` with the configured GID field
+- Check field name matches `unix_gid_field` setting (default: `"unix_gid"`)
+- Enable `development_mode: true` for testing with mock GID values
+- Verify project UUID is correct in resource data
 
 **GID cache not working:**
 
 - Cache statistics available via backend's `get_gid_cache_stats()` method
 - Cache persists until server restart (no TTL-based expiration)
-- Mock values are used if HPC User API is unavailable
+- Mock values are used in development mode when GID is not found in metadata
 
 **Empty filter results:**
 
@@ -602,10 +654,10 @@ Resolved data_type filtering issues that affected multi-storage-system queries:
 
 ### Performance Considerations
 
-- **GID caching**: Reduces external API calls by caching project GIDs until server restart
+- **GID caching**: Reduces Waldur API calls by caching project GIDs by UUID until server restart
 - **Multi-offering efficiency**: Single API call to Waldur with comma-separated offering slugs
 - **Pagination**: Applied after filtering to ensure accurate page counts
-- **SOCKS proxy overhead**: Minimal latency impact for accessing external APIs
+- **Lazy GID fetching**: GIDs are only fetched when creating storage resource JSON, not during initial resource listing
 
 ## Related Plugins
 
