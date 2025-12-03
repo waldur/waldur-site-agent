@@ -409,7 +409,6 @@ When contributing to this plugin:
 ### Storage Plugins
 
 - [Croit S3 Plugin](../croit-s3/README.md) - Croit S3 storage management
-- [CSCS HPC Storage Plugin](../cscs-hpc-storage/README.md) - CSCS HPC storage management
 
 ### Utility Plugins
 

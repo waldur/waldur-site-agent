@@ -508,10 +508,6 @@ Use standard Python logging configuration or waldur-site-agent logging settings 
 - [OpenShift/OKD Plugin](../okd/README.md) - OpenShift and OKD container platform management
 - [Harbor Plugin](../harbor/README.md) - Harbor container registry management
 
-### Storage Plugins
-
-- [CSCS HPC Storage Plugin](../cscs-hpc-storage/README.md) - CSCS HPC storage management
-
 ### Accounting Plugins
 
 - [CSCS DWDI Plugin](../cscs-dwdi/README.md) - CSCS DWDI accounting integration
