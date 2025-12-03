@@ -314,25 +314,3 @@ Publish multiarch waldur-site-agent docker image latest:
 
 Publish multiarch waldur-site-agent docker image with version:
   extends: .Publish multiarch docker image with specific version template
-
-Publish multiarch latest docker image:
-  stage: release
-  interruptible: true
-  image: registry.hpc.ut.ee/mirror/docker:latest
-  services:
-    - name: public.ecr.aws/docker/library/docker:dind
-      command: ["--mtu=1400"]
-      alias: docker
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  before_script:
-    - apk update
-    - apk add --no-cache gcc python3-dev musl-dev linux-headers openldap-dev openssl libffi-dev libjpeg-turbo-dev libxml2-dev libxslt-dev
-    - echo "$WALDUR_DOCKER_HUB_PASSWORD" | docker login $DOCKER_HUB_REGISTRY --username "$WALDUR_DOCKER_HUB_USER" --password-stdin
-  script:
-    - docker context create builder
-    - docker buildx version
-    - docker buildx create builder --use
-    - docker buildx build --platform linux/amd64,linux/arm64 --build-arg DOCKER_REGISTRY=${DOCKER_REGISTRY} -f Dockerfile.waldur-storage-proxy -t opennode/waldur-cscs-storage-proxy:latest --push .
