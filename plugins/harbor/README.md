@@ -479,7 +479,6 @@ This plugin is part of the Waldur Site Agent project and follows the same licens
 ### Storage Plugins
 
 - [Croit S3 Plugin](../croit-s3/README.md) - Croit S3 storage management
-- [CSCS HPC Storage Plugin](../cscs-hpc-storage/README.md) - CSCS HPC storage management
 
 ### Accounting Plugins
 

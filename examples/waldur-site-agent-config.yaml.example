@@ -61,20 +61,3 @@ offerings: # Settings for offerings
         measured_unit: 'EUR'
         accounting_type: limit
         label: Deposit (EUR)
-  - name: "Example CSCS HPC Storage Offering"
-    waldur_api_url: "http://localhost:8081/api/"
-    waldur_api_token: ""
-    waldur_offering_uuid: ""
-    backend_type: "cscs-hpc-storage" # Backend type for CSCS HPC Storage
-    backend_settings:
-      output_directory: "cscs-storage-orders/" # Directory for JSON output files
-      storage_file_system: "lustre" # Storage file system type
-      inode_soft_coefficient: 1.33 # Soft inode limit multiplier
-      inode_hard_coefficient: 2.0 # Hard inode limit multiplier
-      use_mock_target_items: false # Use real targetItem data from backend_metadata
-    backend_components:
-      storage: # Storage component for quota management
-        measured_unit: "TB" # Storage measured in terabytes
-        accounting_type: "limit" # Limit-based accounting
-        label: "Storage" # Component label in Waldur
-        unit_factor: 1 # TB to TB conversion factor
