@@ -9,22 +9,21 @@ from respx import Route
 from waldur_api_client import models
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models import (
-    ResourceState,
-    ServiceProvider,
-    ProjectServiceAccount,
-    ServiceAccountState,
     CourseAccount,
     OfferingUserState,
+    ProjectServiceAccount,
+    ResourceState,
+    ServiceAccountState,
+    ServiceProvider,
 )
 from waldur_api_client.models.offering_state import OfferingState
-from waldur_api_client.models.storage_mode_enum import StorageModeEnum
 from waldur_api_client.models.resource_limits import ResourceLimits
+from waldur_api_client.models.storage_mode_enum import StorageModeEnum
 from waldur_site_agent_slurm import backend
 
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingMembershipProcessor
-from waldur_site_agent.common.utils import get_client
 
 waldur_client_mock = mock.Mock()
 slurm_backend_mock = mock.Mock()

@@ -8,8 +8,9 @@ import respx
 from freezegun import freeze_time
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.models import ServiceProvider
-from waldur_site_agent.backend.utils import format_current_month, get_current_time_in_timezone
 from waldur_site_agent_slurm import backend
+
+from waldur_site_agent.backend.utils import format_current_month, get_current_time_in_timezone
 from waldur_site_agent.common.processors import OfferingReportProcessor
 from waldur_site_agent.common.structures import Offering
 

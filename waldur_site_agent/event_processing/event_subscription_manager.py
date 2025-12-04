@@ -30,6 +30,7 @@ OBJECT_TYPE_TO_HANDLER_STOMP = {
     "importable_resources": handlers.on_importable_resources_message_stomp,
     "service_account": handlers.on_account_message_stomp,
     "course_account": handlers.on_account_message_stomp,
+    "resource_periodic_limits_update": handlers.on_resource_periodic_limits_update_stomp,
 }
 PID_FILE_PATH = "/var/run/waldur_site_agent.pid"
 

@@ -44,6 +44,7 @@ dev = [
     "respx>=0.22.0,<0.23",
     "httpx>=0.28.1,<0.29",
     "ruff>=0.12.1,<0.13",
+    "slurm-emulator>=0.1.1",
 ]
 
 [tool.hatch.metadata]

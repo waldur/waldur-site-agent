@@ -12,7 +12,6 @@ from tests.fixtures import OFFERING
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingReportProcessor
-from waldur_site_agent.common.utils import get_client
 
 waldur_client_mock = mock.Mock()
 slurm_backend_mock = mock.Mock()
