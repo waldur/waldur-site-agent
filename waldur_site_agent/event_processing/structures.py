@@ -98,3 +98,23 @@ class AccountMessage(TypedDict):
     project_uuid: str
     project_name: str
     action: str
+
+
+class PeriodicLimitsMessage(TypedDict):
+    """Represents a message for SLURM periodic limits updates.
+
+    Attributes:
+        resource_uuid (str): UUID of the resource in Waldur
+        backend_id (str): Backend resource ID (SLURM account name)
+        offering_uuid (str): UUID of the offering
+        action (str): Action to perform ('apply_periodic_settings')
+        settings (dict): SLURM settings to apply (fairshare, limits, thresholds)
+        timestamp (str): Current period timestamp
+    """
+
+    resource_uuid: str
+    backend_id: str
+    offering_uuid: str
+    action: str
+    settings: dict
+    timestamp: str

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
+import datetime
 import re
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from waldur_site_agent.backend import clients
 from waldur_site_agent.backend import utils as backend_utils
@@ -341,3 +344,181 @@ class SlurmClient(clients.BaseClient):
             account_command.append("--immediate")
         account_command.extend(command)
         return self.execute_command(account_command, silent=silent)
+
+    # ===== PERIODIC LIMITS EXTENSION =====
+
+    def set_account_fairshare(self, account: str, fairshare: int) -> bool:
+        """Set fairshare for account hierarchy."""
+        try:
+            self._execute_command(["modify", "account", account, "set", f"fairshare={fairshare}"])
+            return True
+        except BackendError as e:
+            raise BackendError(f"Failed to set fairshare for account {account}: {e}") from e
+
+    def set_account_limits(self, account: str, limit_type: str, limits: dict) -> bool:
+        """Set GrpTRESMins, MaxTRESMins, or GrpTRES limits."""
+        try:
+            for tres_type, value in limits.items():
+                limit_spec = f"{limit_type}={tres_type}={value}"
+                self._execute_command(["modify", "account", account, "set", limit_spec])
+            return True
+        except BackendError as e:
+            raise BackendError(
+                f"Failed to set {limit_type} limits for account {account}: {e}"
+            ) from e
+
+    def get_current_usage(
+        self, account: str, start_date: Optional[str] = None, end_date: Optional[str] = None
+    ) -> dict:
+        """Get current period usage for threshold checking (returns billing units)."""
+        try:
+            # Default to current quarter if dates not specified
+            if not start_date or not end_date:
+                now = datetime.datetime.now(tz=ZoneInfo("UTC")).date()
+                # Calculate quarter start
+                quarter_months = 3
+                fourth_quarter = 4
+                quarter = (now.month - 1) // quarter_months + 1
+                start_date = f"{now.year}-{(quarter - 1) * quarter_months + 1:02d}-01"
+                # Calculate quarter end
+                if quarter == fourth_quarter:
+                    end_date = f"{now.year}-12-31"
+                else:
+                    next_quarter_start = datetime.date(now.year, quarter * quarter_months + 1, 1)
+                    end_date = (next_quarter_start - datetime.timedelta(days=1)).strftime(
+                        "%Y-%m-%d"
+                    )
+
+            # Get usage data from sacct
+            command = [
+                "show",
+                "account",
+                account,
+                "where",
+                f"account={account}",
+                "format=account,grptresraw",
+            ]
+            output = self._execute_command(command, command_name="sacct")
+
+            # Parse TRES usage - this is a simplified implementation
+            # In production, you'd parse the actual TRES usage format
+            usage_data = {"billing": 0, "node": 0, "cpu": 0, "mem": 0, "gpu": 0}
+
+            # Basic parsing (would need to be enhanced for production)
+            for line in output.splitlines():
+                if "|" in line and account in line:
+                    # Parse TRES usage format: cpu=1000,mem=2000,gres/gpu=100
+                    parts = line.split("|")
+                    if len(parts) > 1 and parts[1]:
+                        tres_data = parts[1]
+                        for tres_item in tres_data.split(","):
+                            if "=" in tres_item:
+                                tres_name, tres_value = tres_item.split("=", 1)
+                                with contextlib.suppress(ValueError, KeyError):
+                                    usage_data[tres_name.lower()] = int(tres_value)
+
+            return usage_data
+
+        except BackendError as e:
+            raise BackendError(f"Failed to get current usage for account {account}: {e}") from e
+
+    def reset_raw_usage(self, account: str) -> bool:
+        """Reset raw usage for clean period start (manual reset mode)."""
+        try:
+            self._execute_command(["modify", "account", account, "set", "RawUsage=0"])
+            return True
+        except BackendError as e:
+            raise BackendError(f"Failed to reset raw usage for account {account}: {e}") from e
+
+    def get_account_fairshare(self, account: str) -> int:
+        """Get current fairshare value for account."""
+        try:
+            command = [
+                "list",
+                "account",
+                "format=account,fairshare",
+                "where",
+                f"account={account}",
+            ]
+            output = self._execute_command(command)
+
+            for line in output.splitlines():
+                if "|" in line and account in line:
+                    parts = line.split("|")
+                    min_parts_for_fairshare = 2
+                    if len(parts) >= min_parts_for_fairshare:
+                        try:
+                            return int(parts[1])
+                        except ValueError:
+                            pass
+            return 0
+
+        except BackendError as e:
+            raise BackendError(f"Failed to get fairshare for account {account}: {e}") from e
+
+    def get_account_limits(self, account: str) -> dict:
+        """Get current account limits (GrpTRESMins, MaxTRESMins, etc.)."""
+        try:
+            command = [
+                "list",
+                "account",
+                "format=account,grptres,grptresmin,maxtres,maxtresmin",
+                "where",
+                f"account={account}",
+            ]
+            output = self._execute_command(command)
+
+            limits: dict[str, dict[str, str]] = {
+                "GrpTRES": {},
+                "GrpTRESMins": {},
+                "MaxTRES": {},
+                "MaxTRESMins": {},
+            }
+
+            for line in output.splitlines():
+                if "|" in line and account in line:
+                    parts = line.split("|")
+                    min_parts_for_limits = 5
+                    if len(parts) >= min_parts_for_limits:
+                        # Parse TRES format and populate limits dict
+                        # This is simplified - production would need proper TRES parsing
+                        if parts[1]:  # GrpTRES
+                            limits["GrpTRES"] = self._parse_tres_string(parts[1])
+                        if parts[2]:  # GrpTRESMins
+                            limits["GrpTRESMins"] = self._parse_tres_string(parts[2])
+                        if parts[3]:  # MaxTRES
+                            limits["MaxTRES"] = self._parse_tres_string(parts[3])
+                        if parts[4]:  # MaxTRESMins
+                            limits["MaxTRESMins"] = self._parse_tres_string(parts[4])
+
+            return limits
+
+        except BackendError as e:
+            raise BackendError(f"Failed to get limits for account {account}: {e}") from e
+
+    def _parse_tres_string(self, tres_string: str) -> dict[str, str]:
+        """Parse TRES string format like 'cpu=1000,mem=2000,gres/gpu=100'."""
+        tres_dict: dict[str, str] = {}
+        if not tres_string or tres_string == "":
+            return tres_dict
+
+        for tres_item in tres_string.split(","):
+            if "=" in tres_item:
+                tres_name, tres_value = tres_item.split("=", 1)
+                try:
+                    tres_dict[tres_name] = str(int(tres_value))
+                except ValueError:
+                    tres_dict[tres_name] = tres_value  # Keep as string if not numeric
+
+        return tres_dict
+
+    def calculate_billing_units(self, tres_usage: dict, billing_weights: dict) -> float:
+        """Convert raw TRES usage to billing units using weights."""
+        billing_units = 0.0
+
+        for tres_type, usage in tres_usage.items():
+            weight = billing_weights.get(tres_type, 0)
+            if weight and isinstance(usage, (int, float)):
+                billing_units += usage * weight
+
+        return billing_units

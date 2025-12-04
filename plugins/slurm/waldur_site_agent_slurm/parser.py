@@ -13,6 +13,9 @@ UNITS: dict[str, int] = {
     "T": 2**40,
 }
 
+# Constants for time parsing
+MIN_TIME_COMPONENTS = 3
+
 
 def parse_int(value: str) -> int:
     """Converts human-readable integers to machine-readable ones.
@@ -35,6 +38,7 @@ def parse_duration(value: str) -> float:
     00:01:00 is equal to 1.0
     00:00:03 is equal to 0.05
     00:01:03 is equal to 1.05
+    850:00:00 is equal to 51000.0 (supports large hour values)
     """
     days_sep = "-"
     us_sep = "."
@@ -45,16 +49,42 @@ def parse_duration(value: str) -> float:
 
     if days_sep not in value:
         if us_sep in value:  # Simple time with microseconds
-            dt = datetime.datetime.strptime(value, us_fmt)
-            delta = datetime.timedelta(
-                hours=dt.hour,
-                minutes=dt.minute,
-                seconds=dt.second,
-                microseconds=dt.microsecond,
-            )
+            try:
+                dt = datetime.datetime.strptime(value, us_fmt)
+                delta = datetime.timedelta(
+                    hours=dt.hour,
+                    minutes=dt.minute,
+                    seconds=dt.second,
+                    microseconds=dt.microsecond,
+                )
+            except ValueError:
+                # Handle large hour values that exceed 24 hours
+                parts = value.split(":")
+                if len(parts) >= MIN_TIME_COMPONENTS:
+                    hours = int(parts[0])
+                    minutes = int(parts[1])
+                    seconds_parts = parts[2].split(".")
+                    seconds = int(seconds_parts[0])
+                    microseconds = int(seconds_parts[1]) if len(seconds_parts) > 1 else 0
+                    delta = datetime.timedelta(
+                        hours=hours, minutes=minutes, seconds=seconds, microseconds=microseconds
+                    )
+                else:
+                    return 0.0
         else:  # Simple time
-            dt = datetime.datetime.strptime(value, simple_fmt)
-            delta = datetime.timedelta(hours=dt.hour, minutes=dt.minute, seconds=dt.second)
+            try:
+                dt = datetime.datetime.strptime(value, simple_fmt)
+                delta = datetime.timedelta(hours=dt.hour, minutes=dt.minute, seconds=dt.second)
+            except ValueError:
+                # Handle large hour values that exceed 24 hours (like 850:00:00)
+                parts = value.split(":")
+                if len(parts) >= MIN_TIME_COMPONENTS:
+                    hours = int(parts[0])
+                    minutes = int(parts[1])
+                    seconds = int(parts[2])
+                    delta = datetime.timedelta(hours=hours, minutes=minutes, seconds=seconds)
+                else:
+                    return 0.0
     elif us_sep in value:  # Simple time with microseconds and days
         dt = datetime.datetime.strptime(value, days_us_fmt)
         delta = datetime.timedelta(
@@ -97,7 +127,13 @@ class SlurmReportLine:
     @cached_property
     def _resources(self) -> dict:
         pairs = self._parts[1].split(",")
-        return dict(pair.split("=") for pair in pairs)
+        resources = {}
+        for pair in pairs:
+            if "=" in pair:
+                key, value = pair.split("=", 1)  # Split only on first =
+                resources[key] = value
+            # Skip pairs that don't contain = to avoid crashes
+        return resources
 
     def parse_field(self, field: str) -> int:
         """Parses integer field."""
@@ -138,7 +174,13 @@ class SlurmAssociationLine(SlurmReportLine):
     def _resources(self) -> dict:
         if self._parts[1] != "":
             pairs = self._parts[1].split(",")
-            return dict(pair.split("=") for pair in pairs)
+            resources = {}
+            for pair in pairs:
+                if "=" in pair:
+                    key, value = pair.split("=", 1)  # Split only on first =
+                    resources[key] = value
+                # Skip pairs that don't contain = to avoid crashes
+            return resources
         return {}
 
     @cached_property

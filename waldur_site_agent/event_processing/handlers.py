@@ -18,6 +18,7 @@ from waldur_site_agent.event_processing.structures import (
     AccountMessage,
     BackendResourceRequestMessage,
     OrderMessage,
+    PeriodicLimitsMessage,
     ResourceMessage,
     UserData,
     UserRoleMessage,
@@ -438,3 +439,54 @@ def on_account_message_stomp(
         account_type = structures.AccountType.COURSE_ACCOUNT
         observable_object = ObservableObjectTypeEnum.COURSE_ACCOUNT
     process_account_message(message, offering, account_type, observable_object, user_agent)
+
+
+def on_resource_periodic_limits_update_stomp(
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,  # noqa: ARG001
+) -> None:
+    """Periodic limits update handler for STOMP message event."""
+    try:
+        message: PeriodicLimitsMessage = json.loads(frame.body)
+        logger.info(
+            "Processing periodic limits update message for resource %s",
+            message.get("backend_id", "unknown"),
+        )
+        logger.debug("Periodic limits message: %s", message)
+
+        # Extract message data
+        backend_id = message.get("backend_id")
+        action = message.get("action")
+        settings = message.get("settings", {})
+
+        if not backend_id or action != "apply_periodic_settings":
+            logger.error("Invalid periodic limits message: missing backend_id or invalid action")
+            return
+
+        # Get backend for the offering
+        backend, _ = common_utils.get_backend_for_offering(offering, "order_processing_backend")
+
+        if not hasattr(backend, "apply_periodic_settings"):
+            logger.warning("Backend %s does not support periodic limits", type(backend).__name__)
+            return
+
+        # Apply periodic settings via backend
+        result = backend.apply_periodic_settings(backend_id, settings)
+
+        if result.get("success"):
+            logger.info("Successfully applied periodic settings for resource %s", backend_id)
+        else:
+            logger.error(
+                "Failed to apply periodic settings for resource %s: %s",
+                backend_id,
+                result.get("error", "unknown error"),
+            )
+
+        # TODO: Send confirmation back to Waldur via API if needed
+        # This could be implemented to update resource status or send success/failure notifications
+
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse periodic limits STOMP message: %s", e)
+    except Exception as e:
+        logger.error("Error processing periodic limits update: %s", e)

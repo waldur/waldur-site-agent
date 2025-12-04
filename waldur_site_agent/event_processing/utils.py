@@ -92,6 +92,21 @@ def setup_stomp_offering_subscriptions(
             waldur_offering.name,
         )
 
+    # Check if periodic limits are enabled for this offering
+    backend_settings = getattr(waldur_offering, "backend_settings", {})
+    periodic_limits_config = backend_settings.get("periodic_limits", {})
+    if periodic_limits_config.get("enabled", False):
+        object_types.append(ObservableObjectTypeEnum.RESOURCE_PERIODIC_LIMITS_UPDATE)
+        logger.info(
+            "Periodic limits enabled for offering %s, subscribing to periodic limits updates",
+            waldur_offering.name,
+        )
+    else:
+        logger.debug(
+            "Periodic limits disabled for offering %s, skipping periodic limits subscriptions",
+            waldur_offering.name,
+        )
+
     waldur_rest_client = get_client(
         waldur_offering.api_url,
         waldur_offering.api_token,

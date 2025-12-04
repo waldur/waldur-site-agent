@@ -341,6 +341,24 @@ def get_backend_for_offering(
     return backend_class(offering.backend_settings, offering.backend_components), dist_version
 
 
+def get_offering_backend(
+    offering: structures.Offering, backend_type_key: str = "order_processing_backend"
+) -> BaseBackend:
+    """Get backend instance for the specified offering (alias for test compatibility).
+
+    This is an alias function for test compatibility. It defaults to the order_processing_backend.
+
+    Args:
+        offering: The offering configuration
+        backend_type_key: Key to determine which backend type to use
+
+    Returns:
+        Initialized backend instance, or UnknownBackend if type not supported
+    """
+    backend, _ = get_backend_for_offering(offering, backend_type_key)
+    return backend
+
+
 def mark_waldur_resources_as_erred(
     waldur_rest_client: AuthenticatedClient,
     resources: list[WaldurResource],
@@ -1092,3 +1110,38 @@ def sync_resource_limits() -> None:
                 logger.error(
                     "Failed to sync resource limits for %s, reason: %s", waldur_resource.name, e
                 )
+
+
+def get_all_paginated(api_function, client, **kwargs) -> list:  # noqa: ANN001, ANN003
+    """Get all items from a paginated API endpoint.
+
+    Args:
+        api_function: The API function to call
+            (e.g., marketplace_provider_resources_list.sync_detailed)
+        client: The authenticated client
+        **kwargs: Additional parameters to pass to the API function
+
+    Returns:
+        List of all items from all pages
+    """
+    all_items: list = []
+    page = 1
+    page_size = 100  # Default page size
+
+    while True:
+        response = api_function(client=client, page=page, page_size=page_size, **kwargs)
+
+        items = response.parsed if hasattr(response, "parsed") and response.parsed else []
+
+        if not items:
+            break
+
+        all_items.extend(items)
+
+        # If we got fewer items than page_size, we're at the last page
+        if len(items) < page_size:
+            break
+
+        page += 1
+
+    return all_items

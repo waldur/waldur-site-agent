@@ -3,6 +3,7 @@
 import pprint
 from typing import Optional
 
+import requests
 from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend import (
@@ -420,3 +421,217 @@ class SlurmBackend(backends.BaseBackend):
             for key, value in limits.items()
         }
         super().set_resource_user_limits(resource_backend_id, username, converted_limits)
+
+    # ===== PERIODIC LIMITS EXTENSION =====
+
+    def apply_periodic_settings(
+        self,
+        resource_id: str,
+        settings: dict,
+        config: Optional[dict] = None,  # noqa: ARG002
+    ) -> dict:
+        """Apply periodic settings calculated by Waldur with emulator support."""
+        logger.info("Applying periodic settings for resource %s", resource_id)
+        logger.debug("Settings: %s", settings)
+
+        # Get periodic limits configuration
+        periodic_config = self.backend_settings.get("periodic_limits", {})
+        if not periodic_config.get("enabled", False):
+            logger.warning("Periodic limits not enabled, skipping apply_periodic_settings")
+            return {"success": False, "reason": "periodic_limits_not_enabled"}
+
+        # Check if running in emulator mode
+        if periodic_config.get("emulator_mode", False):
+            return self._apply_settings_emulator(resource_id, settings, periodic_config)
+
+        return self._apply_settings_production(resource_id, settings, periodic_config)
+
+    def _apply_settings_emulator(self, resource_id: str, settings: dict, config: dict) -> dict:
+        """Apply settings to SLURM emulator via API."""
+        emulator_url = config.get("emulator_base_url", "http://localhost:8080")
+        logger.info("Applying settings to SLURM emulator at %s", emulator_url)
+
+        try:
+            # Apply fairshare
+            if settings.get("fairshare"):
+                logger.debug(
+                    "Setting fairshare=%s for account %s", settings["fairshare"], resource_id
+                )
+                response = requests.post(
+                    f"{emulator_url}/api/apply-periodic-settings",
+                    json={"resource_id": resource_id, "fairshare": settings["fairshare"]},
+                    timeout=10,
+                )
+                response.raise_for_status()
+
+            # Apply limits
+            if settings.get("grp_tres_mins"):
+                logger.debug(
+                    "Setting GrpTRESMins=%s for account %s", settings["grp_tres_mins"], resource_id
+                )
+                response = requests.post(
+                    f"{emulator_url}/api/apply-periodic-settings",
+                    json={"resource_id": resource_id, "grp_tres_mins": settings["grp_tres_mins"]},
+                    timeout=10,
+                )
+                response.raise_for_status()
+
+            # Check and apply QoS if needed
+            if settings.get("qos_threshold"):
+                current_usage = self._get_current_usage_emulator(resource_id, emulator_url)
+                threshold = next(iter(settings["qos_threshold"].values()))
+
+                if current_usage >= threshold:
+                    logger.info(
+                        "Usage %s exceeds threshold %s, applying slowdown QoS",
+                        current_usage,
+                        threshold,
+                    )
+                    response = requests.post(
+                        f"{emulator_url}/api/downscale-resource",
+                        json={"resource_id": resource_id},
+                        timeout=10,
+                    )
+                    response.raise_for_status()
+
+            # Reset raw usage if requested
+            if settings.get("reset_raw_usage"):
+                logger.debug("Resetting raw usage for account %s", resource_id)
+                response = requests.post(
+                    f"{emulator_url}/api/apply-periodic-settings",
+                    json={"resource_id": resource_id, "reset_raw_usage": True},
+                    timeout=10,
+                )
+                response.raise_for_status()
+
+            logger.info("Successfully applied settings to emulator")
+            return {"success": True, "mode": "emulator"}
+
+        except requests.exceptions.RequestException as e:
+            logger.error("Failed to apply settings to emulator: %s", e)
+            return {"success": False, "error": str(e), "mode": "emulator"}
+        except Exception as e:
+            logger.error("Unexpected error applying settings to emulator: %s", e)
+            return {"success": False, "error": str(e), "mode": "emulator"}
+
+    def _apply_settings_production(self, resource_id: str, settings: dict, config: dict) -> dict:
+        """Apply settings to production SLURM cluster."""
+        logger.info("Applying settings to production SLURM cluster")
+
+        try:
+            # Apply fairshare
+            if settings.get("fairshare"):
+                logger.debug(
+                    "Setting fairshare=%s for account %s", settings["fairshare"], resource_id
+                )
+                self.client.set_account_fairshare(resource_id, settings["fairshare"])
+
+            # Apply limits based on limit_type
+            if settings.get("grp_tres_mins") or settings.get("max_tres_mins"):
+                limit_type = settings.get("limit_type", config.get("limit_type", "GrpTRESMins"))
+                limits = settings.get("grp_tres_mins") or settings.get("max_tres_mins")
+                logger.debug("Setting %s=%s for account %s", limit_type, limits, resource_id)
+                self.client.set_account_limits(resource_id, limit_type, limits)
+
+            # Reset raw usage if requested
+            if settings.get("reset_raw_usage"):
+                logger.debug("Resetting raw usage for account %s", resource_id)
+                self.client.reset_raw_usage(resource_id)
+
+            # Check QoS thresholds
+            if settings.get("qos_threshold"):
+                current_usage = self.client.get_current_usage(resource_id)
+                self._check_and_apply_qos(resource_id, current_usage, settings, config)
+
+            logger.info("Successfully applied settings to production SLURM")
+            return {"success": True, "mode": "production"}
+
+        except Exception as e:
+            logger.error("Failed to apply settings to production SLURM: %s", e)
+            return {"success": False, "error": str(e), "mode": "production"}
+
+    def _get_current_usage_emulator(self, resource_id: str, emulator_url: str) -> float:
+        """Get current usage from emulator."""
+        try:
+            response = requests.get(
+                f"{emulator_url}/api/status",
+                params={"account": resource_id},
+                timeout=10,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("current_usage", 0.0)
+        except requests.exceptions.RequestException as e:
+            logger.error("Failed to get current usage from emulator: %s", e)
+            return 0.0
+
+    def _check_and_apply_qos(
+        self, resource_id: str, current_usage: dict, settings: dict, config: dict
+    ) -> None:
+        """Check usage thresholds and apply QoS if needed."""
+        if not settings.get("qos_threshold"):
+            return
+
+        qos_levels = config.get("qos_levels", {})
+        threshold_data = settings["qos_threshold"]
+
+        # Convert current usage to comparable format (billing units)
+        if config.get("tres_billing_enabled", True):
+            # Use billing units
+            usage_value = current_usage.get("billing", 0) if isinstance(current_usage, dict) else 0
+            threshold_value = (
+                threshold_data.get("billing", 0) if isinstance(threshold_data, dict) else 0
+            )
+        else:
+            # Use node-hours
+            usage_value = current_usage.get("node", 0) if isinstance(current_usage, dict) else 0
+            threshold_value = (
+                threshold_data.get("node", 0) if isinstance(threshold_data, dict) else 0
+            )
+
+        grace_limit = settings.get("grace_limit", {})
+        if config.get("tres_billing_enabled", True):
+            grace_value = (
+                grace_limit.get("billing", float("inf"))
+                if isinstance(grace_limit, dict)
+                else float("inf")
+            )
+        else:
+            grace_value = (
+                grace_limit.get("node", float("inf"))
+                if isinstance(grace_limit, dict)
+                else float("inf")
+            )
+
+        current_qos = self.client.get_current_account_qos(resource_id)
+        new_qos = None
+
+        if usage_value >= grace_value:
+            # Hard limit exceeded - block jobs
+            new_qos = qos_levels.get("blocked", "blocked")
+            logger.warning(
+                "Account %s exceeded grace limit (%s >= %s), setting QoS to %s",
+                resource_id,
+                usage_value,
+                grace_value,
+                new_qos,
+            )
+        elif usage_value >= threshold_value:
+            # Soft limit exceeded - apply slowdown
+            new_qos = qos_levels.get("slowdown", "slowdown")
+            logger.info(
+                "Account %s exceeded threshold (%s >= %s), setting QoS to %s",
+                resource_id,
+                usage_value,
+                threshold_value,
+                new_qos,
+            )
+        else:
+            # Usage under threshold - restore normal QoS
+            new_qos = qos_levels.get("default", "normal")
+
+        if current_qos != new_qos:
+            logger.info("Changing QoS for account %s: %s -> %s", resource_id, current_qos, new_qos)
+            self.client.set_account_qos(resource_id, new_qos)
+        else:
+            logger.debug("QoS for account %s unchanged: %s", resource_id, current_qos)

@@ -4,22 +4,22 @@ from datetime import datetime, timezone
 from typing import Optional
 from unittest import mock
 
-import respx
 import httpx
+import respx
 from waldur_api_client import AuthenticatedClient, models
 from waldur_api_client.models import ResourceState, ServiceProvider
 from waldur_api_client.models.merged_plugin_options import MergedPluginOptions
 from waldur_api_client.models.offering_state import OfferingState
+from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
-from waldur_api_client.models.offering_user_state import OfferingUserState
 
+from tests.fixtures import OFFERING
 from waldur_site_agent.backend.structures import ClientResource
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingOrderProcessor
-from tests.fixtures import OFFERING
 
 
 def setup_common_respx_mocks(
@@ -314,7 +314,6 @@ class CreationOrderTest(unittest.TestCase):
         self, slurm_client_class: mock.Mock
     ) -> None:
         """Test allocation creation failure with empty customer_slug."""
-
         self.waldur_order.update(
             {
                 "uuid": self.order_uuid,
@@ -354,7 +353,6 @@ class CreationOrderTest(unittest.TestCase):
         self, slurm_client_class: mock.Mock
     ) -> None:
         """Test allocation creation failure with empty project_slug."""
-
         self.waldur_order.update(
             {
                 "uuid": self.order_uuid,
