@@ -191,6 +191,7 @@ class RancherBackend(backends.BaseBackend):
         waldur_resource: WaldurResource,
     ) -> tuple[str, str]:
         """Create a Rancher project for the Waldur resource."""
+        logger.info("Creating a new Rancher project for the %s resource", waldur_resource.name)
         project_name = self._get_rancher_project_name(waldur_resource)
 
         try:
@@ -233,6 +234,7 @@ class RancherBackend(backends.BaseBackend):
 
         try:
             # Create or get parent group (cluster level)
+            logger.info("Creating a Keycloak parent group %s", parent_group_name)
             parent_group = self.keycloak_client.get_group_by_name(parent_group_name)
             if parent_group:
                 parent_group_id = parent_group["id"]
@@ -245,10 +247,11 @@ class RancherBackend(backends.BaseBackend):
                 logger.info(f"Created parent group: {parent_group_name}")
 
             # Create child group (project + role level)
+            logger.info("Creating a Keycloak child group %s", child_group_name)
             child_group = self.keycloak_client.get_group_by_name(child_group_name)
             if child_group:
                 child_group_id = child_group["id"]
-                logger.info(f"Using existing child group: {child_group_name}")
+                logger.info("Using existing child group: %s", child_group_name)
             else:
                 child_description = (
                     f"Project {waldur_resource.project_slug} members "
@@ -257,12 +260,12 @@ class RancherBackend(backends.BaseBackend):
                 child_group_id = self.keycloak_client.create_group(
                     child_group_name, child_description, parent_group_id
                 )
-                logger.info(f"Created child group: {child_group_name}")
+                logger.info("Created child group: %s", child_group_name)
 
             return parent_group_id, child_group_id
 
         except Exception as e:
-            logger.error(f"Failed to create Keycloak groups: {e}")
+            logger.error("Failed to create Keycloak groups: %s", e)
             # Don't fail the entire operation if Keycloak fails
             logger.warning("Continuing without Keycloak group creation")
             return None, None
@@ -274,6 +277,12 @@ class RancherBackend(backends.BaseBackend):
         if not self.keycloak_client:
             return
 
+        logger.info(
+            "Binding the Keycloak group %s to the Rancher project %s (role %s)",
+            group_name,
+            project_id,
+            role,
+        )
         try:
             # Use the waldur-mastermind format for group reference
             group_reference = f"keycloakoidc_group://{group_name}"
@@ -284,15 +293,15 @@ class RancherBackend(backends.BaseBackend):
             )
 
             if existing_bindings:
-                logger.info(f"Group binding already exists: {group_name} → {project_id}")
+                logger.info("Group binding already exists: %s → %s", group_name, project_id)
                 return
 
             # Create the binding
             self.rancher_client.create_project_group_role(group_reference, project_id, role)
-            logger.info(f"Created group binding: {group_name} → {project_id} with role {role}")
+            logger.info("Created group binding: %s → %s with role %s", group_name, project_id, role)
 
         except Exception as e:
-            logger.warning(f"Failed to bind group {group_name} to project {project_id}: {e}")
+            logger.warning("Failed to bind group %s to project %s: %s", group_name, project_id, e)
 
     def _cleanup_empty_keycloak_groups(self, waldur_resource: WaldurResource) -> None:
         """Clean up empty Keycloak groups and their Rancher bindings."""
@@ -344,6 +353,12 @@ class RancherBackend(backends.BaseBackend):
     ) -> BackendResourceInfo:
         """Create Rancher project and Keycloak groups for the Waldur project."""
         del resource_backend_id
+
+        logger.info(
+            "Creating resource Rancher objects for the resource %s (%s)",
+            waldur_resource.name,
+            waldur_resource.uuid.hex,
+        )
         self._pre_create_resource(waldur_resource, user_context)
 
         # Create Rancher project for the Waldur project
@@ -368,6 +383,7 @@ class RancherBackend(backends.BaseBackend):
         if quota_components:
             try:
                 # Create a namespace
+                logger.info("Using quota components %s", quota_components.keys())
                 self.client.create_namespace(project_id, project_name)
                 # Setup namespace resource quotas
                 self.client.set_namespace_custom_resource_quotas(project_name, quota_components)

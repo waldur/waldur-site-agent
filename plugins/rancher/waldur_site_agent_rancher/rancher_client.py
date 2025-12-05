@@ -195,11 +195,11 @@ class RancherClient(BaseClient):
             response = self._make_request("POST", "projects", project_data)
             project_id = response.get("id", "")
 
-            logger.info(f"Created Rancher project: {name} (ID: {project_id})")
+            logger.info("Created Rancher project: %s (ID: %s)", name, project_id)
             return project_id
 
         except Exception as e:
-            logger.error(f"Failed to create project {name}: {e}")
+            logger.error("Failed to create project %s: %s", name, e)
             raise BackendError(f"Failed to create project {name}: {e}") from e
 
     def delete_project(self, project_id: str) -> None:
