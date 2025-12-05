@@ -166,8 +166,8 @@ class EventSubscriptionManager:
         )
 
         stomp_host = custom_stomp_ws_host or urllib3.util.parse_url(self.offering.api_url).host
-        stomp_port = (
-            custom_stomp_ws_port or 443 if self.waldur_rest_client._verify_ssl else 80
+        stomp_port = custom_stomp_ws_port or (
+            443 if self.waldur_rest_client._verify_ssl else 80
         )  # TODO: Temporary workaround, improve later
         ws_path = custom_stomp_ws_path or "/rmqws-stomp"
 
