@@ -548,31 +548,6 @@ print(result)
 "
 ```
 
-## Related Plugins
-
-### Compute & HPC Plugins
-
-- [MOAB Plugin](../moab/README.md) - MOAB cluster management
-- [MUP Plugin](../mup/README.md) - MUP portal integration
-
-### Container & Cloud Plugins
-
-- [OpenShift/OKD Plugin](../okd/README.md) - OpenShift and OKD container platform management
-- [Rancher Plugin](../rancher/README.md) - Rancher container management
-- [Harbor Plugin](../harbor/README.md) - Harbor container registry management
-
-### Storage Plugins
-
-- [Croit S3 Plugin](../croit-s3/README.md) - Croit S3 storage management
-
-### Accounting Plugins
-
-- [CSCS DWDI Plugin](../cscs-dwdi/README.md) - CSCS DWDI accounting integration
-
-### Utility Plugins
-
-- [Basic Username Management Plugin](../basic_username_management/README.md) - Username generation and management
-
 ## Support
 
 For issues, bug reports, or feature requests related to the SLURM plugin, please check:

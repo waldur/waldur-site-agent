@@ -392,24 +392,3 @@ When contributing to this plugin:
 2. Add tests for new functionality
 3. Update documentation for new features
 4. Ensure backward compatibility with existing configurations
-
-## Related Plugins
-
-### Compute & HPC Plugins
-
-- [SLURM Plugin](../slurm/README.md) - SLURM cluster management
-- [MOAB Plugin](../moab/README.md) - MOAB cluster management
-- [MUP Plugin](../mup/README.md) - MUP portal integration
-
-### Container & Cloud Plugins
-
-- [OpenShift/OKD Plugin](../okd/README.md) - OpenShift and OKD container platform management
-- [Harbor Plugin](../harbor/README.md) - Harbor container registry management
-
-### Storage Plugins
-
-- [Croit S3 Plugin](../croit-s3/README.md) - Croit S3 storage management
-
-### Utility Plugins
-
-- [Basic Username Management Plugin](../basic_username_management/README.md) - Username generation and management
