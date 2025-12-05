@@ -182,7 +182,6 @@ Waldur Site Agent uses a modular plugin architecture. Install plugins based on y
 - **waldur-site-agent-okd**: OpenShift/OKD container platform management
 - **waldur-site-agent-harbor**: Harbor container registry management
 - **waldur-site-agent-croit-s3**: Croit S3 storage management
-- **waldur-site-agent-cscs-hpc-storage**: CSCS HPC storage management
 - **waldur-site-agent-cscs-dwdi**: CSCS DWDI integration
 - **waldur-site-agent-basic-username-management**: Username management
 
@@ -208,9 +207,6 @@ uv tool install waldur-site-agent-harbor
 
 # Install Croit S3 plugin
 uv tool install waldur-site-agent-croit-s3
-
-# Install CSCS HPC Storage plugin
-uv tool install waldur-site-agent-cscs-hpc-storage
 
 # Install CSCS DWDI plugin
 uv tool install waldur-site-agent-cscs-dwdi
@@ -244,7 +240,6 @@ python -c "import waldur_site_agent_slurm; print('SLURM plugin installed')"
 # sudo apt install python3-waldur-site-agent-okd
 # sudo apt install python3-waldur-site-agent-harbor
 # sudo apt install python3-waldur-site-agent-croit-s3
-# sudo apt install python3-waldur-site-agent-cscs-hpc-storage
 # sudo apt install python3-waldur-site-agent-cscs-dwdi
 # sudo apt install python3-waldur-site-agent-basic-username-management
 ```
@@ -343,14 +338,6 @@ oc version
 **No additional system requirements** - uses S3-compatible API calls only.
 
 **Configuration**: Set `order_processing_backend: "croit-s3"` in your config file.
-
-#### CSCS HPC Storage Plugin (waldur-site-agent-cscs-hpc-storage)
-
-**Required for**: CSCS HPC storage management
-
-**No additional system requirements** - uses API calls only.
-
-**Configuration**: Set `order_processing_backend: "cscs-hpc-storage"` in your config file.
 
 #### CSCS DWDI Plugin (waldur-site-agent-cscs-dwdi)
 

@@ -16,7 +16,6 @@ The agent uses a **uv workspace architecture** with pluggable backends:
   - `waldur-site-agent-okd`: OpenShift/OKD platforms
   - `waldur-site-agent-harbor`: Harbor registries
   - `waldur-site-agent-croit-s3`: Croit S3 storage
-  - `waldur-site-agent-cscs-hpc-storage`: CSCS HPC storage
   - `waldur-site-agent-cscs-dwdi`: CSCS DWDI accounting
   - `waldur-site-agent-basic-username-management`: Username management
 
@@ -86,7 +85,6 @@ waldur_site_load_components -c <config-file>
 ### Storage Plugins
 
 - [Croit S3 Plugin](plugins/croit-s3/README.md) - Croit S3 storage management
-- [CSCS HPC Storage Plugin](plugins/cscs-hpc-storage/README.md) - CSCS HPC storage management
 
 ### Accounting Plugins
 
