@@ -494,24 +494,3 @@ Use standard Python logging configuration or waldur-site-agent logging settings 
 5. **Usage Tracking**: Real-time storage and object consumption reporting
 6. **Limit Updates**: Users can modify safety limits (creates new orders)
 7. **Resource Deletion**: S3 user and all buckets are removed
-
-## Related Plugins
-
-### Compute & HPC Plugins
-
-- [SLURM Plugin](../slurm/README.md) - SLURM cluster management
-- [MOAB Plugin](../moab/README.md) - MOAB cluster management
-- [MUP Plugin](../mup/README.md) - MUP portal integration
-
-### Container & Cloud Plugins
-
-- [OpenShift/OKD Plugin](../okd/README.md) - OpenShift and OKD container platform management
-- [Harbor Plugin](../harbor/README.md) - Harbor container registry management
-
-### Accounting Plugins
-
-- [CSCS DWDI Plugin](../cscs-dwdi/README.md) - CSCS DWDI accounting integration
-
-### Utility Plugins
-
-- [Basic Username Management Plugin](../basic_username_management/README.md) - Username generation and management

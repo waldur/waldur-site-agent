@@ -5,24 +5,3 @@ This plugin provides basic username generation and management capabilities for W
 ## Installation
 
 See the main [Installation Guide](../../docs/installation.md) for platform-specific installation instructions.
-
-## Related Plugins
-
-### Compute & HPC Plugins
-
-- [SLURM Plugin](../slurm/README.md) - SLURM cluster management
-- [MOAB Plugin](../moab/README.md) - MOAB cluster management
-- [MUP Plugin](../mup/README.md) - MUP portal integration
-
-### Container & Cloud Plugins
-
-- [OpenShift/OKD Plugin](../okd/README.md) - OpenShift and OKD container platform management
-- [Harbor Plugin](../harbor/README.md) - Harbor container registry management
-
-### Storage Plugins
-
-- [Croit S3 Plugin](../croit-s3/README.md) - Croit S3 storage management
-
-### Accounting Plugins
-
-- [CSCS DWDI Plugin](../cscs-dwdi/README.md) - CSCS DWDI accounting integration
