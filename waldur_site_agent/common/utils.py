@@ -511,7 +511,7 @@ def load_components_to_waldur(
                     )
                     marketplace_provider_offerings_update_offering_component.sync_detailed(
                         client=waldur_rest_client,
-                        uuid=existing_component.uuid,
+                        uuid=offering_uuid,
                         body=component_update_body,
                     )
                 else:
@@ -559,7 +559,7 @@ def get_current_user_from_client(waldur_rest_client: AuthenticatedClient) -> Use
     return users_me_retrieve.sync(client=waldur_rest_client)
 
 
-def diagnostics() -> bool:
+def diagnostics() -> int:
     """Perform comprehensive system diagnostics for all offerings.
 
     Checks connectivity to Waldur, validates offering configurations,
@@ -567,7 +567,7 @@ def diagnostics() -> bool:
     is used by the diagnostic command to verify agent setup.
 
     Returns:
-        True if all diagnostics pass, False if any issues are detected
+        0 if all diagnostics pass, 1 if any issues are detected
     """
     configuration = init_configuration()
     logger.info("-" * 10 + "DIAGNOSTICS START" + "-" * 10)
@@ -669,10 +669,11 @@ def diagnostics() -> bool:
         backend, _ = get_backend_for_offering(offering, "order_processing_backend")
 
         if not backend.diagnostics():
-            return False
+            return 1
 
     logger.info("-" * 10 + "DIAGNOSTICS END" + "-" * 10)
-    return True
+
+    return 0
 
 
 def create_homedirs_for_offering_users() -> None:
