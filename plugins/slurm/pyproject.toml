@@ -28,3 +28,10 @@ waldur_site_load_historical_usage = "waldur_site_agent_slurm.historical_usage_lo
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]
 slurm = "waldur_site_agent_slurm.backend:SlurmBackend"
+
+# Entry points for plugin-specific schema validation
+[project.entry-points."waldur_site_agent.component_schemas"]
+slurm = "waldur_site_agent_slurm.schemas:SlurmComponentSchema"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+slurm = "waldur_site_agent_slurm.schemas:SlurmBackendSettingsSchema"

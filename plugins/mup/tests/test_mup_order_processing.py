@@ -2,7 +2,6 @@ import unittest
 import uuid
 
 # Create MUP offering fixture
-from dataclasses import replace
 from unittest import mock
 
 import httpx
@@ -15,32 +14,33 @@ from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingOrderProcessor
 from waldur_site_agent.common.utils import get_client
 
-MUP_OFFERING = replace(
-    OFFERING,
-    backend_type="mup",
-    order_processing_backend="mup",
-    membership_sync_backend="mup",
-    reporting_backend="mup",
-    backend_settings={
-        "api_url": "https://mup-api.example.com/api",
-        "username": "test_user",
-        "password": "test_password",
-        "default_research_field": 1,
-        "default_agency": "FCT",
-        "project_prefix": "waldur_",
-        "allocation_prefix": "alloc_",
-        "default_allocation_type": "compute",
-        "default_storage_limit": 1000,
-    },
-    backend_components={
-        "cpu": {
-            "measured_unit": "core-hours",
-            "unit_factor": 1,
-            "accounting_type": "limit",
-            "label": "CPU Cores",
-            "mup_allocation_type": "Deucalion x86_64",
-        }
-    },
+MUP_OFFERING = OFFERING.model_copy(
+    update=dict(
+        backend_type="mup",
+        order_processing_backend="mup",
+        membership_sync_backend="mup",
+        reporting_backend="mup",
+        backend_settings={
+            "api_url": "https://mup-api.example.com/api",
+            "username": "test_user",
+            "password": "test_password",
+            "default_research_field": 1,
+            "default_agency": "FCT",
+            "project_prefix": "waldur_",
+            "allocation_prefix": "alloc_",
+            "default_allocation_type": "compute",
+            "default_storage_limit": 1000,
+        },
+        backend_components={
+            "cpu": {
+                "measured_unit": "core-hours",
+                "unit_factor": 1,
+                "accounting_type": "limit",
+                "label": "CPU Cores",
+                "mup_allocation_type": "Deucalion x86_64",
+            }
+        },
+    )
 )
 
 BASE_URL = "https://waldur.example.com"

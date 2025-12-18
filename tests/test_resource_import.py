@@ -30,10 +30,11 @@ class BackendResourceRequestTest(TestCase):
         self.project_slug = "test-project"
         self.offering = structures.Offering(
             name="test-offering",
-            uuid=uuid.uuid4().hex,
+            waldur_offering_uuid=uuid.uuid4().hex,
+            backend_type="slurm",
             backend_settings={"project_prefix": self.project_prefix},
-            api_url=f"{self.BASE_URL}/api",
-            api_token="test_token",
+            waldur_api_url=f"{self.BASE_URL}/api/",
+            waldur_api_token="test_token",
         )
         self.waldur_rest_client = AuthenticatedClient(
             base_url=self.BASE_URL,

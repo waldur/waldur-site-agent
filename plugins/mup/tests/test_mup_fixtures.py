@@ -6,10 +6,10 @@ from waldur_site_agent.common.structures import Offering
 
 # MUP-specific offering configuration
 MUP_OFFERING = Offering(
-    uuid="d629d5e45567425da9cdbdc1af67b32c",
+    waldur_offering_uuid="d629d5e45567425da9cdbdc1af67b32c",
     name="mup-test-offering",
-    api_url="http://localhost:8081/api/",
-    api_token="9e1132b9616ebfe943ddf632ca32bbb7e1109a32",
+    waldur_api_url="http://localhost:8081/api/",
+    waldur_api_token="9e1132b9616ebfe943ddf632ca32bbb7e1109a32",
     backend_type="mup",
     backend_settings={
         "api_url": "https://mup-api.example.com/api",

@@ -25,7 +25,10 @@ class TestOfferingUserUpdate(unittest.TestCase):
         respx.start()
         self.offering = structures.Offering(
             name="Test offering",
-            uuid=uuid.uuid4().hex,
+            waldur_offering_uuid=uuid.uuid4().hex,
+            waldur_api_url="https://example.com/api/",
+            waldur_api_token="test_token",
+            backend_type="slurm",
         )
         self.provider_offering_details = ProviderOfferingDetails(
             plugin_options=MergedPluginOptions(

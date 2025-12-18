@@ -30,9 +30,10 @@ class ServiceAccountMessageTest(TestCase):
         self.offering_uuid = uuid.uuid4().hex
         self.offering = structures.Offering(
             name="test-offering",
-            uuid=self.offering_uuid,
-            api_url=f"{self.BASE_URL}/api",
-            api_token="test_token",
+            waldur_offering_uuid=self.offering_uuid,
+            waldur_api_url=f"{self.BASE_URL}/api/",
+            waldur_api_token="test_token",
+            backend_type="slurm",
         )
         self.waldur_rest_client = AuthenticatedClient(
             base_url=self.BASE_URL,
