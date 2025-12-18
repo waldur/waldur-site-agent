@@ -12,8 +12,6 @@ include:
   - project: "waldur/waldur-pipelines"
     file: "/templates/test/lint-dockerfile.yaml"
   - project: "waldur/waldur-pipelines"
-    file: "/templates/test/lint-md-files.yml"
-  - project: "waldur/waldur-pipelines"
     file: "/templates/sbom/upload-sboms-to-docs.yml"
   - project: "waldur/waldur-pipelines"
     file: "/templates/sbom/generate-image-sbom.yml"

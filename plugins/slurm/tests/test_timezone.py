@@ -84,9 +84,9 @@ class ProcessorTimezoneTest(unittest.TestCase):
         }
         self.waldur_offering = Offering(
             name="test",
-            api_url=BASE_URL,
-            api_token="token",
-            uuid=self.offering_uuid.hex,
+            waldur_api_url=f"{BASE_URL}/api/",
+            waldur_api_token="token",
+            waldur_offering_uuid=self.offering_uuid.hex,
             backend_type="slurm",
             order_processing_backend="slurm",
             membership_sync_backend="slurm",
@@ -177,9 +177,9 @@ class TimezoneIntegrationTest(unittest.TestCase):
         }
         self.waldur_offering = Offering(
             name="test",
-            api_url=BASE_URL,
-            api_token="token",
-            uuid=self.offering_uuid.hex,
+            waldur_api_url=f"{BASE_URL}/api/",
+            waldur_api_token="token",
+            waldur_offering_uuid=self.offering_uuid.hex,
             backend_type="slurm",
             order_processing_backend="slurm",
             membership_sync_backend="slurm",

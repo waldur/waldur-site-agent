@@ -16,7 +16,7 @@ automatically detected and loaded via Python entry points.
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union, cast
 from uuid import UUID
 
 import yaml
@@ -69,6 +69,7 @@ from waldur_api_client.models.update_offering_component_request import (
 )
 from waldur_api_client.models.user import User
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
+from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import (
     BackendType,
@@ -184,7 +185,7 @@ def is_uuid(value: str) -> bool:
 def load_configuration(
     config_file_path: str, user_agent_suffix: str = "generic"
 ) -> structures.WaldurAgentConfiguration:
-    """Load configuration from YAML file.
+    """Load configuration from YAML file with Pydantic validation.
 
     Args:
         config_file_path: Path to the YAML configuration file
@@ -196,54 +197,27 @@ def load_configuration(
     Raises:
         FileNotFoundError: If the configuration file cannot be found
         yaml.YAMLError: If the configuration file is malformed
+        pydantic.ValidationError: If the configuration data is invalid
     """
-    configuration = structures.WaldurAgentConfiguration()
-
     with Path(config_file_path).open(encoding="UTF-8") as stream:
-        config = yaml.safe_load(stream)
-        offering_list = config["offerings"]
-        waldur_offerings = [
-            structures.Offering(
-                name=offering_info["name"],
-                api_url=offering_info["waldur_api_url"],
-                api_token=offering_info["waldur_api_token"],
-                uuid=offering_info["waldur_offering_uuid"],
-                backend_type=offering_info["backend_type"].lower(),
-                backend_settings=offering_info["backend_settings"],
-                backend_components=offering_info["backend_components"],
-                mqtt_enabled=offering_info.get("mqtt_enabled", False),
-                stomp_enabled=offering_info.get("stomp_enabled", False),
-                websocket_use_tls=offering_info.get("websocket_use_tls", True),
-                stomp_ws_host=offering_info.get("stomp_ws_host"),
-                stomp_ws_port=offering_info.get("stomp_ws_port"),
-                stomp_ws_path=offering_info.get("stomp_ws_path"),
-                username_management_backend=offering_info.get(
-                    "username_management_backend", "base"
-                ),
-                order_processing_backend=offering_info.get("order_processing_backend", ""),
-                membership_sync_backend=offering_info.get("membership_sync_backend", ""),
-                reporting_backend=offering_info.get("reporting_backend", ""),
-                resource_import_enabled=offering_info.get("resource_import_enabled", False),
-                verify_ssl=offering_info.get("verify_ssl", True),
-            )
-            for offering_info in offering_list
-        ]
-        configuration.waldur_offerings = waldur_offerings
+        raw_config = yaml.safe_load(stream)
+
+    try:
+        # Parse and validate the configuration using Pydantic
+        root_config = structures.RootConfiguration(**raw_config)
+        configuration = root_config.to_agent_configuration()
 
         # Handle Sentry configuration - initialize if DSN is provided
-        sentry_dsn = config.get("sentry_dsn")
-        if sentry_dsn:
-            configuration.sentry_dsn = sentry_dsn
+        if configuration.sentry_dsn:
             import sentry_sdk  # noqa: PLC0415
 
-            sentry_sdk.init(dsn=sentry_dsn)
+            sentry_sdk.init(dsn=configuration.sentry_dsn)
 
-        timezone = config.get("timezone", "UTC")
-        configuration.timezone = timezone
-
-        # Handle global proxy configuration
-        global_proxy = config.get("global_proxy", "")
-        configuration.global_proxy = global_proxy
+    except Exception as e:
+        # Provide helpful error messages for configuration validation failures
+        if "ValidationError" in str(type(e)):
+            raise ValueError(f"Configuration validation failed: {e}") from e
+        raise
 
     # Set version and user agent for all configurations
     configuration.waldur_site_agent_version = WALDUR_SITE_AGENT_VERSION
@@ -338,7 +312,7 @@ def get_backend_for_offering(
         offering.name,
     )
 
-    return backend_class(offering.backend_settings, offering.backend_components), dist_version
+    return backend_class(offering.backend_settings, offering.backend_components_dict), dist_version
 
 
 def get_offering_backend(
@@ -447,13 +421,39 @@ def extend_backend_components(
     for missing_component_type in missing_component_types:
         logger.info("Loading %s", missing_component_type)
         remote_component_info = remote_components[missing_component_type]
-        component_info = {
-            "limit": remote_component_info.limit_amount,
-            "measured_unit": remote_component_info.measured_unit,
-            "unit_factor": remote_component_info.unit_factor or 1,
-            "accounting_type": remote_component_info.billing_type,
-            "label": remote_component_info.name,
-        }
+        # Handle potential Unset values from remote component info
+        limit: Union[float, None] = (
+            float(cast("int", remote_component_info.limit_amount))
+            if (
+                remote_component_info.limit_amount is not UNSET
+                and remote_component_info.limit_amount is not None
+            )
+            else None
+        )
+        measured_unit = remote_component_info.measured_unit or ""
+        unit_factor = (
+            float(cast("int", remote_component_info.unit_factor))
+            if (
+                remote_component_info.unit_factor is not UNSET
+                and remote_component_info.unit_factor is not None
+            )
+            else 1.0
+        )
+        billing_type_str = (
+            str(remote_component_info.billing_type)
+            if remote_component_info.billing_type
+            else "usage"
+        )
+        accounting_type = structures.AccountingType(billing_type_str)
+        label = remote_component_info.name or ""
+
+        component_info = structures.BackendComponent(
+            limit=limit,
+            measured_unit=measured_unit,
+            unit_factor=unit_factor,
+            accounting_type=accounting_type,
+            label=label,
+        )
         offering.backend_components[missing_component_type] = component_info
 
 
