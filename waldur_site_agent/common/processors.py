@@ -1220,6 +1220,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             stale_usernames,
         )
 
+        self.resource_backend.process_existing_users(existing_usernames)
+
         return existing_usernames | added_usernames
 
     def _sync_resource_status(self, waldur_resource: WaldurResource) -> None:

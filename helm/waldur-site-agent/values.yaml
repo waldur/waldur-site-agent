@@ -118,8 +118,6 @@ secret:
 strategy:
   type: Recreate
 
-
-
 # Health check configuration
 healthCheck:
   enabled: true
