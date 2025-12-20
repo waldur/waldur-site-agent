@@ -424,6 +424,14 @@ class BaseBackend(ABC):
                 return False
         return True
 
+    def process_existing_users(self, existing_users: set[str]) -> None:
+        """Process existing users on the backend.
+
+        This method can be overridden by subclasses to implement
+        specific logic for processing existing users.
+        """
+        del existing_users
+
     def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
         """Set limits for the resource on the backend."""
         self.client.set_resource_limits(resource_backend_id, limits)

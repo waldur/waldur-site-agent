@@ -200,6 +200,20 @@ class SlurmBackend(backends.BaseBackend):
 
         return added_users
 
+    def process_existing_users(self, existing_users: set[str]) -> None:
+        """Process existing users on the backend."""
+        logger.info(
+            "Processing existing users on the backend to ensure home directories exist: %s",
+            ", ".join(existing_users),
+        )
+        if self.backend_settings.get("enable_user_homedir_account_creation", True):
+            logger.info(
+                "Processing existing users to ensure home directories exist: %s",
+                ", ".join(existing_users),
+            )
+            umask = self.backend_settings.get("homedir_umask", "0700")
+            self.create_user_homedirs(existing_users, umask=umask)
+
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale the resource QoS respecting the backend settings."""
         qos_downscaled = self.backend_settings.get("qos_downscaled")
