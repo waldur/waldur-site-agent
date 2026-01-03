@@ -1,0 +1,37 @@
+{
+  "uuid": "{{ order_uuid | uuid4() }}",
+  "type": "Update",
+  "resource_name": "{{ resource_name }}",
+  "marketplace_resource_uuid": "{{ marketplace_resource_uuid }}",
+  "state": "{{ state | default('executing') }}",
+  "created": "{{ created | timestamp() }}",
+  "limits": {
+    {%- set items = [] -%}
+    {%- if new_cpu_limit is defined -%}
+      {%- set _ = items.append('"cpu": ' ~ new_cpu_limit) -%}
+    {%- endif -%}
+    {%- if new_mem_limit is defined -%}
+      {%- set _ = items.append('"mem": ' ~ new_mem_limit) -%}
+    {%- endif -%}
+    {%- if new_gpu_limit is defined -%}
+      {%- set _ = items.append('"gpu": ' ~ new_gpu_limit) -%}
+    {%- endif -%}
+    {%- if new_storage_limit is defined -%}
+      {%- set _ = items.append('"storage": ' ~ new_storage_limit) -%}
+    {%- endif -%}
+    {{ items | join(', ') }}
+  },
+  "attributes": {
+    {%- set items = [] -%}
+    {%- if new_partition is defined -%}
+      {%- set _ = items.append('"partition": "' ~ new_partition ~ '"') -%}
+    {%- endif -%}
+    {%- if new_qos is defined -%}
+      {%- set _ = items.append('"qos": "' ~ new_qos ~ '"') -%}
+    {%- endif -%}
+    {%- if new_tres_billing_weights is defined -%}
+      {%- set _ = items.append('"tres_billing_weights": "' ~ new_tres_billing_weights ~ '"') -%}
+    {%- endif -%}
+    {{ items | join(', ') }}
+  }
+}

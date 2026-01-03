@@ -1,0 +1,24 @@
+{
+  "uuid": "{{ order_uuid | uuid4() }}",
+  "type": "Create",
+  "resource_name": "{{ resource_name | default('test-allocation') }}",
+  "project_slug": "{{ project_slug | default('test-project') }}",
+  "customer_slug": "{{ customer_slug | default('test-customer') }}",
+  "project_uuid": "{{ project_uuid | uuid4() }}",
+  "customer_uuid": "{{ customer_uuid | uuid4() }}",
+  "offering_uuid": "{{ offering_uuid }}",
+  "marketplace_resource_uuid": "{{ marketplace_resource_uuid | uuid4() }}",
+  "state": "{{ state | default('executing') }}",
+  "offering_type": "{{ offering_type | default('Marketplace.SLURM') }}",
+  "created": "{{ created | timestamp() }}",
+  "limits": {
+    "cpu": {{ cpu_limit | default(1000) }},
+    "mem": {{ mem_limit | default(2048) }},
+    "gpu": {{ gpu_limit | default(0) }}
+  },
+  "attributes": {
+    "slurm_account": "{{ slurm_account | default('default') }}",
+    "partition": "{{ partition | default('compute') }}",
+    "qos": "{{ qos | default('normal') }}"
+  }
+}

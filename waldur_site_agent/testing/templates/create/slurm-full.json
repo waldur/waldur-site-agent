@@ -1,0 +1,28 @@
+{
+  "uuid": "{{ order_uuid | uuid4() }}",
+  "type": "Create",
+  "resource_name": "{{ resource_name | default('slurm-allocation') }}",
+  "project_slug": "{{ project_slug | default('hpc-project') }}",
+  "customer_slug": "{{ customer_slug | default('hpc-customer') }}",
+  "project_uuid": "{{ project_uuid | uuid4() }}",
+  "customer_uuid": "{{ customer_uuid | uuid4() }}",
+  "offering_uuid": "{{ offering_uuid }}",
+  "marketplace_resource_uuid": "{{ marketplace_resource_uuid | uuid4() }}",
+  "state": "{{ state | default('executing') }}",
+  "offering_type": "Marketplace.SLURM",
+  "created": "{{ created | timestamp() }}",
+  "limits": {
+    "cpu": {{ cpu_limit | default(5000) }},
+    "mem": {{ mem_limit | default(8192) }},
+    "gpu": {{ gpu_limit | default(2) }},
+    "storage": {{ storage_limit | default(100) }}
+  },
+  "attributes": {
+    "slurm_account": "{{ slurm_account | default(resource_name | default('slurm-allocation')) }}",
+    "partition": "{{ partition | default('gpu') }}",
+    "qos": "{{ qos | default('high') }}",
+    "tres_billing_weights": "{{ tres_billing_weights | default('CPU=1.0,Mem=0.25G,GRES/gpu=4.0') }}",
+    "account_description": "{{ account_description | default('SLURM allocation created via Waldur') }}",
+    "default_account": "{{ default_account | default('root') }}"
+  }
+}
