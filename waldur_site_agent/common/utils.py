@@ -279,6 +279,33 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
     return configuration
 
 
+def init_configuration_from_file(config_file_path: str) -> structures.WaldurAgentConfiguration:
+    """Initialize agent configuration from a specific config file path.
+
+    This function is useful for testing and cases where the configuration
+    file path is known without needing CLI argument parsing.
+
+    Args:
+        config_file_path: Path to the YAML configuration file
+
+    Returns:
+        Complete agent configuration with all offerings and settings
+
+    Raises:
+        FileNotFoundError: If the configuration file cannot be found
+        yaml.YAMLError: If the configuration file is malformed
+    """
+    logger.info("Loading configuration from %s", config_file_path)
+
+    # Load base configuration
+    configuration = load_configuration(config_file_path, user_agent_suffix="testing")
+
+    # Add default mode for testing
+    configuration.waldur_site_agent_mode = "order_process"
+
+    return configuration
+
+
 def get_backend_for_offering(
     offering: structures.Offering, backend_type_key: str
 ) -> tuple[BaseBackend, str]:

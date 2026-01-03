@@ -35,6 +35,7 @@ waldur_site_load_components = "waldur_site_agent.common.utils:load_offering_comp
 waldur_site_create_homedirs = "waldur_site_agent.common.utils:create_homedirs_for_offering_users"
 waldur_sync_offering_users = "waldur_site_agent.common.utils:sync_offering_users"
 waldur_sync_resource_limits = "waldur_site_agent.common.utils:sync_resource_limits"
+waldur_site_test_order = "waldur_site_agent.testing.cli:main"
 
 [dependency-groups]
 dev = [
@@ -46,6 +47,7 @@ dev = [
     "httpx>=0.28.1,<0.29",
     "ruff>=0.12.1,<0.13",
     "slurm-emulator>=0.1.1",
+    "jinja2>=3.0.0,<4.0",
 ]
 
 [tool.hatch.metadata]

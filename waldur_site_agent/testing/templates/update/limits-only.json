@@ -1,0 +1,14 @@
+{
+  {% if order_uuid is defined %}"uuid": "{{ order_uuid }}",{% else %}"uuid": "{{ '' | uuid4() }}",{% endif %}
+  "type": "Update",
+  "resource_name": "{{ resource_name }}",
+  "marketplace_resource_uuid": "{{ marketplace_resource_uuid }}",
+  "state": "{{ state | default('executing') }}",
+  "created": "{{ created | default('' | timestamp()) }}",
+  "limits": {
+    "cpu": {{ new_cpu_limit }},
+    "mem": {{ new_mem_limit }}{% if new_gpu_limit is defined %},
+    "gpu": {{ new_gpu_limit }}{% endif %}{% if new_storage_limit is defined %},
+    "storage": {{ new_storage_limit }}{% endif %}
+  }
+}

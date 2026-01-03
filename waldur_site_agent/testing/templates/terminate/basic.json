@@ -1,0 +1,10 @@
+{
+  "uuid": "{{ order_uuid | uuid4() }}",
+  "type": "Terminate",
+  "resource_name": "{{ resource_name }}",
+  "marketplace_resource_uuid": "{{ marketplace_resource_uuid }}",
+  "project_slug": "{{ project_slug | default('test-project') }}",
+  "state": "{{ state | default('executing') }}",
+  "created": "{{ created | timestamp() }}",
+  "termination_comment": "{{ termination_comment | default('Resource terminated via order testing') }}"
+}
