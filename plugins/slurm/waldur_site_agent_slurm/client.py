@@ -281,9 +281,9 @@ class SlurmClient(clients.BaseClient):
 
         If user is None, cancel all the jobs for the account.
         """
-        args = [f"-A={account}", "-f"]
+        args = ["-A", account, "-f"]
         if user is not None:
-            args = [f"-u={user}", *args]
+            args = ["-u", user, *args]
         self._execute_command(args, command_name="scancel", parsable=False, immediate=False)
 
     def list_active_user_jobs(self, account: str, user: str) -> list[str]:
