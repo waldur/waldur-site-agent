@@ -219,6 +219,10 @@ class EventSubscriptionManager:
             connect_to_stomp_server(
                 connection, event_subscription.uuid.hex, self.offering.api_token
             )
+            logger.info(
+                "Started STOMP connection for event subscription %s",
+                event_subscription.uuid.hex,
+            )
         except Exception as e:
             logger.error("Failed to start STOMP connection: %s", e)
             return False
