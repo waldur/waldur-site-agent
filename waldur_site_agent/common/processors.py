@@ -99,7 +99,7 @@ from waldur_api_client.models.order_details import (
 from waldur_api_client.models.order_details_limits import (
     OrderDetailsLimits,
 )
-from waldur_api_client.models.order_set_state_erred_request import OrderSetStateErredRequest
+from waldur_api_client.models.order_error_details_request import OrderErrorDetailsRequest
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.project_user import ProjectUser
 from waldur_api_client.models.provider_offering_details import ProviderOfferingDetails
@@ -561,7 +561,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 e,
             )
             if order.state != OrderState.DONE:
-                order_set_state_erred_request = OrderSetStateErredRequest(
+                order_set_state_erred_request = OrderErrorDetailsRequest(
                     error_message=str(e),
                     error_traceback=traceback.format_exc(),
                 )
