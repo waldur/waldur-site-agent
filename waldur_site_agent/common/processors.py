@@ -561,14 +561,14 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 e,
             )
             if order.state != OrderState.DONE:
-                order_set_state_erred_request = OrderErrorDetailsRequest(
+                order_error_details_request = OrderErrorDetailsRequest(
                     error_message=str(e),
                     error_traceback=traceback.format_exc(),
                 )
                 marketplace_orders_set_state_erred.sync_detailed(
                     client=self.waldur_rest_client,
                     uuid=order.uuid,
-                    body=order_set_state_erred_request,
+                    body=order_error_details_request,
                 )
 
     def _create_resource(
