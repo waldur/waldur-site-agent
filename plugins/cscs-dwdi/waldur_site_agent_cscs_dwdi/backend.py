@@ -10,6 +10,7 @@ from waldur_api_client.types import Unset
 
 from waldur_site_agent.backend import structures
 from waldur_site_agent.backend.backends import BaseBackend
+from waldur_site_agent.common.structures import BackendComponent
 
 from .client import CSCSDWDIClient
 
@@ -20,7 +21,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
     """Backend for reporting compute usage from CSCS-DWDI API."""
 
     def __init__(
-        self, backend_settings: dict[str, Any], backend_components: dict[str, dict]
+        self, backend_settings: dict[str, Any], backend_components: dict[str, Any]
     ) -> None:
         """Initialize CSCS-DWDI backend.
 
@@ -31,12 +32,15 @@ class CSCSDWDIComputeBackend(BaseBackend):
         normalized_backend_components = {}
 
         for name, component in backend_components.items():
-            if isinstance(component, BaseModel):
-                normalized_backend_components[name] =\
-                      getattr(component, "model_dump", component.dict)()
+            if isinstance(component, BackendComponent):
+                # Use to_dict() method for BackendComponent
+                normalized_backend_components[name] = component.to_dict()
+            elif isinstance(component, BaseModel):
+                # Use model_dump() for other Pydantic models
+                normalized_backend_components[name] = component.model_dump()
             else:
+                # Fallback for plain objects or dicts
                 normalized_backend_components[name] = component
-
 
         super().__init__(backend_settings, normalized_backend_components)
         self.backend_type = "cscs-dwdi-compute"
@@ -466,7 +470,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
     """Backend for reporting storage usage from CSCS-DWDI API."""
 
     def __init__(
-        self, backend_settings: dict[str, Any], backend_components: dict[str, dict]
+        self, backend_settings: dict[str, Any], backend_components: dict[str, Any]
     ) -> None:
         """Initialize CSCS-DWDI storage backend.
 
@@ -477,10 +481,14 @@ class CSCSDWDIStorageBackend(BaseBackend):
         normalized_backend_components = {}
 
         for name, component in backend_components.items():
-            if isinstance(component, BaseModel):
-                normalized_backend_components[name] = \
-                    getattr(component, "model_dump", component.dict)()
+            if isinstance(component, BackendComponent):
+                # Use to_dict() method for BackendComponent
+                normalized_backend_components[name] = component.to_dict()
+            elif isinstance(component, BaseModel):
+                # Use model_dump() for other Pydantic models
+                normalized_backend_components[name] = component.model_dump()
             else:
+                # Fallback for plain objects or dicts
                 normalized_backend_components[name] = component
 
         super().__init__(backend_settings, normalized_backend_components)
