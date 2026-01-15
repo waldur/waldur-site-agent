@@ -20,7 +20,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
     """Backend for reporting compute usage from CSCS-DWDI API."""
 
     def __init__(
-        self, backend_settings: dict[str, Any], backend_components: dict[str, Any]
+        self, backend_settings: dict[str, Any], backend_components: dict[str, dict]
     ) -> None:
         """Initialize CSCS-DWDI backend.
 
@@ -32,11 +32,8 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
         for name, component in backend_components.items():
             if isinstance(component, BaseModel):
-                # Pydantic v2
-                if hasattr(component, "model_dump"):
-                    normalized_backend_components[name] = component.model_dump()
-                else:  # Pydantic v1 fallback
-                    normalized_backend_components[name] = component.dict()
+                normalized_backend_components[name] =\
+                      getattr(component, "model_dump", component.dict)()
             else:
                 normalized_backend_components[name] = component
 
@@ -477,7 +474,16 @@ class CSCSDWDIStorageBackend(BaseBackend):
             backend_settings: Backend-specific settings from the offering
             backend_components: Component configuration from the offering
         """
-        super().__init__(backend_settings, backend_components)
+        normalized_backend_components = {}
+
+        for name, component in backend_components.items():
+            if isinstance(component, BaseModel):
+                normalized_backend_components[name] = \
+                    getattr(component, "model_dump", component.dict)()
+            else:
+                normalized_backend_components[name] = component
+
+        super().__init__(backend_settings, normalized_backend_components)
         self.backend_type = "cscs-dwdi-storage"
 
         # Extract CSCS-DWDI specific configuration
