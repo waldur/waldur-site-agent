@@ -13,10 +13,10 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.10
     hooks:
-      - id: ruff
-        exclude: ^.*tests/
-        args: [ --fix ]
-      - id: ruff-format
+    - id: ruff
+      args: [--fix]
+      files: \.py$        # only run on Python files
+      exclude: ^.*tests/
 
   - repo: https://github.com/jackdewinter/pymarkdown
     rev: v0.9.30

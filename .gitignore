@@ -1,7 +1,11 @@
 venv/
+.venv/
 .idea/
 .vscode/
 dist/
 **__pycache__
 .DS_Store
 .coverage
+poetry.toml
+poetry.lock
+.ruff_cache
