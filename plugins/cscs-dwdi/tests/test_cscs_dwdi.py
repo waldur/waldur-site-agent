@@ -5,7 +5,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from waldur_site_agent_cscs_dwdi.backend import CSCSDWDIComputeBackend, CSCSDWDIStorageBackend
+from waldur_site_agent_cscs_dwdi.backend import CSCSDWDIComputeBackend,CSCSDWDIStorageBackend
 from waldur_site_agent_cscs_dwdi.client import CSCSDWDIClient
 
 
