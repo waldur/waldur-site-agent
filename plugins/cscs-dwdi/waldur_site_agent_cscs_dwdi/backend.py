@@ -20,7 +20,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
     """Backend for reporting compute usage from CSCS-DWDI API."""
 
     def __init__(
-        self, backend_settings: dict[str, Any], backend_components: dict[str, dict]
+        self, backend_settings: dict[str, Any], backend_components: dict[str, Any]
     ) -> None:
         """Initialize CSCS-DWDI backend.
 
