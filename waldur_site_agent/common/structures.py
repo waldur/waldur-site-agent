@@ -207,6 +207,10 @@ class WaldurAgentConfiguration(BaseModel):
     )
     timezone: str = Field(default="UTC", description="Timezone for billing calculations")
     global_proxy: str = Field(default="", description="Global proxy URL for API connections")
+    log_level: str = Field(
+        default="INFO",
+        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
 
     # Runtime fields (set programmatically, not validated)
     waldur_site_agent_mode: str = ""
@@ -228,6 +232,17 @@ class WaldurAgentConfiguration(BaseModel):
             msg = f"sentry_dsn must be a valid URL: {e}"
             raise ValueError(msg) from e
 
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        """Validate that log_level is a valid logging level."""
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        v_upper = v.upper()
+        if v_upper not in valid_levels:
+            msg = f"log_level must be one of {valid_levels}, got '{v}'"
+            raise ValueError(msg)
+        return v_upper
+
     # Legacy property for backward compatibility
     @property
     def waldur_offerings(self) -> list[Offering]:
@@ -248,6 +263,10 @@ class RootConfiguration(BaseModel):
     )
     timezone: str = Field(default="UTC", description="Timezone for billing calculations")
     global_proxy: str = Field(default="", description="Global proxy URL for API connections")
+    log_level: str = Field(
+        default="INFO",
+        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
 
     @field_validator("sentry_dsn")
     @classmethod
@@ -262,6 +281,17 @@ class RootConfiguration(BaseModel):
         except ValidationError as e:
             msg = f"sentry_dsn must be a valid URL: {e}"
             raise ValueError(msg) from e
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        """Validate that log_level is a valid logging level."""
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        v_upper = v.upper()
+        if v_upper not in valid_levels:
+            msg = f"log_level must be one of {valid_levels}, got '{v}'"
+            raise ValueError(msg)
+        return v_upper
 
     def to_agent_configuration(self) -> WaldurAgentConfiguration:
         """Convert raw configuration to typed agent configuration."""
@@ -300,6 +330,7 @@ class RootConfiguration(BaseModel):
             sentry_dsn=self.sentry_dsn,
             timezone=self.timezone,
             global_proxy=self.global_proxy,
+            log_level=self.log_level,
         )
 
 

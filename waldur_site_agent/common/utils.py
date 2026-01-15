@@ -73,6 +73,7 @@ from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import (
     BackendType,
+    configure_logger,
     logger,
 )
 from waldur_site_agent.backend import exceptions as backend_exceptions
@@ -225,6 +226,9 @@ def load_configuration(
         f"waldur-site-agent-{user_agent_suffix}/{WALDUR_SITE_AGENT_VERSION}"
     )
     configuration.config_file_path = config_file_path
+
+    # Configure logger with the specified log level
+    configure_logger(configuration.log_level)
 
     return configuration
 

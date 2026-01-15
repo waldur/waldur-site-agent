@@ -30,3 +30,14 @@ blank_handler.setFormatter(logging.Formatter(fmt=""))
 
 logger.addHandler(console_handler)
 logger.setLevel(logging.INFO)
+
+
+def configure_logger(log_level: str = "INFO") -> None:
+    """Configure the logger with the specified log level.
+
+    Args:
+        log_level: Logging level as a string (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    """
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    logger.setLevel(level)
+    console_handler.setLevel(level)
