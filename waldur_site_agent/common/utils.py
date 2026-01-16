@@ -517,6 +517,7 @@ def load_components_to_waldur(
         component.type_: component for component in waldur_offering.components
     }
     for component_type, component_info in components.items():
+        component_info=component_info.to_dict()
         try:
             limit_amount = component_info.get("limit")
             accounting_type = component_info["accounting_type"]
