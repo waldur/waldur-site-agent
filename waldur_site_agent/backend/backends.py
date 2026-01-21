@@ -106,6 +106,9 @@ class BaseBackend(ABC):
         """Pull resource from backend."""
         try:
             backend_id = waldur_resource.backend_id
+            if not backend_id:
+                logger.warning("Backend ID is missing for resource %s", waldur_resource.name)
+                return None
             backend_resource_info = self._pull_backend_resource(backend_id)
             if backend_resource_info is None:
                 return None
