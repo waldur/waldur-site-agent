@@ -120,5 +120,8 @@ class MoabBackend(BaseBackend):
         self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
         """Collect deposit limit only with no conversion."""
-        deposit_limit = {"deposit": waldur_resource["limits"]["deposit"]}
+        if waldur_resource.limits:
+            deposit_limit = {"deposit": waldur_resource.limits.to_dict()["deposit"]}
+        else:
+            deposit_limit = {"deposit": 0}
         return deposit_limit, deposit_limit
