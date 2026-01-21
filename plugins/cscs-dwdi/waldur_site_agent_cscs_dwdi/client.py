@@ -290,7 +290,7 @@ class CSCSDWDIClient:
 
         headers = {"Authorization": f"Bearer {token}"}
 
-        url = f"{self.api_url}/storage/usage-month/{filesystem}/{data_type}"
+        url = f"{self.api_url}/storage/usage-month"
 
         logger.debug(
             "Fetching storage usage for paths %s for month %s",
@@ -350,7 +350,7 @@ class CSCSDWDIClient:
 
         headers = {"Authorization": f"Bearer {token}"}
 
-        url = f"{self.api_url}/storage/usage-day/{filesystem}/{data_type}"
+        url = f"{self.api_url}/storage/usage-day"
 
         logger.debug(
             "Fetching storage usage for paths %s for date %s",
@@ -418,9 +418,7 @@ class CSCSDWDIClient:
             }
 
             # Use default values for ping test
-            filesystem = "lustre"
-            data_type = "projects"
-            url = f"{self.api_url}/storage/usage-day/{filesystem}/{data_type}"
+            url = f"{self.api_url}/storage/usage-day"
 
             # Configure httpx client with SOCKS proxy if specified
             client_args: dict[str, Any] = {"timeout": 10.0}
