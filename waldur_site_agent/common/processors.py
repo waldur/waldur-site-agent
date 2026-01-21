@@ -96,9 +96,6 @@ from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.order_details import (
     OrderDetails,
 )
-from waldur_api_client.models.order_details_limits import (
-    OrderDetailsLimits,
-)
 from waldur_api_client.models.order_error_details_request import OrderErrorDetailsRequest
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.project_user import ProjectUser
@@ -110,7 +107,6 @@ from waldur_api_client.models.resource_backend_metadata_request import (
     ResourceBackendMetadataRequest,
 )
 from waldur_api_client.models.resource_state import ResourceState
-from waldur_api_client.types import Unset
 
 from waldur_site_agent.backend import BackendType, logger
 from waldur_site_agent.backend import exceptions as backend_exceptions
@@ -539,9 +535,18 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             # TODO: no need for update of orders for marketplace SLURM offerings
             if order_is_done:
                 logger.info("Marking order as done")
-                marketplace_orders_set_state_done.sync_detailed(
-                    client=self.waldur_rest_client, uuid=order.uuid
+                waldur_order_refreshed = marketplace_orders_retrieve.sync(
+                    client=self.waldur_rest_client, uuid=order.uuid.hex
                 )
+                if waldur_order_refreshed.state == OrderState.EXECUTING:
+                    marketplace_orders_set_state_done.sync_detailed(
+                        client=self.waldur_rest_client, uuid=order.uuid.hex
+                    )
+                else:
+                    logger.info(
+                        "Order is not in EXECUTING state,"
+                        "skipping set_state_done operation"
+                    )
 
                 logger.info("The order has been successfully processed")
 
@@ -802,24 +807,28 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         waldur_resource = marketplace_provider_resources_retrieve.sync(
             uuid=resource_uuid, client=self.waldur_rest_client
         )
+        old_limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
 
         waldur_resource_backend_id = waldur_resource.backend_id
-        new_limits: Unset | OrderDetailsLimits = order.limits
+        new_limits = order.limits.to_dict() if order.limits else {}
         if not new_limits:
-            logger.error(
+            logger.warning(
                 "Order %s (resource %s) with type" + "Update does not include new limits",
                 order.uuid,
                 waldur_resource.name,
             )
+        else:
+            self.resource_backend.set_resource_limits(
+                waldur_resource_backend_id,
+                new_limits
+            )
 
-        self.resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits.to_dict())
-
-        logger.info(
-            "The limits for %s were updated successfully from %s to %s",
-            waldur_resource.name,
-            order.resource_name or "N/A",
-            new_limits.to_dict() if new_limits else "N/A",
-        )
+            logger.info(
+                "The limits for %s were updated successfully from %s to %s",
+                waldur_resource.name,
+                old_limits,
+                new_limits,
+            )
         return True
 
     def _process_terminate_order(self, order: OrderDetails) -> bool:
