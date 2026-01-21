@@ -660,6 +660,27 @@ class CSCSDWDIStorageBackend(BaseBackend):
         except Exception:
             logger.exception("Failed to get storage usage report from CSCS-DWDI")
             raise
+    def _pull_backend_resource(
+        self, resource_backend_id: str
+    ) -> Optional[structures.BackendResourceInfo]:
+        """Pull resource data from the backend."""
+        logger.info("Pulling resource %s", resource_backend_id)
+
+        if resource_backend_id is None:
+            logger.warning("There is no resource with ID %s in the backend", resource_backend_id)
+            return None
+        path = resource_backend_id
+        account = [path.split("/")[-1]]
+        usage = self._get_usage_report([path])
+
+        if usage is None:
+            empty_usage = dict.fromkeys(self.backend_components, 0)
+            usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
+
+        return structures.BackendResourceInfo(
+            users=account,
+            usage=usage
+        )
 
     # Methods not implemented for reporting-only backend
     def get_account(self, account_name: str) -> Optional[dict[str, Any]]:
