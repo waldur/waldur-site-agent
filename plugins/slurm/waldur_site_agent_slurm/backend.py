@@ -414,7 +414,7 @@ class SlurmBackend(backends.BaseBackend):
         """Set limits for limit-based components in the SLURM allocation."""
         # Convert limits
         converted_limits = {
-            key: value * self.backend_components[key]["unit_factor"]
+            key: int(value * self.backend_components[key]["unit_factor"])
             for key, value in limits.items()
         }
         super().set_resource_limits(resource_backend_id, converted_limits)
