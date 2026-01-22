@@ -1,5 +1,4 @@
 """CSCS-DWDI backend implementations for compute and storage usage reporting."""
-
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
