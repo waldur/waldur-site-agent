@@ -651,8 +651,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
                         storage_usage[component_name] = round(inodes_used * unit_factor, 2)
                         storage_limit[component_name] = inodes_limit
 
-                usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE" : storage_usage,
-                                             "ACCOUNT_LIMITS": storage_limit}
+                usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE" : storage_usage}
 
             logger.info(
                 "Successfully retrieved storage usage for %d resources",
@@ -683,10 +682,8 @@ class CSCSDWDIStorageBackend(BaseBackend):
             usage = {"TOTAL_ACCOUNT_USAGE" : empty_usage}
 
         return structures.BackendResourceInfo(
-            users=[account],
-            usage=usage["TOTAL_ACCOUNT_USAGE"],
-            backend_id=path,
-            limits=usage["ACCOUNT_LIMITS"],
+            usage=usage,
+            backend_id=path
         )
 
     # Methods not implemented for reporting-only backend
