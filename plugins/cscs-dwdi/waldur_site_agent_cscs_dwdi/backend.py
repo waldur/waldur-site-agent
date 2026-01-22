@@ -670,7 +670,8 @@ class CSCSDWDIStorageBackend(BaseBackend):
             logger.warning("There is no resource with ID %s in the backend", resource_backend_id)
             return None
         path = resource_backend_id
-        account = [path.split("/")[-1]]
+        account = path.split("/")[-1]
+        logger.info("Account %s", account)
         usage = self._get_usage_report([path])
 
         if usage is None:
@@ -678,9 +679,24 @@ class CSCSDWDIStorageBackend(BaseBackend):
             usage = {"TOTAL_ACCOUNT_USAGE" : empty_usage}
 
         return structures.BackendResourceInfo(
-            users=account,
+            users=[account],
             usage=usage
         )
+
+    def pull_resource(
+        self, waldur_resource: WaldurResource
+    ) -> Optional[structures.BackendResourceInfo]:
+        """Pull resource from backend with cluster filtering support."""
+        try:
+            backend_id = waldur_resource.backend_id
+            backend_resource_info = self._pull_backend_resource(backend_id, waldur_resource)
+            if backend_resource_info is None:
+                return None
+        except Exception:
+            logger.exception("Error while pulling resource [%s]", backend_id)
+            return None
+        else:
+            return backend_resource_info
 
     # Methods not implemented for reporting-only backend
     def get_account(self, account_name: str) -> Optional[dict[str, Any]]:
