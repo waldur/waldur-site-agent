@@ -611,7 +611,6 @@ class CSCSDWDIStorageBackend(BaseBackend):
             # Query CSCS-DWDI storage API
             response = self.cscs_client.get_storage_usage_for_month(
                 paths=paths_to_query,
-                tenant=self.tenant,
                 filesystem=self.filesystem,
                 data_type=self.data_type,
                 exact_month=exact_month,
@@ -682,21 +681,6 @@ class CSCSDWDIStorageBackend(BaseBackend):
             users=[account],
             usage=usage
         )
-
-    def pull_resource(
-        self, waldur_resource: WaldurResource
-    ) -> Optional[structures.BackendResourceInfo]:
-        """Pull resource from backend with cluster filtering support."""
-        try:
-            backend_id = waldur_resource.backend_id
-            backend_resource_info = self._pull_backend_resource(backend_id, waldur_resource)
-            if backend_resource_info is None:
-                return None
-        except Exception:
-            logger.exception("Error while pulling resource [%s]", backend_id)
-            return None
-        else:
-            return backend_resource_info
 
     # Methods not implemented for reporting-only backend
     def get_account(self, account_name: str) -> Optional[dict[str, Any]]:
