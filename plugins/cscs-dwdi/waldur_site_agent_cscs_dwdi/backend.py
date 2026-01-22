@@ -611,7 +611,6 @@ class CSCSDWDIStorageBackend(BaseBackend):
             # Query CSCS-DWDI storage API
             response = self.cscs_client.get_storage_usage_for_month(
                 paths=paths_to_query,
-                tenant=self.tenant,
                 filesystem=self.filesystem,
                 data_type=self.data_type,
                 exact_month=exact_month,
@@ -670,7 +669,8 @@ class CSCSDWDIStorageBackend(BaseBackend):
             logger.warning("There is no resource with ID %s in the backend", resource_backend_id)
             return None
         path = resource_backend_id
-        account = [path.split("/")[-1]]
+        account = path.split("/")[-1]
+        logger.info("Account %s", account)
         usage = self._get_usage_report([path])
 
         if usage is None:
@@ -678,7 +678,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
             usage = {"TOTAL_ACCOUNT_USAGE" : empty_usage}
 
         return structures.BackendResourceInfo(
-            users=account,
+            users=[account],
             usage=usage
         )
 

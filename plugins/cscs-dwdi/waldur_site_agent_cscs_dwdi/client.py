@@ -252,7 +252,6 @@ class CSCSDWDIClient:
     def get_storage_usage_for_month(
         self,
         paths: list[str],
-        tenant: Optional[str],
         filesystem: str,
         data_type: str,
         exact_month: str,
@@ -281,8 +280,6 @@ class CSCSDWDIClient:
         # Add optional parameters
         if paths:
             params["paths"] = paths
-        if tenant:
-            params["tenant"] = tenant
         if filesystem:
             params["filesystem"] = filesystem
         if data_type:
@@ -312,7 +309,6 @@ class CSCSDWDIClient:
     def get_storage_usage_for_day(
         self,
         paths: list[str],
-        tenant: Optional[str],
         filesystem: str,
         data_type: str,
         exact_date: date,
@@ -341,8 +337,6 @@ class CSCSDWDIClient:
         # Add optional parameters
         if paths:
             params["paths"] = paths
-        if tenant:
-            params["tenant"] = tenant
         if filesystem:
             params["filesystem"] = filesystem
         if data_type:
