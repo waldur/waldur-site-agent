@@ -1624,7 +1624,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         component_usage = component_usages[0]
         existing_usage = float(component_usage.usage)
-        if (self.BACKEND_TYPE_KEY!="cscs-dwdi-compute") and (current_usage < existing_usage):
+        if not self.resource_backend.supports_decreasing_usage and current_usage < existing_usage:
             logger.error(
                 "Usage anomaly detected for component %s: "
                 "Current usage %s is lower than existing usage %s",

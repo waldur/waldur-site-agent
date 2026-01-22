@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 class CSCSDWDIComputeBackend(BaseBackend):
     """Backend for reporting compute usage from CSCS-DWDI API."""
 
+    supports_decreasing_usage: bool = True
+
     def __init__(
         self, backend_settings: dict[str, Any], backend_components: dict[str, Any]
     ) -> None:
@@ -469,6 +471,8 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
 class CSCSDWDIStorageBackend(BaseBackend):
     """Backend for reporting storage usage from CSCS-DWDI API."""
+
+    supports_decreasing_usage: bool = True
 
     def __init__(
         self, backend_settings: dict[str, Any], backend_components: dict[str, Any]
