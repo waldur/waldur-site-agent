@@ -648,7 +648,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
                         unit_factor = component_config.get("unit_factor", 1)
                         storage_usage[component_name] = round(inodes_used * unit_factor, 2)
 
-                usage_report[resource_id] = storage_usage
+                usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE" : storage_usage}
 
             logger.info(
                 "Successfully retrieved storage usage for %d resources",
@@ -675,7 +675,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
 
         if usage is None:
             empty_usage = dict.fromkeys(self.backend_components, 0)
-            usage = empty_usage
+            usage = {"TOTAL_ACCOUNT_USAGE" : empty_usage}
 
         return structures.BackendResourceInfo(
             users=account,
