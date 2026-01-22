@@ -643,8 +643,8 @@ class CSCSDWDIStorageBackend(BaseBackend):
                     ):
                         # Apply unit factor for space (e.g., bytes to GB)
                         unit_factor = component_config.get("unit_factor", 1)
-                        storage_usage[component_name] = round(space_used_bytes / unit_factor, 2)
-                        storage_limit[component_name] = round(space_limit_bytes / unit_factor, 2)
+                        storage_usage[component_name] = round(space_used_bytes * (1.0/unit_factor), 2)
+                        storage_limit[component_name] = round(space_limit_bytes * (1.0/ unit_factor), 2)
                     elif "storage_inodes" in component_name.lower()  in component_name.lower():
                         # Inodes typically don't need conversion
                         unit_factor = component_config.get("unit_factor", 1)
