@@ -16,6 +16,9 @@ from .client import CSCSDWDIClient
 logger = logging.getLogger(__name__)
 
 
+
+
+
 class CSCSDWDIComputeBackend(BaseBackend):
     """Backend for reporting compute usage from CSCS-DWDI API."""
 
@@ -43,7 +46,6 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
         super().__init__(backend_settings, normalized_backend_components)
         self.backend_type = "cscs-dwdi-compute"
-        self.flag_compare= backend_settings.get("flag_compare","")
         # Extract CSCS-DWDI specific configuration
         self.api_url = backend_settings.get("cscs_dwdi_api_url", "")
         self.client_id = backend_settings.get("cscs_dwdi_client_id", "")
