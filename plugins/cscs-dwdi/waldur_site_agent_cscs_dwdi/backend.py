@@ -43,7 +43,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
         super().__init__(backend_settings, normalized_backend_components)
         self.backend_type = "cscs-dwdi-compute"
-
+        self.flag_compare= "disabled"
         # Extract CSCS-DWDI specific configuration
         self.api_url = backend_settings.get("cscs_dwdi_api_url", "")
         self.client_id = backend_settings.get("cscs_dwdi_client_id", "")
@@ -643,8 +643,10 @@ class CSCSDWDIStorageBackend(BaseBackend):
                     ):
                         # Apply unit factor for space (e.g., bytes to GB)
                         unit_factor = component_config.get("unit_factor", 1)
-                        storage_usage[component_name] = round(space_used_bytes * (1.0/unit_factor), 2)
-                        storage_limit[component_name] = round(space_limit_bytes * (1.0/ unit_factor), 2)
+                        storage_usage[component_name] = (
+                            round(space_used_bytes * (1.0/unit_factor), 2))
+                        storage_limit[component_name] = (
+                            round(space_limit_bytes * (1.0/ unit_factor), 2))
                     elif "storage_inodes" in component_name.lower()  in component_name.lower():
                         # Inodes typically don't need conversion
                         unit_factor = component_config.get("unit_factor", 1)

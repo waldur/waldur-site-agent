@@ -167,6 +167,7 @@ class OfferingBaseProcessor(abc.ABC):
         timezone: str = "",
         resource_backend: Optional[BaseBackend] = None,
         resource_backend_version: Optional[str] = None,
+        flag_compare: Optional[str] = None
     ) -> None:
         """Initialize the offering processor.
 
@@ -178,6 +179,8 @@ class OfferingBaseProcessor(abc.ABC):
                 (optional, will be created if not provided)
             resource_backend_version: Version of the resource backend
                 (optional, will be determined if not provided)
+            flag_compare: Flag to indicate in the reporting agent whether
+            to compare usage data with previous usage data
 
         Raises:
             BackendError: If unable to create a backend for the offering
@@ -185,7 +188,7 @@ class OfferingBaseProcessor(abc.ABC):
         self.offering: structures.Offering = offering
         self.timezone: str = timezone
         self.waldur_rest_client = waldur_rest_client
-
+        self.flag_compare = flag_compare
         # Use dependency injection if backend is provided, otherwise create it
         if resource_backend is not None:
             self.resource_backend = resource_backend
@@ -1604,6 +1607,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         component_type: str,
         current_usage: float,
         existing_usages: list[ComponentUsage] | None,
+        flag_compare: str | None
     ) -> bool:
         """Check if the current usage is lower than existing usage."""
         if not existing_usages:
@@ -1624,8 +1628,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         component_usage = component_usages[0]
         existing_usage = float(component_usage.usage)
-
-        if current_usage < existing_usage:
+        if (flag_compare!="disabled") and (current_usage < existing_usage):
             logger.error(
                 "Usage anomaly detected for component %s: "
                 "Current usage %s is lower than existing usage %s",
@@ -1664,7 +1667,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         )
         for component, amount in total_usage.items():
             if component in component_types and self._check_usage_anomaly(
-                component, amount, existing_usages
+                component, amount, existing_usages,self.flag_compare
             ):
                 logger.warning(
                     "Skipping usage update for resource %s due to anomaly detection",
