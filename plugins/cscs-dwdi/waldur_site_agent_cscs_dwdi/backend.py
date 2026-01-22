@@ -643,15 +643,16 @@ class CSCSDWDIStorageBackend(BaseBackend):
                     ):
                         # Apply unit factor for space (e.g., bytes to GB)
                         unit_factor = component_config.get("unit_factor", 1)
-                        storage_usage[component_name] = round(space_used_bytes * unit_factor, 2)
-                        storage_limit[component_name] = round(space_limit_bytes * unit_factor, 2)
-                    elif "storage_inodes" in component_name.lower() or "file" in component_name.lower():
+                        storage_usage[component_name] = round(space_used_bytes / unit_factor, 2)
+                        storage_limit[component_name] = round(space_limit_bytes / unit_factor, 2)
+                    elif "storage_inodes" in component_name.lower()  in component_name.lower():
                         # Inodes typically don't need conversion
                         unit_factor = component_config.get("unit_factor", 1)
-                        storage_usage[component_name] = round(inodes_used * unit_factor, 2)
+                        storage_usage[component_name] = round(inodes_used / unit_factor, 2)
                         storage_limit[component_name] = inodes_limit
 
                 usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE" : storage_usage}
+
 
             logger.info(
                 "Successfully retrieved storage usage for %d resources",
@@ -663,6 +664,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
         except Exception:
             logger.exception("Failed to get storage usage report from CSCS-DWDI")
             raise
+
     def _pull_backend_resource(
         self, resource_backend_id: str
     ) -> Optional[structures.BackendResourceInfo]:
