@@ -631,9 +631,12 @@ class CSCSDWDIStorageBackend(BaseBackend):
                 # Extract storage metrics
                 space_used_bytes = storage_entry.get("spaceUsed", 0)
                 inodes_used = storage_entry.get("inodesUsed", 0)
+                inodes_limit= storage_entry.get("inodesSoftQuota", 0)
+                space_limit_bytes = storage_entry.get("spaceSoftQuota", 0)
 
                 # Convert bytes to configured units (typically GB)
                 storage_usage = {}
+                storage_limit = {}
                 for component_name, component_config in self.backend_components.items():
                     if (
                         "storage_space" in component_name.lower()
@@ -642,12 +645,15 @@ class CSCSDWDIStorageBackend(BaseBackend):
                         # Apply unit factor for space (e.g., bytes to GB)
                         unit_factor = component_config.get("unit_factor", 1)
                         storage_usage[component_name] = round(space_used_bytes * unit_factor, 2)
-                    elif "inode" in component_name.lower() or "file" in component_name.lower():
+                        storage_limit[component_name] = round(space_limit_bytes * unit_factor, 2)
+                    elif "storage_inodes" in component_name.lower() or "file" in component_name.lower():
                         # Inodes typically don't need conversion
                         unit_factor = component_config.get("unit_factor", 1)
                         storage_usage[component_name] = round(inodes_used * unit_factor, 2)
+                        storage_limit[component_name] = inodes_limit
 
-                usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE" : storage_usage}
+                usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE" : storage_usage,
+                                             "ACCOUNT_LIMITS": storage_limit}
 
             logger.info(
                 "Successfully retrieved storage usage for %d resources",
@@ -671,7 +677,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
         path = resource_backend_id
         account = path.split("/")[-1]
         logger.info("Account %s", account)
-        usage = self._get_usage_report([path])
+        usage = self._get_usage_report([path])[path]
 
         if usage is None:
             empty_usage = dict.fromkeys(self.backend_components, 0)
@@ -679,7 +685,9 @@ class CSCSDWDIStorageBackend(BaseBackend):
 
         return structures.BackendResourceInfo(
             users=[account],
-            usage=usage
+            usage=usage["TOTAL_ACCOUNT_USAGE"],
+            backend_id=path,
+            limits=usage["ACCOUNT_LIMITS"],
         )
 
     # Methods not implemented for reporting-only backend
