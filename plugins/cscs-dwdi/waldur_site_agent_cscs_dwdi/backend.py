@@ -676,8 +676,6 @@ class CSCSDWDIStorageBackend(BaseBackend):
             logger.warning("There is no resource with ID %s in the backend", resource_backend_id)
             return None
         path = resource_backend_id
-        account = path.split("/")[-1]
-        logger.info("Account %s", account)
         usage = self._get_usage_report([path])[path]
 
         if usage is None:
