@@ -16,6 +16,10 @@ UNKNOWN_BACKEND_TYPE = "unknown"
 class BaseBackend(ABC):
     """Backend class with implemented generic methods and other abstract methods."""
 
+    # Capability flag: Set to True for backends where usage can decrease
+    # (e.g., storage backends reporting current state, not accumulated usage)
+    supports_decreasing_usage: bool = False
+
     def __init__(self, backend_settings: dict, backend_components: dict[str, dict]) -> None:
         """Init backend info."""
         self.backend_type = "abstract"

@@ -260,9 +260,8 @@ class CSCSDWDIClient:
 
         Args:
             paths: List of storage paths to query
-            tenant: Tenant identifier (optional)
-            filesystem: Filesystem name (e.g., "lustre")
-            data_type: Data type (e.g., "projects")
+            filesystem: Filesystem name (e.g., "capstor")
+            data_type: Data type (e.g., "store")
             exact_month: Month in YYYY-MM format
 
         Returns:
@@ -317,9 +316,8 @@ class CSCSDWDIClient:
 
         Args:
             paths: List of storage paths to query
-            tenant: Tenant identifier (optional)
-            filesystem: Filesystem name (e.g., "lustre")
-            data_type: Data type (e.g., "projects")
+            filesystem: Filesystem name (e.g., "capstor")
+            data_type: Data type (e.g., "store")
             exact_date: Specific date
 
         Returns:

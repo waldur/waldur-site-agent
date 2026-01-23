@@ -178,6 +178,7 @@ class OfferingBaseProcessor(abc.ABC):
                 (optional, will be created if not provided)
             resource_backend_version: Version of the resource backend
                 (optional, will be determined if not provided)
+            to compare usage data with previous usage data
 
         Raises:
             BackendError: If unable to create a backend for the offering
@@ -185,7 +186,6 @@ class OfferingBaseProcessor(abc.ABC):
         self.offering: structures.Offering = offering
         self.timezone: str = timezone
         self.waldur_rest_client = waldur_rest_client
-
         # Use dependency injection if backend is provided, otherwise create it
         if resource_backend is not None:
             self.resource_backend = resource_backend
@@ -1624,8 +1624,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         component_usage = component_usages[0]
         existing_usage = float(component_usage.usage)
-
-        if current_usage < existing_usage:
+        if not self.resource_backend.supports_decreasing_usage and current_usage < existing_usage:
             logger.error(
                 "Usage anomaly detected for component %s: "
                 "Current usage %s is lower than existing usage %s",
