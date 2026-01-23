@@ -636,12 +636,9 @@ class CSCSDWDIStorageBackend(BaseBackend):
                 # Extract storage metrics
                 space_used_bytes = storage_entry.get("spaceUsed", 0)
                 inodes_used = storage_entry.get("inodesUsed", 0)
-                inodes_limit= storage_entry.get("inodesSoftQuota", 0)
-                space_limit_bytes = storage_entry.get("spaceSoftQuota", 0)
 
                 # Convert bytes to configured units (typically GB)
                 storage_usage = {}
-                storage_limit = {}
                 for component_name, component_config in self.backend_components.items():
                     if (
                         "storage_space" in component_name.lower()
@@ -651,13 +648,10 @@ class CSCSDWDIStorageBackend(BaseBackend):
                         unit_factor = component_config.get("unit_factor", 1)
                         storage_usage[component_name] = (
                             round(space_used_bytes * (1.0/unit_factor), 2))
-                        storage_limit[component_name] = (
-                            round(space_limit_bytes * (1.0/ unit_factor), 2))
                     elif "storage_inodes" in component_name.lower()  in component_name.lower():
                         # Inodes typically don't need conversion
                         unit_factor = component_config.get("unit_factor", 1)
                         storage_usage[component_name] = round(inodes_used / unit_factor, 2)
-                        storage_limit[component_name] = inodes_limit
 
                 usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE" : storage_usage}
 
