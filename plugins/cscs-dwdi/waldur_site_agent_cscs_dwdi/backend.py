@@ -676,15 +676,18 @@ class CSCSDWDIStorageBackend(BaseBackend):
             logger.warning("There is no resource with ID %s in the backend", resource_backend_id)
             return None
         path = resource_backend_id
-        usage = self._get_usage_report([path])[path]
+        account = path.split("/")[-1]
+        logger.info("Account %s", account)
+        usage = self._get_usage_report([path]).get(path)
 
         if usage is None:
-            empty_usage = dict.fromkeys(self.backend_components, 0)
-            usage = {"TOTAL_ACCOUNT_USAGE" : empty_usage}
+            empty_usage = dict.fromkeys(self.backend_components, 0.0)
+            usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         return structures.BackendResourceInfo(
+            users=[account],
             usage=usage,
-            backend_id=path
+            backend_id=path,
         )
 
     # Methods not implemented for reporting-only backend
