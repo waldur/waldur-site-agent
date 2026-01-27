@@ -92,7 +92,7 @@ class SlurmClient(clients.BaseClient):
 
     def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> str | None:
         """Sets the limits for the account with the specified name."""
-        limits_str = ",".join([f"{key}={value}" for key, value in limits_dict.items()])
+        limits_str = ",".join([f"{key}={value}" for key, value in sorted(limits_dict.items())])
         quota = f"GrpTRESMins={limits_str}"
         return self._execute_command(["modify", "account", resource_id, "set", quota])
 
