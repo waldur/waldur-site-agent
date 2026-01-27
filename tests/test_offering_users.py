@@ -8,8 +8,8 @@ from waldur_site_agent.common import structures
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.provider_offering_details import ProviderOfferingDetails
 from waldur_api_client.models.merged_plugin_options import MergedPluginOptions
-from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
 from waldur_api_client.models.offering_user_state import OfferingUserState
+from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
 from waldur_site_agent.backend.backends import (
     UnknownUsernameManagementBackend,
     AbstractUsernameManagementBackend,
@@ -32,6 +32,7 @@ class TestOfferingUserUpdate(unittest.TestCase):
         )
         self.provider_offering_details = ProviderOfferingDetails(
             plugin_options=MergedPluginOptions(
+                service_provider_can_create_offering_user=True,
                 username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
             )
         )
@@ -313,4 +314,33 @@ class TestOfferingUserUpdate(unittest.TestCase):
         # Verify early exit behavior
         self.assertFalse(result)
         # Verify that get_username_management_backend was never called
+        get_username_management_backend_mock.assert_not_called()
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    def test_service_provider_cannot_create_offering_user(
+        self, marketplace_provider_offerings_retrieve_mock, get_username_management_backend_mock
+    ):
+        """Test that missing service_provider_can_create_offering_user returns False."""
+        offering_details_without_permission = ProviderOfferingDetails(
+            plugin_options=MergedPluginOptions()
+        )
+        marketplace_provider_offerings_retrieve_mock.return_value = (
+            offering_details_without_permission
+        )
+
+        # Call the function
+        result = utils.update_offering_users(self.offering, self.waldur_client, self.offering_users)
+
+        # Verify that processing was skipped (should return False)
+        self.assertFalse(result)
+
+        # Verify that usernames remain unchanged (empty)
+        self.assertEqual(self.offering_users[0].username, "")
+        self.assertEqual(self.offering_users[1].username, "")
+        self.assertEqual(self.offering_users[2].username, "")
+
+        # Verify that get_username_management_backend was never called due to early exit
         get_username_management_backend_mock.assert_not_called()
