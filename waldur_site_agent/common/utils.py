@@ -871,8 +871,21 @@ def _can_generate_usernames(
     offering_details = marketplace_provider_offerings_retrieve.sync(
         client=waldur_rest_client, uuid=offering.uuid
     )
+    plugin_options = offering_details.plugin_options
+
+    # Check if service provider is allowed to create offering users
+    service_provider_can_create = plugin_options.service_provider_can_create_offering_user
+    if isinstance(service_provider_can_create, type(UNSET)) or not service_provider_can_create:
+        logger.error(
+            "Offering %s (%s) does not have 'service_provider_can_create_offering_user' "
+            "set to True in plugin_options. OfferingUser creation is disabled.",
+            offering.name,
+            offering.uuid,
+        )
+        return False
+
     return (
-        offering_details.plugin_options.username_generation_policy
+        plugin_options.username_generation_policy
         == UsernameGenerationPolicyEnum.SERVICE_PROVIDER
     )
 

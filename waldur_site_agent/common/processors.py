@@ -87,6 +87,9 @@ from waldur_api_client.models.component_user_usage_create_request import (
 from waldur_api_client.models.marketplace_orders_list_state_item import (
     MarketplaceOrdersListStateItem,
 )
+from waldur_api_client.models.marketplace_provider_offerings_retrieve_field_item import (
+    MarketplaceProviderOfferingsRetrieveFieldItem,
+)
 from waldur_api_client.models.marketplace_provider_resources_list_state_item import (
     MarketplaceProviderResourcesListStateItem,
 )
@@ -107,6 +110,7 @@ from waldur_api_client.models.resource_backend_metadata_request import (
     ResourceBackendMetadataRequest,
 )
 from waldur_api_client.models.resource_state import ResourceState
+from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import BackendType, logger
 from waldur_site_agent.backend import exceptions as backend_exceptions
@@ -1069,8 +1073,36 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     exc,
                 )
 
+    def _validate_offering_user_configuration(self) -> bool:
+        """Validate that the offering is configured to support OfferingUser.
+
+        Returns:
+            True if the offering supports OfferingUser, False otherwise.
+        """
+        offering_details = marketplace_provider_offerings_retrieve.sync(
+            client=self.waldur_rest_client,
+            uuid=self.offering.uuid,
+            field=[MarketplaceProviderOfferingsRetrieveFieldItem.PLUGIN_OPTIONS],
+        )
+        plugin_options = offering_details.plugin_options
+        service_provider_can_create = plugin_options.service_provider_can_create_offering_user
+
+        if isinstance(service_provider_can_create, type(UNSET)) or not service_provider_can_create:
+            logger.error(
+                "Offering %s (%s) does not have 'service_provider_can_create_offering_user' "
+                "set to True in plugin_options. Membership sync requires OfferingUser support.",
+                self.offering.name,
+                self.offering.uuid,
+            )
+            return False
+        return True
+
     def _refresh_local_offering_users(self) -> list[OfferingUser]:
         try:
+            # Validate offering configuration for OfferingUser support
+            if not self._validate_offering_user_configuration():
+                return []
+
             # Fetch offering users
             offering_users: list[OfferingUser] = self._get_waldur_offering_users()
 

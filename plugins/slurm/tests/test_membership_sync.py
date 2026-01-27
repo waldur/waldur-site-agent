@@ -96,6 +96,7 @@ class MembershipSyncTest(unittest.TestCase):
             plugin_options=models.MergedPluginOptions(
                 latest_date_for_resource_termination=datetime(2024, 12, 31, tzinfo=timezone.utc),
                 storage_mode=StorageModeEnum.FIXED,
+                service_provider_can_create_offering_user=True,
             ),
             customer_uuid=uuid.uuid4(),
         )
