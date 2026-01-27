@@ -1,8 +1,11 @@
 """Classes for managing agent identities, event subscriptions, services, and processors."""
 
+from __future__ import annotations
+
 import datetime
 
 from waldur_api_client import AuthenticatedClient
+from waldur_api_client.api.event_subscriptions import event_subscriptions_create_queue
 from waldur_api_client.api.marketplace_site_agent_identities import (
     marketplace_site_agent_identities_create,
     marketplace_site_agent_identities_list,
@@ -21,6 +24,8 @@ from waldur_api_client.models import (
     AgentService,
     AgentServiceCreateRequest,
     EventSubscription,
+    EventSubscriptionQueue,
+    EventSubscriptionQueueCreateRequest,
     ObservableObjectTypeEnum,
 )
 from waldur_api_client.models.agent_event_subscription_create_request import (
@@ -154,6 +159,29 @@ class AgentIdentityManager:
         )
         logger.info("Registered new event subscription with UUID %s", event_subscription.uuid.hex)
         return event_subscription
+
+    def create_event_subscription_queue(
+        self, event_subscription: EventSubscription, object_type: ObservableObjectTypeEnum
+    ) -> EventSubscriptionQueue | None:
+        """Create an event subscription queue for the given agent identity and object type."""
+        try:
+            logger.info(
+                "Creating event subscription queue for %s, object type %s",
+                event_subscription.uuid.hex,
+                object_type,
+            )
+            body = EventSubscriptionQueueCreateRequest(
+                offering_uuid=self.offering.uuid,
+                object_type=object_type,
+            )
+            return event_subscriptions_create_queue.sync(
+                uuid=event_subscription.uuid.hex,
+                client=self.waldur_rest_client,
+                body=body,
+            )
+        except Exception as e:
+            logger.error("Failed to create event subscription queue: %s", e)
+            return None
 
     def register_service(self, identity: AgentIdentity, name: str, mode: str) -> AgentService:
         """Register a service within the agent identity.

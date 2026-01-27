@@ -172,6 +172,7 @@ class EventSubscriptionManager:
         ws_path = custom_stomp_ws_path or "/rmqws-stomp"
 
         password = self.offering.api_token
+        logger.info("Using %s:%s/%s%s broker", stomp_host, stomp_port, vhost_name, ws_path)
         connection = stomp.WSStompConnection(
             host_and_ports=[(stomp_host, stomp_port)], ws_path=ws_path, vhost=vhost_name
         )

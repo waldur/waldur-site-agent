@@ -184,6 +184,13 @@ class SlurmBackend(backends.BaseBackend):
         for component_key in usage_based_limits:
             waldur_resource_limits[component_key] = self.backend_components[component_key]["limit"]
 
+        logger.info(
+            "SLURM allocation limits: %s", allocation_limits
+        )
+        logger.info(
+            "SLURM Waldur limits: %s", waldur_resource_limits
+        )
+
         return allocation_limits, waldur_resource_limits
 
     def add_users_to_resource(

@@ -196,7 +196,10 @@ class OfferingBaseProcessor(abc.ABC):
             )
 
         if self.resource_backend.backend_type == BackendType.UNKNOWN.value:
-            raise backend_exceptions.BackendError(f"Unable to create backend for {self.offering}")
+            raise backend_exceptions.BackendError(
+                "Unable to create backend"
+                f" for {self.offering.name}"
+            )
 
         self._print_current_user()
 

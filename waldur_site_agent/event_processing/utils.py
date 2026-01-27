@@ -11,7 +11,7 @@ from typing import Union
 
 import httpx
 import paho.mqtt.client as mqtt
-from waldur_api_client import errors
+from waldur_api_client import AuthenticatedClient, errors
 from waldur_api_client.api.marketplace_orders import marketplace_orders_list
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 
@@ -54,22 +54,28 @@ def on_connect(
         client.subscribe(topic_name)
 
 
-def setup_stomp_offering_subscriptions(
-    waldur_offering: common_structures.Offering, waldur_user_agent: str, global_proxy: str = ""
-) -> list[StompConsumer]:
-    """Set up STOMP subscriptions for the specified offering."""
-    stomp_connections: list[StompConsumer] = []
-    object_types = []
+def _determine_observable_object_types(
+    offering: common_structures.Offering,
+) -> list[ObservableObjectTypeEnum]:
+    """Determine which observable object types to subscribe to based on offering configuration.
 
-    if waldur_offering.order_processing_backend:
+    Args:
+        offering: The Waldur offering configuration
+
+    Returns:
+        List of object types to create subscriptions for
+    """
+    object_types: list[ObservableObjectTypeEnum] = []
+
+    if offering.order_processing_backend:
         object_types.append(ObservableObjectTypeEnum.ORDER)
     else:
         logger.info(
             "Order processing is disabled for offering %s, skipping start of STOMP connections",
-            waldur_offering.name,
+            offering.name,
         )
 
-    if waldur_offering.membership_sync_backend:
+    if offering.membership_sync_backend:
         object_types.extend(
             [
                 ObservableObjectTypeEnum.USER_ROLE,
@@ -81,31 +87,136 @@ def setup_stomp_offering_subscriptions(
     else:
         logger.info(
             "Membership sync is disabled for offering %s, skipping start of STOMP connections",
-            waldur_offering.name,
+            offering.name,
         )
 
-    if waldur_offering.resource_import_enabled:
+    if offering.resource_import_enabled:
         object_types.append(ObservableObjectTypeEnum.IMPORTABLE_RESOURCES)
     else:
         logger.info(
             "Resource import is disabled for offering %s, skipping start of STOMP connections",
-            waldur_offering.name,
+            offering.name,
         )
 
     # Check if periodic limits are enabled for this offering
-    backend_settings = getattr(waldur_offering, "backend_settings", {})
+    backend_settings = getattr(offering, "backend_settings", {})
     periodic_limits_config = backend_settings.get("periodic_limits", {})
     if periodic_limits_config.get("enabled", False):
-        object_types.append(ObservableObjectTypeEnum.RESOURCE_PERIODIC_LIMITS_UPDATE)
+        object_types.append(ObservableObjectTypeEnum.RESOURCE_PERIODIC_LIMITS)
         logger.info(
             "Periodic limits enabled for offering %s, subscribing to periodic limits updates",
-            waldur_offering.name,
+            offering.name,
         )
     else:
         logger.debug(
             "Periodic limits disabled for offering %s, skipping periodic limits subscriptions",
-            waldur_offering.name,
+            offering.name,
         )
+
+    return object_types
+
+
+def _register_agent_identity(
+    offering: common_structures.Offering,
+    waldur_rest_client: AuthenticatedClient,
+) -> agent_identity_management.AgentIdentity | None:
+    """Register or retrieve agent identity for the offering.
+
+    Args:
+        offering: The Waldur offering configuration
+        waldur_rest_client: Authenticated REST client for Waldur API
+
+    Returns:
+        AgentIdentity if successful, None if registration failed
+    """
+    agent_identity_manager = agent_identity_management.AgentIdentityManager(
+        offering, waldur_rest_client
+    )
+    identity_name = f"agent-{offering.uuid}"
+    try:
+        return agent_identity_manager.register_identity(identity_name)
+    except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
+        logger.exception("Failed to register identity for the offering %s: %s", offering.name, e)
+        return None
+
+
+def _setup_single_stomp_subscription(
+    offering: common_structures.Offering,
+    agent_identity: agent_identity_management.AgentIdentity,
+    agent_identity_manager: agent_identity_management.AgentIdentityManager,
+    waldur_user_agent: str,
+    object_type: ObservableObjectTypeEnum,
+    global_proxy: str = "",
+) -> StompConsumer | None:
+    """Setup a single STOMP subscription for the given object type.
+
+    Args:
+        offering: The Waldur offering configuration
+        agent_identity: The registered agent identity
+        agent_identity_manager: Manager for agent identity operations
+        waldur_user_agent: User agent string
+        object_type: Type of observable object to subscribe to
+        global_proxy: Optional proxy configuration
+
+    Returns:
+        Tuple of (connection, event_subscription, offering) if successful, None if failed
+    """
+    try:
+        event_subscription = agent_identity_manager.register_event_subscription(
+            agent_identity, object_type
+        )
+
+        event_subscription_queue = agent_identity_manager.create_event_subscription_queue(
+            event_subscription, object_type
+        )
+        if event_subscription_queue is None:
+            logger.error(
+                "Failed to create event subscription queue for the offering %s, object type %s",
+                offering.name,
+                object_type,
+            )
+            return None
+
+        event_subscription_manager = EventSubscriptionManager(
+            offering, None, None, waldur_user_agent, object_type, global_proxy
+        )
+        connection = event_subscription_manager.setup_stomp_connection(
+            event_subscription,
+            offering.stomp_ws_host,
+            offering.stomp_ws_port,
+            offering.stomp_ws_path,
+        )
+        connected = event_subscription_manager.start_stomp_connection(
+            event_subscription, connection
+        )
+        if not connected:
+            logger.error(
+                "Failed to start STOMP connection for the offering %s (%s), object type %s",
+                offering.name,
+                offering.uuid,
+                object_type,
+            )
+            return None
+
+        return (connection, event_subscription, offering)
+    except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
+        logger.exception(
+            "Unable to register event subscription for offering %s object type %s: %s",
+            offering.name,
+            object_type,
+            e,
+        )
+        return None
+
+
+def setup_stomp_offering_subscriptions(
+    waldur_offering: common_structures.Offering, waldur_user_agent: str, global_proxy: str = ""
+) -> list[StompConsumer]:
+    """Set up STOMP subscriptions for the specified offering."""
+    stomp_connections: list[StompConsumer] = []
+
+    # Determine which object types to subscribe to
+    object_types = _determine_observable_object_types(waldur_offering)
 
     waldur_rest_client = get_client(
         waldur_offering.api_url,
@@ -115,52 +226,27 @@ def setup_stomp_offering_subscriptions(
         proxy=global_proxy,
     )
 
+    # Register agent identity
+    agent_identity = _register_agent_identity(waldur_offering, waldur_rest_client)
+    if agent_identity is None:
+        return stomp_connections
+
     agent_identity_manager = agent_identity_management.AgentIdentityManager(
         waldur_offering, waldur_rest_client
     )
-    identity_name = f"agent-{waldur_offering.uuid}"
-    try:
-        agent_identity = agent_identity_manager.register_identity(identity_name)
-    except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
-        logger.exception(
-            "Failed to register identity for the offering %s: %s", waldur_offering.name, e
-        )
-        return stomp_connections
 
+    # Setup subscription for each object type
     for object_type in object_types:
-        try:
-            event_subscription = agent_identity_manager.register_event_subscription(
-                agent_identity, object_type
-            )
-            event_subscription_manager = EventSubscriptionManager(
-                waldur_offering, None, None, waldur_user_agent, object_type, global_proxy
-            )
-            connection = event_subscription_manager.setup_stomp_connection(
-                event_subscription,
-                waldur_offering.stomp_ws_host,
-                waldur_offering.stomp_ws_port,
-                waldur_offering.stomp_ws_path,
-            )
-            connected = event_subscription_manager.start_stomp_connection(
-                event_subscription, connection
-            )
-            if not connected:
-                logger.error(
-                    "Failed to start STOMP connection for the offering %s (%s), object type %s",
-                    waldur_offering.name,
-                    waldur_offering.uuid,
-                    object_type,
-                )
-                continue
-
-            stomp_connections.append((connection, event_subscription, waldur_offering))
-        except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
-            logger.exception(
-                "Unable to register event subscription for offering %s object type %s: %s",
-                waldur_offering.name,
-                object_type,
-                e,
-            )
+        consumer = _setup_single_stomp_subscription(
+            waldur_offering,
+            agent_identity,
+            agent_identity_manager,
+            waldur_user_agent,
+            object_type,
+            global_proxy,
+        )
+        if consumer is not None:
+            stomp_connections.append(consumer)
 
     return stomp_connections
 

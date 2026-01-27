@@ -73,10 +73,32 @@ class WaldurListener(stomp.ConnectionListener):
 
     def on_connected(self, _: stomp.utils.Frame) -> None:
         """Connection handler method."""
-        logger.debug("Subscribing to %s", self.queue)
+        # Subscribe to pre-existing queue created by Waldur backend
+        # Use /amq/queue/ prefix to subscribe to existing queue without attempting declaration
+        # The /queue/ prefix would try to redeclare and cause PRECONDITION_FAILED errors
+        # when queue parameters (x-message-ttl, x-overflow, etc.) don't match
+        destination = f"/amq/queue/{self.queue}"
+        logger.debug("Subscribing to %s", destination)
         self.conn.subscribe(
-            destination=self.queue, id="waldur-subscription-", ack="auto"
-        )  # TODO: try ack='client'
+            destination=destination,
+            id=self.queue,
+            ack="auto",  # TODO: try ack='client'
+        )
+
+        # Log connection and queue details
+        logger.debug(
+            "Successfully subscribed to queue: %s "
+            "(subscription_id: %s, ack_mode: auto)",
+            destination,
+            self.queue,
+        )
+        logger.debug(
+            "Connection info - host: %s, vhost: %s, ws_path: %s, connected: %s",
+            self.conn.transport.current_host_and_port,
+            self.conn.transport.vhost,
+            self.conn.transport.ws_path,
+            self.conn.is_connected(),
+        )
 
     def on_disconnected(self) -> None:
         """Disconnection handler method."""
