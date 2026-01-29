@@ -215,7 +215,7 @@ class BaseBackend(ABC):
             )
             return True
         logger.info("The resource with ID %s already exists in the cluster", resource_backend_id)
-        return True  # Return True if resource already exists - this is success, not failure
+        return False  # Return False if resource isn't created
 
     def create_resource(
         self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
