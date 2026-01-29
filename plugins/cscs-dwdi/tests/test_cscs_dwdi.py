@@ -59,7 +59,7 @@ class TestCSCSDWDIClient:
             "compute": [
                 {
                     "account": "test_account",
-                    "accountNodeHours": 100.0,
+                    "totalNodeHours": 100.0,
                     "users": [],
                 }
             ]
@@ -329,7 +329,7 @@ class TestCSCSDWDIComputeBackend:
             "compute": [
                 {
                     "account": "account1",
-                    "accountNodeHours": 1500.75,
+                    "totalNodeHours": 1500.75,
                     "users": [
                         {
                             "username": "user1",
@@ -343,7 +343,7 @@ class TestCSCSDWDIComputeBackend:
                 },
                 {
                     "account": "account2",
-                    "accountNodeHours": 750.0,
+                    "totalNodeHours": 750.0,
                     "users": [
                         {
                             "username": "user3",
@@ -390,7 +390,7 @@ class TestCSCSDWDIComputeBackend:
             "compute": [
                 {
                     "account": "account1",
-                    "accountNodeHours": 300.0,
+                    "totalNodeHours": 300.0,
                     "users": [
                         {
                             "username": "user1",
@@ -425,14 +425,14 @@ class TestCSCSDWDIComputeBackend:
             "compute": [
                 {
                     "account": "account1",
-                    "accountNodeHours": 100.0,
+                    "totalNodeHours": 100.0,
                     "users": [
                         {"username": "user1", "nodeHours": 100.0},
                     ],
                 },
                 {
                     "account": "account2",
-                    "accountNodeHours": 200.0,
+                    "totalNodeHours": 200.0,
                     "users": [],
                 },
             ]
@@ -492,17 +492,17 @@ class TestCSCSDWDIComputeBackend:
                 "compute": [
                     {
                         "account": "account1",
-                        "accountNodeHours": 100.0,
+                        "totalNodeHours": 100.0,
                         "users": [],
                     },
                     {
                         "account": "account2",
-                        "accountNodeHours": 200.0,
+                        "totalNodeHours": 200.0,
                         "users": [],
                     },
                     {
                         "account": "account3",
-                        "accountNodeHours": 300.0,
+                        "totalNodeHours": 300.0,
                         "users": [],
                     },
                 ]
