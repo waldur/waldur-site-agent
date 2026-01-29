@@ -13,7 +13,6 @@ members = [
     "waldur-site-agent-croit-s3",
     "waldur-site-agent-cscs-dwdi",
     "waldur-site-agent-harbor",
-    "waldur-site-agent-k8s-cluster",
     "waldur-site-agent-moab",
     "waldur-site-agent-mup",
     "waldur-site-agent-okd",
@@ -1551,14 +1550,12 @@ version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "importlib-metadata", marker = "python_full_version < '3.10'" },
-    { name = "mypy" },
     { name = "paho-mqtt" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "sentry-sdk" },
     { name = "stomp-py" },
-    { name = "types-pyyaml" },
     { name = "waldur-api-client" },
 ]
 
@@ -1568,24 +1565,24 @@ dev = [
     { name = "freezegun" },
     { name = "httpx" },
     { name = "jinja2" },
+    { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "respx" },
     { name = "ruff" },
     { name = "slurm-emulator" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "importlib-metadata", marker = "python_full_version == '3.9.*'", specifier = ">=8.7.0" },
-    { name = "mypy", specifier = ">=1.18.2" },
     { name = "paho-mqtt", specifier = "==2.1.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pyyaml", specifier = "==6.0.1" },
     { name = "requests", specifier = "==2.32.3" },
     { name = "sentry-sdk", specifier = "==2.3.1" },
     { name = "stomp-py", specifier = ">=8.2.0,<9" },
-    { name = "types-pyyaml", specifier = ">=6.0.12.20240311,<7" },
     { name = "waldur-api-client", specifier = ">=7.9.9" },
 ]
 
@@ -1595,11 +1592,13 @@ dev = [
     { name = "freezegun", specifier = "==0.3.4" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "jinja2", specifier = ">=3.0.0,<4.0" },
+    { name = "mypy", specifier = ">=1.18.2" },
     { name = "pytest", specifier = "==7.1.2" },
     { name = "pytest-cov", specifier = "==3.0.0" },
     { name = "respx", specifier = ">=0.22.0,<0.23" },
     { name = "ruff", specifier = ">=0.12.1,<0.13" },
     { name = "slurm-emulator", specifier = ">=0.1.1" },
+    { name = "types-pyyaml", specifier = ">=6.0.12.20240311,<7" },
 ]
 
 [[package]]
@@ -1662,17 +1661,6 @@ requires-dist = [
     { name = "requests", specifier = ">=2.31.0" },
     { name = "waldur-site-agent", editable = "." },
 ]
-
-[[package]]
-name = "waldur-site-agent-k8s-cluster"
-version = "0.1.0"
-source = { editable = "plugins/k8s-cluster" }
-dependencies = [
-    { name = "waldur-site-agent" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "waldur-site-agent-moab"
