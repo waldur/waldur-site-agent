@@ -157,10 +157,8 @@ class CSCSDWDIComputeBackend(BaseBackend):
                 to_date=to_date,
                 clusters=clusters,
             )
-
             # Process the response
             usage_report = self._process_api_response(response)
-
             # Filter to only include requested accounts
             filtered_report = {
                 account: data
@@ -250,22 +248,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
         for component_name, component_config in self.backend_components.items():
             # Look for component usage in account data
-            # Try multiple naming patterns to match API response fields to component names
-            raw_value = 0.0
-
-            # Try exact match first (e.g., nodeHours -> nodeHours)
-            if component_name in account_data:
-                raw_value = account_data[component_name]
-            # Try account prefix preserving case (e.g., nodeHours -> accountNodeHours)
-            elif f"account{component_name[0].upper()}{component_name[1:]}" in account_data:
-                raw_value = account_data[f"account{component_name[0].upper()}{component_name[1:]}"]
-            # Try total prefix (e.g., nodeHours -> totalNodeHours)
-            elif f"total{component_name[0].upper()}{component_name[1:]}" in account_data:
-                raw_value = account_data[f"total{component_name[0].upper()}{component_name[1:]}"]
-            # Try lowercase with account prefix
-            elif f"account{component_name}" in account_data:
-                raw_value = account_data[f"account{component_name}"]
-
+            raw_value = account_data.get("totalNodeHours")
             # Apply unit factor conversion
             unit_factor = component_config.get("unit_factor", 1)
             converted_value = raw_value * unit_factor
@@ -285,11 +268,10 @@ class CSCSDWDIComputeBackend(BaseBackend):
             Dictionary mapping component names to usage values
         """
         usage = {}
-
         for component_name, component_config in self.backend_components.items():
             # Look for component usage in user data
             # The API should return fields that match component names
-            raw_value = user_data.get(component_name, 0.0)
+            raw_value = user_data.get("nodeHours")
 
             # Apply unit factor conversion
             unit_factor = component_config.get("unit_factor", 1)
@@ -322,7 +304,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
         clusters = None
         if (
             waldur_resource
-            and hasattr(waldur_resource, "offering_slug")
+            and hasattr(waldur_resource, "offering_backend_id")
             and waldur_resource.offering_slug
             and not isinstance(waldur_resource.offering_slug, Unset)
         ):
