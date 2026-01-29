@@ -13,6 +13,7 @@ members = [
     "waldur-site-agent-croit-s3",
     "waldur-site-agent-cscs-dwdi",
     "waldur-site-agent-harbor",
+    "waldur-site-agent-k8s-cluster",
     "waldur-site-agent-moab",
     "waldur-site-agent-mup",
     "waldur-site-agent-okd",
@@ -1661,6 +1662,17 @@ requires-dist = [
     { name = "requests", specifier = ">=2.31.0" },
     { name = "waldur-site-agent", editable = "." },
 ]
+
+[[package]]
+name = "waldur-site-agent-k8s-cluster"
+version = "0.1.0"
+source = { editable = "plugins/k8s-cluster" }
+dependencies = [
+    { name = "waldur-site-agent" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "waldur-site-agent-moab"

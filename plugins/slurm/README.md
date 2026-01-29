@@ -165,6 +165,179 @@ Periodic limits are managed automatically via event processing when enabled. The
 3. **Monitors thresholds** and adjusts QoS based on current usage
 4. **Reports status** back to Waldur
 
+### Account Diagnostics
+
+The `waldur_site_diagnose_slurm_account` command provides diagnostic information for SLURM
+accounts by comparing local cluster state with Waldur Mastermind configuration.
+
+```bash
+# Basic diagnostic
+waldur_site_diagnose_slurm_account alloc_myproject -c config.yaml
+
+# JSON output for scripting
+waldur_site_diagnose_slurm_account alloc_myproject --json
+
+# Verbose output with reasoning
+waldur_site_diagnose_slurm_account alloc_myproject -v
+```
+
+#### Diagnostic Data Flow
+
+```mermaid
+flowchart TB
+    subgraph Input
+        ACCOUNT[Account Name<br/>e.g., alloc_myproject]
+        CONFIG[Configuration<br/>config.yaml]
+    end
+
+    subgraph "Local SLURM Cluster"
+        SACCTMGR_Q[sacctmgr queries]
+        SLURM_DATA[Account Data<br/>• Fairshare<br/>• QoS<br/>• GrpTRESMins<br/>• Users]
+    end
+
+    subgraph "Waldur Mastermind API"
+        RESOURCE_API[Resources API<br/>GET /marketplace-provider-resources/]
+        POLICY_API[Policy API<br/>GET /marketplace-slurm-periodic-usage-policies/]
+        WALDUR_DATA[Resource Data<br/>• Limits<br/>• State<br/>• Offering]
+        POLICY_DATA[Policy Data<br/>• Limit Type<br/>• TRES Billing<br/>• Grace Ratio<br/>• Component Limits]
+    end
+
+    subgraph "Diagnostic Service"
+        FETCH_SLURM[Get SLURM<br/>Account Info]
+        FETCH_WALDUR[Get Waldur<br/>Resource Info]
+        FETCH_POLICY[Get SLURM<br/>Policy Info]
+        CALCULATE[Calculate<br/>Expected Settings]
+        COMPARE[Compare<br/>Actual vs Expected]
+        GENERATE[Generate<br/>Fix Commands]
+    end
+
+    subgraph Output
+        HUMAN[Human-Readable<br/>Report]
+        JSON[JSON<br/>Output]
+        FIX_CMDS[sacctmgr<br/>Fix Commands]
+    end
+
+    %% Flow
+    ACCOUNT --> FETCH_SLURM
+    CONFIG --> FETCH_SLURM
+    CONFIG --> FETCH_WALDUR
+
+    FETCH_SLURM --> SACCTMGR_Q
+    SACCTMGR_Q --> SLURM_DATA
+    SLURM_DATA --> COMPARE
+
+    FETCH_WALDUR --> RESOURCE_API
+    RESOURCE_API --> WALDUR_DATA
+    WALDUR_DATA --> FETCH_POLICY
+    WALDUR_DATA --> CALCULATE
+
+    FETCH_POLICY --> POLICY_API
+    POLICY_API --> POLICY_DATA
+    POLICY_DATA --> CALCULATE
+
+    CALCULATE --> COMPARE
+    COMPARE --> GENERATE
+    GENERATE --> HUMAN
+    GENERATE --> JSON
+    GENERATE --> FIX_CMDS
+
+    %% Styling
+    classDef input fill:#e8f5e9
+    classDef slurm fill:#f3e5f5
+    classDef waldur fill:#fff3e0
+    classDef service fill:#e3f2fd
+    classDef output fill:#fce4ec
+
+    class ACCOUNT,CONFIG input
+    class SACCTMGR_Q,SLURM_DATA slurm
+    class RESOURCE_API,POLICY_API,WALDUR_DATA,POLICY_DATA waldur
+    class FETCH_SLURM,FETCH_WALDUR,FETCH_POLICY,CALCULATE,COMPARE,GENERATE service
+    class HUMAN,JSON,FIX_CMDS output
+```
+
+#### Diagnostic Output
+
+The diagnostic provides:
+
+1. **SLURM Cluster Status**: Account existence, fairshare, QoS, limits, users
+2. **Waldur Mastermind Status**: Resource state, offering, configured limits
+3. **SLURM Policy Status**: Period, limit type, TRES billing, grace ratio
+4. **Expected vs Actual Comparison**: Field-by-field comparison with status
+5. **Unit Conversion Info**: Shows how Waldur units convert to SLURM units
+6. **Remediation Commands**: `sacctmgr` commands to fix any mismatches
+
+#### Unit Conversions
+
+Waldur and SLURM may use different units for resource limits. The diagnostic shows:
+
+- **Waldur units**: e.g., Hours, GB-Hours (from offering configuration)
+- **SLURM units**: e.g., TRES-minutes (from limit type: GrpTRESMins, MaxTRESMins)
+- **Conversion factor**: The `unit_factor` from backend component configuration
+
+For example, if Waldur uses "k-Hours" (kilo-hours) and SLURM uses "TRES-minutes", with a
+`unit_factor` of 60000:
+
+```text
+Waldur: 100 k-Hours -> SLURM: 6000000 TRES-minutes (factor: 60000)
+```
+
+Use `-v/--verbose` to see detailed unit conversion information for each component.
+
+Example output:
+
+```text
+================================================================================
+SLURM Account Diagnostic: alloc_myproject_abc123
+================================================================================
+
+SLURM CLUSTER
+--------------------------------------------------------------------------------
+  Account Exists:     Yes
+  Fairshare:          1000
+  QoS:                normal
+  GrpTRESMins:        cpu=6000000,mem=10000000
+
+WALDUR MASTERMIND
+--------------------------------------------------------------------------------
+  Resource Found:     Yes
+  Resource Name:      My Project Allocation
+  State:              OK
+  Limits:             cpu=100, mem=10
+
+SLURM POLICY
+--------------------------------------------------------------------------------
+  Policy Found:       Yes
+  Period:             quarterly
+  Limit Type:         GrpTRESMins
+  TRES Billing:       Enabled
+
+EXPECTED vs ACTUAL
+--------------------------------------------------------------------------------
+  [OK]       qos: normal == normal
+  [OK]       GrpTRESMins[cpu]: 6000000 == 6000000
+             Units: Waldur: 100.0 k-Hours -> SLURM: 6000000 TRES-minutes (factor: 60000.0)
+  [MISMATCH] GrpTRESMins[mem]: 8000000 != 10000000
+             Units: Waldur: 10.0 k-GB-Hours -> SLURM: 10000000 TRES-minutes (factor: 1000000.0)
+
+REMEDIATION COMMANDS
+--------------------------------------------------------------------------------
+  sacctmgr -i modify account alloc_myproject_abc123 set GrpTRESMins=cpu=6000000,mem=10000000
+
+OVERALL: MISMATCH (1 issue found)
+================================================================================
+```
+
+#### CLI Options
+
+| Option | Description |
+|--------|-------------|
+| `account_name` | SLURM account name to diagnose (required) |
+| `-c, --config` | Path to configuration file (default: waldur-site-agent-config.yaml) |
+| `--offering-uuid` | Specific offering UUID (auto-detected if not specified) |
+| `--json` | Output in JSON format for scripting |
+| `-v, --verbose` | Include detailed reasoning in output |
+| `--no-color` | Disable colored output |
+
 ## Architecture
 
 ### Component Overview
@@ -318,6 +491,7 @@ plugins/slurm/tests/
 │   ├── test_slurm_client_historical.py
 │   ├── test_slurm_backend_historical.py
 │   └── README.md
+├── test_diagnostics.py            # Account diagnostics CLI
 ├── test_order_processing.py       # Core functionality
 ├── test_reporing.py               # Usage reporting
 ├── test_membership_sync.py        # User management
