@@ -727,7 +727,7 @@ print(result)
 For issues, bug reports, or feature requests related to the SLURM plugin, please check:
 
 1. **Plugin documentation** - This README and test documentation
-2. **Main project documentation** - [Waldur Site Agent docs](../../docs/)
+2. **Main project documentation** - [Waldur Site Agent docs](../../)
 3. **Test coverage** - Run tests to verify expected behavior
 4. **Debug logging** - Enable debug mode for detailed troubleshooting
 
