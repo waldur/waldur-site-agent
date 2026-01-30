@@ -107,6 +107,7 @@ class PeriodicLimitsMessage(TypedDict):
         resource_uuid (str): UUID of the resource in Waldur
         backend_id (str): Backend resource ID (SLURM account name)
         offering_uuid (str): UUID of the offering
+        policy_uuid (str): UUID of the SLURM periodic usage policy
         action (str): Action to perform ('apply_periodic_settings')
         settings (dict): SLURM settings to apply (fairshare, limits, thresholds)
         timestamp (str): Current period timestamp
@@ -115,6 +116,7 @@ class PeriodicLimitsMessage(TypedDict):
     resource_uuid: str
     backend_id: str
     offering_uuid: str
+    policy_uuid: str
     action: str
     settings: dict
     timestamp: str
