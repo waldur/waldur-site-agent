@@ -105,8 +105,8 @@ class CSCSDWDIComputeBackend(BaseBackend):
         return self.cscs_client.ping()
 
     def _get_usage_report(
-        self, resource_backend_ids: list[str], clusters: Optional[list[str]] = None
-    ) -> dict[str, dict[str, dict[str, float]]]:
+        self,resource_backend_ids: list[str], clusters: Optional[list[str]]=None)\
+            -> dict[str, dict[str, dict[str, float]]]:
         """Get usage report for specified resources.
 
         This method queries the CSCS-DWDI API for the current month's usage
@@ -300,25 +300,29 @@ class CSCSDWDIComputeBackend(BaseBackend):
         # For DWDI, the resource_backend_id is the account name
         account_name = resource_backend_id
 
-        # Extract cluster from offering_slug for filtering (always lowercase)
-        clusters = None
+        # Extract cluster from offering_backend_id for filtering (always lowercase)
         if (
-            waldur_resource
-            and hasattr(waldur_resource, "offering_backend_id")
-            and waldur_resource.offering_slug
-            and not isinstance(waldur_resource.offering_slug, Unset)
+            not waldur_resource
+            or not hasattr(waldur_resource, "offering_backend_id")
+            or not waldur_resource.offering_backend_id
+            or isinstance(waldur_resource.offering_backend_id, Unset)
         ):
-            # Use offering_slug as cluster name, converted to lowercase
-            cluster_name = waldur_resource.offering_slug.lower()
-            clusters = [cluster_name]
-            logger.info(
-                "Filtering DWDI query by cluster: %s (lowercase from offering_slug)",
-                cluster_name,
+            logger.error(
+                "Resource %s is missing offering_backend_id, skipping",
+                resource_backend_id,
             )
+            return None
+
+        cluster_name = waldur_resource.offering_backend_id.lower()
+        clusters = [cluster_name]
+        logger.info(
+            "Filtering DWDI query by cluster: %s (lowercase from offering_backend_id)",
+            cluster_name,
+        )
 
         # Get usage data for this account
         try:
-            usage_report = self._get_usage_report([account_name], clusters=clusters)
+            usage_report = self._get_usage_report([account_name],clusters=clusters)
 
             if account_name not in usage_report:
                 logger.warning("There is no account with ID %s in the DWDI backend", account_name)
