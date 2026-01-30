@@ -1,6 +1,7 @@
 """SLURM-specific backend classes and functions."""
 
 import pprint
+from enum import Enum
 from typing import Optional
 
 import requests
@@ -16,6 +17,13 @@ from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent_slurm import utils
 from waldur_site_agent_slurm.client import SlurmClient
+
+
+class PeriodicSettingsMode(Enum):
+    """Mode in which periodic settings are applied."""
+
+    PRODUCTION = "production"
+    EMULATOR = "emulator"
 
 
 class SlurmBackend(backends.BaseBackend):
@@ -526,18 +534,19 @@ class SlurmBackend(backends.BaseBackend):
                 response.raise_for_status()
 
             logger.info("Successfully applied settings to emulator")
-            return {"success": True, "mode": "emulator"}
+            return {"success": True, "mode": PeriodicSettingsMode.EMULATOR.value}
 
         except requests.exceptions.RequestException as e:
             logger.error("Failed to apply settings to emulator: %s", e)
-            return {"success": False, "error": str(e), "mode": "emulator"}
+            return {"success": False, "error": str(e), "mode": PeriodicSettingsMode.EMULATOR.value}
         except Exception as e:
             logger.error("Unexpected error applying settings to emulator: %s", e)
-            return {"success": False, "error": str(e), "mode": "emulator"}
+            return {"success": False, "error": str(e), "mode": PeriodicSettingsMode.EMULATOR.value}
 
     def _apply_settings_production(self, resource_id: str, settings: dict, config: dict) -> dict:
         """Apply settings to production SLURM cluster."""
         logger.info("Applying settings to production SLURM cluster")
+        self.client.clear_executed_commands()
 
         try:
             # Apply fairshare
@@ -565,11 +574,20 @@ class SlurmBackend(backends.BaseBackend):
                 self._check_and_apply_qos(resource_id, current_usage, settings, config)
 
             logger.info("Successfully applied settings to production SLURM")
-            return {"success": True, "mode": "production"}
+            return {
+                "success": True,
+                "mode": PeriodicSettingsMode.PRODUCTION.value,
+                "commands_executed": list(self.client.executed_commands),
+            }
 
         except Exception as e:
             logger.error("Failed to apply settings to production SLURM: %s", e)
-            return {"success": False, "error": str(e), "mode": "production"}
+            return {
+                "success": False,
+                "error": str(e),
+                "mode": PeriodicSettingsMode.PRODUCTION.value,
+                "commands_executed": list(self.client.executed_commands),
+            }
 
     def _get_current_usage_emulator(self, resource_id: str, emulator_url: str) -> float:
         """Get current usage from emulator."""

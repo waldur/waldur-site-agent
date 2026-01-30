@@ -285,9 +285,9 @@ class SlurmAccountDiagnosticService:
             grace_ratio=(
                 policy.grace_ratio if not isinstance(policy.grace_ratio, type(UNSET)) else None
             ),
-            fairshare_decay_half_life=(
-                policy.fairshare_decay_half_life
-                if not isinstance(policy.fairshare_decay_half_life, type(UNSET))
+            carryover_factor=(
+                policy.carryover_factor
+                if not isinstance(policy.carryover_factor, type(UNSET))
                 else None
             ),
             carryover_enabled=(
@@ -405,9 +405,9 @@ class SlurmAccountDiagnosticService:
 
         # Fairshare calculation (simplified)
         fairshare = None
-        if policy_info.fairshare_decay_half_life:
-            half_life = policy_info.fairshare_decay_half_life
-            reasoning["fairshare"] = f"Policy-managed fairshare (decay_half_life={half_life} days)"
+        if policy_info.carryover_factor:
+            factor = policy_info.carryover_factor
+            reasoning["fairshare"] = f"Policy-managed fairshare (carryover_factor={factor}%)"
 
         return ExpectedSettings(
             fairshare=fairshare,

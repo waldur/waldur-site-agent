@@ -218,8 +218,8 @@ def format_human_readable(diagnostic: AccountDiagnostic, verbose: bool = False) 
             grace_pct = int(policy.grace_ratio * 100)
             grace_str = f"{policy.grace_ratio} ({grace_pct}% overconsumption allowed)"
             lines.append(f"  {'Grace Ratio:':<20} {grace_str}")
-        if policy.fairshare_decay_half_life:
-            lines.append(f"  {'Decay Half-Life:':<20} {policy.fairshare_decay_half_life} days")
+        if policy.carryover_factor is not None:
+            lines.append(f"  {'Carryover Factor:':<20} {policy.carryover_factor}%")
         if policy.carryover_enabled is not None:
             lines.append(
                 f"  {'Carryover:':<20} {'Enabled' if policy.carryover_enabled else 'Disabled'}"

@@ -66,7 +66,7 @@ class PolicyInfo:
     tres_billing_enabled: Optional[bool] = None
     tres_billing_weights: Optional[dict[str, float]] = None
     grace_ratio: Optional[float] = None
-    fairshare_decay_half_life: Optional[int] = None
+    carryover_factor: Optional[int] = None
     carryover_enabled: Optional[bool] = None
     raw_usage_reset: Optional[bool] = None
     qos_strategy: Optional[str] = None
@@ -175,7 +175,7 @@ class AccountDiagnostic:
                 "tres_billing_enabled": self.policy_info.tres_billing_enabled,
                 "tres_billing_weights": self.policy_info.tres_billing_weights,
                 "grace_ratio": self.policy_info.grace_ratio,
-                "fairshare_decay_half_life": self.policy_info.fairshare_decay_half_life,
+                "carryover_factor": self.policy_info.carryover_factor,
                 "carryover_enabled": self.policy_info.carryover_enabled,
                 "raw_usage_reset": self.policy_info.raw_usage_reset,
                 "qos_strategy": self.policy_info.qos_strategy,
