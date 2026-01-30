@@ -1,14 +1,23 @@
 """Handlers for different events and protocols."""
 
 import json
+from uuid import UUID
 
 import paho.mqtt.client as mqtt
 import stomp
 import stomp.utils
 from stomp.constants import HDR_DESTINATION
 from waldur_api_client import AuthenticatedClient
+from waldur_api_client.api.marketplace_slurm_periodic_usage_policies import (
+    marketplace_slurm_periodic_usage_policies_report_command_result,
+)
+from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import ObservableObjectTypeEnum, OrderState
 from waldur_api_client.models.agent_service import AgentService
+from waldur_api_client.models.mode_enum import ModeEnum
+from waldur_api_client.models.slurm_command_result_request import (
+    SlurmCommandResultRequest,
+)
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import agent_identity_management, structures
@@ -441,6 +450,52 @@ def on_account_message_stomp(
     process_account_message(message, offering, account_type, observable_object, user_agent)
 
 
+def _report_command_result_to_waldur(
+    offering: structures.Offering,
+    message: PeriodicLimitsMessage,
+    result: dict,
+) -> None:
+    """Report command execution result back to Waldur's report-command-result endpoint."""
+    try:
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, "site-agent", offering.verify_ssl
+        )
+
+        resource_uuid_str = message.get("resource_uuid", "")
+        policy_uuid_str = message.get("policy_uuid", "")
+
+        if not policy_uuid_str:
+            logger.warning(
+                "No policy_uuid in periodic limits message, cannot report result"
+            )
+            return
+
+        body = SlurmCommandResultRequest(
+            resource_uuid=UUID(resource_uuid_str),
+            success=result.get("success", False),
+            error_message=result.get("error", ""),
+            mode=ModeEnum.PRODUCTION,
+        )
+
+        marketplace_slurm_periodic_usage_policies_report_command_result.sync_detailed(
+            uuid=UUID(policy_uuid_str),
+            client=waldur_rest_client,
+            body=body,
+        )
+
+        logger.info(
+            "Reported command result for resource %s to Waldur",
+            message.get("backend_id", "unknown"),
+        )
+    except UnexpectedStatus as e:
+        logger.warning(
+            "Failed to report command result to Waldur: %s",
+            e,
+        )
+    except Exception as e:
+        logger.error("Error reporting command result to Waldur: %s", e)
+
+
 def on_resource_periodic_limits_update_stomp(
     frame: stomp.utils.Frame,
     offering: structures.Offering,
@@ -483,8 +538,8 @@ def on_resource_periodic_limits_update_stomp(
                 result.get("error", "unknown error"),
             )
 
-        # TODO: Send confirmation back to Waldur via API if needed
-        # This could be implemented to update resource status or send success/failure notifications
+        # Report command execution result back to Waldur
+        _report_command_result_to_waldur(offering, message, result)
 
     except json.JSONDecodeError as e:
         logger.error("Failed to parse periodic limits STOMP message: %s", e)
