@@ -56,6 +56,7 @@ class TestSlurmBackendPeriodicLimits:
         """Test apply_periodic_settings in production mode."""
         backend = SlurmBackend(backend_config_production, {})
         backend.client = MagicMock(spec=SlurmClient)
+        backend.client.executed_commands = []
 
         # Test settings
         settings = {
@@ -438,6 +439,142 @@ class TestSlurmClientPeriodicLimits:
         assert abs(billing_units - expected) < 0.01, f"Expected {expected}, got {billing_units}"
 
         print(f"✅ Billing units calculation: {tres_usage} → {billing_units} units")
+
+
+class TestExecutedCommandsTracking:
+    """Test that executed commands are tracked and returned."""
+
+    @pytest.fixture
+    def client(self):
+        """SLURM client with mocked base execute_command."""
+        client = SlurmClient({})
+        with patch.object(client, "execute_command", return_value=""):
+            yield client
+
+    def test_executed_commands_starts_empty(self, client):
+        """Executed commands list is empty on init."""
+        assert client.executed_commands == []
+
+    def test_execute_command_tracks_full_command(self, client):
+        """_execute_command records the full shell command string."""
+        client._execute_command(["modify", "account", "acct1", "set", "fairshare=500"])
+        assert len(client.executed_commands) == 1
+        assert client.executed_commands[0] == (
+            "sacctmgr --parsable2 --noheader --immediate modify account acct1 set fairshare=500"
+        )
+
+    def test_execute_command_tracks_without_immediate(self, client):
+        """_execute_command without immediate flag omits --immediate."""
+        client._execute_command(["show", "account", "acct1"], immediate=False)
+        assert client.executed_commands[0] == (
+            "sacctmgr --parsable2 --noheader show account acct1"
+        )
+
+    def test_execute_command_tracks_different_command_name(self, client):
+        """_execute_command tracks sacct commands too."""
+        client._execute_command(["--starttime=2026-01-01"], command_name="sacct", immediate=False)
+        assert client.executed_commands[0] == (
+            "sacct --parsable2 --noheader --starttime=2026-01-01"
+        )
+
+    def test_multiple_commands_tracked_in_order(self, client):
+        """Multiple commands are tracked in execution order."""
+        client._execute_command(["modify", "account", "a1", "set", "fairshare=100"])
+        client._execute_command(["modify", "account", "a1", "set", "RawUsage=0"])
+        assert len(client.executed_commands) == 2
+        assert "fairshare=100" in client.executed_commands[0]
+        assert "RawUsage=0" in client.executed_commands[1]
+
+    def test_clear_executed_commands(self, client):
+        """clear_executed_commands resets the list."""
+        client._execute_command(["modify", "account", "a1", "set", "fairshare=100"])
+        assert len(client.executed_commands) == 1
+        client.clear_executed_commands()
+        assert client.executed_commands == []
+
+
+class TestProductionModeCommandsExecuted:
+    """Test that _apply_settings_production returns commands_executed."""
+
+    @pytest.fixture
+    def backend(self):
+        """Backend with mocked client that tracks commands."""
+        config = {
+            "periodic_limits": {
+                "enabled": True,
+                "emulator_mode": False,
+                "limit_type": "GrpTRESMins",
+            }
+        }
+        backend = SlurmBackend(config, {})
+        backend.client = SlurmClient({})
+        with patch.object(backend.client, "execute_command", return_value=""):
+            yield backend
+
+    def test_commands_executed_returned_on_success(self, backend):
+        """Successful apply returns the exact commands executed."""
+        settings = {
+            "fairshare": 500,
+            "grp_tres_mins": {"billing": 72000},
+            "reset_raw_usage": True,
+        }
+        result = backend.apply_periodic_settings("proj-1", settings)
+
+        assert result["success"] is True
+        assert "commands_executed" in result
+        cmds = result["commands_executed"]
+        assert len(cmds) >= 3
+        assert any("fairshare=500" in c for c in cmds)
+        assert any("GrpTRESMins=billing=72000" in c for c in cmds)
+        assert any("RawUsage=0" in c for c in cmds)
+        # Verify they are real sacctmgr commands, not approximations
+        for c in cmds:
+            assert c.startswith("sacctmgr ")
+
+    def test_commands_executed_returned_on_failure(self):
+        """Failed apply still returns commands executed before the failure."""
+        from waldur_site_agent.backend.exceptions import BackendError
+
+        config = {
+            "periodic_limits": {
+                "enabled": True,
+                "emulator_mode": False,
+                "limit_type": "GrpTRESMins",
+            }
+        }
+        backend = SlurmBackend(config, {})
+        backend.client = SlurmClient({})
+
+        call_count = 0
+
+        def execute_with_failure(cmd, silent=False):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise BackendError("SLURM down")
+            return ""
+
+        with patch.object(backend.client, "execute_command", side_effect=execute_with_failure):
+            settings = {"fairshare": 500, "reset_raw_usage": True}
+            result = backend.apply_periodic_settings("proj-1", settings)
+
+        assert result["success"] is False
+        assert "commands_executed" in result
+        # Should have at least the fairshare command that was tracked
+        assert len(result["commands_executed"]) >= 1
+
+    def test_commands_executed_empty_when_no_settings(self, backend):
+        """No settings means no commands executed."""
+        result = backend.apply_periodic_settings("proj-1", {})
+        assert result["commands_executed"] == []
+
+    def test_commands_contain_account_name(self, backend):
+        """Commands reference the correct account name."""
+        settings = {"fairshare": 100}
+        result = backend.apply_periodic_settings("my-project-abc", settings)
+
+        for cmd in result["commands_executed"]:
+            assert "my-project-abc" in cmd
 
 
 class TestErrorHandlingAndEdgeCases:

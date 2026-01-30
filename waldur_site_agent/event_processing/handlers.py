@@ -476,6 +476,7 @@ def _report_command_result_to_waldur(
             error_message=result.get("error", ""),
             mode=ModeEnum.PRODUCTION,
         )
+        body["commands_executed"] = result.get("commands_executed", [])
 
         marketplace_slurm_periodic_usage_policies_report_command_result.sync_detailed(
             uuid=UUID(policy_uuid_str),

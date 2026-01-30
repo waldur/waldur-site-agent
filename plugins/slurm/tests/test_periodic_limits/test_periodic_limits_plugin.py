@@ -129,6 +129,7 @@ class TestPeriodicLimitsPlugin:
         }
         backend = SlurmBackend(backend_settings, {})
         backend.client = MagicMock(spec=SlurmClient)
+        backend.client.executed_commands = []
         return backend
 
     def test_quarterly_transition_with_mastermind_signal(self, slurm_backend_production):

@@ -98,9 +98,9 @@ class PeriodicLimitsConfig(PluginBackendSettingsSchema):
         default=None, description="Billing weights for resource types (e.g., CPU: 0.015625)"
     )
 
-    # Fairshare configuration
-    fairshare_decay_half_life: Optional[int] = Field(
-        default=15, description="Fairshare decay half-life in days"
+    # Carryover configuration
+    carryover_factor: Optional[int] = Field(
+        default=50, description="Maximum percentage of base allocation that can carry over (0-100)"
     )
     raw_usage_reset: Optional[bool] = Field(
         default=True, description="Reset raw usage at period transitions"

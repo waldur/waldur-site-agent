@@ -26,6 +26,11 @@ class SlurmClient(clients.BaseClient):
     def __init__(self, slurm_tres: dict) -> None:
         """Inits SLURM-related data."""
         self.slurm_tres = slurm_tres
+        self.executed_commands: list[str] = []
+
+    def clear_executed_commands(self) -> None:
+        """Clear the list of tracked executed commands."""
+        self.executed_commands = []
 
     def list_resources(self) -> list[ClientResource]:
         """Returns a list of accounts in the SLURM cluster."""
@@ -343,6 +348,7 @@ class SlurmClient(clients.BaseClient):
         if immediate:
             account_command.append("--immediate")
         account_command.extend(command)
+        self.executed_commands.append(" ".join(account_command))
         return self.execute_command(account_command, silent=silent)
 
     # ===== PERIODIC LIMITS EXTENSION =====
