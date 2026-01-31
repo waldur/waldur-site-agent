@@ -29,35 +29,153 @@ class BaseBackend(ABC):
 
     @abstractmethod
     def ping(self, raise_exception: bool = False) -> bool:
-        """Check if backend is online."""
+        """Check if the backend system is reachable and operational.
+
+        Called by diagnostics and health checks before any agent mode starts processing.
+        Implementations should attempt a lightweight connection to the backend system
+        (e.g., listing resources or running a version command).
+
+        Args:
+            raise_exception: If True, raise BackendError on failure instead of returning False.
+
+        Returns:
+            True if the backend is reachable, False otherwise.
+
+        No-op guidance:
+            Return False if your backend has no health check mechanism.
+        """
 
     @abstractmethod
     def diagnostics(self) -> bool:
-        """Logs info about the backend and returns diagnostics status."""
+        """Log diagnostic information about the backend and return status.
+
+        Called by the ``waldur_site_diagnostics`` CLI tool. Implementations should
+        log useful debugging information (version, connectivity, configuration)
+        and return whether the backend is healthy.
+
+        Returns:
+            True if diagnostics pass, False if issues are detected.
+
+        No-op guidance:
+            Log a message indicating diagnostics are not supported and return True.
+        """
 
     @abstractmethod
     def list_components(self) -> list[str]:
-        """Return a list of computing components on the backend."""
+        """Return a list of computing component types available on the backend.
+
+        Called during diagnostics to verify that the backend exposes the same
+        components that are configured in ``backend_components``.
+
+        Returns:
+            List of component type identifiers (e.g., ``["cpu", "mem", "gres/gpu"]``
+            for SLURM, or ``["deposit"]`` for MOAB).
+
+        No-op guidance:
+            Return an empty list if component discovery is not supported.
+        """
 
     @abstractmethod
     def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
-        """Collect usage report for the specified resource_backend_ids."""
+        """Collect usage report for the specified resources.
+
+        Called by the ``report`` agent mode (via ``pull_resource``) and
+        ``membership_sync`` mode. Must return a nested dict keyed by resource
+        backend ID, containing per-user usage and a ``TOTAL_ACCOUNT_USAGE`` entry.
+
+        Args:
+            resource_backend_ids: List of backend resource identifiers to report on.
+
+        Returns:
+            Nested dict with the following structure::
+
+                {
+                    "<resource_backend_id>": {
+                        "TOTAL_ACCOUNT_USAGE": {"cpu": 1000, "mem": 2048},
+                        "user1": {"cpu": 500, "mem": 1024},
+                        "user2": {"cpu": 500, "mem": 1024},
+                    }
+                }
+
+            Component keys must match those defined in ``backend_components``.
+            Values are in **Waldur units** (after applying ``unit_factor`` conversion).
+            The ``TOTAL_ACCOUNT_USAGE`` key is required and should be the sum of all
+            per-user usages.
+
+        No-op guidance:
+            Return an empty dict ``{}`` if usage reporting is not supported.
+        """
 
     @abstractmethod
     def downscale_resource(self, resource_backend_id: str) -> bool:
-        """Downscale the resource with the ID on the backend."""
+        """Downscale the resource, restricting its capabilities.
+
+        Called by ``membership_sync`` mode when a Waldur resource enters
+        a downscaled state (e.g., allocation nearing exhaustion). The exact
+        behavior is backend-specific (e.g., SLURM sets a restrictive QoS).
+
+        Args:
+            resource_backend_id: Backend identifier for the resource.
+
+        Returns:
+            True if downscaling succeeded, False otherwise.
+
+        No-op guidance:
+            Return True if your backend has no concept of resource downscaling.
+        """
 
     @abstractmethod
     def pause_resource(self, resource_backend_id: str) -> bool:
-        """Pause the resource on the backend."""
+        """Pause the resource, preventing all usage.
+
+        Called by ``membership_sync`` mode when a Waldur resource is paused
+        (e.g., allocation fully exhausted or administratively suspended).
+
+        Args:
+            resource_backend_id: Backend identifier for the resource.
+
+        Returns:
+            True if pausing succeeded, False otherwise.
+
+        No-op guidance:
+            Return True if your backend has no concept of resource pausing.
+        """
 
     @abstractmethod
     def restore_resource(self, resource_backend_id: str) -> bool:
-        """Restore the resource after downscaling or pausing."""
+        """Restore the resource to normal operation after downscaling or pausing.
+
+        Called by ``membership_sync`` mode when a Waldur resource returns to
+        normal state (e.g., allocation topped up or administrative hold lifted).
+
+        Args:
+            resource_backend_id: Backend identifier for the resource.
+
+        Returns:
+            True if restoration succeeded, False otherwise.
+
+        No-op guidance:
+            Return True if your backend has no concept of resource pausing/downscaling.
+        """
 
     @abstractmethod
     def get_resource_metadata(self, resource_backend_id: str) -> dict:
-        """Get backend-specific resource metadata."""
+        """Get backend-specific resource metadata for reporting to Waldur.
+
+        Called by ``membership_sync`` mode to fetch backend-specific state
+        (e.g., current QoS for SLURM). The returned dict is stored as
+        resource metadata in Waldur Mastermind.
+
+        Args:
+            resource_backend_id: Backend identifier for the resource.
+
+        Returns:
+            Dict of metadata key-value pairs (e.g., ``{"qos": "normal"}``
+            for SLURM). Keys should be meaningful to the Waldur UI.
+
+        No-op guidance:
+            Return an empty dict ``{}`` if no metadata is available.
+        """
 
     def list_resources(self) -> list[structures.BackendResourceInfo]:
         """List resources in the the backend."""
@@ -87,7 +205,26 @@ class BaseBackend(ABC):
     def _collect_resource_limits(
         self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
-        """Collect limits for backend and waldur separately."""
+        """Collect and convert resource limits for both backend and Waldur.
+
+        Called during resource creation (``order_process`` mode) to translate
+        Waldur resource limits into backend-native limits. Each component's
+        ``unit_factor`` (from ``backend_components``) is used for conversion:
+        ``backend_value = waldur_value * unit_factor``.
+
+        Args:
+            waldur_resource: The Waldur resource containing requested limits.
+
+        Returns:
+            A tuple of two dicts:
+            - **backend_limits**: Limits in backend-native units for setting on the
+              backend (e.g., ``{"cpu": 60000, "mem": 61440}`` in SLURM minutes).
+            - **waldur_limits**: Limits in Waldur units to store back in Waldur
+              (e.g., ``{"cpu": 1, "mem": 1}`` in k-Hours/GB-Hours).
+
+        No-op guidance:
+            Return ``({}, {})`` if your backend does not support resource limits.
+        """
 
     def pull_resources(
         self, waldur_resources: list[WaldurResource]
@@ -148,7 +285,15 @@ class BaseBackend(ABC):
         )
 
     def _pre_delete_resource(self, waldur_resource: WaldurResource) -> None:
-        """Perform actions before deleting the resource in the backend."""
+        """Perform actions before deleting the resource in the backend.
+
+        Called by ``delete_resource`` before the backend resource is removed.
+        Override to perform cleanup (e.g., SLURM cancels active jobs and
+        removes all user associations).
+
+        Args:
+            waldur_resource: Resource data from Waldur marketplace.
+        """
         del waldur_resource
 
     def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:
@@ -240,7 +385,22 @@ class BaseBackend(ABC):
     def _pre_create_resource(
         self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
     ) -> None:
-        """Perform actions prior to resource creation."""
+        """Perform actions prior to resource creation on the backend.
+
+        Called by ``create_resource_with_id`` before the backend resource is created.
+        Use this to set up prerequisite structures (e.g., SLURM creates parent
+        customer and project accounts in its hierarchy).
+
+        Args:
+            waldur_resource: Resource data from Waldur marketplace.
+            user_context: Optional dict with team members and offering users.
+
+        Raises:
+            BackendError: If prerequisite setup fails (aborts resource creation).
+
+        No-op guidance:
+            Use ``pass`` if no pre-creation setup is needed.
+        """
 
     def create_resource_with_id(
         self,
@@ -315,7 +475,17 @@ class BaseBackend(ABC):
         waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
     ) -> None:
-        """Perform customizable actions after resource creation."""
+        """Perform actions after resource creation on the backend.
+
+        Called by ``create_resource_with_id`` after the resource is created and
+        limits are set. Override to perform post-creation tasks (e.g., SLURM
+        creates home directories for users proactively).
+
+        Args:
+            resource: The newly created backend resource info (includes backend_id, limits).
+            waldur_resource: Original resource data from Waldur marketplace.
+            user_context: Optional dict with team members and offering users.
+        """
         del resource, waldur_resource, user_context  # Not used in base implementation
 
     def add_users_to_resource(
@@ -409,7 +579,15 @@ class BaseBackend(ABC):
         return removed_users
 
     def _pre_delete_user_actions(self, resource_backend_id: str, username: str) -> None:
-        """Perform actions before removing the user from the resource."""
+        """Perform actions before removing the user from the resource.
+
+        Called by ``remove_user`` before deleting the user-resource association.
+        Override to perform per-user cleanup (e.g., cancelling active jobs).
+
+        Args:
+            resource_backend_id: Backend identifier for the resource.
+            username: Username to be removed.
+        """
         del resource_backend_id, username
 
     def remove_user(self, waldur_resource: WaldurResource, username: str) -> bool:
