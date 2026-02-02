@@ -59,26 +59,10 @@ Lint helm chart:
     paths:
       - rendered-templates
 
-.Run tests template:
+# Base test template with common settings
+.Run tests base:
   stage: test
   interruptible: true
-  rules:
-    # Skip tests if specified
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    # If tagged release
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
-    # If event is related to a created merge request
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/**/*
-        - tests/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
   coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
   artifacts:
     when: always
@@ -87,11 +71,190 @@ Lint helm chart:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
+
+# Core tests template - runs tests/ directory
+.Run core tests template:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - tests/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
   script:
     - pip install uv
     - uv sync --all-packages
     - source .venv/bin/activate
-    - pytest --junitxml=report.xml plugins/ tests/
+    - pytest --junitxml=report.xml tests/
+    - coverage xml
+    - coverage report
+
+# Plugin test templates - each runs only when its plugin or core changes
+.Run slurm tests template:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/slurm/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --junitxml=report.xml plugins/slurm/
+    - coverage xml
+    - coverage report
+
+.Run mup tests template:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/mup/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --junitxml=report.xml plugins/mup/
+    - coverage xml
+    - coverage report
+
+.Run harbor tests template:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/harbor/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --junitxml=report.xml plugins/harbor/
+    - coverage xml
+    - coverage report
+
+.Run okd tests template:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/okd/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --junitxml=report.xml plugins/okd/
+    - coverage xml
+    - coverage report
+
+.Run rancher tests template:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/rancher/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --junitxml=report.xml plugins/rancher/
+    - coverage xml
+    - coverage report
+
+.Run croit-s3 tests template:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/croit-s3/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --junitxml=report.xml plugins/croit-s3/
+    - coverage xml
+    - coverage report
+
+.Run cscs-dwdi tests template:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/cscs-dwdi/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --junitxml=report.xml plugins/cscs-dwdi/
     - coverage xml
     - coverage report
 
@@ -140,31 +303,215 @@ Run python v3.13 linters:
       echo '  python: python3.13' >> .pre-commit-config.yaml
     - cat .pre-commit-config.yaml
 
-.Test template:
-  extends: .Run tests template
+# Core test job templates
+.Core test template:
+  extends: .Run core tests template
   before_script:
-  - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
 
+# Plugin test job templates
+.Slurm test template:
+  extends: .Run slurm tests template
+  before_script:
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
 
-Run python v3.9 tests:
+.Mup test template:
+  extends: .Run mup tests template
+  before_script:
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+
+.Harbor test template:
+  extends: .Run harbor tests template
+  before_script:
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+
+.Okd test template:
+  extends: .Run okd tests template
+  before_script:
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+
+.Rancher test template:
+  extends: .Run rancher tests template
+  before_script:
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+
+.Croit-s3 test template:
+  extends: .Run croit-s3 tests template
+  before_script:
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+
+.Cscs-dwdi test template:
+  extends: .Run cscs-dwdi tests template
+  before_script:
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+
+# Core tests - Python versions
+Run python v3.9 core tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Test template
+  extends: .Core test template
 
-Run python v3.10 tests:
+Run python v3.10 core tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Test template
+  extends: .Core test template
 
-Run python v3.11 tests:
+Run python v3.11 core tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Test template
+  extends: .Core test template
 
-Run python v3.12 tests:
+Run python v3.12 core tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Test template
+  extends: .Core test template
 
-Run python v3.13 tests:
+Run python v3.13 core tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Test template
+  extends: .Core test template
+
+# SLURM plugin tests - Python versions
+Run python v3.9 slurm tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Slurm test template
+
+Run python v3.10 slurm tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Slurm test template
+
+Run python v3.11 slurm tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Slurm test template
+
+Run python v3.12 slurm tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Slurm test template
+
+Run python v3.13 slurm tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Slurm test template
+
+# MUP plugin tests - Python versions
+Run python v3.9 mup tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Mup test template
+
+Run python v3.10 mup tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Mup test template
+
+Run python v3.11 mup tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Mup test template
+
+Run python v3.12 mup tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Mup test template
+
+Run python v3.13 mup tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Mup test template
+
+# Harbor plugin tests - Python versions
+Run python v3.9 harbor tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Harbor test template
+
+Run python v3.10 harbor tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Harbor test template
+
+Run python v3.11 harbor tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Harbor test template
+
+Run python v3.12 harbor tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Harbor test template
+
+Run python v3.13 harbor tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Harbor test template
+
+# OKD plugin tests - Python versions
+Run python v3.9 okd tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Okd test template
+
+Run python v3.10 okd tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Okd test template
+
+Run python v3.11 okd tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Okd test template
+
+Run python v3.12 okd tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Okd test template
+
+Run python v3.13 okd tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Okd test template
+
+# Rancher plugin tests - Python versions
+Run python v3.9 rancher tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Rancher test template
+
+Run python v3.10 rancher tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Rancher test template
+
+Run python v3.11 rancher tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Rancher test template
+
+Run python v3.12 rancher tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Rancher test template
+
+Run python v3.13 rancher tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Rancher test template
+
+# Croit-S3 plugin tests - Python versions
+Run python v3.9 croit-s3 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Croit-s3 test template
+
+Run python v3.10 croit-s3 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Croit-s3 test template
+
+Run python v3.11 croit-s3 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Croit-s3 test template
+
+Run python v3.12 croit-s3 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Croit-s3 test template
+
+Run python v3.13 croit-s3 tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Croit-s3 test template
+
+# CSCS-DWDI plugin tests - Python versions
+Run python v3.9 cscs-dwdi tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Cscs-dwdi test template
+
+Run python v3.10 cscs-dwdi tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Cscs-dwdi test template
+
+Run python v3.11 cscs-dwdi tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Cscs-dwdi test template
+
+Run python v3.12 cscs-dwdi tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Cscs-dwdi test template
+
+Run python v3.13 cscs-dwdi tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Cscs-dwdi test template
 
 Lint docker image:
   extends: .Lint docker image template
@@ -181,8 +528,6 @@ Lint dockerfile:
         - DL3018 # "versions for `apk add`" warning
         - DL3008 # "versions for `apt-get install`" warning
         - DL3009 # "Delete apt-get lists" warning (handled in same RUN)
-
-
 
 .Generate Codebase SBOM template:
   image:
