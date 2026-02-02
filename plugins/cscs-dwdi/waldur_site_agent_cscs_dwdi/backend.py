@@ -248,11 +248,12 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
         for component_name, component_config in self.backend_components.items():
             # Look for component usage in account data
-            raw_value = account_data.get("totalNodeHours")
-            # Apply unit factor conversion
-            unit_factor = component_config.get("unit_factor", 1)
-            converted_value = raw_value * unit_factor
-            usage[component_name] = round(converted_value, 2)
+            if "node" in component_name:
+                raw_value = account_data.get("totalNodeHours")
+                # Apply unit factor conversion
+                unit_factor = component_config.get("unit_factor", 1)
+                converted_value = raw_value * unit_factor
+                usage[component_name] = round(converted_value, 2)
 
         return usage
 
@@ -271,12 +272,13 @@ class CSCSDWDIComputeBackend(BaseBackend):
         for component_name, component_config in self.backend_components.items():
             # Look for component usage in user data
             # The API should return fields that match component names
-            raw_value = user_data.get("nodeHours")
+            if "node" in component_name:
+                raw_value = user_data.get("nodeHours")
 
-            # Apply unit factor conversion
-            unit_factor = component_config.get("unit_factor", 1)
-            converted_value = raw_value * unit_factor
-            usage[component_name] = converted_value
+                # Apply unit factor conversion
+                unit_factor = component_config.get("unit_factor", 1)
+                converted_value = raw_value * unit_factor
+                usage[component_name] = converted_value
 
         return usage
 
