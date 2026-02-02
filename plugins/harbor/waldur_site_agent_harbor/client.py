@@ -565,7 +565,7 @@ class HarborClient(BaseClient):
         # Harbor doesn't support per-user quotas
         return ""
 
-    def get_usage_report(self, resource_ids: list[str]) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
         """Get usage records for Harbor projects."""
         usage_records = []
         for resource_id in resource_ids:
