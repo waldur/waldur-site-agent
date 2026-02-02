@@ -159,9 +159,11 @@ class SlurmClient(clients.BaseClient):
             ]
         )
 
-    def get_usage_report(self, resource_ids: list[str]) -> list[SlurmReportLine]:
+    def get_usage_report(
+        self, resource_ids: list[str], timezone: Optional[str] = None
+    ) -> list[SlurmReportLine]:
         """Generates per-user usage report for the accounts."""
-        month_start, month_end = backend_utils.format_current_month()
+        month_start, month_end = backend_utils.format_current_month(timezone or "")
 
         args = [
             "--noconvert",

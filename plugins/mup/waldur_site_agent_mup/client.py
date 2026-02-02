@@ -425,8 +425,9 @@ class MUPClient(BaseClient):
         # This is handled by the backend's user management methods
         return f"Association deleted for {username} from {resource_id}"
 
-    def get_usage_report(self, resource_ids: list[str]) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
         """Get usage records - get allocation usage from MUP."""
+        del timezone
         usage_data = []
         projects = self.get_projects()
 

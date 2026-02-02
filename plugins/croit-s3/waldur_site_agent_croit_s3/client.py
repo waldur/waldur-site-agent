@@ -417,7 +417,7 @@ class CroitS3Client(BaseClient):
         """Delete association between the user and the resource - not applicable for S3."""
         return ""
 
-    def get_usage_report(self, resource_ids: list[str]) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
         """Get usage report for resources - not applicable for S3."""
         return []
 

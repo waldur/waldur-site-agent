@@ -383,8 +383,9 @@ class OkdClient(TokenRefreshMixin, BaseClient):
             logger.error(f"Failed to remove association for {username} from {resource_id}: {e}")
             raise BackendError(f"Failed to remove association: {e}") from e
 
-    def get_usage_report(self, resource_ids: list[str]) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
         """Get resource usage metrics for projects."""
+        del timezone
         usage_reports = []
 
         for resource_id in resource_ids:

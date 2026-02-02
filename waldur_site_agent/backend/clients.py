@@ -187,7 +187,7 @@ class BaseClient:
         """
 
     @abc.abstractmethod
-    def get_usage_report(self, resource_ids: list[str]) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
         """Get raw usage records from the backend.
 
         This returns raw backend-specific data structures that are then processed
@@ -195,6 +195,7 @@ class BaseClient:
 
         Args:
             resource_ids: List of backend resource identifiers.
+            timezone: Timezone for the report.
 
         Returns:
             List of backend-specific usage record objects (e.g., ``SlurmReportLine``
@@ -277,8 +278,9 @@ class UnknownClient(BaseClient):
         del resource_id
         return username
 
-    def get_usage_report(self, resource_ids: list[str]) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
         """Get usages records."""
+        del timezone
         return resource_ids
 
     def list_resource_users(self, _: str) -> list[str]:

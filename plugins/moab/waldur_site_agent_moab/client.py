@@ -140,14 +140,14 @@ class MoabClient(clients.BaseClient):
         command = f"mam-modify-account --del-user {username} -a {resource_id}"
         return self.execute_command(command.split())
 
-    def get_usage_report(self, resource_ids: list[str]) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
         """Get usages records from MOAB."""
         template = (
             "mam-list-usagerecords --raw --quiet --show "
             "Account,User,Charge "
             "-a %(account)s -s %(start)s -e %(end)s"
         )
-        month_start, month_end = backend_utils.format_current_month()
+        month_start, month_end = backend_utils.format_current_month(timezone or "")
 
         report_lines = []
         for account in resource_ids:
