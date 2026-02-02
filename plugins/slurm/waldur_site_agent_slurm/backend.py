@@ -192,6 +192,14 @@ class SlurmBackend(backends.BaseBackend):
         for component_key in usage_based_limits:
             waldur_resource_limits[component_key] = self.backend_components[component_key]["limit"]
 
+        # Convert allocation limits to integers
+        for limit_key, limit_value in allocation_limits.items():
+            allocation_limits[limit_key] = int(limit_value)
+
+        # Convert Waldur limits to integers
+        for limit_key, limit_value in waldur_resource_limits.items():
+            waldur_resource_limits[limit_key] = int(limit_value)
+
         logger.info(
             "SLURM allocation limits: %s", allocation_limits
         )
