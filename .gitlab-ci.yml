@@ -92,9 +92,7 @@ Lint helm chart:
     - pip install uv
     - uv sync --all-packages
     - source .venv/bin/activate
-    - pytest --junitxml=report.xml tests/
-    - coverage xml
-    - coverage report
+    - pytest --cov=waldur_site_agent --cov-report=xml --cov-report=term --junitxml=report.xml tests/
 
 # Plugin test templates - each runs only when its plugin or core changes
 .Run slurm tests template:
@@ -116,9 +114,7 @@ Lint helm chart:
     - pip install uv
     - uv sync --all-packages
     - source .venv/bin/activate
-    - pytest --junitxml=report.xml plugins/slurm/
-    - coverage xml
-    - coverage report
+    - pytest --cov=plugins/slurm --cov-report=xml --cov-report=term --junitxml=report.xml plugins/slurm/
 
 .Run mup tests template:
   extends: .Run tests base
@@ -139,9 +135,7 @@ Lint helm chart:
     - pip install uv
     - uv sync --all-packages
     - source .venv/bin/activate
-    - pytest --junitxml=report.xml plugins/mup/
-    - coverage xml
-    - coverage report
+    - pytest --cov=plugins/mup --cov-report=xml --cov-report=term --junitxml=report.xml plugins/mup/
 
 .Run harbor tests template:
   extends: .Run tests base
@@ -162,9 +156,7 @@ Lint helm chart:
     - pip install uv
     - uv sync --all-packages
     - source .venv/bin/activate
-    - pytest --junitxml=report.xml plugins/harbor/
-    - coverage xml
-    - coverage report
+    - pytest --cov=plugins/harbor --cov-report=xml --cov-report=term --junitxml=report.xml plugins/harbor/
 
 .Run okd tests template:
   extends: .Run tests base
@@ -185,9 +177,7 @@ Lint helm chart:
     - pip install uv
     - uv sync --all-packages
     - source .venv/bin/activate
-    - pytest --junitxml=report.xml plugins/okd/
-    - coverage xml
-    - coverage report
+    - pytest --cov=plugins/okd --cov-report=xml --cov-report=term --junitxml=report.xml plugins/okd/
 
 .Run rancher tests template:
   extends: .Run tests base
@@ -208,9 +198,7 @@ Lint helm chart:
     - pip install uv
     - uv sync --all-packages
     - source .venv/bin/activate
-    - pytest --junitxml=report.xml plugins/rancher/
-    - coverage xml
-    - coverage report
+    - pytest --cov=plugins/rancher --cov-report=xml --cov-report=term --junitxml=report.xml plugins/rancher/
 
 .Run croit-s3 tests template:
   extends: .Run tests base
@@ -231,9 +219,7 @@ Lint helm chart:
     - pip install uv
     - uv sync --all-packages
     - source .venv/bin/activate
-    - pytest --junitxml=report.xml plugins/croit-s3/
-    - coverage xml
-    - coverage report
+    - pytest --cov=plugins/croit-s3 --cov-report=xml --cov-report=term --junitxml=report.xml plugins/croit-s3/
 
 .Run cscs-dwdi tests template:
   extends: .Run tests base
@@ -254,9 +240,7 @@ Lint helm chart:
     - pip install uv
     - uv sync --all-packages
     - source .venv/bin/activate
-    - pytest --junitxml=report.xml plugins/cscs-dwdi/
-    - coverage xml
-    - coverage report
+    - pytest --cov=plugins/cscs-dwdi --cov-report=xml --cov-report=term --junitxml=report.xml plugins/cscs-dwdi/
 
 Run python v3.9 linters:
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"
