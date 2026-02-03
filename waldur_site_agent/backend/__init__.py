@@ -14,6 +14,7 @@ class BackendType(Enum):
     MOAB = "moab"
     MUP = "mup"
     CROIT_S3 = "croit_s3"
+    DIGITALOCEAN = "digitalocean"
     CUSTOM = "custom"
     UNKNOWN = "unknown"
 
