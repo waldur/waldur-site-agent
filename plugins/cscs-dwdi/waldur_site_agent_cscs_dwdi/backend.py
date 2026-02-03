@@ -105,8 +105,8 @@ class CSCSDWDIComputeBackend(BaseBackend):
         return self.cscs_client.ping()
 
     def _get_usage_report(
-        self,resource_backend_ids: list[str], clusters: Optional[list[str]]=None)\
-            -> dict[str, dict[str, dict[str, float]]]:
+        self, resource_backend_ids: list[str], clusters: Optional[list[str]] = None
+    ) -> dict[str, dict[str, dict[str, float]]]:
         """Get usage report for specified resources.
 
         This method queries the CSCS-DWDI API for the current month's usage
@@ -250,8 +250,10 @@ class CSCSDWDIComputeBackend(BaseBackend):
             # Look for component usage in account data
             if "node" in component_name:
                 raw_value = account_data.get("totalNodeHours")
-                # Apply unit factor conversion
-                unit_factor = component_config.get("unit_factor", 1)
+                # Apply unit factor conversion (use reporting-specific factor if set)
+                unit_factor = component_config.get(
+                    "unit_factor_reporting", component_config.get("unit_factor", 1)
+                )
                 converted_value = raw_value * unit_factor
                 usage[component_name] = round(converted_value, 2)
 
@@ -275,8 +277,10 @@ class CSCSDWDIComputeBackend(BaseBackend):
             if "node" in component_name:
                 raw_value = user_data.get("nodeHours")
 
-                # Apply unit factor conversion
-                unit_factor = component_config.get("unit_factor", 1)
+                # Apply unit factor conversion (use reporting-specific factor if set)
+                unit_factor = component_config.get(
+                    "unit_factor_reporting", component_config.get("unit_factor", 1)
+                )
                 converted_value = raw_value * unit_factor
                 usage[component_name] = converted_value
 
@@ -324,7 +328,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
         # Get usage data for this account
         try:
-            usage_report = self._get_usage_report([account_name],clusters=clusters)
+            usage_report = self._get_usage_report([account_name], clusters=clusters)
 
             if account_name not in usage_report:
                 logger.warning("There is no account with ID %s in the DWDI backend", account_name)
@@ -631,17 +635,21 @@ class CSCSDWDIStorageBackend(BaseBackend):
                         "storage_space" in component_name.lower()
                         or "space" in component_name.lower()
                     ):
-                        # Apply unit factor for space (e.g., bytes to GB)
-                        unit_factor = component_config.get("unit_factor", 1)
-                        storage_usage[component_name] = (
-                            round(space_used_bytes * (1.0/unit_factor), 2))
-                    elif "storage_inodes" in component_name.lower()  in component_name.lower():
-                        # Inodes typically don't need conversion
-                        unit_factor = component_config.get("unit_factor", 1)
+                        # Apply unit factor for space (use reporting-specific factor if set)
+                        unit_factor = component_config.get(
+                            "unit_factor_reporting", component_config.get("unit_factor", 1)
+                        )
+                        storage_usage[component_name] = round(
+                            space_used_bytes * (1.0 / unit_factor), 2
+                        )
+                    elif "storage_inodes" in component_name.lower() in component_name.lower():
+                        # Inodes (use reporting-specific factor if set)
+                        unit_factor = component_config.get(
+                            "unit_factor_reporting", component_config.get("unit_factor", 1)
+                        )
                         storage_usage[component_name] = round(inodes_used / unit_factor, 2)
 
-                usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE" : storage_usage}
-
+                usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE": storage_usage}
 
             logger.info(
                 "Successfully retrieved storage usage for %d resources",

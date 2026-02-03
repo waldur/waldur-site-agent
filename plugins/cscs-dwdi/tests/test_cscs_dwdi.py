@@ -5,7 +5,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from waldur_site_agent_cscs_dwdi.backend import CSCSDWDIComputeBackend,CSCSDWDIStorageBackend
+from waldur_site_agent_cscs_dwdi.backend import CSCSDWDIComputeBackend, CSCSDWDIStorageBackend
 from waldur_site_agent_cscs_dwdi.client import CSCSDWDIClient
 
 
@@ -560,3 +560,78 @@ class TestCSCSDWDIComputeBackend:
 
         with pytest.raises(NotImplementedError):
             backend.set_resource_limits("test", {"cpu": 100})
+
+    def test_unit_factor_reporting_used_when_set(self) -> None:
+        """Test that unit_factor_reporting is used instead of unit_factor in reporting."""
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 1,
+                "unit_factor_reporting": 2,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+
+        api_response = {
+            "compute": [
+                {
+                    "account": "account1",
+                    "totalNodeHours": 100.0,
+                    "users": [
+                        {"username": "user1", "nodeHours": 60.0},
+                        {"username": "user2", "nodeHours": 40.0},
+                    ],
+                }
+            ]
+        }
+
+        result = backend._process_api_response(api_response)
+
+        # unit_factor_reporting=2 should be applied, not unit_factor=1
+        assert result["account1"]["TOTAL_ACCOUNT_USAGE"]["nodeHours"] == 200.0
+        assert result["account1"]["user1"]["nodeHours"] == 120.0
+        assert result["account1"]["user2"]["nodeHours"] == 80.0
+
+    def test_unit_factor_reporting_falls_back_to_unit_factor(self) -> None:
+        """Test that unit_factor is used when unit_factor_reporting is not set."""
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 3,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+
+        api_response = {
+            "compute": [
+                {
+                    "account": "account1",
+                    "totalNodeHours": 100.0,
+                    "users": [
+                        {"username": "user1", "nodeHours": 100.0},
+                    ],
+                }
+            ]
+        }
+
+        result = backend._process_api_response(api_response)
+
+        # No unit_factor_reporting set, so unit_factor=3 should be used
+        assert result["account1"]["TOTAL_ACCOUNT_USAGE"]["nodeHours"] == 300.0
+        assert result["account1"]["user1"]["nodeHours"] == 300.0

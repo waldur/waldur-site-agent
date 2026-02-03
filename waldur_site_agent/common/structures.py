@@ -40,6 +40,11 @@ class BackendComponent(BaseModel):
     # Core fields (required by all backends)
     measured_unit: str = Field(..., description="Unit of measurement (e.g., 'Hours', 'GB')")
     unit_factor: float = Field(default=1.0, description="Factor for conversion to backend units")
+    unit_factor_reporting: Optional[float] = Field(
+        default=None,
+        description="Factor for unit conversion in reporting mode. "
+        "Falls back to unit_factor if not set.",
+    )
     accounting_type: AccountingType = Field(..., description="Component accounting type")
     label: str = Field(..., description="Human-readable label for display")
     limit: Optional[float] = Field(default=None, description="Component limit value")
