@@ -32,6 +32,17 @@ The agent uses a **uv workspace architecture** with pluggable backends:
 waldur_site_agent -m <mode> -c <config-file>
 ```
 
+## Logging
+
+The agent emits structured logs in JSON format to stdout. This applies to both the core
+agent and CLI tools.
+
+Example log entry:
+
+```json
+{"event": "Running agent in order_process mode", "level": "info", "logger": "waldur_site_agent.backend", "timestamp": "2026-02-03T14:02:35.551020+00:00"}
+```
+
 ### CLI Arguments
 
 - `-m`, `--mode`: Agent mode (`order_process`, `report`, `membership_sync`, `event_process`)

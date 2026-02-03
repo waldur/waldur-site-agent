@@ -272,6 +272,9 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
     config_file_path = cli_args.config_file_path
     agent_mode = cli_args.mode
 
+    # Ensure JSON logging is configured before any log output.
+    configure_logger()
+
     logger.info("Using %s as a config source", config_file_path)
 
     # Load base configuration with mode-specific user agent

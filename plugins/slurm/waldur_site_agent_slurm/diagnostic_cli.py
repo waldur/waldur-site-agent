@@ -8,6 +8,7 @@ import logging
 import sys
 from typing import Optional
 
+from waldur_site_agent.backend import configure_logger
 from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.common.structures import Offering
 from waldur_site_agent_slurm.client import SlurmClient
@@ -307,11 +308,8 @@ def main() -> int:
     parser = create_parser()
     args = parser.parse_args()
 
-    # Setup logging
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(levelname)s: %(message)s",
-    )
+    # Setup logging (JSON to stdout)
+    configure_logger("DEBUG" if args.verbose else "INFO")
 
     # Load configuration
     try:

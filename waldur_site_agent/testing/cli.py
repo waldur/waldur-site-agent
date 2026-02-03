@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from waldur_site_agent.backend import logger
+from waldur_site_agent.backend import configure_logger
 from waldur_site_agent.testing.order_test_harness import OrderTestHarness, TestResult
 from waldur_site_agent.testing.template_engine import OrderTemplateEngine
 
@@ -189,10 +189,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Configure logging
-    if args.verbose:
-        logger.setLevel("DEBUG")
-    else:
-        logger.setLevel("INFO")
+    configure_logger("DEBUG" if args.verbose else "INFO")
 
     # Handle template listing
     if args.list_templates:
