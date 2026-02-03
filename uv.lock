@@ -12,6 +12,7 @@ members = [
     "waldur-site-agent-basic-username-management",
     "waldur-site-agent-croit-s3",
     "waldur-site-agent-cscs-dwdi",
+    "waldur-site-agent-digitalocean",
     "waldur-site-agent-harbor",
     "waldur-site-agent-moab",
     "waldur-site-agent-mup",
@@ -614,6 +615,15 @@ wheels = [
 ]
 
 [[package]]
+name = "jsonpickle"
+version = "4.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/a6/d07afcfdef402900229bcca795f80506b207af13a838d4d99ad45abf530c/jsonpickle-4.1.1.tar.gz", hash = "sha256:f86e18f13e2b96c1c1eede0b7b90095bbb61d99fedc14813c44dc2f361dbbae1", size = 316885, upload-time = "2025-06-02T20:36:11.57Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/73/04df8a6fa66d43a9fd45c30f283cc4afff17da671886e451d52af60bdc7e/jsonpickle-4.1.1-py3-none-any.whl", hash = "sha256:bb141da6057898aa2438ff268362b126826c812a1721e31cf08a6e142910dc91", size = 47125, upload-time = "2025-06-02T20:36:08.647Z" },
+]
+
+[[package]]
 name = "jwcrypto"
 version = "1.5.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1157,6 +1167,19 @@ wheels = [
 ]
 
 [[package]]
+name = "python-digitalocean"
+version = "1.17.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jsonpickle" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f8/f7/43cb73fb393c4c0da36294b6040c7424bc904042d55c1b37c73ecc9e7714/python-digitalocean-1.17.0.tar.gz", hash = "sha256:107854fde1aafa21774e8053cf253b04173613c94531f75d5a039ad770562b24", size = 33586, upload-time = "2021-10-02T21:05:21.803Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e4/4f/87c17d4e23a62273c192656300e92a26bf6d5d8b2908cf2fc4a5a96da4b2/python_digitalocean-1.17.0-py3-none-any.whl", hash = "sha256:0032168e022e85fca314eb3f8dfaabf82087f2ed40839eb28f1eeeeca5afb1fa", size = 40298, upload-time = "2021-10-02T21:05:20.806Z" },
+]
+
+[[package]]
 name = "python-keycloak"
 version = "3.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1389,6 +1412,18 @@ wheels = [
 ]
 
 [[package]]
+name = "structlog"
+version = "25.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ef/52/9ba0f43b686e7f3ddfeaa78ac3af750292662284b3661e91ad5494f21dbc/structlog-25.5.0.tar.gz", hash = "sha256:098522a3bebed9153d4570c6d0288abf80a031dfdb2048d59a49e9dc2190fc98", size = 1460830, upload-time = "2025-10-27T08:28:23.028Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/45/a132b9074aa18e799b891b91ad72133c98d8042c70f6240e4c5f9dabee2f/structlog-25.5.0-py3-none-any.whl", hash = "sha256:a8453e9b9e636ec59bd9e79bbd4a72f025981b3ba0f5837aebf48f02f37a7f9f", size = 72510, upload-time = "2025-10-27T08:28:21.535Z" },
+]
+
+[[package]]
 name = "tomli"
 version = "2.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1552,6 +1587,7 @@ dependencies = [
     { name = "requests" },
     { name = "sentry-sdk" },
     { name = "stomp-py" },
+    { name = "structlog" },
     { name = "waldur-api-client" },
 ]
 
@@ -1579,6 +1615,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.3" },
     { name = "sentry-sdk", specifier = "==2.3.1" },
     { name = "stomp-py", specifier = ">=8.2.0,<9" },
+    { name = "structlog", specifier = ">=25.4.0" },
     { name = "waldur-api-client", git = "https://github.com/waldur/py-client.git?rev=main" },
 ]
 
@@ -1640,6 +1677,21 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.25.0" },
+    { name = "waldur-site-agent", editable = "." },
+]
+
+[[package]]
+name = "waldur-site-agent-digitalocean"
+version = "0.1.0"
+source = { editable = "plugins/digitalocean" }
+dependencies = [
+    { name = "python-digitalocean" },
+    { name = "waldur-site-agent" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "python-digitalocean" },
     { name = "waldur-site-agent", editable = "." },
 ]
 
