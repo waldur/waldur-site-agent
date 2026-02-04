@@ -14,6 +14,7 @@ from waldur_api_client.api.event_subscriptions import (
 )
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.event_subscription import EventSubscription
+from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import utils
@@ -24,13 +25,15 @@ from waldur_site_agent.event_processing.structures import UserData
 
 WALDUR_LISTENER_NAME = "waldur-listener"
 OBJECT_TYPE_TO_HANDLER_STOMP = {
-    "order": handlers.on_order_message_stomp,
-    "user_role": handlers.on_user_role_message_stomp,
-    "resource": handlers.on_resource_message_stomp,
-    "importable_resources": handlers.on_importable_resources_message_stomp,
-    "service_account": handlers.on_account_message_stomp,
-    "course_account": handlers.on_account_message_stomp,
-    "resource_periodic_limits_update": handlers.on_resource_periodic_limits_update_stomp,
+    ObservableObjectTypeEnum.ORDER: handlers.on_order_message_stomp,
+    ObservableObjectTypeEnum.USER_ROLE: handlers.on_user_role_message_stomp,
+    ObservableObjectTypeEnum.RESOURCE: handlers.on_resource_message_stomp,
+    ObservableObjectTypeEnum.IMPORTABLE_RESOURCES: handlers.on_importable_resources_message_stomp,
+    ObservableObjectTypeEnum.SERVICE_ACCOUNT: handlers.on_account_message_stomp,
+    ObservableObjectTypeEnum.COURSE_ACCOUNT: handlers.on_account_message_stomp,
+    ObservableObjectTypeEnum.RESOURCE_PERIODIC_LIMITS: (
+        handlers.on_resource_periodic_limits_update_stomp
+    ),
 }
 PID_FILE_PATH = "/var/run/waldur_site_agent.pid"
 
