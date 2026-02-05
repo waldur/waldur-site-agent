@@ -12,6 +12,7 @@ import time
 from typing import Optional
 from uuid import UUID
 
+from waldur_api_client.api.version import version_retrieve
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.component_usage import ComponentUsage
 from waldur_api_client.models.component_user_usage import ComponentUserUsage
@@ -645,6 +646,15 @@ class WaldurClient(BaseClient):
     def get_project_url(self, project_uuid: str) -> str:
         """Get the API URL for a project on Waldur B."""
         return f"{self.api_url}/api/projects/{self._normalize_uuid(project_uuid)}/"
+
+    def get_version(self) -> str:
+        """Get the version of the remote Waldur B instance.
+
+        Returns:
+            Version string from Waldur B.
+        """
+        version_info = version_retrieve.sync(client=self._api_client)
+        return version_info.version
 
     def ping(self) -> bool:
         """Test connectivity to Waldur B."""
