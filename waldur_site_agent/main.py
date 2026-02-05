@@ -15,6 +15,7 @@ def main() -> None:
     """Entrypoint for the application."""
     configuration = utils.init_configuration()
     logger.info("Waldur site agent version: %s", configuration.waldur_site_agent_version)
+    utils.log_versions(configuration)
 
     logger.info("Running agent in %s mode", configuration.waldur_site_agent_mode)
     if AgentMode.ORDER_PROCESS.value == configuration.waldur_site_agent_mode:

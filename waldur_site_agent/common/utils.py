@@ -42,6 +42,7 @@ from waldur_api_client.api.marketplace_provider_resources import (
 )
 from waldur_api_client.api.marketplace_resources import marketplace_resources_list
 from waldur_api_client.api.users import users_me_retrieve
+from waldur_api_client.api.version import version_retrieve
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
     MarketplaceResourcesListStateItem,
@@ -128,6 +129,60 @@ waldur_api_client_info = [
 ]
 
 DEPENDENCIES = backend_packages + username_backend_packages + waldur_api_client_info
+
+
+def log_versions(configuration: structures.WaldurAgentConfiguration) -> None:
+    """Log agent version, dependency versions, and Waldur Mastermind versions.
+
+    For each offering, queries the Waldur version endpoint. If the offering
+    uses the waldur backend, also queries the remote Waldur B version.
+
+    Args:
+        configuration: Agent configuration with offerings
+    """
+    dep_versions = ", ".join(
+        f"{dep['package']}={dep['version']}" for dep in DEPENDENCIES
+    )
+    logger.info("Dependency versions: %s", dep_versions)
+
+    for offering in configuration.waldur_offerings:
+        try:
+            client = get_client(
+                offering.api_url,
+                offering.api_token,
+                configuration.waldur_user_agent,
+                offering.verify_ssl,
+                configuration.global_proxy,
+            )
+            version_info = version_retrieve.sync(client=client)
+            logger.info(
+                'Offering "%s": Waldur Mastermind version %s',
+                offering.name,
+                version_info.version,
+            )
+        except Exception:
+            logger.warning(
+                'Offering "%s": unable to fetch Waldur Mastermind version',
+                offering.name,
+            )
+
+        if offering.backend_type == "waldur":
+            target_api_url = offering.backend_settings.get("target_api_url", "")
+            target_api_token = offering.backend_settings.get("target_api_token", "")
+            if target_api_url and target_api_token:
+                try:
+                    target_client = get_client(target_api_url, target_api_token)
+                    target_version_info = version_retrieve.sync(client=target_client)
+                    logger.info(
+                        'Offering "%s": Remote Waldur B version %s',
+                        offering.name,
+                        target_version_info.version,
+                    )
+                except Exception:
+                    logger.warning(
+                        'Offering "%s": unable to fetch remote Waldur B version',
+                        offering.name,
+                    )
 
 
 def get_client(
