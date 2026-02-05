@@ -19,6 +19,7 @@ members = [
     "waldur-site-agent-okd",
     "waldur-site-agent-rancher",
     "waldur-site-agent-slurm",
+    "waldur-site-agent-waldur",
 ]
 
 [[package]]
@@ -557,7 +558,7 @@ name = "importlib-metadata"
 version = "8.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp" },
+    { name = "zipp", marker = "python_full_version < '3.10'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f3/49/3b30cad09e7771a4982d9975a8cbf64f00d4a1ececb53297f1d9a7be1b10/importlib_metadata-8.7.1.tar.gz", hash = "sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb", size = 57107, upload-time = "2025-12-21T10:00:19.278Z" }
 wheels = [
@@ -1787,6 +1788,17 @@ dev = [
     { name = "pytest", specifier = ">=7.1.0" },
     { name = "slurm-emulator", specifier = ">=0.0.1" },
 ]
+
+[[package]]
+name = "waldur-site-agent-waldur"
+version = "0.7.0"
+source = { editable = "plugins/waldur" }
+dependencies = [
+    { name = "waldur-site-agent" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "websocket-client"
