@@ -199,6 +199,8 @@ class OfferingBaseProcessor(abc.ABC):
                 offering, self.BACKEND_TYPE_KEY
             )
 
+        self.resource_backend.timezone = timezone
+
         if self.resource_backend.backend_type == BackendType.UNKNOWN.value:
             raise backend_exceptions.BackendError(
                 "Unable to create backend"
@@ -1711,7 +1713,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             for component, amount in total_usage.items()
             if component in component_types
         ]
-        request_body = ComponentUsageCreateRequest(usages=usage_objects, resource=resource_uuid)
+        request_body = ComponentUsageCreateRequest(
+            usages=usage_objects, resource=resource_uuid, date=current_time
+        )
         marketplace_component_usages_set_usage.sync_detailed(
             client=self.waldur_rest_client, body=request_body
         )
@@ -1763,9 +1767,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 component_type,
                 usage,
             )
+            current_time = backend_utils.get_current_time_in_timezone(self.timezone)
             body = ComponentUserUsageCreateRequest(
                 username=username,
                 usage=usage,
+                date=current_time,
             )
             if offering_user:
                 body.user = offering_user.url

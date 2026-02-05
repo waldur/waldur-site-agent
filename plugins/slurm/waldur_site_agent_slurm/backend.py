@@ -332,7 +332,7 @@ class SlurmBackend(backends.BaseBackend):
         }
         """
         report: dict[str, dict[str, dict[str, int]]] = {}
-        lines = self.client.get_usage_report(resource_backend_ids)
+        lines = self.client.get_usage_report(resource_backend_ids, timezone=self.timezone)
 
         for line in lines:
             report.setdefault(line.account, {}).setdefault(line.user, {})

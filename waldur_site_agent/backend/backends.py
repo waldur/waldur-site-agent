@@ -26,6 +26,7 @@ class BaseBackend(ABC):
         self.backend_settings = backend_settings
         self.backend_components = backend_components
         self.client: BaseClient = UnknownClient()
+        self.timezone: str = ""
 
     @abstractmethod
     def ping(self, raise_exception: bool = False) -> bool:

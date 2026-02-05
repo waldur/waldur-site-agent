@@ -80,6 +80,9 @@ class MyCustomBackend(BaseBackend):
         Values must be in Waldur units (divide raw backend values by unit_factor).
 
         TODO: Implement usage collection from your backend.
+
+        Note: self.timezone is available for timezone-aware date calculations.
+        Use backend_utils.get_current_time_in_timezone(self.timezone) for current time.
         """
         report: dict = {}
 
