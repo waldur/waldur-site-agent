@@ -1,0 +1,20 @@
+[project]
+name = "waldur-site-agent-mycustom"
+version = "0.1.0"
+description = "Custom backend plugin for Waldur Site Agent"
+requires-python = ">=3.10"
+dependencies = ["waldur-site-agent>=0.7.0"]
+
+[project.entry-points."waldur_site_agent.backends"]
+mycustom = "waldur_site_agent_mycustom.backend:MyCustomBackend"
+
+# Optional: uncomment to add configuration validation schemas
+# [project.entry-points."waldur_site_agent.component_schemas"]
+# mycustom = "waldur_site_agent_mycustom.schemas:MyCustomComponentSchema"
+#
+# [project.entry-points."waldur_site_agent.backend_settings_schemas"]
+# mycustom = "waldur_site_agent_mycustom.schemas:MyCustomBackendSettingsSchema"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"

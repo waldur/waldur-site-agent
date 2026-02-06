@@ -169,79 +169,21 @@ plugins/{backend_name}/
 - **Implementation**: Minimal placeholder implementation
 - **Extensibility**: Template for custom username generation backends
 
-## Creating Custom Plugins
+## Creating custom plugins
 
-### Backend Plugin Development
+For comprehensive plugin development instructions, including:
 
-1. **Create plugin package**:
+- Full `BaseBackend` and `BaseClient` method references
+- Agent mode method matrix (which methods are called when)
+- Usage report format specification with examples
+- Unit conversion (`unit_factor`) explained
+- Common pitfalls and debugging tips
+- Testing guidance with mock patterns
+- LLM-specific implementation checklist
 
-   ```bash
-   mkdir my-custom-backend
-   cd my-custom-backend
-   ```
+See **[Plugin Development Guide](plugin-development-guide.md)**.
 
-2. **Setup pyproject.toml**:
-
-   ```toml
-   [project]
-   name = "waldur-site-agent-mycustom"
-   version = "0.1.0"
-   dependencies = ["waldur-site-agent==0.1.0"]
-
-   [project.entry-points."waldur_site_agent.backends"]
-   mycustom = "waldur_site_agent_mycustom.backend:MyCustomBackend"
-   ```
-
-3. **Implement backend class**:
-
-   ```python
-   from waldur_site_agent.backend.backends import BaseBackend
-
-   class MyCustomBackend(BaseBackend):
-       def ping(self):
-           # Health check implementation
-           pass
-
-       def _get_usage_report(self):
-           # Usage reporting implementation
-           pass
-
-       # Implement other required methods...
-   ```
-
-4. **Install and register**:
-
-   ```bash
-   uv sync --all-packages
-   ```
-
-### Username management plugin development
-
-1. **Entry point registration**:
-
-   ```toml
-   [project.entry-points."waldur_site_agent.username_management_backends"]
-   custom_username = "your_project.backend.usernames:CustomUsernameManagementBackend"
-   ```
-
-2. **Implementation**:
-
-   ```python
-   from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
-
-   class CustomUsernameManagementBackend(AbstractUsernameManagementBackend):
-       def generate_username(self, user_data):
-           # Custom username generation logic
-           pass
-   ```
-
-3. **Configuration**:
-
-   ```yaml
-   offerings:
-     - name: "My Offering"
-       username_management_backend: "custom_username"
-   ```
+A ready-to-use plugin template is available at `docs/plugin-template/`.
 
 ## Plugin discovery mechanism
 

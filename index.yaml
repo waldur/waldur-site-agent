@@ -2,8 +2,31 @@ apiVersion: v1
 entries:
   waldur-site-agent:
   - apiVersion: v2
+    appVersion: 0.8.6
+    created: "2026-02-06T06:06:26.280361974Z"
+    description: A Helm chart for Waldur Site Agent - a stateless application that
+      synchronizes data between Waldur and service provider backends
+    digest: df61ad038a1b1b1fa2ee100f3b1dd7721e80c94d4e8feafba84fc1d7f31099f2
+    home: https://waldur.com/
+    keywords:
+    - waldur
+    - site-agent
+    - slurm
+    - moab
+    - mup
+    - synchronization
+    maintainers:
+    - email: info@waldur.com
+      name: Waldur Team
+    name: waldur-site-agent
+    sources:
+    - https://github.com/waldur/waldur-site-agent
+    urls:
+    - charts/waldur-site-agent-0.8.6.tgz
+    version: 0.8.6
+  - apiVersion: v2
     appVersion: 0.8.5
-    created: "2026-01-27T11:01:21.908642411Z"
+    created: "2026-02-06T06:06:26.262789598Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: cccef6f44a4b0c62faee22a11f5f971a8e2fc95c0abbe16d8530abd597088271
@@ -26,7 +49,7 @@ entries:
     version: 0.8.5
   - apiVersion: v2
     appVersion: 0.8.4
-    created: "2026-01-27T11:01:21.89514562Z"
+    created: "2026-02-06T06:06:26.245131113Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: d31890a626b46db7cf66661d955dffe7b1769c70d7b1f749a0eb3c442f5ebf48
@@ -49,7 +72,7 @@ entries:
     version: 0.8.4
   - apiVersion: v2
     appVersion: 0.8.3
-    created: "2026-01-27T11:01:21.878536644Z"
+    created: "2026-02-06T06:06:26.22782424Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: 32163f69f78cc6b85ca89d0b920bda064403717a242b1507bcda7873977251fb
@@ -72,7 +95,7 @@ entries:
     version: 0.8.3
   - apiVersion: v2
     appVersion: 0.8.2
-    created: "2026-01-27T11:01:21.862166861Z"
+    created: "2026-02-06T06:06:26.209037329Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: 9e8baf9f684f13daf2e7b11ae225966447740a0f5fe5a87c7eb763a49e768207
@@ -95,7 +118,7 @@ entries:
     version: 0.8.2
   - apiVersion: v2
     appVersion: 0.8.1
-    created: "2026-01-27T11:01:21.851297768Z"
+    created: "2026-02-06T06:06:26.192349718Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: 9f93d8f0ec329e1c635c92c8452c7f1a3b1c35ab302fd84bcfd2dcb8f97572b2
@@ -118,7 +141,7 @@ entries:
     version: 0.8.1
   - apiVersion: v2
     appVersion: 0.8.0
-    created: "2026-01-27T11:01:21.840759277Z"
+    created: "2026-02-06T06:06:26.175546Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: deab4108213d134b857e0d6b1b571ec265875b21beffb4a78bf9265c3ce8c0df
@@ -141,7 +164,7 @@ entries:
     version: 0.8.0
   - apiVersion: v2
     appVersion: 0.7.9
-    created: "2026-01-27T11:01:21.829408566Z"
+    created: "2026-02-06T06:06:26.164525853Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: c06a337f65fe2aeb5c7e34e905a18f46e559dab51714c834a3ccfa8783de3b27
@@ -164,7 +187,7 @@ entries:
     version: 0.7.9
   - apiVersion: v2
     appVersion: 0.7.8
-    created: "2026-01-27T11:01:21.813097525Z"
+    created: "2026-02-06T06:06:26.157060407Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: a1748a967d16b01fd1fd586da7858d138b0366ea1148fe5d21bcaa2be74d07e6
@@ -187,7 +210,7 @@ entries:
     version: 0.7.8
   - apiVersion: v2
     appVersion: 0.7.7
-    created: "2026-01-27T11:01:21.797856108Z"
+    created: "2026-02-06T06:06:26.146197178Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: 30129aa5ff468e5a43571400f1750b40045a19e633de6bea68ae8a7ba86c45f9
@@ -210,7 +233,7 @@ entries:
     version: 0.7.7
   - apiVersion: v2
     appVersion: 0.7.6
-    created: "2026-01-27T11:01:21.780283609Z"
+    created: "2026-02-06T06:06:26.129867099Z"
     description: A Helm chart for Waldur Site Agent - a stateless application that
       synchronizes data between Waldur and service provider backends
     digest: 9214dd8ea564d78e744d1b86d4be7d5274317aded9fdbe1762e3ab8b09e7e792
@@ -231,4 +254,4 @@ entries:
     urls:
     - charts/waldur-site-agent-0.7.6.tgz
     version: 0.7.6
-generated: "2026-01-27T11:01:21.7655948Z"
+generated: "2026-02-06T06:06:26.112597003Z"
