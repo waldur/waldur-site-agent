@@ -1,6 +1,8 @@
+import json
 import unittest
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 from unittest import mock
 
 import respx
@@ -21,14 +23,21 @@ from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_api_client.models.storage_mode_enum import StorageModeEnum
 from waldur_site_agent_slurm import backend
 
+from tests.fixtures import OFFERING
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingMembershipProcessor
 
+
+def _serialize_datetime_aware(obj: dict[str, Any]) -> bytes:
+    """Serialize a dict to JSON bytes, converting datetime objects to ISO strings."""
+    return json.dumps(
+        obj, default=lambda x: x.isoformat() if hasattr(x, "isoformat") else str(x)
+    ).encode()
+
+
 waldur_client_mock = mock.Mock()
 slurm_backend_mock = mock.Mock()
-
-from tests.fixtures import OFFERING
 
 OFFERING_UUID = "d629d5e45567425da9cdbdc1af67b32c"
 allocation_slurm = BackendResourceInfo(
@@ -151,7 +160,7 @@ class MembershipSyncTest(unittest.TestCase):
         respx.get(f"{self.BASE_URL}/api/users/me/").respond(200, json=self.waldur_user)
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-offerings/{self.offering.uuid}/"
-        ).respond(200, json=self.waldur_offering.to_dict())
+        ).respond(200, content=_serialize_datetime_aware(self.waldur_offering.to_dict()))
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-resources/",
             params={
@@ -239,7 +248,7 @@ class MembershipSyncTest(unittest.TestCase):
             offering_user_data = self.waldur_offering_user
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-offerings/{offering_user_data['offering_uuid']}/"
-        ).respond(200, json=self.waldur_offering.to_dict())
+        ).respond(200, content=_serialize_datetime_aware(self.waldur_offering.to_dict()))
 
     def _setup_slurm_mock(self) -> None:
         self.mock_pull_backend_resource = mock.patch.object(
