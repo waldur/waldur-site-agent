@@ -647,3 +647,316 @@ class UpdateOrderTest(unittest.TestCase):
                 "mem": 301 * 61440,
             },
         )
+
+
+@mock.patch(
+    "waldur_site_agent_slurm.backend.SlurmClient",
+    autospec=True,
+)
+class DuplicateResourceCreationTest(unittest.TestCase):
+    """Tests for DuplicateResourceError handling during resource creation.
+
+    When create_resource_with_id finds that a resource already exists in the backend,
+    it raises DuplicateResourceError. The processor's _create_resource_with_uniqueness_check
+    method catches this and retries with a modified ID (when retries are enabled).
+    """
+
+    BASE_URL = "https://waldur.example.com"
+
+    def setUp(self) -> None:
+        respx.start()
+        self.resource_uuid = uuid.uuid4().hex
+        self.project_uuid = uuid.uuid4().hex
+        self.order_uuid = uuid.UUID("2c76f6ea-3482-4cb9-a975-ae0235ba4ac7").hex
+
+        self.waldur_user = models.User(
+            uuid=uuid.uuid4(),
+            username="test-user",
+            date_joined=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            email="test@example.com",
+            full_name="Test User",
+        ).to_dict()
+
+        self.waldur_offering = models.Offering(
+            uuid=OFFERING.uuid,
+            name=OFFERING.name,
+            created=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            state=OfferingState.ACTIVE,
+            type_=MARKETPLACE_SLURM_OFFERING_TYPE,
+            plugin_options=MergedPluginOptions(
+                username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
+            ),
+            customer_uuid=uuid.uuid4().hex,
+        ).to_dict()
+
+        self.team_member = models.ProjectUser(
+            uuid=uuid.uuid4(),
+            username="test-offering-user-01",
+            url=f"{self.BASE_URL}/api/users/test-offering-user-01/",
+            full_name="Test Offering User 01",
+            role="admin",
+            expiration_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            offering_user_username="test-offering-user-01",
+            offering_user_state=OfferingUserState.OK,
+        ).to_dict()
+
+        self.waldur_offering_user = models.OfferingUser(
+            username="test-offering-user-01",
+            user_uuid=self.team_member["uuid"],
+            offering_uuid=OFFERING.uuid,
+            created=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            state=OfferingUserState.OK,
+        ).to_dict()
+
+        self.client_patcher = mock.patch("waldur_site_agent.common.utils.get_client")
+        self.mock_get_client = self.client_patcher.start()
+
+        self.mock_client = AuthenticatedClient(
+            base_url=self.BASE_URL,
+            token=OFFERING.api_token,
+            headers={},
+        )
+
+    def tearDown(self) -> None:
+        respx.stop()
+        self.client_patcher.stop()
+
+    def _make_waldur_resource(self, offering_plugin_options: dict) -> dict:
+        return models.Resource(
+            uuid=self.resource_uuid,
+            name="sample-resource-1",
+            offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+            project_slug="project-1",
+            customer_slug="customer-1",
+            customer_name="test-customer",
+            resource_type="Slurm",
+            resource_uuid=uuid.uuid4().hex,
+            project_uuid=self.project_uuid,
+            slug="sample-resource-1",
+            state=ResourceState.CREATING,
+            offering_plugin_options=offering_plugin_options,
+            limits=ResourceLimits.from_dict({"cpu": 10, "mem": 20}),
+        ).to_dict()
+
+    def _make_waldur_order(self) -> dict:
+        order = models.OrderDetails(
+            uuid=self.order_uuid,
+            type_=RequestTypes.CREATE,
+            resource_name="test-allocation-01",
+            project_slug="project-1",
+            customer_slug="customer-1",
+        ).to_dict()
+        order.update(
+            {
+                "state": "pending-provider",
+                "type": "Create",
+                "marketplace_resource_uuid": str(self.resource_uuid),
+            }
+        )
+        return order
+
+    def test_duplicate_resource_no_retry_with_resource_name_policy(
+        self, slurm_client_class: mock.Mock
+    ) -> None:
+        """With resource_name policy and no uniqueness check, max_retries=1.
+
+        DuplicateResourceError on the only attempt results in order marked as erred.
+        """
+        waldur_resource = self._make_waldur_resource(
+            {"account_name_generation_policy": "resource_name", "account_name_prefix": "hpc_"}
+        )
+        waldur_order = self._make_waldur_order()
+
+        allocation_account = "hpc_sample-resource-1"
+        setup_common_respx_mocks(
+            self.BASE_URL,
+            self.waldur_user,
+            self.waldur_offering,
+            waldur_resource,
+            [self.team_member],
+            self.waldur_offering_user,
+            allocation_account,
+        )
+        request_order_set_as_error = setup_order_respx_mocks(
+            self.BASE_URL, self.order_uuid, waldur_order
+        )
+
+        slurm_client = setup_slurm_client_mocks(slurm_client_class)
+        # Allocation account already exists in backend — triggers DuplicateResourceError
+        existing_resource = ClientResource(
+            name=allocation_account,
+            description="sample-resource-1",
+            organization="hpc_project-1",
+        )
+        slurm_client.get_resource.side_effect = (
+            lambda name: existing_resource if name == allocation_account else None
+        )
+
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
+        processor.process_offering()
+
+        # With only 1 retry, the error should propagate and order should be marked erred
+        assert request_order_set_as_error.call_count == 1
+        error_request = request_order_set_as_error.calls[0].request
+        assert "all generated names already exist" in error_request.content.decode()
+
+    def test_duplicate_resource_retry_succeeds_with_project_slug_policy(
+        self, slurm_client_class: mock.Mock
+    ) -> None:
+        """With project_slug policy, DuplicateResourceError triggers retry with modified ID.
+
+        First attempt uses 'hpc_project-1' which already exists.
+        Retry uses 'hpc_project-1-0' which succeeds.
+        """
+        waldur_resource = self._make_waldur_resource(
+            {"account_name_generation_policy": "project_slug"}
+        )
+        waldur_order = self._make_waldur_order()
+
+        first_allocation_account = "hpc_project-1"
+        retry_allocation_account = "hpc_project-1-0"
+
+        setup_common_respx_mocks(
+            self.BASE_URL,
+            self.waldur_user,
+            self.waldur_offering,
+            waldur_resource,
+            [self.team_member],
+            self.waldur_offering_user,
+            retry_allocation_account,
+        )
+        request_order_set_as_error = setup_order_respx_mocks(
+            self.BASE_URL, self.order_uuid, waldur_order
+        )
+
+        slurm_client = setup_slurm_client_mocks(slurm_client_class)
+        # First allocation ID exists, retry ID does not
+        existing_resource = ClientResource(
+            name=first_allocation_account,
+            description="sample-resource-1",
+            organization="hpc_project-1",
+        )
+        slurm_client.get_resource.side_effect = (
+            lambda name: existing_resource if name == first_allocation_account else None
+        )
+
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
+        processor.process_offering()
+
+        # Order should succeed (not erred)
+        assert request_order_set_as_error.call_count == 0
+        # The successful creation call should use the retry account name
+        slurm_client.create_resource.assert_any_call(
+            name=retry_allocation_account,
+            description=waldur_resource["name"],
+            organization="hpc_project-1",
+            parent_name="hpc_project-1",
+        )
+
+    def test_duplicate_resource_all_retries_exhausted_with_project_slug_policy(
+        self, slurm_client_class: mock.Mock
+    ) -> None:
+        """With project_slug policy, all 10 retries fail with DuplicateResourceError.
+
+        Every generated allocation ID already exists in the backend.
+        """
+        waldur_resource = self._make_waldur_resource(
+            {"account_name_generation_policy": "project_slug"}
+        )
+        waldur_order = self._make_waldur_order()
+
+        setup_common_respx_mocks(
+            self.BASE_URL,
+            self.waldur_user,
+            self.waldur_offering,
+            waldur_resource,
+            [self.team_member],
+            self.waldur_offering_user,
+        )
+        request_order_set_as_error = setup_order_respx_mocks(
+            self.BASE_URL, self.order_uuid, waldur_order
+        )
+
+        slurm_client = setup_slurm_client_mocks(slurm_client_class)
+        # All allocation names that start with "hpc_project-1" already exist
+        existing_resource = ClientResource(
+            name="existing",
+            description="existing",
+            organization="hpc_project-1",
+        )
+        slurm_client.get_resource.side_effect = lambda name: (
+            existing_resource if name.startswith("hpc_project-1") else None
+        )
+
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
+        processor.process_offering()
+
+        # All retries exhausted — order should be marked as erred
+        assert request_order_set_as_error.call_count == 1
+        error_request = request_order_set_as_error.calls[0].request
+        assert "all generated names already exist" in error_request.content.decode()
+
+    def test_duplicate_resource_retry_with_uniqueness_check_enabled(
+        self, slurm_client_class: mock.Mock
+    ) -> None:
+        """With check_backend_id_uniqueness enabled and resource_name policy,
+        max_retries=10. DuplicateResourceError on first attempt, success on retry.
+        """
+        offering_with_uniqueness = OFFERING.model_copy(
+            update={
+                "backend_settings": {
+                    **OFFERING.backend_settings,
+                    "check_backend_id_uniqueness": True,
+                },
+            }
+        )
+        waldur_resource = self._make_waldur_resource(
+            {"account_name_generation_policy": "resource_name", "account_name_prefix": "hpc_"}
+        )
+        waldur_order = self._make_waldur_order()
+
+        first_allocation_account = "hpc_sample-resource-1"
+        retry_allocation_account = "hpc_project-1-0"
+
+        setup_common_respx_mocks(
+            self.BASE_URL,
+            self.waldur_user,
+            self.waldur_offering,
+            waldur_resource,
+            [self.team_member],
+            self.waldur_offering_user,
+            retry_allocation_account,
+        )
+        request_order_set_as_error = setup_order_respx_mocks(
+            self.BASE_URL, self.order_uuid, waldur_order
+        )
+        # Mock the uniqueness check API — all IDs are unique in Waldur
+        respx.post(
+            f"{self.BASE_URL}/api/marketplace-provider-offerings/"
+            f"{OFFERING.uuid}/check_unique_backend_id/"
+        ).respond(200, json={"is_unique": True})
+
+        slurm_client = setup_slurm_client_mocks(slurm_client_class)
+        # First allocation ID exists in backend, retry ID does not
+        existing_resource = ClientResource(
+            name=first_allocation_account,
+            description="sample-resource-1",
+            organization="hpc_project-1",
+        )
+        slurm_client.get_resource.side_effect = (
+            lambda name: existing_resource if name == first_allocation_account else None
+        )
+
+        processor = OfferingOrderProcessor(offering_with_uniqueness, self.mock_client)
+        processor.process_offering()
+
+        # Order should succeed
+        assert request_order_set_as_error.call_count == 0
+        # Retry allocation should be created
+        slurm_client.create_resource.assert_any_call(
+            name=retry_allocation_account,
+            description=waldur_resource["name"],
+            organization="hpc_project-1",
+            parent_name="hpc_project-1",
+        )

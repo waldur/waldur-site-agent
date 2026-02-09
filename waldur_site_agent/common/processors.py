@@ -304,6 +304,8 @@ class OfferingBaseProcessor(abc.ABC):
 
         # Try creating resource with generated IDs
         for retry in range(max_retries):
+            logger.info("Attempt %d/%d to create a resource", retry + 1, max_retries)
+
             resource_backend_id = self.resource_backend._get_resource_backend_id(resource_base_id)
 
             # Check backend_id uniqueness if enabled
@@ -320,16 +322,13 @@ class OfferingBaseProcessor(abc.ABC):
                 return self.resource_backend.create_resource_with_id(
                     waldur_resource, resource_backend_id, user_context
                 )
-            except backend_exceptions.BackendError as e:
-                if "already exists" in str(e).lower() and use_project_slug:
-                    # Resource already exists, try next iteration
-                    logger.info(
-                        "Resource %s already exists, trying next iteration", resource_backend_id
-                    )
-                    resource_base_id = f"{waldur_resource.project_slug}-{retry}"
-                    continue
-                # Some other error, re-raise it
-                raise
+            except backend_exceptions.DuplicateResourceError:
+                # Resource already exists, try next iteration
+                logger.info(
+                    "Resource %s already exists, trying next iteration", resource_backend_id
+                )
+                resource_base_id = f"{waldur_resource.project_slug}-{retry}"
+                continue
 
         # If we get here, all retries failed
         raise backend_exceptions.BackendError(

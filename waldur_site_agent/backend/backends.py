@@ -8,7 +8,7 @@ from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend import logger, structures, utils
 from waldur_site_agent.backend.clients import BaseClient, UnknownClient
-from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.exceptions import BackendError, DuplicateResourceError
 
 UNKNOWN_BACKEND_TYPE = "unknown"
 
@@ -436,7 +436,7 @@ class BaseBackend(ABC):
         if not self._create_backend_resource(
             resource_backend_id, waldur_resource.name, project_backend_id, project_backend_id
         ):
-            raise BackendError(f"Failed to create backend resource with ID: {resource_backend_id}")
+            raise DuplicateResourceError(resource_backend_id)
 
         # Setup limits
         waldur_limits = self._setup_resource_limits(resource_backend_id, waldur_resource)
