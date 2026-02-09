@@ -29,13 +29,13 @@ offerings:
 
       # Keycloak integration (optional) - matches waldur-mastermind format
       keycloak_enabled: true
-      keycloak_role_name: "workloads-manage"  # Role name for Keycloak group: project_{uuid}_{role_name}
-      keycloak_url: "https://keycloak.example.com/auth/"
-      keycloak_realm: "waldur"
-      keycloak_user_realm: "master"
-      keycloak_username: "keycloak-admin"
-      keycloak_password: "your-keycloak-admin-password"
-      keycloak_ssl_verify: true
+      keycloak:
+        keycloak_url: "https://keycloak.example.com/auth/"
+        keycloak_realm: "waldur"
+        keycloak_user_realm: "master"
+        keycloak_username: "keycloak-admin"
+        keycloak_password: "your-keycloak-admin-password"
+        keycloak_ssl_verify: true
 
     # Component definitions for resource management
     components:

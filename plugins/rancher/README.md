@@ -128,18 +128,18 @@ offerings:
       cluster_id: "c-xxxxx"  # Cluster ID only
       verify_cert: true
       project_prefix: "waldur-"
-      default_role: "project-member"
+      default_role: "workloads-manage"
 
       # Keycloak integration (optional)
       keycloak_enabled: true
-      keycloak_role_name: "project-member"
       keycloak_use_user_id: true  # Use Waldur username as Keycloak user ID
-      keycloak_url: "https://your-keycloak.com/"
-      keycloak_realm: "your-realm"
-      keycloak_user_realm: "your-realm"
-      keycloak_username: "waldur-site-agent-rancher"
-      keycloak_password: "your-keycloak-password"
-      keycloak_ssl_verify: true
+      keycloak:
+        keycloak_url: "https://your-keycloak.com/"
+        keycloak_realm: "your-realm"
+        keycloak_user_realm: "your-realm"
+        keycloak_username: "waldur-site-agent-rancher"
+        keycloak_password: "your-keycloak-password"
+        keycloak_ssl_verify: true
 
     # Component definitions
     backend_components:
@@ -208,7 +208,7 @@ offerings:
       cluster_id: "c-m-1234abcd:p-5678efgh"
       verify_cert: true
       project_prefix: "waldur-"
-      default_role: "project-member"
+      default_role: "workloads-manage"
       keycloak_enabled: false
 
     components:
@@ -241,14 +241,14 @@ offerings:
       default_role: "project-member"
 
       keycloak_enabled: true
-      keycloak_role_name: "project-member"
-      keycloak_url: "https://keycloak.example.com/auth/"
-      keycloak_realm: "waldur"
-      keycloak_user_realm: "master"
-      keycloak_username: "keycloak-admin"
-      keycloak_password: "your-keycloak-admin-password"
-      keycloak_ssl_verify: true
-      keycloak_sync_frequency: 15
+      keycloak:
+        keycloak_url: "https://keycloak.example.com/auth/"
+        keycloak_realm: "waldur"
+        keycloak_user_realm: "master"
+        keycloak_username: "keycloak-admin"
+        keycloak_password: "your-keycloak-admin-password"
+        keycloak_ssl_verify: true
+        keycloak_sync_frequency: 15
 
     components:
       cpu:
@@ -285,8 +285,7 @@ offerings:
 | `cluster_id` | string | Yes | - | Rancher cluster ID (e.g., c-m-1234abcd, not c-m-1234abcd:p-xxxxx) |
 | `verify_cert` | boolean | No | true | Whether to verify SSL certificates |
 | `project_prefix` | string | No | "waldur-" | Prefix for created Rancher project names |
-| `default_role` | string | No | "project-member" | Default role assigned to users in Rancher |
-| `keycloak_role_name` | string | No | "project-member" | Role name used in Keycloak group naming |
+| `default_role` | string | No | "workloads-manage" | Default role assigned to users in Rancher |
 | `keycloak_use_user_id` | boolean | No | true | Use Keycloak user ID for lookup (false = use username) |
 
 ### Keycloak Settings (optional, matching waldur-mastermind format)
@@ -294,12 +293,12 @@ offerings:
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `keycloak_enabled` | boolean | No | false | Enable Keycloak integration |
-| `keycloak_url` | string | Conditional | - | Keycloak server URL |
-| `keycloak_realm` | string | Conditional | "waldur" | Keycloak realm name |
-| `keycloak_user_realm` | string | Conditional | "master" | Keycloak user realm for auth |
-| `keycloak_username` | string | Conditional | - | Keycloak admin username |
-| `keycloak_password` | string | Conditional | - | Keycloak admin password |
-| `keycloak_ssl_verify` | boolean | No | true | Whether to verify SSL certificates |
+| `keycloak.keycloak_url` | string | Conditional | - | Keycloak server URL |
+| `keycloak.keycloak_realm` | string | Conditional | "waldur" | Keycloak realm name |
+| `keycloak.keycloak_user_realm` | string | Conditional | "master" | Keycloak user realm for auth |
+| `keycloak.keycloak_username` | string | Conditional | - | Keycloak admin username |
+| `keycloak.keycloak_password` | string | Conditional | - | Keycloak admin password |
+| `keycloak.keycloak_ssl_verify` | boolean | No | true | Whether to verify SSL certificates |
 
 ## Usage
 
@@ -365,7 +364,7 @@ Where:
 - `{waldur_resource_slug}` is the Waldur resource slug (more specific than project slug)
 - `{cluster_uuid_hex}` is the cluster UUID in hex format
 - `{project_uuid_hex}` is the Waldur project UUID in hex format (for permissions)
-- `{role_name}` is configurable (default: `project-member`)
+- `{role_name}` is configurable (default: `workloads-manage`)
 
 ## Supported Components and Accounting Model
 

@@ -39,7 +39,7 @@ class RancherBackend(backends.BaseBackend):
         # Rancher-specific settings
         self.project_prefix = rancher_settings.get("project_prefix", "waldur-")
         self.cluster_id = rancher_settings.get("cluster_id", "")
-        self.keycloak_role_name = rancher_settings.get("keycloak_role_name", "workloads-manage")
+        self.rancher_role = rancher_settings.get("default_role", "workloads-manage")
         self.keycloak_use_user_id = rancher_settings.get(
             "keycloak_use_user_id", True
         )  # Default: lookup by ID
@@ -163,7 +163,7 @@ class RancherBackend(backends.BaseBackend):
     def _get_keycloak_child_group_name(self, waldur_resource: WaldurResource) -> str:
         """Generate child Keycloak group name (project level with role)."""
         project_slug = waldur_resource.project_slug or "unknown-project"
-        return f"project_{project_slug}_{self.keycloak_role_name}"
+        return f"project_{project_slug}_{self.rancher_role}"
 
     def _pre_create_resource(
         self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
@@ -255,7 +255,7 @@ class RancherBackend(backends.BaseBackend):
             else:
                 child_description = (
                     f"Project {waldur_resource.project_slug} members "
-                    f"with role {self.keycloak_role_name}"
+                    f"with role {self.rancher_role}"
                 )
                 child_group_id = self.keycloak_client.create_group(
                     child_group_name, child_description, parent_group_id
@@ -324,7 +324,7 @@ class RancherBackend(backends.BaseBackend):
                         project_id = waldur_resource.backend_id
                         group_reference = f"keycloakoidc_group://{child_group_name}"
                         self.rancher_client.delete_project_group_role(
-                            group_reference, project_id, self.keycloak_role_name
+                            group_reference, project_id, self.rancher_role
                         )
                         logger.info(f"Removed Rancher binding for group {child_group_name}")
                     except Exception as e:
@@ -371,7 +371,7 @@ class RancherBackend(backends.BaseBackend):
         if child_group_id:
             child_group_name = self._get_keycloak_child_group_name(waldur_resource)
             self._bind_keycloak_group_to_rancher_project(
-                project_id, child_group_name, self.keycloak_role_name
+                project_id, child_group_name, self.rancher_role
             )
 
         # Store the project ID as backend_id
@@ -616,7 +616,7 @@ class RancherBackend(backends.BaseBackend):
                             if child_id:
                                 # Bind the new group to the Rancher project
                                 self._bind_keycloak_group_to_rancher_project(
-                                    resource_backend_id, child_group_name, self.keycloak_role_name
+                                    resource_backend_id, child_group_name, self.rancher_role
                                 )
                                 group = {"id": child_id}
                                 logger.info(f"Created and bound group {child_group_name}")
