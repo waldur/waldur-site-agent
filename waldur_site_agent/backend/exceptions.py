@@ -37,3 +37,14 @@ class OfferingUserAdditionalValidationRequiredError(Exception):
         """
         super().__init__(message)
         self.comment_url = comment_url
+
+class DuplicateResourceError(BackendError):
+    """The resource with ID already exists in the cluster."""
+
+    def __init__(self, resource_id: str) -> None:
+        """Initialize exception with resource ID.
+
+        Args:
+            resource_id: The ID of the resource that already exists
+        """
+        super().__init__(f"The resource with ID {resource_id} already exists in the cluster")
