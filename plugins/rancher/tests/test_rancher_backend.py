@@ -198,7 +198,7 @@ class TestRancherBackend:
 
         group_name = backend._get_keycloak_child_group_name(waldur_resource)
         # Should be project_{project-slug}_{role}
-        assert group_name == f"project_{waldur_resource.project_slug}_{backend.keycloak_role_name}"
+        assert group_name == f"project_{waldur_resource.project_slug}_{backend.rancher_role}"
 
     @patch("waldur_site_agent_rancher.backend.RancherClient")
     def test_pre_create_resource_validation(

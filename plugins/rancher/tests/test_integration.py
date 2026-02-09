@@ -1,11 +1,11 @@
 """Integration tests for complete Rancher plugin workflow."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from waldur_api_client.models.resource import Resource as WaldurResource
+import pytest
 from waldur_api_client.models.offering_user import OfferingUser
+from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_site_agent_rancher.backend import RancherBackend
 
 
@@ -38,12 +38,14 @@ def backend_settings():
         "verify_cert": False,
         "project_prefix": "waldur-",
         "keycloak_enabled": True,
-        "keycloak_role_name": "workloads-manage",
-        "keycloak_url": "https://keycloak.example.com/auth/",
-        "keycloak_realm": "waldur",
-        "keycloak_username": "admin",
-        "keycloak_password": "admin-password",
-        "keycloak_ssl_verify": False,
+        "rancher_role": "workloads-manage",
+        "keycloak": {
+            "keycloak_url": "https://keycloak.example.com/auth/",
+            "keycloak_realm": "waldur",
+            "keycloak_username": "admin",
+            "keycloak_password": "admin-password",
+            "keycloak_ssl_verify": False,
+        },
     }
 
 
@@ -200,6 +202,7 @@ class TestRancherIntegration:
 
         # Test user association creation (using enhanced interface)
         from uuid import uuid4
+
         from waldur_api_client.models.resource import Resource as WaldurResource
 
         test_resource_for_user = WaldurResource(
