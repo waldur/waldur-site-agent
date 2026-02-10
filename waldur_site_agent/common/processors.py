@@ -203,8 +203,7 @@ class OfferingBaseProcessor(abc.ABC):
 
         if self.resource_backend.backend_type == BackendType.UNKNOWN.value:
             raise backend_exceptions.BackendError(
-                "Unable to create backend"
-                f" for {self.offering.name}"
+                f"Unable to create backend for {self.offering.name}"
             )
 
         self._print_current_user()
@@ -366,6 +365,66 @@ class OfferingBaseProcessor(abc.ABC):
         return agent_identity_manager.register_processor(
             service, processor_name, backend_type, self.resource_backend_version
         )
+
+    def _sync_resource_service_accounts(self, waldur_resource: WaldurResource) -> None:
+        """Sync project service accounts between Waldur and the backend resource."""
+        logger.info(
+            "Syncing service accounts for the resource %s (%s)",
+            waldur_resource.name,
+            waldur_resource.backend_id,
+        )
+        if self.service_provider is None:
+            logger.warning("No service provider configured, skipping service accounts sync")
+            return
+
+        service_accounts = marketplace_service_providers_project_service_accounts_list.sync_all(
+            service_provider_uuid=self.service_provider.uuid.hex,
+            project_uuid=waldur_resource.project_uuid.hex,
+            client=self.waldur_rest_client,
+        )
+        usernames_active = {
+            account.username
+            for account in service_accounts
+            if account.username and account.state == ServiceAccountState.OK
+        }
+        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
+
+        usernames_closed = {
+            account.username
+            for account in service_accounts
+            if account.username and account.state == ServiceAccountState.CLOSED
+        }
+        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
+
+    def _sync_resource_course_accounts(self, waldur_resource: WaldurResource) -> None:
+        """Sync course accounts between Waldur and the backend resource."""
+        logger.info(
+            "Syncing course accounts for the resource %s (%s)",
+            waldur_resource.name,
+            waldur_resource.backend_id,
+        )
+        if self.service_provider is None:
+            logger.warning("No service provider configured, skipping service accounts sync")
+            return
+
+        course_accounts = marketplace_service_providers_course_accounts_list.sync_all(
+            service_provider_uuid=self.service_provider.uuid.hex,
+            project_uuid=waldur_resource.project_uuid.hex,
+            client=self.waldur_rest_client,
+        )
+        usernames_active = {
+            account.username
+            for account in course_accounts
+            if account.username and account.state == ServiceAccountState.OK
+        }
+        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
+
+        usernames_closed = {
+            account.username
+            for account in course_accounts
+            if account.username and account.state == ServiceAccountState.CLOSED
+        }
+        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
 
 
 class OfferingOrderProcessor(OfferingBaseProcessor):
@@ -552,7 +611,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     )
                 else:
                     logger.info(
-                        "Order is not in EXECUTING state,"
+                        "Order is not in EXECUTING state, "
                         "skipping set_state_done operation"
                     )
 
@@ -826,10 +885,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 waldur_resource.name,
             )
         else:
-            self.resource_backend.set_resource_limits(
-                waldur_resource_backend_id,
-                new_limits
-            )
+            self.resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits)
 
             logger.info(
                 "The limits for %s were updated successfully from %s to %s",
@@ -882,6 +938,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
             # Add users to the backend resource
             self._add_users_to_resource(waldur_resource, user_context)
+
+            # Sync service and course accounts
+            self._sync_resource_service_accounts(waldur_resource)
+            self._sync_resource_course_accounts(waldur_resource)
 
         return True
 
@@ -1366,66 +1426,6 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     waldur_resource.backend_id,
                     exc,
                 )
-
-    def _sync_resource_service_accounts(self, waldur_resource: WaldurResource) -> None:
-        """Sync project service accounts between Waldur and the backend resource."""
-        logger.info(
-            "Syncing service accounts for the resource %s (%s)",
-            waldur_resource.name,
-            waldur_resource.backend_id,
-        )
-        if self.service_provider is None:
-            logger.warning("No service provider configured, skipping service accounts sync")
-            return
-
-        service_accounts = marketplace_service_providers_project_service_accounts_list.sync_all(
-            service_provider_uuid=self.service_provider.uuid.hex,
-            project_uuid=waldur_resource.project_uuid.hex,
-            client=self.waldur_rest_client,
-        )
-        usernames_active = {
-            account.username
-            for account in service_accounts
-            if account.username and account.state == ServiceAccountState.OK
-        }
-        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
-
-        usernames_closed = {
-            account.username
-            for account in service_accounts
-            if account.username and account.state == ServiceAccountState.CLOSED
-        }
-        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
-
-    def _sync_resource_course_accounts(self, waldur_resource: WaldurResource) -> None:
-        """Sync course accounts between Waldur and the backend resource."""
-        logger.info(
-            "Syncing course accounts for the resource %s (%s)",
-            waldur_resource.name,
-            waldur_resource.backend_id,
-        )
-        if self.service_provider is None:
-            logger.warning("No service provider configured, skipping service accounts sync")
-            return
-
-        course_accounts = marketplace_service_providers_course_accounts_list.sync_all(
-            service_provider_uuid=self.service_provider.uuid.hex,
-            project_uuid=waldur_resource.project_uuid.hex,
-            client=self.waldur_rest_client,
-        )
-        usernames_active = {
-            account.username
-            for account in course_accounts
-            if account.username and account.state == ServiceAccountState.OK
-        }
-        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
-
-        usernames_closed = {
-            account.username
-            for account in course_accounts
-            if account.username and account.state == ServiceAccountState.CLOSED
-        }
-        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
 
     def _process_resources(
         self,
