@@ -75,6 +75,13 @@ def setup_common_respx_mocks(
         f"{base_url}/api/marketplace-service-providers/",
         params={"customer_uuid": waldur_offering["customer_uuid"]},
     ).respond(200, json=[service_provider.to_dict()])
+    # Mock service and course account endpoints (return empty lists by default)
+    respx.get(
+        f"{base_url}/api/marketplace-service-providers/{service_provider.uuid.hex}/project_service_accounts/",
+    ).respond(200, json=[])
+    respx.get(
+        f"{base_url}/api/marketplace-service-providers/{service_provider.uuid.hex}/course_accounts/",
+    ).respond(200, json=[])
 
 
 def setup_order_respx_mocks(base_url: str, order_uuid: str, waldur_order: dict):
