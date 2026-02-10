@@ -406,7 +406,7 @@ class SlurmClient(clients.BaseClient):
                 f"account={account}",
                 "format=account,grptresraw",
             ]
-            output = self._execute_command(command, command_name="sacct")
+            output = self._execute_command(command, command_name="sacct", immediate=False)
 
             # Parse TRES usage - this is a simplified implementation
             # In production, you'd parse the actual TRES usage format
