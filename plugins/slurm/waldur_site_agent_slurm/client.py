@@ -23,6 +23,11 @@ class SlurmClient(clients.BaseClient):
     See also: https://slurm.schedmd.com/sacctmgr.html
     """
 
+    # Commands that support --immediate flag (only sacctmgr)
+    _COMMAND_SUPPORTS_IMMEDIATE = frozenset({"sacctmgr"})
+    # Commands that support --parsable2 and --noheader flags
+    _COMMAND_SUPPORTS_PARSABLE = frozenset({"sacctmgr", "sacct"})
+
     def __init__(self, slurm_tres: dict) -> None:
         """Inits SLURM-related data."""
         self.slurm_tres = slurm_tres
@@ -344,6 +349,16 @@ class SlurmClient(clients.BaseClient):
         silent: bool = False,
     ) -> str:
         """Constructs and executes a command with the given parameters."""
+        if immediate and command_name not in self._COMMAND_SUPPORTS_IMMEDIATE:
+            raise ValueError(
+                f"--immediate is not supported by {command_name}. "
+                f"Use immediate=False for non-sacctmgr commands."
+            )
+        if parsable and command_name not in self._COMMAND_SUPPORTS_PARSABLE:
+            raise ValueError(
+                f"--parsable2/--noheader are not supported by {command_name}. "
+                f"Use parsable=False for {command_name} commands."
+            )
         account_command = [command_name]
         if parsable:
             account_command.extend(["--parsable2", "--noheader"])

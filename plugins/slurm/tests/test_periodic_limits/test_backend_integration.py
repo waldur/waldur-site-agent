@@ -492,6 +492,30 @@ class TestExecutedCommandsTracking:
         client.clear_executed_commands()
         assert client.executed_commands == []
 
+    def test_immediate_on_sacct_raises_value_error(self, client):
+        """--immediate on sacct is rejected with a clear error."""
+        with pytest.raises(ValueError, match="--immediate is not supported by sacct"):
+            client._execute_command(["--allusers"], command_name="sacct", immediate=True)
+
+    def test_immediate_on_scancel_raises_value_error(self, client):
+        """--immediate on scancel is rejected with a clear error."""
+        with pytest.raises(ValueError, match="--immediate is not supported by scancel"):
+            client._execute_command(["-A", "acct1"], command_name="scancel", immediate=True)
+
+    def test_parsable_on_scancel_raises_value_error(self, client):
+        """--parsable2 on scancel is rejected with a clear error."""
+        with pytest.raises(ValueError, match="--parsable2/--noheader are not supported by scancel"):
+            client._execute_command(
+                ["-A", "acct1"], command_name="scancel", parsable=True, immediate=False
+            )
+
+    def test_parsable_on_id_raises_value_error(self, client):
+        """--parsable2 on id is rejected with a clear error."""
+        with pytest.raises(ValueError, match="--parsable2/--noheader are not supported by id"):
+            client._execute_command(
+                ["-u", "user1"], command_name="id", parsable=True, immediate=False
+            )
+
 
 class TestProductionModeCommandsExecuted:
     """Test that _apply_settings_production returns commands_executed."""
