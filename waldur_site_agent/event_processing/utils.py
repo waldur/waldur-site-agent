@@ -19,7 +19,7 @@ from waldur_site_agent.backend import logger
 from waldur_site_agent.common import agent_identity_management
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
-from waldur_site_agent.common.utils import get_client
+from waldur_site_agent.common.utils import get_backend_for_offering, get_client
 from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.event_subscription_manager import EventSubscriptionManager
 from waldur_site_agent.event_processing.structures import (
@@ -119,7 +119,10 @@ def _determine_observable_object_types(
 def _register_agent_identity(
     offering: common_structures.Offering,
     waldur_rest_client: AuthenticatedClient,
-) -> agent_identity_management.AgentIdentity | None:
+) -> (
+    tuple[agent_identity_management.AgentIdentity, agent_identity_management.AgentIdentityManager]
+    | None
+):
     """Register or retrieve agent identity for the offering.
 
     Args:
@@ -127,14 +130,15 @@ def _register_agent_identity(
         waldur_rest_client: Authenticated REST client for Waldur API
 
     Returns:
-        AgentIdentity if successful, None if registration failed
+        (AgentIdentity, AgentIdentityManager) if successful, None if registration failed
     """
     agent_identity_manager = agent_identity_management.AgentIdentityManager(
         offering, waldur_rest_client
     )
     identity_name = f"agent-{offering.uuid}"
     try:
-        return agent_identity_manager.register_identity(identity_name)
+        identity = agent_identity_manager.register_identity(identity_name)
+        return (identity, agent_identity_manager)
     except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
         logger.exception("Failed to register identity for the offering %s: %s", offering.name, e)
         return None
@@ -227,13 +231,11 @@ def setup_stomp_offering_subscriptions(
     )
 
     # Register agent identity
-    agent_identity = _register_agent_identity(waldur_offering, waldur_rest_client)
-    if agent_identity is None:
+    result = _register_agent_identity(waldur_offering, waldur_rest_client)
+    if result is None:
         return stomp_connections
 
-    agent_identity_manager = agent_identity_management.AgentIdentityManager(
-        waldur_offering, waldur_rest_client
-    )
+    agent_identity, agent_identity_manager = result
 
     # Setup subscription for each object type
     for object_type in object_types:
@@ -247,6 +249,24 @@ def setup_stomp_offering_subscriptions(
         )
         if consumer is not None:
             stomp_connections.append(consumer)
+
+    # Set up target event subscriptions for backends that support them
+    # (e.g., Waldur federation backend subscribes to ORDER events on Waldur B).
+    # BaseBackend.setup_target_event_subscriptions returns [] by default.
+    if waldur_offering.order_processing_backend:
+        try:
+            backend, _ = get_backend_for_offering(
+                waldur_offering, "order_processing_backend"
+            )
+            target_consumers = backend.setup_target_event_subscriptions(
+                waldur_offering, waldur_user_agent, global_proxy
+            )
+            stomp_connections.extend(target_consumers)
+        except Exception:
+            logger.exception(
+                "Failed to set up target event subscriptions for %s",
+                waldur_offering.name,
+            )
 
     return stomp_connections
 

@@ -10,8 +10,13 @@ import logging
 from typing import Optional
 from uuid import UUID
 
+from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.types import UNSET
+
+from waldur_api_client.models.observable_object_type_enum import (
+    ObservableObjectTypeEnum,
+)
 
 from waldur_site_agent.backend import backends
 from waldur_site_agent.backend.exceptions import BackendError
@@ -21,6 +26,8 @@ from waldur_site_agent_waldur.client import WaldurClient
 from waldur_site_agent_waldur.component_mapping import ComponentMapper
 
 logger = logging.getLogger(__name__)
+
+TERMINAL_ERROR_STATES = {OrderState.ERRED, OrderState.CANCELED, OrderState.REJECTED}
 
 
 class WaldurBackend(backends.BaseBackend):
@@ -123,17 +130,36 @@ class WaldurBackend(backends.BaseBackend):
             backend_id,
         )
 
-    def create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+    def create_resource_with_id(
+        self,
+        waldur_resource: WaldurResource,
+        resource_backend_id: str,
+        user_context: Optional[dict] = None,
     ) -> BackendResourceInfo:
-        """Create a resource on Waldur B via a marketplace order.
+        """Create a resource on Waldur B via a marketplace order (non-blocking).
 
-        1. Find/create project on Waldur B
-        2. Convert limits via ComponentMapper
-        3. Create marketplace order on Waldur B
-        4. Poll for order completion
-        5. Return resource info with Waldur B resource UUID as backend_id
+        Overrides BaseBackend.create_resource_with_id because the Waldur
+        federation backend creates resources via marketplace orders on the
+        target instance, not via the generic client.create_resource() path.
+
+        Returns immediately after order submission. The target resource UUID
+        is available on the order response (the resource is created in
+        CREATING state). Order completion is tracked via ``pending_order_id``
+        and checked by ``check_pending_order()`` on subsequent polling cycles.
+
+        The target resource UUID is stored as ``backend_id`` on the source
+        resource (Waldur A) by the core processor. The agent does NOT set
+        ``backend_id`` on the target resource (Waldur B) — that is managed
+        by B's own service provider.
+
+        Steps:
+            1. Find/create project on Waldur B (_pre_create_resource)
+            2. Create marketplace order on Waldur B
+            3. Return resource info with pending_order_id for async tracking
         """
+        logger.info("Creating resource in the backend with ID: %s", resource_backend_id)
+
+        # Pre-create: find or create project on Waldur B
         self._pre_create_resource(waldur_resource, user_context)
 
         # Collect and convert limits
@@ -143,11 +169,11 @@ class WaldurBackend(backends.BaseBackend):
         # Find the project on Waldur B
         project_uuid = waldur_resource.project_uuid
         customer_uuid = waldur_resource.customer_uuid
-        backend_id = f"{customer_uuid}_{project_uuid}"
-        project = self.client.find_project_by_backend_id(backend_id)
+        project_backend_id = f"{customer_uuid}_{project_uuid}"
+        project = self.client.find_project_by_backend_id(project_backend_id)
 
         if not project:
-            msg = f"Project not found on Waldur B for backend_id={backend_id}"
+            msg = f"Project not found on Waldur B for backend_id={project_backend_id}"
             raise BackendError(msg)
 
         project_url = self.client.get_project_url(project["uuid"])
@@ -177,31 +203,54 @@ class WaldurBackend(backends.BaseBackend):
             msg = "Order created but no UUID returned"
             raise BackendError(msg)
 
-        # Poll for completion
-        logger.info("Waiting for order %s to complete on Waldur B...", order_uuid)
-        completed_order = self.client.poll_order_completion(
-            order_uuid=order_uuid,
-            timeout=self.order_poll_timeout,
-            interval=self.order_poll_interval,
-        )
-
-        # Extract the created resource UUID
-        resource_uuid = completed_order.marketplace_resource_uuid
+        # Target resource UUID is available immediately on the order response
+        resource_uuid = order.marketplace_resource_uuid
         if isinstance(resource_uuid, type(UNSET)) or not resource_uuid:
-            msg = f"Order {order_uuid} completed but no marketplace_resource_uuid returned"
+            msg = f"Order {order_uuid} created but no marketplace_resource_uuid returned"
             raise BackendError(msg)
 
-        resource_backend_id = str(resource_uuid)
+        target_resource_uuid = str(resource_uuid)
+        target_order_uuid = str(order_uuid)
+
         logger.info(
-            "Resource created on Waldur B: resource_uuid=%s, order_uuid=%s",
-            resource_backend_id,
-            order_uuid,
+            "Order submitted on Waldur B: order_uuid=%s, resource_uuid=%s (non-blocking)",
+            target_order_uuid,
+            target_resource_uuid,
         )
 
+        # Return immediately — order completion deferred to check_pending_order()
         return BackendResourceInfo(
-            backend_id=resource_backend_id,
+            backend_id=target_resource_uuid,
+            pending_order_id=target_order_uuid,
             limits=waldur_limits,
         )
+
+    def check_pending_order(self, order_backend_id: str) -> bool:
+        """Check if target order on Waldur B has completed.
+
+        Args:
+            order_backend_id: Target order UUID on Waldur B.
+
+        Returns:
+            True if target order completed successfully, False if still pending.
+
+        Raises:
+            BackendError: If the target order failed or was cancelled.
+        """
+        target_order = self.client.get_order(UUID(order_backend_id))
+
+        if target_order.state == OrderState.DONE:
+            logger.info("Target order %s completed successfully", order_backend_id)
+            return True
+
+        if target_order.state in TERMINAL_ERROR_STATES:
+            msg = f"Target order {order_backend_id} failed: {target_order.state}"
+            raise BackendError(msg)
+
+        logger.info(
+            "Target order %s still in state %s", order_backend_id, target_order.state
+        )
+        return False
 
     def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:
         """Terminate resource on Waldur B via a marketplace order."""
@@ -527,6 +576,140 @@ class WaldurBackend(backends.BaseBackend):
                 "Failed to get project UUID for resource %s", resource_backend_id
             )
         return None
+
+    # --- Target Event Subscriptions ---
+
+    def setup_target_event_subscriptions(
+        self,
+        source_offering,
+        user_agent: str = "",
+        global_proxy: str = "",
+    ) -> list:
+        """Set up STOMP subscription to ORDER events on Waldur B.
+
+        When target_stomp_enabled is True, subscribes to ORDER events on the
+        target Waldur B instance. When a target order completes, the handler
+        finds and updates the corresponding source order on Waldur A.
+
+        Args:
+            source_offering: The source Waldur offering (Waldur A).
+            user_agent: User agent string for API calls.
+            global_proxy: Optional proxy configuration.
+
+        Returns:
+            List of StompConsumer tuples for lifecycle management.
+        """
+        if not self.backend_settings.get("target_stomp_enabled"):
+            return []
+
+        try:
+            # Lazy imports: common.utils eagerly loads backend entry points
+            # via entry_point.load(), which re-imports this module. Importing
+            # anything that transitively touches common.utils at module level
+            # causes a circular import when this plugin is loaded first.
+            from waldur_site_agent.common.agent_identity_management import (
+                AgentIdentityManager,
+            )
+            from waldur_site_agent.common.structures import Offering
+            from waldur_site_agent.common.utils import get_client
+            from waldur_site_agent.event_processing.event_subscription_manager import (
+                WALDUR_LISTENER_NAME,
+            )
+            from waldur_site_agent.event_processing.utils import (
+                _setup_single_stomp_subscription,
+            )
+            from waldur_site_agent_waldur.target_event_handler import (
+                make_target_order_handler,
+            )
+
+            target_api_url = self.backend_settings["target_api_url"]
+            target_api_token = self.backend_settings["target_api_token"]
+
+            # The STOMP offering on B must be agent-based (Marketplace.Slurm)
+            # since agent identity registration only accepts those.
+            # Falls back to target_offering_uuid if not specified.
+            target_stomp_offering = self.backend_settings.get(
+                "target_stomp_offering_uuid", self.target_offering_uuid
+            )
+
+            # Create synthetic Offering for Waldur B to set up STOMP connection
+            target_offering = Offering(
+                name=f"Target: {source_offering.name}",
+                waldur_api_url=target_api_url
+                if target_api_url.endswith("/")
+                else target_api_url + "/",
+                waldur_api_token=target_api_token,
+                waldur_offering_uuid=target_stomp_offering,
+                backend_type="waldur",
+                stomp_enabled=True,
+                # Copy STOMP WebSocket settings from source if available
+                stomp_ws_host=getattr(source_offering, "stomp_ws_host", None),
+                stomp_ws_port=getattr(source_offering, "stomp_ws_port", None),
+                stomp_ws_path=getattr(source_offering, "stomp_ws_path", None),
+            )
+
+            # Register agent identity on Waldur B
+            target_client = get_client(
+                target_offering.api_url,
+                target_offering.api_token,
+                user_agent,
+                verify_ssl=target_offering.verify_ssl,
+                proxy=global_proxy,
+            )
+            agent_identity_manager = AgentIdentityManager(
+                target_offering, target_client
+            )
+            identity_name = f"agent-{target_offering.uuid}"
+            try:
+                agent_identity = agent_identity_manager.register_identity(identity_name)
+            except Exception:
+                logger.exception(
+                    "Failed to register agent identity on Waldur B for target STOMP"
+                )
+                return []
+
+            # Set up STOMP subscription for ORDER events with custom handler
+            consumer = _setup_single_stomp_subscription(
+                target_offering,
+                agent_identity,
+                agent_identity_manager,
+                user_agent,
+                ObservableObjectTypeEnum.ORDER,
+                global_proxy,
+            )
+
+            if consumer is None:
+                logger.error(
+                    "Failed to set up target STOMP subscription for %s",
+                    source_offering.name,
+                )
+                return []
+
+            # Replace the standard handler with our custom target order handler.
+            # The WaldurListener in the connection uses the handler from
+            # OBJECT_TYPE_TO_HANDLER_STOMP. We need to replace it with our
+            # closure-based handler that knows about the source offering.
+            connection, event_subscription, _ = consumer
+            custom_handler = make_target_order_handler(source_offering)
+
+            listener = connection.get_listener(WALDUR_LISTENER_NAME)
+            if listener is not None:
+                listener.on_message_callback = custom_handler
+
+            logger.info(
+                "Target STOMP subscription active for %s -> %s",
+                source_offering.name,
+                target_offering.name,
+            )
+
+            return [(connection, event_subscription, target_offering)]
+
+        except Exception:
+            logger.exception(
+                "Failed to set up target event subscriptions for %s",
+                source_offering.name,
+            )
+            return []
 
     # --- Resource Listing ---
 

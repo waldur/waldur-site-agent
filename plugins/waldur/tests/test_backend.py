@@ -88,8 +88,8 @@ class TestPingAndDiagnostics:
 
 
 class TestResourceCreation:
-    def test_create_resource_success(self, backend, mock_client):
-        # Setup mocks
+    def test_create_resource_returns_pending_order(self, backend, mock_client):
+        """Non-blocking creation: returns pending_order_id for async tracking."""
         mock_client.find_or_create_project.return_value = {
             "uuid": str(PROJECT_UUID),
             "url": f"/api/projects/{PROJECT_UUID}/",
@@ -106,14 +106,11 @@ class TestResourceCreation:
 
         mock_order = MagicMock()
         mock_order.uuid = ORDER_UUID
+        mock_order.marketplace_resource_uuid = RESOURCE_UUID
         mock_client.create_marketplace_order.return_value = mock_order
 
-        mock_completed = MagicMock()
-        mock_completed.marketplace_resource_uuid = RESOURCE_UUID
-        mock_client.poll_order_completion.return_value = mock_completed
-
-        # Create mock Waldur resource
         waldur_resource = MagicMock()
+        waldur_resource.uuid = "source-resource-uuid"
         waldur_resource.project_uuid = "proj-uuid-a"
         waldur_resource.customer_uuid = "cust-uuid-a"
         waldur_resource.project_name = "Test Project"
@@ -122,11 +119,16 @@ class TestResourceCreation:
         waldur_resource.limits.__contains__ = lambda self, key: key in {"cpu", "mem"}
         waldur_resource.limits.__getitem__ = lambda self, key: {"cpu": 100, "mem": 200}[key]
 
-        result = backend.create_resource(waldur_resource)
+        result = backend.create_resource_with_id(waldur_resource, "test-backend-id")
+
         assert isinstance(result, BackendResourceInfo)
         assert result.backend_id == str(RESOURCE_UUID)
+        assert result.pending_order_id == str(ORDER_UUID)
+        # poll_order_completion should NOT be called (non-blocking)
+        mock_client.poll_order_completion.assert_not_called()
 
-    def test_create_resource_order_timeout(self, backend, mock_client):
+    def test_create_resource_no_resource_uuid_on_order(self, backend, mock_client):
+        """Error when order response has no marketplace_resource_uuid."""
         mock_client.find_or_create_project.return_value = {
             "uuid": str(PROJECT_UUID),
             "url": f"/api/projects/{PROJECT_UUID}/",
@@ -134,8 +136,6 @@ class TestResourceCreation:
         }
         mock_client.find_project_by_backend_id.return_value = {
             "uuid": str(PROJECT_UUID),
-            "url": f"/api/projects/{PROJECT_UUID}/",
-            "name": "Test Project",
         }
         mock_client.get_project_url.return_value = f"/api/projects/{PROJECT_UUID}/"
         mock_client.get_offering_url.return_value = "/api/offerings/off-uuid/"
@@ -143,10 +143,11 @@ class TestResourceCreation:
 
         mock_order = MagicMock()
         mock_order.uuid = ORDER_UUID
+        mock_order.marketplace_resource_uuid = UNSET
         mock_client.create_marketplace_order.return_value = mock_order
-        mock_client.poll_order_completion.side_effect = BackendError("timed out")
 
         waldur_resource = MagicMock()
+        waldur_resource.uuid = "source-resource-uuid"
         waldur_resource.project_uuid = "proj-uuid-a"
         waldur_resource.customer_uuid = "cust-uuid-a"
         waldur_resource.project_name = "Test Project"
@@ -155,8 +156,65 @@ class TestResourceCreation:
         waldur_resource.limits.__contains__ = lambda self, key: key in {"cpu"}
         waldur_resource.limits.__getitem__ = lambda self, key: {"cpu": 100}[key]
 
-        with pytest.raises(BackendError, match="timed out"):
-            backend.create_resource(waldur_resource)
+        with pytest.raises(BackendError, match="no marketplace_resource_uuid"):
+            backend.create_resource_with_id(waldur_resource, "test-backend-id")
+
+
+class TestCheckPendingOrder:
+    def test_check_pending_order_done(self, backend, mock_client):
+        """Returns True when target order has completed."""
+        mock_order = MagicMock()
+        mock_order.state = OrderState.DONE
+        mock_client.get_order.return_value = mock_order
+
+        result = backend.check_pending_order(str(ORDER_UUID))
+        assert result is True
+        mock_client.get_order.assert_called_once_with(ORDER_UUID)
+
+    def test_check_pending_order_still_executing(self, backend, mock_client):
+        """Returns False when target order is still executing."""
+        mock_order = MagicMock()
+        mock_order.state = OrderState.EXECUTING
+        mock_client.get_order.return_value = mock_order
+
+        result = backend.check_pending_order(str(ORDER_UUID))
+        assert result is False
+
+    def test_check_pending_order_erred(self, backend, mock_client):
+        """Raises BackendError when target order has failed."""
+        mock_order = MagicMock()
+        mock_order.state = OrderState.ERRED
+        mock_client.get_order.return_value = mock_order
+
+        with pytest.raises(BackendError, match="failed"):
+            backend.check_pending_order(str(ORDER_UUID))
+
+    def test_check_pending_order_canceled(self, backend, mock_client):
+        """Raises BackendError when target order was canceled."""
+        mock_order = MagicMock()
+        mock_order.state = OrderState.CANCELED
+        mock_client.get_order.return_value = mock_order
+
+        with pytest.raises(BackendError, match="failed"):
+            backend.check_pending_order(str(ORDER_UUID))
+
+    def test_check_pending_order_rejected(self, backend, mock_client):
+        """Raises BackendError when target order was rejected."""
+        mock_order = MagicMock()
+        mock_order.state = OrderState.REJECTED
+        mock_client.get_order.return_value = mock_order
+
+        with pytest.raises(BackendError, match="failed"):
+            backend.check_pending_order(str(ORDER_UUID))
+
+    def test_check_pending_order_pending_provider(self, backend, mock_client):
+        """Returns False when target order is pending provider approval."""
+        mock_order = MagicMock()
+        mock_order.state = OrderState.PENDING_PROVIDER
+        mock_client.get_order.return_value = mock_order
+
+        result = backend.check_pending_order(str(ORDER_UUID))
+        assert result is False
 
 
 class TestResourceDeletion:

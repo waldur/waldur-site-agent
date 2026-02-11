@@ -98,6 +98,7 @@ username_management_backend: "base"  # Backend for username management
 - `"slurm"`: SLURM cluster management
 - `"moab"`: MOAB cluster management
 - `"mup"`: MUP portal integration
+- `"waldur"`: Waldur-to-Waldur federation
 - `"base"`: Basic username management
 - Custom backends via plugins
 
@@ -169,6 +170,23 @@ backend_settings:
   api_url: "https://mup.example.com/api/"
   api_token: "your-api-token"
   # Other MUP-specific configuration
+```
+
+### Waldur Federation Backend Settings
+
+```yaml
+backend_settings:
+  target_api_url: "https://waldur-b.example.com/api/"
+  target_api_token: "service-account-token"
+  target_offering_uuid: "offering-uuid-on-waldur-b"
+  target_customer_uuid: "customer-uuid-on-waldur-b"
+  user_match_field: "cuid"                   # cuid | email | username
+  order_poll_timeout: 300                    # Max seconds for sync order completion
+  order_poll_interval: 5                     # Seconds between sync order polls
+  user_not_found_action: "warn"              # warn | fail
+  # Optional: target STOMP for instant async order completion
+  target_stomp_enabled: false
+  target_stomp_offering_uuid: ""             # Marketplace.Slurm offering on B
 ```
 
 ## Backend Components
@@ -337,6 +355,54 @@ offerings:
     order_processing_backend: "slurm"
     reporting_backend: "slurm"
     # Note: membership_sync_backend omitted for event processing
+```
+
+### Waldur-to-Waldur Federation
+
+```yaml
+offerings:
+  - name: "Federated HPC Access"
+    waldur_api_url: "https://waldur-a.example.com/api/"
+    waldur_api_token: "token-for-waldur-a"
+    waldur_offering_uuid: "offering-uuid-on-waldur-a"
+    backend_type: "waldur"
+    order_processing_backend: "waldur"
+    membership_sync_backend: "waldur"
+    reporting_backend: "waldur"
+
+    # Optional: STOMP event processing
+    stomp_enabled: true
+    websocket_use_tls: true
+
+    backend_settings:
+      target_api_url: "https://waldur-b.example.com/api/"
+      target_api_token: "service-account-token-for-waldur-b"
+      target_offering_uuid: "offering-uuid-on-waldur-b"
+      target_customer_uuid: "customer-uuid-on-waldur-b"
+      user_match_field: "cuid"
+      order_poll_timeout: 300
+      order_poll_interval: 5
+      user_not_found_action: "warn"
+      target_stomp_enabled: true
+      target_stomp_offering_uuid: "agent-offering-uuid-on-waldur-b"
+
+    backend_components:
+      node_hours:
+        measured_unit: "Node-hours"
+        unit_factor: 1.0
+        accounting_type: "limit"
+        label: "Node Hours"
+        target_components:
+          cpu_k_hours:
+            factor: 128.0
+      tb_hours:
+        measured_unit: "TB-hours"
+        unit_factor: 1.0
+        accounting_type: "limit"
+        label: "TB Hours"
+        target_components:
+          gb_k_hours:
+            factor: 1.0
 ```
 
 ## Validation
