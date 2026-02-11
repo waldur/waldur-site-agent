@@ -31,3 +31,4 @@ class BackendResourceInfo:
     users: list[str] = field(default_factory=list)
     usage: dict = field(default_factory=dict)
     limits: dict = field(default_factory=dict)
+    pending_order_id: str = ""

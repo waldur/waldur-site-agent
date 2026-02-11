@@ -134,6 +134,47 @@ backend needs custom behavior.
 | `_pre_delete_resource` | No-op | Pre-deletion cleanup (cancel jobs) |
 | `_pre_delete_user_actions` | No-op | Per-user cleanup before removal |
 | `process_existing_users` | No-op | Process existing users (homedirs) |
+| `check_pending_order` | Returns `True` | Non-blocking order creation (see below) |
+| `setup_target_event_subscriptions` | Returns `[]` | STOMP subscriptions to target systems |
+
+### Non-blocking order creation (optional)
+
+Backends that create resources via remote APIs can use non-blocking order
+creation. Instead of blocking until the remote operation completes, the backend
+returns immediately with a `pending_order_id` in `BackendResourceInfo`.
+
+The core processor then:
+
+1. Sets the source order's `backend_id` to the `pending_order_id`
+2. Keeps the order in `EXECUTING` state
+3. On subsequent polling cycles, calls `check_pending_order(backend_id)` to check completion
+4. When `check_pending_order()` returns `True`, marks the source order as `DONE`
+
+#### `check_pending_order(order_backend_id: str) -> bool`
+
+- **Default**: Returns `True` (no async orders, always "complete")
+- **Override when**: Your backend uses non-blocking resource creation
+- **Returns**: `True` if the remote order completed, `False` if still pending
+- **Raises**: `BackendError` if the remote order failed or was cancelled
+
+Example (Waldur federation plugin):
+
+```python
+def check_pending_order(self, order_backend_id: str) -> bool:
+    target_order = self.client.get_order(UUID(order_backend_id))
+    if target_order.state == OrderState.DONE:
+        return True
+    if target_order.state in {OrderState.ERRED, OrderState.CANCELED}:
+        raise BackendError(f"Target order failed: {target_order.state}")
+    return False  # Still pending
+```
+
+#### `setup_target_event_subscriptions(source_offering, user_agent, global_proxy) -> list`
+
+- **Default**: Returns `[]` (no target subscriptions)
+- **Override when**: Your backend supports STOMP events from a target system
+- **Returns**: List of `StompConsumer` tuples for lifecycle management
+- **Called by**: `event_process` mode during STOMP setup
 
 ## BaseClient method reference
 
@@ -169,6 +210,7 @@ This table shows which `BaseBackend` methods are called by each agent mode.
 | `_pre_create_resource` | CREATE order | - | - | CREATE event |
 | `post_create_resource` | CREATE order | - | - | CREATE event |
 | `_collect_resource_limits` | CREATE order | - | - | CREATE event |
+| `check_pending_order` | CREATE order (async) | - | - | CREATE event (async) |
 | `set_resource_limits` | UPDATE order | - | - | UPDATE event |
 | `delete_resource` | TERMINATE order | - | - | TERMINATE event |
 | `_pre_delete_resource` | TERMINATE order | - | - | TERMINATE event |
@@ -181,6 +223,7 @@ This table shows which `BaseBackend` methods are called by each agent mode.
 | `pause_resource` | - | - | status sync | - |
 | `restore_resource` | - | - | status sync | - |
 | `get_resource_metadata` | - | - | status sync | - |
+| `setup_target_event_subscriptions` | - | - | - | STOMP setup |
 | `list_resources` | - | import | - | import event |
 | `get_resource_limits` | - | import | - | import event |
 | `get_resource_user_limits` | - | - | limits sync | - |
@@ -522,7 +565,7 @@ When implementing a new backend plugin with an LLM, follow these steps in order:
 - `waldur_site_agent/backend/backends.py` - Base classes with all abstract methods
 - `waldur_site_agent/backend/clients.py` - Base client class
 - `waldur_site_agent/backend/structures.py` - Data structures (`ClientResource`,
-  `Association`, `BackendResourceInfo`)
+  `Association`, `BackendResourceInfo` with `pending_order_id` for async orders)
 - `plugins/slurm/waldur_site_agent_slurm/backend.py` - Reference implementation
   (CLI-based)
 - `plugins/mup/waldur_site_agent_mup/backend.py` - Reference implementation

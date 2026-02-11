@@ -40,6 +40,7 @@ from waldur_api_client.api.marketplace_orders import (
     marketplace_orders_approve_by_provider,
     marketplace_orders_list,
     marketplace_orders_retrieve,
+    marketplace_orders_set_backend_id,
     marketplace_orders_set_state_done,
     marketplace_orders_set_state_erred,
 )
@@ -96,6 +97,7 @@ from waldur_api_client.models.marketplace_provider_resources_list_state_item imp
 from waldur_api_client.models.offering_component import OfferingComponent
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.offering_user_state import OfferingUserState
+from waldur_api_client.models.order_backend_id_request import OrderBackendIDRequest
 from waldur_api_client.models.order_details import (
     OrderDetails,
 )
@@ -808,8 +810,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     def _process_create_order(self, order: OrderDetails | None) -> bool:
         """Process a CREATE order to establish a new resource.
 
-        Waits for Waldur resource creation, fetches user context,
-        creates the backend resource, and adds users to it.
+        Supports both synchronous and asynchronous resource creation.
+        When a backend returns a pending_order_id, the source order stays
+        EXECUTING until the target order completes (checked on subsequent cycles).
 
         Args:
             order: The CREATE order to process
@@ -819,6 +822,20 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         """
         if not order:
             logger.error("Error during order processing: Order is None")
+            return False
+
+        # Check for pending async order (order.backend_id = target order UUID)
+        order_backend_id = (
+            ""
+            if isinstance(order.backend_id, type(UNSET))
+            else (order.backend_id or "")
+        )
+        if order_backend_id:
+            is_done = self.resource_backend.check_pending_order(order_backend_id)
+            if is_done:
+                logger.info("Target order %s completed successfully", order_backend_id)
+                return True
+            logger.info("Target order %s still pending", order_backend_id)
             return False
 
         waldur_resource = marketplace_provider_resources_retrieve.sync(
@@ -849,6 +866,22 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             if backend_resource_info is None:
                 msg = f"Unable to create the resource {waldur_resource.name}"
                 raise backend_exceptions.BackendError(msg)
+
+            # Handle async creation: set order backend_id and stay EXECUTING
+            if backend_resource_info.pending_order_id:
+                logger.info(
+                    "Async order created: setting order %s backend_id to %s",
+                    order.uuid,
+                    backend_resource_info.pending_order_id,
+                )
+                marketplace_orders_set_backend_id.sync(
+                    client=self.waldur_rest_client,
+                    uuid=order.uuid,
+                    body=OrderBackendIDRequest(
+                        backend_id=backend_resource_info.pending_order_id
+                    ),
+                )
+                return False  # Order stays EXECUTING
 
         if backend_resource_info is None:
             return False

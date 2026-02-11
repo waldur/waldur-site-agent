@@ -163,6 +163,20 @@ plugins/{backend_name}/
 - **Client**: `MUPClient` with HTTP authentication and comprehensive API coverage
 - **Advanced**: Most sophisticated plugin with full user lifecycle management
 
+### Waldur federation plugin (`waldur-site-agent-waldur`)
+
+- **Communication**: HTTP REST API (Waldur-to-Waldur)
+- **Components**: Configurable mapping with conversion factors (fan-out, fan-in)
+- **Features**:
+  - Non-blocking order creation with async completion tracking
+  - Optional target STOMP subscriptions for instant order-completion notifications
+  - Component type conversion between source and target offerings
+  - Project tracking via `backend_id` mapping
+  - User resolution via CUID, email, or username matching
+  - Per-user usage reporting with reverse conversion
+- **Client**: `WaldurClient` with `waldur_api_client` (httpx-based)
+- **Advanced**: Supports both polling (`order_process`) and event-driven (`event_process`) modes
+
 ### Basic username management (`waldur-site-agent-basic-username-management`)
 
 - **Purpose**: Provides base username management interface

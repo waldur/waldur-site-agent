@@ -1,12 +1,17 @@
 """Generic backend classes."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend import logger, structures, utils
+
+if TYPE_CHECKING:
+    from waldur_site_agent.common.structures import Offering
 from waldur_site_agent.backend.clients import BaseClient, UnknownClient
 from waldur_site_agent.backend.exceptions import BackendError, DuplicateResourceError
 
@@ -177,6 +182,46 @@ class BaseBackend(ABC):
         No-op guidance:
             Return an empty dict ``{}`` if no metadata is available.
         """
+
+    def setup_target_event_subscriptions(
+        self,
+        source_offering: Offering,
+        user_agent: str = "",
+        global_proxy: str = "",
+    ) -> list:
+        """Set up event subscriptions on target systems for async order tracking.
+
+        Override in backends that support async order creation and want instant
+        notifications from the target system when orders complete.
+
+        Args:
+            source_offering: The source Waldur offering configuration.
+            user_agent: User agent string for API calls.
+            global_proxy: Optional proxy configuration.
+
+        Returns:
+            List of StompConsumer tuples for lifecycle management.
+        """
+        del source_offering, user_agent, global_proxy
+        return []
+
+    def check_pending_order(self, order_backend_id: str) -> bool:
+        """Check if an async order on a remote system has completed.
+
+        Called when a source order has a non-empty backend_id indicating
+        an async creation was started on a remote backend.
+
+        Args:
+            order_backend_id: The source order's backend_id (= target order UUID)
+
+        Returns:
+            True if target order completed successfully, False if still pending.
+
+        Raises:
+            BackendError: If the target order failed/was cancelled.
+        """
+        del order_backend_id
+        return True  # Default: no async orders, always "complete"
 
     def list_resources(self) -> list[structures.BackendResourceInfo]:
         """List resources in the the backend."""

@@ -13,6 +13,23 @@ from dataclasses import dataclass, field
 from typing import Optional
 from uuid import UUID
 
+from waldur_api_client.api.customers import customers_create, customers_destroy
+from waldur_api_client.api.marketplace_categories import marketplace_categories_create
+from waldur_api_client.api.marketplace_component_usages import (
+    marketplace_component_usages_set_usage,
+)
+from waldur_api_client.api.marketplace_orders import marketplace_orders_retrieve
+from waldur_api_client.api.marketplace_provider_offerings import (
+    marketplace_provider_offerings_activate,
+    marketplace_provider_offerings_create,
+    marketplace_provider_offerings_create_offering_component,
+    marketplace_provider_offerings_destroy,
+)
+from waldur_api_client.api.marketplace_service_providers import (
+    marketplace_service_providers_create,
+    marketplace_service_providers_destroy,
+)
+from waldur_api_client.api.projects import projects_create, projects_destroy
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.billing_type_enum import BillingTypeEnum
 from waldur_api_client.models.component_usage_create_request import ComponentUsageCreateRequest
@@ -82,10 +99,6 @@ class WaldurTestSetup:
 
     def _create_category(self, title: str) -> str:
         """Create a marketplace category, return its UUID."""
-        from waldur_api_client.api.marketplace_categories import (
-            marketplace_categories_create,
-        )
-
         body = MarketplaceCategoryRequest(title=title)
         result = marketplace_categories_create.sync(client=self.client, body=body)
         cat_uuid = str(result.uuid) if not isinstance(result.uuid, type(UNSET)) else ""
@@ -95,8 +108,6 @@ class WaldurTestSetup:
 
     def _create_customer(self, name: str) -> tuple[str, str]:
         """Create a customer, return (uuid, url)."""
-        from waldur_api_client.api.customers import customers_create
-
         body = CustomerRequest(name=name)
         result = customers_create.sync(client=self.client, body=body)
         cust_uuid = str(result.uuid) if not isinstance(result.uuid, type(UNSET)) else ""
@@ -107,10 +118,6 @@ class WaldurTestSetup:
 
     def _make_service_provider(self, customer_url: str) -> None:
         """Register a customer as a service provider (required for offering creation)."""
-        from waldur_api_client.api.marketplace_service_providers import (
-            marketplace_service_providers_create,
-        )
-
         body = ServiceProviderRequest(customer=customer_url)
         result = marketplace_service_providers_create.sync(client=self.client, body=body)
         sp_uuid = str(result.uuid) if not isinstance(result.uuid, type(UNSET)) else ""
@@ -119,8 +126,6 @@ class WaldurTestSetup:
 
     def _create_project(self, customer_url: str, name: str) -> tuple[str, str]:
         """Create a project, return (uuid, url)."""
-        from waldur_api_client.api.projects import projects_create
-
         body = ProjectRequest(name=name, customer=customer_url)
         result = projects_create.sync(client=self.client, body=body)
         proj_uuid = str(result.uuid) if not isinstance(result.uuid, type(UNSET)) else ""
@@ -137,10 +142,6 @@ class WaldurTestSetup:
         offering_type: str,
     ) -> tuple[str, str]:
         """Create an offering, return (uuid, url)."""
-        from waldur_api_client.api.marketplace_provider_offerings import (
-            marketplace_provider_offerings_create,
-        )
-
         body = OfferingCreateRequest(
             name=name,
             category=category_url,
@@ -163,10 +164,6 @@ class WaldurTestSetup:
         measured_unit: str = "",
     ) -> None:
         """Add a component to an offering."""
-        from waldur_api_client.api.marketplace_provider_offerings import (
-            marketplace_provider_offerings_create_offering_component,
-        )
-
         body = OfferingComponentRequest(
             billing_type=billing_type,
             type_=type_,
@@ -207,10 +204,6 @@ class WaldurTestSetup:
 
     def _activate_offering(self, offering_uuid: str) -> None:
         """Activate an offering."""
-        from waldur_api_client.api.marketplace_provider_offerings import (
-            marketplace_provider_offerings_activate,
-        )
-
         marketplace_provider_offerings_activate.sync(
             uuid=uuid.UUID(offering_uuid), client=self.client
         )
@@ -626,10 +619,6 @@ class WaldurTestSetup:
             resource_uuid: UUID of the resource on Waldur B.
             usages: Component type -> usage amount mapping.
         """
-        from waldur_api_client.api.marketplace_component_usages import (
-            marketplace_component_usages_set_usage,
-        )
-
         items = [
             ComponentUsageItemRequest(type_=comp_type, amount=str(amount))
             for comp_type, amount in usages.items()
@@ -650,6 +639,40 @@ class WaldurTestSetup:
             )
         else:
             logger.info("Injected usage for resource %s: %s", resource_uuid, usages)
+
+    # --- Order Approval ---
+
+    def approve_and_wait(self, pending_order_id: str, timeout: int = 30) -> None:
+        """Approve a pending order and wait for it to complete.
+
+        Used in integration tests after non-blocking create_resource() calls.
+        The non-blocking WaldurBackend.create_resource_with_id() returns
+        immediately with pending_order_id set. This helper approves the
+        pending order on Waldur B and waits for it to reach DONE state.
+
+        Args:
+            pending_order_id: Target order UUID on Waldur B.
+            timeout: Maximum seconds to wait for completion.
+        """
+        order_uuid = UUID(pending_order_id)
+        self.approve_order(self.client, order_uuid)
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            order = marketplace_orders_retrieve.sync(
+                client=self.client, uuid=order_uuid.hex
+            )
+            state = order.state if not isinstance(order.state, type(UNSET)) else None
+            if state == OrderState.DONE:
+                logger.info("Order %s completed (DONE)", pending_order_id)
+                return
+            if state in {OrderState.ERRED, OrderState.CANCELED, OrderState.REJECTED}:
+                msg = f"Order {pending_order_id} reached terminal error state: {state}"
+                raise RuntimeError(msg)
+            time.sleep(1)
+
+        msg = f"Order {pending_order_id} timed out after {timeout}s"
+        raise RuntimeError(msg)
 
     # --- Cleanup ---
 
@@ -694,15 +717,6 @@ class WaldurTestSetup:
         Silently ignores errors (entities may already be deleted by tests
         or cascade deletions).
         """
-        from waldur_api_client.api.customers import customers_destroy
-        from waldur_api_client.api.marketplace_provider_offerings import (
-            marketplace_provider_offerings_destroy,
-        )
-        from waldur_api_client.api.marketplace_service_providers import (
-            marketplace_service_providers_destroy,
-        )
-        from waldur_api_client.api.projects import projects_destroy
-
         destroy_map = {
             "project": lambda u: projects_destroy.sync_detailed(
                 uuid=uuid.UUID(u), client=self.client

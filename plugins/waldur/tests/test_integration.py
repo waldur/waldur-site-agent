@@ -53,6 +53,17 @@ def _make_test_backend(backend_settings: dict, backend_components: dict) -> Wald
     return backend
 
 
+def _complete_pending_order(waldur_setup: WaldurTestSetup, result) -> None:
+    """Approve and wait for a pending order after non-blocking create_resource().
+
+    The WaldurBackend.create_resource_with_id() returns immediately with
+    pending_order_id set. Integration tests need to approve the order on
+    Waldur B and wait for it to reach DONE before subsequent operations.
+    """
+    if result.pending_order_id:
+        waldur_setup.approve_and_wait(result.pending_order_id)
+
+
 def _make_waldur_resource(
     project_uuid: str,
     customer_uuid: str,
@@ -152,7 +163,7 @@ class TestPassthroughLifecycle:
 
     # -- Create --
 
-    def test_create_resource(self, passthrough_backend, passthrough_env):
+    def test_create_resource(self, passthrough_backend, passthrough_env, waldur_setup):
         """Create resource on Waldur B — order completes, resource UUID returned."""
         waldur_resource = _make_waldur_resource(
             project_uuid=passthrough_env.project_a_uuid,
@@ -163,6 +174,7 @@ class TestPassthroughLifecycle:
         result = passthrough_backend.create_resource(waldur_resource)
 
         assert result.backend_id, "Expected a backend_id (resource UUID on Waldur B)"
+        _complete_pending_order(waldur_setup, result)
         _passthrough_state["resource_backend_id"] = result.backend_id
 
     def test_verify_resource_on_target(self, passthrough_backend):
@@ -173,7 +185,9 @@ class TestPassthroughLifecycle:
         resource = passthrough_backend.client.get_resource(resource_id)
         assert resource is not None, "Resource not found on Waldur B"
 
-    def test_create_resource_idempotent_project(self, passthrough_backend, passthrough_env):
+    def test_create_resource_idempotent_project(
+        self, passthrough_backend, passthrough_env, waldur_setup
+    ):
         """Second create reuses existing project (same backend_id)."""
         waldur_resource = _make_waldur_resource(
             project_uuid=passthrough_env.project_a_uuid,
@@ -183,6 +197,7 @@ class TestPassthroughLifecycle:
         )
         result = passthrough_backend.create_resource(waldur_resource)
         assert result.backend_id
+        _complete_pending_order(waldur_setup, result)
         _passthrough_state["resource2_backend_id"] = result.backend_id
 
     # -- Update Limits --
@@ -201,7 +216,9 @@ class TestPassthroughLifecycle:
 
     # -- Create with zero limits --
 
-    def test_create_resource_with_zero_limits(self, passthrough_backend, passthrough_env):
+    def test_create_resource_with_zero_limits(
+        self, passthrough_backend, passthrough_env, waldur_setup
+    ):
         """Create resource with all limits=0 — should succeed."""
         waldur_resource = _make_waldur_resource(
             project_uuid=passthrough_env.project_a_uuid,
@@ -211,6 +228,7 @@ class TestPassthroughLifecycle:
         )
         result = passthrough_backend.create_resource(waldur_resource)
         assert result.backend_id
+        _complete_pending_order(waldur_setup, result)
         _passthrough_state["resource_zero_backend_id"] = result.backend_id
 
     # -- Usage Reporting --
@@ -325,7 +343,9 @@ class TestPassthroughLifecycle:
 class TestConversionLifecycle:
     """Tests with component conversion (node_hours -> gpu_hours + storage_gb_hours)."""
 
-    def test_create_resource_with_conversion(self, conversion_backend, conversion_env):
+    def test_create_resource_with_conversion(
+        self, conversion_backend, conversion_env, waldur_setup
+    ):
         """node_hours=100 -> gpu_hours=500, storage_gb_hours=1000 on B."""
         waldur_resource = _make_waldur_resource(
             project_uuid=conversion_env.project_a_uuid,
@@ -335,6 +355,7 @@ class TestConversionLifecycle:
         )
         result = conversion_backend.create_resource(waldur_resource)
         assert result.backend_id
+        _complete_pending_order(waldur_setup, result)
         _conversion_state["resource_backend_id"] = result.backend_id
 
         # Verify converted limits on Waldur B
@@ -471,13 +492,11 @@ class TestOrderStates:
         with pytest.raises(Exception):
             backend.create_resource(waldur_resource)
 
-    def test_poll_order_timeout(self, passthrough_env):
-        """Backend with very short timeout — should raise BackendError on timeout.
+    def test_create_with_short_timeout(self, passthrough_env, waldur_setup):
+        """Backend with very short timeout — non-blocking create always returns.
 
-        Note: This test may pass quickly if the offering auto-completes fast
-        enough. The timeout is set very low to trigger the timeout path when
-        possible. If orders complete in <1s this test validates that short
-        timeouts don't break things.
+        With non-blocking create, the timeout only affects delete/update orders.
+        create_resource() returns immediately with pending_order_id.
         """
         settings = {
             **passthrough_env.backend_settings,
@@ -492,20 +511,20 @@ class TestOrderStates:
             limits={"cpu": 5, "mem": 10},
             name=f"pt-timeout-{uuid.uuid4().hex[:6]}",
         )
-        # Either succeeds (fast auto-complete) or times out — both are valid
-        try:
-            result = backend.create_resource(waldur_resource)
-            # If it succeeded, clean up
-            if result.backend_id:
-                resource_mock = MagicMock()
-                resource_mock.backend_id = result.backend_id
-                backend_cleanup = _make_test_backend(
-                    passthrough_env.backend_settings,
-                    passthrough_env.backend_components,
-                )
-                backend_cleanup.delete_resource(resource_mock)
-        except BackendError as e:
-            assert "timed out" in str(e).lower() or "timeout" in str(e).lower()
+        # Non-blocking create always returns immediately
+        result = backend.create_resource(waldur_resource)
+        assert result.backend_id
+        assert result.pending_order_id  # Order is still pending
+
+        # Approve and clean up
+        _complete_pending_order(waldur_setup, result)
+        resource_mock = MagicMock()
+        resource_mock.backend_id = result.backend_id
+        backend_cleanup = _make_test_backend(
+            passthrough_env.backend_settings,
+            passthrough_env.backend_components,
+        )
+        backend_cleanup.delete_resource(resource_mock)
 
 
 # ============================================================================
@@ -590,7 +609,7 @@ class TestWaldurAOrderOperations:
 
     # -- CREATE order processing --
 
-    def test_process_create_order(self, passthrough_backend, passthrough_env):
+    def test_process_create_order(self, passthrough_backend, passthrough_env, waldur_setup):
         """Simulates OfferingOrderProcessor._process_create_order().
 
         The agent receives a CREATE order from Waldur A, calls
@@ -607,6 +626,7 @@ class TestWaldurAOrderOperations:
         result = passthrough_backend.create_resource(waldur_resource)
         assert result.backend_id
         assert result.limits == {"cpu": 150, "mem": 300}
+        _complete_pending_order(waldur_setup, result)
         self.__class__._state["resource_backend_id"] = result.backend_id
 
     # -- UPDATE order processing (limits change) --
@@ -740,7 +760,7 @@ class TestConversionOrderOperations:
 
     _state: dict[str, str] = {}
 
-    def test_create_with_conversion(self, conversion_backend, conversion_env):
+    def test_create_with_conversion(self, conversion_backend, conversion_env, waldur_setup):
         """CREATE order with conversion: node_hours -> gpu_hours + storage_gb_hours."""
         waldur_resource = _make_waldur_resource(
             project_uuid=conversion_env.project_a_uuid,
@@ -750,6 +770,7 @@ class TestConversionOrderOperations:
         )
         result = conversion_backend.create_resource(waldur_resource)
         assert result.backend_id
+        _complete_pending_order(waldur_setup, result)
         self.__class__._state["resource_backend_id"] = result.backend_id
 
         # Verify converted limits: 50 * 5 = 250 gpu_hours, 50 * 10 = 500 storage_gb_hours
@@ -804,7 +825,7 @@ class TestMultipleResources:
 
     _state: dict[str, list[str]] = {"resource_ids": []}
 
-    def test_create_multiple_resources(self, passthrough_backend, passthrough_env):
+    def test_create_multiple_resources(self, passthrough_backend, passthrough_env, waldur_setup):
         """Create multiple resources under the same project."""
         for i in range(2):
             waldur_resource = _make_waldur_resource(
@@ -815,6 +836,7 @@ class TestMultipleResources:
             )
             result = passthrough_backend.create_resource(waldur_resource)
             assert result.backend_id
+            _complete_pending_order(waldur_setup, result)
             self.__class__._state["resource_ids"].append(result.backend_id)
 
     def test_list_multiple_resources(self, passthrough_backend):
@@ -896,7 +918,9 @@ class TestMixedBillingTypes:
         components = mixed_billing_backend.list_components()
         assert set(components) == {"limit_comp", "usage_comp", "fixed_comp", "one_comp"}
 
-    def test_create_resource_with_limit_component(self, mixed_billing_backend, mixed_billing_env):
+    def test_create_resource_with_limit_component(
+        self, mixed_billing_backend, mixed_billing_env, waldur_setup
+    ):
         """Create resource — only limit_comp supports limits in orders.
 
         USAGE, FIXED, and ONE type components do not accept limits on
@@ -910,6 +934,7 @@ class TestMixedBillingTypes:
         )
         result = mixed_billing_backend.create_resource(waldur_resource)
         assert result.backend_id
+        _complete_pending_order(waldur_setup, result)
         self.__class__._state["resource_backend_id"] = result.backend_id
 
     def test_verify_limit_component_on_target(self, mixed_billing_backend):
@@ -1008,7 +1033,7 @@ class TestUsageOnlyComponents:
         """Backend with usage-only components is reachable."""
         assert usage_only_backend.ping() is True
 
-    def test_create_resource_no_limits(self, usage_only_backend, usage_only_env):
+    def test_create_resource_no_limits(self, usage_only_backend, usage_only_env, waldur_setup):
         """Create resource with empty limits — valid for usage-only offerings."""
         waldur_resource = _make_waldur_resource(
             project_uuid=usage_only_env.project_a_uuid,
@@ -1018,6 +1043,7 @@ class TestUsageOnlyComponents:
         )
         result = usage_only_backend.create_resource(waldur_resource)
         assert result.backend_id
+        _complete_pending_order(waldur_setup, result)
         self.__class__._state["resource_backend_id"] = result.backend_id
 
     def test_resource_has_no_limits(self, usage_only_backend):
@@ -1063,3 +1089,72 @@ class TestUsageOnlyComponents:
         resource_mock = MagicMock()
         resource_mock.backend_id = resource_id
         usage_only_backend.delete_resource(resource_mock)
+
+
+# ============================================================================
+# Scenario 11: Non-Blocking Order Flow
+# ============================================================================
+
+
+@pytest.mark.skipif(not INTEGRATION_TESTS, reason="Integration tests not enabled")
+class TestNonBlockingOrderFlow:
+    """Tests for the non-blocking order creation and check_pending_order() flow.
+
+    Validates the two-phase async creation:
+    1. create_resource() returns immediately with pending_order_id
+    2. check_pending_order() tracks order completion on Waldur B
+    """
+
+    _state: dict[str, str] = {}
+
+    def test_create_returns_pending_order_id(self, passthrough_backend, passthrough_env):
+        """create_resource() returns immediately with pending_order_id set."""
+        waldur_resource = _make_waldur_resource(
+            project_uuid=passthrough_env.project_a_uuid,
+            customer_uuid=passthrough_env.offering_a.customer_uuid,
+            limits={"cpu": 50, "mem": 100},
+            name=f"nb-resource-{uuid.uuid4().hex[:6]}",
+        )
+        result = passthrough_backend.create_resource(waldur_resource)
+        assert result.backend_id, "Expected backend_id (target resource UUID)"
+        assert result.pending_order_id, "Expected pending_order_id (target order UUID)"
+        self.__class__._state["backend_id"] = result.backend_id
+        self.__class__._state["pending_order_id"] = result.pending_order_id
+
+    def test_check_pending_order_returns_false(self, passthrough_backend):
+        """Target order is still PENDING_PROVIDER — check returns False."""
+        pending_order_id = self.__class__._state.get("pending_order_id")
+        assert pending_order_id
+        assert passthrough_backend.check_pending_order(pending_order_id) is False
+
+    def test_approve_target_order(self, waldur_setup):
+        """Approve the target order (simulating Waldur B backend processor)."""
+        pending_order_id = self.__class__._state.get("pending_order_id")
+        assert pending_order_id
+        waldur_setup.approve_and_wait(pending_order_id)
+
+    def test_check_pending_order_returns_true(self, passthrough_backend):
+        """After approval, check returns True."""
+        pending_order_id = self.__class__._state.get("pending_order_id")
+        assert pending_order_id
+        assert passthrough_backend.check_pending_order(pending_order_id) is True
+
+    def test_resource_usable_after_completion(self, passthrough_backend):
+        """Resource on Waldur B is usable after order completes."""
+        backend_id = self.__class__._state.get("backend_id")
+        assert backend_id
+
+        passthrough_backend.set_resource_limits(backend_id, {"cpu": 200, "mem": 400})
+
+        limits = passthrough_backend.client.get_resource_limits(backend_id)
+        assert limits.get("cpu") == 200
+        assert limits.get("mem") == 400
+
+    def test_cleanup(self, passthrough_backend):
+        """Delete the resource."""
+        backend_id = self.__class__._state.get("backend_id")
+        assert backend_id
+
+        resource_mock = MagicMock()
+        resource_mock.backend_id = backend_id
+        passthrough_backend.delete_resource(resource_mock)

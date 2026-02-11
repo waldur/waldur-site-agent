@@ -147,7 +147,10 @@ class TestRegisterIdentity(unittest.TestCase):
         result = utils._register_agent_identity(self.offering, self.waldur_rest_client)
 
         # Verify
-        self.assertEqual(result, self.mock_identity)
+        self.assertIsNotNone(result)
+        identity, manager = result
+        self.assertEqual(identity, self.mock_identity)
+        self.assertEqual(manager, mock_manager)
         mock_manager_class.assert_called_once_with(self.offering, self.waldur_rest_client)
         mock_manager.register_identity.assert_called_once_with(
             f"agent-{self.offering.waldur_offering_uuid}"
@@ -403,7 +406,8 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
         ]
 
         mock_identity = mock.Mock()
-        mock_register_identity.return_value = mock_identity
+        mock_identity_manager = mock.Mock()
+        mock_register_identity.return_value = (mock_identity, mock_identity_manager)
 
         mock_consumer1 = (mock.Mock(), mock.Mock(), self.offering)
         mock_consumer2 = (mock.Mock(), mock.Mock(), self.offering)
@@ -462,7 +466,8 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
         ]
 
         mock_identity = mock.Mock()
-        mock_register_identity.return_value = mock_identity
+        mock_identity_manager = mock.Mock()
+        mock_register_identity.return_value = (mock_identity, mock_identity_manager)
 
         mock_consumer1 = (mock.Mock(), mock.Mock(), self.offering)
         # First succeeds, second fails, third succeeds
@@ -486,7 +491,7 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
         mock_rest_client = mock.Mock()
         mock_get_client.return_value = mock_rest_client
         mock_determine_types.return_value = []  # No object types
-        mock_register_identity.return_value = mock.Mock()  # Identity succeeds but no types
+        mock_register_identity.return_value = (mock.Mock(), mock.Mock())  # Identity succeeds but no types
 
         # Call function
         result = utils.setup_stomp_offering_subscriptions(self.offering, "test-agent")
@@ -516,7 +521,8 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
         ]
 
         mock_identity = mock.Mock()
-        mock_register_identity.return_value = mock_identity
+        mock_identity_manager = mock.Mock()
+        mock_register_identity.return_value = (mock_identity, mock_identity_manager)
 
         # All setups fail
         mock_setup_single.return_value = None
