@@ -10,6 +10,7 @@ import logging
 from typing import Optional
 from uuid import UUID
 
+from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.types import UNSET
@@ -184,6 +185,16 @@ class WaldurBackend(backends.BaseBackend):
             "name": waldur_resource.name or "",
         }
 
+        # Forward configured source attributes to the target order
+        resource_attrs = waldur_resource.attributes
+        if resource_attrs and not isinstance(resource_attrs, type(UNSET)):
+            passthrough_keys = self.backend_settings.get("passthrough_attributes", [])
+            if passthrough_keys:
+                attrs_dict = resource_attrs.to_dict()
+                for key in passthrough_keys:
+                    if key in attrs_dict:
+                        attributes[key] = attrs_dict[key]
+
         logger.info(
             "Creating marketplace order on Waldur B: offering=%s, project=%s, limits=%s",
             self.target_offering_uuid,
@@ -191,12 +202,19 @@ class WaldurBackend(backends.BaseBackend):
             target_limits,
         )
 
-        order = self.client.create_marketplace_order(
-            project_url=project_url,
-            offering_url=offering_url,
-            limits=target_limits,
-            attributes=attributes,
-        )
+        try:
+            order = self.client.create_marketplace_order(
+                project_url=project_url,
+                offering_url=offering_url,
+                limits=target_limits,
+                attributes=attributes,
+            )
+        except UnexpectedStatus as e:
+            if e.status_code == 400:
+                error_detail = e.content.decode(errors="ignore")
+                msg = f"Target Waldur rejected order (HTTP 400): {error_detail}"
+                raise BackendError(msg) from e
+            raise
 
         order_uuid = order.uuid if not isinstance(order.uuid, type(UNSET)) else None
         if not order_uuid:
