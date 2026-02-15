@@ -4,7 +4,9 @@ from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
+from httpx import URL
 
+from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.types import UNSET
 
@@ -418,6 +420,130 @@ class TestUserSync:
 
         # resolve_user_by_cuid should only be called once due to caching
         assert mock_client.resolve_user_by_cuid.call_count == 1
+
+
+class TestAttributePassthrough:
+    """Tests for passthrough_attributes forwarding in create_resource_with_id."""
+
+    def _setup_create_mocks(self, mock_client):
+        """Configure mocks for create_resource_with_id calls."""
+        mock_client.find_or_create_project.return_value = {
+            "uuid": str(PROJECT_UUID),
+            "url": f"/api/projects/{PROJECT_UUID}/",
+            "name": "Test Project",
+        }
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": str(PROJECT_UUID),
+        }
+        mock_client.get_project_url.return_value = f"/api/projects/{PROJECT_UUID}/"
+        mock_client.get_offering_url.return_value = "/api/offerings/off-uuid/"
+        mock_client.get_customer_url.return_value = "/api/customers/cust-uuid/"
+
+        mock_order = MagicMock()
+        mock_order.uuid = ORDER_UUID
+        mock_order.marketplace_resource_uuid = RESOURCE_UUID
+        mock_client.create_marketplace_order.return_value = mock_order
+
+    def _make_waldur_resource(self, attributes=UNSET):
+        """Create a mock WaldurResource with optional attributes."""
+        resource = MagicMock()
+        resource.uuid = "source-resource-uuid"
+        resource.project_uuid = "proj-uuid-a"
+        resource.customer_uuid = "cust-uuid-a"
+        resource.project_name = "Test Project"
+        resource.name = "Test Resource"
+        resource.limits = MagicMock()
+        resource.limits.__contains__ = lambda self, key: key in {"cpu", "mem"}
+        resource.limits.__getitem__ = lambda self, key: {"cpu": 100, "mem": 200}[key]
+        resource.attributes = attributes
+        return resource
+
+    def test_create_resource_passes_through_attributes(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        """Only configured keys from passthrough_attributes are forwarded."""
+        backend_settings["passthrough_attributes"] = ["storage_data_type"]
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+        self._setup_create_mocks(mock_client)
+
+        mock_attrs = MagicMock()
+        mock_attrs.to_dict.return_value = {
+            "storage_data_type": "Store",
+            "other_field": "should-not-be-forwarded",
+        }
+        waldur_resource = self._make_waldur_resource(attributes=mock_attrs)
+
+        backend.create_resource_with_id(waldur_resource, "test-backend-id")
+
+        call_kwargs = mock_client.create_marketplace_order.call_args.kwargs
+        assert call_kwargs["attributes"]["name"] == "Test Resource"
+        assert call_kwargs["attributes"]["storage_data_type"] == "Store"
+        assert "other_field" not in call_kwargs["attributes"]
+
+    def test_create_resource_passthrough_empty_list(self, backend, mock_client):
+        """Default config (no passthrough_attributes) sends only name."""
+        self._setup_create_mocks(mock_client)
+
+        mock_attrs = MagicMock()
+        mock_attrs.to_dict.return_value = {"storage_data_type": "Store"}
+        waldur_resource = self._make_waldur_resource(attributes=mock_attrs)
+
+        backend.create_resource_with_id(waldur_resource, "test-backend-id")
+
+        call_kwargs = mock_client.create_marketplace_order.call_args.kwargs
+        assert call_kwargs["attributes"] == {"name": "Test Resource"}
+
+    def test_create_resource_passthrough_missing_attribute(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        """Missing attribute key is silently skipped."""
+        backend_settings["passthrough_attributes"] = ["nonexistent_key"]
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+        self._setup_create_mocks(mock_client)
+
+        mock_attrs = MagicMock()
+        mock_attrs.to_dict.return_value = {"storage_data_type": "Store"}
+        waldur_resource = self._make_waldur_resource(attributes=mock_attrs)
+
+        backend.create_resource_with_id(waldur_resource, "test-backend-id")
+
+        call_kwargs = mock_client.create_marketplace_order.call_args.kwargs
+        assert call_kwargs["attributes"] == {"name": "Test Resource"}
+
+    def test_create_resource_passthrough_with_unset_attributes(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        """UNSET resource attributes don't crash."""
+        backend_settings["passthrough_attributes"] = ["storage_data_type"]
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+        self._setup_create_mocks(mock_client)
+
+        waldur_resource = self._make_waldur_resource(attributes=UNSET)
+
+        backend.create_resource_with_id(waldur_resource, "test-backend-id")
+
+        call_kwargs = mock_client.create_marketplace_order.call_args.kwargs
+        assert call_kwargs["attributes"] == {"name": "Test Resource"}
+
+    def test_create_resource_uniqueness_error_handling(
+        self, backend, mock_client
+    ):
+        """400 from target Waldur becomes BackendError with detail."""
+        self._setup_create_mocks(mock_client)
+        error_body = b'{"attributes":["Resource with this storage_data_type already exists"]}'
+        mock_client.create_marketplace_order.side_effect = UnexpectedStatus(
+            status_code=400,
+            content=error_body,
+            url=URL("https://waldur-b.example.com/api/marketplace-orders/"),
+        )
+
+        waldur_resource = self._make_waldur_resource()
+
+        with pytest.raises(BackendError, match="Target Waldur rejected order"):
+            backend.create_resource_with_id(waldur_resource, "test-backend-id")
 
 
 class TestNoOpMethods:
