@@ -166,7 +166,9 @@ class RancherBackend(backends.BaseBackend):
         return f"project_{project_slug}_{self.rancher_role}"
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Validate and prepare for resource creation."""
         if not waldur_resource.customer_slug or not waldur_resource.project_slug:
@@ -396,7 +398,11 @@ class RancherBackend(backends.BaseBackend):
             limits=waldur_limits,
         )
 
-    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:  # noqa: ARG002
+    def delete_resource(
+        self,
+        waldur_resource: WaldurResource,
+        **kwargs: str,  # noqa: ARG002
+    ) -> None:
         """Delete Rancher project and Keycloak group associated with the resource."""
         project_id = waldur_resource.backend_id
         if not project_id or not project_id.strip():

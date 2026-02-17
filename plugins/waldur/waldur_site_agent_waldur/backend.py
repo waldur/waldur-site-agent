@@ -95,7 +95,9 @@ class WaldurBackend(backends.BaseBackend):
         return list(self.backend_components.keys())
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Find or create the project on Waldur B before creating the resource.
 
@@ -270,7 +272,11 @@ class WaldurBackend(backends.BaseBackend):
         )
         return False
 
-    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:
+    def delete_resource(
+        self,
+        waldur_resource: WaldurResource,
+        **kwargs: str,
+    ) -> None:
         """Terminate resource on Waldur B via a marketplace order."""
         del kwargs
         resource_backend_id = waldur_resource.backend_id

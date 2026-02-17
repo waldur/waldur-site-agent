@@ -28,17 +28,23 @@ A plugin consists of two main classes:
 - **Client** (inherits `BaseClient`): Handles low-level communication with
   the external system (CLI commands, API calls).
 
-```text
-Waldur Mastermind
-       │
-       ▼
-  Site Agent Core  ──►  YourBackend(BaseBackend)
-                              │
-                              ▼
-                        YourClient(BaseClient)
-                              │
-                              ▼
-                        External System (CLI / API)
+```mermaid
+graph TB
+    WM[Waldur Mastermind<br/>REST API] <-->|Orders, Resources,<br/>Usage, Keys| SA[Site Agent Core<br/>Processor]
+    SA -->|user_context<br/>(ssh_keys, plan_quotas)| BE[YourBackend<br/>BaseBackend]
+    BE --> CL[YourClient<br/>BaseClient]
+    CL --> EXT[External System<br/>CLI / API]
+    BE -.->|backend_metadata| SA
+
+    classDef waldur fill:#1E3A8A,stroke:#3B82F6,stroke-width:2px,color:#FFFFFF
+    classDef core fill:#065F46,stroke:#10B981,stroke-width:2px,color:#FFFFFF
+    classDef plugin fill:#581C87,stroke:#8B5CF6,stroke-width:2px,color:#FFFFFF
+    classDef external fill:#92400E,stroke:#F59E0B,stroke-width:2px,color:#FFFFFF
+
+    class WM waldur
+    class SA core
+    class BE,CL plugin
+    class EXT external
 ```
 
 ## BaseBackend method reference
@@ -97,6 +103,8 @@ Waldur Mastermind
 
 - **Mode**: `order_process` (resource creation)
 - **Purpose**: Set up prerequisites before resource creation (e.g., parent accounts).
+- **`user_context`** contains pre-resolved data: `ssh_keys` (UUID → public key),
+  `plan_quotas` (component → value), `team`, `offering_users`.
 - **No-op**: Use `pass`.
 
 #### `downscale_resource(resource_backend_id: str) -> bool`
@@ -130,7 +138,7 @@ backend needs custom behavior.
 
 | Method | Default | When to override |
 |---|---|---|
-| `post_create_resource` | No-op | Post-creation setup (homedirs) |
+| `post_create_resource` | No-op | Post-creation setup; set `resource.backend_metadata` to push data to Waldur |
 | `_pre_delete_resource` | No-op | Pre-deletion cleanup (cancel jobs) |
 | `_pre_delete_user_actions` | No-op | Per-user cleanup before removal |
 | `process_existing_users` | No-op | Process existing users (homedirs) |
@@ -409,6 +417,107 @@ mycustom = "waldur_site_agent_mycustom.schemas:MyCustomBackendSettingsSchema"
 The entry point name (e.g., `mycustom`) is what users put in
 `backend_type` or `order_processing_backend` in the config YAML.
 
+## Processor-plugin data flow
+
+Plugins **never** have direct access to the Waldur API client. Instead,
+the core processor pre-resolves any Waldur data the plugin might need and
+passes it via `user_context`. Plugins return metadata to Waldur by setting
+`resource.backend_metadata`.
+
+### Pre-resolved data in `user_context`
+
+The processor enriches the `user_context` dict before calling backend
+methods. Plugins read from it without making API calls:
+
+| Key | Type | Contents |
+|---|---|---|
+| `team` | `list[dict]` | Team members with usernames |
+| `offering_users` | `list[dict]` | Offering users |
+| `ssh_keys` | `dict[str, str]` | Mapping of SSH key UUID → public key text |
+| `plan_quotas` | `dict[str, int]` | Plan component quotas (component key → value) |
+
+### Returning metadata via `backend_metadata`
+
+To push metadata back to Waldur (e.g., access credentials, connection
+endpoints), set `resource.backend_metadata` in `post_create_resource`:
+
+```python
+def post_create_resource(self, resource, waldur_resource, user_context=None):
+    # ... create credentials, gather endpoints ...
+    resource.backend_metadata = {
+        "username": "admin",
+        "password": generated_password,
+        "endpoint": "https://service.example.com",
+    }
+    # The processor pushes this to Waldur automatically
+```
+
+### Data flow
+
+```mermaid
+sequenceDiagram
+    participant P as Processor
+    participant B as YourBackend
+    participant W as Waldur API
+    participant E as External System
+
+    P->>P: Fetch service provider
+    P->>B: Set service_provider_uuid
+
+    Note over P,B: Resource creation order arrives
+
+    P->>W: Resolve SSH keys, plan quotas
+    W-->>P: Pre-resolved data
+    P->>B: _pre_create_resource(resource, user_context)
+    B->>B: Read ssh_keys, plan_quotas from user_context
+    B->>E: Create resource with resolved data
+    E-->>B: Resource created
+
+    P->>B: post_create_resource(resource, waldur_resource, user_context)
+    B->>B: Set resource.backend_metadata
+    B-->>P: Return
+    P->>W: Push backend_metadata to Waldur
+```
+
+### Example: resolving an SSH key UUID from `user_context`
+
+When a resource attribute contains a UUID reference (e.g., an SSH key UUID
+from the order form), look it up in the pre-resolved `ssh_keys` dict:
+
+```python
+from uuid import UUID
+
+class MyBackend(BaseBackend):
+    @staticmethod
+    def _resolve_ssh_key(key_value: str, ssh_keys: dict[str, str]) -> str:
+        """Resolve SSH key from pre-resolved context.
+
+        If key_value is a UUID, look it up. Otherwise treat as raw key text.
+        """
+        try:
+            key_uuid = UUID(key_value.strip())
+        except ValueError:
+            return key_value  # Raw public key text, use as-is
+
+        return ssh_keys.get(str(key_uuid), "") or ssh_keys.get(key_uuid.hex, "")
+
+    def _pre_create_resource(self, waldur_resource, user_context=None):
+        user_context = user_context or {}
+        ssh_keys = user_context.get("ssh_keys", {})
+        raw_key = waldur_resource.attributes.get("ssh_public_key", "")
+        resolved_key = self._resolve_ssh_key(raw_key, ssh_keys)
+        # Use resolved_key for resource setup ...
+```
+
+### Design principles
+
+- **Plugins must not import `waldur_api_client`** for runtime API calls.
+  All Waldur data should come via `user_context` or `BaseBackend` attributes.
+- **`service_provider_uuid`** is still set on `BaseBackend` by the processor
+  and can be read by plugins for constructing backend-side identifiers.
+- **Handle missing context gracefully** — `user_context` may be `None` or
+  missing keys in unit tests. Always default to `{}` or empty values.
+
 ## Common pitfalls
 
 ### 1. Unit factor direction
@@ -565,7 +674,8 @@ When implementing a new backend plugin with an LLM, follow these steps in order:
 - `waldur_site_agent/backend/backends.py` - Base classes with all abstract methods
 - `waldur_site_agent/backend/clients.py` - Base client class
 - `waldur_site_agent/backend/structures.py` - Data structures (`ClientResource`,
-  `Association`, `BackendResourceInfo` with `pending_order_id` for async orders)
+  `Association`, `BackendResourceInfo` with `pending_order_id` for async orders
+  and `backend_metadata` for returning data to Waldur)
 - `plugins/slurm/waldur_site_agent_slurm/backend.py` - Reference implementation
   (CLI-based)
 - `plugins/mup/waldur_site_agent_mup/backend.py` - Reference implementation

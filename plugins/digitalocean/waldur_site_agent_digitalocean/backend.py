@@ -78,7 +78,9 @@ class DigitalOceanBackend(backends.BaseBackend):
         return {}
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         del waldur_resource, user_context
 
@@ -174,7 +176,9 @@ class DigitalOceanBackend(backends.BaseBackend):
         return [ssh_key.id] if ssh_key is not None else []
 
     def create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> BackendResourceInfo:
         """Provision a droplet for the given Waldur resource."""
         del user_context
@@ -240,7 +244,11 @@ class DigitalOceanBackend(backends.BaseBackend):
         waldur_limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
         return BackendResourceInfo(backend_id=backend_id, limits=waldur_limits)
 
-    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:
+    def delete_resource(
+        self,
+        waldur_resource: WaldurResource,
+        **kwargs: str,
+    ) -> None:
         """Delete droplet corresponding to the Waldur resource."""
         del kwargs
         resource_backend_id = waldur_resource.backend_id

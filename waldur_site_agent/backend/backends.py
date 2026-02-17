@@ -31,6 +31,7 @@ class BaseBackend(ABC):
         self.backend_settings = backend_settings
         self.backend_components = backend_components
         self.client: BaseClient = UnknownClient()
+        self.service_provider_uuid: str | None = None
         self.timezone: str = ""
 
     @abstractmethod
@@ -342,7 +343,11 @@ class BaseBackend(ABC):
         """
         del waldur_resource
 
-    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:
+    def delete_resource(
+        self,
+        waldur_resource: WaldurResource,
+        **kwargs: str,
+    ) -> None:
         """Delete resource from the backend."""
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
@@ -372,6 +377,23 @@ class BaseBackend(ABC):
                 == 0
             ):
                 self._delete_resource_safely(project_backend_id)
+
+        self.post_delete_resource(waldur_resource)
+
+    def post_delete_resource(
+        self,
+        waldur_resource: WaldurResource,
+    ) -> None:
+        """Perform actions after resource deletion on the backend.
+
+        Called by ``delete_resource`` after the backend resource is removed.
+        Override to perform post-deletion tasks (e.g., deleting child offerings
+        linked to the deleted resource).
+
+        Args:
+            waldur_resource: Resource data from Waldur marketplace.
+        """
+        del waldur_resource
 
     def _delete_resource_safely(self, resource_backend_id: str) -> None:
         if self.client.get_resource(resource_backend_id):
@@ -409,7 +431,9 @@ class BaseBackend(ABC):
         return False  # Return False if resource isn't created
 
     def create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> structures.BackendResourceInfo:
         """Create resource on the backend.
 
@@ -425,11 +449,15 @@ class BaseBackend(ABC):
         resource_backend_id = self._get_resource_backend_id(waldur_resource.slug)
 
         # Create resource with generated ID
-        return self.create_resource_with_id(waldur_resource, resource_backend_id, user_context)
+        return self.create_resource_with_id(
+            waldur_resource, resource_backend_id, user_context
+        )
 
     @abstractmethod
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Perform actions prior to resource creation on the backend.
 
@@ -439,7 +467,8 @@ class BaseBackend(ABC):
 
         Args:
             waldur_resource: Resource data from Waldur marketplace.
-            user_context: Optional dict with team members and offering users.
+            user_context: Optional dict with team members, offering users,
+                and pre-resolved data (plan_quotas, ssh_keys).
 
         Raises:
             BackendError: If prerequisite setup fails (aborts resource creation).
@@ -491,7 +520,9 @@ class BaseBackend(ABC):
         )
 
         # Actions after resource creation
-        self.post_create_resource(backend_resource_info, waldur_resource, user_context)
+        self.post_create_resource(
+            backend_resource_info, waldur_resource, user_context
+        )
         return backend_resource_info
 
     def _setup_resource_limits(
@@ -527,12 +558,16 @@ class BaseBackend(ABC):
         limits are set. Override to perform post-creation tasks (e.g., SLURM
         creates home directories for users proactively).
 
+        To push metadata back to Waldur, set ``resource.backend_metadata``
+        to a dict. The processor will push it via the Waldur API.
+
         Args:
             resource: The newly created backend resource info (includes backend_id, limits).
             waldur_resource: Original resource data from Waldur marketplace.
             user_context: Optional dict with team members and offering users.
         """
-        del resource, waldur_resource, user_context  # Not used in base implementation
+        # Not used in base implementation
+        del resource, waldur_resource, user_context
 
     def add_users_to_resource(
         self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
@@ -716,7 +751,9 @@ class UnknownBackend(BaseBackend):
         return []
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Placeholder."""
 
@@ -726,12 +763,18 @@ class UnknownBackend(BaseBackend):
         """Placeholder."""
         return {}
 
-    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:
+    def delete_resource(
+        self,
+        waldur_resource: WaldurResource,
+        **kwargs: str,
+    ) -> None:
         """Placeholder."""
         del kwargs, waldur_resource
 
     def create_resource(
-        self, _: dict, user_context: Optional[dict] = None
+        self,
+        _: dict,
+        user_context: Optional[dict] = None,
     ) -> structures.BackendResourceInfo:
         """Placeholder."""
         del user_context

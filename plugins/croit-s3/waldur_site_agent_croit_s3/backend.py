@@ -273,13 +273,18 @@ class CroitS3Backend(backends.BaseBackend):
             )
             raise
 
-    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:
+    def delete_resource(
+        self,
+        waldur_resource: WaldurResource,
+        **kwargs: str,
+    ) -> None:
         """Delete S3 user resource.
 
         Args:
             waldur_resource: Waldur resource object
             **kwargs: Additional arguments
         """
+        del kwargs
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id:
             logger.warning("No backend ID found for resource %s", waldur_resource.uuid)
@@ -576,7 +581,9 @@ class CroitS3Backend(backends.BaseBackend):
         return backend_limits, waldur_limits
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Perform actions prior to S3 user creation.
 

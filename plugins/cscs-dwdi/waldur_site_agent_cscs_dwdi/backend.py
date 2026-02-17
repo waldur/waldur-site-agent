@@ -438,7 +438,9 @@ class CSCSDWDIComputeBackend(BaseBackend):
         raise NotImplementedError(msg)
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Not implemented for reporting-only backend."""
         msg = "CSCS-DWDI backend is reporting-only and does not support resource creation"
@@ -774,7 +776,9 @@ class CSCSDWDIStorageBackend(BaseBackend):
         raise NotImplementedError(msg)
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Not implemented for reporting-only backend."""
         msg = "CSCS-DWDI storage backend is reporting-only and does not support resource creation"

@@ -93,7 +93,7 @@ def setup_order_respx_mocks(base_url: str, order_uuid: str, waldur_order: dict):
     ).respond(200, json=[order_copy])
     respx.get(f"{base_url}/api/marketplace-orders/{order_uuid}/").respond(200, json=order_copy)
     respx.post(f"{base_url}/api/marketplace-orders/{order_uuid}/approve_by_provider/").respond(
-        200, json={}
+        200, json={"detail": "Order approved."}
     )
     respx.post(f"{base_url}/api/marketplace-orders/{order_uuid}/set_state_done/").respond(
         200, json={}

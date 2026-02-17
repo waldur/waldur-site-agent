@@ -36,7 +36,9 @@ class SlurmBackend(backends.BaseBackend):
         self.client: SlurmClient = SlurmClient(slurm_tres)
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Override parent method to validate slug fields."""
         if not waldur_resource.customer_slug or not waldur_resource.project_slug:

@@ -157,7 +157,9 @@ class HarborBackend(backends.BaseBackend):
         return list(self.backend_components.keys())
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Prepare for resource creation by setting up OIDC group.
 
@@ -187,7 +189,9 @@ class HarborBackend(backends.BaseBackend):
             # Continue anyway - group might already exist
 
     def create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> structures.BackendResourceInfo:
         """Create Harbor project for Waldur resource.
 
@@ -249,13 +253,18 @@ class HarborBackend(backends.BaseBackend):
             limits={"storage": storage_quota_gb},
         )
 
-    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:
+    def delete_resource(
+        self,
+        waldur_resource: WaldurResource,
+        **kwargs: str,
+    ) -> None:
         """Delete Harbor project for Waldur resource.
 
         Args:
             waldur_resource: Waldur resource to delete
             **kwargs: Additional arguments (not used)
         """
+        del kwargs
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             logger.warning("Empty backend_id for resource, skipping deletion")

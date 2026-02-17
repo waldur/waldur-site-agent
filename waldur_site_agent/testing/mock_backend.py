@@ -78,7 +78,11 @@ class MockBackend(BaseBackend):
         self._created_resources[resource_backend_id] = resource_info
         return resource_info
 
-    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
+    def delete_resource(
+        self,
+        waldur_resource: WaldurResource,
+        **kwargs: str,  # noqa: ARG002
+    ) -> None:
         """Delete a mock resource."""
         backend_id = waldur_resource.backend_id
         self._log_operation("delete_resource", backend_id=backend_id)
@@ -254,7 +258,9 @@ class MockBackend(BaseBackend):
         return result
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: dict[Any, Any] | None = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: dict[Any, Any] | None = None,
     ) -> None:
         """Pre-creation setup for mock resources."""
         self._log_operation(

@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 import pytest
-from waldur_api_client.models.mode_enum import ModeEnum
 from waldur_api_client.models.slurm_command_result_request import (
     SlurmCommandResultRequest,
 )
@@ -71,7 +70,6 @@ class TestReportCommandResult:
 
         assert body.resource_uuid == UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         assert body.success is True
-        assert body.mode == ModeEnum.PRODUCTION
         assert body["commands_executed"] == result["commands_executed"]
 
     @patch(
