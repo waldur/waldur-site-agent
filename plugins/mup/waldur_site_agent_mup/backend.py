@@ -494,7 +494,9 @@ class MUPBackend(backends.BaseBackend):
             )
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Create and activate MUP project."""
         # Get project information

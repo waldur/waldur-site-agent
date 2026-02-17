@@ -44,6 +44,9 @@ from waldur_api_client.api.marketplace_orders import (
     marketplace_orders_set_state_done,
     marketplace_orders_set_state_erred,
 )
+from waldur_api_client.api.marketplace_plans import (
+    marketplace_plans_retrieve,
+)
 from waldur_api_client.api.marketplace_provider_offerings import (
     marketplace_provider_offerings_check_unique_backend_id,
     marketplace_provider_offerings_retrieve,
@@ -60,6 +63,7 @@ from waldur_api_client.api.marketplace_provider_resources import (
 )
 from waldur_api_client.api.marketplace_service_providers import (
     marketplace_service_providers_course_accounts_list,
+    marketplace_service_providers_keys_list,
     marketplace_service_providers_list,
     marketplace_service_providers_project_service_accounts_list,
 )
@@ -97,6 +101,9 @@ from waldur_api_client.models.marketplace_provider_resources_list_state_item imp
 from waldur_api_client.models.offering_component import OfferingComponent
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.offering_user_state import OfferingUserState
+from waldur_api_client.models.order_approve_by_provider_request import (
+    OrderApproveByProviderRequest,
+)
 from waldur_api_client.models.order_backend_id_request import OrderBackendIDRequest
 from waldur_api_client.models.order_details import (
     OrderDetails,
@@ -221,6 +228,7 @@ class OfferingBaseProcessor(abc.ABC):
         )
 
         self.service_provider = service_providers[0]
+        self.resource_backend.service_provider_uuid = self.service_provider.uuid.hex
 
     def _print_current_user(self) -> None:
         """Log information about the current authenticated Waldur user."""
@@ -270,7 +278,9 @@ class OfferingBaseProcessor(abc.ABC):
             return True  # Continue with creation if check fails
 
     def _create_resource_with_uniqueness_check(
-        self, waldur_resource: WaldurResource, user_context: dict
+        self,
+        waldur_resource: WaldurResource,
+        user_context: dict,
     ) -> BackendResourceInfo:
         """Create resource with uniqueness checking and retry logic.
 
@@ -464,6 +474,31 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             e,
         )
 
+    def _fetch_service_provider_ssh_keys(self) -> dict[str, str]:
+        """Fetch all SSH keys for the service provider.
+
+        Returns a mapping of key UUID (hex string) to public key text.
+        Backends can use this to resolve SSH key UUID references from
+        resource attributes without needing direct Waldur API access.
+        """
+        if self.service_provider is None:
+            return {}
+        try:
+            keys = marketplace_service_providers_keys_list.sync(
+                service_provider_uuid=self.service_provider.uuid.hex,
+                client=self.waldur_rest_client,
+            )
+            if not keys:
+                return {}
+            return {
+                str(getattr(key, "uuid", "")): getattr(key, "public_key", "")
+                for key in keys
+                if getattr(key, "uuid", None) and getattr(key, "public_key", None)
+            }
+        except Exception as e:
+            logger.warning("Failed to fetch service provider SSH keys: %s", e)
+            return {}
+
     def process_offering(self) -> None:
         """Process all pending and executing orders for this offering.
 
@@ -576,7 +611,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             elif order.state == OrderState.PENDING_PROVIDER:
                 logger.info("Approving the order")
                 marketplace_orders_approve_by_provider.sync_detailed(
-                    client=self.waldur_rest_client, uuid=order.uuid.hex
+                    client=self.waldur_rest_client,
+                    uuid=order.uuid.hex,
+                    body=OrderApproveByProviderRequest(),
                 )
                 logger.info("Refreshing the order")
                 order = marketplace_orders_retrieve.sync(
@@ -652,6 +689,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     ) -> BackendResourceInfo | None:
         """Create a new resource in the backend system.
 
+        Enriches user_context with pre-resolved data (plan quotas, SSH keys)
+        before delegating to the backend. After creation, pushes backend_metadata
+        and resource limits to Waldur.
+
         Args:
             waldur_resource: Waldur resource information
             user_context: User context containing team and offering user data
@@ -663,6 +704,13 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             BackendError: If resource creation fails
         """
         logger.info("Creating resource %s", waldur_resource.name)
+
+        # Enrich user_context with pre-resolved data for backends
+        plan_uuid = getattr(waldur_resource, "plan_uuid", None)
+        user_context["plan_quotas"] = self._resolve_plan_limits(
+            plan_uuid, waldur_resource.name
+        )
+        user_context["ssh_keys"] = self._fetch_service_provider_ssh_keys()
 
         # Use the provided user context for resource creation
         backend_resource_info = self._create_resource_with_uniqueness_check(
@@ -687,6 +735,20 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 client=self.waldur_rest_client,
             )
             logger.info("Resource limits are set to %s", backend_resource_info.limits)
+
+        # Push backend metadata if the backend provided any
+        if backend_resource_info.backend_metadata:
+            try:
+                marketplace_provider_resources_set_backend_metadata.sync(
+                    uuid=waldur_resource.uuid.hex,
+                    client=self.waldur_rest_client,
+                    body=ResourceBackendMetadataRequest(
+                        backend_metadata=backend_resource_info.backend_metadata
+                    ),
+                )
+                logger.info("Pushed backend metadata to Waldur resource")
+            except Exception as e:
+                logger.warning("Failed to push backend metadata to Waldur: %s", e)
 
         return backend_resource_info
 
@@ -862,7 +924,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         backend_resource_info = None
         if create_resource:
-            backend_resource_info = self._create_resource(waldur_resource, user_context)
+            backend_resource_info = self._create_resource(
+                waldur_resource, user_context
+            )
             if backend_resource_info is None:
                 msg = f"Unable to create the resource {waldur_resource.name}"
                 raise backend_exceptions.BackendError(msg)
@@ -912,8 +976,17 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         waldur_resource_backend_id = waldur_resource.backend_id
         new_limits = order.limits.to_dict() if order.limits else {}
         if not new_limits:
+            # For plan-based updates (FIXED components), the order carries
+            # a new plan but no explicit limits.  Resolve the plan's
+            # component quotas and use them as the new limits.
+            # Use the order's plan (the NEW plan), not the resource's
+            # current plan which hasn't been updated yet.
+            order_plan_uuid = getattr(order, "plan_uuid", None)
+            new_limits = self._resolve_plan_limits(order_plan_uuid, order.resource_name)
+        if not new_limits:
             logger.warning(
-                "Order %s (resource %s) with type" + "Update does not include new limits",
+                "Order %s (resource %s) with type Update does not include "
+                "new limits and has no resolvable plan quotas",
                 order.uuid,
                 waldur_resource.name,
             )
@@ -927,6 +1000,52 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 new_limits,
             )
         return True
+
+    def _resolve_plan_limits(
+        self, plan_uuid: object, resource_name: str = ""
+    ) -> dict[str, int]:
+        """Resolve resource limits from a plan's fixed-component quotas.
+
+        When an offering uses FIXED billing components, the plan's quotas
+        define the resource specification.  This method fetches those quotas
+        so they can be treated as the effective limits during an update.
+
+        Args:
+            plan_uuid: UUID of the plan to fetch quotas from.
+            resource_name: Resource name for log messages.
+
+        Returns:
+            Mapping of component type to quantity, or empty dict.
+        """
+        if not plan_uuid:
+            return {}
+        try:
+            plan = marketplace_plans_retrieve.sync(
+                uuid=str(plan_uuid), client=self.waldur_rest_client
+            )
+            if plan and hasattr(plan, "quotas") and plan.quotas:
+                raw = (
+                    plan.quotas.to_dict()
+                    if hasattr(plan.quotas, "to_dict")
+                    else plan.quotas
+                )
+                quotas = {k: int(v) for k, v in raw.items() if v}
+                if quotas:
+                    logger.info(
+                        "Resolved plan '%s' quotas as limits for %s: %s",
+                        getattr(plan, "name", plan_uuid),
+                        resource_name,
+                        quotas,
+                    )
+                return quotas
+        except Exception:
+            logger.warning(
+                "Failed to resolve plan quotas for %s (plan %s)",
+                resource_name,
+                plan_uuid,
+                exc_info=True,
+            )
+        return {}
 
     def _process_terminate_order(self, order: OrderDetails) -> bool:
         """Process a TERMINATE order to remove a resource.
@@ -947,7 +1066,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         )
         project_slug = order.project_slug
 
-        self.resource_backend.delete_resource(waldur_resource, project_slug=project_slug)
+        self.resource_backend.delete_resource(
+            waldur_resource,
+            project_slug=project_slug,
+        )
 
         logger.info("Allocation has been terminated successfully")
         return True

@@ -123,7 +123,9 @@ class MyCustomBackend(BaseBackend):
         return backend_limits, waldur_limits
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Perform actions before resource creation.
 

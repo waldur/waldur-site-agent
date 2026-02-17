@@ -104,7 +104,9 @@ class OkdBackend(backends.BaseBackend):
         return f"{self.namespace_prefix}{self.allocation_prefix}{allocation_slug}"
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> None:
         """Validate and prepare for resource creation."""
         if not waldur_resource.customer_slug or not waldur_resource.project_slug:
@@ -159,7 +161,9 @@ class OkdBackend(backends.BaseBackend):
             raise
 
     def create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self,
+        waldur_resource: WaldurResource,
+        user_context: Optional[dict] = None,
     ) -> BackendResourceInfo:
         """Create OKD project for the Waldur resource."""
         self._pre_create_resource(waldur_resource, user_context)
@@ -195,8 +199,13 @@ class OkdBackend(backends.BaseBackend):
             limits=waldur_limits,
         )
 
-    def delete_resource(self, waldur_resource: WaldurResource, **kwargs: str) -> None:  # noqa: ARG002
+    def delete_resource(
+        self,
+        waldur_resource: WaldurResource,
+        **kwargs: str,
+    ) -> None:
         """Delete OKD project associated with the resource."""
+        del kwargs
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id or not resource_backend_id.strip():
             logger.warning(f"Resource {waldur_resource.uuid} has no backend_id, skipping deletion")

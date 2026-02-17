@@ -133,7 +133,7 @@ class BaseMUPOrderTest(unittest.TestCase):
         if order_data.get("state") == "pending-provider":
             respx.post(
                 f"{BASE_URL}/api/marketplace-orders/{order_uuid}/approve_by_provider/"
-            ).respond(200, json={})
+            ).respond(200, json={"detail": "Order approved."})
 
     def _setup_resource_mocks(self, marketplace_resource_uuid, resource_data) -> None:
         """Setup resource-specific mocks."""

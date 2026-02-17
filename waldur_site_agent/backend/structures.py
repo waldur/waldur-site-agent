@@ -32,3 +32,4 @@ class BackendResourceInfo:
     usage: dict = field(default_factory=dict)
     limits: dict = field(default_factory=dict)
     pending_order_id: str = ""
+    backend_metadata: dict = field(default_factory=dict)

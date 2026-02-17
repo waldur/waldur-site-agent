@@ -14,7 +14,6 @@ from waldur_api_client.api.marketplace_slurm_periodic_usage_policies import (
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import ObservableObjectTypeEnum, OrderState
 from waldur_api_client.models.agent_service import AgentService
-from waldur_api_client.models.mode_enum import ModeEnum
 from waldur_api_client.models.slurm_command_result_request import (
     SlurmCommandResultRequest,
 )
@@ -474,7 +473,6 @@ def _report_command_result_to_waldur(
             resource_uuid=UUID(resource_uuid_str),
             success=result.get("success", False),
             error_message=result.get("error", ""),
-            mode=ModeEnum.PRODUCTION,
         )
         body["commands_executed"] = result.get("commands_executed", [])
 
