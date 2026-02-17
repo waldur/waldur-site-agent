@@ -76,7 +76,7 @@ graph TB
     subgraph "External Systems"
         WALDUR[Waldur Mastermind<br/>REST API]
         BACKENDS[Cluster Backends<br/>CLI/API Systems]
-        MQTT[MQTT/STOMP Broker<br/>Event Processing]
+        STOMP[STOMP Broker<br/>Event Processing]
     end
 
     %% Agent mode usage of plugins
@@ -90,7 +90,7 @@ graph TB
     REPORT <--> WALDUR
     SYNC <--> WALDUR
     EVENT <--> WALDUR
-    EVENT <--> MQTT
+    EVENT <--> STOMP
     PLUGINS <--> BACKENDS
 
     %% Styling - Dark mode compatible colors
@@ -100,7 +100,7 @@ graph TB
 
     class ORDER,REPORT,SYNC,EVENT agent
     class PLUGINS plugin
-    class WALDUR,BACKENDS,MQTT external
+    class WALDUR,BACKENDS,STOMP external
 ```
 
 ## Key plugin features

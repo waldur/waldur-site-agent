@@ -113,7 +113,7 @@ secret:
           waldur_api_url: "https://my-waldur.example.com/api/"
           waldur_api_token: "your-api-token-here"
           waldur_offering_uuid: "your-offering-uuid"
-          mqtt_enabled: true
+          stomp_enabled: true
           backend_type: "slurm"
           backend_settings:
             default_account: "root"
@@ -157,7 +157,7 @@ secret:
           waldur_api_url: "https://my-waldur.example.com/api/"
           waldur_api_token: "your-api-token-here"
           waldur_offering_uuid: "your-offering-uuid"
-          mqtt_enabled: false
+          stomp_enabled: false
           backend_type: "slurm"
           # ... backend configuration
 ```
@@ -193,7 +193,7 @@ The Waldur Site Agent is designed to run as **4 separate deployments**, each han
 - **`order-process`**: Polls for orders from Waldur and manages backend resources
 - **`report`**: Reports usage data from backend to Waldur on schedule
 - **`membership-sync`**: Synchronizes user memberships between Waldur and backend
-- **`event-process`**: Event-based processing using MQTT/STOMP (alternative to order-process + membership-sync)
+- **`event-process`**: Event-based processing using STOMP (alternative to order-process + membership-sync)
 
 ### Valid Deployment Combinations
 

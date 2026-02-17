@@ -106,12 +106,6 @@ username_management_backend: "base"  # Backend for username management
 
 ### Event Processing
 
-#### `mqtt_enabled`
-
-- **Type**: Boolean
-- **Default**: `false`
-- **Description**: Enable MQTT-based event processing
-
 #### `stomp_enabled`
 
 - **Type**: Boolean
@@ -123,8 +117,6 @@ username_management_backend: "base"  # Backend for username management
 - **Type**: Boolean
 - **Default**: `true`
 - **Description**: Use TLS for websocket connections
-
-**Important**: Only one of `mqtt_enabled` or `stomp_enabled` can be `true`.
 
 ### Resource Management
 
@@ -289,7 +281,6 @@ offerings:
     username_management_backend: "base"
 
     resource_import_enabled: true
-    mqtt_enabled: false
     stomp_enabled: false
 
     backend_settings:
@@ -349,7 +340,7 @@ offerings:
   - name: "Event-Driven SLURM"
     # ... basic settings ...
 
-    mqtt_enabled: true
+    stomp_enabled: true
     websocket_use_tls: true
 
     order_processing_backend: "slurm"

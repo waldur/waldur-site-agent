@@ -50,7 +50,7 @@
    - membership-sync: Syncs memberships between Waldur and backend
 {{- end }}
 {{- if .Values.agents.eventProcess.enabled }}
-   - event-process: Listens to MQTT/STOMP events continuously
+   - event-process: Listens to STOMP events continuously
 {{- end }}
 
 {{- if and .Values.secret.create (not .Values.secret.data) }}

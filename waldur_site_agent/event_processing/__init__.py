@@ -1,1 +1,1 @@
-"""Event-processing module for MQTT and STOMP integration."""
+"""Event-processing module for STOMP integration."""
