@@ -480,8 +480,7 @@ sudo ufw status
 # If UFW is active, allow outbound HTTPS (usually allowed by default)
 sudo ufw allow out 443/tcp
 
-# For custom ports or MQTT/STOMP, add specific rules:
-# sudo ufw allow out 8883/tcp  # MQTT over TLS
+# For custom ports or STOMP, add specific rules:
 # sudo ufw allow out 61613/tcp # STOMP
 ```
 

@@ -34,8 +34,7 @@ secret:
           membership_sync_backend: "slurm"
           reporting_backend: "slurm"
           resource_import_enabled: false
-          mqtt_enabled: true
-          stomp_enabled: false
+          stomp_enabled: true
           websocket_use_tls: true
           backend_type: "slurm"
           backend_settings:

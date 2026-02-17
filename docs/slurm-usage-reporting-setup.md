@@ -71,7 +71,6 @@ offerings:
     reporting_backend: "slurm"          # This is what matters for reporting
 
     # Event processing (not needed for usage reporting)
-    mqtt_enabled: false
     stomp_enabled: false
 
     backend_type: "slurm"

@@ -3,7 +3,6 @@
 import json
 from uuid import UUID
 
-import paho.mqtt.client as mqtt
 import stomp
 import stomp.utils
 from stomp.constants import HDR_DESTINATION
@@ -28,7 +27,6 @@ from waldur_site_agent.event_processing.structures import (
     OrderMessage,
     PeriodicLimitsMessage,
     ResourceMessage,
-    UserData,
     UserRoleMessage,
 )
 
@@ -59,152 +57,6 @@ def register_event_process_service(
         service_name,
         structures.AgentMode.EVENT_PROCESS.value,
     )
-
-
-def on_order_message_mqtt(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
-    """Order-processing handler for MQTT message event."""
-    del client
-    message_text = msg.payload.decode("utf-8")
-    message: OrderMessage = json.loads(message_text)
-    logger.info("Received message: %s on topic %s", message, msg.topic)
-    offering = userdata["offering"]
-    user_agent = userdata["user_agent"]
-
-    order_uuid = message["order_uuid"]
-    order_state = message.get("order_state", "")
-
-    # Skip done and erred orders to avoid duplicate processing
-    if order_state in [OrderState.DONE, OrderState.ERRED]:
-        logger.info("Skipping order %s with finished state %s", order_uuid, order_state)
-        return
-
-    try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
-        agent_service = register_event_process_service(
-            offering, waldur_rest_client, ObservableObjectTypeEnum.ORDER
-        )
-
-        # Create backend instance for dependency injection
-        resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
-            offering, "order_processing_backend"
-        )
-
-        processor = common_processors.OfferingOrderProcessor(
-            offering,
-            waldur_rest_client,
-            resource_backend=resource_backend,
-            resource_backend_version=resource_backend_version,
-        )
-        processor.register(agent_service)
-
-        order = processor.get_order_info(order_uuid)
-        if order is None:
-            logger.error("Failed to process order %s", order_uuid)
-            return
-        processor.process_order_with_retries(order)
-    except Exception as e:
-        logger.error("Failed to process order %s: %s", order_uuid, e)
-
-
-def on_user_role_message_mqtt(
-    client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage
-) -> None:
-    """Membership sync handler for MQTT message event."""
-    del client
-    message_text = msg.payload.decode("utf-8")
-    message: UserRoleMessage = json.loads(message_text)
-    logger.info("Received message: %s on topic %s", message, msg.topic)
-    offering = userdata["offering"]
-    user_agent = userdata["user_agent"]
-    user_uuid = message.get("user_uuid")
-    project_name = message["project_name"]
-    project_uuid = message["project_uuid"]
-
-    try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
-        agent_service = register_event_process_service(
-            offering, waldur_rest_client, ObservableObjectTypeEnum.USER_ROLE
-        )
-
-        # Create backend instance for dependency injection
-        resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
-            offering, "membership_sync_backend"
-        )
-
-        processor = common_processors.OfferingMembershipProcessor(
-            offering,
-            waldur_rest_client,
-            resource_backend=resource_backend,
-            resource_backend_version=resource_backend_version,
-        )
-        processor.register(agent_service)
-        if user_uuid:
-            user_username = message["user_username"]
-            role_granted = message["granted"]
-            if role_granted is not None:
-                logger.info(
-                    "Processing %s (%s) user role changed event in project %s, granted: %s",
-                    user_username,
-                    user_uuid,
-                    project_name,
-                    role_granted,
-                )
-                processor.process_user_role_changed(user_uuid, project_uuid, role_granted)
-        else:
-            logger.info(
-                "Processing full project all users sync event for project %s",
-                project_name,
-            )
-            processor.process_project_user_sync(project_uuid)
-    except Exception as e:
-        if user_uuid:
-            logger.error(
-                "Failed to process user %s (%s) role change in project %s (%s) (granted: %s): %s",
-                user_username,
-                user_uuid,
-                project_name,
-                project_uuid,
-                role_granted,
-                e,
-            )
-        else:
-            logger.error(
-                "Failed to process full project all users sync event for project %s: %s",
-                project_uuid,
-                e,
-            )
-
-
-def on_resource_message_mqtt(
-    client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage
-) -> None:
-    """Resource update handler for MQTT message event."""
-    del client
-    message_text = msg.payload.decode("utf-8")
-    message: ResourceMessage = json.loads(message_text)
-    logger.info("Received message: %s on topic %s", message, msg.topic)
-    offering = userdata["offering"]
-    user_agent = userdata["user_agent"]
-    resource_uuid = message["resource_uuid"]
-
-    try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
-
-        agent_service = register_event_process_service(
-            offering, waldur_rest_client, ObservableObjectTypeEnum.RESOURCE
-        )
-
-        processor = common_processors.OfferingMembershipProcessor(offering, waldur_rest_client)
-        processor.register(agent_service)
-        processor.process_resource_by_uuid(resource_uuid)
-    except Exception as e:
-        logger.error("Failed to process resource %s: %s", resource_uuid, e)
 
 
 def process_account_message(
@@ -244,23 +96,6 @@ def process_account_message(
             service_account_uuid,
             e,
         )
-
-
-def on_account_message_mqtt(client: mqtt.Client, userdata: UserData, msg: mqtt.MQTTMessage) -> None:
-    """Generic account handler for MQTT message event."""
-    del client
-    message_text = msg.payload.decode("utf-8")
-    message: AccountMessage = json.loads(message_text)
-    logger.info("Received message: %s on topic %s", message, msg.topic)
-    offering = userdata["offering"]
-    user_agent = userdata["user_agent"]
-    account_type_raw = msg.topic.split("/")[-1]
-    account_type = structures.AccountType.SERVICE_ACCOUNT
-    observable_object = ObservableObjectTypeEnum.SERVICE_ACCOUNT
-    if account_type_raw == structures.AccountType.COURSE_ACCOUNT.value:
-        account_type = structures.AccountType.COURSE_ACCOUNT
-        observable_object = ObservableObjectTypeEnum.COURSE_ACCOUNT
-    process_account_message(message, offering, account_type, observable_object, user_agent)
 
 
 def on_order_message_stomp(

@@ -353,7 +353,6 @@ offerings:
     backend_type: "mycustom"
 
     # Event processing (optional)
-    mqtt_enabled: false
     stomp_enabled: false
 
     # Backend-specific settings (passed to __init__ as backend_settings)

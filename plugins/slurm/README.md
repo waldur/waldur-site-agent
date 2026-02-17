@@ -20,7 +20,7 @@ including resource management, usage reporting, periodic limits, and historical 
 - **QoS Management**: Threshold-based Quality of Service adjustments
 - **Carryover Allocation**: Unused allocation carryover between billing periods
 - **Decay Calculations**: Configurable half-life decay for historical usage
-- **Event-Driven Updates**: Real-time periodic limits updates via STOMP/MQTT
+- **Event-Driven Updates**: Real-time periodic limits updates via STOMP
 
 ### Historical Usage Loading
 

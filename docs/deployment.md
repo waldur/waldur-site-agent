@@ -19,7 +19,7 @@ The agent can run in 4 different modes, deployed as separate systemd services:
 - agent-membership-sync
 - agent-report
 
-**Option 2: Event-based** (requires MQTT/STOMP)
+**Option 2: Event-based** (requires STOMP)
 
 - agent-event-process
 - agent-report
@@ -158,18 +158,6 @@ The default configuration file location is `/etc/waldur/waldur-site-agent-config
    ```
 
 ## Event-Based Processing Setup
-
-### MQTT Configuration
-
-For MQTT-based event processing, add to your offering configuration:
-
-```yaml
-offerings:
-  - name: "Your Offering"
-    # ... other settings ...
-    mqtt_enabled: true
-    websocket_use_tls: true
-```
 
 ### STOMP Configuration
 
@@ -379,6 +367,6 @@ offerings:
 For HA deployment:
 
 - Run agents on multiple nodes
-- Use external load balancer for MQTT/STOMP connections
+- Use external load balancer for STOMP connections
 - Implement cluster-level monitoring
 - Consider using configuration management tools (Ansible, Puppet, etc.)

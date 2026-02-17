@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-import paho.mqtt.client as mqtt
 import stomp
 from waldur_api_client.models.event_subscription import EventSubscription
 
@@ -24,30 +23,13 @@ class ObservableObject(TypedDict):
     object_uuid: str
 
 
-# A tuple containing MQTT client, subscription, and offering information.
-MqttConsumer = tuple[mqtt.Client, EventSubscription, common_structures.Offering]
-
-# A tuple of offering name and UUID used as a key for consumer mapping.
-MqttConsumerKey = tuple[str, str]
-
 # A tuple of offering name and UUID used as a key for connection mapping.
 StompConsumerKey = tuple[str, str]
 
 # A tuple containing STOMP connection, subscription, and offering information.
 StompConsumer = tuple[stomp.WSStompConnection, EventSubscription, common_structures.Offering]
 
-# A dictionary mapping consumer keys to lists of MQTT consumers.
-MqttConsumersMap = dict[MqttConsumerKey, list[MqttConsumer]]
 StompConsumersMap = dict[StompConsumerKey, list[StompConsumer]]
-
-
-class UserData(TypedDict):
-    """Represents user data for event handling and processing."""
-
-    event_subscription: EventSubscription
-    offering: common_structures.Offering
-    user_agent: str
-    topic_postfix: str
 
 
 class UserRoleMessage(TypedDict):

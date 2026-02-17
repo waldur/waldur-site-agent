@@ -70,7 +70,6 @@ class Offering(BaseModel):
         backend_type: Legacy backend type identifier (deprecated)
         backend_settings: Backend-specific configuration parameters
         backend_components: Component definitions for the offering
-        mqtt_enabled: Whether MQTT event processing is enabled
         websocket_use_tls: Whether to use TLS for websocket connections
         stomp_enabled: Whether STOMP event processing is enabled
         order_processing_backend: Backend name for order processing operations
@@ -94,7 +93,6 @@ class Offering(BaseModel):
     )
 
     # Event processing
-    mqtt_enabled: bool = Field(default=False, description="Enable MQTT event processing")
     websocket_use_tls: bool = Field(default=True, description="Use TLS for websocket connections")
     stomp_enabled: bool = Field(default=False, description="Enable STOMP event processing")
     stomp_ws_host: Optional[str] = Field(default=None, description="STOMP WebSocket host")
@@ -175,7 +173,7 @@ class AgentMode(Enum):
     - ORDER_PROCESS: Fetches orders from Waldur and creates/updates backend resources
     - REPORT: Collects usage data from backends and reports to Waldur
     - MEMBERSHIP_SYNC: Synchronizes user memberships between Waldur and backends
-    - EVENT_PROCESS: Handles event-based processing via MQTT/STOMP
+    - EVENT_PROCESS: Handles event-based processing via STOMP
     """
 
     ORDER_PROCESS = "order_process"
