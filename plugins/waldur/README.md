@@ -589,16 +589,18 @@ plugins/waldur/
 │   ├── client.py                          # WaldurClient(BaseClient)
 │   ├── component_mapping.py               # ComponentMapper (forward + reverse)
 │   ├── schemas.py                         # Pydantic validation schemas
-│   └── target_event_handler.py            # STOMP handler for Waldur B ORDER events
+│   ├── target_event_handler.py            # STOMP handler for Waldur B ORDER events
+│   └── username_backend.py               # Identity bridge username management backend
 └── tests/
     ├── __init__.py
     ├── conftest.py                        # Shared test fixtures
     ├── integration_helpers.py             # Test setup helpers (WaldurTestSetup)
-    ├── test_backend.py                    # Backend unit tests (35 tests)
+    ├── test_backend.py                    # Backend unit tests (36 tests)
     ├── test_client.py                     # Client tests (20 tests)
     ├── test_component_mapping.py          # Mapper tests (22 tests)
     ├── test_integration.py                # Integration tests (56 tests)
     ├── test_target_event_handler.py       # Target event handler tests
+    ├── test_username_backend.py           # Identity bridge username backend tests (22 tests)
     └── e2e/                               # End-to-end tests against live instances
         ├── conftest.py                    # E2E fixtures, AutoApproveWaldurBackend, MessageCapture
         ├── test_e2e_federation.py         # REST polling lifecycle tests (Tests 1-4)
@@ -608,7 +610,7 @@ plugins/waldur/
 
 ### Entry Points
 
-The plugin registers three entry points for automatic discovery:
+The plugin registers four entry points for automatic discovery:
 
 ```toml
 [project.entry-points."waldur_site_agent.backends"]
@@ -619,6 +621,9 @@ waldur = "waldur_site_agent_waldur.schemas:WaldurComponentSchema"
 
 [project.entry-points."waldur_site_agent.backend_settings_schemas"]
 waldur = "waldur_site_agent_waldur.schemas:WaldurBackendSettingsSchema"
+
+[project.entry-points."waldur_site_agent.username_management_backends"]
+waldur-identity-bridge = "waldur_site_agent_waldur.username_backend:WaldurIdentityBridgeUsernameBackend"
 ```
 
 ## User Matching
@@ -637,6 +642,49 @@ When a user cannot be resolved on Waldur B:
 
 - **`warn`** (default): Log a warning and skip the user
 - **`fail`**: Raise a `BackendError` (caught per-user, does not abort the batch)
+
+## Identity Bridge Integration
+
+The plugin includes a username management backend (`waldur-identity-bridge`) that pushes
+user profiles from Waldur A to Waldur B via the Identity Bridge API before membership sync.
+This ensures users exist on Waldur B before the agent tries to resolve and add them to projects.
+
+### How It Works
+
+1. During membership sync, `sync_user_profiles()` is called before user resolution
+2. For each offering user on Waldur A, it sends `POST /api/identity-bridge/` to Waldur B
+3. Identity Bridge creates the user if they don't exist, or updates attributes if they do
+4. Users that disappear from the offering are deactivated via `POST /api/identity-bridge/remove/`
+
+### Identity Bridge Configuration
+
+```yaml
+offerings:
+  - name: "Federated HPC Access"
+    waldur_api_url: "https://waldur-a.example.com/api/"
+    waldur_api_token: "token-for-waldur-a"
+    waldur_offering_uuid: "offering-uuid-on-waldur-a"
+    username_management_backend: "waldur-identity-bridge"
+    backend_type: "waldur"
+    backend_settings:
+      target_api_url: "https://waldur-b.example.com/api/"
+      target_api_token: "service-account-token-for-waldur-b"
+      target_offering_uuid: "offering-uuid-on-waldur-b"
+      target_customer_uuid: "customer-uuid-on-waldur-b"
+      identity_bridge_source: "isd:efp"  # Required for identity bridge
+```
+
+### Identity Bridge Settings
+
+| Setting | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `identity_bridge_source` | Yes | `""` | ISD source identifier (e.g. `isd:efp`) |
+
+### User Attributes Synced
+
+The backend pushes all exposed offering user attributes to identity bridge, including:
+first name, last name, email, organization, affiliations, phone number, gender,
+birth date, nationality, and other profile fields configured via `OfferingUserAttributeConfig`.
 
 ## Project Mapping
 
@@ -693,7 +741,8 @@ WALDUR_E2E_PROJECT_A_UUID=<uuid> \
 |--------|-------|-------|
 | `test_component_mapping.py` | 22 | Forward/reverse conversion, passthrough, round-trip |
 | `test_client.py` | 20 | API operations with mocked `waldur_api_client` |
-| `test_backend.py` | 35 | Resource lifecycle, async orders, usage reporting, membership sync |
+| `test_backend.py` | 36 | Resource lifecycle, async orders, usage reporting, membership sync |
+| `test_username_backend.py` | 22 | Identity bridge username backend, attribute mapping, user sync |
 | `test_target_event_handler.py` | -- | STOMP ORDER event handling, source order state updates |
 | `test_integration.py` | 56 | Integration tests against real single Waldur instance |
 | `e2e/test_e2e_federation.py` | 4 | REST polling lifecycle (create, update, terminate) |

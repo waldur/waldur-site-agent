@@ -690,6 +690,18 @@ class BaseBackend(ABC):
                 return False
         return True
 
+    def update_user_attributes(self, username: str, attributes: dict) -> None:
+        """Forward user profile attribute updates to the backend.
+
+        Called when Waldur publishes an OFFERING_USER attribute_update event.
+        Override in backends that need to sync user attributes.
+
+        Args:
+            username: The username of the user whose attributes changed.
+            attributes: Dict of user profile attributes to forward.
+        """
+        del username, attributes
+
     def process_existing_users(self, existing_users: set[str]) -> None:
         """Process existing users on the backend.
 
@@ -836,6 +848,20 @@ class AbstractUsernameManagementBackend(ABC):
     users with links to forms, documentation, or other resources.
     """
 
+    def __init__(
+        self,
+        backend_settings: dict | None = None,
+        offering: Optional[Offering] = None,
+    ) -> None:
+        """Initialize the username management backend.
+
+        Args:
+            backend_settings: Backend-specific configuration dict.
+            offering: The offering configuration this backend is associated with.
+        """
+        self.backend_settings = backend_settings or {}
+        self.offering = offering
+
     @abstractmethod
     def generate_username(self, offering_user: OfferingUser) -> str:
         """Generate username based on offering user details."""
@@ -861,9 +887,29 @@ class AbstractUsernameManagementBackend(ABC):
         )
         return self.generate_username(offering_user)
 
+    def sync_user_profiles(self, offering_users: list[OfferingUser]) -> None:
+        """Push user profiles to external system before membership sync.
+
+        Override in backends that need to ensure users exist on a remote
+        system before membership synchronization runs. Default: no-op.
+        """
+        del offering_users
+
+    def deactivate_users(self, usernames: set[str]) -> None:
+        """Deactivate users no longer in the offering.
+
+        Override in backends that need to remove departed users from
+        external systems. Default: no-op.
+        """
+        del usernames
+
 
 class UnknownUsernameManagementBackend(AbstractUsernameManagementBackend):
     """Class for an unknown username management backend."""
+
+    def __init__(self, **kwargs: object) -> None:  # noqa: ARG002
+        """Initialize the unknown username management backend."""
+        super().__init__()
 
     def generate_username(self, offering_user: OfferingUser) -> str:
         """Generate username based on offering user details."""

@@ -81,3 +81,8 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
         description="UUID of an agent-based (Marketplace.Slurm) offering on Waldur B "
         "for STOMP agent identity registration. Falls back to target_offering_uuid.",
     )
+    identity_bridge_source: str = Field(
+        default="",
+        description="ISD source identifier for identity bridge (e.g. 'isd:efp'). "
+        "Required when username_management_backend is 'waldur-identity-bridge'.",
+    )

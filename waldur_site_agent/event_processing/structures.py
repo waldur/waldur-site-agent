@@ -102,3 +102,25 @@ class PeriodicLimitsMessage(TypedDict):
     action: str
     settings: dict
     timestamp: str
+
+
+class OfferingUserMessage(TypedDict):
+    """Represents a message for offering user events.
+
+    Attributes:
+        offering_user_uuid (str): UUID of the offering user
+        user_uuid (str): UUID of the user
+        username (str): Username of the user
+        action (str): Action type ("create", "update", "delete", "attribute_update")
+        offering_uuid (str): UUID of the offering
+        attributes (dict): Filtered user profile attributes
+        changed_attributes (list[str]): Fields that changed (attribute_update only)
+    """
+
+    offering_user_uuid: str
+    user_uuid: str
+    username: str
+    action: str
+    offering_uuid: str
+    attributes: dict
+    changed_attributes: list[str]

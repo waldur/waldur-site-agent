@@ -31,6 +31,7 @@ OBJECT_TYPE_TO_HANDLER_STOMP = {
     ObservableObjectTypeEnum.RESOURCE_PERIODIC_LIMITS: (
         handlers.on_resource_periodic_limits_update_stomp
     ),
+    ObservableObjectTypeEnum.OFFERING_USER: handlers.on_offering_user_message_stomp,
 }
 PID_FILE_PATH = "/var/run/waldur_site_agent.pid"
 

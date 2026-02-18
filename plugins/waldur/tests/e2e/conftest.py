@@ -194,9 +194,12 @@ class MessageCapture:
             message = json.loads(frame.body)
             with self._lock:
                 self._messages.append(message)
-                order_uuid = message.get("order_uuid", "")
-                if order_uuid in self._waiters:
-                    self._waiters[order_uuid].set()
+                # Signal any waiters whose key:value matches this message
+                for waiter_id, evt in list(self._waiters.items()):
+                    if ":" in waiter_id:
+                        k, v = waiter_id.split(":", 1)
+                        if str(message.get(k, "")) == v:
+                            evt.set()
             if delegate:
                 delegate(frame, offering, user_agent)
 
@@ -204,18 +207,36 @@ class MessageCapture:
 
     def wait_for_order_event(self, order_uuid: str, timeout: float = 60) -> dict | None:
         """Wait for an ORDER event matching the given UUID. Returns message or None."""
+        return self.wait_for_event("order_uuid", order_uuid, timeout)
+
+    def wait_for_event(
+        self, key: str, value: str, timeout: float = 60
+    ) -> dict | None:
+        """Wait for any event where message[key] == value. Returns message or None."""
+        waiter_id = f"{key}:{value}"
         with self._lock:
             for msg in self._messages:
-                if msg.get("order_uuid") == order_uuid:
+                if msg.get(key) == value:
                     return msg
             event = threading.Event()
-            self._waiters[order_uuid] = event
+            self._waiters[waiter_id] = event
 
         if event.wait(timeout=timeout):
             with self._lock:
                 for msg in reversed(self._messages):
-                    if msg.get("order_uuid") == order_uuid:
+                    if msg.get(key) == value:
                         return msg
+        return None
+
+    def wait_for_any(self, timeout: float = 30) -> dict | None:
+        """Wait for any message to arrive. Returns the latest or None on timeout."""
+        initial_count = len(self.messages)
+        deadline = __import__("time").time() + timeout
+        while __import__("time").time() < deadline:
+            msgs = self.messages
+            if len(msgs) > initial_count:
+                return msgs[-1]
+            __import__("time").sleep(0.5)
         return None
 
     @property
