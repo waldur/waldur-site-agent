@@ -196,6 +196,78 @@ but do not support:
 - User management
 - Limit setting
 
+## Historical Usage Loading
+
+The core `waldur_site_load_historical_usage` command can be used to bulk-load past usage data
+from DWDI into Waldur. This requires implementing `get_historical_usage_report()` on the
+backend, which queries the same DWDI API endpoints but for a specific historical month instead
+of the current one.
+
+### Cluster Filtering
+
+For compute backends, the normal reporting flow reads the cluster from each Waldur resource's
+`offering_backend_id`. The historical loader does not pass Waldur resources, so you can
+configure a cluster filter in `backend_settings`:
+
+```yaml
+backend_settings:
+  cscs_dwdi_cluster: "alps"   # optional: filter historical queries by cluster
+```
+
+When set, all historical compute queries will include `cluster=["alps"]` in the API request.
+If omitted, no cluster filter is applied.
+
+### How It Works
+
+The DWDI API already supports date-range queries (`from`/`to` parameters on
+`/compute/usage-month/account` and `exact-month` on `/storage/usage-month`). The historical
+loader calls `get_historical_usage_report(resource_backend_ids, year, month)` for each month in
+the requested range, then submits the returned usage to Waldur.
+
+### Running Historical Loads
+
+```bash
+# Load compute usage for all of 2024
+waldur_site_load_historical_usage \
+  --config /etc/waldur/cscs-dwdi-config.yaml \
+  --offering-uuid <compute-offering-uuid> \
+  --user-token <staff-or-provider-token> \
+  --start-date 2024-01-01 \
+  --end-date 2024-12-31 \
+  --no-staff-check
+
+# Load resource-level totals only (skip per-user breakdown)
+waldur_site_load_historical_usage \
+  --config /etc/waldur/cscs-dwdi-config.yaml \
+  --offering-uuid <compute-offering-uuid> \
+  --user-token <provider-token> \
+  --start-date 2024-06-01 \
+  --end-date 2024-09-30 \
+  --no-staff-check \
+  --skip-user-usage
+```
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--config` | Path to waldur-site-agent configuration file |
+| `--offering-uuid` | UUID of the Waldur offering to load data for |
+| `--user-token` | Waldur API token (staff or service provider) |
+| `--start-date` | Start date in YYYY-MM-DD format |
+| `--end-date` | End date in YYYY-MM-DD format |
+| `--no-staff-check` | Skip staff user validation (use with service provider tokens) |
+| `--skip-user-usage` | Only submit resource-level totals, skip per-user breakdown |
+
+### Notes
+
+- The `--no-staff-check` flag is useful when using a service provider token instead of a
+  staff token — the Waldur API enforces permissions server-side regardless
+- The `--skip-user-usage` flag skips the `marketplace_offering_users_list` API call and all
+  per-user usage submission, which can significantly speed up large loads
+- Resources must already exist in Waldur with valid `backend_id` values matching DWDI accounts
+- Maximum date range is 5 years
+
 ## Example Configurations
 
 See the `examples/` directory for complete configuration examples:

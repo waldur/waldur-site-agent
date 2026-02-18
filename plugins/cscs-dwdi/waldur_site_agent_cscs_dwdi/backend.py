@@ -1,7 +1,7 @@
 """CSCS-DWDI backend implementations for compute and storage usage reporting."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel
@@ -58,6 +58,9 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
         # Optional SOCKS proxy configuration
         self.socks_proxy = backend_settings.get("socks_proxy")
+
+        # Optional cluster filter for historical usage queries
+        self.cluster = backend_settings.get("cscs_dwdi_cluster")
 
         if not all([self.api_url, self.client_id, self.client_secret, self.oidc_token_url]):
             msg = (
@@ -176,6 +179,37 @@ class CSCSDWDIComputeBackend(BaseBackend):
         except Exception:
             logger.exception("Failed to get usage report from CSCS-DWDI")
             raise
+
+    def get_historical_usage_report(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Get historical usage report for a specific month.
+
+        Args:
+            resource_backend_ids: List of account identifiers
+            year: Year to query
+            month: Month to query
+
+        Returns:
+            Usage report in Waldur format for the specified month
+        """
+        if not resource_backend_ids:
+            return {}
+
+        from_date = date(year, month, 1)
+        to_date = from_date  # client formats as YYYY-MM, only month matters
+
+        clusters = [self.cluster] if self.cluster else None
+
+        response = self.cscs_client.get_usage_for_month(
+            accounts=resource_backend_ids,
+            from_date=from_date,
+            to_date=to_date,
+            clusters=clusters,
+        )
+
+        usage_report = self._process_api_response(response)
+        return {k: v for k, v in usage_report.items() if k in resource_backend_ids}  # type: ignore[misc]
 
     def _process_api_response(
         self, response: dict[str, Any]
@@ -559,25 +593,56 @@ class CSCSDWDIStorageBackend(BaseBackend):
             resource_backend_ids: List of resource identifiers (paths or mapped IDs)
 
         Returns:
+            Dictionary mapping resource IDs to usage data
+        """
+        if not resource_backend_ids:
+            logger.warning("No resource backend IDs provided for storage usage report")
+            return {}
+
+        today = datetime.now(tz=timezone.utc).date()
+        exact_month = today.strftime("%Y-%m")
+        return self._get_storage_usage_for_month(resource_backend_ids, exact_month)
+
+    def get_historical_usage_report(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Get historical storage usage report for a specific month.
+
+        Args:
+            resource_backend_ids: List of resource identifiers
+            year: Year to query
+            month: Month to query
+
+        Returns:
+            Usage report in Waldur format for the specified month
+        """
+        if not resource_backend_ids:
+            return {}
+
+        exact_month = f"{year:04d}-{month:02d}"
+        return self._get_storage_usage_for_month(resource_backend_ids, exact_month)  # type: ignore[return-value]
+
+    def _get_storage_usage_for_month(
+        self, resource_backend_ids: list[str], exact_month: str
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Query CSCS-DWDI storage API for a specific month and format results.
+
+        Args:
+            resource_backend_ids: List of resource identifiers (paths or mapped IDs)
+            exact_month: Month in YYYY-MM format
+
+        Returns:
             Dictionary mapping resource IDs to usage data:
             {
                 "resource1": {
                     "TOTAL_ACCOUNT_USAGE": {
-                        "storage_space": 1234.56,  # GB
+                        "storage_space": 1234.56,
                         "storage_inodes": 50000
                     }
                 },
                 ...
             }
         """
-        if not resource_backend_ids:
-            logger.warning("No resource backend IDs provided for storage usage report")
-            return {}
-
-        # Get current month for reporting
-        today = datetime.now(tz=timezone.utc).date()
-        exact_month = today.strftime("%Y-%m")
-
         logger.info(
             "Fetching storage usage report for %d resources for month %s",
             len(resource_backend_ids),

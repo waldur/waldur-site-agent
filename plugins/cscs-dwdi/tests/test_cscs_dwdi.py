@@ -2,7 +2,7 @@
 
 from datetime import date
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from waldur_site_agent_cscs_dwdi.backend import CSCSDWDIComputeBackend, CSCSDWDIStorageBackend
@@ -635,3 +635,161 @@ class TestCSCSDWDIComputeBackend:
         # No unit_factor_reporting set, so unit_factor=3 should be used
         assert result["account1"]["TOTAL_ACCOUNT_USAGE"]["nodeHours"] == 300.0
         assert result["account1"]["user1"]["nodeHours"] == 300.0
+
+    def test_get_historical_usage_report(self) -> None:
+        """Test historical usage report queries the correct month."""
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 1,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+
+        with patch.object(backend.cscs_client, "get_usage_for_month") as mock_get:
+            mock_get.return_value = {
+                "compute": [
+                    {
+                        "account": "acct1",
+                        "totalNodeHours": 500.0,
+                        "users": [{"username": "u1", "nodeHours": 500.0}],
+                    },
+                ]
+            }
+
+            result = backend.get_historical_usage_report(["acct1"], 2024, 1)
+
+            # Verify correct date params
+            mock_get.assert_called_once()
+            call_kwargs = mock_get.call_args.kwargs
+            assert call_kwargs["from_date"] == date(2024, 1, 1)
+            assert call_kwargs["to_date"] == date(2024, 1, 1)
+            assert call_kwargs["accounts"] == ["acct1"]
+            assert call_kwargs["clusters"] is None
+
+            # Verify output format
+            assert "acct1" in result
+            assert result["acct1"]["TOTAL_ACCOUNT_USAGE"]["nodeHours"] == 500.0
+            assert result["acct1"]["u1"]["nodeHours"] == 500.0
+
+    def test_get_historical_usage_report_with_cluster(self) -> None:
+        """Test historical usage report passes cluster filter from config."""
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+            "cscs_dwdi_cluster": "alps",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 1,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+
+        assert backend.cluster == "alps"
+
+        with patch.object(backend.cscs_client, "get_usage_for_month") as mock_get:
+            mock_get.return_value = {"compute": []}
+
+            backend.get_historical_usage_report(["acct1"], 2024, 6)
+
+            call_kwargs = mock_get.call_args.kwargs
+            assert call_kwargs["clusters"] == ["alps"]
+
+    def test_get_historical_usage_report_empty(self) -> None:
+        """Test historical usage report with empty input returns empty dict."""
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 1,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+
+        result = backend.get_historical_usage_report([], 2024, 1)
+
+        assert result == {}
+
+
+class TestCSCSDWDIStorageBackend:
+    """Tests for CSCS-DWDI storage backend historical usage."""
+
+    @staticmethod
+    def _make_storage_backend(
+        extra_settings: dict | None = None,
+    ) -> CSCSDWDIStorageBackend:
+        settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+            "storage_filesystem": "lustre",
+            "storage_data_type": "projects",
+        }
+        if extra_settings:
+            settings.update(extra_settings)
+        components = {
+            "storage_space": {
+                "measured_unit": "GB",
+                "unit_factor": 1_000_000_000,
+                "accounting_type": "usage",
+                "label": "Storage Space (GB)",
+            }
+        }
+        return CSCSDWDIStorageBackend(settings, components)
+
+    def test_get_historical_usage_report(self) -> None:
+        """Test historical storage usage report for a specific month."""
+        backend = self._make_storage_backend()
+
+        with patch.object(backend.cscs_client, "get_storage_usage_for_month") as mock_get:
+            mock_get.return_value = {
+                "storage": [
+                    {
+                        "path": "/store/projects/proj1",
+                        "spaceUsed": 5_000_000_000,
+                        "inodesUsed": 1000,
+                    }
+                ]
+            }
+
+            result = backend.get_historical_usage_report(
+                ["/store/projects/proj1"], 2024, 6
+            )
+
+            mock_get.assert_called_once()
+            call_kwargs = mock_get.call_args.kwargs
+            assert call_kwargs["exact_month"] == "2024-06"
+            assert call_kwargs["paths"] == ["/store/projects/proj1"]
+
+            assert "/store/projects/proj1" in result
+            assert result["/store/projects/proj1"]["TOTAL_ACCOUNT_USAGE"]["storage_space"] == 5.0
+
+    def test_get_historical_usage_report_empty(self) -> None:
+        """Test historical storage usage report with empty input."""
+        backend = self._make_storage_backend()
+
+        result = backend.get_historical_usage_report([], 2024, 6)
+
+        assert result == {}
