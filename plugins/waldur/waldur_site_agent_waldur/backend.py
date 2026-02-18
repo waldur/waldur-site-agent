@@ -491,7 +491,8 @@ class WaldurBackend(backends.BaseBackend):
         else:
             logger.error("Unknown user_match_field: %s", self.user_match_field)
 
-        self._user_uuid_cache[local_username] = remote_uuid
+        if remote_uuid is not None:
+            self._user_uuid_cache[local_username] = remote_uuid
 
         if remote_uuid is None:
             if self.user_not_found_action == "fail":

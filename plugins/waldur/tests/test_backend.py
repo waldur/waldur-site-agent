@@ -421,6 +421,25 @@ class TestUserSync:
         # resolve_user_by_cuid should only be called once due to caching
         assert mock_client.resolve_user_by_cuid.call_count == 1
 
+    def test_resolve_remote_user_does_not_cache_none(self, backend, mock_client):
+        """When user resolution fails, None should NOT be cached so retries work."""
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+
+        # First call: user not found
+        mock_client.resolve_user_by_cuid.return_value = None
+        result = backend._resolve_remote_user("unknown_user")
+        assert result is None
+
+        # Second call: user now exists (e.g., identity bridge created them)
+        mock_client.resolve_user_by_cuid.return_value = USER_UUID
+        result = backend._resolve_remote_user("unknown_user")
+        assert result == USER_UUID
+
+        # resolve_user_by_cuid should be called twice (None was not cached)
+        assert mock_client.resolve_user_by_cuid.call_count == 2
+
 
 class TestAttributePassthrough:
     """Tests for passthrough_attributes forwarding in create_resource_with_id."""

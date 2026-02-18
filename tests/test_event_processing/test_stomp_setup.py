@@ -39,6 +39,7 @@ class TestDetermineObjectTypes(unittest.TestCase):
             ObservableObjectTypeEnum.RESOURCE,
             ObservableObjectTypeEnum.SERVICE_ACCOUNT,
             ObservableObjectTypeEnum.COURSE_ACCOUNT,
+            ObservableObjectTypeEnum.OFFERING_USER,
             ObservableObjectTypeEnum.IMPORTABLE_RESOURCES,
             ObservableObjectTypeEnum.RESOURCE_PERIODIC_LIMITS,
         ]
@@ -77,6 +78,7 @@ class TestDetermineObjectTypes(unittest.TestCase):
             ObservableObjectTypeEnum.RESOURCE,
             ObservableObjectTypeEnum.SERVICE_ACCOUNT,
             ObservableObjectTypeEnum.COURSE_ACCOUNT,
+            ObservableObjectTypeEnum.OFFERING_USER,
         ]
         self.assertEqual(result, expected)
 

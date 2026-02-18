@@ -867,7 +867,10 @@ def get_username_management_backend(
         offering.name,
     )
 
-    return backend_class(), dist_version
+    return (
+        backend_class(backend_settings=offering.backend_settings, offering=offering),
+        dist_version,
+    )
 
 
 def update_offering_users(

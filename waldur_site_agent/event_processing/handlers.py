@@ -24,6 +24,7 @@ from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.event_processing.structures import (
     AccountMessage,
     BackendResourceRequestMessage,
+    OfferingUserMessage,
     OrderMessage,
     PeriodicLimitsMessage,
     ResourceMessage,
@@ -379,3 +380,95 @@ def on_resource_periodic_limits_update_stomp(
         logger.error("Failed to parse periodic limits STOMP message: %s", e)
     except Exception as e:
         logger.error("Error processing periodic limits update: %s", e)
+
+
+def on_offering_user_message_stomp(
+    frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
+) -> None:
+    """Offering user event handler for STOMP."""
+    message: OfferingUserMessage = json.loads(frame.body)
+    logger.info("Received offering user message: %s", message)
+    _process_offering_user_message(message, offering, user_agent)
+
+
+
+def _process_offering_user_message(
+    message: OfferingUserMessage,
+    offering: structures.Offering,
+    user_agent: str,
+) -> None:
+    """Process an OFFERING_USER event message."""
+    action = message.get("action", "")
+    offering_user_uuid = message.get("offering_user_uuid", "")
+    username = message.get("username", "")
+
+    try:
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
+        register_event_process_service(
+            offering, waldur_rest_client, ObservableObjectTypeEnum.OFFERING_USER
+        )
+
+        if action == "attribute_update":
+            attributes = message.get("attributes", {})
+            changed = message.get("changed_attributes", [])
+            logger.info(
+                "User %s attribute update: changed=%s",
+                username,
+                changed,
+            )
+            _forward_user_attributes_to_backend(offering, username, attributes, user_agent)
+        elif action == "create":
+            attributes = message.get("attributes", {})
+            logger.info(
+                "Offering user %s created with attributes: %s", username, list(attributes)
+            )
+            _forward_user_attributes_to_backend(offering, username, attributes, user_agent)
+        elif action in ("update", "delete"):
+            logger.info(
+                "Offering user %s action: %s (no attribute forwarding)", username, action
+            )
+        else:
+            logger.warning("Unknown offering user action: %s", action)
+    except Exception:
+        logger.exception(
+            "Failed to process offering user event %s for %s (%s)",
+            action,
+            username,
+            offering_user_uuid,
+        )
+
+
+def _forward_user_attributes_to_backend(
+    offering: structures.Offering,
+    username: str,
+    attributes: dict,
+    user_agent: str,  # noqa: ARG001
+) -> None:
+    """Forward user attributes to the membership sync backend if available."""
+    if not offering.membership_sync_backend:
+        logger.debug(
+            "No membership_sync_backend for offering %s, skipping attribute forward",
+            offering.name,
+        )
+        return
+
+    if not attributes:
+        logger.debug("No attributes to forward for user %s", username)
+        return
+
+    try:
+        backend, _ = common_utils.get_backend_for_offering(offering, "membership_sync_backend")
+        if hasattr(backend, "update_user_attributes"):
+            backend.update_user_attributes(username, attributes)
+            logger.info(
+                "Forwarded %d attributes for user %s to backend", len(attributes), username
+            )
+        else:
+            logger.debug(
+                "Backend %s does not support update_user_attributes",
+                type(backend).__name__,
+            )
+    except Exception:
+        logger.exception("Failed to forward attributes for user %s", username)

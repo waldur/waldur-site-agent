@@ -20,6 +20,9 @@ waldur-site-agent = { workspace = true }
 [project.entry-points."waldur_site_agent.backends"]
 waldur = "waldur_site_agent_waldur.backend:WaldurBackend"
 
+[project.entry-points."waldur_site_agent.username_management_backends"]
+waldur-identity-bridge = "waldur_site_agent_waldur.username_backend:WaldurIdentityBridgeUsernameBackend"
+
 [project.entry-points."waldur_site_agent.component_schemas"]
 waldur = "waldur_site_agent_waldur.schemas:WaldurComponentSchema"
 

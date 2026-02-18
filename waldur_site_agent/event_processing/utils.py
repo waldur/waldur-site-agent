@@ -53,6 +53,7 @@ def _determine_observable_object_types(
                 ObservableObjectTypeEnum.RESOURCE,
                 ObservableObjectTypeEnum.SERVICE_ACCOUNT,
                 ObservableObjectTypeEnum.COURSE_ACCOUNT,
+                ObservableObjectTypeEnum.OFFERING_USER,
             ]
         )
     else:
@@ -240,6 +241,7 @@ def setup_stomp_offering_subscriptions(
             )
 
     return stomp_connections
+
 
 
 def start_stomp_consumers(

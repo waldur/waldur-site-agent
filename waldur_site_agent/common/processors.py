@@ -124,7 +124,7 @@ from waldur_api_client.types import UNSET
 from waldur_site_agent.backend import BackendType, logger
 from waldur_site_agent.backend import exceptions as backend_exceptions
 from waldur_site_agent.backend import utils as backend_utils
-from waldur_site_agent.backend.backends import BaseBackend
+from waldur_site_agent.backend.backends import BaseBackend, UnknownUsernameManagementBackend
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import agent_identity_management, structures, utils
@@ -1331,6 +1331,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.error("Unable to refresh local offering users: %s", exc)
             return []
 
+    def _sync_user_profiles_to_backend(self, offering_users: list[OfferingUser]) -> None:
+        """Sync user profiles via the username management backend (if configured)."""
+        username_management_backend, _ = utils.get_username_management_backend(self.offering)
+        if isinstance(username_management_backend, UnknownUsernameManagementBackend):
+            return
+        username_management_backend.sync_user_profiles(offering_users)
+
     def process_project_user_sync(self, project_uuid: str) -> None:
         """Perform full user synchronization for all resources in a project.
 
@@ -1346,6 +1353,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         resource_report = self.resource_backend.pull_resources(resources)
         # Fetch offering users
         offering_users = self._refresh_local_offering_users()
+        self._sync_user_profiles_to_backend(offering_users)
 
         for waldur_resource, backend_resource_info in resource_report.values():
             try:
@@ -1589,6 +1597,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         """Sync status and membership data for the resource."""
         # Fetch offering users
         offering_users = self._refresh_local_offering_users()
+        self._sync_user_profiles_to_backend(offering_users)
 
         for waldur_resource, backend_resource_info in resource_report.values():
             try:
