@@ -113,6 +113,26 @@ class BaseBackend(ABC):
             Return an empty dict ``{}`` if usage reporting is not supported.
         """
 
+    def get_historical_usage_report(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Collect usage report for a specific historical month.
+
+        Override in backends that support historical usage queries.
+        Return structure identical to ``_get_usage_report()`` but for a specific month.
+
+        Args:
+            resource_backend_ids: List of backend resource identifiers to report on.
+            year: Year to query.
+            month: Month to query (1-12).
+
+        Returns:
+            Nested dict with same structure as ``_get_usage_report()``.
+            Default returns ``{}`` (unsupported).
+        """
+        del resource_backend_ids, year, month
+        return {}
+
     @abstractmethod
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale the resource, restricting its capabilities.
@@ -829,6 +849,13 @@ class UnknownBackend(BaseBackend):
         return None
 
     def _get_usage_report(self, _: list[str]) -> dict:
+        return {}
+
+    def get_historical_usage_report(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Placeholder."""
+        del resource_backend_ids, year, month
         return {}
 
 

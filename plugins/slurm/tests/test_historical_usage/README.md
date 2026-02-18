@@ -1,22 +1,21 @@
 # SLURM Historical Usage Tests
 
-This directory contains comprehensive tests for the SLURM historical usage functionality using the `slurm-emulator` package.
+This directory contains SLURM-specific tests for historical usage functionality using
+the `slurm-emulator` package. Backend-agnostic tests (loader command and backend utils)
+have been moved to the core test suite at `tests/test_historical_usage_loader.py` and
+`tests/test_backend_utils_historical.py`.
 
 ## Test Structure
 
-### Core Test Files
+### Test Files
 
-- **`conftest.py`** - Pytest fixtures and configuration for historical usage tests
+- **`conftest.py`** - Pytest fixtures and configuration (emulator setup, test data)
 
 - **`test_slurm_client_historical.py`** - Tests for `SlurmClient.get_historical_usage_report()`
 
 - **`test_slurm_backend_historical.py`** - Tests for `SlurmBackend.get_historical_usage_report()`
 
-- **`test_historical_usage_loader.py`** - Tests for the historical usage loading command
-
-- **`test_backend_utils_historical.py`** - Tests for backend utility functions
-
-- **`test_integration.py`** - End-to-end integration tests
+- **`test_integration.py`** - End-to-end integration tests with SLURM emulator
 
 - **`README.md`** - This documentation file
 
