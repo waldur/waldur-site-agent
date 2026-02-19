@@ -4,7 +4,7 @@ import pprint
 from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
-from waldur_site_agent_rancher.keycloak_client import KeycloakClient
+from waldur_site_agent_keycloak_client import KeycloakClient
 from waldur_site_agent_rancher.rancher_client import RancherClient
 
 from waldur_site_agent.backend import backends, logger
