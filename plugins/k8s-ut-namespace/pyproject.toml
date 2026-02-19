@@ -1,14 +1,13 @@
 [project]
-name = "waldur-site-agent-rancher"
+name = "waldur-site-agent-k8s-ut-namespace"
 version = "0.7.0"
-description = "Rancher plugin for Waldur Site Agent"
-readme = "README.md"
+description = "Kubernetes UT ManagedNamespace plugin for Waldur Site Agent"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
     "waldur-site-agent>=0.7.0",
     "waldur-site-agent-keycloak-client>=0.7.0",
-    "requests>=2.31.0",
+    "kubernetes>=28.0.0,<32.0.0",
 ]
 
 [build-system]
@@ -21,7 +20,7 @@ waldur-site-agent-keycloak-client = { workspace = true }
 
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]
-rancher = "waldur_site_agent_rancher.backend:RancherBackend"
+k8s-ut-namespace = "waldur_site_agent_k8s_ut_namespace.backend:K8sUtNamespaceBackend"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

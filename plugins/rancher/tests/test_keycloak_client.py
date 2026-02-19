@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from keycloak.exceptions import KeycloakError
 
-from waldur_site_agent_rancher.keycloak_client import KeycloakClient
+from waldur_site_agent_keycloak_client import KeycloakClient
 from waldur_site_agent.backend.exceptions import BackendError
 
 
@@ -24,8 +24,8 @@ def keycloak_settings():
 class TestKeycloakClient:
     """Test cases for KeycloakClient."""
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_initialization(self, mock_connection, mock_admin, keycloak_settings):
         """Test client initialization."""
         mock_admin_instance = MagicMock()
@@ -43,8 +43,8 @@ class TestKeycloakClient:
         mock_connection.assert_called_once()
         mock_admin.assert_called_once()
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_initialization_failure(self, mock_connection, mock_admin, keycloak_settings):
         """Test initialization failure handling."""
         mock_connection.side_effect = Exception("Connection failed")
@@ -52,8 +52,8 @@ class TestKeycloakClient:
         with pytest.raises(BackendError, match="Failed to initialize Keycloak client"):
             KeycloakClient(keycloak_settings)
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_ping_success(self, mock_connection, mock_admin, keycloak_settings):
         """Test successful ping operation."""
         mock_admin_instance = MagicMock()
@@ -65,8 +65,8 @@ class TestKeycloakClient:
         assert client.ping() is True
         mock_admin_instance.get_realm.assert_called_once_with("test")
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_ping_failure(self, mock_connection, mock_admin, keycloak_settings):
         """Test ping failure."""
         mock_admin_instance = MagicMock()
@@ -77,8 +77,8 @@ class TestKeycloakClient:
 
         assert client.ping() is False
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_find_user_by_username(self, mock_connection, mock_admin, keycloak_settings):
         """Test finding user by username."""
         mock_admin_instance = MagicMock()
@@ -98,8 +98,8 @@ class TestKeycloakClient:
             {"username": "testuser", "exact": True}
         )
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_find_user_not_found(self, mock_connection, mock_admin, keycloak_settings):
         """Test finding user that doesn't exist."""
         mock_admin_instance = MagicMock()
@@ -111,8 +111,8 @@ class TestKeycloakClient:
 
         assert user is None
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_create_group(self, mock_connection, mock_admin, keycloak_settings):
         """Test group creation."""
         mock_admin_instance = MagicMock()
@@ -130,8 +130,8 @@ class TestKeycloakClient:
         assert call_args["attributes"]["description"] == ["Test group description"]
         assert call_args["attributes"]["managed_by"] == ["waldur-site-agent"]
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_create_subgroup(self, mock_connection, mock_admin, keycloak_settings):
         """Test subgroup creation."""
         mock_admin_instance = MagicMock()
@@ -147,8 +147,8 @@ class TestKeycloakClient:
         call_args = mock_admin_instance.create_group.call_args
         assert call_args[1]["parent"] == "parent-123"
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_get_group_by_name(self, mock_connection, mock_admin, keycloak_settings):
         """Test getting group by name."""
         mock_admin_instance = MagicMock()
@@ -178,8 +178,8 @@ class TestKeycloakClient:
         missing = client.get_group_by_name("missing-group")
         assert missing is None
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_delete_group(self, mock_connection, mock_admin, keycloak_settings):
         """Test group deletion."""
         mock_admin_instance = MagicMock()
@@ -190,8 +190,8 @@ class TestKeycloakClient:
 
         mock_admin_instance.delete_group.assert_called_once_with("group-123")
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_add_user_to_group(self, mock_connection, mock_admin, keycloak_settings):
         """Test adding user to group."""
         mock_admin_instance = MagicMock()
@@ -202,8 +202,8 @@ class TestKeycloakClient:
 
         mock_admin_instance.group_user_add.assert_called_once_with("user-123", "group-123")
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_remove_user_from_group(self, mock_connection, mock_admin, keycloak_settings):
         """Test removing user from group."""
         mock_admin_instance = MagicMock()
@@ -214,8 +214,8 @@ class TestKeycloakClient:
 
         mock_admin_instance.group_user_remove.assert_called_once_with("user-123", "group-123")
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_create_project_groups(self, mock_connection, mock_admin, keycloak_settings):
         """Test creating project group structure."""
         mock_admin_instance = MagicMock()
@@ -234,8 +234,8 @@ class TestKeycloakClient:
         # Check that both groups were created
         assert mock_admin_instance.create_group.call_count == 2
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_create_project_groups_existing(self, mock_connection, mock_admin, keycloak_settings):
         """Test creating project groups when they already exist."""
         mock_admin_instance = MagicMock()
@@ -266,8 +266,8 @@ class TestKeycloakClient:
             # Should not create new groups
             mock_admin_instance.create_group.assert_not_called()
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_delete_project_groups(self, mock_connection, mock_admin, keycloak_settings):
         """Test deleting project groups."""
         mock_admin_instance = MagicMock()
@@ -292,8 +292,8 @@ class TestKeycloakClient:
             mock_delete.assert_any_call("child-123")
             mock_delete.assert_any_call("parent-123")
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_ensure_project_group_exists(self, mock_connection, mock_admin, keycloak_settings):
         """Test ensuring project group exists."""
         mock_admin_instance = MagicMock()
@@ -320,8 +320,8 @@ class TestKeycloakClient:
             assert group_id == "child-123"
             mock_create.assert_called_once_with("test-project", "Test description")
 
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakAdmin")
-    @patch("waldur_site_agent_rancher.keycloak_client.KeycloakOpenIDConnection")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakAdmin")
+    @patch("waldur_site_agent_keycloak_client.keycloak_client.KeycloakOpenIDConnection")
     def test_error_handling(self, mock_connection, mock_admin, keycloak_settings):
         """Test error handling in various operations."""
         mock_admin_instance = MagicMock()

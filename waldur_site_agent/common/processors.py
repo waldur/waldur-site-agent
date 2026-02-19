@@ -1404,7 +1404,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         waldur_resource: WaldurResource,
         backend_resource_info: BackendResourceInfo,
         offering_users: list[OfferingUser],
-    ) -> tuple[set[str], set[str], set[str]]:
+    ) -> tuple[set[str], set[str], set[str], dict[str, str]]:
         logger.info("Fetching new, existing and stale resource users")
         usernames: list[str] = backend_resource_info.users
         local_usernames = set(usernames)
@@ -1432,6 +1432,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             ", ".join(str(u) for u in resource_usernames),
         )
 
+        # Build user_roles mapping (username -> Waldur role) for backends that need it
+        user_roles = {
+            user.offering_user_username: user.role
+            for user in team
+            if user.offering_user_username and user.role
+        }
+
         logger.info("Number of offering user usernames: %s", len(offering_user_usernames))
 
         existing_usernames: set[str] = resource_usernames & local_usernames
@@ -1449,7 +1456,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             "Resource stale usernames (%s): %s", len(stale_usernames), ", ".join(stale_usernames)
         )
 
-        return existing_usernames, stale_usernames, new_usernames
+        return existing_usernames, stale_usernames, new_usernames, user_roles
 
     def _sync_resource_users(
         self,
@@ -1463,8 +1470,10 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         """
         logger.info("Syncing user list for resource %s", waldur_resource.name)
 
-        existing_usernames, stale_usernames, new_usernames = self._group_resource_usernames(
-            waldur_resource, backend_resource_info, offering_users
+        existing_usernames, stale_usernames, new_usernames, user_roles = (
+            self._group_resource_usernames(
+                waldur_resource, backend_resource_info, offering_users
+            )
         )
 
         if waldur_resource.restrict_member_access:
@@ -1481,6 +1490,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             waldur_resource,
             new_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
+            user_roles=user_roles,
         )
 
         self.resource_backend.remove_users_from_resource(
