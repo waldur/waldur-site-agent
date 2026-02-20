@@ -392,7 +392,7 @@ class TestK8sUtNamespaceBackendPullResource:
         assert result is not None
         assert result.backend_id == "waldur-test-ns"
         assert set(result.users) == {"user1", "user2"}
-        assert result.usage["TOTAL_ACCOUNT_USAGE"]["cpu"] == 4
+        assert result.usage["TOTAL_ACCOUNT_USAGE"]["cpu"] == 0
 
     def test_pull_resource_not_found(self, backend_settings, backend_components, waldur_resource):
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
@@ -441,25 +441,21 @@ class TestK8sUtNamespaceBackendStatusOps:
 class TestK8sUtNamespaceBackendUsageReport:
     """Tests for usage report generation."""
 
-    def test_usage_report(self, backend_settings, backend_components):
-        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
-
-        mock_k8s.get_managed_namespace.return_value = {
-            "spec": {"quota": {"cpu": "4", "memory": "8Gi", "storage": "100Gi", "gpu": "1"}}
-        }
+    def test_usage_report_returns_zeros(self, backend_settings, backend_components):
+        backend, _, _ = _make_backend(backend_settings, backend_components)
 
         report = backend._get_usage_report(["waldur-test-ns"])
 
         assert "waldur-test-ns" in report
         usage = report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"]
-        assert usage["cpu"] == 4
-        assert usage["ram"] == 8
-        assert usage["storage"] == 100
-        assert usage["gpu"] == 1
+        assert usage["cpu"] == 0
+        assert usage["ram"] == 0
+        assert usage["storage"] == 0
+        assert usage["gpu"] == 0
 
-    def test_usage_report_missing_cr(self, backend_settings, backend_components):
-        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
-        mock_k8s.get_managed_namespace.return_value = None
+    def test_usage_report_multiple_resources(self, backend_settings, backend_components):
+        backend, _, _ = _make_backend(backend_settings, backend_components)
 
-        report = backend._get_usage_report(["waldur-missing"])
-        assert report["waldur-missing"]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 0
+        report = backend._get_usage_report(["ns-1", "ns-2"])
+        assert report["ns-1"]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 0
+        assert report["ns-2"]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 0

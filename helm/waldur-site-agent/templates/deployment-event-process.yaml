@@ -48,6 +48,8 @@ spec:
             - name: config
               mountPath: /etc/waldur-site-agent
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
           {{- if .Values.healthCheck.enabled }}
           livenessProbe:
             exec:
@@ -76,6 +78,8 @@ spec:
         - name: config
           secret:
             secretName: {{ include "waldur-site-agent.secretName" . }}
+        - name: tmp
+          emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
