@@ -62,6 +62,7 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
                     configuration.timezone,
                     resource_backend=resource_backend,
                     resource_backend_version=resource_backend_version,
+                    reporting_periods=configuration.reporting_periods,
                 )
                 processor.register(agent_service)
 

@@ -214,6 +214,12 @@ class WaldurAgentConfiguration(BaseModel):
         default="INFO",
         description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
+    reporting_periods: int = Field(
+        default=2,
+        ge=1,
+        le=12,
+        description="Number of billing periods to report (1=current, 2=current+previous)",
+    )
 
     # Runtime fields (set programmatically, not validated)
     waldur_site_agent_mode: str = ""
@@ -269,6 +275,12 @@ class RootConfiguration(BaseModel):
     log_level: str = Field(
         default="INFO",
         description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
+    reporting_periods: int = Field(
+        default=2,
+        ge=1,
+        le=12,
+        description="Number of billing periods to report (1=current, 2=current+previous)",
     )
 
     @field_validator("sentry_dsn")
@@ -334,6 +346,7 @@ class RootConfiguration(BaseModel):
             timezone=self.timezone,
             global_proxy=self.global_proxy,
             log_level=self.log_level,
+            reporting_periods=self.reporting_periods,
         )
 
 

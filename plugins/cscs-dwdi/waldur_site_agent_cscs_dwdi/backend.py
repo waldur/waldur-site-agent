@@ -1,7 +1,8 @@
 """CSCS-DWDI backend implementations for compute and storage usage reporting."""
 
+import calendar
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel
@@ -104,43 +105,27 @@ class CSCSDWDIComputeBackend(BaseBackend):
         """
         return self.cscs_client.ping()
 
-    def _get_usage_report(
-        self, resource_backend_ids: list[str], clusters: Optional[list[str]] = None
+    def _get_compute_usage_for_dates(
+        self,
+        resource_backend_ids: list[str],
+        from_date: date,
+        to_date: date,
+        clusters: Optional[list[str]] = None,
     ) -> dict[str, dict[str, dict[str, float]]]:
-        """Get usage report for specified resources.
-
-        This method queries the CSCS-DWDI API for the current month's usage
-        and formats it according to Waldur's expected structure.
+        """Shared helper to query compute usage for a date range.
 
         Args:
             resource_backend_ids: List of account identifiers to report on
+            from_date: Start date for the query
+            to_date: End date for the query
             clusters: Optional list of cluster names to filter by
 
         Returns:
-            Dictionary mapping account names to usage data:
-            {
-                "account1": {
-                    "TOTAL_ACCOUNT_USAGE": {
-                        "nodeHours": 1234.56
-                    },
-                    "user1": {
-                        "nodeHours": 500.00
-                    },
-                    "user2": {
-                        "nodeHours": 734.56
-                    }
-                },
-                ...
-            }
+            Formatted usage report dict.
         """
         if not resource_backend_ids:
             logger.warning("No resource backend IDs provided for usage report")
             return {}
-
-        # Get current month's date range
-        today = datetime.now(tz=timezone.utc).date()
-        from_date = today.replace(day=1)
-        to_date = today
 
         logger.info(
             "Fetching usage report for %d accounts from %s to %s",
@@ -150,16 +135,13 @@ class CSCSDWDIComputeBackend(BaseBackend):
         )
 
         try:
-            # Query CSCS-DWDI API for usage data
             response = self.cscs_client.get_usage_for_month(
                 accounts=resource_backend_ids,
                 from_date=from_date,
                 to_date=to_date,
                 clusters=clusters,
             )
-            # Process the response
             usage_report = self._process_api_response(response)
-            # Filter to only include requested accounts
             filtered_report = {
                 account: data
                 for account, data in usage_report.items()
@@ -176,6 +158,24 @@ class CSCSDWDIComputeBackend(BaseBackend):
         except Exception:
             logger.exception("Failed to get usage report from CSCS-DWDI")
             raise
+
+    def _get_usage_report(
+        self, resource_backend_ids: list[str], clusters: Optional[list[str]] = None
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Get usage report for the current month."""
+        today = datetime.now(tz=timezone.utc).date()
+        from_date = today.replace(day=1)
+        return self._get_compute_usage_for_dates(
+            resource_backend_ids, from_date, today, clusters=clusters
+        )
+
+    def get_usage_report_for_period(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Get usage report for a specific historical billing period."""
+        from_date = date(year, month, 1)
+        to_date = date(year, month, calendar.monthrange(year, month)[1])
+        return self._get_compute_usage_for_dates(resource_backend_ids, from_date, to_date)
 
     def _process_api_response(
         self, response: dict[str, Any]
@@ -547,36 +547,21 @@ class CSCSDWDIStorageBackend(BaseBackend):
         """
         return self.cscs_client.ping_storage()
 
-    def _get_usage_report(
-        self, resource_backend_ids: list[str]
+    def _get_storage_usage_for_month(
+        self, resource_backend_ids: list[str], exact_month: str
     ) -> dict[str, dict[str, dict[str, float]]]:
-        """Get storage usage report for specified resources.
-
-        This method queries the CSCS-DWDI storage API for the current month's usage
-        and formats it according to Waldur's expected structure.
+        """Shared helper to query storage usage for a specific month.
 
         Args:
             resource_backend_ids: List of resource identifiers (paths or mapped IDs)
+            exact_month: Month in "YYYY-MM" format
 
         Returns:
-            Dictionary mapping resource IDs to usage data:
-            {
-                "resource1": {
-                    "TOTAL_ACCOUNT_USAGE": {
-                        "storage_space": 1234.56,  # GB
-                        "storage_inodes": 50000
-                    }
-                },
-                ...
-            }
+            Formatted usage report dict.
         """
         if not resource_backend_ids:
             logger.warning("No resource backend IDs provided for storage usage report")
             return {}
-
-        # Get current month for reporting
-        today = datetime.now(tz=timezone.utc).date()
-        exact_month = today.strftime("%Y-%m")
 
         logger.info(
             "Fetching storage usage report for %d resources for month %s",
@@ -584,7 +569,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
             exact_month,
         )
 
-        usage_report = {}
+        usage_report: dict[str, dict[str, dict[str, float]]] = {}
 
         try:
             # Map resource IDs to storage paths
@@ -592,13 +577,11 @@ class CSCSDWDIStorageBackend(BaseBackend):
             id_to_path_map = {}
 
             for resource_id in resource_backend_ids:
-                # Check if we have a path mapping for this resource ID
                 if resource_id in self.path_mapping:
                     path = self.path_mapping[resource_id]
                     paths_to_query.append(path)
                     id_to_path_map[path] = resource_id
                 else:
-                    # Assume the resource_id is the path itself
                     paths_to_query.append(resource_id)
                     id_to_path_map[resource_id] = resource_id
 
@@ -606,7 +589,6 @@ class CSCSDWDIStorageBackend(BaseBackend):
                 logger.warning("No paths to query after mapping")
                 return {}
 
-            # Query CSCS-DWDI storage API
             response = self.cscs_client.get_storage_usage_for_month(
                 paths=paths_to_query,
                 filesystem=self.filesystem,
@@ -614,7 +596,6 @@ class CSCSDWDIStorageBackend(BaseBackend):
                 exact_month=exact_month,
             )
 
-            # Process the response
             storage_data = response.get("storage", [])
 
             for storage_entry in storage_data:
@@ -623,21 +604,17 @@ class CSCSDWDIStorageBackend(BaseBackend):
                     logger.warning("Storage entry missing path, skipping")
                     continue
 
-                # Map path back to resource ID
                 resource_id = id_to_path_map.get(path, path)
 
-                # Extract storage metrics
                 space_used_bytes = storage_entry.get("spaceUsed", 0)
                 inodes_used = storage_entry.get("inodesUsed", 0)
 
-                # Convert bytes to configured units (typically GB)
-                storage_usage = {}
+                storage_usage: dict[str, float] = {}
                 for component_name, component_config in self.backend_components.items():
                     if (
-                        "storage_space" in component_name.lower()
+                        component_name.lower() == "storage"
                         or "space" in component_name.lower()
                     ):
-                        # Apply unit factor for space (use reporting-specific factor if set)
                         unit_factor = component_config.get(
                             "unit_factor_reporting", component_config.get("unit_factor", 1)
                         )
@@ -645,7 +622,6 @@ class CSCSDWDIStorageBackend(BaseBackend):
                             space_used_bytes * (1.0 / unit_factor), 2
                         )
                     elif "storage_inodes" in component_name.lower() in component_name.lower():
-                        # Inodes (use reporting-specific factor if set)
                         unit_factor = component_config.get(
                             "unit_factor_reporting", component_config.get("unit_factor", 1)
                         )
@@ -663,6 +639,21 @@ class CSCSDWDIStorageBackend(BaseBackend):
         except Exception:
             logger.exception("Failed to get storage usage report from CSCS-DWDI")
             raise
+
+    def _get_usage_report(
+        self, resource_backend_ids: list[str]
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Get storage usage report for the current month."""
+        today = datetime.now(tz=timezone.utc).date()
+        exact_month = today.strftime("%Y-%m")
+        return self._get_storage_usage_for_month(resource_backend_ids, exact_month)
+
+    def get_usage_report_for_period(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Get storage usage report for a specific historical billing period."""
+        exact_month = f"{year:04d}-{month:02d}"
+        return self._get_storage_usage_for_month(resource_backend_ids, exact_month)
 
     def _pull_backend_resource(
         self, resource_backend_id: str

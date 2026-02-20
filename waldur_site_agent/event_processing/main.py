@@ -27,7 +27,7 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
                 )
                 time.sleep(30 * 60)
     except Exception as e:
-        logger.error("Error in main process: %s", e)
+        logger.exception("Error in main process: %s", e)
         if "stomp_consumers_map" in locals():
             utils.stop_stomp_consumers(stomp_consumers_map)
         sys.exit(1)

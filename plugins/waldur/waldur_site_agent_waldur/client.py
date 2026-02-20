@@ -7,6 +7,7 @@ the generated API functions.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import time
 from typing import Optional
@@ -462,30 +463,48 @@ class WaldurClient(BaseClient):
     def get_component_usages(
         self,
         resource_uuid: UUID,
+        billing_period: Optional[datetime.date] = None,
     ) -> list[ComponentUsage]:
-        """Get component usages for a resource on Waldur B."""
+        """Get component usages for a resource on Waldur B.
+
+        Args:
+            resource_uuid: Resource UUID on Waldur B.
+            billing_period: Optional billing period date to filter by.
+        """
         from waldur_api_client.api.marketplace_component_usages import (  # noqa: PLC0415
             marketplace_component_usages_list,
         )
+        from waldur_api_client.types import UNSET as _UNSET  # noqa: PLC0415
 
         return marketplace_component_usages_list.sync(
             client=self._api_client,
             resource_uuid=resource_uuid,
+            billing_period=billing_period if billing_period is not None else _UNSET,
         )
 
     def get_component_user_usages(
         self,
         resource_uuid: UUID,
+        billing_period: Optional[datetime.date] = None,
     ) -> list[ComponentUserUsage]:
-        """Get per-user component usages for a resource on Waldur B."""
+        """Get per-user component usages for a resource on Waldur B.
+
+        Args:
+            resource_uuid: Resource UUID on Waldur B.
+            billing_period: Optional billing period date to filter by.
+        """
         from waldur_api_client.api.marketplace_component_user_usages import (  # noqa: PLC0415
             marketplace_component_user_usages_list,
         )
 
-        return marketplace_component_user_usages_list.sync(
-            client=self._api_client,
-            resource_uuid=resource_uuid,
-        )
+        kwargs: dict = {
+            "client": self._api_client,
+            "resource_uuid": resource_uuid,
+        }
+        if billing_period is not None:
+            kwargs["component_usage_billing_period"] = billing_period
+
+        return marketplace_component_user_usages_list.sync(**kwargs)
 
     # --- BaseClient Abstract Method Implementations ---
 

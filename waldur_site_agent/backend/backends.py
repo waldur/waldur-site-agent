@@ -113,6 +113,30 @@ class BaseBackend(ABC):
             Return an empty dict ``{}`` if usage reporting is not supported.
         """
 
+    def get_usage_report_for_period(
+        self,
+        resource_backend_ids: list[str],  # noqa: ARG002
+        year: int,  # noqa: ARG002
+        month: int,  # noqa: ARG002
+    ) -> dict:
+        """Collect usage report for a specific historical billing period.
+
+        Override this method to enable multi-period usage reporting. By default,
+        returns an empty dict, meaning the backend does not support historical
+        usage queries. The processor will skip past periods for such backends.
+
+        Args:
+            resource_backend_ids: List of backend resource identifiers to report on.
+            year: Year of the billing period (e.g., 2024).
+            month: Month of the billing period (1-12).
+
+        Returns:
+            Same structure as ``_get_usage_report``: nested dict keyed by
+            resource backend ID with per-user and TOTAL_ACCOUNT_USAGE entries.
+            Return ``{}`` if historical reporting is not supported.
+        """
+        return {}
+
     @abstractmethod
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale the resource, restricting its capabilities.

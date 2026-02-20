@@ -6,6 +6,7 @@ pull usage back, and synchronize user memberships between instances.
 
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import Optional
 from uuid import UUID
@@ -403,13 +404,17 @@ class WaldurBackend(backends.BaseBackend):
         return report
 
     def _get_single_resource_usage(
-        self, resource_id: str
+        self,
+        resource_id: str,
+        billing_period: Optional[datetime.date] = None,
     ) -> dict[str, dict[str, float]]:
         """Get usage report for a single resource from Waldur B."""
         resource_uuid = UUID(resource_id)
 
         # Fetch total component usages
-        component_usages = self.client.get_component_usages(resource_uuid)
+        component_usages = self.client.get_component_usages(
+            resource_uuid, billing_period=billing_period
+        )
         target_total_usage: dict[str, float] = {}
         for usage in component_usages:
             comp_type = usage.type_ if not isinstance(usage.type_, type(UNSET)) else None
@@ -433,7 +438,9 @@ class WaldurBackend(backends.BaseBackend):
         }
 
         # Fetch per-user usages
-        user_usages = self.client.get_component_user_usages(resource_uuid)
+        user_usages = self.client.get_component_user_usages(
+            resource_uuid, billing_period=billing_period
+        )
 
         # Group user usages by username and component
         per_user_target: dict[str, dict[str, float]] = {}
@@ -468,6 +475,31 @@ class WaldurBackend(backends.BaseBackend):
             resource_report[username] = source_usage
 
         return resource_report
+
+    def get_usage_report_for_period(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Pull usage from Waldur B for a specific billing period."""
+        billing_period = datetime.date(year, month, 1)
+        report: dict[str, dict[str, dict[str, float]]] = {}
+
+        for resource_id in resource_backend_ids:
+            try:
+                resource_report = self._get_single_resource_usage(
+                    resource_id, billing_period=billing_period
+                )
+                report[resource_id] = resource_report
+            except Exception:
+                logger.exception(
+                    "Failed to get usage for resource %s (period %s-%s)",
+                    resource_id, year, month,
+                )
+                empty_usage: dict[str, float] = {
+                    comp: 0.0 for comp in self.backend_components
+                }
+                report[resource_id] = {"TOTAL_ACCOUNT_USAGE": empty_usage}
+
+        return report
 
     # --- User/Membership Sync ---
 
