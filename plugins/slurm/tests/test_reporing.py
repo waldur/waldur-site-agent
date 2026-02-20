@@ -119,6 +119,9 @@ class ReportingTest(unittest.TestCase):
             f"{self.BASE_URL}/api/marketplace-component-usages/",
             params={"resource_uuid": self.waldur_resource["uuid"], "billing_period": "2022-01-01"},
         ).respond(200, json=[])
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-user-usages/",
+        ).respond(200, json=[])
         set_usage_response = respx.post(
             f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
         ).respond(201, json={})
@@ -126,7 +129,7 @@ class ReportingTest(unittest.TestCase):
         componet_usage_uuid_mem = uuid.uuid4()
         respx.get(
             f"{self.BASE_URL}/api/marketplace-component-usages/",
-            params={"resource_uuid": self.waldur_resource["uuid"], "date_after": "2022-01-01"},
+            params={"resource_uuid": self.waldur_resource["uuid"], "billing_period": "2022-01-01"},
         ).respond(
             200,
             json=[
@@ -207,15 +210,13 @@ class ReportingTest(unittest.TestCase):
                 },
             ],
         )
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-user-usages/",
+        ).respond(200, json=[])
 
         set_usage_response = respx.post(
             f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
         ).respond(201, json={})
-
-        respx.get(
-            f"{self.BASE_URL}/api/marketplace-component-usages/",
-            params={"resource_uuid": self.waldur_resource["uuid"], "date_after": "2022-01-01"},
-        ).respond(200, json=[])
 
         respx.post(
             f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/set_as_erred/"

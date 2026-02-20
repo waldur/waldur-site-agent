@@ -360,6 +360,12 @@ class SlurmBackend(backends.BaseBackend):
 
         return report_converted
 
+    def get_usage_report_for_period(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Return usage report for a specific historical billing period."""
+        return self.get_historical_usage_report(resource_backend_ids, year, month)
+
     def get_historical_usage_report(
         self, resource_backend_ids: list[str], year: int, month: int
     ) -> dict[str, dict[str, dict[str, int]]]:

@@ -8,8 +8,7 @@ import types
 from collections.abc import Generator
 from contextlib import contextmanager
 
-import httpx
-from waldur_api_client import AuthenticatedClient, errors
+from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_orders import marketplace_orders_list
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 
@@ -111,7 +110,7 @@ def _register_agent_identity(
     try:
         identity = agent_identity_manager.register_identity(identity_name)
         return (identity, agent_identity_manager)
-    except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
+    except Exception as e:
         logger.exception("Failed to register identity for the offering %s: %s", offering.name, e)
         return None
 
@@ -175,7 +174,7 @@ def _setup_single_stomp_subscription(
             return None
 
         return (connection, event_subscription, offering)
-    except (errors.UnexpectedStatus, httpx.TimeoutException) as e:
+    except Exception as e:
         logger.exception(
             "Unable to register event subscription for offering %s object type %s: %s",
             offering.name,

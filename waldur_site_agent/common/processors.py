@@ -16,9 +16,11 @@ while sharing common patterns for error handling, retry logic, and API communica
 from __future__ import annotations
 
 import abc
+import datetime
 import traceback
 from time import sleep
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from waldur_api_client.api.backend_resource_requests import (
     backend_resource_requests_retrieve,
@@ -32,6 +34,9 @@ from waldur_api_client.api.marketplace_component_usages import (
     marketplace_component_usages_list,
     marketplace_component_usages_set_usage,
     marketplace_component_usages_set_user_usage,
+)
+from waldur_api_client.api.marketplace_component_user_usages import (
+    marketplace_component_user_usages_list,
 )
 from waldur_api_client.api.marketplace_offering_users import (
     marketplace_offering_users_list,
@@ -1716,9 +1721,84 @@ class OfferingReportProcessor(OfferingBaseProcessor):
     The processor includes anomaly detection to prevent reporting usage data
     that appears to have decreased from previous reports, which typically
     indicates a data collection error.
+
+    Supports multi-period reporting: by default reports both the current month
+    and the previous month. Controlled by ``reporting_periods`` (default 1
+    in the constructor for backward compatibility; the agent passes the
+    configured value, which defaults to 2).
     """
 
     BACKEND_TYPE_KEY = "reporting_backend"
+
+    def __init__(
+        self,
+        offering: structures.Offering,
+        waldur_rest_client: utils.AuthenticatedClient,
+        timezone: str = "",
+        resource_backend: Optional[BaseBackend] = None,
+        resource_backend_version: Optional[str] = None,
+        reporting_periods: int = 1,
+    ) -> None:
+        """Initialize the report processor.
+
+        Args:
+            offering: The offering configuration to process.
+            waldur_rest_client: HTTP Client for Waldur API.
+            timezone: Timezone for billing period calculations.
+            resource_backend: Backend instance for resource operations.
+            resource_backend_version: Version of the resource backend.
+            reporting_periods: Number of billing periods to report
+                (1 = current month only, 2 = current + previous).
+        """
+        super().__init__(
+            offering,
+            waldur_rest_client,
+            timezone,
+            resource_backend=resource_backend,
+            resource_backend_version=resource_backend_version,
+        )
+        self.reporting_periods = reporting_periods
+
+    @staticmethod
+    def _compute_reporting_periods(
+        current_time: datetime.datetime, num_periods: int
+    ) -> list[tuple[int, int, bool]]:
+        """Compute the list of (year, month, is_current) billing periods.
+
+        Returns periods oldest-first so that the current month is processed last.
+
+        Args:
+            current_time: A datetime with `year` and `month` attributes.
+            num_periods: Number of periods to report (1 = current only).
+
+        Returns:
+            List of (year, month, is_current_month) tuples, oldest first.
+        """
+        periods: list[tuple[int, int, bool]] = []
+        year = current_time.year
+        month = current_time.month
+
+        for i in range(num_periods):
+            is_current = i == 0
+            periods.append((year, month, is_current))
+            # Move to previous month
+            month -= 1
+            if month < 1:
+                month = 12
+                year -= 1
+
+        # Reverse so oldest is first, current is last
+        periods.reverse()
+        return periods
+
+    def _get_reporting_timezone(self) -> ZoneInfo | None:
+        """Return the configured timezone as a ZoneInfo, or None."""
+        if self.timezone:
+            try:
+                return ZoneInfo(self.timezone)
+            except Exception:
+                return None
+        return None
 
     def process_offering(self) -> None:
         """Process all resources in this offering for usage reporting.
@@ -1806,6 +1886,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         existing_usages: list[ComponentUsage] | None,
     ) -> bool:
         """Check if the current usage is lower than existing usage."""
+        if self.resource_backend.supports_decreasing_usage:
+            return False
         if not existing_usages:
             return False
         # Find all usage records for this component type
@@ -1824,7 +1906,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         component_usage = component_usages[0]
         existing_usage = float(component_usage.usage)
-        if not self.resource_backend.supports_decreasing_usage and current_usage < existing_usage:
+        if current_usage < existing_usage:
             logger.error(
                 "Usage anomaly detected for component %s: "
                 "Current usage %s is lower than existing usage %s",
@@ -1841,8 +1923,19 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_resource: WaldurResource,
         total_usage: dict[str, float],
         waldur_components: list[OfferingComponent],
+        report_date: Optional[datetime.datetime] = None,
+        billing_period_start: Optional[datetime.date] = None,
     ) -> None:
-        """Reports total usage for a backend resource to Waldur."""
+        """Reports total usage for a backend resource to Waldur.
+
+        Args:
+            waldur_resource: The Waldur resource to report usage for.
+            total_usage: Dict of component_type -> usage amount.
+            waldur_components: List of offering components from Waldur.
+            report_date: Datetime to use as the report date. Defaults to current time.
+            billing_period_start: Date of the billing period start. Defaults to
+                first day of report_date's month.
+        """
         logger.info("Setting usages for %s: %s", waldur_resource.backend_id, total_usage)
         resource_uuid = waldur_resource.uuid.hex
 
@@ -1856,20 +1949,48 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 ", ".join(missing_components),
             )
 
-        current_time = backend_utils.get_current_time_in_timezone(self.timezone)
-        month_start = backend_utils.month_start(current_time).date()
-        existing_usages = marketplace_component_usages_list.sync_all(
-            client=self.waldur_rest_client, resource_uuid=resource_uuid, billing_period=month_start
-        )
-        for component, amount in total_usage.items():
-            if component in component_types and self._check_usage_anomaly(
-                component, amount, existing_usages
-            ):
-                logger.warning(
-                    "Skipping usage update for resource %s due to anomaly detection",
-                    waldur_resource.backend_id,
-                )
-                raise UsageAnomalyError(f"Usage anomaly detected for component {component}")
+        if report_date is None:
+            report_date = backend_utils.get_current_time_in_timezone(self.timezone)
+        if billing_period_start is None:
+            billing_period_start = backend_utils.month_start(report_date).date()
+
+        if not self.resource_backend.supports_decreasing_usage:
+            existing_usages = marketplace_component_usages_list.sync_all(
+                client=self.waldur_rest_client,
+                resource_uuid=resource_uuid,
+                billing_period=billing_period_start,
+            )
+
+            # Filter out component usages that have per-user breakdowns;
+            # only aggregate records should participate in anomaly detection.
+            user_usages = marketplace_component_user_usages_list.sync_all(
+                client=self.waldur_rest_client,
+                resource_uuid=resource_uuid,
+                component_usage_billing_period=billing_period_start,
+            )
+            user_usage_parent_uuids = set()
+            for uu in user_usages:
+                if not isinstance(uu.component_usage, type(UNSET)) and uu.component_usage:
+                    # component_usage is a URL like ".../marketplace-component-usages/{uuid}/"
+                    parent_uuid = uu.component_usage.rstrip("/").split("/")[-1]
+                    user_usage_parent_uuids.add(parent_uuid)
+
+            aggregate_usages = [
+                u for u in existing_usages
+                if str(u.uuid) not in user_usage_parent_uuids
+            ] if user_usage_parent_uuids else existing_usages
+
+            for component, amount in total_usage.items():
+                if component in component_types and self._check_usage_anomaly(
+                    component, amount, aggregate_usages
+                ):
+                    logger.warning(
+                        "Skipping usage update for resource %s due to anomaly detection",
+                        waldur_resource.backend_id,
+                    )
+                    raise UsageAnomalyError(
+                        f"Usage anomaly detected for component {component}"
+                    )
 
         usage_objects = [
             ComponentUsageItemRequest(type_=component, amount=str(amount))
@@ -1877,7 +1998,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             if component in component_types
         ]
         request_body = ComponentUsageCreateRequest(
-            usages=usage_objects, resource=resource_uuid, date=current_time
+            usages=usage_objects, resource=resource_uuid, date=report_date
         )
         marketplace_component_usages_set_usage.sync_detailed(
             client=self.waldur_rest_client, body=request_body
@@ -1888,8 +2009,16 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         username: str,
         user_usage: dict[str, float],
         waldur_component_usages: list[ComponentUsage] | None,
+        report_date: Optional[datetime.datetime] = None,
     ) -> None:
-        """Reports per-user usage for a backend resource to Waldur."""
+        """Reports per-user usage for a backend resource to Waldur.
+
+        Args:
+            username: Username to report usage for.
+            user_usage: Dict of component_type -> usage amount.
+            waldur_component_usages: List of component usage records from Waldur.
+            report_date: Datetime to use as the report date. Defaults to current time.
+        """
         logger.info("Setting usages for %s", username)
         if not waldur_component_usages:
             logger.warning(
@@ -1915,12 +2044,15 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         )
         offering_user = offering_users[0] if offering_users else None
 
+        if report_date is None:
+            report_date = backend_utils.get_current_time_in_timezone(self.timezone)
+
         for component_usage in waldur_component_usages:
             component_type = component_usage.type_
             usage = user_usage.get(component_type)
             if usage is None:
                 logger.warning(
-                    "No usage for Waldur component %s is found in SLURM user usage report",
+                    "No usage for Waldur component %s is found in user usage report",
                     component_type,
                 )
                 continue
@@ -1930,11 +2062,10 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 component_type,
                 usage,
             )
-            current_time = backend_utils.get_current_time_in_timezone(self.timezone)
             body = ComponentUserUsageCreateRequest(
                 username=username,
                 usage=usage,
-                date=current_time,
+                date=report_date,
             )
             if offering_user:
                 body.user = offering_user.url
@@ -1950,9 +2081,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_resource: WaldurResource,
         waldur_offering: ProviderOfferingDetails,
     ) -> None:
-        """Processes usage report for the resource."""
-        current_time = backend_utils.get_current_time_in_timezone(self.timezone)
-        month_start = backend_utils.month_start(current_time).date()
+        """Processes usage report for the resource across configured billing periods."""
         resource_backend_id = waldur_resource.backend_id
         logger.info("Pulling resource %s (%s)", waldur_resource.name, resource_backend_id)
         backend_resource_info = self.resource_backend.pull_resource(waldur_resource)
@@ -1967,32 +2096,116 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_resource_info: WaldurResource = marketplace_provider_resources_retrieve.sync(
             client=self.waldur_rest_client, uuid=waldur_resource.uuid.hex
         )
-        usages: dict[str, dict[str, float]] = backend_resource_info.usage
 
-        # Submit usage
-        total_usage = usages.pop("TOTAL_ACCOUNT_USAGE")
-        try:
-            self._submit_total_usage_for_resource(
-                waldur_resource_info,
-                total_usage,
-                waldur_offering.components,
+        current_time = backend_utils.get_current_time_in_timezone(self.timezone)
+        periods = self._compute_reporting_periods(current_time, self.reporting_periods)
+
+        for year, month, is_current in periods:
+            try:
+                self._process_resource_period(
+                    waldur_resource_info,
+                    waldur_offering,
+                    resource_backend_id,
+                    backend_resource_info,
+                    year,
+                    month,
+                    is_current,
+                )
+            except UnexpectedStatus as e:
+                http_bad_request = 400
+                if not is_current and e.status_code == http_bad_request:
+                    logger.info(
+                        "Past period %04d-%02d rejected (HTTP 400) for resource %s, "
+                        "likely usage-based component — skipping",
+                        year, month, resource_backend_id,
+                    )
+                else:
+                    raise
+            except UsageAnomalyError:
+                if is_current:
+                    logger.info(
+                        "Skipping per-user usage processing due to anomaly in usage reporting"
+                    )
+                    return
+                logger.info(
+                    "Skipping past period %04d-%02d for resource %s due to usage anomaly",
+                    year, month, resource_backend_id,
+                )
+            except Exception:
+                if is_current:
+                    raise
+                logger.warning(
+                    "Failed to report past period %04d-%02d for resource %s, continuing",
+                    year, month, resource_backend_id,
+                    exc_info=True,
+                )
+
+    def _process_resource_period(
+        self,
+        waldur_resource_info: WaldurResource,
+        waldur_offering: ProviderOfferingDetails,
+        resource_backend_id: str,
+        backend_resource_info: BackendResourceInfo,
+        year: int,
+        month: int,
+        is_current: bool,
+    ) -> None:
+        """Process a single billing period for a resource."""
+        billing_period_start = datetime.date(year, month, 1)
+        # Build a report_date in the target period for the Waldur API,
+        # preserving the same timezone as get_current_time_in_timezone uses.
+        tz = self._get_reporting_timezone()
+        report_date = datetime.datetime(year, month, 1, tzinfo=tz)
+
+        if is_current:
+            # Use current-month data already fetched by pull_resource
+            usages = dict(backend_resource_info.usage)
+        else:
+            logger.info(
+                "Fetching historical usage for %s, period %04d-%02d",
+                resource_backend_id, year, month,
             )
-        except UsageAnomalyError:
-            logger.info("Skipping per-user usage processing due to anomaly in usage reporting")
+            period_report = self.resource_backend.get_usage_report_for_period(
+                [resource_backend_id], year, month
+            )
+            usages = period_report.get(resource_backend_id, {})
+            if not usages:
+                logger.info(
+                    "No historical data for %s in %04d-%02d, skipping",
+                    resource_backend_id, year, month,
+                )
+                return
+
+        total_usage = usages.pop("TOTAL_ACCOUNT_USAGE", None)
+        if total_usage is None:
+            logger.warning(
+                "No TOTAL_ACCOUNT_USAGE for %s in %04d-%02d, skipping",
+                resource_backend_id, year, month,
+            )
             return
 
-        # Skip the following actions if the dict is empty
+        self._submit_total_usage_for_resource(
+            waldur_resource_info,
+            total_usage,
+            waldur_offering.components,
+            report_date=report_date,
+            billing_period_start=billing_period_start,
+        )
+
+        # Skip per-user usage if the dict is empty
         if not usages:
             return
 
         waldur_component_usages = marketplace_component_usages_list.sync_all(
             client=self.waldur_rest_client,
             resource_uuid=waldur_resource_info.uuid.hex,
-            date_after=month_start,
+            billing_period=billing_period_start,
         )
-        logger.info("Setting per-user usages")
+        logger.info("Setting per-user usages for period %04d-%02d", year, month)
         for username, user_usage in usages.items():
-            self._submit_user_usage_for_resource(username, user_usage, waldur_component_usages)
+            self._submit_user_usage_for_resource(
+                username, user_usage, waldur_component_usages, report_date=report_date
+            )
 
 
 class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
