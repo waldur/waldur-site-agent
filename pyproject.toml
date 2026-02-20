@@ -20,7 +20,7 @@ dependencies = [
     "importlib-metadata>=8.7.0 ; python_full_version == '3.9.*'",
     "pydantic>=2.0.0",
     "structlog>=25.4.0",
-    "waldur-api-client>=8.0.2",
+    "waldur-api-client>=8.0.4",
 ]
 
 [project.urls]
