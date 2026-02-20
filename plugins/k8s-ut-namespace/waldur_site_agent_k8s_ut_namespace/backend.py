@@ -262,31 +262,15 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         return backend_limits, waldur_limits
 
     def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
-        """Return quota limits from ManagedNamespace CR spec as usage."""
+        """Return zero usage for all components.
+
+        Billing is based on limits (allocation), not actual consumption.
+        Waldur already tracks the limits, so usage is reported as 0.
+        """
         usage_report = {}
+        empty = dict.fromkeys(self.backend_components, 0)
         for resource_id in resource_backend_ids:
-            try:
-                cr = self.k8s_client.get_managed_namespace(resource_id)
-                if cr:
-                    quota = cr.get("spec", {}).get("quota", {})
-                    # Convert K8s quantities back to numeric values
-                    usage = {}
-                    for component_key, component_config in self.backend_components.items():
-                        component_type = component_config.get("type", component_key)
-                        quota_field = self.component_quota_mapping.get(component_type)
-                        if quota_field and quota_field in quota:
-                            raw = quota[quota_field]
-                            usage[component_key] = self._parse_k8s_quantity(raw)
-                        else:
-                            usage[component_key] = 0
-                    usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE": usage}
-                else:
-                    empty = dict.fromkeys(self.backend_components, 0)
-                    usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE": empty}
-            except Exception as e:
-                logger.warning("Failed to get usage for %s: %s", resource_id, e)
-                empty = dict.fromkeys(self.backend_components, 0)
-                usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE": empty}
+            usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE": dict(empty)}
         return usage_report
 
     @staticmethod
