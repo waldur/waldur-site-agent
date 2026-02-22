@@ -233,6 +233,61 @@ backend_components:
 - **Optional**: Yes
 - **Description**: Fixed limit amount for limit-type components
 
+#### `description`
+
+- **Type**: String
+- **Optional**: Yes
+- **Description**: Description of the component shown in Waldur
+
+#### `min_value`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Minimum allowed value for the component
+
+#### `max_value`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Maximum allowed value for the component
+
+#### `max_available_limit`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Maximum available limit for the component
+
+#### `default_limit`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Default limit value applied when creating a resource
+
+#### `limit_period`
+
+- **Type**: String
+- **Optional**: Yes
+- **Values**: `"annual"`, `"month"`, `"quarterly"`, `"total"`
+- **Description**: Billing period for limit enforcement
+
+#### `article_code`
+
+- **Type**: String
+- **Optional**: Yes
+- **Description**: Article code for billing system integration
+
+#### `is_boolean`
+
+- **Type**: Boolean
+- **Optional**: Yes
+- **Description**: Whether the component represents a boolean (on/off) option
+
+#### `is_prepaid`
+
+- **Type**: Boolean
+- **Optional**: Yes
+- **Description**: Whether the component requires prepaid billing
+
 ### Backend-Specific Component Notes
 
 **SLURM**: Supports `cpu`, `mem`, and other custom components

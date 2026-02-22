@@ -49,6 +49,25 @@ class BackendComponent(BaseModel):
     label: str = Field(..., description="Human-readable label for display")
     limit: Optional[float] = Field(default=None, description="Component limit value")
 
+    # Optional Waldur offering component fields (passed through to OfferingComponentRequest)
+    description: Optional[str] = Field(default=None, description="Description of the component")
+    min_value: Optional[int] = Field(default=None, description="Minimum allowed value")
+    max_value: Optional[int] = Field(default=None, description="Maximum allowed value")
+    max_available_limit: Optional[int] = Field(
+        default=None, description="Maximum available limit"
+    )
+    default_limit: Optional[int] = Field(default=None, description="Default limit value")
+    limit_period: Optional[str] = Field(
+        default=None, description="Limit period: annual, month, quarterly, total"
+    )
+    article_code: Optional[str] = Field(default=None, description="Article code for billing")
+    is_boolean: Optional[bool] = Field(
+        default=None, description="Whether the component is boolean"
+    )
+    is_prepaid: Optional[bool] = Field(
+        default=None, description="Whether the component is prepaid"
+    )
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for backward compatibility with BaseBackend."""
         # Use mode='json' to automatically serialize enums to their values

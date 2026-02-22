@@ -39,6 +39,16 @@ offerings: # Settings for offerings
           # which uses cpu-minutes for accounting
         accounting_type: "usage" # Can be either `usage` or `limit`
         label: "CPU" # A label for the component in Waldur
+        # Optional Waldur offering component fields:
+        # description: "CPU time" # Component description
+        # min_value: 0 # Minimum allowed value
+        # max_value: 10000 # Maximum allowed value
+        # max_available_limit: 5000 # Maximum available limit
+        # default_limit: 100 # Default limit value
+        # limit_period: "month" # One of: annual, month, quarterly, total
+        # article_code: "CPU-001" # Billing article code
+        # is_boolean: false # Boolean (on/off) component
+        # is_prepaid: false # Prepaid billing
       mem:
         limit: 10 # Amount of measured units for Waldur (SLURM measured unit is MB-minutes)
         measured_unit: 'gb-Hours' # Waldur measured unit for accounting
