@@ -370,6 +370,16 @@ offerings:
         unit_factor: 60000               # Waldur-to-backend conversion factor
         accounting_type: "usage"         # "usage" = metered, "limit" = quota
         label: "CPU"                     # Display label in Waldur UI
+        # Optional Waldur offering component fields:
+        # description: "CPU time"        # Component description
+        # min_value: 0                   # Minimum allowed value
+        # max_value: 10000               # Maximum allowed value
+        # max_available_limit: 5000      # Maximum available limit
+        # default_limit: 100             # Default limit value
+        # limit_period: "month"          # "annual", "month", "quarterly", "total"
+        # article_code: "CPU-001"        # Billing article code
+        # is_boolean: false              # Boolean (on/off) component
+        # is_prepaid: false              # Prepaid billing
       storage:
         limit: 1000
         measured_unit: "GB"

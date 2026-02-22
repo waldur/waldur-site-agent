@@ -50,6 +50,7 @@ from waldur_api_client.models import (
     ResourceSetStateErredRequest,
 )
 from waldur_api_client.models.billing_type_enum import BillingTypeEnum
+from waldur_api_client.models.limit_period_enum import LimitPeriodEnum
 from waldur_api_client.models.marketplace_offering_users_list_state_item import (
     MarketplaceOfferingUsersListStateItem,
 )
@@ -546,6 +547,38 @@ def extend_backend_components(
         offering.backend_components[missing_component_type] = component_info
 
 
+_OPTIONAL_COMPONENT_FIELDS = (
+    "description",
+    "min_value",
+    "max_value",
+    "max_available_limit",
+    "default_limit",
+    "limit_period",
+    "article_code",
+    "is_boolean",
+    "is_prepaid",
+)
+
+
+def _build_component_kwargs(component_info: dict) -> dict:
+    """Extract optional OfferingComponentRequest fields from component config.
+
+    Args:
+        component_info: Dictionary of component configuration values
+
+    Returns:
+        Dictionary of kwargs to pass to OfferingComponentRequest/UpdateOfferingComponentRequest
+    """
+    kwargs = {}
+    for field in _OPTIONAL_COMPONENT_FIELDS:
+        if field in component_info and component_info[field] is not None:
+            value = component_info[field]
+            if field == "limit_period":
+                value = LimitPeriodEnum(value)
+            kwargs[field] = value
+    return kwargs
+
+
 def load_components_to_waldur(
     waldur_rest_client: AuthenticatedClient,
     offering_uuid: str,
@@ -580,6 +613,7 @@ def load_components_to_waldur(
             limit_amount = component_info.get("limit")
             accounting_type = component_info["accounting_type"]
             label = component_info["label"]
+            extra_kwargs = _build_component_kwargs(component_info)
 
             if component_type in waldur_offering_components:
                 if component_info["accounting_type"] == "usage":
@@ -598,6 +632,7 @@ def load_components_to_waldur(
                         name=label,
                         measured_unit=component_info["measured_unit"],
                         limit_amount=limit_amount,
+                        **extra_kwargs,
                     )
                     marketplace_provider_offerings_update_offering_component.sync_detailed(
                         client=waldur_rest_client,
@@ -623,6 +658,7 @@ def load_components_to_waldur(
                     name=label,
                     measured_unit=component_info["measured_unit"],
                     limit_amount=limit_amount,
+                    **extra_kwargs,
                 )
                 marketplace_provider_offerings_create_offering_component.sync_detailed(
                     client=waldur_rest_client, uuid=offering_uuid, body=component
