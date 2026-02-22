@@ -363,13 +363,7 @@ class SlurmBackend(backends.BaseBackend):
     def get_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int
     ) -> dict[str, dict[str, dict[str, int]]]:
-        """Return usage report for a specific historical billing period."""
-        return self.get_historical_usage_report(resource_backend_ids, year, month)
-
-    def get_historical_usage_report(
-        self, resource_backend_ids: list[str], year: int, month: int
-    ) -> dict[str, dict[str, dict[str, int]]]:
-        """Generate historical usage report for a specific month.
+        """Generate usage report for a specific billing period.
 
         Args:
             resource_backend_ids: List of SLURM account names to query

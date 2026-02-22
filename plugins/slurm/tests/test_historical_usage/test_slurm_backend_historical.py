@@ -9,7 +9,7 @@ from waldur_site_agent_slurm.backend import SlurmBackend
 class TestSlurmBackendHistorical:
     """Test SlurmBackend historical usage methods."""
 
-    def test_get_historical_usage_report_basic(
+    def test_get_usage_report_for_period_basic(
         self,
         emulator_available,
         patched_slurm_client,
@@ -21,7 +21,7 @@ class TestSlurmBackendHistorical:
         backend = SlurmBackend(mock_slurm_backend_config, mock_slurm_tres)
 
         # Test January 2024 usage
-        usage_report = backend.get_historical_usage_report(["test_account_123"], 2024, 1)
+        usage_report = backend.get_usage_report_for_period(["test_account_123"], 2024, 1)
 
         assert isinstance(usage_report, dict)
         assert "test_account_123" in usage_report
@@ -31,7 +31,7 @@ class TestSlurmBackendHistorical:
         assert "testuser1" in account_usage
         assert "testuser2" in account_usage
 
-    def test_get_historical_usage_report_unit_conversion(
+    def test_get_usage_report_for_period_unit_conversion(
         self,
         emulator_available,
         patched_slurm_client,
@@ -43,7 +43,7 @@ class TestSlurmBackendHistorical:
         backend = SlurmBackend(mock_slurm_backend_config, mock_slurm_tres)
 
         # Test January 2024 usage
-        usage_report = backend.get_historical_usage_report(["test_account_123"], 2024, 1)
+        usage_report = backend.get_usage_report_for_period(["test_account_123"], 2024, 1)
 
         account_usage = usage_report["test_account_123"]
         user1_usage = account_usage["testuser1"]
@@ -63,7 +63,7 @@ class TestSlurmBackendHistorical:
             assert isinstance(value, (int, float))
             assert value >= 0
 
-    def test_get_historical_usage_report_aggregation(
+    def test_get_usage_report_for_period_aggregation(
         self,
         emulator_available,
         patched_slurm_client,
@@ -75,7 +75,7 @@ class TestSlurmBackendHistorical:
         backend = SlurmBackend(mock_slurm_backend_config, mock_slurm_tres)
 
         # Test February 2024 usage (has more usage)
-        usage_report = backend.get_historical_usage_report(["test_account_123"], 2024, 2)
+        usage_report = backend.get_usage_report_for_period(["test_account_123"], 2024, 2)
 
         account_usage = usage_report["test_account_123"]
 
@@ -93,7 +93,7 @@ class TestSlurmBackendHistorical:
             # Allow for small floating point differences
             assert abs(total_usage[component] - expected_total) < 0.001
 
-    def test_get_historical_usage_report_multiple_months(
+    def test_get_usage_report_for_period_multiple_months(
         self,
         emulator_available,
         patched_slurm_client,
@@ -106,7 +106,7 @@ class TestSlurmBackendHistorical:
 
         monthly_reports = {}
         for month in [1, 2, 3]:
-            monthly_reports[month] = backend.get_historical_usage_report(
+            monthly_reports[month] = backend.get_usage_report_for_period(
                 ["test_account_123"], 2024, month
             )
 
@@ -121,14 +121,14 @@ class TestSlurmBackendHistorical:
             total_value = sum(total_usage.values())
             assert total_value > 0
 
-    def test_get_historical_usage_report_empty_results(
+    def test_get_usage_report_for_period_empty_results(
         self, emulator_available, patched_slurm_client, mock_slurm_backend_config, mock_slurm_tres
     ):
         """Test historical usage report when no data is available."""
         backend = SlurmBackend(mock_slurm_backend_config, mock_slurm_tres)
 
         # Test month with no data
-        usage_report = backend.get_historical_usage_report(["test_account_123"], 2023, 12)
+        usage_report = backend.get_usage_report_for_period(["test_account_123"], 2023, 12)
 
         # Should return empty dict or dict with no usage
         assert isinstance(usage_report, dict)
@@ -139,7 +139,7 @@ class TestSlurmBackendHistorical:
                 total_value = sum(account_usage["TOTAL_ACCOUNT_USAGE"].values())
                 assert total_value == 0
 
-    def test_get_historical_usage_report_multiple_accounts(
+    def test_get_usage_report_for_period_multiple_accounts(
         self,
         emulator_available,
         patched_slurm_client,
@@ -151,7 +151,7 @@ class TestSlurmBackendHistorical:
         backend = SlurmBackend(mock_slurm_backend_config, mock_slurm_tres)
 
         # Test with multiple accounts
-        usage_report = backend.get_historical_usage_report(
+        usage_report = backend.get_usage_report_for_period(
             ["test_account_123", "nonexistent_account"], 2024, 1
         )
 
@@ -188,7 +188,7 @@ class TestSlurmBackendHistorical:
             current_usage = backend._get_usage_report(["test_account_123"])
 
         # Get historical usage for March 2024
-        historical_usage = backend.get_historical_usage_report(["test_account_123"], 2024, 3)
+        historical_usage = backend.get_usage_report_for_period(["test_account_123"], 2024, 3)
 
         # Both should have the same structure
         assert isinstance(current_usage, dict)
@@ -208,7 +208,7 @@ class TestSlurmBackendHistorical:
             historical_users = set(historical_account.keys()) - {"TOTAL_ACCOUNT_USAGE"}
             assert current_users == historical_users
 
-    def test_get_historical_usage_report_component_filtering(
+    def test_get_usage_report_for_period_component_filtering(
         self,
         emulator_available,
         patched_slurm_client,
@@ -219,7 +219,7 @@ class TestSlurmBackendHistorical:
         """Test that only configured components are included in the report."""
         backend = SlurmBackend(mock_slurm_backend_config, mock_slurm_tres)
 
-        usage_report = backend.get_historical_usage_report(["test_account_123"], 2024, 1)
+        usage_report = backend.get_usage_report_for_period(["test_account_123"], 2024, 1)
         account_usage = usage_report["test_account_123"]
         total_usage = account_usage["TOTAL_ACCOUNT_USAGE"]
 
@@ -230,7 +230,7 @@ class TestSlurmBackendHistorical:
         # All reported components should be configured (subset)
         assert reported_components.issubset(configured_components)
 
-    def test_get_historical_usage_report_data_types(
+    def test_get_usage_report_for_period_data_types(
         self,
         emulator_available,
         patched_slurm_client,
@@ -241,7 +241,7 @@ class TestSlurmBackendHistorical:
         """Test that the historical usage report returns correct data types."""
         backend = SlurmBackend(mock_slurm_backend_config, mock_slurm_tres)
 
-        usage_report = backend.get_historical_usage_report(["test_account_123"], 2024, 1)
+        usage_report = backend.get_usage_report_for_period(["test_account_123"], 2024, 1)
 
         # Should be a dictionary
         assert isinstance(usage_report, dict)

@@ -23,7 +23,6 @@ build-backend = "hatchling.build"
 waldur-site-agent = { workspace = true }
 
 [project.scripts]
-waldur_site_load_historical_usage = "waldur_site_agent_slurm.historical_usage_loader:main"
 waldur_site_diagnose_slurm_account = "waldur_site_agent_slurm.diagnostic_cli:main"
 
 # Entry points for exporting backends

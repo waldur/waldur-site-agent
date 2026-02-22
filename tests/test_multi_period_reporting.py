@@ -160,32 +160,6 @@ class TestBaseBackendGetUsageReportForPeriod(unittest.TestCase):
         assert result == {}
 
 
-class TestSlurmGetUsageReportForPeriod(unittest.TestCase):
-    """Test SLURM backend delegates to get_historical_usage_report."""
-
-    @mock.patch("waldur_site_agent_slurm.backend.SlurmClient")
-    def test_delegates_to_historical(self, mock_client_cls) -> None:
-        from waldur_site_agent_slurm.backend import SlurmBackend
-
-        backend = SlurmBackend(
-            slurm_settings={"default_account": "root"},
-            slurm_tres={
-                "cpu": {
-                    "limit": 10,
-                    "measured_unit": "k-Hours",
-                    "unit_factor": 60000,
-                    "accounting_type": "usage",
-                    "label": "CPU",
-                }
-            },
-        )
-        with mock.patch.object(backend, "get_historical_usage_report") as mock_hist:
-            mock_hist.return_value = {"acc1": {"TOTAL_ACCOUNT_USAGE": {"cpu": 100}}}
-            result = backend.get_usage_report_for_period(["acc1"], 2024, 1)
-            mock_hist.assert_called_once_with(["acc1"], 2024, 1)
-            assert result == {"acc1": {"TOTAL_ACCOUNT_USAGE": {"cpu": 100}}}
-
-
 @freeze_time("2024-06-15")
 class TestMultiPeriodProcessorFlow(unittest.TestCase):
     """Test that the processor loops over multiple periods."""

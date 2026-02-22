@@ -1,7 +1,7 @@
 """Pytest configuration and fixtures for historical usage tests."""
 
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -223,55 +223,3 @@ def patched_slurm_client(sacct_emulator, sacctmgr_emulator):
         side_effect=mock_execute_command,
     ):
         yield
-
-
-class MockWaldurResource:
-    """Mock Waldur resource for testing."""
-
-    def __init__(self, name="test_resource", backend_id="test_account_123"):
-        self.name = name
-        self.backend_id = backend_id
-        self.uuid = Mock()
-        self.uuid.hex = "12345678-1234-1234-1234-123456789abc"
-
-
-class MockOfferingUser:
-    """Mock Waldur offering user for testing."""
-
-    def __init__(self, username, url=None):
-        self.username = username
-        self.url = url or f"https://waldur.example.com/api/marketplace-offering-users/{username}/"
-
-
-class MockComponentUsage:
-    """Mock Waldur component usage for testing."""
-
-    def __init__(self, type_, uuid_str=None):
-        self.type_ = type_
-        self.uuid = Mock()
-        self.uuid.hex = uuid_str or f"component-{type_}-uuid"
-
-
-@pytest.fixture
-def mock_waldur_resources():
-    """Mock Waldur resources for testing."""
-    return [MockWaldurResource()]
-
-
-@pytest.fixture
-def mock_offering_users():
-    """Mock Waldur offering users for testing."""
-    return [
-        MockOfferingUser("testuser1"),
-        MockOfferingUser("testuser2"),
-    ]
-
-
-@pytest.fixture
-def mock_component_usages():
-    """Mock Waldur component usages for testing."""
-    return [
-        MockComponentUsage("cpu"),
-        MockComponentUsage("mem"),
-        MockComponentUsage("gres/gpu"),
-    ]
