@@ -60,6 +60,9 @@ class CSCSDWDIComputeBackend(BaseBackend):
         # Optional SOCKS proxy configuration
         self.socks_proxy = backend_settings.get("socks_proxy")
 
+        # Optional cluster filter for historical usage queries
+        self.cluster = backend_settings.get("cscs_dwdi_cluster")
+
         if not all([self.api_url, self.client_id, self.client_secret, self.oidc_token_url]):
             msg = (
                 "CSCS-DWDI backend requires cscs_dwdi_api_url, cscs_dwdi_client_id, "
@@ -172,10 +175,25 @@ class CSCSDWDIComputeBackend(BaseBackend):
     def get_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int
     ) -> dict[str, dict[str, dict[str, float]]]:
-        """Get usage report for a specific historical billing period."""
+        """Get usage report for a specific billing period.
+
+        Args:
+            resource_backend_ids: List of account identifiers
+            year: Year to query
+            month: Month to query
+
+        Returns:
+            Usage report in Waldur format for the specified month
+        """
+        if not resource_backend_ids:
+            return {}
+
         from_date = date(year, month, 1)
         to_date = date(year, month, calendar.monthrange(year, month)[1])
-        return self._get_compute_usage_for_dates(resource_backend_ids, from_date, to_date)
+        clusters = [self.cluster] if self.cluster else None
+        return self._get_compute_usage_for_dates(
+            resource_backend_ids, from_date, to_date, clusters=clusters
+        )
 
     def _process_api_response(
         self, response: dict[str, Any]
@@ -651,7 +669,9 @@ class CSCSDWDIStorageBackend(BaseBackend):
     def get_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int
     ) -> dict[str, dict[str, dict[str, float]]]:
-        """Get storage usage report for a specific historical billing period."""
+        """Get storage usage report for a specific billing period."""
+        if not resource_backend_ids:
+            return {}
         exact_month = f"{year:04d}-{month:02d}"
         return self._get_storage_usage_for_month(resource_backend_ids, exact_month)
 

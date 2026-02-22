@@ -1,8 +1,9 @@
-"""Historical usage loading command for SLURM backend.
+"""Historical usage loading command for any supported backend.
 
 This module provides a command-line interface for loading historical usage data
-into Waldur from SLURM accounting records. The command requires staff user
-authentication and processes usage data monthly to align with Waldur's billing model.
+into Waldur from backend accounting records. The command requires staff user
+authentication (unless --no-staff-check is used) and processes usage data monthly
+to align with Waldur's billing model.
 """
 
 import argparse
@@ -56,14 +57,14 @@ def validate_staff_user(user_token: str, offering: Offering) -> None:
         utils.print_current_user(current_user)
 
         if not current_user.is_staff:
-            logger.error("❌ Historical usage loading requires staff user privileges")
+            logger.error("Historical usage loading requires staff user privileges")
             logger.error("Current user %s is not a staff user", current_user.username)
             sys.exit(1)
 
-        logger.info("✓ Staff user validation successful for user: %s", current_user.username)
+        logger.info("Staff user validation successful for user: %s", current_user.username)
 
     except Exception as e:
-        logger.error("❌ Failed to validate user credentials: %s", e)
+        logger.error("Failed to validate user credentials: %s", e)
         sys.exit(1)
 
 
@@ -85,12 +86,12 @@ def parse_date_range(start_date_str: str, end_date_str: str) -> tuple[datetime.d
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
         end_date = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()
     except ValueError as e:
-        logger.error("❌ Invalid date format. Use YYYY-MM-DD format: %s", e)
+        logger.error("Invalid date format. Use YYYY-MM-DD format: %s", e)
         raise
 
     if end_date < start_date:
         msg = f"End date {end_date} cannot be before start date {start_date}"
-        logger.error("❌ %s", msg)
+        logger.error("%s", msg)
         raise ValueError(msg)
 
     # Validate reasonable range (max 5 years)
@@ -99,13 +100,13 @@ def parse_date_range(start_date_str: str, end_date_str: str) -> tuple[datetime.d
 
     if days_diff > max_days:
         logger.error(
-            "❌ Date range too large (%d days). Maximum allowed is %d days (5 years)",
+            "Date range too large (%d days). Maximum allowed is %d days (5 years)",
             days_diff,
             max_days,
         )
         sys.exit(1)
 
-    logger.info("✓ Date range validated: %s to %s (%d days)", start_date, end_date, days_diff)
+    logger.info("Date range validated: %s to %s (%d days)", start_date, end_date, days_diff)
     return start_date, end_date
 
 
@@ -123,7 +124,14 @@ def find_offering_by_uuid(offerings: list[Offering], target_uuid: str) -> Option
 
 
 def load_historical_usage_for_month(
-    offering: Offering, user_token: str, year: int, month: int, month_count: int, total_months: int
+    offering: Offering,
+    user_token: str,
+    year: int,
+    month: int,
+    month_count: int,
+    total_months: int,
+    *,
+    skip_user_usage: bool = False,
 ) -> None:
     """Load historical usage data for a specific month.
 
@@ -134,9 +142,10 @@ def load_historical_usage_for_month(
         month: Month to process (1-12)
         month_count: Current month number in sequence (for progress)
         total_months: Total number of months to process
+        skip_user_usage: If True, skip per-user usage submission
     """
     logger.info(
-        "📅 Processing month %d/%d: %04d-%02d for offering '%s' (%s)",
+        "Processing month %d/%d: %04d-%02d for offering '%s' (%s)",
         month_count,
         total_months,
         year,
@@ -152,11 +161,6 @@ def load_historical_usage_for_month(
 
     # Get backend for this offering - reuse existing backend creation logic
     resource_backend, _ = utils.get_backend_for_offering(offering, "reporting_backend")
-
-    # Verify backend supports historical usage reporting
-    if not hasattr(resource_backend, "get_historical_usage_report"):
-        logger.error("❌ Backend does not support historical usage reporting")
-        return
 
     # Get all resources for this offering from Waldur
     waldur_resources = marketplace_provider_resources_list.sync_all(
@@ -175,24 +179,25 @@ def load_historical_usage_for_month(
         logger.info("No active resources found for offering, skipping month")
         return
 
-    logger.info("📋 Found %d active resources to process", len(active_resources))
+    logger.info("Found %d active resources to process", len(active_resources))
 
-    # Get offering users for username mapping
-    offering_users = marketplace_offering_users_list.sync_all(
-        client=waldur_rest_client,
-        offering_uuid=[offering.uuid],
-        state=[MarketplaceOfferingUsersListStateItem.OK],
-    )
-
-    # Create username to offering user mapping
-    username_to_offering_user = {user.username: user for user in offering_users}
+    # Get offering users for username mapping (only if submitting user usage)
+    if not skip_user_usage:
+        offering_users = marketplace_offering_users_list.sync_all(
+            client=waldur_rest_client,
+            offering_uuid=[offering.uuid],
+            state=[MarketplaceOfferingUsersListStateItem.OK],
+        )
+        username_to_offering_user = {user.username: user for user in offering_users}
+    else:
+        username_to_offering_user = {}
 
     try:
         # Get resource backend IDs
         resource_backend_ids = [resource.backend_id for resource in active_resources]
 
         # Get historical usage data from backend - reuse existing method
-        usage_report = resource_backend.get_historical_usage_report(
+        usage_report = resource_backend.get_usage_report_for_period(
             resource_backend_ids, year, month
         )
 
@@ -201,7 +206,7 @@ def load_historical_usage_for_month(
             return
 
         logger.info(
-            "📊 Processing usage data for %d accounts in offering '%s'",
+            "Processing usage data for %d accounts in offering '%s'",
             len(usage_report),
             offering.name,
         )
@@ -216,7 +221,7 @@ def load_historical_usage_for_month(
             backend_id = resource.backend_id
 
             logger.info(
-                "🔍 Processing resource '%s' (backend_id: %s, uuid: %s)",
+                "Processing resource '%s' (backend_id: %s, uuid: %s)",
                 resource.name,
                 backend_id,
                 resource.uuid.hex,
@@ -224,7 +229,7 @@ def load_historical_usage_for_month(
 
             if backend_id not in usage_report:
                 logger.warning(
-                    "⚠️  No usage data for resource '%s' (%s) in offering '%s'",
+                    "No usage data for resource '%s' (%s) in offering '%s'",
                     resource.name,
                     backend_id,
                     offering.name,
@@ -236,7 +241,7 @@ def load_historical_usage_for_month(
 
             if not total_usage:
                 logger.warning(
-                    "⚠️  No total usage for resource '%s' in offering '%s'",
+                    "No total usage for resource '%s' in offering '%s'",
                     resource.name,
                     offering.name,
                 )
@@ -245,32 +250,39 @@ def load_historical_usage_for_month(
             # Submit resource-level usage
             _submit_resource_usage(waldur_rest_client, resource, total_usage, usage_date, offering)
 
-            # Submit per-user usage
-            user_count = 0
-            for username, user_usage in account_usage.items():
-                if username == "TOTAL_ACCOUNT_USAGE":
-                    continue
+            # Submit per-user usage (unless skipped)
+            if not skip_user_usage:
+                user_count = 0
+                for username, user_usage in account_usage.items():
+                    if username == "TOTAL_ACCOUNT_USAGE":
+                        continue
 
-                _submit_user_usage(
-                    waldur_rest_client,
-                    resource,
-                    username,
-                    user_usage,
-                    username_to_offering_user,
-                    usage_date,
-                    offering,
+                    _submit_user_usage(
+                        waldur_rest_client,
+                        resource,
+                        username,
+                        user_usage,
+                        username_to_offering_user,
+                        usage_date,
+                        offering,
+                    )
+                    user_count += 1
+
+                logger.info(
+                    "Submitted usage for resource '%s': %d users processed",
+                    resource.name,
+                    user_count,
                 )
-                user_count += 1
+            else:
+                logger.info(
+                    "Submitted resource-level usage for '%s' (user usage skipped)",
+                    resource.name,
+                )
 
-            logger.info(
-                "📋 Submitted usage for resource '%s': %d users processed",
-                resource.name,
-                user_count,
-            )
             processed_resources += 1
 
         logger.info(
-            "✅ Completed processing %04d-%02d for offering '%s' (%d resources)",
+            "Completed processing %04d-%02d for offering '%s' (%d resources)",
             year,
             month,
             offering.name,
@@ -278,7 +290,7 @@ def load_historical_usage_for_month(
         )
 
     except Exception as e:
-        logger.error("❌ Failed to process %04d-%02d: %s", year, month, e)
+        logger.error("Failed to process %04d-%02d: %s", year, month, e)
         raise
 
 
@@ -313,7 +325,7 @@ def _submit_resource_usage(
             client=waldur_rest_client, body=request_body
         )
         logger.info(
-            "📤 Submitted resource usage for '%s' (uuid: %s) in offering '%s' (%s): %s",
+            "Submitted resource usage for '%s' (uuid: %s) in offering '%s' (%s): %s",
             resource.name,
             resource.uuid.hex,
             offering.name,
@@ -322,7 +334,7 @@ def _submit_resource_usage(
         )
     except Exception as e:
         logger.error(
-            "❌ Failed to submit resource usage for '%s' in offering '%s': %s",
+            "Failed to submit resource usage for '%s' in offering '%s': %s",
             resource.name,
             offering.name,
             e,
@@ -341,7 +353,7 @@ def _submit_user_usage(
 ) -> None:
     """Submit per-user usage data to Waldur."""
     logger.info(
-        "👤 Processing user '%s' for resource '%s' in offering '%s'",
+        "Processing user '%s' for resource '%s' in offering '%s'",
         username,
         resource.name,
         offering.name,
@@ -365,7 +377,7 @@ def _submit_user_usage(
         component_usage = component_usage_map.get(component_type)
         if not component_usage:
             logger.warning(
-                "⚠️  No component usage found for '%s' in resource '%s' (offering: '%s')",
+                "No component usage found for '%s' in resource '%s' (offering: '%s')",
                 component_type,
                 resource.name,
                 offering.name,
@@ -384,11 +396,11 @@ def _submit_user_usage(
         if offering_user:
             body.user = offering_user.url
             logger.debug(
-                "🔗 Linked user '%s' to offering user URL: %s", username, offering_user.url
+                "Linked user '%s' to offering user URL: %s", username, offering_user.url
             )
         else:
             logger.warning(
-                "⚠️  No offering user found for username '%s' in offering '%s'",
+                "No offering user found for username '%s' in offering '%s'",
                 username,
                 offering.name,
             )
@@ -398,7 +410,7 @@ def _submit_user_usage(
                 uuid=component_usage.uuid, client=waldur_rest_client, body=body
             )
             logger.info(
-                "📤 Submitted user usage: '%s'/'%s' in resource '%s' (offering: '%s') - %s=%s",
+                "Submitted user usage: '%s'/'%s' in resource '%s' (offering: '%s') - %s=%s",
                 username,
                 component_type,
                 resource.name,
@@ -409,7 +421,7 @@ def _submit_user_usage(
             submitted_components += 1
         except Exception as e:
             logger.error(
-                "❌ Failed to submit user usage for '%s'/'%s' in '%s' (%s): %s",
+                "Failed to submit user usage for '%s'/'%s' in '%s' (%s): %s",
                 username,
                 component_type,
                 resource.name,
@@ -420,14 +432,14 @@ def _submit_user_usage(
 
     if submitted_components > 0:
         logger.info(
-            "✅ Completed user '%s' in resource '%s': %d components submitted",
+            "Completed user '%s' in resource '%s': %d components submitted",
             username,
             resource.name,
             submitted_components,
         )
     else:
         logger.warning(
-            "⚠️  No usage components submitted for user '%s' in resource '%s'",
+            "No usage components submitted for user '%s' in resource '%s'",
             username,
             resource.name,
         )
@@ -436,7 +448,7 @@ def _submit_user_usage(
 def main() -> None:
     """Main entry point for historical usage loading command."""
     parser = argparse.ArgumentParser(
-        description="Load historical usage data from SLURM to Waldur (Staff only)",
+        description="Load historical usage data into Waldur from backend accounting records",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -448,13 +460,23 @@ Examples:
     --start-date 2024-01-01 \\
     --end-date 2024-12-31
 
-  # Load usage for specific quarter
+  # Load resource-level usage only (skip per-user breakdown)
   waldur_site_load_historical_usage \\
     --config /etc/waldur/waldur-site-agent-config.yaml \\
     --offering-uuid 12345678-1234-1234-1234-123456789abc \\
     --user-token your-staff-token \\
     --start-date 2024-01-01 \\
-    --end-date 2024-03-31
+    --end-date 2024-03-31 \\
+    --skip-user-usage
+
+  # Load with service provider token (skip staff check)
+  waldur_site_load_historical_usage \\
+    --config /etc/waldur/waldur-site-agent-config.yaml \\
+    --offering-uuid 12345678-1234-1234-1234-123456789abc \\
+    --user-token your-provider-token \\
+    --start-date 2024-01-01 \\
+    --end-date 2024-03-31 \\
+    --no-staff-check
         """,
     )
 
@@ -477,9 +499,24 @@ Examples:
 
     parser.add_argument("--end-date", "-e", required=True, help="End date in YYYY-MM-DD format")
 
+    parser.add_argument(
+        "--skip-user-usage",
+        action="store_true",
+        default=False,
+        help="Skip per-user usage submission (only submit resource-level totals)",
+    )
+
+    parser.add_argument(
+        "--no-staff-check",
+        action="store_true",
+        default=False,
+        help="Skip staff user validation (use with service provider tokens; "
+        "API enforces permissions server-side)",
+    )
+
     args = parser.parse_args()
 
-    logger.info("🚀 Starting historical usage loading")
+    logger.info("Starting historical usage loading")
     logger.info("Configuration file: %s", args.config)
     logger.info("Offering UUID: %s", args.offering_uuid)
     logger.info("Date range: %s to %s", args.start_date, args.end_date)
@@ -491,13 +528,16 @@ Examples:
         # Find the specified offering
         offering = find_offering_by_uuid(configuration.waldur_offerings, args.offering_uuid)
         if not offering:
-            logger.error("❌ Offering with UUID %s not found in configuration", args.offering_uuid)
+            logger.error("Offering with UUID %s not found in configuration", args.offering_uuid)
             sys.exit(1)
 
-        logger.info("✓ Found offering: %s", offering.name)
+        logger.info("Found offering: %s", offering.name)
 
-        # Validate staff user
-        validate_staff_user(args.user_token, offering)
+        # Validate staff user (unless skipped)
+        if not args.no_staff_check:
+            validate_staff_user(args.user_token, offering)
+        else:
+            logger.info("Staff user validation skipped (--no-staff-check)")
 
         # Parse and validate date range
         start_date, end_date = parse_date_range(args.start_date, args.end_date)
@@ -508,22 +548,28 @@ Examples:
         )
 
         total_months = len(periods)
-        logger.info("📊 Will process %d months of data", total_months)
+        logger.info("Will process %d months of data", total_months)
 
         # Process each month
         for month_count, (year, month, _, _) in enumerate(periods, 1):
             load_historical_usage_for_month(
-                offering, args.user_token, year, month, month_count, total_months
+                offering,
+                args.user_token,
+                year,
+                month,
+                month_count,
+                total_months,
+                skip_user_usage=args.skip_user_usage,
             )
 
-        logger.info("🎉 Historical usage loading completed successfully!")
+        logger.info("Historical usage loading completed successfully!")
         logger.info("Processed %d months from %s to %s", total_months, start_date, end_date)
 
     except KeyboardInterrupt:
-        logger.info("⏹️  Operation cancelled by user")
+        logger.info("Operation cancelled by user")
         sys.exit(130)
     except Exception as e:
-        logger.error("💥 Historical usage loading failed: %s", e)
+        logger.error("Historical usage loading failed: %s", e)
         sys.exit(1)
 
 

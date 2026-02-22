@@ -37,7 +37,7 @@ class TestHistoricalUsageIntegration:
         assert all(line.account == "test_account_123" for line in usage_lines)
 
         # 2. Backend processes the data
-        usage_report = backend.get_historical_usage_report(["test_account_123"], year, month)
+        usage_report = backend.get_usage_report_for_period(["test_account_123"], year, month)
 
         assert "test_account_123" in usage_report
         account_usage = usage_report["test_account_123"]
@@ -74,7 +74,7 @@ class TestHistoricalUsageIntegration:
         monthly_reports = {}
 
         for month in months_to_test:
-            report = backend.get_historical_usage_report(["test_account_123"], 2024, month)
+            report = backend.get_usage_report_for_period(["test_account_123"], 2024, month)
             monthly_reports[month] = report
 
         # All months should have the same account
@@ -126,7 +126,7 @@ class TestHistoricalUsageIntegration:
             current_usage = backend._get_usage_report(["test_account_123"])
 
         # Get historical usage for January
-        historical_usage = backend.get_historical_usage_report(["test_account_123"], 2024, 1)
+        historical_usage = backend.get_usage_report_for_period(["test_account_123"], 2024, 1)
 
         # Should have similar structure since both query same month
         if "test_account_123" in current_usage and "test_account_123" in historical_usage:
@@ -149,7 +149,7 @@ class TestHistoricalUsageIntegration:
         """Test that SLURM to Waldur unit conversion is accurate."""
         backend = SlurmBackend(mock_slurm_backend_config, mock_slurm_tres)
 
-        usage_report = backend.get_historical_usage_report(["test_account_123"], 2024, 1)
+        usage_report = backend.get_usage_report_for_period(["test_account_123"], 2024, 1)
         account_usage = usage_report["test_account_123"]
         user_usage = account_usage["testuser1"]
 
@@ -182,16 +182,16 @@ class TestHistoricalUsageIntegration:
         backend = SlurmBackend(mock_slurm_backend_config, mock_slurm_tres)
 
         # Test with non-existent account
-        usage_report = backend.get_historical_usage_report(["nonexistent_account"], 2024, 1)
+        usage_report = backend.get_usage_report_for_period(["nonexistent_account"], 2024, 1)
         assert isinstance(usage_report, dict)
         # Should not raise exception
 
         # Test with invalid month (should raise ValueError)
         with pytest.raises(ValueError, match="month must be in"):
-            backend.get_historical_usage_report(["test_account_123"], 2024, 13)
+            backend.get_usage_report_for_period(["test_account_123"], 2024, 13)
 
         # Test with empty account list
-        usage_report = backend.get_historical_usage_report([], 2024, 1)
+        usage_report = backend.get_usage_report_for_period([], 2024, 1)
         assert isinstance(usage_report, dict)
 
     def test_large_date_range_simulation(
@@ -209,7 +209,7 @@ class TestHistoricalUsageIntegration:
 
         monthly_reports = []
         for year, month, start_str, end_str in periods:
-            report = backend.get_historical_usage_report(["test_account_123"], year, month)
+            report = backend.get_usage_report_for_period(["test_account_123"], year, month)
             monthly_reports.append((year, month, report))
 
         # Verify each month processed
@@ -242,7 +242,7 @@ class TestHistoricalUsageIntegration:
 
         start_time = time.time()
 
-        usage_report = backend.get_historical_usage_report(accounts, 2024, 1)
+        usage_report = backend.get_usage_report_for_period(accounts, 2024, 1)
 
         end_time = time.time()
         duration = end_time - start_time

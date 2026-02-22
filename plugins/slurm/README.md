@@ -24,11 +24,9 @@ including resource management, usage reporting, periodic limits, and historical 
 
 ### Historical Usage Loading
 
-- **Bulk Data Import**: Load historical SLURM usage data into Waldur
-- **Monthly Processing**: Automatic monthly billing period handling
-- **Staff Authentication**: Secure historical data submission with staff tokens
-- **Data Attribution**: User-level and resource-level usage attribution
-- **Progress Tracking**: Detailed progress reporting during bulk loads
+The `waldur_site_load_historical_usage` command has been moved to the core package and is now
+available to all backend plugins. The SLURM backend implements `get_usage_report_for_period()`
+to supply historical data from SLURM accounting records.
 
 ### Dual-Mode Operation
 
@@ -410,7 +408,7 @@ The SLURM backend implements all required methods from `BaseBackend`:
 #### Usage Reporting
 
 - `get_usage_report(start_date, end_date)`
-- `get_historical_usage_report(start_date, end_date)`
+- `get_usage_report_for_period(resource_backend_ids, year, month)`
 
 #### Periodic Limits
 
@@ -486,11 +484,12 @@ plugins/slurm/tests/
 │   ├── test_mock_mastermind_signals.py
 │   ├── test_emulator_scenarios_*.py
 │   └── README.md
-├── test_historical_usage/         # Historical usage loading
+├── test_historical_usage/         # SLURM-specific historical usage tests
 │   ├── test_integration.py
 │   ├── test_slurm_client_historical.py
 │   ├── test_slurm_backend_historical.py
 │   └── README.md
+│   # Note: Loader and backend utils tests moved to core tests/
 ├── test_diagnostics.py            # Account diagnostics CLI
 ├── test_order_processing.py       # Core functionality
 ├── test_reporing.py               # Usage reporting
