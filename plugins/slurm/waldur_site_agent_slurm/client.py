@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import datetime
 import re
+from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -27,15 +28,33 @@ class SlurmClient(clients.BaseClient):
     _COMMAND_SUPPORTS_IMMEDIATE = frozenset({"sacctmgr"})
     # Commands that support --parsable2 and --noheader flags
     _COMMAND_SUPPORTS_PARSABLE = frozenset({"sacctmgr", "sacct"})
+    # SLURM commands whose path should be resolved via slurm_bin_path
+    SLURM_COMMANDS = frozenset({"sacctmgr", "sacct", "scancel", "sinfo"})
 
-    def __init__(self, slurm_tres: dict) -> None:
+    def __init__(self, slurm_tres: dict, slurm_bin_path: str = "/usr/bin") -> None:
         """Inits SLURM-related data."""
         self.slurm_tres = slurm_tres
+        self.slurm_bin_path = slurm_bin_path
         self.executed_commands: list[str] = []
 
     def clear_executed_commands(self) -> None:
         """Clear the list of tracked executed commands."""
         self.executed_commands = []
+
+    def validate_slurm_binary(self) -> bool:
+        """Validate that sacctmgr is a real SLURM binary, not an emulator.
+
+        Runs ``sacctmgr --version`` and checks that the output contains
+        "slurm", which real SLURM binaries always include (e.g. "slurm 24.05.4").
+        Returns False for emulator scripts that produce different output.
+        """
+        try:
+            output = self._execute_command(
+                ["--version"], command_name="sacctmgr", immediate=False, parsable=False
+            )
+            return "slurm" in output.lower()
+        except BackendError:
+            return False
 
     def list_resources(self) -> list[ClientResource]:
         """Returns a list of accounts in the SLURM cluster."""
@@ -359,7 +378,11 @@ class SlurmClient(clients.BaseClient):
                 f"--parsable2/--noheader are not supported by {command_name}. "
                 f"Use parsable=False for {command_name} commands."
             )
-        account_command = [command_name]
+        if self.slurm_bin_path and command_name in self.SLURM_COMMANDS:
+            resolved_command = str(Path(self.slurm_bin_path) / command_name)
+        else:
+            resolved_command = command_name
+        account_command = [resolved_command]
         if parsable:
             account_command.extend(["--parsable2", "--noheader"])
         if immediate:

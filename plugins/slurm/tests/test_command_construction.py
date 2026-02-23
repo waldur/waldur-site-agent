@@ -17,7 +17,7 @@ class TestFlagValidationGuard:
     @pytest.fixture
     def client(self):
         """SlurmClient with mocked base execute_command."""
-        client = SlurmClient({})
+        client = SlurmClient({}, slurm_bin_path="")
         with patch.object(client, "execute_command", return_value=""):
             yield client
 
@@ -96,7 +96,8 @@ class TestCommandPrefixByMethod:
     def client(self):
         """SlurmClient with mocked base execute_command returning typical output."""
         client = SlurmClient(
-            {"cpu": "TRES_CPU", "gpu": "TRES_GPU", "ram": "TRES_RAM"}
+            {"cpu": "TRES_CPU", "gpu": "TRES_GPU", "ram": "TRES_RAM"},
+            slurm_bin_path="",
         )
         with patch.object(client, "execute_command", return_value="") as mock_exec:
             yield client, mock_exec

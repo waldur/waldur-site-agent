@@ -33,7 +33,8 @@ class SlurmBackend(backends.BaseBackend):
         """Init backend data and creates a corresponding client."""
         super().__init__(slurm_settings, slurm_tres)
         self.backend_type = BackendType.SLURM.value
-        self.client: SlurmClient = SlurmClient(slurm_tres)
+        slurm_bin_path = self.backend_settings.get("slurm_bin_path", "/usr/bin")
+        self.client: SlurmClient = SlurmClient(slurm_tres, slurm_bin_path=slurm_bin_path)
 
     def _pre_create_resource(
         self,
@@ -103,6 +104,14 @@ class SlurmBackend(backends.BaseBackend):
         except BackendError as err:
             logger.error("Unable to fetch SLURM info, reason: %s", err)
             return False
+
+        if not self.client.validate_slurm_binary():
+            logger.error(
+                "SLURM binary validation failed: sacctmgr does not appear to be a real "
+                "SLURM binary. This may indicate an emulator is shadowing the real binary. "
+                "Check slurm_bin_path setting (current: '%s').",
+                self.client.slurm_bin_path,
+            )
 
         try:
             self.ping(raise_exception=True)
