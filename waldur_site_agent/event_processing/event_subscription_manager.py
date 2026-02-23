@@ -137,8 +137,17 @@ class EventSubscriptionManager:
 
         password = self.offering.api_token
         logger.info("Using %s:%s/%s%s broker", stomp_host, stomp_port, vhost_name, ws_path)
+        # Transport-level reconnection is intentionally limited to a single attempt.
+        # Application-level retries with exponential backoff are handled by
+        # connect_to_stomp_server() in listener.py.  See the module docstring
+        # there for the full reconnection design and stomp.py corner cases.
+        # IMPORTANT: reconnect_attempts_max=0 disables ALL connection attempts
+        # (the transport loop condition is `count < max`, so 0 < 0 is False).
         connection = stomp.WSStompConnection(
-            host_and_ports=[(stomp_host, stomp_port)], ws_path=ws_path, vhost=vhost_name
+            host_and_ports=[(stomp_host, stomp_port)],
+            ws_path=ws_path,
+            vhost=vhost_name,
+            reconnect_attempts_max=1,
         )
         if self.offering.websocket_use_tls:
             connection.set_ssl(for_hosts=[(stomp_host, stomp_port)])
