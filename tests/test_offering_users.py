@@ -87,14 +87,14 @@ class TestOfferingUserUpdate(unittest.TestCase):
         "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_begin_creating.sync_detailed"
     )
     @mock.patch(
-        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_partial_update.sync_detailed"
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_partial_update.sync"
     )
     @mock.patch(
-        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_ok.sync_detailed"
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_validation_complete.sync_detailed"
     )
     def test_offering_user_update(
         self,
-        marketplace_offering_users_set_ok_mock,
+        set_validation_complete_mock,
         marketplace_offering_users_partial_update_mock,
         marketplace_offering_users_begin_creating_mock,
         marketplace_provider_offerings_retrieve_mock,
@@ -121,7 +121,7 @@ class TestOfferingUserUpdate(unittest.TestCase):
 
         marketplace_offering_users_begin_creating_mock.return_value = mock_response
         marketplace_offering_users_partial_update_mock.return_value = mock_response
-        marketplace_offering_users_set_ok_mock.return_value = mock_response
+        set_validation_complete_mock.return_value = mock_response
 
         result = utils.update_offering_users(self.offering, self.waldur_client, self.offering_users)
 
@@ -138,6 +138,11 @@ class TestOfferingUserUpdate(unittest.TestCase):
         self.assertEqual(self.offering_users[0].username, new_requested_username)
         self.assertEqual(self.offering_users[1].username, new_pending_username)
         self.assertEqual(self.offering_users[2].username, new_creating_username)
+
+        # set_validation_complete should only be called for the PENDING_ACCOUNT_LINKING user
+        set_validation_complete_mock.assert_called_once_with(
+            uuid=self.offering_users[1].uuid, client=self.waldur_client
+        )
 
     def _setup_error_test_mocks(
         self,
@@ -344,3 +349,562 @@ class TestOfferingUserUpdate(unittest.TestCase):
 
         # Verify that get_username_management_backend was never called due to early exit
         get_username_management_backend_mock.assert_not_called()
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_pending_account_linking.sync_detailed"
+    )
+    def test_creating_user_transitions_to_pending_account_linking(
+        self,
+        set_pending_account_linking_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that a user in CREATING state transitions to PENDING_ACCOUNT_LINKING
+        when backend raises OfferingUserAccountLinkingRequiredError.
+
+        This covers the scenario where:
+        1. User was moved from REQUESTED to CREATING
+        2. Backend initially failed with a non-linking error
+        3. On retry, backend raises OfferingUserAccountLinkingRequiredError
+        4. The user should transition to PENDING_ACCOUNT_LINKING (not stay stuck in CREATING)
+        """
+        test_comment_url = "https://example.com/account-linking"
+        error_message = "Please link your existing account"
+
+        # User is already in CREATING state (was moved from REQUESTED in a previous run)
+        creating_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="stuck_user@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.CREATING,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.side_effect = (
+            backend_exceptions.OfferingUserAccountLinkingRequiredError(
+                error_message, comment_url=test_comment_url
+            )
+        )
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
+        set_pending_account_linking_mock.return_value = mock_response
+
+        utils.update_offering_users(self.offering, self.waldur_client, [creating_user])
+
+        # Verify the state transition API was called
+        set_pending_account_linking_mock.assert_called_once()
+        call_args = set_pending_account_linking_mock.call_args
+        body = call_args.kwargs["body"]
+        self.assertEqual(body.comment, error_message)
+        self.assertEqual(body.comment_url, test_comment_url)
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_pending_additional_validation.sync_detailed"
+    )
+    def test_creating_user_transitions_to_pending_validation(
+        self,
+        set_pending_validation_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that a user in CREATING state transitions to PENDING_ADDITIONAL_VALIDATION
+        when backend raises OfferingUserAdditionalValidationRequiredError."""
+        test_comment_url = "https://example.com/validation-form"
+        error_message = "Additional documents required"
+
+        creating_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="stuck_user@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.CREATING,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.side_effect = (
+            backend_exceptions.OfferingUserAdditionalValidationRequiredError(
+                error_message, comment_url=test_comment_url
+            )
+        )
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
+        set_pending_validation_mock.return_value = mock_response
+
+        utils.update_offering_users(self.offering, self.waldur_client, [creating_user])
+
+        # Verify the state transition API was called
+        set_pending_validation_mock.assert_called_once()
+        call_args = set_pending_validation_mock.call_args
+        body = call_args.kwargs["body"]
+        self.assertEqual(body.comment, error_message)
+        self.assertEqual(body.comment_url, test_comment_url)
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_pending_account_linking.sync_detailed"
+    )
+    def test_already_pending_user_stays_in_pending_state(
+        self,
+        set_pending_account_linking_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that a user already in PENDING_ACCOUNT_LINKING does NOT re-trigger
+        the state transition when backend still raises the same error."""
+        pending_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="pending_user@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.PENDING_ACCOUNT_LINKING,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.side_effect = (
+            backend_exceptions.OfferingUserAccountLinkingRequiredError("Still pending")
+        )
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        utils.update_offering_users(self.offering, self.waldur_client, [pending_user])
+
+        # The state transition API should NOT be called since user is already in the right state
+        set_pending_account_linking_mock.assert_not_called()
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_begin_creating.sync_detailed"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_partial_update.sync"
+    )
+    def test_error_creating_user_is_retried(
+        self,
+        partial_update_mock,
+        begin_creating_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that ERROR_CREATING user is retried: begin_creating called, then username set."""
+        error_creating_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="error_user@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.ERROR_CREATING,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.return_value = "error_user"
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
+        begin_creating_mock.return_value = mock_response
+
+        result = utils.update_offering_users(
+            self.offering, self.waldur_client, [error_creating_user]
+        )
+
+        self.assertTrue(result)
+        # begin_creating should be called to transition from ERROR_CREATING to CREATING
+        begin_creating_mock.assert_called_once_with(
+            uuid=error_creating_user.uuid, client=self.waldur_client
+        )
+        # Username should be set
+        self.assertEqual(error_creating_user.username, "error_user")
+        partial_update_mock.assert_called_once()
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_error_creating.sync_detailed"
+    )
+    def test_backend_error_in_creating_sets_error_creating(
+        self,
+        set_error_creating_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that BackendError in CREATING state triggers set_error_creating."""
+        creating_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="failing_user@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.CREATING,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.side_effect = (
+            backend_exceptions.BackendError("SLURM command failed")
+        )
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
+        set_error_creating_mock.return_value = mock_response
+
+        utils.update_offering_users(self.offering, self.waldur_client, [creating_user])
+
+        # set_error_creating should be called for BackendError
+        set_error_creating_mock.assert_called_once_with(
+            uuid=creating_user.uuid, client=self.waldur_client
+        )
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_error_creating.sync_detailed"
+    )
+    def test_network_error_does_not_set_error_creating(
+        self,
+        set_error_creating_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that a non-BackendError (e.g. network timeout) does NOT trigger set_error_creating."""
+        creating_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="timeout_user@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.CREATING,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.side_effect = (
+            ConnectionError("Network unreachable")
+        )
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        utils.update_offering_users(self.offering, self.waldur_client, [creating_user])
+
+        # set_error_creating should NOT be called for non-BackendError exceptions
+        set_error_creating_mock.assert_not_called()
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_partial_update.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_validation_complete.sync_detailed"
+    )
+    def test_pending_user_uses_set_validation_complete(
+        self,
+        set_validation_complete_mock,
+        partial_update_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that PENDING_ACCOUNT_LINKING user with successful username
+        calls set_validation_complete (not set_ok)."""
+        pending_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="pending_ok_user@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.PENDING_ACCOUNT_LINKING,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.return_value = "pending_ok_user"
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
+        set_validation_complete_mock.return_value = mock_response
+
+        result = utils.update_offering_users(self.offering, self.waldur_client, [pending_user])
+
+        self.assertTrue(result)
+        set_validation_complete_mock.assert_called_once_with(
+            uuid=pending_user.uuid, client=self.waldur_client
+        )
+        self.assertEqual(pending_user.username, "pending_ok_user")
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_pending_additional_validation.sync_detailed"
+    )
+    def test_pending_linking_cross_transitions_to_pending_validation(
+        self,
+        set_pending_validation_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that PENDING_ACCOUNT_LINKING user cross-transitions to
+        PENDING_ADDITIONAL_VALIDATION when backend raises AdditionalValidationRequiredError."""
+        test_comment_url = "https://example.com/validation-form"
+        error_message = "Validation now required"
+
+        pending_linking_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="cross_user@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.PENDING_ACCOUNT_LINKING,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.side_effect = (
+            backend_exceptions.OfferingUserAdditionalValidationRequiredError(
+                error_message, comment_url=test_comment_url
+            )
+        )
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
+        set_pending_validation_mock.return_value = mock_response
+
+        utils.update_offering_users(self.offering, self.waldur_client, [pending_linking_user])
+
+        # Should cross-transition to PENDING_ADDITIONAL_VALIDATION
+        set_pending_validation_mock.assert_called_once()
+        call_args = set_pending_validation_mock.call_args
+        body = call_args.kwargs["body"]
+        self.assertEqual(body.comment, error_message)
+        self.assertEqual(body.comment_url, test_comment_url)
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_pending_account_linking.sync_detailed"
+    )
+    def test_pending_validation_cross_transitions_to_pending_linking(
+        self,
+        set_pending_linking_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that PENDING_ADDITIONAL_VALIDATION user cross-transitions to
+        PENDING_ACCOUNT_LINKING when backend raises AccountLinkingRequiredError."""
+        test_comment_url = "https://example.com/account-linking"
+        error_message = "Linking now required"
+
+        pending_validation_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="cross_user2@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.PENDING_ADDITIONAL_VALIDATION,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.side_effect = (
+            backend_exceptions.OfferingUserAccountLinkingRequiredError(
+                error_message, comment_url=test_comment_url
+            )
+        )
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
+        set_pending_linking_mock.return_value = mock_response
+
+        utils.update_offering_users(self.offering, self.waldur_client, [pending_validation_user])
+
+        # Should cross-transition to PENDING_ACCOUNT_LINKING
+        set_pending_linking_mock.assert_called_once()
+        call_args = set_pending_linking_mock.call_args
+        body = call_args.kwargs["body"]
+        self.assertEqual(body.comment, error_message)
+        self.assertEqual(body.comment_url, test_comment_url)
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_pending_additional_validation.sync_detailed"
+    )
+    def test_already_pending_validation_stays_in_pending_validation(
+        self,
+        set_pending_validation_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that PENDING_ADDITIONAL_VALIDATION user does NOT re-trigger
+        the transition when backend still raises the same error."""
+        pending_validation_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="still_pending@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.PENDING_ADDITIONAL_VALIDATION,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.side_effect = (
+            backend_exceptions.OfferingUserAdditionalValidationRequiredError("Still pending")
+        )
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        utils.update_offering_users(self.offering, self.waldur_client, [pending_validation_user])
+
+        # Should NOT call set_pending_additional_validation since already in that state
+        set_pending_validation_mock.assert_not_called()
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_begin_creating.sync_detailed"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_pending_account_linking.sync_detailed"
+    )
+    def test_error_creating_user_transitions_to_pending_linking(
+        self,
+        set_pending_linking_mock,
+        begin_creating_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that ERROR_CREATING user transitions to PENDING_ACCOUNT_LINKING
+        when backend raises OfferingUserAccountLinkingRequiredError."""
+        test_comment_url = "https://example.com/account-linking"
+        error_message = "Please link your account"
+
+        error_creating_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="error_link_user@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.ERROR_CREATING,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.side_effect = (
+            backend_exceptions.OfferingUserAccountLinkingRequiredError(
+                error_message, comment_url=test_comment_url
+            )
+        )
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
+        begin_creating_mock.return_value = mock_response
+        set_pending_linking_mock.return_value = mock_response
+
+        utils.update_offering_users(self.offering, self.waldur_client, [error_creating_user])
+
+        # begin_creating should be called first to move from ERROR_CREATING to CREATING
+        begin_creating_mock.assert_called_once()
+        # Then set_pending_account_linking should be called
+        set_pending_linking_mock.assert_called_once()
+        call_args = set_pending_linking_mock.call_args
+        body = call_args.kwargs["body"]
+        self.assertEqual(body.comment, error_message)
+        self.assertEqual(body.comment_url, test_comment_url)
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_begin_creating.sync_detailed"
+    )
+    @mock.patch(
+        "waldur_api_client.api.marketplace_offering_users.marketplace_offering_users_set_error_creating.sync_detailed"
+    )
+    def test_backend_error_in_requested_sets_error_creating(
+        self,
+        set_error_creating_mock,
+        begin_creating_mock,
+        marketplace_provider_offerings_retrieve_mock,
+        get_username_management_backend_mock,
+    ):
+        """Test that BackendError during REQUESTED→CREATING processing triggers set_error_creating."""
+        requested_user = OfferingUser(
+            uuid=uuid.uuid4(),
+            user_email="requested_fail@example.com",
+            is_restricted=False,
+            username="",
+            state=OfferingUserState.REQUESTED,
+        )
+
+        username_management_backend_mock = mock.Mock(spec=AbstractUsernameManagementBackend)
+        username_management_backend_mock.get_or_create_username.side_effect = (
+            backend_exceptions.BackendError("SLURM command failed")
+        )
+        get_username_management_backend_mock.return_value = (username_management_backend_mock, "")
+
+        marketplace_provider_offerings_retrieve_mock.return_value = self.provider_offering_details
+
+        mock_response = mock.Mock()
+        mock_response.parsed = None
+        mock_response.status_code = 200
+        begin_creating_mock.return_value = mock_response
+        set_error_creating_mock.return_value = mock_response
+
+        utils.update_offering_users(self.offering, self.waldur_client, [requested_user])
+
+        # begin_creating should be called (REQUESTED → CREATING)
+        begin_creating_mock.assert_called_once()
+        # set_error_creating should be called after BackendError
+        set_error_creating_mock.assert_called_once_with(
+            uuid=requested_user.uuid, client=self.waldur_client
+        )
