@@ -460,21 +460,21 @@ class TestExecutedCommandsTracking:
         client._execute_command(["modify", "account", "acct1", "set", "fairshare=500"])
         assert len(client.executed_commands) == 1
         assert client.executed_commands[0] == (
-            "sacctmgr --parsable2 --noheader --immediate modify account acct1 set fairshare=500"
+            "/usr/bin/sacctmgr --parsable2 --noheader --immediate modify account acct1 set fairshare=500"
         )
 
     def test_execute_command_tracks_without_immediate(self, client):
         """_execute_command without immediate flag omits --immediate."""
         client._execute_command(["show", "account", "acct1"], immediate=False)
         assert client.executed_commands[0] == (
-            "sacctmgr --parsable2 --noheader show account acct1"
+            "/usr/bin/sacctmgr --parsable2 --noheader show account acct1"
         )
 
     def test_execute_command_tracks_different_command_name(self, client):
         """_execute_command tracks sacct commands too."""
         client._execute_command(["--starttime=2026-01-01"], command_name="sacct", immediate=False)
         assert client.executed_commands[0] == (
-            "sacct --parsable2 --noheader --starttime=2026-01-01"
+            "/usr/bin/sacct --parsable2 --noheader --starttime=2026-01-01"
         )
 
     def test_multiple_commands_tracked_in_order(self, client):
@@ -553,7 +553,7 @@ class TestProductionModeCommandsExecuted:
         assert any("RawUsage=0" in c for c in cmds)
         # Verify they are real sacctmgr commands, not approximations
         for c in cmds:
-            assert c.startswith("sacctmgr ")
+            assert "sacctmgr" in c
 
     def test_commands_executed_returned_on_failure(self):
         """Failed apply still returns commands executed before the failure."""

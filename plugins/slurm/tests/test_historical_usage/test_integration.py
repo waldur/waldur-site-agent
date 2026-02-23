@@ -176,7 +176,7 @@ class TestHistoricalUsageIntegration:
                     assert usage_value >= 0 and usage_value < float("inf")
 
     def test_error_handling_resilience(
-        self, emulator_available, mock_slurm_backend_config, mock_slurm_tres
+        self, emulator_available, patched_slurm_client, mock_slurm_backend_config, mock_slurm_tres
     ):
         """Test that historical usage handles errors gracefully."""
         backend = SlurmBackend(mock_slurm_backend_config, mock_slurm_tres)
