@@ -18,12 +18,18 @@ The async user creation follows a state-based workflow that prevents blocking op
 ```mermaid
 stateDiagram-v2
     [*] --> REQUESTED : User requests access
-    REQUESTED --> CREATING : Begin username generation
-    CREATING --> OK : Username successfully created
-    CREATING --> PENDING_ACCOUNT_LINKING : Manual linking required
-    CREATING --> PENDING_ADDITIONAL_VALIDATION : Additional validation needed
-    PENDING_ACCOUNT_LINKING --> OK : Username generation succeeds on retry
-    PENDING_ADDITIONAL_VALIDATION --> OK : Username generation succeeds on retry
+    REQUESTED --> CREATING : begin_creating
+    CREATING --> OK : Username set (auto-transition)
+    CREATING --> PENDING_ACCOUNT_LINKING : Linking required
+    CREATING --> PENDING_ADDITIONAL_VALIDATION : Validation needed
+    CREATING --> ERROR_CREATING : BackendError
+    ERROR_CREATING --> CREATING : begin_creating (retry)
+    ERROR_CREATING --> PENDING_ACCOUNT_LINKING : Linking required
+    ERROR_CREATING --> PENDING_ADDITIONAL_VALIDATION : Validation needed
+    PENDING_ACCOUNT_LINKING --> OK : set_validation_complete
+    PENDING_ADDITIONAL_VALIDATION --> OK : set_validation_complete
+    PENDING_ACCOUNT_LINKING --> PENDING_ADDITIONAL_VALIDATION : Cross-transition
+    PENDING_ADDITIONAL_VALIDATION --> PENDING_ACCOUNT_LINKING : Cross-transition
     OK --> [*] : User ready for resource access
 ```
 
@@ -34,6 +40,7 @@ stateDiagram-v2
 - **OK**: Username successfully generated and user is ready for resource access
 - **PENDING_ACCOUNT_LINKING**: Manual intervention required to link user accounts
 - **PENDING_ADDITIONAL_VALIDATION**: Additional validation steps needed before proceeding
+- **ERROR_CREATING**: Backend failure during username generation; retried on next sync cycle
 
 ## Core Components
 
@@ -77,6 +84,7 @@ Core processing function that handles username generation and state transitions.
 - `_update_user_username()`: Individual user processing
 - `_handle_account_linking_error()`: Account linking error management
 - `_handle_validation_error()`: Validation error management
+- `_set_error_creating()`: Marks user as ERROR_CREATING after backend failures
 
 ### Username Management Backend System
 
@@ -211,19 +219,41 @@ The system defines specific exceptions for different error scenarios:
 
 - **`OfferingUserAccountLinkingRequiredError`**: Raised when manual account linking is required
 - **`OfferingUserAdditionalValidationRequiredError`**: Raised when additional validation steps are needed
+- **`BackendError`**: Generic backend failure; triggers ERROR_CREATING state transition
 
-Both exceptions support an optional `comment_url` parameter to provide links to forms, documentation, or
-other resources needed for error resolution.
+Both linking/validation exceptions support an optional `comment_url` parameter to provide links to
+forms, documentation, or other resources needed for error resolution.
 
 ### Error Recovery
 
-When exceptions occur:
+When exceptions occur during username generation:
 
-1. User state transitions to appropriate pending state
+1. User state transitions to appropriate pending or error state
 2. Error details are logged with context
 3. Comment field is updated with error message and comment_url field with any provided URL
 4. Processing continues for other users
-5. Pending users are retried in subsequent runs
+5. Pending and error users are retried in subsequent runs
+
+**State transition handling by current user state:**
+
+- **REQUESTED → CREATING**: The agent first transitions the user to CREATING, then calls the backend.
+  If the backend raises a linking/validation error, the user transitions to the appropriate PENDING state.
+  If a `BackendError` occurs, the user transitions to ERROR_CREATING.
+- **CREATING / ERROR_CREATING**: If the backend raises `OfferingUserAccountLinkingRequiredError` or
+  `OfferingUserAdditionalValidationRequiredError`, the user transitions to `PENDING_ACCOUNT_LINKING`
+  or `PENDING_ADDITIONAL_VALIDATION` respectively. If a `BackendError` occurs, the user transitions
+  to ERROR_CREATING so that admins can see the failure. On the next cycle, ERROR_CREATING users
+  are moved back to CREATING via `begin_creating` and retried.
+- **PENDING_ACCOUNT_LINKING**: If the backend still raises `OfferingUserAccountLinkingRequiredError`,
+  the user stays in the current state (no redundant API call). If the backend raises
+  `OfferingUserAdditionalValidationRequiredError`, the user cross-transitions to
+  PENDING_ADDITIONAL_VALIDATION.
+- **PENDING_ADDITIONAL_VALIDATION**: If the backend still raises
+  `OfferingUserAdditionalValidationRequiredError`, the user stays in the current state.
+  If the backend raises `OfferingUserAccountLinkingRequiredError`, the user cross-transitions
+  to PENDING_ACCOUNT_LINKING.
+- **PENDING_* → OK**: When username generation succeeds for a PENDING user, `set_validation_complete`
+  is called (which clears service provider comments) before setting the username.
 
 ## Best Practices
 

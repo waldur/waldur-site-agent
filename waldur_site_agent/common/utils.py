@@ -26,9 +26,10 @@ from waldur_api_client.api.marketplace_offering_users import (
     marketplace_offering_users_begin_creating,
     marketplace_offering_users_list,
     marketplace_offering_users_partial_update,
-    marketplace_offering_users_set_ok,
+    marketplace_offering_users_set_error_creating,
     marketplace_offering_users_set_pending_account_linking,
     marketplace_offering_users_set_pending_additional_validation,
+    marketplace_offering_users_set_validation_complete,
 )
 from waldur_api_client.api.marketplace_orders import marketplace_orders_list
 from waldur_api_client.api.marketplace_provider_offerings import (
@@ -1001,6 +1002,7 @@ def _group_users_by_state(
             OfferingUserState.CREATING,
             OfferingUserState.PENDING_ACCOUNT_LINKING,
             OfferingUserState.PENDING_ADDITIONAL_VALIDATION,
+            OfferingUserState.ERROR_CREATING,
         }:
             pending_users.append(user)
 
@@ -1040,6 +1042,8 @@ def _process_requested_users(
         except backend_exceptions.OfferingUserAdditionalValidationRequiredError as e:
             _handle_validation_error(user, e, waldur_rest_client)
         except Exception as e:
+            if isinstance(e, backend_exceptions.BackendError):
+                _set_error_creating(user, waldur_rest_client)
             logger.error(
                 "Failed to generate username for offering user %s (%s): %s",
                 user.user_email,
@@ -1067,15 +1071,36 @@ def _process_pending_users(
                 user.uuid,
             )
 
+            # ERROR_CREATING users need to be moved back to CREATING before retry
+            if user.state == OfferingUserState.ERROR_CREATING:
+                logger.info(
+                    "Re-creating offering user %s (%s) from ERROR_CREATING state",
+                    user.user_email,
+                    user.uuid,
+                )
+                marketplace_offering_users_begin_creating.sync_detailed(
+                    uuid=user.uuid, client=waldur_rest_client
+                )
+
             if _update_user_username(user, username_management_backend, waldur_rest_client):
                 changed = True
 
-        except (
-            backend_exceptions.OfferingUserAccountLinkingRequiredError,
-            backend_exceptions.OfferingUserAdditionalValidationRequiredError,
-        ):
-            logger.info("Backend account is still in the pending state")
+        except backend_exceptions.OfferingUserAccountLinkingRequiredError as e:
+            if user.state == OfferingUserState.PENDING_ACCOUNT_LINKING:
+                logger.info("Backend account is still in the pending account linking state")
+            else:
+                _handle_account_linking_error(user, e, waldur_rest_client)
+        except backend_exceptions.OfferingUserAdditionalValidationRequiredError as e:
+            if user.state == OfferingUserState.PENDING_ADDITIONAL_VALIDATION:
+                logger.info("Backend account is still in the pending validation state")
+            else:
+                _handle_validation_error(user, e, waldur_rest_client)
         except Exception as e:
+            if isinstance(e, backend_exceptions.BackendError) and user.state in {
+                OfferingUserState.CREATING,
+                OfferingUserState.ERROR_CREATING,
+            }:
+                _set_error_creating(user, waldur_rest_client)
             logger.error(
                 "Failed to generate username for offering user %s (%s): %s",
                 user.user_email,
@@ -1103,19 +1128,47 @@ def _update_user_username(
         username,
     )
 
-    # Update local object and remote API
+    # For PENDING users: transition to OK and clear comments first
+    if offering_user.state in {
+        OfferingUserState.PENDING_ACCOUNT_LINKING,
+        OfferingUserState.PENDING_ADDITIONAL_VALIDATION,
+    }:
+        logger.info("Setting offering user state to OK via set_validation_complete")
+        marketplace_offering_users_set_validation_complete.sync_detailed(
+            uuid=offering_user.uuid, client=waldur_rest_client
+        )
+
+    # Update local object and set username via API
+    # For CREATING/ERROR_CREATING users, Mastermind auto-transitions to OK on save()
     offering_user.username = username
     payload = PatchedOfferingUserRequest(username=username)
     marketplace_offering_users_partial_update.sync(
         uuid=offering_user.uuid, client=waldur_rest_client, body=payload
     )
 
-    logger.info("Setting offering user state to OK")
-    marketplace_offering_users_set_ok.sync_detailed(
-        uuid=offering_user.uuid, client=waldur_rest_client
-    )
-
     return True
+
+
+def _set_error_creating(
+    user: OfferingUser,
+    waldur_rest_client: AuthenticatedClient,
+) -> None:
+    """Set offering user state to ERROR_CREATING after a backend failure."""
+    try:
+        logger.info(
+            "Setting offering user %s (%s) state to ERROR_CREATING",
+            user.user_email,
+            user.uuid,
+        )
+        marketplace_offering_users_set_error_creating.sync_detailed(
+            uuid=user.uuid, client=waldur_rest_client
+        )
+    except Exception:
+        logger.warning(
+            "Failed to set ERROR_CREATING for offering user %s (%s)",
+            user.user_email,
+            user.uuid,
+        )
 
 
 def _handle_account_linking_error(
