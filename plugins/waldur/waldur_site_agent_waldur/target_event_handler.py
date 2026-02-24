@@ -18,9 +18,6 @@ from waldur_api_client.api.marketplace_orders import (
     marketplace_orders_set_state_done,
     marketplace_orders_set_state_erred,
 )
-from waldur_api_client.models.marketplace_orders_list_state_item import (
-    MarketplaceOrdersListStateItem,
-)
 from waldur_api_client.models.order_error_details_request import OrderErrorDetailsRequest
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.types import UNSET
@@ -93,7 +90,7 @@ def make_target_order_handler(
             executing_orders = marketplace_orders_list.sync_all(
                 client=source_client,
                 offering_uuid=UUID(source_offering.uuid),
-                state=[MarketplaceOrdersListStateItem.EXECUTING],
+                state=[OrderState.EXECUTING],
             )
 
             source_order = next(

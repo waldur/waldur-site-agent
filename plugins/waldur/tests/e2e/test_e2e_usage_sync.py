@@ -47,9 +47,7 @@ from waldur_api_client.models import ComponentUsageCreateRequest, ComponentUsage
 from waldur_api_client.models.component_user_usage_create_request import (
     ComponentUserUsageCreateRequest,
 )
-from waldur_api_client.models.marketplace_provider_resources_list_state_item import (
-    MarketplaceProviderResourcesListStateItem,
-)
+from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.common.processors import OfferingReportProcessor
@@ -67,7 +65,7 @@ def _find_usable_resource(waldur_client_a, waldur_client_b, offering_uuid):
     resources = marketplace_provider_resources_list.sync_all(
         client=waldur_client_a,
         offering_uuid=[offering_uuid],
-        state=[MarketplaceProviderResourcesListStateItem("OK")],
+        state=[ResourceState("OK")],
     )
     for r in resources:
         backend_id = r.backend_id

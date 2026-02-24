@@ -78,9 +78,11 @@ from waldur_api_client.models import (
     ComponentUsageCreateRequest,
     ComponentUsageItemRequest,
     CourseAccount,
-    MarketplaceOfferingUsersListStateItem,
+    OrderState,
     ProjectServiceAccount,
+    ProviderOfferingDetailsFieldEnum,
     ResourceSetLimitsRequest,
+    ResourceState,
     ServiceAccountState,
 )
 from waldur_api_client.models.agent_processor import AgentProcessor
@@ -94,15 +96,6 @@ from waldur_api_client.models.component_usage import ComponentUsage
 from waldur_api_client.models.component_user_usage_create_request import (
     ComponentUserUsageCreateRequest,
 )
-from waldur_api_client.models.marketplace_orders_list_state_item import (
-    MarketplaceOrdersListStateItem,
-)
-from waldur_api_client.models.marketplace_provider_offerings_retrieve_field_item import (
-    MarketplaceProviderOfferingsRetrieveFieldItem,
-)
-from waldur_api_client.models.marketplace_provider_resources_list_state_item import (
-    MarketplaceProviderResourcesListStateItem,
-)
 from waldur_api_client.models.offering_component import OfferingComponent
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.offering_user_state import OfferingUserState
@@ -114,7 +107,6 @@ from waldur_api_client.models.order_details import (
     OrderDetails,
 )
 from waldur_api_client.models.order_error_details_request import OrderErrorDetailsRequest
-from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.project_user import ProjectUser
 from waldur_api_client.models.provider_offering_details import ProviderOfferingDetails
 from waldur_api_client.models.request_types import RequestTypes
@@ -123,7 +115,6 @@ from waldur_api_client.models.resource_backend_id_request import ResourceBackend
 from waldur_api_client.models.resource_backend_metadata_request import (
     ResourceBackendMetadataRequest,
 )
-from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import BackendType, logger
@@ -520,8 +511,8 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             client=self.waldur_rest_client,
             offering_uuid=self.offering.uuid,
             state=[
-                MarketplaceOrdersListStateItem.PENDING_PROVIDER,
-                MarketplaceOrdersListStateItem.EXECUTING,
+                OrderState.PENDING_PROVIDER,
+                OrderState.EXECUTING,
             ],
         )
 
@@ -1145,8 +1136,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         filters: dict[str, list | str] = {
             "offering_uuid": [self.offering.uuid],
             "state": [
-                MarketplaceProviderResourcesListStateItem.OK,
-                MarketplaceProviderResourcesListStateItem.ERRED,
+                ResourceState.OK,
+                ResourceState.ERRED,
             ],
         }
 
@@ -1309,7 +1300,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         offering_details = marketplace_provider_offerings_retrieve.sync(
             client=self.waldur_rest_client,
             uuid=self.offering.uuid,
-            field=[MarketplaceProviderOfferingsRetrieveFieldItem.PLUGIN_OPTIONS],
+            field=[ProviderOfferingDetailsFieldEnum.PLUGIN_OPTIONS],
         )
         plugin_options = offering_details.plugin_options
         service_provider_can_create = plugin_options.service_provider_can_create_offering_user
@@ -1396,8 +1387,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             client=self.waldur_rest_client,
             offering_uuid=[self.offering.uuid],
             state=[
-                MarketplaceOfferingUsersListStateItem.OK,
-                MarketplaceOfferingUsersListStateItem.REQUESTED,
+                OfferingUserState.OK,
+                OfferingUserState.REQUESTED,
             ],
             is_restricted=False,
         )
@@ -2308,9 +2299,9 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
         waldur_resources = marketplace_provider_resources_list.sync_all(
             offering_uuid=[self.offering.uuid],
             state=[
-                MarketplaceProviderResourcesListStateItem.OK,
-                MarketplaceProviderResourcesListStateItem.ERRED,
-                MarketplaceProviderResourcesListStateItem.CREATING,
+                ResourceState.OK,
+                ResourceState.ERRED,
+                ResourceState.CREATING,
             ],
             client=self.waldur_rest_client,
         )

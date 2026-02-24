@@ -12,9 +12,7 @@ from waldur_api_client.api.marketplace_provider_resources import (
 from waldur_api_client.api.marketplace_slurm_periodic_usage_policies import (
     marketplace_slurm_periodic_usage_policies_list,
 )
-from waldur_api_client.models.marketplace_provider_resources_list_state_item import (
-    MarketplaceProviderResourcesListStateItem,
-)
+from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend.exceptions import BackendError
@@ -142,8 +140,8 @@ class SlurmAccountDiagnosticService:
                 offering_uuid=[UUID(self.offering.waldur_offering_uuid)],
                 backend_id=account_name,
                 state=[
-                    MarketplaceProviderResourcesListStateItem.OK,
-                    MarketplaceProviderResourcesListStateItem.ERRED,
+                    ResourceState.OK,
+                    ResourceState.ERRED,
                 ],
             )
 
@@ -156,8 +154,8 @@ class SlurmAccountDiagnosticService:
                 client=self.waldur_client,
                 offering_uuid=[UUID(self.offering.waldur_offering_uuid)],
                 state=[
-                    MarketplaceProviderResourcesListStateItem.OK,
-                    MarketplaceProviderResourcesListStateItem.ERRED,
+                    ResourceState.OK,
+                    ResourceState.ERRED,
                 ],
             )
 
