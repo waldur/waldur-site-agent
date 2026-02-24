@@ -106,12 +106,6 @@ username_management_backend: "base"  # Backend for username management
 
 ### Event Processing
 
-#### `mqtt_enabled`
-
-- **Type**: Boolean
-- **Default**: `false`
-- **Description**: Enable MQTT-based event processing
-
 #### `stomp_enabled`
 
 - **Type**: Boolean
@@ -123,8 +117,6 @@ username_management_backend: "base"  # Backend for username management
 - **Type**: Boolean
 - **Default**: `true`
 - **Description**: Use TLS for websocket connections
-
-**Important**: Only one of `mqtt_enabled` or `stomp_enabled` can be `true`.
 
 ### Resource Management
 
@@ -241,6 +233,61 @@ backend_components:
 - **Optional**: Yes
 - **Description**: Fixed limit amount for limit-type components
 
+#### `description`
+
+- **Type**: String
+- **Optional**: Yes
+- **Description**: Description of the component shown in Waldur
+
+#### `min_value`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Minimum allowed value for the component
+
+#### `max_value`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Maximum allowed value for the component
+
+#### `max_available_limit`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Maximum available limit for the component
+
+#### `default_limit`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Default limit value applied when creating a resource
+
+#### `limit_period`
+
+- **Type**: String
+- **Optional**: Yes
+- **Values**: `"annual"`, `"month"`, `"quarterly"`, `"total"`
+- **Description**: Billing period for limit enforcement
+
+#### `article_code`
+
+- **Type**: String
+- **Optional**: Yes
+- **Description**: Article code for billing system integration
+
+#### `is_boolean`
+
+- **Type**: Boolean
+- **Optional**: Yes
+- **Description**: Whether the component represents a boolean (on/off) option
+
+#### `is_prepaid`
+
+- **Type**: Boolean
+- **Optional**: Yes
+- **Description**: Whether the component requires prepaid billing
+
 ### Backend-Specific Component Notes
 
 **SLURM**: Supports `cpu`, `mem`, and other custom components
@@ -289,7 +336,6 @@ offerings:
     username_management_backend: "base"
 
     resource_import_enabled: true
-    mqtt_enabled: false
     stomp_enabled: false
 
     backend_settings:
@@ -349,7 +395,7 @@ offerings:
   - name: "Event-Driven SLURM"
     # ... basic settings ...
 
-    mqtt_enabled: true
+    stomp_enabled: true
     websocket_use_tls: true
 
     order_processing_backend: "slurm"

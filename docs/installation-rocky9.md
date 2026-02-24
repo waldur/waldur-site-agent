@@ -496,8 +496,7 @@ sudo systemctl status firewalld
 sudo firewall-cmd --permanent --add-service=https
 sudo firewall-cmd --reload
 
-# For custom ports or MQTT/STOMP, add specific rules:
-# sudo firewall-cmd --permanent --add-port=8883/tcp  # MQTT over TLS
+# For custom ports or STOMP, add specific rules:
 # sudo firewall-cmd --permanent --add-port=61613/tcp # STOMP
 # sudo firewall-cmd --reload
 ```
