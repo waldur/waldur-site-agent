@@ -8,6 +8,7 @@ combinations are rejected at construction time.
 from unittest.mock import patch
 
 import pytest
+from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_slurm.client import SlurmClient
 
 
@@ -318,3 +319,43 @@ class TestCommandPrefixByMethod:
         assert "--parsable2" not in cmd
         assert "--noheader" not in cmd
         assert "--immediate" not in cmd
+
+
+class TestModifyNothingChanged:
+    """sacctmgr returns exit-code 1 with 'Nothing modified' when a modify
+    command sets values that already match.  This must be treated as a no-op."""
+
+    @pytest.fixture
+    def client(self):
+        client = SlurmClient({}, slurm_bin_path="")
+        return client
+
+    def test_modify_nothing_modified_is_suppressed(self, client):
+        """'Nothing modified' on a modify command should not raise."""
+        with patch.object(
+            client,
+            "execute_command",
+            side_effect=BackendError("sacctmgr: Request didn't affect anything\n Nothing modified"),
+        ):
+            result = client.set_resource_limits("acct1", {"node": 0})
+        assert result == ""
+
+    def test_modify_real_error_still_raises(self, client):
+        """Other errors on a modify command must still propagate."""
+        with patch.object(
+            client,
+            "execute_command",
+            side_effect=BackendError("sacctmgr: error: some real error"),
+        ):
+            with pytest.raises(BackendError, match="some real error"):
+                client.set_resource_limits("acct1", {"node": 0})
+
+    def test_non_modify_error_still_raises(self, client):
+        """Errors on non-modify commands must propagate regardless of message."""
+        with patch.object(
+            client,
+            "execute_command",
+            side_effect=BackendError("Nothing modified"),
+        ):
+            with pytest.raises(BackendError):
+                client.list_resources()

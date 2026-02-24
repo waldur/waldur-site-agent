@@ -389,7 +389,15 @@ class SlurmClient(clients.BaseClient):
             account_command.append("--immediate")
         account_command.extend(command)
         self.executed_commands.append(" ".join(account_command))
-        return self.execute_command(account_command, silent=silent)
+        try:
+            return self.execute_command(account_command, silent=silent)
+        except BackendError as e:
+            if command and command[0] == "modify" and "Nothing modified" in str(e):
+                # sacctmgr returns exit-code 1 with "Nothing modified" when the
+                # requested values already match the current state.  This is not
+                # a real error — the desired state is already reached.
+                return ""
+            raise
 
     # ===== PERIODIC LIMITS EXTENSION =====
 
