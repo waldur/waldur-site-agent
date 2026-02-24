@@ -65,8 +65,11 @@ class WaldurClient(BaseClient):
         super().__init__()
         self.api_url = api_url.rstrip("/")
         self.offering_uuid = offering_uuid
+        # Strip /api suffix for AuthenticatedClient base_url —
+        # the SDK prepends /api/ to all endpoint paths.
+        base_url = self.api_url.rstrip("/api")
         self._api_client = AuthenticatedClient(
-            base_url=self.api_url,
+            base_url=base_url,
             token=api_token,
         )
 
@@ -411,6 +414,36 @@ class WaldurClient(BaseClient):
             uuid=project_uuid,
             client=self._api_client,
         )
+
+    def list_offering_users(
+        self,
+        offering_uuid: str,
+        state: list | None = None,
+        is_restricted: bool = False,
+    ) -> list:
+        """List offering users on Waldur B for a given offering.
+
+        Args:
+            offering_uuid: UUID of the offering on Waldur B.
+            state: Optional list of OfferingUserState values to filter by.
+            is_restricted: Filter by restriction status.
+
+        Returns:
+            List of OfferingUser objects from Waldur B.
+        """
+        from waldur_api_client.api.marketplace_offering_users import (  # noqa: PLC0415
+            marketplace_offering_users_list,
+        )
+
+        kwargs: dict = {
+            "client": self._api_client,
+            "offering_uuid": [UUID(offering_uuid)],
+            "is_restricted": is_restricted,
+        }
+        if state:
+            kwargs["state"] = state
+
+        return marketplace_offering_users_list.sync_all(**kwargs)
 
     def resolve_user_by_cuid(self, cuid: str) -> Optional[UUID]:
         """Resolve a user on Waldur B by eduTeams CUID.

@@ -11,6 +11,7 @@ import logging
 from typing import Optional
 from uuid import UUID
 
+from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -634,6 +635,121 @@ class WaldurBackend(backends.BaseBackend):
             )
         return None
 
+    # --- Offering User Username Sync ---
+
+    def sync_offering_user_usernames(
+        self,
+        waldur_a_offering_uuid: str,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> bool:
+        """Pull offering user usernames from Waldur B and update on Waldur A.
+
+        Lists offering users on Waldur B for the target offering, matches them
+        to Waldur A offering users by resolving user identity, and updates the
+        Waldur A offering user username when it differs from the Waldur B value.
+
+        For offering users in CREATING state on Waldur A, setting the username
+        auto-transitions them to OK in Mastermind.
+
+        Args:
+            waldur_a_offering_uuid: UUID of the offering on Waldur A.
+            waldur_rest_client: Authenticated client for the Waldur A API.
+
+        Returns:
+            True if any offering user usernames were updated.
+        """
+        from waldur_api_client.api.marketplace_offering_users import (  # noqa: PLC0415
+            marketplace_offering_users_list,
+            marketplace_offering_users_partial_update,
+        )
+        from waldur_api_client.models.offering_user_state import (  # noqa: PLC0415
+            OfferingUserState,
+        )
+        from waldur_api_client.models.patched_offering_user_request import (  # noqa: PLC0415
+            PatchedOfferingUserRequest,
+        )
+
+        try:
+            # 1. Fetch Waldur B offering users with assigned usernames (OK state)
+            waldur_b_offering_users = self.client.list_offering_users(
+                offering_uuid=self.target_offering_uuid,
+                state=[OfferingUserState.OK],
+            )
+            if not waldur_b_offering_users:
+                logger.debug("No OK offering users found on Waldur B")
+                return False
+
+            # 2. Build map: Waldur B user_uuid -> offering username
+            b_uuid_to_username: dict[str, str] = {}
+            for ou in waldur_b_offering_users:
+                user_uuid = ou.user_uuid
+                username = ou.username
+                if (
+                    not isinstance(user_uuid, type(UNSET))
+                    and user_uuid
+                    and not isinstance(username, type(UNSET))
+                    and username
+                ):
+                    b_uuid_to_username[str(user_uuid)] = username
+
+            if not b_uuid_to_username:
+                return False
+
+            # 3. Fetch Waldur A offering users that may need username sync
+            waldur_a_offering_users = marketplace_offering_users_list.sync_all(
+                client=waldur_rest_client,
+                offering_uuid=[UUID(waldur_a_offering_uuid)],
+                state=[
+                    OfferingUserState.OK,
+                    OfferingUserState.CREATING,
+                    OfferingUserState.REQUESTED,
+                ],
+                is_restricted=False,
+            )
+
+            # 4. Match and update
+            changed = False
+            for a_ou in waldur_a_offering_users:
+                a_user_username = a_ou.user_username
+                if isinstance(a_user_username, type(UNSET)) or not a_user_username:
+                    continue
+
+                # Resolve Waldur A user identity -> Waldur B user UUID
+                remote_uuid = self._resolve_remote_user(a_user_username)
+                if remote_uuid is None:
+                    continue
+
+                # Look up the username Waldur B assigned
+                b_username = b_uuid_to_username.get(str(remote_uuid))
+                if not b_username:
+                    continue
+
+                # Update Waldur A offering user if username differs
+                current = a_ou.username
+                if isinstance(current, type(UNSET)):
+                    current = None
+                if current == b_username:
+                    continue
+
+                logger.info(
+                    "Syncing offering user %s username from Waldur B: %s -> %s",
+                    a_ou.uuid,
+                    current,
+                    b_username,
+                )
+                marketplace_offering_users_partial_update.sync(
+                    uuid=a_ou.uuid,
+                    client=waldur_rest_client,
+                    body=PatchedOfferingUserRequest(username=b_username),
+                )
+                changed = True
+
+            return changed
+
+        except Exception:
+            logger.exception("Failed to sync offering user usernames from Waldur B")
+            return False
+
     # --- Target Event Subscriptions ---
 
     def setup_target_event_subscriptions(
@@ -642,11 +758,12 @@ class WaldurBackend(backends.BaseBackend):
         user_agent: str = "",
         global_proxy: str = "",
     ) -> list:
-        """Set up STOMP subscription to ORDER events on Waldur B.
+        """Set up STOMP subscriptions to events on Waldur B.
 
-        When target_stomp_enabled is True, subscribes to ORDER events on the
-        target Waldur B instance. When a target order completes, the handler
-        finds and updates the corresponding source order on Waldur A.
+        When target_stomp_enabled is True, subscribes to:
+        - ORDER events: updates source orders on Waldur A when target orders complete.
+        - OFFERING_USER events: syncs usernames from Waldur B to A when offering
+          users are created or updated with a username.
 
         Args:
             source_offering: The source Waldur offering (Waldur A).
@@ -676,6 +793,7 @@ class WaldurBackend(backends.BaseBackend):
                 _setup_single_stomp_subscription,
             )
             from waldur_site_agent_waldur.target_event_handler import (
+                make_target_offering_user_handler,
                 make_target_order_handler,
             )
 
@@ -703,6 +821,7 @@ class WaldurBackend(backends.BaseBackend):
                 stomp_ws_host=getattr(source_offering, "stomp_ws_host", None),
                 stomp_ws_port=getattr(source_offering, "stomp_ws_port", None),
                 stomp_ws_path=getattr(source_offering, "stomp_ws_path", None),
+                websocket_use_tls=getattr(source_offering, "websocket_use_tls", True),
             )
 
             # Register agent identity on Waldur B
@@ -725,8 +844,10 @@ class WaldurBackend(backends.BaseBackend):
                 )
                 return []
 
-            # Set up STOMP subscription for ORDER events with custom handler
-            consumer = _setup_single_stomp_subscription(
+            consumers = []
+
+            # Set up STOMP subscription for ORDER events
+            order_consumer = _setup_single_stomp_subscription(
                 target_offering,
                 agent_identity,
                 agent_identity_manager,
@@ -734,32 +855,74 @@ class WaldurBackend(backends.BaseBackend):
                 ObservableObjectTypeEnum.ORDER,
                 global_proxy,
             )
+            if order_consumer is not None:
+                connection, event_subscription, _ = order_consumer
+                custom_handler = make_target_order_handler(source_offering)
+                listener = connection.get_listener(WALDUR_LISTENER_NAME)
+                if listener is not None:
+                    listener.on_message_callback = custom_handler
+                consumers.append((connection, event_subscription, target_offering))
 
-            if consumer is None:
+            # Set up STOMP subscription for OFFERING_USER events.
+            # OFFERING_USER events are published against the actual target
+            # offering (target_offering_uuid), not the STOMP offering used for
+            # agent identity registration.  When these differ, we need a
+            # separate Offering/AgentIdentityManager so the
+            # EventSubscriptionQueue and STOMP queue name use the correct UUID.
+            if target_stomp_offering != self.target_offering_uuid:
+                target_ou_offering = Offering(
+                    name=f"Target OU: {source_offering.name}",
+                    waldur_api_url=target_api_url
+                    if target_api_url.endswith("/")
+                    else target_api_url + "/",
+                    waldur_api_token=target_api_token,
+                    waldur_offering_uuid=self.target_offering_uuid,
+                    backend_type="waldur",
+                    stomp_enabled=True,
+                    stomp_ws_host=getattr(source_offering, "stomp_ws_host", None),
+                    stomp_ws_port=getattr(source_offering, "stomp_ws_port", None),
+                    stomp_ws_path=getattr(source_offering, "stomp_ws_path", None),
+                )
+                ou_identity_manager = AgentIdentityManager(
+                    target_ou_offering, target_client
+                )
+            else:
+                target_ou_offering = target_offering
+                ou_identity_manager = agent_identity_manager
+
+            ou_consumer = _setup_single_stomp_subscription(
+                target_ou_offering,
+                agent_identity,
+                ou_identity_manager,
+                user_agent,
+                ObservableObjectTypeEnum.OFFERING_USER,
+                global_proxy,
+            )
+            if ou_consumer is not None:
+                connection, event_subscription, _ = ou_consumer
+                custom_handler = make_target_offering_user_handler(
+                    source_offering, self
+                )
+                listener = connection.get_listener(WALDUR_LISTENER_NAME)
+                if listener is not None:
+                    listener.on_message_callback = custom_handler
+                consumers.append((connection, event_subscription, target_ou_offering))
+
+            if not consumers:
                 logger.error(
-                    "Failed to set up target STOMP subscription for %s",
+                    "Failed to set up target STOMP subscriptions for %s",
                     source_offering.name,
                 )
                 return []
 
-            # Replace the standard handler with our custom target order handler.
-            # The WaldurListener in the connection uses the handler from
-            # OBJECT_TYPE_TO_HANDLER_STOMP. We need to replace it with our
-            # closure-based handler that knows about the source offering.
-            connection, event_subscription, _ = consumer
-            custom_handler = make_target_order_handler(source_offering)
-
-            listener = connection.get_listener(WALDUR_LISTENER_NAME)
-            if listener is not None:
-                listener.on_message_callback = custom_handler
-
             logger.info(
-                "Target STOMP subscription active for %s -> %s",
+                "Target STOMP subscriptions active for %s -> %s (%d subscriptions)",
                 source_offering.name,
                 target_offering.name,
+                len(consumers),
             )
 
-            return [(connection, event_subscription, target_offering)]
+            return consumers
 
         except Exception:
             logger.exception(

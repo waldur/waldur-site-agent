@@ -1,9 +1,12 @@
-"""Handler for ORDER events from Waldur B (target instance).
+"""Handlers for events from Waldur B (target instance).
 
-When a target order reaches a terminal state (DONE, ERRED, CANCELED, REJECTED),
-finds the matching source order on Waldur A and updates its state.
-This enables instant completion of source orders without waiting for the
-next polling cycle.
+ORDER handler: when a target order reaches a terminal state (DONE, ERRED,
+CANCELED, REJECTED), finds the matching source order on Waldur A and updates
+its state.
+
+OFFERING_USER handler: when a target offering user is created or updated with
+a username, triggers a full username sync from Waldur B to Waldur A so the
+username is propagated instantly without waiting for the next polling cycle.
 """
 
 from __future__ import annotations
@@ -138,6 +141,84 @@ def make_target_order_handler(
             logger.exception(
                 "Failed to update source order for target order %s",
                 order_uuid,
+            )
+
+    return handler
+
+
+def make_target_offering_user_handler(
+    source_offering: Offering,
+    backend,  # WaldurBackend — not type-hinted to avoid circular import
+):
+    """Create a STOMP handler for OFFERING_USER events from Waldur B.
+
+    When a Waldur B offering user is created or updated with a username,
+    triggers a full sync of offering user usernames from B to A via
+    ``backend.sync_offering_user_usernames``.
+
+    Args:
+        source_offering: The source Waldur offering (Waldur A).
+        backend: The WaldurBackend instance.
+
+    Returns:
+        Handler function for STOMP OFFERING_USER messages from Waldur B.
+    """
+
+    def handler(
+        frame: stomp.utils.Frame,
+        target_offering: Offering,
+        user_agent: str,
+    ) -> None:
+        """Process OFFERING_USER event from Waldur B and sync to Waldur A."""
+        del target_offering  # Not used — source_offering from closure is used instead
+        message = json.loads(frame.body)
+        action = message.get("action", "")
+        username = message.get("username", "")
+        offering_user_uuid = message.get("offering_user_uuid", "")
+
+        if action not in ("create", "update"):
+            logger.debug(
+                "Offering user %s action %s is not create/update, skipping",
+                offering_user_uuid,
+                action,
+            )
+            return
+
+        if not username:
+            logger.debug(
+                "Offering user %s has no username, skipping",
+                offering_user_uuid,
+            )
+            return
+
+        logger.info(
+            "Offering user %s %sd with username %s, triggering username sync",
+            offering_user_uuid,
+            action,
+            username,
+        )
+
+        try:
+            source_client = get_client(
+                source_offering.api_url,
+                source_offering.api_token,
+                user_agent,
+                verify_ssl=source_offering.verify_ssl,
+            )
+
+            updated = backend.sync_offering_user_usernames(
+                waldur_a_offering_uuid=source_offering.uuid,
+                waldur_rest_client=source_client,
+            )
+
+            if updated:
+                logger.info("Username sync completed: usernames updated on Waldur A")
+            else:
+                logger.debug("Username sync completed: no changes needed on Waldur A")
+        except Exception:
+            logger.exception(
+                "Failed to sync offering user usernames after event for %s",
+                offering_user_uuid,
             )
 
     return handler

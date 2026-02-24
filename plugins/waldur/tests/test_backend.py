@@ -1,6 +1,6 @@
 """Tests for WaldurBackend with mocked WaldurClient."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 import pytest
@@ -578,3 +578,221 @@ class TestNoOpMethods:
     def test_get_resource_metadata(self, backend):
         metadata = backend.get_resource_metadata("some-uuid")
         assert metadata == {"waldur_b_resource_uuid": "some-uuid"}
+
+
+WALDUR_A_OFFERING_UUID = "aaaaaaaa-0000-0000-0000-000000000001"
+WALDUR_B_USER_UUID = UUID("bbbbbbbb-0000-0000-0000-000000000001")
+WALDUR_B_USER_UUID_2 = UUID("bbbbbbbb-0000-0000-0000-000000000002")
+WALDUR_A_OU_UUID = UUID("cccccccc-0000-0000-0000-000000000001")
+WALDUR_A_OU_UUID_2 = UUID("cccccccc-0000-0000-0000-000000000002")
+
+
+def _make_offering_user(
+    uuid, user_username, username=UNSET, user_uuid=UNSET, state="OK"
+):
+    """Create a mock OfferingUser with the given fields."""
+    ou = MagicMock()
+    ou.uuid = uuid
+    ou.user_username = user_username
+    ou.username = username
+    ou.user_uuid = user_uuid
+    ou.state = state
+    return ou
+
+
+# Import the actual modules so we can patch their functions with patch.object
+from waldur_api_client.api.marketplace_offering_users import (  # noqa: E402
+    marketplace_offering_users_list as _ou_list_mod,
+    marketplace_offering_users_partial_update as _ou_update_mod,
+)
+
+
+class TestSyncOfferingUserUsernames:
+    """Tests for sync_offering_user_usernames pulling usernames from Waldur B."""
+
+    def test_updates_username_from_waldur_b(self, backend, mock_client):
+        """When Waldur B has a username and Waldur A differs, update Waldur A."""
+        waldur_b_ou = _make_offering_user(
+            uuid=UUID("dd000000-0000-0000-0000-000000000001"),
+            user_username="bob_on_b",
+            username="slurm_bob",
+            user_uuid=WALDUR_B_USER_UUID,
+        )
+        mock_client.list_offering_users.return_value = [waldur_b_ou]
+
+        waldur_a_ou = _make_offering_user(
+            uuid=WALDUR_A_OU_UUID,
+            user_username="bob@idp.org",
+            username="bob@idp.org",
+        )
+        mock_client.resolve_user_by_cuid.return_value = WALDUR_B_USER_UUID
+
+        with (
+            patch.object(_ou_list_mod, "sync_all", return_value=[waldur_a_ou]),
+            patch.object(_ou_update_mod, "sync") as mock_update,
+        ):
+            result = backend.sync_offering_user_usernames(
+                WALDUR_A_OFFERING_UUID, MagicMock()
+            )
+
+        assert result is True
+        mock_update.assert_called_once()
+        call_kwargs = mock_update.call_args
+        assert call_kwargs.kwargs["uuid"] == WALDUR_A_OU_UUID
+        assert call_kwargs.kwargs["body"].username == "slurm_bob"
+
+    def test_skips_when_no_waldur_b_offering_users(self, backend, mock_client):
+        """When no OK offering users on Waldur B, return False."""
+        mock_client.list_offering_users.return_value = []
+
+        with patch.object(_ou_list_mod, "sync_all") as mock_list:
+            result = backend.sync_offering_user_usernames(
+                WALDUR_A_OFFERING_UUID, MagicMock()
+            )
+
+        assert result is False
+        mock_list.assert_not_called()
+
+    def test_skips_when_user_not_resolved(self, backend, mock_client):
+        """When Waldur A user can't be resolved on Waldur B, skip them."""
+        waldur_b_ou = _make_offering_user(
+            uuid=UUID("dd000000-0000-0000-0000-000000000001"),
+            user_username="bob_on_b",
+            username="slurm_bob",
+            user_uuid=WALDUR_B_USER_UUID,
+        )
+        mock_client.list_offering_users.return_value = [waldur_b_ou]
+
+        waldur_a_ou = _make_offering_user(
+            uuid=WALDUR_A_OU_UUID,
+            user_username="unknown@idp.org",
+            username="unknown@idp.org",
+        )
+        mock_client.resolve_user_by_cuid.return_value = None
+
+        with (
+            patch.object(_ou_list_mod, "sync_all", return_value=[waldur_a_ou]),
+            patch.object(_ou_update_mod, "sync") as mock_update,
+        ):
+            result = backend.sync_offering_user_usernames(
+                WALDUR_A_OFFERING_UUID, MagicMock()
+            )
+
+        assert result is False
+        mock_update.assert_not_called()
+
+    def test_skips_when_username_already_matches(self, backend, mock_client):
+        """When Waldur A already has the Waldur B username, no update needed."""
+        waldur_b_ou = _make_offering_user(
+            uuid=UUID("dd000000-0000-0000-0000-000000000001"),
+            user_username="bob_on_b",
+            username="slurm_bob",
+            user_uuid=WALDUR_B_USER_UUID,
+        )
+        mock_client.list_offering_users.return_value = [waldur_b_ou]
+
+        waldur_a_ou = _make_offering_user(
+            uuid=WALDUR_A_OU_UUID,
+            user_username="bob@idp.org",
+            username="slurm_bob",
+        )
+        mock_client.resolve_user_by_cuid.return_value = WALDUR_B_USER_UUID
+
+        with (
+            patch.object(_ou_list_mod, "sync_all", return_value=[waldur_a_ou]),
+            patch.object(_ou_update_mod, "sync") as mock_update,
+        ):
+            result = backend.sync_offering_user_usernames(
+                WALDUR_A_OFFERING_UUID, MagicMock()
+            )
+
+        assert result is False
+        mock_update.assert_not_called()
+
+    def test_handles_api_failure_gracefully(self, backend, mock_client):
+        """When Waldur B API fails, return False without crashing."""
+        mock_client.list_offering_users.side_effect = Exception("API down")
+
+        result = backend.sync_offering_user_usernames(
+            WALDUR_A_OFFERING_UUID, MagicMock()
+        )
+
+        assert result is False
+
+    def test_updates_creating_user(self, backend, mock_client):
+        """CREATING state users on Waldur A should also get updated."""
+        waldur_b_ou = _make_offering_user(
+            uuid=UUID("dd000000-0000-0000-0000-000000000001"),
+            user_username="alice_on_b",
+            username="hpc_alice",
+            user_uuid=WALDUR_B_USER_UUID,
+        )
+        mock_client.list_offering_users.return_value = [waldur_b_ou]
+
+        waldur_a_ou = _make_offering_user(
+            uuid=WALDUR_A_OU_UUID,
+            user_username="alice@idp.org",
+            username=None,
+            state="Creating",
+        )
+        mock_client.resolve_user_by_cuid.return_value = WALDUR_B_USER_UUID
+
+        with (
+            patch.object(_ou_list_mod, "sync_all", return_value=[waldur_a_ou]),
+            patch.object(_ou_update_mod, "sync") as mock_update,
+        ):
+            result = backend.sync_offering_user_usernames(
+                WALDUR_A_OFFERING_UUID, MagicMock()
+            )
+
+        assert result is True
+        mock_update.assert_called_once()
+        assert mock_update.call_args.kwargs["body"].username == "hpc_alice"
+
+    def test_multiple_users_partial_match(self, backend, mock_client):
+        """Only users with a Waldur B match get updated."""
+        b_ou_1 = _make_offering_user(
+            uuid=UUID("dd000000-0000-0000-0000-000000000001"),
+            user_username="alice_on_b",
+            username="hpc_alice",
+            user_uuid=WALDUR_B_USER_UUID,
+        )
+        b_ou_2 = _make_offering_user(
+            uuid=UUID("dd000000-0000-0000-0000-000000000002"),
+            user_username="bob_on_b",
+            username="hpc_bob",
+            user_uuid=WALDUR_B_USER_UUID_2,
+        )
+        mock_client.list_offering_users.return_value = [b_ou_1, b_ou_2]
+
+        a_ou_1 = _make_offering_user(
+            uuid=WALDUR_A_OU_UUID,
+            user_username="alice@idp.org",
+            username="alice@idp.org",
+        )
+        a_ou_2 = _make_offering_user(
+            uuid=WALDUR_A_OU_UUID_2,
+            user_username="charlie@idp.org",
+            username="charlie@idp.org",
+        )
+
+        def resolve_side_effect(username):
+            if username == "alice@idp.org":
+                return WALDUR_B_USER_UUID
+            return None
+
+        mock_client.resolve_user_by_cuid.side_effect = resolve_side_effect
+
+        with (
+            patch.object(
+                _ou_list_mod, "sync_all", return_value=[a_ou_1, a_ou_2]
+            ),
+            patch.object(_ou_update_mod, "sync") as mock_update,
+        ):
+            result = backend.sync_offering_user_usernames(
+                WALDUR_A_OFFERING_UUID, MagicMock()
+            )
+
+        assert result is True
+        assert mock_update.call_count == 1
+        assert mock_update.call_args.kwargs["body"].username == "hpc_alice"
