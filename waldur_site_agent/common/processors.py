@@ -995,6 +995,12 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 order.uuid,
                 waldur_resource.name,
             )
+        elif new_limits == old_limits:
+            logger.info(
+                "Limits for %s are unchanged (%s), skipping backend update",
+                waldur_resource.name,
+                new_limits,
+            )
         else:
             self.resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits)
 
