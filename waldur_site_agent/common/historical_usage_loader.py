@@ -23,14 +23,10 @@ from waldur_api_client.api.marketplace_provider_resources import (
 )
 from waldur_api_client.models import ComponentUsageCreateRequest, ComponentUserUsageCreateRequest
 from waldur_api_client.models.component_usage_item_request import ComponentUsageItemRequest
-from waldur_api_client.models.marketplace_offering_users_list_state_item import (
-    MarketplaceOfferingUsersListStateItem,
-)
-from waldur_api_client.models.marketplace_provider_resources_list_state_item import (
-    MarketplaceProviderResourcesListStateItem,
-)
 from waldur_api_client.models.offering_user import OfferingUser
+from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.models.resource_state import ResourceState
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend import utils as backend_utils
@@ -167,8 +163,8 @@ def load_historical_usage_for_month(
         client=waldur_rest_client,
         offering_uuid=[offering.uuid],
         state=[
-            MarketplaceProviderResourcesListStateItem.OK,
-            MarketplaceProviderResourcesListStateItem.ERRED,
+            ResourceState.OK,
+            ResourceState.ERRED,
         ],
     )
 
@@ -186,7 +182,7 @@ def load_historical_usage_for_month(
         offering_users = marketplace_offering_users_list.sync_all(
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
-            state=[MarketplaceOfferingUsersListStateItem.OK],
+            state=[OfferingUserState.OK],
         )
         username_to_offering_user = {user.username: user for user in offering_users}
     else:

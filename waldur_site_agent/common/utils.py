@@ -46,18 +46,13 @@ from waldur_api_client.api.users import users_me_retrieve
 from waldur_api_client.api.version import version_retrieve
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
-    MarketplaceResourcesListStateItem,
+    OrderState,
     ResourceSetLimitsRequest,
     ResourceSetStateErredRequest,
+    ResourceState,
 )
 from waldur_api_client.models.billing_type_enum import BillingTypeEnum
 from waldur_api_client.models.limit_period_enum import LimitPeriodEnum
-from waldur_api_client.models.marketplace_offering_users_list_state_item import (
-    MarketplaceOfferingUsersListStateItem,
-)
-from waldur_api_client.models.marketplace_orders_list_state_item import (
-    MarketplaceOrdersListStateItem,
-)
 from waldur_api_client.models.offering_component import OfferingComponent
 from waldur_api_client.models.offering_component_request import OfferingComponentRequest
 from waldur_api_client.models.offering_user import OfferingUser
@@ -780,8 +775,8 @@ def diagnostics() -> int:
                 client=waldur_rest_client,
                 offering_uuid=offering_uuid,
                 state=[
-                    MarketplaceOrdersListStateItem.PENDING_PROVIDER,
-                    MarketplaceOrdersListStateItem.EXECUTING,
+                    OrderState.PENDING_PROVIDER,
+                    OrderState.EXECUTING,
                 ],
             )
             logger.info("Active orders:")
@@ -830,7 +825,7 @@ def create_homedirs_for_offering_users() -> None:
         offering_users = marketplace_offering_users_list.sync_all(
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
-            state=[MarketplaceOfferingUsersListStateItem.OK],
+            state=[OfferingUserState.OK],
             is_restricted=False,
         )
 
@@ -1294,7 +1289,7 @@ def sync_resource_limits() -> None:
         resources = marketplace_resources_list.sync_all(
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
-            state=[MarketplaceResourcesListStateItem.OK, MarketplaceResourcesListStateItem.ERRED],
+            state=[ResourceState.OK, ResourceState.ERRED],
         )
 
         waldur_resources = [resource for resource in resources if resource.backend_id]
