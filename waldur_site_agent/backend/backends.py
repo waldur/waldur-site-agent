@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
+from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.resource import Resource as WaldurResource
 
@@ -725,6 +726,26 @@ class BaseBackend(ABC):
             attributes: Dict of user profile attributes to forward.
         """
         del username, attributes
+
+    def sync_offering_user_usernames(
+        self,
+        waldur_a_offering_uuid: str,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> bool:
+        """Pull offering user usernames from backend and update on Waldur A.
+
+        Override in backends where the backend assigns its own usernames
+        to offering users (e.g., Waldur federation). Default: no-op.
+
+        Args:
+            waldur_a_offering_uuid: UUID of the offering on Waldur A.
+            waldur_rest_client: Authenticated client for Waldur A API.
+
+        Returns:
+            True if any usernames were updated, False otherwise.
+        """
+        del waldur_a_offering_uuid, waldur_rest_client
+        return False
 
     def process_existing_users(self, existing_users: set[str]) -> None:
         """Process existing users on the backend.

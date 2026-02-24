@@ -214,7 +214,9 @@ class WaldurTestSetup:
 
     # --- Setup Scenarios ---
 
-    def setup_passthrough(self) -> SetupResult:
+    def setup_passthrough(
+        self, target_offering_type: str = "Marketplace.Basic"
+    ) -> SetupResult:
         """Create entities for passthrough tests (same components on both sides).
 
         Creates:
@@ -222,7 +224,11 @@ class WaldurTestSetup:
         - 2 customers (A and B)
         - 1 project under customer A
         - Offering A (Marketplace.Slurm) with cpu, mem components
-        - Offering B (Marketplace.Basic) with cpu, mem components
+        - Offering B (target_offering_type, default Marketplace.Basic) with cpu, mem components
+
+        Args:
+            target_offering_type: Marketplace type for offering B.
+                Use "Marketplace.Slurm" when STOMP event subscriptions are needed.
         """
         prefix = f"inttest-pt-{self._run_id}"
 
@@ -252,9 +258,9 @@ class WaldurTestSetup:
         self._create_plan(off_a_url)
         self._activate_offering(off_a_uuid)
 
-        # Offering B: Marketplace.Basic (target side, auto-completes)
+        # Offering B: target side
         off_b_uuid, off_b_url = self._create_offering(
-            f"{prefix}-offering-b", category_url, cust_b_url, "Marketplace.Basic"
+            f"{prefix}-offering-b", category_url, cust_b_url, target_offering_type
         )
         for comp_type, comp_name, unit in components:
             self._add_component(
