@@ -71,6 +71,18 @@ pre-commit run --all-files
 waldur_site_load_components -c <config-file>
 ```
 
+## Releasing
+
+```bash
+./scripts/release.sh 0.10.0
+# Review the commit, then push:
+git push origin main --tags
+```
+
+See the [Releasing Guide](docs/releasing.md) for details on
+version bumping, changelog generation, and what CI does after
+you push.
+
 ## Documentation
 
 - [Architecture & Plugin Development](docs/architecture.md)
@@ -79,6 +91,7 @@ waldur_site_load_components -c <config-file>
 - [Deployment Guide](docs/deployment.md)
 - [Username Management](docs/offering-users.md)
 - [SLURM Usage Reporting Setup](docs/slurm-usage-reporting-setup.md)
+- [Releasing Guide](docs/releasing.md)
 
 ## Plugin Documentation
 
