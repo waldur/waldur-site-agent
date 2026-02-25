@@ -16,13 +16,13 @@ repos:
     - id: ruff
       args: [--fix]
       files: \.py$        # only run on Python files
-      exclude: ^.*tests/
+      exclude: ^(.*tests/|scripts/)
 
   - repo: https://github.com/jackdewinter/pymarkdown
     rev: v0.9.30
     hooks:
       - id: pymarkdown
-        exclude: .github/|CHANGELOG
+        exclude: .github/|CHANGELOG|scripts/prompts/
         args: [-d, "MD046", "-s", "plugins.md013.code_block_line_length=$#120", "-s", "plugins.md013.heading_line_length=$#120", "-s", "plugins.md013.line_length=$#120", scan]
 
   - repo: https://github.com/pre-commit/mirrors-mypy
