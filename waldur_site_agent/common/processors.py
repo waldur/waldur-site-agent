@@ -44,6 +44,7 @@ from waldur_api_client.api.marketplace_offering_users import (
 from waldur_api_client.api.marketplace_orders import (
     marketplace_orders_approve_by_provider,
     marketplace_orders_list,
+    marketplace_orders_reject_by_provider,
     marketplace_orders_retrieve,
     marketplace_orders_set_backend_id,
     marketplace_orders_set_state_done,
@@ -107,6 +108,9 @@ from waldur_api_client.models.order_details import (
     OrderDetails,
 )
 from waldur_api_client.models.order_error_details_request import OrderErrorDetailsRequest
+from waldur_api_client.models.order_provider_rejection_request import (
+    OrderProviderRejectionRequest,
+)
 from waldur_api_client.models.project_user import ProjectUser
 from waldur_api_client.models.provider_offering_details import ProviderOfferingDetails
 from waldur_api_client.models.request_types import RequestTypes
@@ -120,7 +124,11 @@ from waldur_api_client.types import UNSET
 from waldur_site_agent.backend import BackendType, logger
 from waldur_site_agent.backend import exceptions as backend_exceptions
 from waldur_site_agent.backend import utils as backend_utils
-from waldur_site_agent.backend.backends import BaseBackend, UnknownUsernameManagementBackend
+from waldur_site_agent.backend.backends import (
+    BaseBackend,
+    PendingOrderDecision,
+    UnknownUsernameManagementBackend,
+)
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import agent_identity_management, structures, utils
@@ -605,16 +613,34 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             if order.state == OrderState.EXECUTING:
                 logger.info("Order is executing already, no need for approval")
             elif order.state == OrderState.PENDING_PROVIDER:
-                logger.info("Approving the order")
-                marketplace_orders_approve_by_provider.sync_detailed(
-                    client=self.waldur_rest_client,
-                    uuid=order.uuid.hex,
-                    body=OrderApproveByProviderRequest(),
+                decision = self.resource_backend.evaluate_pending_order(
+                    order, self.waldur_rest_client
                 )
-                logger.info("Refreshing the order")
-                order = marketplace_orders_retrieve.sync(
-                    client=self.waldur_rest_client, uuid=order.uuid.hex
-                )
+                if decision == PendingOrderDecision.ACCEPT:
+                    logger.info("Approving the order")
+                    marketplace_orders_approve_by_provider.sync_detailed(
+                        client=self.waldur_rest_client,
+                        uuid=order.uuid.hex,
+                        body=OrderApproveByProviderRequest(),
+                    )
+                    logger.info("Refreshing the order")
+                    order = marketplace_orders_retrieve.sync(
+                        client=self.waldur_rest_client, uuid=order.uuid.hex
+                    )
+                elif decision == PendingOrderDecision.REJECT:
+                    logger.info("Rejecting the order")
+                    marketplace_orders_reject_by_provider.sync_detailed(
+                        client=self.waldur_rest_client,
+                        uuid=order.uuid.hex,
+                        body=OrderProviderRejectionRequest(),
+                    )
+                    return
+                elif decision == PendingOrderDecision.PENDING:
+                    logger.info(
+                        "Order %s kept pending, will re-evaluate on next cycle",
+                        order.uuid,
+                    )
+                    return
             else:
                 logger.warning(
                     "The order %s %s (%s) is in unexpected state %s, skipping processing",

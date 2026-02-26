@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.offering_user import OfferingUser
+from waldur_api_client.models.order_details import OrderDetails
 from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend import logger, structures, utils
@@ -17,6 +19,14 @@ from waldur_site_agent.backend.clients import BaseClient, UnknownClient
 from waldur_site_agent.backend.exceptions import BackendError, DuplicateResourceError
 
 UNKNOWN_BACKEND_TYPE = "unknown"
+
+
+class PendingOrderDecision(Enum):
+    """Decision for an order in PENDING_PROVIDER state."""
+
+    ACCEPT = "accept"
+    REJECT = "reject"
+    PENDING = "pending"
 
 
 class BaseBackend(ABC):
@@ -248,6 +258,35 @@ class BaseBackend(ABC):
         """
         del order_backend_id
         return True  # Default: no async orders, always "complete"
+
+    def evaluate_pending_order(
+        self,
+        order: OrderDetails,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> PendingOrderDecision:
+        """Evaluate whether a pending-provider order should be accepted, rejected, or kept pending.
+
+        Called each polling cycle for orders in PENDING_PROVIDER state, before
+        the agent auto-approves them. Override in plugins to implement custom
+        approval logic (e.g., wait for PI information, validate project data,
+        or request a signed agreement from the customer).
+
+        The order object carries project_uuid, customer_uuid, created_by_*,
+        attributes, consumer/provider messages, and more.
+        Use waldur_rest_client to fetch additional data from Waldur
+        (e.g., project members and roles).
+
+        Args:
+            order: Full order details from Waldur.
+            waldur_rest_client: Authenticated client for the Waldur API.
+
+        Returns:
+            ACCEPT  - approve the order (default, preserves current auto-approve behaviour).
+            REJECT  - reject the order.
+            PENDING - keep waiting; the order will be re-evaluated on the next cycle.
+        """
+        del order, waldur_rest_client
+        return PendingOrderDecision.ACCEPT
 
     def list_resources(self) -> list[structures.BackendResourceInfo]:
         """List resources in the the backend."""
