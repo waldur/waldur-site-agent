@@ -202,7 +202,7 @@ class RancherBackend(backends.BaseBackend):
             for project in existing_projects:
                 if project.name == project_name:
                     logger.info(f"Rancher project {project_name} already exists")
-                    return project.backend_id
+                    return project.backend_id, project_name
 
             # Create new project with descriptive information
             customer_info = waldur_resource.customer_name or waldur_resource.customer_slug

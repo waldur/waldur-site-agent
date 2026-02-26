@@ -26,6 +26,12 @@ class BaseBackend(ABC):
     # (e.g., storage backends reporting current state, not accumulated usage)
     supports_decreasing_usage: bool = False
 
+    # Capability flag: Set to True for backends that use async order tracking
+    # via order.backend_id (e.g., Waldur-to-Waldur federation).
+    # When enabled, the processor checks order.backend_id on EXECUTING orders
+    # and calls check_pending_order() to track remote order completion.
+    supports_async_orders: bool = False
+
     def __init__(self, backend_settings: dict, backend_components: dict[str, dict]) -> None:
         """Init backend info."""
         self.backend_type = "abstract"

@@ -882,19 +882,24 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             logger.error("Error during order processing: Order is None")
             return False
 
-        # Check for pending async order (order.backend_id = target order UUID)
-        order_backend_id = (
-            ""
-            if isinstance(order.backend_id, type(UNSET))
-            else (order.backend_id or "")
-        )
-        if order_backend_id:
-            is_done = self.resource_backend.check_pending_order(order_backend_id)
-            if is_done:
-                logger.info("Target order %s completed successfully", order_backend_id)
-                return True
-            logger.info("Target order %s still pending", order_backend_id)
-            return False
+        # Check for pending async order (order.backend_id = target order UUID).
+        # Only used by backends that opt in via supports_async_orders flag
+        # (e.g., Waldur-to-Waldur federation). External systems may also set
+        # order.backend_id for their own purposes, so this check must be skipped
+        # for backends that don't use async order tracking.
+        if self.resource_backend.supports_async_orders:
+            order_backend_id = (
+                ""
+                if isinstance(order.backend_id, type(UNSET))
+                else (order.backend_id or "")
+            )
+            if order_backend_id:
+                is_done = self.resource_backend.check_pending_order(order_backend_id)
+                if is_done:
+                    logger.info("Target order %s completed successfully", order_backend_id)
+                    return True
+                logger.info("Target order %s still pending", order_backend_id)
+                return False
 
         waldur_resource = marketplace_provider_resources_retrieve.sync(
             uuid=order.marketplace_resource_uuid.hex, client=self.waldur_rest_client
@@ -927,8 +932,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 msg = f"Unable to create the resource {waldur_resource.name}"
                 raise backend_exceptions.BackendError(msg)
 
-            # Handle async creation: set order backend_id and stay EXECUTING
-            if backend_resource_info.pending_order_id:
+            # Handle async creation: set order backend_id and stay EXECUTING.
+            # Only used by backends with supports_async_orders enabled.
+            if backend_resource_info.pending_order_id and self.resource_backend.supports_async_orders:
                 logger.info(
                     "Async order created: setting order %s backend_id to %s",
                     order.uuid,

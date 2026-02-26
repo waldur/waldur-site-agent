@@ -40,6 +40,8 @@ class WaldurBackend(backends.BaseBackend):
     with optional component conversion, and synchronizes user memberships.
     """
 
+    supports_async_orders = True
+
     def __init__(
         self, backend_settings: dict, backend_components: dict[str, dict]
     ) -> None:
