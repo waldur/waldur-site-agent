@@ -934,7 +934,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
             # Handle async creation: set order backend_id and stay EXECUTING.
             # Only used by backends with supports_async_orders enabled.
-            if backend_resource_info.pending_order_id and self.resource_backend.supports_async_orders:
+            if (
+                backend_resource_info.pending_order_id
+                and self.resource_backend.supports_async_orders
+            ):
                 logger.info(
                     "Async order created: setting order %s backend_id to %s",
                     order.uuid,
