@@ -681,20 +681,22 @@ class WaldurBackend(backends.BaseBackend):
                 logger.debug("No OK offering users found on Waldur B")
                 return False
 
-            # 2. Build map: Waldur B user_uuid -> offering username
-            b_uuid_to_username: dict[str, str] = {}
+            # 2. Build map: user_username -> offering username on Waldur B.
+            #    user_username is the common identity attribute shared across
+            #    Waldur instances (user_uuid differs between instances).
+            b_user_username_to_offering_username: dict[str, str] = {}
             for ou in waldur_b_offering_users:
-                user_uuid = ou.user_uuid
+                user_username = ou.user_username
                 username = ou.username
                 if (
-                    not isinstance(user_uuid, type(UNSET))
-                    and user_uuid
+                    not isinstance(user_username, type(UNSET))
+                    and user_username
                     and not isinstance(username, type(UNSET))
                     and username
                 ):
-                    b_uuid_to_username[str(user_uuid)] = username
+                    b_user_username_to_offering_username[user_username] = username
 
-            if not b_uuid_to_username:
+            if not b_user_username_to_offering_username:
                 return False
 
             # 3. Fetch Waldur A offering users that may need username sync
@@ -709,20 +711,17 @@ class WaldurBackend(backends.BaseBackend):
                 is_restricted=False,
             )
 
-            # 4. Match and update
+            # 4. Match by user_username and update offering username on A
             changed = False
             for a_ou in waldur_a_offering_users:
                 a_user_username = a_ou.user_username
                 if isinstance(a_user_username, type(UNSET)) or not a_user_username:
                     continue
 
-                # Resolve Waldur A user identity -> Waldur B user UUID
-                remote_uuid = self._resolve_remote_user(a_user_username)
-                if remote_uuid is None:
-                    continue
-
-                # Look up the username Waldur B assigned
-                b_username = b_uuid_to_username.get(str(remote_uuid))
+                # Look up the offering username Waldur B assigned
+                b_username = b_user_username_to_offering_username.get(
+                    a_user_username
+                )
                 if not b_username:
                     continue
 

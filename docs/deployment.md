@@ -236,7 +236,10 @@ sudo chown root:root /etc/waldur/waldur-site-agent-config.yaml
 
 ### API Token Security
 
-- Use dedicated service account in Waldur
+- For the source offering: the token user needs **OFFERING.MANAGER** role on the offering
+- For Waldur federation (`waldur` backend): the target token user needs **customer owner**
+  (can be a non-SP customer) and **ISD identity manager** (`managed_isds` set)
+- Use dedicated service accounts in Waldur
 - Rotate API tokens regularly
 - Store tokens securely (consider using systemd credentials)
 

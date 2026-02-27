@@ -103,6 +103,116 @@ graph TB
     class WALDUR,BACKENDS,STOMP external
 ```
 
+## Event processing architecture
+
+The `event_process` mode uses WebSocket STOMP connections to receive real-time events from Waldur Mastermind
+via RabbitMQ. The main loop combines event-driven processing with periodic reconciliation to ensure data
+consistency even when STOMP messages are missed.
+
+### Event processing flow
+
+```mermaid
+---
+config:
+  layout: elk
+---
+graph TB
+    subgraph "Startup"
+        INIT[Run Initial<br/>Offering Processing]
+        REG[Register Agent Identity<br/>& Event Subscriptions]
+        STOMP_CONN[Connect WebSocket STOMP<br/>per Object Type]
+    end
+
+    subgraph "Main Loop (1-min tick)"
+        TICK[Wake Up]
+        HC_CHECK{Health Check<br/>interval elapsed?<br/>default: 30 min}
+        HC[Send Health Checks<br/>for All Offerings]
+        RC_CHECK{Reconciliation<br/>interval elapsed?<br/>default: 60 min}
+        RC[Run Username<br/>Reconciliation]
+        SLEEP[Sleep 60s]
+    end
+
+    subgraph "STOMP Event Handlers (daemon threads)"
+        ORDER_H[Order Handler<br/>process orders]
+        MEMBER_H[Membership Handler<br/>sync roles & users]
+        OU_H[OfferingUser Handler<br/>sync usernames]
+        IMPORT_H[Resource Import<br/>Handler]
+        LIMITS_H[Periodic Limits<br/>Handler]
+    end
+
+    subgraph "External Systems"
+        WALDUR[Waldur Mastermind<br/>REST API]
+        RMQ[RabbitMQ<br/>WebSocket STOMP]
+        BACKEND[Backend System<br/>SLURM / Waldur B / etc.]
+    end
+
+    %% Startup flow
+    INIT --> REG --> STOMP_CONN
+
+    %% Main loop
+    STOMP_CONN --> TICK
+    TICK --> HC_CHECK
+    HC_CHECK -->|Yes| HC --> RC_CHECK
+    HC_CHECK -->|No| RC_CHECK
+    RC_CHECK -->|Yes| RC --> SLEEP
+    RC_CHECK -->|No| SLEEP
+    SLEEP --> TICK
+
+    %% STOMP event handlers
+    RMQ -->|events| ORDER_H
+    RMQ -->|events| MEMBER_H
+    RMQ -->|events| OU_H
+    RMQ -->|events| IMPORT_H
+    RMQ -->|events| LIMITS_H
+
+    %% External connections
+    ORDER_H --> WALDUR
+    MEMBER_H --> WALDUR
+    OU_H --> WALDUR
+    HC --> WALDUR
+    RC --> WALDUR
+    RC --> BACKEND
+    ORDER_H --> BACKEND
+    MEMBER_H --> BACKEND
+    STOMP_CONN --> RMQ
+
+    %% Styling - Dark mode compatible colors
+    classDef startup fill:#1E3A8A,stroke:#3B82F6,stroke-width:2px,color:#FFFFFF
+    classDef loop fill:#B45309,stroke:#F59E0B,stroke-width:2px,color:#FFFFFF
+    classDef handler fill:#581C87,stroke:#8B5CF6,stroke-width:2px,color:#FFFFFF
+    classDef external fill:#C2410C,stroke:#F97316,stroke-width:2px,color:#FFFFFF
+    classDef decision fill:#065F46,stroke:#10B981,stroke-width:2px,color:#FFFFFF
+
+    class INIT,REG,STOMP_CONN startup
+    class TICK,HC,RC,SLEEP loop
+    class ORDER_H,MEMBER_H,OU_H,IMPORT_H,LIMITS_H handler
+    class WALDUR,RMQ,BACKEND external
+    class HC_CHECK,RC_CHECK decision
+```
+
+### Periodic reconciliation
+
+Event-driven processing can miss updates due to transient STOMP disconnections or message loss.
+The main loop includes a periodic reconciliation timer (default: 60 minutes, configurable via
+`WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES` environment variable) that runs
+`sync_offering_user_usernames()` for all STOMP-enabled offerings with a membership sync backend.
+
+This reconciliation is lightweight — it only syncs usernames, not a full membership sync — and is
+idempotent, so running it has no side effects when data is already consistent.
+
+### STOMP subscription types
+
+Each offering can subscribe to multiple object types depending on configuration:
+
+- **ORDER**: Order processing events (requires `order_processing_backend`)
+- **USER_ROLE**: Role grant/revoke events (requires `membership_sync_backend`)
+- **RESOURCE**: Resource lifecycle events (requires `membership_sync_backend`)
+- **SERVICE_ACCOUNT**: Service account events (requires `membership_sync_backend`)
+- **COURSE_ACCOUNT**: Course account events (requires `membership_sync_backend`)
+- **OFFERING_USER**: Offering user create/update events (requires `membership_sync_backend`)
+- **IMPORTABLE_RESOURCES**: Resource import events (requires `resource_import_enabled`)
+- **RESOURCE_PERIODIC_LIMITS**: Periodic limit updates (requires `periodic_limits.enabled`)
+
 ## Key plugin features
 
 - **Automatic Discovery**: Plugins are automatically discovered via Python entry points

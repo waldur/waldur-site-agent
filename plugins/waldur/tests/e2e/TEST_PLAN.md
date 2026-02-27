@@ -8,7 +8,7 @@ and memberships.
 
 ```text
 Waldur A (source)                     Site Agent                     Waldur B (target)
-Marketplace.Slurm offering      <-->  OfferingOrderProcessor   <-->  Marketplace.Basic offering
+Marketplace.Slurm offering      <-->  OfferingOrderProcessor   <-->  Marketplace.Slurm offering
                                       WaldurBackend
 ```
 
@@ -33,9 +33,8 @@ The tests exercise both operational modes:
 
 | Instance | Requirements |
 |---|---|
-| Waldur A (source) | Active `Marketplace.Slurm` offering with plan, staff API token |
-| Waldur B (target) | Active `Marketplace.Basic` offering with matching components, staff API token |
-| Waldur B (STOMP) | Optional: `Marketplace.Slurm` offering for agent identity registration |
+| Waldur A (source) | Active `Marketplace.Slurm` offering with plan; see Step 2 for token permissions |
+| Waldur B (target) | Active `Marketplace.Slurm` offering with matching components; see Step 1 for token permissions |
 
 ### Setup Instructions
 
@@ -50,8 +49,9 @@ agent config.
 1. **Create or choose an organization** on Waldur B.
    Note its UUID — this becomes `target_customer_uuid`.
 
-2. **Create a `Marketplace.Basic` offering** under that organization:
-   - Offering type: `Marketplace.Basic`
+2. **Create a `Marketplace.Slurm` offering** under that organization:
+   - Offering type: `Marketplace.Slurm` (required for STOMP event signals
+     and agent identity registration)
    - Add components that match your source offering. For each component:
      - **Type**: `limit` (billing type)
      - **Billing type**: `limit`
@@ -66,7 +66,10 @@ agent config.
    - Set offering state to `Active` (via Admin UI or API)
 
 5. **Create an API token** on Waldur B:
-   - Staff token or service provider token with access to the offering
+   - The token user must be a **customer owner** (can be a non-SP
+     customer separate from the offering's service provider) and an
+     **ISD identity manager** (`is_identity_manager: true` with
+     `managed_isds` set)
    - This becomes `target_api_token`
 
 #### Step 2: Waldur A (Source) — Offering and Project
@@ -92,7 +95,7 @@ agent config.
    - Note the project UUID — this becomes `WALDUR_E2E_PROJECT_A_UUID`
 
 5. **Create an API token** on Waldur A:
-   - Staff token or service provider token with access to the offering
+   - The token user must have **OFFERING.MANAGER** role on the offering
    - This becomes `waldur_api_token`
 
 #### Step 3: Component Mapping
@@ -157,10 +160,9 @@ curl -sI https://<waldur-a-host>/rmqws-stomp
 **On Waldur B (target STOMP):**
 
 - Verify `/rmqws-stomp` WebSocket endpoint is available (same curl test)
-- Create a **`Marketplace.Slurm` offering** on Waldur B (separate from
-  the Basic offering). This is required because agent identity
-  registration only accepts `Marketplace.Slurm` offering types.
-  Note its UUID — this becomes `target_stomp_offering_uuid`.
+- The target offering is already `Marketplace.Slurm` (Step 1), so agent
+  identity registration works directly. Set `target_stomp_offering_uuid`
+  to the same UUID as `target_offering_uuid`.
 - Set `target_stomp_enabled: true` in backend settings
 
 If Waldur B does not have `/rmqws-stomp` configured (returns HTTP 200
@@ -203,15 +205,16 @@ offerings:
     backend_settings:
       target_api_url: "https://waldur-b.example.com/"
       target_api_token: "<token-for-B>"
-      target_offering_uuid: "<basic-offering-uuid-on-B>"
+      target_offering_uuid: "<offering-uuid-on-B>"
       target_customer_uuid: "<customer-uuid-on-B>"
       user_match_field: "cuid"
       order_poll_timeout: 300
       order_poll_interval: 5
       user_not_found_action: "warn"
-      # For target STOMP tests (optional)
+      # For target STOMP tests (optional); same UUID as target_offering_uuid
+      # since the target offering is Marketplace.Slurm
       target_stomp_enabled: true
-      target_stomp_offering_uuid: "<slurm-offering-uuid-on-B>"
+      target_stomp_offering_uuid: "<offering-uuid-on-B>"
 
     backend_components:
       # Example: passthrough (1:1) or with conversion factors
@@ -564,8 +567,9 @@ class MessageCapture:
 ### AutoApproveWaldurBackend (conftest.py)
 
 Extends `WaldurBackend`. Overrides `check_pending_order()` to
-auto-approve `PENDING_PROVIDER` orders on B. Required because B's
-`Marketplace.Basic` offering has no real backend processor in tests.
+auto-approve `PENDING_PROVIDER` orders on B. Required because there
+is no real backend processor (e.g., SLURM site agent) running on B
+in tests.
 
 ```python
 class AutoApproveWaldurBackend(WaldurBackend):
