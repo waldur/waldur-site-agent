@@ -695,64 +695,14 @@ class RancherBackend(backends.BaseBackend):
             logger.error(f"Failed to delete association for {username}: {e}")
             return False
 
-    def downscale_resource(self, resource_backend_id: str) -> bool:
-        """Downscale resource by setting minimal quotas."""
-        try:
-            # Set minimal limits to effectively downscale resource consumption
-            minimal_limits = {
-                "cpu": 1,  # 1 core
-                "memory": 1,  # 1 GB
-                "storage": 1,  # 1 GB
-            }
-            # Setup namespace resource quotas
-            namespaces = self.client.get_project_namespaces(resource_backend_id)
-            if len(namespaces) > 0 and namespaces[0]:
-                namespace = namespaces[0]
-                self.client.set_namespace_custom_resource_quotas(namespace, minimal_limits)
-                logger.info(
-                    "Downscaled Rancher project %s namespace %s: %s",
-                    resource_backend_id,
-                    namespace,
-                    minimal_limits,
-                )
-            return True
-        except Exception as e:
-            logger.error("Failed to downscale %s: %s", resource_backend_id, e)
-            return False
+    def downscale_resource(self, _resource_backend_id: str) -> bool:
+        """No-op: Rancher does not support resource downscaling."""
+        return False
 
-    def pause_resource(self, resource_backend_id: str) -> bool:
-        """Pause resource by setting quotas to zero."""
-        try:
-            # Set zero limits to prevent any resource consumption
-            zero_limits = {"cpu": 0, "memory": 0, "storage": 0, "pods": 0}
-            # Setup namespace resource quotas
-            namespaces = self.client.get_project_namespaces(resource_backend_id)
-            if len(namespaces) > 0 and namespaces[0]:
-                namespace = namespaces[0]
-                self.client.set_namespace_custom_resource_quotas(namespace, zero_limits)
-                logger.info("Paused Rancher project %s", resource_backend_id)
-            return True
-        except Exception as e:
-            logger.error("Failed to pause %s: %s", resource_backend_id, e)
-            return False
+    def pause_resource(self, _resource_backend_id: str) -> bool:
+        """No-op: Rancher does not support resource pausing."""
+        return False
 
-    def restore_resource(self, resource_backend_id: str) -> bool:
-        """Restore resource by removing quota restrictions."""
-        try:
-            # Get the project's original limits from Rancher or set defaults
-            # For now, we'll set reasonable defaults
-            default_limits = {
-                "cpu": 10,  # 10 cores
-                "memory": 32,  # 32 GB
-                "storage": 100,  # 100 GB
-            }
-            # Setup namespace resource quotas
-            namespaces = self.client.get_project_namespaces(resource_backend_id)
-            if len(namespaces) > 0 and namespaces[0]:
-                namespace = namespaces[0]
-                self.client.set_namespace_custom_resource_quotas(namespace, default_limits)
-                logger.info("Restored Rancher project %s", resource_backend_id)
-            return True
-        except Exception as e:
-            logger.error("Failed to restore %s: %s", resource_backend_id, e)
-            return False
+    def restore_resource(self, _resource_backend_id: str) -> bool:
+        """No-op: Rancher does not support resource downscaling/pausing."""
+        return False
