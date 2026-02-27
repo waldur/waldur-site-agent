@@ -376,6 +376,42 @@ def process_offering(offering: common_structures.Offering, user_agent: str = "")
         logger.info("Membership sync is disabled for this offering, skipping it")
 
 
+def run_periodic_username_reconciliation(
+    waldur_offerings: list[common_structures.Offering], user_agent: str = ""
+) -> None:
+    """Reconcile offering user usernames for STOMP-enabled offerings.
+
+    Catches any username updates from Waldur B that may have been missed
+    due to transient STOMP disconnections or message loss.
+    Only runs sync_offering_user_usernames — not a full membership sync.
+    """
+    for offering in waldur_offerings:
+        if not offering.username_reconciliation_enabled:
+            continue
+        try:
+            waldur_rest_client = get_client(
+                offering.api_url,
+                offering.api_token,
+                user_agent,
+                verify_ssl=offering.verify_ssl,
+            )
+            resource_backend, _ = get_backend_for_offering(
+                offering, "membership_sync_backend"
+            )
+            updated = resource_backend.sync_offering_user_usernames(
+                offering.uuid, waldur_rest_client
+            )
+            if updated:
+                logger.info(
+                    "Reconciliation: usernames updated for offering %s",
+                    offering.name,
+                )
+        except Exception:
+            logger.exception(
+                "Reconciliation failed for offering %s", offering.name
+            )
+
+
 def send_agent_health_checks(offerings: list[common_structures.Offering], user_agent: str) -> None:
     """Sends agent health checks for the specified offerings."""
     for offering in offerings:

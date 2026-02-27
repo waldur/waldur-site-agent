@@ -124,9 +124,12 @@ class EventSubscriptionManager:
         event_subscription_uuid = event_subscription.uuid.hex
         # Mapped to a username in RabbitMQ bound to the Waldur EventSubscription object
         username = event_subscription_uuid
+        # Normalize offering UUID to hex (no dashes) to match the queue name format
+        # used by Waldur Mastermind's EventSubscriptionQueue.queue_name property.
+        offering_uuid_hex = self.offering.uuid.replace("-", "")
         queue_name = (
             f"subscription_{event_subscription_uuid}_"
-            f"offering_{self.offering.uuid}_{self.observable_object_type}"
+            f"offering_{offering_uuid_hex}_{self.observable_object_type}"
         )
 
         stomp_host = custom_stomp_ws_host or urllib3.util.parse_url(self.offering.api_url).host

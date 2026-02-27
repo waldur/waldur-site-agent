@@ -502,6 +502,58 @@ These settings are on the offering itself (not inside `backend_settings`):
 | `target_stomp_enabled` | No | `false` | STOMP subscription on B for instant order completion |
 | `target_stomp_offering_uuid` | No | `target_offering_uuid` | `Marketplace.Slurm` offering on B for agent identity |
 
+### Required User Permissions
+
+The plugin uses two API tokens that connect to different Waldur instances.
+Each token must belong to a user with the appropriate permissions.
+
+#### Waldur A Token (`waldur_api_token`)
+
+This token authenticates against Waldur A (the source instance). The user must have
+**OFFERING.MANAGER** role on the offering specified by `waldur_offering_uuid`.
+
+Required capabilities:
+
+- List and manage offering users on offering A
+- List and process marketplace orders on offering A
+- Report component usages on offering A
+- Register agent identities (requires `CREATE_OFFERING` permission on the
+  offering's customer, granted to `OFFERING.MANAGER`)
+- Subscribe to STOMP events for the offering (when `stomp_enabled: true`)
+
+#### Waldur B Token (`target_api_token`)
+
+This token authenticates against Waldur B (the target instance). The user must be:
+
+- **Customer owner** on their own organization (can be a non-SP customer separate
+  from the service provider that owns the offering)
+- **ISD identity manager** (`is_identity_manager: true` with `managed_isds` set)
+
+The user does **not** need OFFERING.MANAGER or customer owner on the SP that owns
+the target offering. Access to offering B's offering users is granted via ISD
+overlap (`managed_isds` intersecting offering users' `active_isds`).
+
+Required capabilities:
+
+- List offering users on offering B (via ISD identity manager overlap)
+- Create and manage marketplace orders on offering B
+- Create and manage projects under `target_customer_uuid`
+- Resolve users on Waldur B (via CUID, email, or username)
+- Add and remove users from projects on Waldur B
+- Read component usages from resources on Waldur B
+
+If `target_stomp_enabled: true`, agent identity registration uses the ISD manager
+path (no OFFERING.MANAGER needed):
+
+- Register agent identities on the target STOMP offering via IDM path
+- Create event subscriptions and subscription queues on Waldur B
+
+If `identity_bridge_source` is set (identity bridge mode), the user additionally
+requires:
+
+- POST to `/api/identity-bridge/` on Waldur B
+- POST to `/api/identity-bridge/remove/` on Waldur B
+
 ### Component Target Configuration
 
 Each source component can optionally define `target_components`:
@@ -599,6 +651,7 @@ plugins/waldur/
     ├── test_client.py                     # Client tests (20 tests)
     ├── test_component_mapping.py          # Mapper tests (22 tests)
     ├── test_integration.py                # Integration tests (56 tests)
+    ├── test_integration_username_sync.py  # Username sync + STOMP event routing (18 tests)
     ├── test_target_event_handler.py       # Target event handler tests
     ├── test_username_backend.py           # Identity bridge username backend tests (22 tests)
     └── e2e/                               # End-to-end tests against live instances
@@ -745,6 +798,7 @@ WALDUR_E2E_PROJECT_A_UUID=<uuid> \
 | `test_username_backend.py` | 22 | Identity bridge username backend, attribute mapping, user sync |
 | `test_target_event_handler.py` | -- | STOMP ORDER event handling, source order state updates |
 | `test_integration.py` | 56 | Integration tests against real single Waldur instance |
+| `test_integration_username_sync.py` | 18 | Username sync, STOMP event routing, periodic reconciliation |
 | `e2e/test_e2e_federation.py` | 4 | REST polling lifecycle (create, update, terminate) |
 | `e2e/test_e2e_stomp.py` | 4 | STOMP connections + event capture + order flow + cleanup |
 

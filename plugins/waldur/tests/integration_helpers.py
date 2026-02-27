@@ -7,6 +7,7 @@ components) on a real Waldur instance for integration testing.
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -209,6 +210,137 @@ class WaldurTestSetup:
         )
         logger.info("Activated offering %s", offering_uuid)
 
+    def create_resource_via_django(
+        self,
+        offering_uuid: str,
+        project_uuid: str,
+        name: str = "inttest-resource",
+    ) -> str:
+        """Create a marketplace Resource in OK state via Django ORM.
+
+        Marketplace.Slurm offerings can't create orders via API without a real
+        SLURM backend (no service_settings scope). This bypasses the order flow
+        and creates the resource directly, which is sufficient to trigger
+        offering user auto-creation when a user is added to the project.
+
+        Returns the resource UUID. Tracks the resource for cleanup.
+        """
+        import shutil  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+
+        waldur_dir = os.environ.get(
+            "WALDUR_MASTERMIND_DIR",
+            os.path.expanduser("~/workspace/waldur-mastermind"),
+        )
+        uv_bin = shutil.which("uv")
+        if not uv_bin or not os.path.isdir(waldur_dir):
+            msg = "Cannot create resource: uv or waldur_dir not found"
+            raise RuntimeError(msg)
+
+        off_clean = offering_uuid.replace("-", "")
+        proj_clean = project_uuid.replace("-", "")
+
+        script = (
+            "from waldur_mastermind.marketplace.models import Resource, Offering, Plan; "
+            "from waldur_core.structure.models import Project; "
+            f"o = Offering.objects.get(uuid='{off_clean}'); "
+            f"p = Project.objects.get(uuid='{proj_clean}'); "
+            "plan = Plan.objects.filter(offering=o).first(); "
+            f"r = Resource.objects.create("
+            f"offering=o, project=p, plan=plan, name='{name}', "
+            "state=Resource.States.OK); "
+            "print(str(r.uuid))"
+        )
+        try:
+            result = subprocess.run(  # noqa: S603
+                [uv_bin, "run", "waldur", "shell", "-c", script],
+                capture_output=True, text=True, timeout=15, cwd=waldur_dir,
+            )
+            # UUID is the last non-empty line
+            for line in reversed(result.stdout.strip().splitlines()):
+                line = line.strip()
+                if len(line) == 32 and all(c in "0123456789abcdef" for c in line):
+                    self._track("resource", line)
+                    logger.info(
+                        "Created resource %s via Django ORM (offering=%s)",
+                        line, offering_uuid,
+                    )
+                    return line
+            msg = (
+                f"Django shell resource creation failed: "
+                f"{(result.stderr or result.stdout)[:300]}"
+            )
+            raise RuntimeError(msg)
+        except subprocess.TimeoutExpired as exc:
+            msg = "Django shell resource creation timed out"
+            raise RuntimeError(msg) from exc
+
+    def _delete_resource_via_django(self, resource_uuid: str) -> None:
+        """Delete a marketplace Resource via Django ORM."""
+        import shutil  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+
+        waldur_dir = os.environ.get(
+            "WALDUR_MASTERMIND_DIR",
+            os.path.expanduser("~/workspace/waldur-mastermind"),
+        )
+        uv_bin = shutil.which("uv")
+        if not uv_bin or not os.path.isdir(waldur_dir):
+            return
+
+        clean_uuid = resource_uuid.replace("-", "")
+        script = (
+            "from waldur_mastermind.marketplace.models import Resource; "
+            f"Resource.objects.filter(uuid='{clean_uuid}').delete(); "
+            "print('OK')"
+        )
+        try:
+            subprocess.run(  # noqa: S603
+                [uv_bin, "run", "waldur", "shell", "-c", script],
+                capture_output=True, text=True, timeout=15, cwd=waldur_dir,
+            )
+        except Exception:
+            pass
+
+    def _set_plugin_options(self, offering_uuid: str, plugin_options: dict) -> None:
+        """Set plugin_options on an offering via Django ORM (local dev)."""
+        import shutil  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+
+        waldur_dir = os.environ.get(
+            "WALDUR_MASTERMIND_DIR",
+            os.path.expanduser("~/workspace/waldur-mastermind"),
+        )
+        uv_bin = shutil.which("uv")
+        # Use repr() to produce Python literals (True/False, not true/false)
+        opts_repr = repr(plugin_options)
+        clean_uuid = offering_uuid.replace("-", "")
+
+        if uv_bin and os.path.isdir(waldur_dir):
+            script = (
+                "from waldur_mastermind.marketplace.models import Offering; "
+                f"o = Offering.objects.get(uuid='{clean_uuid}'); "
+                f"o.plugin_options = {opts_repr}; "
+                "o.save(update_fields=['plugin_options']); "
+                f"print('OK: ' + str(o.uuid))"
+            )
+            try:
+                result = subprocess.run(  # noqa: S603
+                    [uv_bin, "run", "waldur", "shell", "-c", script],
+                    capture_output=True, text=True, timeout=15, cwd=waldur_dir,
+                )
+                if "OK:" in result.stdout:
+                    logger.info("Set plugin_options on offering %s via Django ORM", offering_uuid)
+                    return
+                logger.warning(
+                    "Django shell plugin_options failed for %s: %s",
+                    offering_uuid, (result.stderr or result.stdout)[:200],
+                )
+            except Exception as exc:
+                logger.warning("Django shell plugin_options error for %s: %s", offering_uuid, exc)
+        else:
+            logger.warning("Cannot set plugin_options: uv or waldur_dir not found")
+
     def _get_category_url(self, category_uuid: str) -> str:
         return f"{self.api_url}/api/marketplace-categories/{category_uuid}/"
 
@@ -257,6 +389,9 @@ class WaldurTestSetup:
             )
         self._create_plan(off_a_url)
         self._activate_offering(off_a_uuid)
+        self._set_plugin_options(off_a_uuid, {
+            "service_provider_can_create_offering_user": True,
+        })
 
         # Offering B: target side
         off_b_uuid, off_b_url = self._create_offering(
@@ -269,6 +404,9 @@ class WaldurTestSetup:
             )
         self._create_plan(off_b_url)
         self._activate_offering(off_b_uuid)
+        self._set_plugin_options(off_b_uuid, {
+            "service_provider_can_create_offering_user": True,
+        })
 
         backend_settings = {
             "target_api_url": self.api_url,
@@ -724,6 +862,7 @@ class WaldurTestSetup:
         or cascade deletions).
         """
         destroy_map = {
+            "resource": lambda u: self._delete_resource_via_django(u),
             "project": lambda u: projects_destroy.sync_detailed(
                 uuid=uuid.UUID(u), client=self.client
             ),

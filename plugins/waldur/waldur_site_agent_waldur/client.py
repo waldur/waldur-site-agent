@@ -67,7 +67,7 @@ class WaldurClient(BaseClient):
         self.offering_uuid = offering_uuid
         # Strip /api suffix for AuthenticatedClient base_url —
         # the SDK prepends /api/ to all endpoint paths.
-        base_url = self.api_url.rstrip("/api")
+        base_url = self.api_url.removesuffix("/api")
         self._api_client = AuthenticatedClient(
             base_url=base_url,
             token=api_token,

@@ -1367,8 +1367,11 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         self._sync_user_profiles_to_backend(offering_users)
 
         # Pull backend-assigned usernames (e.g., from Waldur B offering users)
-        if self.resource_backend.sync_offering_user_usernames(
-            self.offering.uuid, self.waldur_rest_client
+        if (
+            self.offering.username_reconciliation_enabled
+            and self.resource_backend.sync_offering_user_usernames(
+                self.offering.uuid, self.waldur_rest_client
+            )
         ):
             offering_users = self._get_waldur_offering_users()
 
@@ -1627,8 +1630,11 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         self._sync_user_profiles_to_backend(offering_users)
 
         # Pull backend-assigned usernames (e.g., from Waldur B offering users)
-        if self.resource_backend.sync_offering_user_usernames(
-            self.offering.uuid, self.waldur_rest_client
+        if (
+            self.offering.username_reconciliation_enabled
+            and self.resource_backend.sync_offering_user_usernames(
+                self.offering.uuid, self.waldur_rest_client
+            )
         ):
             offering_users = self._get_waldur_offering_users()
 

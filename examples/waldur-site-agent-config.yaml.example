@@ -11,6 +11,7 @@ offerings: # Settings for offerings
     membership_sync_backend: "slurm" # Name of the backend from entrypoints to use for membership syncing
     reporting_backend: "slurm" # Name of the backend from entrypoints to use for reporting
     resource_import_enabled: false # Whether to expose importable resources to Waldur
+    username_reconciliation_enabled: false # Enable periodic username reconciliation from target backend (e.g. Waldur B). Only needed for Waldur federation setups.
     mqtt_enabled: false # MQTT feature toggler
     stomp_enabled: false # STOMP feature toggler
     websocket_use_tls: true # Whether to use TLS for MQTT connection

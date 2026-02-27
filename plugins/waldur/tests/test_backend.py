@@ -614,7 +614,7 @@ class TestSyncOfferingUserUsernames:
         """When Waldur B has a username and Waldur A differs, update Waldur A."""
         waldur_b_ou = _make_offering_user(
             uuid=UUID("dd000000-0000-0000-0000-000000000001"),
-            user_username="bob_on_b",
+            user_username="bob@idp.org",
             username="slurm_bob",
             user_uuid=WALDUR_B_USER_UUID,
         )
@@ -625,7 +625,6 @@ class TestSyncOfferingUserUsernames:
             user_username="bob@idp.org",
             username="bob@idp.org",
         )
-        mock_client.resolve_user_by_cuid.return_value = WALDUR_B_USER_UUID
 
         with (
             patch.object(_ou_list_mod, "sync_all", return_value=[waldur_a_ou]),
@@ -653,11 +652,11 @@ class TestSyncOfferingUserUsernames:
         assert result is False
         mock_list.assert_not_called()
 
-    def test_skips_when_user_not_resolved(self, backend, mock_client):
-        """When Waldur A user can't be resolved on Waldur B, skip them."""
+    def test_skips_when_user_not_on_waldur_b(self, backend, mock_client):
+        """When Waldur A user has no matching offering user on Waldur B, skip."""
         waldur_b_ou = _make_offering_user(
             uuid=UUID("dd000000-0000-0000-0000-000000000001"),
-            user_username="bob_on_b",
+            user_username="bob@idp.org",
             username="slurm_bob",
             user_uuid=WALDUR_B_USER_UUID,
         )
@@ -668,7 +667,6 @@ class TestSyncOfferingUserUsernames:
             user_username="unknown@idp.org",
             username="unknown@idp.org",
         )
-        mock_client.resolve_user_by_cuid.return_value = None
 
         with (
             patch.object(_ou_list_mod, "sync_all", return_value=[waldur_a_ou]),
@@ -685,7 +683,7 @@ class TestSyncOfferingUserUsernames:
         """When Waldur A already has the Waldur B username, no update needed."""
         waldur_b_ou = _make_offering_user(
             uuid=UUID("dd000000-0000-0000-0000-000000000001"),
-            user_username="bob_on_b",
+            user_username="bob@idp.org",
             username="slurm_bob",
             user_uuid=WALDUR_B_USER_UUID,
         )
@@ -696,7 +694,6 @@ class TestSyncOfferingUserUsernames:
             user_username="bob@idp.org",
             username="slurm_bob",
         )
-        mock_client.resolve_user_by_cuid.return_value = WALDUR_B_USER_UUID
 
         with (
             patch.object(_ou_list_mod, "sync_all", return_value=[waldur_a_ou]),
@@ -723,7 +720,7 @@ class TestSyncOfferingUserUsernames:
         """CREATING state users on Waldur A should also get updated."""
         waldur_b_ou = _make_offering_user(
             uuid=UUID("dd000000-0000-0000-0000-000000000001"),
-            user_username="alice_on_b",
+            user_username="alice@idp.org",
             username="hpc_alice",
             user_uuid=WALDUR_B_USER_UUID,
         )
@@ -735,7 +732,6 @@ class TestSyncOfferingUserUsernames:
             username=None,
             state="Creating",
         )
-        mock_client.resolve_user_by_cuid.return_value = WALDUR_B_USER_UUID
 
         with (
             patch.object(_ou_list_mod, "sync_all", return_value=[waldur_a_ou]),
@@ -753,13 +749,13 @@ class TestSyncOfferingUserUsernames:
         """Only users with a Waldur B match get updated."""
         b_ou_1 = _make_offering_user(
             uuid=UUID("dd000000-0000-0000-0000-000000000001"),
-            user_username="alice_on_b",
+            user_username="alice@idp.org",
             username="hpc_alice",
             user_uuid=WALDUR_B_USER_UUID,
         )
         b_ou_2 = _make_offering_user(
             uuid=UUID("dd000000-0000-0000-0000-000000000002"),
-            user_username="bob_on_b",
+            user_username="bob@idp.org",
             username="hpc_bob",
             user_uuid=WALDUR_B_USER_UUID_2,
         )
@@ -775,13 +771,6 @@ class TestSyncOfferingUserUsernames:
             user_username="charlie@idp.org",
             username="charlie@idp.org",
         )
-
-        def resolve_side_effect(username):
-            if username == "alice@idp.org":
-                return WALDUR_B_USER_UUID
-            return None
-
-        mock_client.resolve_user_by_cuid.side_effect = resolve_side_effect
 
         with (
             patch.object(

@@ -58,6 +58,9 @@ Each offering in the `offerings` array represents a separate service offering.
 - **Type**: String
 - **Required**: Yes
 - **Description**: Token for Waldur API authentication
+- **Permissions**: The token user must have **OFFERING.MANAGER** role on the offering specified by
+  `waldur_offering_uuid`. This grants the permissions needed for order processing, usage reporting,
+  membership sync, and event subscriptions.
 - **Security**: Keep this secret and secure
 
 #### `verify_ssl`
@@ -166,10 +169,15 @@ backend_settings:
 
 ### Waldur Federation Backend Settings
 
+The `target_api_token` user must be a **customer owner** (can be a non-SP customer
+separate from the offering's service provider) and an **ISD identity manager**
+(`is_identity_manager: true` with `managed_isds` set). Access to the target
+offering's users is granted via ISD overlap, not via OFFERING.MANAGER.
+
 ```yaml
 backend_settings:
   target_api_url: "https://waldur-b.example.com/api/"
-  target_api_token: "service-account-token"
+  target_api_token: "token-for-waldur-b"  # customer owner + ISD manager
   target_offering_uuid: "offering-uuid-on-waldur-b"
   target_customer_uuid: "customer-uuid-on-waldur-b"
   user_match_field: "cuid"                   # cuid | email | username
@@ -422,7 +430,7 @@ offerings:
 
     backend_settings:
       target_api_url: "https://waldur-b.example.com/api/"
-      target_api_token: "service-account-token-for-waldur-b"
+      target_api_token: "token-for-waldur-b"  # customer owner + ISD manager
       target_offering_uuid: "offering-uuid-on-waldur-b"
       target_customer_uuid: "customer-uuid-on-waldur-b"
       user_match_field: "cuid"

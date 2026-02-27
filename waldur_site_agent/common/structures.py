@@ -132,6 +132,9 @@ class Offering(BaseModel):
 
     # Additional settings
     resource_import_enabled: bool = Field(default=False, description="Enable resource import")
+    username_reconciliation_enabled: bool = Field(
+        default=False, description="Enable periodic username reconciliation from target backend"
+    )
     verify_ssl: bool = Field(default=True, description="Verify SSL certificates")
 
     @field_validator("waldur_api_url")

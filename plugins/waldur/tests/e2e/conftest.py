@@ -337,9 +337,9 @@ def waldur_client_b(offering, report):
 class AutoApproveWaldurBackend(WaldurBackend):
     """WaldurBackend that auto-approves pending orders on Waldur B.
 
-    In production, Waldur B's own backend processor approves
-    Marketplace.Basic orders. In E2E tests there is no such processor,
-    so we approve them ourselves in check_pending_order().
+    In production, Waldur B's own backend processor (e.g., SLURM site
+    agent) approves and processes orders. In E2E tests there is no such
+    processor, so we approve them ourselves in check_pending_order().
     """
 
     def check_pending_order(self, order_backend_id: str) -> bool:
@@ -371,8 +371,8 @@ class AutoApproveWaldurBackend(WaldurBackend):
 def backend(offering):
     """WaldurBackend with auto-approve for Waldur B orders.
 
-    In production, Waldur B has its own backend processor that approves
-    Marketplace.Basic orders. In tests, we auto-approve them ourselves.
+    In production, Waldur B has its own backend processor that processes
+    orders. In tests, we auto-approve them ourselves.
     """
     settings = offering.backend_settings
     components = offering.backend_components_dict
