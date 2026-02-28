@@ -103,21 +103,15 @@ class ReportingTest(unittest.TestCase):
         )
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-resources/",
-            params={
-                "offering_uuid": self.offering.uuid,
-                "page_size": 100,
-            },
         ).respond(200, json=[self.waldur_resource])
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/"
         ).respond(200, json=self.waldur_resource)
         respx.get(
             f"{self.BASE_URL}/api/marketplace-offering-users/",
-            params={"user_username": "user-01", "query": OFFERING.uuid},
         ).respond(200, json=[])
         respx.get(
             f"{self.BASE_URL}/api/marketplace-component-usages/",
-            params={"resource_uuid": self.waldur_resource["uuid"], "billing_period": "2022-01-01"},
         ).respond(200, json=[])
         respx.get(
             f"{self.BASE_URL}/api/marketplace-component-user-usages/",
@@ -129,7 +123,6 @@ class ReportingTest(unittest.TestCase):
         componet_usage_uuid_mem = uuid.uuid4()
         respx.get(
             f"{self.BASE_URL}/api/marketplace-component-usages/",
-            params={"resource_uuid": self.waldur_resource["uuid"], "billing_period": "2022-01-01"},
         ).respond(
             200,
             json=[
@@ -179,22 +172,16 @@ class ReportingTest(unittest.TestCase):
         )
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-resources/",
-            params={
-                "offering_uuid": self.offering.uuid,
-                "page_size": 100,
-            },
         ).respond(200, json=[self.waldur_resource])
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/"
         ).respond(200, json=self.waldur_resource)
         respx.get(
             f"{self.BASE_URL}/api/marketplace-offering-users/",
-            params={"user_username": "user-01", "query": OFFERING.uuid},
         ).respond(200, json=[])
 
         respx.get(
             f"{self.BASE_URL}/api/marketplace-component-usages/",
-            params={"resource_uuid": self.waldur_resource["uuid"], "billing_period": "2022-01-01"},
         ).respond(
             200,
             json=[

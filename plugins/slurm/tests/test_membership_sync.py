@@ -136,6 +136,7 @@ class MembershipSyncTest(unittest.TestCase):
             offering_uuid=self.offering.uuid,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            state=OfferingUserState.OK,
         ).to_dict()
         self.waldur_resource_team = [self.team_member]
         self.mock_client = AuthenticatedClient(
@@ -163,11 +164,6 @@ class MembershipSyncTest(unittest.TestCase):
         ).respond(200, content=_serialize_datetime_aware(self.waldur_offering.to_dict()))
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-resources/",
-            params={
-                "offering_uuid": self.offering.uuid,
-                "state": ["OK", "Erred"],
-                "page_size": 100,
-            },
         ).respond(200, json=[self.waldur_resource.to_dict()])
         respx.post(
             f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_backend_metadata/"
@@ -221,6 +217,9 @@ class MembershipSyncTest(unittest.TestCase):
             f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/course_accounts/",
             params={"project_uuid": self.waldur_resource.project_uuid.hex, "page_size": 100},
         ).respond(200, json=[course_account.to_dict()])
+        respx.get(
+            f"{self.BASE_URL}/api/component-user-usage-limits/",
+        ).respond(200, json=[])
         return respx.post(
             f"https://waldur.example.com/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_limits/"
         ).respond(200, json={"status": "ok"})
@@ -239,7 +238,6 @@ class MembershipSyncTest(unittest.TestCase):
             offering_users_data = [self.waldur_offering_user]
         respx.get(
             f"{self.BASE_URL}/api/marketplace-offering-users/",
-            params={"offering_uuid": self.offering.uuid, "is_restricted": False},
         ).respond(200, json=offering_users_data)
 
     def _setup_offering_details_mock(self, offering_user_data=None) -> None:

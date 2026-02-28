@@ -148,7 +148,6 @@ class BaseMUPOrderTest(unittest.TestCase):
         """Setup offering users mock."""
         respx.get(
             f"{BASE_URL}/api/marketplace-offering-users/",
-            params={"offering_uuid": MUP_OFFERING.uuid, "is_restricted": False},
         ).respond(200, json=offering_users_data)
 
         if offering_users_data:
@@ -237,7 +236,6 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         self, order_uuid, marketplace_resource_uuid, order_data=None, order_states=None
     ) -> None:
         """Setup order-specific mocks for creation orders."""
-        pending_order = self.waldur_order.copy()
         executing_order = self.waldur_order.copy()
         executing_order["state"] = "executing"
         executing_order["marketplace_resource_uuid"] = marketplace_resource_uuid
@@ -246,7 +244,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             order_uuid,
             marketplace_resource_uuid,
             self.waldur_order,
-            [pending_order, executing_order],
+            [executing_order, executing_order],
         )
 
     def _setup_resource_mocks(self, marketplace_resource_uuid):
