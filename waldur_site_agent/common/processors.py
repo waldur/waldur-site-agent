@@ -78,9 +78,12 @@ from waldur_api_client.models import (
     ComponentUsageCreateRequest,
     ComponentUsageItemRequest,
     CourseAccount,
+    OfferingUserFieldEnum,
+    OrderDetailsFieldEnum,
     OrderState,
     ProjectServiceAccount,
     ProviderOfferingDetailsFieldEnum,
+    ResourceFieldEnum,
     ResourceSetLimitsRequest,
     ResourceState,
     ServiceAccountState,
@@ -93,6 +96,7 @@ from waldur_api_client.models.backend_resource_request_set_erred_request import 
 )
 from waldur_api_client.models.check_unique_backend_id_request import CheckUniqueBackendIDRequest
 from waldur_api_client.models.component_usage import ComponentUsage
+from waldur_api_client.models.component_usage_field_enum import ComponentUsageFieldEnum
 from waldur_api_client.models.component_user_usage_create_request import (
     ComponentUserUsageCreateRequest,
 )
@@ -226,10 +230,43 @@ class OfferingBaseProcessor(abc.ABC):
         self.service_provider = service_providers[0]
         self.resource_backend.service_provider_uuid = self.service_provider.uuid.hex
 
+        # Per-cycle cache for offering users (avoids redundant API calls)
+        self._offering_users_cache: list[OfferingUser] | None = None
+
     def _print_current_user(self) -> None:
         """Log information about the current authenticated Waldur user."""
         current_user = utils.get_current_user_from_client(self.waldur_rest_client)
         utils.print_current_user(current_user)
+
+    def _get_cached_offering_users(self) -> list[OfferingUser]:
+        """Return cached offering users, fetching from API on first call.
+
+        Uses a per-cycle cache to avoid redundant API calls when multiple
+        methods need the full offering users list.
+        """
+        if self._offering_users_cache is None:
+            self._offering_users_cache = marketplace_offering_users_list.sync_all(
+                client=self.waldur_rest_client,
+                offering_uuid=[self.offering.uuid],
+                is_restricted=False,
+                field=[
+                    OfferingUserFieldEnum.USER_UUID,
+                    OfferingUserFieldEnum.USERNAME,
+                    OfferingUserFieldEnum.URL,
+                    OfferingUserFieldEnum.STATE,
+                    OfferingUserFieldEnum.UUID,
+                    OfferingUserFieldEnum.USER_USERNAME,
+                ],
+            )
+        return self._offering_users_cache
+
+    def _invalidate_offering_users_cache(self) -> None:
+        """Invalidate the offering users cache.
+
+        Call this after modifying offering users (e.g., creating new ones)
+        to ensure fresh data on the next access.
+        """
+        self._offering_users_cache = None
 
     def _check_backend_id_uniqueness(self, backend_id: str) -> bool:
         """Check if backend_id is unique across offering history.
@@ -357,7 +394,13 @@ class OfferingBaseProcessor(abc.ABC):
         Args:
             offering_users: List of offering users to process
         """
-        return utils.update_offering_users(self.offering, self.waldur_rest_client, offering_users)
+        result = utils.update_offering_users(
+            self.offering, self.waldur_rest_client, offering_users
+        )
+        if result:
+            # Usernames were modified, invalidate the cache
+            self._invalidate_offering_users_cache()
+        return result
 
     def register(self, service: AgentService) -> AgentProcessor:
         """Register this processor in Waldur."""
@@ -546,24 +589,29 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         """Process an order with automatic retry on failures.
 
         Args:
-            order_info: The order to process
+            order_info: The order to process (used directly on first attempt)
             retry_count: Maximum number of retry attempts (default: 10)
             delay: Delay in seconds between retry attempts (default: 5)
         """
         for attempt_number in range(retry_count):
             try:
                 logger.info("Attempt %s of %s", attempt_number + 1, retry_count)
-                order: Optional[OrderDetails] = self.get_order_info(order_info.uuid.hex)
-                if order is None:
-                    logger.error("Failed to get order %s info", order_info.uuid)
-                    return
+                if attempt_number == 0:
+                    # Use the already-fetched order on the first attempt
+                    order = order_info
+                else:
+                    # Re-fetch on retries for freshness
+                    order_fetched: Optional[OrderDetails] = self.get_order_info(
+                        order_info.uuid.hex
+                    )
+                    if order_fetched is None:
+                        logger.error("Failed to get order %s info", order_info.uuid)
+                        return
+                    order = order_fetched
                 self.process_order(order)
                 break
             except UnexpectedStatus as e:
-                if order is not None:
-                    self.log_order_processing_error(order, e)
-                else:
-                    self.log_order_processing_error(order_info, e)
+                self.log_order_processing_error(order, e)
                 logger.info("Retrying order %s processing in %s seconds", order_info.uuid, delay)
                 sleep(delay)
 
@@ -638,7 +686,12 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             if order_is_done:
                 logger.info("Marking order as done")
                 waldur_order_refreshed = marketplace_orders_retrieve.sync(
-                    client=self.waldur_rest_client, uuid=order.uuid.hex
+                    client=self.waldur_rest_client,
+                    uuid=order.uuid.hex,
+                    field=[
+                        OrderDetailsFieldEnum.UUID,
+                        OrderDetailsFieldEnum.STATE,
+                    ],
                 )
                 if waldur_order_refreshed.state == OrderState.EXECUTING:
                     marketplace_orders_set_state_done.sync_detailed(
@@ -651,11 +704,6 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     )
 
                 logger.info("The order has been successfully processed")
-
-                # Refresh local order
-                order = marketplace_orders_retrieve.sync(
-                    client=self.waldur_rest_client, uuid=order.uuid.hex
-                )
 
                 self._post_process_order(order)
             else:
@@ -780,11 +828,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             user_uuids = {user.uuid for user in team}
 
             # Get offering users
-            offering_users_all = marketplace_offering_users_list.sync_all(
-                client=self.waldur_rest_client,
-                offering_uuid=[self.offering.uuid],
-                is_restricted=False,
-            )
+            offering_users_all = self._get_cached_offering_users()
 
             if not offering_users_all:
                 logger.warning("No offering users found for offering %s", self.offering.uuid)
@@ -1133,6 +1177,27 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
     BACKEND_TYPE_KEY = "membership_sync_backend"
 
+    def __init__(
+        self,
+        offering: structures.Offering,
+        waldur_rest_client: utils.AuthenticatedClient,
+        timezone: str = "",
+        resource_backend: Optional[BaseBackend] = None,
+        resource_backend_version: Optional[str] = None,
+    ) -> None:
+        """Initialize the membership processor with per-cycle caches."""
+        super().__init__(
+            offering,
+            waldur_rest_client,
+            timezone,
+            resource_backend=resource_backend,
+            resource_backend_version=resource_backend_version,
+        )
+        # Per-cycle caches to avoid redundant API calls per project
+        self._team_cache: dict[str, list[ProjectUser]] = {}
+        self._service_accounts_cache: dict[str, list[ProjectServiceAccount]] = {}
+        self._course_accounts_cache: dict[str, list[CourseAccount]] = {}
+
     def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[WaldurResource]:
         """Fetch Waldur resources for this offering, optionally filtered by project.
 
@@ -1142,11 +1207,24 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         Returns:
             List of resources that have backend IDs and are in OK or ERRED state
         """
-        filters: dict[str, list | str] = {
+        filters: dict[str, Any] = {
             "offering_uuid": [self.offering.uuid],
             "state": [
                 ResourceState.OK,
                 ResourceState.ERRED,
+            ],
+            "field": [
+                ResourceFieldEnum.UUID,
+                ResourceFieldEnum.BACKEND_ID,
+                ResourceFieldEnum.NAME,
+                ResourceFieldEnum.STATE,
+                ResourceFieldEnum.PROJECT_UUID,
+                ResourceFieldEnum.RESTRICT_MEMBER_ACCESS,
+                ResourceFieldEnum.BACKEND_METADATA,
+                ResourceFieldEnum.LIMITS,
+                ResourceFieldEnum.PAUSED,
+                ResourceFieldEnum.DOWNSCALED,
+                ResourceFieldEnum.OFFERING_PLUGIN_OPTIONS,
             ],
         }
 
@@ -1394,30 +1472,32 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     def _get_waldur_offering_users(self) -> list[OfferingUser]:
         """Fetch all offering users for this offering.
 
+        Uses the per-cycle cache and filters to OK and REQUESTED states.
+
         Returns:
             List of all non-restricted offering users for this offering
-
-        Raises:
-            ObjectNotFoundError: If no offering users found
         """
         logger.info("Fetching Waldur offering users (OK and Requested)")
-        offering_users = marketplace_offering_users_list.sync_all(
-            client=self.waldur_rest_client,
-            offering_uuid=[self.offering.uuid],
-            state=[
-                OfferingUserState.OK,
-                OfferingUserState.REQUESTED,
-            ],
-            is_restricted=False,
-        )
+        all_offering_users = self._get_cached_offering_users()
+        offering_users = [
+            ou
+            for ou in all_offering_users
+            if ou.state in (OfferingUserState.OK, OfferingUserState.REQUESTED)
+        ]
         logger.info("Fetched %d offering users", len(offering_users))
         return offering_users
 
     def _get_waldur_resource_team(self, resource: WaldurResource) -> list[ProjectUser]:
+        cache_key = resource.project_uuid.hex
+        if cache_key in self._team_cache:
+            logger.info("Using cached team for project %s", cache_key)
+            return self._team_cache[cache_key]
         logger.info("Fetching Waldur resource team")
-        return marketplace_provider_resources_team_list.sync(
+        team = marketplace_provider_resources_team_list.sync(
             client=self.waldur_rest_client, uuid=resource.uuid.hex
         )
+        self._team_cache[cache_key] = team
+        return team
 
     def _group_resource_usernames(
         self,
@@ -1584,30 +1664,32 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             waldur_resource.backend_id
         )
 
+        # Fetch all user limits for the resource in a single API call
+        all_user_limits = component_user_usage_limits_list.sync_all(
+            client=self.waldur_rest_client,
+            resource_uuid=waldur_resource.uuid.hex,
+        )
+
+        # Group limits by username (the API model uses `user` for the username string)
+        limits_by_username: dict[str, dict[str, int]] = {}
+        for user_limit in all_user_limits:
+            limit_username = user_limit.user
+            if limit_username not in limits_by_username:
+                limits_by_username[limit_username] = {}
+            limits_by_username[limit_username][user_limit.component_type] = int(
+                float(user_limit.limit)
+            )
+
         for username in usernames:
             try:
-                logger.info(
-                    "Fetching user usage limits for %s, resource %s",
-                    username,
-                    waldur_resource.uuid.hex,
-                )
-                user_limits = component_user_usage_limits_list.sync_all(
-                    client=self.waldur_rest_client,
-                    resource_uuid=waldur_resource.uuid.hex,
-                    username=username,
-                )
-                if len(user_limits) == 0:
+                user_component_limits = limits_by_username.get(username)
+                if user_component_limits is None:
                     existing_user_limits = backend_user_limits.get(username)
                     logger.debug("The limits for user %s are not set in Waldur", username)
                     if not existing_user_limits:
                         continue
                     logger.info("Unsetting the existing limits %s", existing_user_limits)
                     user_component_limits = {}
-                else:
-                    user_component_limits = {
-                        user_limit.component_type: int(float(user_limit.limit))
-                        for user_limit in user_limits
-                    }
                 self.resource_backend.set_resource_user_limits(
                     waldur_resource.backend_id, username, user_component_limits
                 )
@@ -1619,6 +1701,80 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     waldur_resource.backend_id,
                     exc,
                 )
+
+    def _sync_resource_service_accounts(self, waldur_resource: WaldurResource) -> None:
+        """Sync service accounts with per-project caching."""
+        if self.service_provider is None:
+            logger.warning("No service provider configured, skipping service accounts sync")
+            return
+
+        cache_key = waldur_resource.project_uuid.hex
+        if cache_key in self._service_accounts_cache:
+            service_accounts = self._service_accounts_cache[cache_key]
+        else:
+            service_accounts = (
+                marketplace_service_providers_project_service_accounts_list.sync_all(
+                    service_provider_uuid=self.service_provider.uuid.hex,
+                    project_uuid=cache_key,
+                    client=self.waldur_rest_client,
+                )
+            )
+            self._service_accounts_cache[cache_key] = service_accounts
+
+        logger.info(
+            "Syncing service accounts for the resource %s (%s)",
+            waldur_resource.name,
+            waldur_resource.backend_id,
+        )
+        usernames_active = {
+            account.username
+            for account in service_accounts
+            if account.username and account.state == ServiceAccountState.OK
+        }
+        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
+
+        usernames_closed = {
+            account.username
+            for account in service_accounts
+            if account.username and account.state == ServiceAccountState.CLOSED
+        }
+        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
+
+    def _sync_resource_course_accounts(self, waldur_resource: WaldurResource) -> None:
+        """Sync course accounts with per-project caching."""
+        if self.service_provider is None:
+            logger.warning("No service provider configured, skipping course accounts sync")
+            return
+
+        cache_key = waldur_resource.project_uuid.hex
+        if cache_key in self._course_accounts_cache:
+            course_accounts = self._course_accounts_cache[cache_key]
+        else:
+            course_accounts = marketplace_service_providers_course_accounts_list.sync_all(
+                service_provider_uuid=self.service_provider.uuid.hex,
+                project_uuid=cache_key,
+                client=self.waldur_rest_client,
+            )
+            self._course_accounts_cache[cache_key] = course_accounts
+
+        logger.info(
+            "Syncing course accounts for the resource %s (%s)",
+            waldur_resource.name,
+            waldur_resource.backend_id,
+        )
+        usernames_active = {
+            account.username
+            for account in course_accounts
+            if account.username and account.state == ServiceAccountState.OK
+        }
+        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
+
+        usernames_closed = {
+            account.username
+            for account in course_accounts
+            if account.username and account.state == ServiceAccountState.CLOSED
+        }
+        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
 
     def _process_resources(
         self,
@@ -1852,6 +2008,20 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_resources = marketplace_provider_resources_list.sync_all(
             client=self.waldur_rest_client,
             offering_uuid=[self.offering.uuid],
+            state=[
+                ResourceState.OK,
+                ResourceState.ERRED,
+            ],
+            field=[
+                ResourceFieldEnum.UUID,
+                ResourceFieldEnum.BACKEND_ID,
+                ResourceFieldEnum.NAME,
+                ResourceFieldEnum.STATE,
+                ResourceFieldEnum.PROJECT_UUID,
+                ResourceFieldEnum.LIMITS,
+                ResourceFieldEnum.BACKEND_METADATA,
+                ResourceFieldEnum.OFFERING_PLUGIN_OPTIONS,
+            ],
         )
         if not waldur_resources:
             logger.info("No resources to process")
@@ -1993,6 +2163,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 client=self.waldur_rest_client,
                 resource_uuid=resource_uuid,
                 billing_period=billing_period_start,
+                field=[
+                    ComponentUsageFieldEnum.UUID,
+                    ComponentUsageFieldEnum.TYPE,
+                    ComponentUsageFieldEnum.USAGE,
+                ],
             )
 
             # Filter out component usages that have per-user breakdowns;
@@ -2072,11 +2247,12 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 "The following components are not found in Waldur: %s",
                 ", ".join(missing_components),
             )
-        # Assumed to be looking up offering users by the user's username
-        offering_users: list[OfferingUser] = marketplace_offering_users_list.sync(
-            client=self.waldur_rest_client, user_username=username, query=self.offering.uuid
+        # Look up offering user from cache instead of per-user API call
+        cached_offering_users = self._get_cached_offering_users()
+        offering_user = next(
+            (ou for ou in cached_offering_users if ou.username == username),
+            None,
         )
-        offering_user = offering_users[0] if offering_users else None
 
         if report_date is None:
             report_date = backend_utils.get_current_time_in_timezone(self.timezone)
@@ -2234,6 +2410,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             client=self.waldur_rest_client,
             resource_uuid=waldur_resource_info.uuid.hex,
             billing_period=billing_period_start,
+            field=[
+                ComponentUsageFieldEnum.UUID,
+                ComponentUsageFieldEnum.TYPE,
+                ComponentUsageFieldEnum.USAGE,
+            ],
         )
         logger.info("Setting per-user usages for period %04d-%02d", year, month)
         for username, user_usage in usages.items():
