@@ -490,13 +490,13 @@ class TestRancherBackend:
 
     @patch("waldur_site_agent_rancher.backend.RancherClient")
     def test_get_usage_report(self, mock_rancher_client, rancher_settings, rancher_components):
-        """Test usage report generation."""
+        """Test usage report generation from ResourceQuota status.used."""
         mock_client = MagicMock()
-        mock_client.get_project_usage.return_value = {
+        mock_client.get_project_namespaces.return_value = ["waldur-test-ns"]
+        mock_client.get_namespace_quota_usage.return_value = {
             "cpu": 2.5,
             "memory": 4.0,
             "storage": 50.0,
-            "pods": 10,
         }
         mock_rancher_client.return_value = mock_client
 
@@ -504,6 +504,8 @@ class TestRancherBackend:
 
         report = backend._get_usage_report(["project-123"])
 
+        mock_client.get_project_namespaces.assert_called_once_with("project-123")
+        mock_client.get_namespace_quota_usage.assert_called_once_with("waldur-test-ns")
         assert "project-123" in report
         assert report["project-123"]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 2.5
         assert report["project-123"]["TOTAL_ACCOUNT_USAGE"]["memory"] == 4.0

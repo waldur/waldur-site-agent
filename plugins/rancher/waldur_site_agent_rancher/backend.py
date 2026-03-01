@@ -474,17 +474,26 @@ class RancherBackend(backends.BaseBackend):
             raise BackendError(f"Failed to set limits: {e}") from e
 
     def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
-        """Collect usage metrics for specified projects."""
+        """Collect usage metrics for specified projects.
+
+        Reads ``status.used`` from all ResourceQuota objects
+        in each project namespace.
+        """
         usage_report = {}
 
         for resource_id in resource_backend_ids:
             try:
-                usage = self.rancher_client.get_project_usage(resource_id)
+                namespaces = self.client.get_project_namespaces(resource_id)
+                aggregated: dict[str, float] = {}
+                for namespace in namespaces:
+                    ns_usage = self.rancher_client.get_namespace_quota_usage(namespace)
+                    for key, value in ns_usage.items():
+                        aggregated[key] = aggregated.get(key, 0) + value
 
                 # Ensure all components have values (default to 0)
                 normalized_usage = {}
                 for component_key in self.backend_components:
-                    normalized_usage[component_key] = usage.get(component_key, 0)
+                    normalized_usage[component_key] = aggregated.get(component_key, 0)
 
                 usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE": normalized_usage}
 
