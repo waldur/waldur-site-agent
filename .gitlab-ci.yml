@@ -11,12 +11,13 @@ include:
     file: "/templates/test/lint-docker-image.yaml"
   - project: "waldur/waldur-pipelines"
     file: "/templates/test/lint-dockerfile.yaml"
-  - project: "waldur/waldur-pipelines"
-    file: "/templates/sbom/upload-sboms-to-docs.yml"
-  - project: "waldur/waldur-pipelines"
-    file: "/templates/sbom/generate-image-sbom.yml"
-  - project: "waldur/waldur-pipelines"
-    file: "/templates/sbom/generate-python-codebase-sbom.yml"
+  # Temporarily disabled
+  # - project: "waldur/waldur-pipelines"
+  #   file: "/templates/sbom/upload-sboms-to-docs.yml"
+  # - project: "waldur/waldur-pipelines"
+  #   file: "/templates/sbom/generate-image-sbom.yml"
+  # - project: "waldur/waldur-pipelines"
+  #   file: "/templates/sbom/generate-python-codebase-sbom.yml"
 
 variables:
   COMPONENT_VERSION: "latest"
@@ -513,42 +514,45 @@ Lint dockerfile:
         - DL3008 # "versions for `apt-get install`" warning
         - DL3009 # "Delete apt-get lists" warning (handled in same RUN)
 
-.Generate Codebase SBOM template:
-  image:
-    name: "registry.hpc.ut.ee/mirror/library/python:3.11-bullseye"
-  stage: build
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
-  before_script:
-    - apt-get update
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - uv pip install cyclonedx-bom
-    - uv run cyclonedx-py environment "$(which python )" -o ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
-    - echo "SBOM generated. Size:"
-    - du -h ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
-    - tar -czf ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
-    - echo "SBOM archived. Size:"
-    - du -h ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz
-  artifacts:
-    paths:
-      - ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz
-    expire_in: 1 day
+# Temporarily disabled
+# .Generate Codebase SBOM template:
+#   image:
+#     name: "registry.hpc.ut.ee/mirror/library/python:3.11-bullseye"
+#   stage: build
+#   rules:
+#     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+#   before_script:
+#     - apt-get update
+#   script:
+#     - pip install uv
+#     - uv sync --all-packages
+#     - uv pip install cyclonedx-bom
+#     - uv run cyclonedx-py environment "$(which python )" -o ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
+#     - echo "SBOM generated. Size:"
+#     - du -h ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
+#     - tar -czf ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
+#     - echo "SBOM archived. Size:"
+#     - du -h ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz
+#   artifacts:
+#     paths:
+#       - ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz
+#     expire_in: 1 day
 
-Generate Codebase SBOM:
-  extends: .Generate Codebase SBOM template
-  variables:
-    PROJECT_NAME: "waldur-site-agent"
+# Temporarily disabled
+# Generate Codebase SBOM:
+#   extends: .Generate Codebase SBOM template
+#   variables:
+#     PROJECT_NAME: "waldur-site-agent"
 
-Upload Source SBOM:
-  extends: .Upload SBOM template
-  needs:
-    - Generate Codebase SBOM
-  variables:
-    PROJECT_NAME: "waldur-site-agent"
-    SBOM_TYPE: "source"
-    SBOM_DIR: "source"
+# Temporarily disabled
+# Upload Source SBOM:
+#   extends: .Upload SBOM template
+#   needs:
+#     - Generate Codebase SBOM
+#   variables:
+#     PROJECT_NAME: "waldur-site-agent"
+#     SBOM_TYPE: "source"
+#     SBOM_DIR: "source"
 
 Publish python module tagged release with uv:
   image: ghcr.io/astral-sh/uv:python3.13-alpine
