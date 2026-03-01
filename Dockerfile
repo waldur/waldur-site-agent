@@ -16,6 +16,10 @@ WORKDIR /app
 # Copy source code
 COPY . .
 
+# Bump versions when building a tagged release (safety net for manual tags)
+ARG VERSION=
+RUN if [ -n "$VERSION" ]; then python3 scripts/bump_versions.py "$VERSION"; fi
+
 # Install dependencies and build workspace
 RUN uv sync --all-packages --no-dev
 

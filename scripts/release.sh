@@ -43,24 +43,29 @@ echo "=== Releasing waldur-site-agent $VERSION ==="
 echo ""
 
 # ── Step 1: Bump versions ────────────────────────────────────────────────
-echo "[1/4] Bumping versions..."
+echo "[1/5] Bumping versions..."
 python3 "$SCRIPT_DIR/bump_versions.py" "$VERSION"
 echo ""
 
-# ── Step 2: Generate changelog ────────────────────────────────────────────
-echo "[2/4] Generating changelog..."
+# ── Step 2: Regenerate lockfile ──────────────────────────────────────────
+echo "[2/5] Regenerating uv.lock..."
+uv lock
+echo ""
+
+# ── Step 3: Generate changelog ────────────────────────────────────────────
+echo "[3/5] Generating changelog..."
 "$SCRIPT_DIR/changelog.sh" "$VERSION"
 echo ""
 
-# ── Step 3: Commit ────────────────────────────────────────────────────────
-echo "[3/4] Committing release..."
-git add pyproject.toml plugins/*/pyproject.toml
+# ── Step 4: Commit ────────────────────────────────────────────────────────
+echo "[4/5] Committing release..."
+git add pyproject.toml plugins/*/pyproject.toml uv.lock
 git add CHANGELOG.md
 git commit -m "Release $VERSION"
 echo ""
 
-# ── Step 4: Tag ───────────────────────────────────────────────────────────
-echo "[4/4] Tagging $VERSION..."
+# ── Step 5: Tag ───────────────────────────────────────────────────────────
+echo "[5/5] Tagging $VERSION..."
 git tag "$VERSION"
 echo ""
 
