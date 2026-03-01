@@ -31,6 +31,7 @@ import logging
 import os
 import subprocess
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,9 @@ from waldur_api_client.api.component_user_usage_limits import (
 )
 from waldur_api_client.api.marketplace_component_usages import (
     marketplace_component_usages_list,
+)
+from waldur_api_client.api.marketplace_component_user_usages import (
+    marketplace_component_user_usages_list,
 )
 from waldur_api_client.api.marketplace_offering_users import (
     marketplace_offering_users_list,
@@ -551,7 +555,13 @@ class TestReportingOptimizations:
     def test_02_usage_report_with_optimizations(
         self, offering, waldur_client, slurm_backend, report
     ):
-        """Run report processor, verify it pulls usage from SLURM emulator."""
+        """Run report processor with injected multi-user usage data.
+
+        Injects usage for NUM_USAGE_USERS users into the emulator, runs the
+        reporting processor, then verifies per-user usage values in Waldur
+        match the expected values derived from the injected node-hours.
+        """
+        NUM_USAGE_USERS = 5
         report.heading(2, "Optimization Test 9: Usage Report with Optimizations")
 
         resource_uuid_val = _reporting_state.get("resource_uuid")
@@ -562,6 +572,28 @@ class TestReportingOptimizations:
         report.status_snapshot(
             "Resource for usage report",
             {"uuid": resource_uuid_val, "backend_id": resource_backend_id},
+        )
+
+        # Inject per-user usage into the SLURM emulator
+        from emulator.core.database import SlurmDatabase
+        from emulator.core.time_engine import TimeEngine
+        from emulator.core.usage_simulator import UsageSimulator
+
+        db = SlurmDatabase()
+        db.load_state()
+        te = TimeEngine()
+        sim = UsageSimulator(te, db)
+
+        now = datetime(2026, 3, 1, 12, 0, 0)
+        injected = {}
+        for i in range(NUM_USAGE_USERS):
+            username = f"e2euser{i + 1}"
+            node_hours = 10.0 * (i + 1)
+            sim.inject_usage(resource_backend_id, username, node_hours, at_time=now)
+            injected[username] = node_hours
+
+        report.text(
+            f"Injected usage for {NUM_USAGE_USERS} users into {resource_backend_id}."
         )
 
         # Run report processor — it calls sacct via the emulator
@@ -580,13 +612,45 @@ class TestReportingOptimizations:
         processor._process_resource_with_retries(waldur_resource, waldur_offering)
         report.text("Report processor completed for target resource.")
 
-        # Check that component usages exist on Waldur (may be zero if
-        # emulator has no usage data, but the API call should succeed)
+        # Verify component usages exist
         usages = marketplace_component_usages_list.sync_all(
             client=waldur_client,
             resource_uuid=resource_uuid_val,
         )
         report.text(f"Found {len(usages)} component usage records on Waldur.")
+
+        # Verify per-user usage values in Waldur match expected
+        user_usages = marketplace_component_user_usages_list.sync_all(
+            client=waldur_client,
+            resource_uuid=resource_uuid_val,
+        )
+        report.text(f"Found {len(user_usages)} per-user usage records on Waldur.")
+
+        cpu_component = offering.backend_components.get("cpu")
+        cpu_unit_factor = cpu_component.unit_factor if cpu_component else 60000
+        actual_by_user = {}
+        for uu in user_usages:
+            username = uu.username if not isinstance(uu.username, type(UNSET)) else None
+            comp_type = uu.component_type if not isinstance(uu.component_type, type(UNSET)) else None
+            usage_val = float(uu.usage) if not isinstance(uu.usage, type(UNSET)) else 0.0
+            if username and comp_type == "cpu":
+                actual_by_user[username] = usage_val
+
+        for username, node_hours in injected.items():
+            cpu_raw = int(node_hours * 64)  # emulator: 64 CPUs per node
+            elapsed_min = node_hours * 60   # elapsed in minutes
+            expected = (cpu_raw * elapsed_min) / cpu_unit_factor
+            actual = actual_by_user.get(username)
+            assert actual is not None, (
+                f"No per-user cpu usage found for {username}"
+            )
+            assert abs(actual - expected) < 0.01, (
+                f"Usage mismatch for {username}: expected {expected}, got {actual}"
+            )
+
+        report.text(
+            f"All {NUM_USAGE_USERS} per-user cpu usage values match expected."
+        )
         report.flush_api_log("Usage report with optimizations")
 
     def test_03_field_filtered_usages(self, offering, waldur_client, report):

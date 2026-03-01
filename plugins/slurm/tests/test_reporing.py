@@ -139,10 +139,10 @@ class ReportingTest(unittest.TestCase):
             ],
         )
         user_usage_cpu_response = respx.post(
-            f"{self.BASE_URL}/api/marketplace-component-usages/{componet_usage_uuid_cpu}/set_user_usage/"
+            f"{self.BASE_URL}/api/marketplace-component-usages/{componet_usage_uuid_cpu}/set_user_usages/"
         ).respond(201, json={})
         user_usage_mem_response = respx.post(
-            f"{self.BASE_URL}/api/marketplace-component-usages/{componet_usage_uuid_mem}/set_user_usage/"
+            f"{self.BASE_URL}/api/marketplace-component-usages/{componet_usage_uuid_mem}/set_user_usages/"
         ).respond(201, json={})
         respx.post(
             f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/set_as_erred/"
