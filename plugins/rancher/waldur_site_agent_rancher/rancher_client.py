@@ -41,6 +41,7 @@ class RancherClient(BaseClient):
 
         # Rancher API configuration (matching waldur-mastermind format)
         backend_url = rancher_settings.get("backend_url", "https://localhost")
+        self.backend_url = backend_url
         self.api_url = f"{backend_url}/v3"  # Add /v3 to backend_url
         self.access_key = rancher_settings.get(
             "username", ""
@@ -235,6 +236,10 @@ class RancherClient(BaseClient):
                 "type": "namespace",
                 "name": namespace,
                 "projectId": project_id,
+                "labels": {
+                    "pod-security.kubernetes.io/enforce": "restricted",
+                    "pod-security.kubernetes.io/enforce-version": "latest",
+                },
                 "annotations": {
                     "waldur/managed": "true",
                 },
@@ -309,69 +314,73 @@ class RancherClient(BaseClient):
             logger.debug(f"No quotas found for project {project_id}: {e}")
             return {}
 
-    def get_project_usage(self, project_id: str) -> dict[str, float]:
-        """Get actual allocated resources for the project (total allocated CPU, memory, storage)."""
+    def get_namespace_quota_usage(self, namespace: str) -> dict[str, float]:
+        """Get used resources from ResourceQuotas in a namespace.
+
+        Lists all ResourceQuota objects in the namespace via the Rancher
+        k8s proxy and merges their ``status.used`` fields.
+        """
+        url = (
+            f"{self.backend_url}/k8s/clusters/{self.cluster_id}"
+            f"/api/v1/namespaces/{namespace}/resourcequotas"
+        )
+
         try:
-            # Get all workloads in the project to calculate total allocated resources
-            workloads_endpoint = f"projects/{project_id}/workloads"
-            workloads_response = self._make_request("GET", workloads_endpoint)
+            response = self.session.get(url)
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.RequestException as e:
+            logger.warning("Failed to get ResourceQuotas for namespace %s: %s", namespace, e)
+            return {}
 
-            total_usage = {"cpu": 0.0, "memory": 0.0, "storage": 0.0, "pods": 0}
+        # Merge status.used from all ResourceQuota objects
+        used: dict[str, str] = {}
+        for item in data.get("items", []):
+            used.update(item.get("status", {}).get("used", {}))
 
-            for workload in workloads_response.get("data", []):
-                containers = workload.get("containers", [])
+        usage: dict[str, float] = {}
 
-                for container in containers:
-                    resources = container.get("resources", {})
-                    requests = resources.get("requests", {})
+        # Parse CPU (e.g., "5", "5000m")
+        if "limits.cpu" in used:
+            cpu_str = used["limits.cpu"]
+            if cpu_str.endswith("m"):
+                usage["cpu"] = float(cpu_str[:-1]) / 1000
+            else:
+                usage["cpu"] = float(cpu_str)
 
-                    # Sum up CPU requests (allocated CPU)
-                    if "cpu" in requests:
-                        cpu_str = requests["cpu"]
-                        if cpu_str.endswith("m"):
-                            total_usage["cpu"] += int(cpu_str[:-1]) / 1000
-                        else:
-                            total_usage["cpu"] += float(cpu_str)
+        # Parse memory (e.g., "3Gi", "3072Mi")
+        if "limits.memory" in used:
+            memory_str = used["limits.memory"]
+            if memory_str.endswith("Gi"):
+                usage["memory"] = float(memory_str[:-2])
+            elif memory_str.endswith("Mi"):
+                usage["memory"] = float(memory_str[:-2]) / 1024
+            elif memory_str.endswith("Ki"):
+                usage["memory"] = float(memory_str[:-2]) / (1024 * 1024)
+            else:
+                usage["memory"] = float(memory_str)
 
-                    # Sum up memory requests (allocated memory)
-                    if "memory" in requests:
-                        memory_str = requests["memory"]
-                        if memory_str.endswith("Gi"):
-                            total_usage["memory"] += float(memory_str[:-2])
-                        elif memory_str.endswith("Mi"):
-                            total_usage["memory"] += float(memory_str[:-2]) / 1024
-                        elif memory_str.endswith("Ki"):
-                            total_usage["memory"] += float(memory_str[:-2]) / (1024 * 1024)
+        # Parse storage (e.g., "12Gi", "0")
+        if "requests.storage" in used:
+            storage_str = used["requests.storage"]
+            if storage_str.endswith("Gi"):
+                usage["storage"] = float(storage_str[:-2])
+            elif storage_str.endswith("Mi"):
+                usage["storage"] = float(storage_str[:-2]) / 1024
+            else:
+                usage["storage"] = float(storage_str)
 
-                # Count pods (replicas)
-                replicas = workload.get("scale", 1)
-                total_usage["pods"] += replicas
+        # Parse GPU (e.g., "1", "0").
+        # For GPU resources, K8s requires requests == limits, so only one key
+        # needs to be checked. We use requests.nvidia.com/gpu to match what
+        # set_namespace_custom_resource_quotas sets in spec.hard.
+        # Refs:
+        #   https://github.com/NVIDIA/k8s-device-plugin/issues/211
+        #   https://www.perfectscale.io/blog/kubernetes-gpu
+        if "requests.nvidia.com/gpu" in used:
+            usage["gpu"] = float(used["requests.nvidia.com/gpu"])
 
-            # Get storage usage from persistent volume claims
-            try:
-                pvc_endpoint = f"projects/{project_id}/persistentvolumeclaims"
-                pvc_response = self._make_request("GET", pvc_endpoint)
-
-                for pvc in pvc_response.get("data", []):
-                    spec = pvc.get("spec", {})
-                    resources = spec.get("resources", {})
-                    requests = resources.get("requests", {})
-                    if "storage" in requests:
-                        storage_str = requests["storage"]
-                        if storage_str.endswith("Gi"):
-                            total_usage["storage"] += float(storage_str[:-2])
-                        elif storage_str.endswith("Mi"):
-                            total_usage["storage"] += float(storage_str[:-2]) / 1024
-
-            except Exception as e:
-                logger.debug(f"Could not get storage usage for {project_id}: {e}")
-
-            return total_usage
-
-        except Exception as e:
-            logger.warning(f"Failed to get allocated resources for project {project_id}: {e}")
-            # Return zero usage if we can't get metrics
-            return {"cpu": 0.0, "memory": 0.0, "storage": 0.0, "pods": 0}
+        return usage
 
     def list_project_users(self, project_id: str) -> list[str]:
         """List users with access to the project."""
@@ -510,6 +519,8 @@ class RancherClient(BaseClient):
                 # Convert to Gi (e.g., 100 GB -> "100Gi")
                 hard_quotas["requests.storage"] = f"{int(value) * 1024}Mi"
             elif component == "gpu":
+                # K8s requires requests == limits for GPU; using requests is sufficient.
+                # See get_namespace_quota_usage() for the corresponding read side.
                 hard_quotas["requests.nvidia.com/gpu"] = str(int(value))
 
         if not hard_quotas:

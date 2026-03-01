@@ -233,66 +233,50 @@ class TestRancherClient:
         assert "102400Mi" in yaml_content  # Storage in Mi
 
     @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
-    def test_get_project_usage(self, mock_session, rancher_settings):
-        """Test getting project usage metrics."""
+    def test_get_namespace_quota_usage(self, mock_session, rancher_settings):
+        """Test getting usage from ResourceQuota status.used across multiple quotas."""
 
-        # Mock different responses for different endpoints
-        def mock_get_side_effect(url, **kwargs):
-            mock_response = MagicMock()
-            if "/projects/project-123/workloads" in url:
-                # Mock workloads response
-                mock_response.json.return_value = {
-                    "data": [
-                        {
-                            "containers": [
-                                {
-                                    "resources": {
-                                        "requests": {
-                                            "cpu": "2500m",  # 2.5 CPU
-                                            "memory": "4Gi",  # 4GB
-                                        }
-                                    }
-                                }
-                            ],
-                            "scale": 10,  # 10 replicas = 10 pods
-                        }
-                    ]
-                }
-            elif "/projects/project-123/persistentvolumeclaims" in url:
-                # Mock PVC response for storage
-                mock_response.json.return_value = {
-                    "data": [
-                        {
-                            "spec": {
-                                "resources": {
-                                    "requests": {
-                                        "storage": "50Gi"  # 50GB storage
-                                    }
-                                }
-                            }
-                        }
-                    ]
-                }
-            else:
-                mock_response.json.return_value = {}
-            return mock_response
+        # Mock the k8s proxy response listing ResourceQuotas
+        mock_quota_response = MagicMock()
+        mock_quota_response.json.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "custom-resource-quota"},
+                    "status": {
+                        "used": {
+                            "limits.cpu": "5",
+                            "limits.memory": "3Gi",
+                        },
+                    },
+                },
+                {
+                    "metadata": {"name": "storage-quota"},
+                    "status": {
+                        "used": {
+                            "requests.storage": "10Gi",
+                            "requests.nvidia.com/gpu": "2",
+                        },
+                    },
+                },
+            ]
+        }
 
         # Mock login response
         mock_login_response = MagicMock()
         mock_login_response.json.return_value = {}
 
         mock_session_instance = MagicMock()
-        mock_session_instance.get.side_effect = mock_get_side_effect
-        mock_session_instance.post.return_value = mock_login_response  # For login
+        mock_session_instance.get.return_value = mock_quota_response
+        mock_session_instance.post.return_value = mock_login_response
         mock_session.return_value = mock_session_instance
 
         client = RancherClient(rancher_settings)
-        usage = client.get_project_usage("project-123")
+        usage = client.get_namespace_quota_usage("waldur-test-ns")
 
-        assert usage["cpu"] == 2.5
-        assert usage["memory"] == 4.0  # Converted to GB
-        assert usage["storage"] == 50.0  # Converted to GB
-        assert usage["pods"] == 10
+        assert usage["cpu"] == 5.0
+        assert usage["memory"] == 3.0
+        assert usage["storage"] == 10.0
+        assert usage["gpu"] == 2.0
 
     @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
     def test_list_project_users(self, mock_session, rancher_settings):
@@ -419,6 +403,8 @@ class TestRancherClient:
         assert posted_data["name"] == "test-namespace"
         assert posted_data["projectId"] == "c-m-test:p-test"
         assert posted_data["annotations"]["waldur/managed"] == "true"
+        assert posted_data["labels"]["pod-security.kubernetes.io/enforce"] == "restricted"
+        assert posted_data["labels"]["pod-security.kubernetes.io/enforce-version"] == "latest"
         assert "resourceQuota" not in posted_data
 
     @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
