@@ -33,7 +33,7 @@ from waldur_api_client.api.component_user_usage_limits import component_user_usa
 from waldur_api_client.api.marketplace_component_usages import (
     marketplace_component_usages_list,
     marketplace_component_usages_set_usage,
-    marketplace_component_usages_set_user_usage,
+    marketplace_component_usages_set_user_usages,
 )
 from waldur_api_client.api.marketplace_component_user_usages import (
     marketplace_component_user_usages_list,
@@ -97,6 +97,9 @@ from waldur_api_client.models.backend_resource_request_set_erred_request import 
 from waldur_api_client.models.check_unique_backend_id_request import CheckUniqueBackendIDRequest
 from waldur_api_client.models.component_usage import ComponentUsage
 from waldur_api_client.models.component_usage_field_enum import ComponentUsageFieldEnum
+from waldur_api_client.models.component_user_usage_bulk_create_request import (
+    ComponentUserUsageBulkCreateRequest,
+)
 from waldur_api_client.models.component_user_usage_create_request import (
     ComponentUserUsageCreateRequest,
 )
@@ -2213,77 +2216,63 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             client=self.waldur_rest_client, body=request_body
         )
 
-    def _submit_user_usage_for_resource(
+    def _submit_bulk_user_usages_for_resource(
         self,
-        username: str,
-        user_usage: dict[str, float],
+        usages: dict[str, dict[str, float]],
         waldur_component_usages: list[ComponentUsage] | None,
         report_date: Optional[datetime.datetime] = None,
     ) -> None:
-        """Reports per-user usage for a backend resource to Waldur.
+        """Reports per-user usage for all users in bulk, one API call per component.
 
         Args:
-            username: Username to report usage for.
-            user_usage: Dict of component_type -> usage amount.
+            usages: Mapping of username -> {component_type -> usage amount}.
             waldur_component_usages: List of component usage records from Waldur.
             report_date: Datetime to use as the report date. Defaults to current time.
         """
-        logger.info("Setting usages for %s", username)
         if not waldur_component_usages:
-            logger.warning(
-                "No component usages found for resource %s",
-                username,
-            )
+            logger.warning("No component usages found, skipping per-user usage reporting")
             return
-        component_usage_types = [
-            component_usage.type_
-            for component_usage in waldur_component_usages
-            if component_usage.type_
-        ]
-        missing_components = set(user_usage) - set(component_usage_types)
-
-        if missing_components:
-            logger.warning(
-                "The following components are not found in Waldur: %s",
-                ", ".join(missing_components),
-            )
-        # Look up offering user from cache instead of per-user API call
-        cached_offering_users = self._get_cached_offering_users()
-        offering_user = next(
-            (ou for ou in cached_offering_users if ou.username == username),
-            None,
-        )
 
         if report_date is None:
             report_date = backend_utils.get_current_time_in_timezone(self.timezone)
 
+        # Build offering user lookup: username -> offering user URL
+        cached_offering_users = self._get_cached_offering_users()
+        offering_user_urls: dict[str, str] = {
+            ou.username: ou.url
+            for ou in cached_offering_users
+            if ou.username and ou.url
+        }
+
         for component_usage in waldur_component_usages:
             component_type = component_usage.type_
-            usage = user_usage.get(component_type)
-            if usage is None:
-                logger.warning(
-                    "No usage for Waldur component %s is found in user usage report",
-                    component_type,
+            items: list[ComponentUserUsageCreateRequest] = []
+            for username, user_usage in usages.items():
+                usage = user_usage.get(component_type)
+                if usage is None:
+                    continue
+                body = ComponentUserUsageCreateRequest(
+                    username=username,
+                    usage=usage,
+                    date=report_date,
                 )
-                continue
-            logger.info(
-                "Submitting usage for username %s: %s -> %s",
-                username,
-                component_type,
-                usage,
-            )
-            body = ComponentUserUsageCreateRequest(
-                username=username,
-                usage=usage,
-                date=report_date,
-            )
-            if offering_user:
-                body.user = offering_user.url
-            else:
-                logger.warning("No offering user found for username %s", username)
+                user_url = offering_user_urls.get(username)
+                if user_url:
+                    body.user = user_url
+                items.append(body)
 
-            marketplace_component_usages_set_user_usage.sync_detailed(
-                uuid=component_usage.uuid, client=self.waldur_rest_client, body=body
+            if not items:
+                continue
+
+            logger.info(
+                "Bulk submitting %d user usages for component %s",
+                len(items),
+                component_type,
+            )
+            marketplace_component_usages_set_user_usages.sync_detailed(
+                uuid=component_usage.uuid,
+                client=self.waldur_rest_client,
+                body=ComponentUserUsageBulkCreateRequest(usages=items),
             )
 
     def _process_resource(
@@ -2417,10 +2406,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             ],
         )
         logger.info("Setting per-user usages for period %04d-%02d", year, month)
-        for username, user_usage in usages.items():
-            self._submit_user_usage_for_resource(
-                username, user_usage, waldur_component_usages, report_date=report_date
-            )
+        self._submit_bulk_user_usages_for_resource(
+            usages, waldur_component_usages, report_date=report_date
+        )
 
 
 class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
