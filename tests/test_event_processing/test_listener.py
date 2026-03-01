@@ -73,7 +73,6 @@ class TestConnectToStompServer(unittest.TestCase):
             wait=True,
             headers={
                 "accept-version": "1.2",
-                "heart-beat": "10000,10000",
             },
         )
 

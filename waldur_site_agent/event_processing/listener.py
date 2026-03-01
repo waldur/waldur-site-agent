@@ -33,7 +33,11 @@ Key stomp.py corner cases (validated against RabbitMQ + rabbitmq_web_stomp):
    firing ``on_disconnected``.  ``transport.start()`` resets
    ``self.running = True`` and creates a fresh WebSocket, so state is clean.
 
-4. WebSocket disconnect detection depends on heartbeats (configured at 10s).
+4. WebSocket disconnect detection depends on heartbeats (configured at 10s via
+   ``heartbeats=(10000, 10000)`` on the ``WSStompConnection`` constructor).
+   IMPORTANT: the heartbeats must be set on the *constructor*, not just in
+   the CONNECT frame headers — otherwise stomp.py's HeartbeatListener never
+   starts its send/receive loop, and RabbitMQ disconnects every ~30s.
    Server-side AMQP connection closures (e.g. ``rabbitmqctl close_all_connections``)
    do NOT immediately tear down the WebSocket layer — detection can take up to
    two heartbeat intervals (~20s).  Actual network drops or WebSocket close
@@ -118,7 +122,6 @@ def connect_to_stomp_server(
                 wait=True,
                 headers={
                     "accept-version": "1.2",
-                    "heart-beat": "10000,10000",
                 },
             )
         except (StompException, OSError) as e:

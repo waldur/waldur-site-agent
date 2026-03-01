@@ -151,6 +151,7 @@ class EventSubscriptionManager:
             ws_path=ws_path,
             vhost=vhost_name,
             reconnect_attempts_max=1,
+            heartbeats=(10000, 10000),
         )
         if self.offering.websocket_use_tls:
             connection.set_ssl(for_hosts=[(stomp_host, stomp_port)])
