@@ -498,6 +498,114 @@ Run python v3.13 cscs-dwdi tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.13"
   extends: .Cscs-dwdi test template
 
+# E2E integration tests: boots a minimal Waldur stack (PostgreSQL + RabbitMQ +
+# Mastermind API/Worker) via Docker-in-Docker, loads the site_agent_e2e demo
+# preset, then runs the SLURM emulator E2E test suite against it.
+E2E integration tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  stage: test
+  interruptible: true
+  services:
+    - name: "docker:24.0-dind"
+      command: ["--mtu=1400"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_REGISTRY_PREFIX: "registry.hpc.ut.ee/mirror/"
+    WALDUR_MASTERMIND_IMAGE_TAG: "latest"
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    # Temporary: run on MRs to validate STOMP E2E tests, remove after merge
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  before_script:
+    # Install Docker CLI + Compose plugin (static binaries)
+    - apt-get update -qq && apt-get install -y -qq curl
+    - curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz | tar xz -C /usr/local/bin --strip-components=1 docker/docker
+    - mkdir -p ~/.docker/cli-plugins
+    - curl -fsSL https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose
+    - chmod +x ~/.docker/cli-plugins/docker-compose
+    - docker compose version
+    # Install Python dependencies (core + all plugins including slurm-emulator)
+    - pip install uv
+    - uv sync --all-packages
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+  script:
+    # Boot minimal Waldur stack
+    - docker compose -f ci/docker-compose.e2e.yml pull
+    - docker compose -f ci/docker-compose.e2e.yml up waldur-db-migration
+    - docker compose -f ci/docker-compose.e2e.yml up -d
+    - docker compose -f ci/docker-compose.e2e.yml ps
+    # Wait for Waldur API to be ready (401 = up but unauthenticated, which is expected)
+    - |
+      echo "Waiting for Waldur API..."
+      for i in $(seq 1 60); do
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://docker:8080/api/ 2>/dev/null || echo "000")
+        if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "200" ]; then
+          echo "Waldur API ready (HTTP $HTTP_CODE, attempt $i)"
+          break
+        fi
+        if [ "$i" -eq 60 ]; then
+          echo "ERROR: Waldur API not ready after 60 attempts (last HTTP $HTTP_CODE)"
+          docker compose -f ci/docker-compose.e2e.yml logs
+          exit 1
+        fi
+        sleep 5
+      done
+    # Copy demo preset into container and load it
+    - |
+      API_CONTAINER=$(docker compose -f ci/docker-compose.e2e.yml ps -q waldur-api)
+      PRESETS_DIR=$(docker compose -f ci/docker-compose.e2e.yml exec -T waldur-api \
+        find /usr/src -path "*/demo_presets/presets" -type d | head -1 | tr -d '\r')
+      echo "Presets directory: ${PRESETS_DIR}"
+      docker cp ci/site_agent_e2e.json ${API_CONTAINER}:${PRESETS_DIR}/site_agent_e2e.json
+      docker compose -f ci/docker-compose.e2e.yml exec -T waldur-api waldur demo_presets load site_agent_e2e --no-cleanup
+    # Force-set the deterministic auth token (preset load skips it if user already has one)
+    - |
+      docker compose -f ci/docker-compose.e2e.yml exec -T waldur-api waldur shell -c "
+      from rest_framework.authtoken.models import Token
+      from django.contrib.auth import get_user_model
+      User = get_user_model()
+      u = User.objects.get(username='e2e-staff')
+      Token.objects.filter(user=u).delete()
+      Token.objects.create(user=u, key='e2e0000000000000000000000000token001')
+      print('Token set successfully')
+      "
+    # Run REST E2E tests (stomp_enabled=false)
+    - |
+      source .venv/bin/activate
+      WALDUR_E2E_TESTS=true \
+      WALDUR_E2E_CONFIG=ci/e2e-ci-config.yaml \
+      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
+      WALDUR_E2E_BENCH_RESOURCES=5 \
+      pytest plugins/slurm/tests/e2e/ -v --junitxml=e2e-report-rest.xml \
+        --ignore=plugins/slurm/tests/e2e/test_e2e_stomp.py
+    # Run STOMP E2E tests (stomp_enabled=true)
+    - |
+      source .venv/bin/activate
+      WALDUR_E2E_TESTS=true \
+      WALDUR_E2E_STOMP_CONFIG=ci/e2e-ci-config-stomp.yaml \
+      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
+      pytest plugins/slurm/tests/e2e/test_e2e_stomp.py -v \
+        --junitxml=e2e-report-stomp.xml
+  after_script:
+    - docker compose -f ci/docker-compose.e2e.yml logs > waldur-stack-logs.txt 2>&1 || true
+    - docker compose -f ci/docker-compose.e2e.yml down || true
+  artifacts:
+    when: always
+    reports:
+      junit:
+        - e2e-report-rest.xml
+        - e2e-report-stomp.xml
+    paths:
+      - waldur-stack-logs.txt
+      - plugins/slurm/tests/e2e/*-report.md
+      - plugins/slurm/tests/e2e/*-report.json
+    expire_in: 1 week
+
 Lint docker image:
   extends: .Lint docker image template
   variables:

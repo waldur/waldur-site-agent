@@ -30,7 +30,7 @@ repos:
     hooks:
       - id: mypy
         name: "run mypy"
-        exclude: ^(docs/plugin-template/|plugins/.*/tests/)
+        exclude: ^(docs/plugin-template/|plugins/.*/tests/|ci/)
         additional_dependencies:
           - "types-requests"
           - "types-PyYaml"

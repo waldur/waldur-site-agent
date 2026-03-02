@@ -1,0 +1,76 @@
+# Minimal Waldur stack for site-agent E2E tests.
+# Boots: PostgreSQL, RabbitMQ (with STOMP), Mastermind API + Celery worker.
+# No HomePort, Caddy, Keycloak, or Celery beat needed.
+#
+# Usage (from repo root):
+#   docker compose -f ci/docker-compose.e2e.yml up waldur-db-migration
+#   docker compose -f ci/docker-compose.e2e.yml up -d
+#   docker compose -f ci/docker-compose.e2e.yml exec waldur-api waldur demo_presets load site_agent_e2e --no-cleanup
+
+services:
+  waldur-db:
+    image: "${DOCKER_REGISTRY_PREFIX}library/postgres:16"
+    environment:
+      POSTGRES_USER: waldur
+      POSTGRES_PASSWORD: e2e-db-password
+      POSTGRES_DB: waldur
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - ./createdb-celery_results.sql:/docker-entrypoint-initdb.d/createdb-celery_results.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U waldur"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  waldur-queue:
+    image: "${DOCKER_REGISTRY_PREFIX}library/rabbitmq:4.1.2"
+    environment:
+      RABBITMQ_DEFAULT_USER: waldur
+      RABBITMQ_DEFAULT_PASS: waldur
+    volumes:
+      - ./rabbitmq-enabled-plugins:/etc/rabbitmq/enabled_plugins
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+    ports:
+      - "15674:15674"
+
+  waldur-db-migration:
+    image: "${DOCKER_REGISTRY_PREFIX}opennode/waldur-mastermind:${WALDUR_MASTERMIND_IMAGE_TAG:-latest}"
+    environment: &mastermind-env
+      GLOBAL_SECRET_KEY: e2e-secret-key
+      POSTGRESQL_HOST: waldur-db
+      POSTGRESQL_PASSWORD: e2e-db-password
+      RABBITMQ_HOST: waldur-queue
+      RABBITMQ_USERNAME: waldur
+      RABBITMQ_PASSWORD: waldur
+    volumes: &mastermind-volumes
+      - ./override.conf.py:/etc/waldur/override.conf.py
+    depends_on:
+      waldur-db:
+        condition: service_healthy
+      waldur-queue:
+        condition: service_started
+    command: initdb
+
+  waldur-worker:
+    image: "${DOCKER_REGISTRY_PREFIX}opennode/waldur-mastermind:${WALDUR_MASTERMIND_IMAGE_TAG:-latest}"
+    environment: *mastermind-env
+    volumes: *mastermind-volumes
+    depends_on:
+      waldur-db-migration:
+        condition: service_completed_successfully
+    command: worker
+
+  waldur-api:
+    image: "${DOCKER_REGISTRY_PREFIX}opennode/waldur-mastermind:${WALDUR_MASTERMIND_IMAGE_TAG:-latest}"
+    environment: *mastermind-env
+    volumes: *mastermind-volumes
+    depends_on:
+      waldur-db-migration:
+        condition: service_completed_successfully
+      waldur-worker:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    command: mastermind

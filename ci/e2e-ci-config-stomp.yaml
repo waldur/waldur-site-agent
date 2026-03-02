@@ -1,0 +1,48 @@
+# E2E STOMP test configuration for CI pipeline.
+# Uses a single offering with STOMP enabled to validate WebSocket event delivery.
+#
+# API host is "docker" — the DinD service hostname in GitLab CI.
+# RabbitMQ web_stomp is exposed on port 15674 (no TLS in CI).
+
+timezone: "UTC"
+offerings:
+  - name: "E2E SLURM STOMP"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000001"
+
+    stomp_enabled: true
+    stomp_ws_host: "docker"
+    stomp_ws_port: 15674
+    stomp_ws_path: "/ws"
+    websocket_use_tls: false
+
+    backend_type: "slurm"
+    order_processing_backend: "slurm"
+    reporting_backend: "slurm"
+    membership_sync_backend: "slurm"
+
+    backend_settings:
+      slurm_bin_path: ".venv/bin"
+      default_account: "root"
+      customer_prefix: "e2e_cust_"
+      project_prefix: "e2e_proj_"
+      allocation_prefix: "e2e_alloc_"
+      qos_downscaled: "limited"
+      qos_paused: "paused"
+      qos_default: "normal"
+      enable_user_homedir_account_creation: false
+
+    backend_components:
+      cpu:
+        limit: 10000
+        measured_unit: "k-Hours"
+        unit_factor: 60000
+        accounting_type: "limit"
+        label: "CPU"
+      ram:
+        limit: 10000
+        measured_unit: "gb-Hours"
+        unit_factor: 61440
+        accounting_type: "limit"
+        label: "RAM"
