@@ -30,10 +30,10 @@
    - All configuration is stored in secret: {{ include "waldur-site-agent.secretName" . }}
 
 4. Deployed agent combination:
-{{- if and .Values.agents.orderProcess.enabled .Values.agents.membershipSync.enabled .Values.agents.report.enabled (not .Values.agents.eventProcess.enabled) }}
-   ✅ Combination 1: Polling-based processing (order-process + membership-sync + report)
-{{- else if and .Values.agents.eventProcess.enabled .Values.agents.report.enabled (not .Values.agents.orderProcess.enabled) (not .Values.agents.membershipSync.enabled) }}
-   ✅ Combination 2: Event-based processing (event-process + report)
+{{- if and .Values.agents.eventProcess.enabled .Values.agents.report.enabled (not .Values.agents.orderProcess.enabled) (not .Values.agents.membershipSync.enabled) }}
+   ✅ Combination 1: Event-based processing (event-process + report) [default]
+{{- else if and .Values.agents.orderProcess.enabled .Values.agents.membershipSync.enabled .Values.agents.report.enabled (not .Values.agents.eventProcess.enabled) }}
+   ✅ Combination 2: Polling-based processing (order-process + membership-sync + report)
 {{- else }}
    ⚠️  Custom combination - ensure compatibility per documentation
 {{- end }}

@@ -67,9 +67,9 @@ The following table lists the configurable parameters of the Waldur Site Agent c
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `resources.limits.cpu` | CPU limit | `500m` |
-| `resources.limits.memory` | Memory limit | `512Mi` |
-| `resources.requests.cpu` | CPU request | `100m` |
-| `resources.requests.memory` | Memory request | `128Mi` |
+| `resources.limits.memory` | Memory limit | `1024Mi` |
+| `resources.requests.cpu` | CPU request | `200m` |
+| `resources.requests.memory` | Memory request | `256Mi` |
 | `securityContext.runAsUser` | User ID to run container | `1000` |
 | `securityContext.runAsNonRoot` | Run as non-root user | `true` |
 

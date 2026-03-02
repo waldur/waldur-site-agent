@@ -76,6 +76,8 @@ secret:
     config.yaml: |
       sentry_dsn: ""
       timezone: "UTC"
+      log_level: "INFO"
+      reporting_periods: 2
       offerings:
         - name: "Example SLURM Offering"
           waldur_api_url: "http://localhost:8081/api/"
