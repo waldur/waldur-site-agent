@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.4 - 2026-03-02
+
+### Highlights
+
+This release dramatically reduces Waldur API load — polling cycles now make ~80% fewer API calls thanks to aggressive caching and bulk usage endpoints. Federation operators gain real-time username synchronization from a remote Waldur instance via STOMP, eliminating the need for manual user mapping. Several reliability fixes address STOMP connection stability, order processing correctness, and month-boundary usage reporting.
+
+### What's New
+
+- **Federation**: Add offering user username sync from a remote Waldur instance with real-time STOMP event subscription.
+- **CI**: Add end-to-end integration test pipeline using a Docker-in-Docker Waldur stack, enabling automated STOMP and API tests against a live environment.
+- **Release tooling**: Add `release.sh` orchestrator, `bump_versions.py` auto-discovery, and changelog generation scripts, replacing hardcoded CI version bumps.
+
+### Improvements
+
+- **Core**: Reduce API calls per polling cycle by ~80% through response caching across processor methods.
+- **Core**: Use bulk `set_user_usages` endpoint to batch per-user usage reporting into a single API call.
+- **Rancher**: Switch usage reporting to `ResourceQuota status.used` for accurate actual-usage figures.
+
+### Bug Fixes
+
+- **Core**: Fix order processing skipping resource creation when `order.backend_id` is set by external systems (e.g. SharePoint) by gating async order tracking behind a `supports_async_orders` backend capability flag.
+- **Core**: Fix STOMP heartbeat misconfiguration that caused spurious reconnects every ~30 seconds.
+- **Core**: Fix month-boundary race condition in usage reporting that could attribute usage to the wrong period.
+- **Rancher**: Fix backend overwriting resource quotas with hardcoded defaults instead of preserving existing values.
+- **Release**: Fix release script to regenerate `uv.lock` after version bumps so Docker builds use correct workspace package versions.
+
+> 16 commits, 74 files changed (+10,217/−541 lines)
+
+---
+
 ## 0.9.2 - 2026-02-24
 
 ### Highlights
