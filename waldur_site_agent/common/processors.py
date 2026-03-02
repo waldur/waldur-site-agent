@@ -2283,6 +2283,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         """Processes usage report for the resource across configured billing periods."""
         resource_backend_id = waldur_resource.backend_id
         logger.info("Pulling resource %s (%s)", waldur_resource.name, resource_backend_id)
+
+        # Record the month BEFORE pulling resource data so we can detect
+        # a month-boundary crossing (e.g. pull at 23:59 Mar 31, process at 00:00 Apr 1).
+        pre_pull_time = backend_utils.get_current_time_in_timezone(self.timezone)
+
         backend_resource_info = self.resource_backend.pull_resource(waldur_resource)
         if backend_resource_info is None:
             logger.warning("The resource %s is missing in backend", resource_backend_id)
@@ -2297,6 +2302,27 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         )
 
         current_time = backend_utils.get_current_time_in_timezone(self.timezone)
+
+        # If the month changed between pulling usage data and computing billing
+        # periods, skip this resource.  The pre-fetched usage belongs to the old
+        # month and would be incorrectly submitted into the new billing period.
+        # The next reporting cycle (every 30 min) will handle it correctly.
+        if (pre_pull_time.year, pre_pull_time.month) != (
+            current_time.year,
+            current_time.month,
+        ):
+            logger.warning(
+                "Month boundary crossed while processing resource %s "
+                "(data fetched for %04d-%02d, now %04d-%02d). "
+                "Skipping to avoid misattributing usage across billing periods.",
+                resource_backend_id,
+                pre_pull_time.year,
+                pre_pull_time.month,
+                current_time.year,
+                current_time.month,
+            )
+            return
+
         periods = self._compute_reporting_periods(current_time, self.reporting_periods)
 
         for year, month, is_current in periods:
