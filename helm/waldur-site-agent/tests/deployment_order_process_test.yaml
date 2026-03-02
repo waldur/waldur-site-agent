@@ -1,0 +1,92 @@
+suite: order-process deployment
+templates:
+  - templates/deployment-order-process.yaml
+  - templates/secret.yaml
+release:
+  name: test-release
+  namespace: test-ns
+tests:
+  - it: should not render deployment by default (disabled)
+    template: templates/deployment-order-process.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render when enabled
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.orderProcess.enabled: true
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: test-release-waldur-site-agent-order-process
+
+  - it: should set correct component label
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.orderProcess.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: order-process
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: order-process
+
+  - it: should pass correct mode argument
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.orderProcess.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--mode"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "order_process"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--config-file"
+
+  - it: should set container name
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.orderProcess.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: order-process
+
+  - it: should set replicas from values
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.orderProcess.enabled: true
+      agents.orderProcess.replicas: 2
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: should use correct selector labels
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.orderProcess.enabled: true
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: order-process
+
+  - it: should include health check probes with correct command
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.orderProcess.enabled: true
+      healthCheck.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.exec.command
+          value:
+            - waldur_site_diagnostics
+            - --config-file
+            - /etc/waldur-site-agent/config.yaml

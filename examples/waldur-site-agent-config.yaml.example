@@ -12,9 +12,8 @@ offerings: # Settings for offerings
     reporting_backend: "slurm" # Name of the backend from entrypoints to use for reporting
     resource_import_enabled: false # Whether to expose importable resources to Waldur
     username_reconciliation_enabled: false # Enable periodic username reconciliation from target backend (e.g. Waldur B). Only needed for Waldur federation setups.
-    mqtt_enabled: false # MQTT feature toggler
     stomp_enabled: false # STOMP feature toggler
-    websocket_use_tls: true # Whether to use TLS for MQTT connection
+    websocket_use_tls: true # Whether to use TLS for WebSocket connection
     backend_type: "slurm" # type of backend, for now only `slurm` is supported
     backend_settings: # backend-specific settings
       default_account: "root" # Default parent account name in SLURM cluster

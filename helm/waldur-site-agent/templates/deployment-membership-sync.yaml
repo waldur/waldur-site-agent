@@ -42,7 +42,7 @@ spec:
           args:
             - "--mode"
             - "membership_sync"
-            - "--config"
+            - "--config-file"
             - "/etc/waldur-site-agent/config.yaml"
           volumeMounts:
             - name: config
@@ -55,7 +55,7 @@ spec:
             exec:
               command:
                 - waldur_site_diagnostics
-                - --config
+                - --config-file
                 - /etc/waldur-site-agent/config.yaml
             initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.periodSeconds }}
@@ -65,7 +65,7 @@ spec:
             exec:
               command:
                 - waldur_site_diagnostics
-                - --config
+                - --config-file
                 - /etc/waldur-site-agent/config.yaml
             initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.periodSeconds }}

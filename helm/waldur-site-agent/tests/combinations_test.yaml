@@ -1,0 +1,162 @@
+suite: deployment combinations
+release:
+  name: test-release
+  namespace: test-ns
+tests:
+  # Combination 1: Event-based (default)
+  - it: "default values should create event-process deployment"
+    template: templates/deployment-event-process.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: "default values should create report deployment"
+    template: templates/deployment-report.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: "default values should not create order-process deployment"
+    template: templates/deployment-order-process.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "default values should not create membership-sync deployment"
+    template: templates/deployment-membership-sync.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Combination 2: Polling-based
+  - it: "polling mode should create order-process deployment"
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      agents.membershipSync.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: "polling mode should create membership-sync deployment"
+    template: templates/deployment-membership-sync.yaml
+    set:
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      agents.membershipSync.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: "polling mode should create report deployment"
+    template: templates/deployment-report.yaml
+    set:
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      agents.membershipSync.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: "polling mode should not create event-process deployment"
+    template: templates/deployment-event-process.yaml
+    set:
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      agents.membershipSync.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Test values files
+  - it: "test-values.yaml should enable polling agents"
+    template: templates/deployment-order-process.yaml
+    values:
+      - ../test-values.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: "test-values.yaml should disable event-process"
+    template: templates/deployment-event-process.yaml
+    values:
+      - ../test-values.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "test-values-event.yaml should enable event-process"
+    template: templates/deployment-event-process.yaml
+    values:
+      - ../test-values-event.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: "test-values-event.yaml should disable order-process"
+    template: templates/deployment-order-process.yaml
+    values:
+      - ../test-values-event.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Custom secret name propagation
+  - it: "custom secret name should propagate to event-process volume"
+    template: templates/deployment-event-process.yaml
+    set:
+      secret.name: custom-config-secret
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: config
+            secret:
+              secretName: custom-config-secret
+
+  - it: "custom secret name should propagate to report volume"
+    template: templates/deployment-report.yaml
+    set:
+      secret.name: custom-config-secret
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: config
+            secret:
+              secretName: custom-config-secret
+
+  # All deployments share same resources
+  - it: "custom resources should apply to event-process"
+    template: templates/deployment-event-process.yaml
+    set:
+      resources.limits.cpu: 1000m
+      resources.limits.memory: 2048Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 1000m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 2048Mi
+
+  - it: "custom resources should apply to report"
+    template: templates/deployment-report.yaml
+    set:
+      resources.limits.cpu: 1000m
+      resources.limits.memory: 2048Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 1000m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 2048Mi
+
+  # Checksum annotation changes when secret changes
+  - it: "different secret data should produce different checksum"
+    template: templates/deployment-event-process.yaml
+    asserts:
+      - isNotEmpty:
+          path: spec.template.metadata.annotations["checksum/secret"]

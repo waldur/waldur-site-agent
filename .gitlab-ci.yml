@@ -44,10 +44,12 @@ Lint helm chart:
     - apk add jq python3
     - apk add -X http://dl-cdn.alpinelinux.org/alpine/edge/community -u alpine-keys
     - apk add yq --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community
+    - helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 1.0.2
   script:
     - helm lint helm/waldur-site-agent/
     - helm lint helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values.yaml
     - helm lint helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values-event.yaml
+    - helm unittest helm/waldur-site-agent/
     - helm template waldur-site-agent helm/waldur-site-agent/ --debug
     - helm template waldur-site-agent helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values.yaml --debug
     - helm template waldur-site-agent helm/waldur-site-agent/ -f helm/waldur-site-agent/test-values-event.yaml --debug
