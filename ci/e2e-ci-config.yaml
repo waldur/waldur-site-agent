@@ -1,0 +1,134 @@
+# E2E test configuration for CI pipeline.
+# Uses deterministic UUIDs and token from the site_agent_e2e demo preset.
+# Three offerings exercise usage-based, limit-based, and mixed billing.
+#
+# API host is "docker" — the DinD service hostname in GitLab CI.
+# For local testing, override with WALDUR_E2E_API_HOST=localhost.
+
+timezone: "UTC"
+offerings:
+  # Offering 1: Usage-based (cpu k-Hours, ram gb-Hours)
+  - name: "E2E SLURM Usage"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000001"
+
+    stomp_enabled: false
+
+    backend_type: "slurm"
+    order_processing_backend: "slurm"
+    reporting_backend: "slurm"
+    membership_sync_backend: "slurm"
+
+    backend_settings:
+      slurm_bin_path: ".venv/bin"
+      default_account: "root"
+      customer_prefix: "e2e_cust_"
+      project_prefix: "e2e_proj_"
+      allocation_prefix: "e2e_alloc_"
+      qos_downscaled: "limited"
+      qos_paused: "paused"
+      qos_default: "normal"
+      enable_user_homedir_account_creation: false
+
+    backend_components:
+      cpu:
+        limit: 10000
+        measured_unit: "k-Hours"
+        unit_factor: 60000
+        accounting_type: "limit"
+        label: "CPU"
+      ram:
+        limit: 10000
+        measured_unit: "gb-Hours"
+        unit_factor: 61440
+        accounting_type: "limit"
+        label: "RAM"
+
+  # Offering 2: Limit-based (cpu cores, ram GB, gpu GPUs)
+  - name: "E2E SLURM Limits"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000002"
+
+    stomp_enabled: false
+
+    backend_type: "slurm"
+    order_processing_backend: "slurm"
+    reporting_backend: "slurm"
+    membership_sync_backend: "slurm"
+
+    backend_settings:
+      slurm_bin_path: ".venv/bin"
+      default_account: "root"
+      customer_prefix: "e2e_cust_"
+      project_prefix: "e2e_proj_"
+      allocation_prefix: "e2e_alloc_"
+      qos_downscaled: "limited"
+      qos_paused: "paused"
+      qos_default: "normal"
+      enable_user_homedir_account_creation: false
+
+    backend_components:
+      cpu:
+        limit: 1000
+        measured_unit: "cores"
+        unit_factor: 1
+        accounting_type: "limit"
+        label: "CPU Cores"
+      ram:
+        limit: 4096
+        measured_unit: "GB"
+        unit_factor: 1
+        accounting_type: "limit"
+        label: "RAM"
+      gpu:
+        limit: 100
+        measured_unit: "GPUs"
+        unit_factor: 1
+        accounting_type: "limit"
+        label: "GPUs"
+
+  # Offering 3: Mixed (cpu usage k-Hours, gpu limit, storage limit)
+  - name: "E2E SLURM Mixed"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000003"
+
+    stomp_enabled: false
+
+    backend_type: "slurm"
+    order_processing_backend: "slurm"
+    reporting_backend: "slurm"
+    membership_sync_backend: "slurm"
+
+    backend_settings:
+      slurm_bin_path: ".venv/bin"
+      default_account: "root"
+      customer_prefix: "e2e_cust_"
+      project_prefix: "e2e_proj_"
+      allocation_prefix: "e2e_alloc_"
+      qos_downscaled: "limited"
+      qos_paused: "paused"
+      qos_default: "normal"
+      enable_user_homedir_account_creation: false
+
+    backend_components:
+      cpu:
+        limit: 10000
+        measured_unit: "k-Hours"
+        unit_factor: 60000
+        accounting_type: "limit"
+        label: "CPU"
+      gpu:
+        limit: 100
+        measured_unit: "GPUs"
+        unit_factor: 1
+        accounting_type: "limit"
+        label: "GPUs"
+      storage:
+        limit: 500
+        measured_unit: "TB"
+        unit_factor: 1
+        accounting_type: "limit"
+        label: "Storage"

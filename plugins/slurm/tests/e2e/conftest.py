@@ -258,10 +258,9 @@ def get_offering_info(client, offering_uuid: str) -> tuple[str, str]:
 
 def get_project_url(client, project_uuid: str) -> str:
     """Get the full URL for a project."""
-    from waldur_api_client.api.projects import projects_retrieve
-
-    proj = projects_retrieve.sync(client=client, uuid=project_uuid)
-    return proj.url
+    resp = client.get_httpx_client().get(f"/api/projects/{project_uuid}/")
+    resp.raise_for_status()
+    return resp.json()["url"]
 
 
 def create_source_order(

@@ -1,0 +1,421 @@
+{
+  "_metadata": {
+    "title": "Site Agent E2E Tests",
+    "description": "Minimal fixture for waldur-site-agent CI end-to-end tests. Provides a service provider organization with three Marketplace.Slurm offerings (usage-based, limit-based, mixed) against a single SLURM emulator backend, plus a test project with member users.",
+    "version": "1.0.0",
+    "scenarios": [
+      "Order processing (create, update, terminate) with SLURM emulator",
+      "Usage-based reporting with per-user tracking and bulk submission",
+      "Limit-based allocation management",
+      "Mixed usage+limit component offerings",
+      "Membership sync between Waldur and SLURM backend",
+      "Multiple offerings on a single backend instance"
+    ]
+  },
+
+  "users": [
+    {
+      "uuid": "e2ea0000000000000000000000000001",
+      "username": "e2e-staff",
+      "email": "e2e-staff@site-agent.test",
+      "first_name": "E2E",
+      "last_name": "Staff",
+      "is_staff": true,
+      "is_active": true,
+      "password": "e2e-staff-password"
+    },
+    {
+      "uuid": "e2ea0000000000000000000000000002",
+      "username": "e2euser1",
+      "email": "e2euser1@site-agent.test",
+      "first_name": "E2E",
+      "last_name": "User 1",
+      "is_active": true,
+      "password": "e2e-user-password"
+    },
+    {
+      "uuid": "e2ea0000000000000000000000000003",
+      "username": "e2euser2",
+      "email": "e2euser2@site-agent.test",
+      "first_name": "E2E",
+      "last_name": "User 2",
+      "is_active": true,
+      "password": "e2e-user-password"
+    },
+    {
+      "uuid": "e2ea0000000000000000000000000004",
+      "username": "e2euser3",
+      "email": "e2euser3@site-agent.test",
+      "first_name": "E2E",
+      "last_name": "User 3",
+      "is_active": true,
+      "password": "e2e-user-password"
+    },
+    {
+      "uuid": "e2ea0000000000000000000000000005",
+      "username": "e2euser4",
+      "email": "e2euser4@site-agent.test",
+      "first_name": "E2E",
+      "last_name": "User 4",
+      "is_active": true,
+      "password": "e2e-user-password"
+    },
+    {
+      "uuid": "e2ea0000000000000000000000000006",
+      "username": "e2euser5",
+      "email": "e2euser5@site-agent.test",
+      "first_name": "E2E",
+      "last_name": "User 5",
+      "is_active": true,
+      "password": "e2e-user-password"
+    }
+  ],
+
+  "auth_tokens": [
+    {
+      "key": "e2e0000000000000000000000000token001",
+      "user_uuid": "e2ea0000000000000000000000000001",
+      "user_username": "e2e-staff"
+    }
+  ],
+
+  "customers": [
+    {
+      "uuid": "e2ec0000000000000000000000000001",
+      "name": "E2E Service Provider Org",
+      "abbreviation": "E2E-SP",
+      "contact_details": "Site agent E2E test organization"
+    }
+  ],
+
+  "projects": [
+    {
+      "uuid": "e2eb0000000000000000000000000001",
+      "name": "E2E Test Project",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Project for site-agent E2E test orders"
+    }
+  ],
+
+  "category_groups": [
+    {
+      "uuid": "e2ed0000000000000000000000000001",
+      "title": "HPC",
+      "description": "High-Performance Computing"
+    }
+  ],
+
+  "categories": [
+    {
+      "uuid": "e2ed0000000000000000000000000002",
+      "title": "SLURM Compute",
+      "description": "SLURM-managed HPC compute and storage",
+      "group_uuid": "e2ed0000000000000000000000000001"
+    }
+  ],
+
+  "service_providers": [
+    {
+      "uuid": "e2ee0000000000000000000000000001",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "E2E test service provider"
+    }
+  ],
+
+  "offerings": [
+    {
+      "uuid": "e2ef0000000000000000000000000001",
+      "name": "E2E SLURM Usage",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Usage-based SLURM offering for E2E tests. Components: cpu (k-Hours) and ram (gb-Hours), both billed by usage.",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true
+      }
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000002",
+      "name": "E2E SLURM Limits",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Limit-based SLURM offering for E2E tests. Components: cpu (cores), ram (GB), gpu (GPUs), all billed by limit.",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true
+      }
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000003",
+      "name": "E2E SLURM Mixed",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Mixed usage+limit SLURM offering for E2E tests. Components: cpu (usage, k-Hours), gpu (limit, GPUs), storage (limit, TB).",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true
+      }
+    }
+  ],
+
+  "offering_components": [
+    {
+      "uuid": "e2e10000000000000000000000000001",
+      "offering_uuid": "e2ef0000000000000000000000000001",
+      "type": "cpu",
+      "name": "CPU",
+      "description": "CPU time in k-Hours",
+      "billing_type": "limit",
+      "measured_unit": "k-Hours"
+    },
+    {
+      "uuid": "e2e10000000000000000000000000002",
+      "offering_uuid": "e2ef0000000000000000000000000001",
+      "type": "ram",
+      "name": "RAM",
+      "description": "Memory in gb-Hours",
+      "billing_type": "limit",
+      "measured_unit": "gb-Hours"
+    },
+
+    {
+      "uuid": "e2e20000000000000000000000000001",
+      "offering_uuid": "e2ef0000000000000000000000000002",
+      "type": "cpu",
+      "name": "CPU Cores",
+      "description": "CPU core allocation",
+      "billing_type": "limit",
+      "measured_unit": "cores"
+    },
+    {
+      "uuid": "e2e20000000000000000000000000002",
+      "offering_uuid": "e2ef0000000000000000000000000002",
+      "type": "ram",
+      "name": "RAM",
+      "description": "Memory allocation",
+      "billing_type": "limit",
+      "measured_unit": "GB"
+    },
+    {
+      "uuid": "e2e20000000000000000000000000003",
+      "offering_uuid": "e2ef0000000000000000000000000002",
+      "type": "gpu",
+      "name": "GPUs",
+      "description": "GPU allocation",
+      "billing_type": "limit",
+      "measured_unit": "GPUs"
+    },
+
+    {
+      "uuid": "e2e30000000000000000000000000001",
+      "offering_uuid": "e2ef0000000000000000000000000003",
+      "type": "cpu",
+      "name": "CPU",
+      "description": "CPU time in k-Hours",
+      "billing_type": "limit",
+      "measured_unit": "k-Hours"
+    },
+    {
+      "uuid": "e2e30000000000000000000000000002",
+      "offering_uuid": "e2ef0000000000000000000000000003",
+      "type": "gpu",
+      "name": "GPUs",
+      "description": "GPU allocation",
+      "billing_type": "limit",
+      "measured_unit": "GPUs"
+    },
+    {
+      "uuid": "e2e30000000000000000000000000003",
+      "offering_uuid": "e2ef0000000000000000000000000003",
+      "type": "storage",
+      "name": "Storage",
+      "description": "Storage allocation",
+      "billing_type": "limit",
+      "measured_unit": "TB"
+    }
+  ],
+
+  "plans": [
+    {
+      "uuid": "e2e00000000000000000000000000011",
+      "name": "E2E Usage Standard",
+      "offering_uuid": "e2ef0000000000000000000000000001",
+      "unit": "month",
+      "description": "Standard plan for usage-based SLURM offering"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000012",
+      "name": "E2E Limits Standard",
+      "offering_uuid": "e2ef0000000000000000000000000002",
+      "unit": "month",
+      "description": "Standard plan for limit-based SLURM offering"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000013",
+      "name": "E2E Mixed Standard",
+      "offering_uuid": "e2ef0000000000000000000000000003",
+      "unit": "month",
+      "description": "Standard plan for mixed SLURM offering"
+    }
+  ],
+
+  "plan_components": [
+    {
+      "plan_uuid": "e2e00000000000000000000000000011",
+      "component_uuid": "e2e10000000000000000000000000001",
+      "component_type": "cpu",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000011",
+      "component_uuid": "e2e10000000000000000000000000002",
+      "component_type": "ram",
+      "price": "0.00",
+      "amount": 0
+    },
+
+    {
+      "plan_uuid": "e2e00000000000000000000000000012",
+      "component_uuid": "e2e20000000000000000000000000001",
+      "component_type": "cpu",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000012",
+      "component_uuid": "e2e20000000000000000000000000002",
+      "component_type": "ram",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000012",
+      "component_uuid": "e2e20000000000000000000000000003",
+      "component_type": "gpu",
+      "price": "0.00",
+      "amount": 0
+    },
+
+    {
+      "plan_uuid": "e2e00000000000000000000000000013",
+      "component_uuid": "e2e30000000000000000000000000001",
+      "component_type": "cpu",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000013",
+      "component_uuid": "e2e30000000000000000000000000002",
+      "component_type": "gpu",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000013",
+      "component_uuid": "e2e30000000000000000000000000003",
+      "component_type": "storage",
+      "price": "0.00",
+      "amount": 0
+    }
+  ],
+
+  "user_roles": [
+    {
+      "uuid": "e2e00000000000000000000000000021",
+      "user_uuid": "e2ea0000000000000000000000000001",
+      "user_username": "e2e-staff",
+      "role_name": "CUSTOMER.OWNER",
+      "scope_type": "structure.customer",
+      "scope_uuid": "e2ec0000000000000000000000000001",
+      "is_active": true
+    },
+    {
+      "uuid": "e2e00000000000000000000000000022",
+      "user_uuid": "e2ea0000000000000000000000000002",
+      "user_username": "e2euser1",
+      "role_name": "PROJECT.MEMBER",
+      "scope_type": "structure.project",
+      "scope_uuid": "e2eb0000000000000000000000000001",
+      "is_active": true
+    },
+    {
+      "uuid": "e2e00000000000000000000000000023",
+      "user_uuid": "e2ea0000000000000000000000000003",
+      "user_username": "e2euser2",
+      "role_name": "PROJECT.MEMBER",
+      "scope_type": "structure.project",
+      "scope_uuid": "e2eb0000000000000000000000000001",
+      "is_active": true
+    },
+    {
+      "uuid": "e2e00000000000000000000000000024",
+      "user_uuid": "e2ea0000000000000000000000000004",
+      "user_username": "e2euser3",
+      "role_name": "PROJECT.MEMBER",
+      "scope_type": "structure.project",
+      "scope_uuid": "e2eb0000000000000000000000000001",
+      "is_active": true
+    },
+    {
+      "uuid": "e2e00000000000000000000000000025",
+      "user_uuid": "e2ea0000000000000000000000000005",
+      "user_username": "e2euser4",
+      "role_name": "PROJECT.MEMBER",
+      "scope_type": "structure.project",
+      "scope_uuid": "e2eb0000000000000000000000000001",
+      "is_active": true
+    },
+    {
+      "uuid": "e2e00000000000000000000000000026",
+      "user_uuid": "e2ea0000000000000000000000000006",
+      "user_username": "e2euser5",
+      "role_name": "PROJECT.MEMBER",
+      "scope_type": "structure.project",
+      "scope_uuid": "e2eb0000000000000000000000000001",
+      "is_active": true
+    }
+  ],
+
+  "offering_users": [
+    {
+      "uuid": "e2e00000000000000000000000000031",
+      "offering_uuid": "e2ef0000000000000000000000000001",
+      "user_uuid": "e2ea0000000000000000000000000002",
+      "username": "e2euser1"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000032",
+      "offering_uuid": "e2ef0000000000000000000000000001",
+      "user_uuid": "e2ea0000000000000000000000000003",
+      "username": "e2euser2"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000033",
+      "offering_uuid": "e2ef0000000000000000000000000001",
+      "user_uuid": "e2ea0000000000000000000000000004",
+      "username": "e2euser3"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000034",
+      "offering_uuid": "e2ef0000000000000000000000000001",
+      "user_uuid": "e2ea0000000000000000000000000005",
+      "username": "e2euser4"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000035",
+      "offering_uuid": "e2ef0000000000000000000000000001",
+      "user_uuid": "e2ea0000000000000000000000000006",
+      "username": "e2euser5"
+    }
+  ]
+}

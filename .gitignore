@@ -9,3 +9,4 @@ dist/
 poetry.toml
 poetry.lock
 .ruff_cache
+ci/db-cache/

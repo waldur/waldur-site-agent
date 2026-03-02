@@ -78,6 +78,7 @@ markdown.cmd = "pymarkdown scan -r py_maker/**/[!CHANGELOG,!.github/]*.md docs/*
 markdown.help = "Run markdown checks"
 
 [tool.ruff]
+exclude = ["ci/override.conf.py"]
 lint.extend-select = ["UP"]
 lint.select = ["ALL"]
 lint.ignore = [
@@ -149,3 +150,4 @@ members = [
 
 [tool.mypy]
 explicit_package_bases = true
+exclude = ["ci/"]
