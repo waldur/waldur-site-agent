@@ -162,6 +162,103 @@ class TimezoneMonthBoundaryTest(unittest.TestCase):
         assert tallinn_start.endswith("T00:00:00")
 
 
+class MonthBoundaryCrossingTest(unittest.TestCase):
+    """Test that a month-boundary crossing during pull_resource is detected."""
+
+    def setUp(self) -> None:
+        respx.start()
+        self.offering_uuid = uuid.uuid4()
+        self.waldur_offering = Offering(
+            name="test",
+            waldur_api_url=f"{BASE_URL}/api/",
+            waldur_api_token="token",
+            waldur_offering_uuid=self.offering_uuid.hex,
+            backend_type="slurm",
+            order_processing_backend="slurm",
+            membership_sync_backend="slurm",
+            reporting_backend="slurm",
+            backend_settings={},
+            backend_components={},
+        )
+        self.waldur_offering_response = {
+            "uuid": self.offering_uuid.hex,
+            "name": "test",
+            "description": "test",
+            "customer_uuid": uuid.uuid4().hex,
+            "components": [{"type": "cpu"}, {"type": "mem"}],
+        }
+        self.waldur_user = {
+            "username": "test",
+            "email": "test@example.com",
+            "full_name": "Test User",
+            "is_staff": False,
+        }
+        self.mock_client = AuthenticatedClient(
+            base_url=BASE_URL,
+            token=self.waldur_offering.api_token,
+            headers={},
+        )
+
+    def tearDown(self) -> None:
+        respx.stop()
+
+    @mock.patch("waldur_site_agent.common.processors.backend_utils.get_current_time_in_timezone")
+    @mock.patch.object(backend.SlurmBackend, "_pull_backend_resource")
+    def test_month_boundary_crossing_skips_resource(
+        self, mock_pull_backend_resource, mock_get_time
+    ) -> None:
+        """When month changes between pull_resource and period computation, skip the resource."""
+        from waldur_site_agent.backend.structures import BackendResourceInfo
+
+        mock_pull_backend_resource.return_value = BackendResourceInfo(
+            backend_id="test-alloc",
+            users=["user1"],
+            usage={
+                "TOTAL_ACCOUNT_USAGE": {"cpu": 16, "mem": 100},
+                "user1": {"cpu": 16, "mem": 100},
+            },
+        )
+
+        # First call (pre_pull_time): March 31, 23:59
+        # Second call (current_time): April 1, 00:00
+        march_time = datetime.datetime(2025, 3, 31, 23, 59, 50, tzinfo=ZoneInfo("UTC"))
+        april_time = datetime.datetime(2025, 4, 1, 0, 0, 5, tzinfo=ZoneInfo("UTC"))
+        mock_get_time.side_effect = [march_time, april_time]
+
+        respx.get("https://waldur.example.com/api/users/me/").respond(200, json=self.waldur_user)
+        respx.get(
+            f"{BASE_URL}/api/marketplace-provider-offerings/{self.offering_uuid.hex}/"
+        ).respond(200, json=self.waldur_offering_response)
+        service_provider = ServiceProvider(uuid=uuid.uuid4())
+        respx.get(
+            f"{BASE_URL}/api/marketplace-service-providers/",
+            params={"customer_uuid": self.waldur_offering_response["customer_uuid"]},
+        ).respond(200, json=[service_provider.to_dict()])
+
+        waldur_resource = {
+            "uuid": "10a0f810be1c43bbb651e8cbdbb90198",
+            "name": "test-alloc",
+            "backend_id": "test-alloc",
+            "state": "OK",
+        }
+        respx.get(f"{BASE_URL}/api/marketplace-provider-resources/").respond(
+            200, json=[waldur_resource]
+        )
+        respx.get(
+            f"{BASE_URL}/api/marketplace-provider-resources/{waldur_resource['uuid']}/"
+        ).respond(200, json=waldur_resource)
+
+        set_usage_response = respx.post(
+            f"{BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).respond(201, json={})
+
+        processor = OfferingReportProcessor(self.waldur_offering, self.mock_client, "UTC")
+        processor.process_offering()
+
+        # Usage should NOT have been submitted because month boundary was crossed
+        assert set_usage_response.call_count == 0
+
+
 @mock.patch.object(backend.SlurmBackend, "_pull_backend_resource")
 class TimezoneIntegrationTest(unittest.TestCase):
     """Integration tests for timezone functionality with mocked dependencies."""
