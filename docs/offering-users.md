@@ -163,7 +163,8 @@ offerings:
 1. **Service Provider Username Generation**: The offering must be configured
    with `username_generation_policy = SERVICE_PROVIDER` in Waldur
 2. **Backend Plugin**: Appropriate username management backend must be installed and configured
-3. **Permissions**: API token must have permissions to manage offering users
+3. **Permissions**: API token user must have **OFFERING.MANAGER** role on the offering
+   (grants permissions to manage offering users, orders, and agent identities)
 
 ## Integration with Order Processing
 
@@ -220,6 +221,9 @@ The system defines specific exceptions for different error scenarios:
 - **`OfferingUserAccountLinkingRequiredError`**: Raised when manual account linking is required
 - **`OfferingUserAdditionalValidationRequiredError`**: Raised when additional validation steps are needed
 - **`BackendError`**: Generic backend failure; triggers ERROR_CREATING state transition
+- **Other exceptions** (e.g. `ValueError`, `HTTPError`): Logged but do **not** trigger any state
+  transition — the user silently stays in their current state. Plugin developers should wrap backend
+  failures as `BackendError` to ensure the error state is reflected in Waldur.
 
 Both linking/validation exceptions support an optional `comment_url` parameter to provide links to
 forms, documentation, or other resources needed for error resolution.
@@ -254,6 +258,28 @@ When exceptions occur during username generation:
   to PENDING_ACCOUNT_LINKING.
 - **PENDING_* → OK**: When username generation succeeds for a PENDING user, `set_validation_complete`
   is called (which clears service provider comments) before setting the username.
+
+## Username Reconciliation in Event Processing Mode
+
+When the agent runs in `event_process` mode, offering user username synchronization is primarily driven
+by real-time STOMP events. However, transient STOMP disconnections or message loss can cause missed
+updates. To address this, the main event loop includes a periodic reconciliation timer.
+
+### How it works
+
+- **Interval**: Defaults to 60 minutes, configurable via `WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES`
+- **Scope**: Only runs for offerings with both `stomp_enabled: true` and a `membership_sync_backend`
+- **Operation**: Calls `sync_offering_user_usernames()` which compares usernames between source and
+  target offerings and patches any mismatches
+- **Idempotent**: Safe to run at any frequency — no side effects when data is already consistent
+- **Lightweight**: Only syncs usernames, not a full membership reconciliation
+
+### Reconciliation interval setting
+
+```yaml
+# Environment variable (default: 60 minutes)
+WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES=60
+```
 
 ## Best Practices
 
