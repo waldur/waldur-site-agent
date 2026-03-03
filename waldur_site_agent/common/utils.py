@@ -888,7 +888,16 @@ def get_username_management_backend(
         )
         return UnknownUsernameManagementBackend(), "unknown"
 
-    backend_info = USERNAME_BACKENDS[username_management_setting]
+    backend_info = USERNAME_BACKENDS.get(username_management_setting)
+    if backend_info is None:
+        logger.error(
+            "Username management backend '%s' is not installed for offering %s. "
+            "Available backends: %s. Falling back to default.",
+            username_management_setting,
+            offering.name,
+            list(USERNAME_BACKENDS.keys()),
+        )
+        return UnknownUsernameManagementBackend(), "unknown"
     backend_class, dist_name, dist_version = backend_info
 
     logger.info(
