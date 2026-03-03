@@ -521,8 +521,6 @@ E2E integration tests:
       when: never
     - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
-    # Temporary: run on MRs to validate STOMP E2E tests, remove after merge
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   before_script:
     # Install Docker CLI + Compose plugin (static binaries)
     - apt-get update -qq && apt-get install -y -qq curl
