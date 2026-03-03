@@ -1,5 +1,25 @@
 # Changelog
 
+Now I have the full picture. Here's the changelog entry:
+
+## 0.9.6 - 2026-03-03
+
+### Highlights
+
+This patch release ensures that sparse field selection for Waldur API resource queries includes all fields required by processors. Previously, missing fields (such as slug identifiers and offering backend ID) could cause failures or incomplete data during membership and report processing.
+
+### Bug Fixes
+
+- **Core**: Add missing fields (`slug`, `project_slug`, `customer_slug`, `offering_backend_id`) to sparse resource field selection in membership and report processors, preventing potential data gaps during synchronization.
+
+### What's New
+
+- **Core**: Add comprehensive test coverage for processor field selection to validate that all required resource fields are included in API queries.
+
+> 1 commit, 2 files changed (+242/-0 lines)
+
+---
+
 ## 0.9.5 - 2026-03-03
 
 ### Highlights
