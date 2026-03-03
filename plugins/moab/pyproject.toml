@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-moab"
-version = "0.9.4"
+version = "0.9.5"
 description = "MOAB plugin for Waldur Site Agent"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent>=0.9.4"
+    "waldur-site-agent>=0.9.5"
 ]
 
 [build-system]

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.5 - 2026-03-03
+
+### Highlights
+
+This patch release improves deployment reliability by fixing Helm chart issues and adding a comprehensive helm-unittest test suite to catch template regressions early. It also resolves a crash that occurred when the username management backend plugin was not installed.
+
+### Bug Fixes
+
+- **Core**: Fix KeyError when the username management backend plugin is not installed.
+- **Helm**: Fix Helm chart template issues across all deployment manifests (order processing, event processing, membership sync, and reporting).
+
+### Improvements
+
+- **Helm**: Add helm-unittest test suite covering all deployment templates, secrets, helpers, and value combinations.
+
+### Statistics
+
+> 2 commits, 18 files changed (+949/−24 lines)
+
+---
+
 ## 0.9.4 - 2026-03-02
 
 ### Highlights
