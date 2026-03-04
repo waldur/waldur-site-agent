@@ -685,7 +685,6 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
             if order.type_ == RequestTypes.TERMINATE:
                 order_is_done = self._process_terminate_order(order)
-            # TODO: no need for update of orders for marketplace SLURM offerings
             if order_is_done:
                 logger.info("Marking order as done")
                 waldur_order_refreshed = marketplace_orders_retrieve.sync(

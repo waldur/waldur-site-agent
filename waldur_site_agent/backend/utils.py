@@ -44,8 +44,7 @@ def format_current_month(timezone_str: str = "") -> tuple[str, str]:
 def get_usage_based_limits(resource_limits: dict) -> dict[str, int]:
     """Returns dictionary of limits for usage-based computing resources.
 
-    The limits converted to SLURM-readable values.
-    I.e. CPU-minutes, MB-minutes.
+    The limits are converted to backend-native values using unit_factor.
     """
     return {
         tres: data["limit"] * data.get("unit_factor", 1)
@@ -54,10 +53,10 @@ def get_usage_based_limits(resource_limits: dict) -> dict[str, int]:
     }
 
 
-def prettify_limits(limits: dict[str, int], slurm_tres: dict) -> str:
+def prettify_limits(limits: dict[str, int], backend_components: dict) -> str:
     """Makes limits human-readable."""
     limits_info = {
-        slurm_tres[key]["label"]: f"{value} {slurm_tres[key]['measured_unit']}"
+        backend_components[key]["label"]: f"{value} {backend_components[key]['measured_unit']}"
         for key, value in limits.items()
     }
     return yaml.dump(limits_info)
@@ -71,7 +70,7 @@ def format_month_period(year: int, month: int) -> tuple[str, str]:
         month: Month (1-12)
 
     Returns:
-        Tuple of (start_date_str, end_date_str) formatted for SLURM sacct
+        Tuple of (start_date_str, end_date_str) formatted as date-time strings
     """
     # Create datetime for first day of month
     start_date = datetime.datetime(year=year, month=month, day=1)
