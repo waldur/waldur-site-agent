@@ -890,7 +890,7 @@ def get_username_management_backend(
 
     backend_info = USERNAME_BACKENDS.get(username_management_setting)
     if backend_info is None:
-        logger.error(
+        logger.warning(
             "Username management backend '%s' is not installed for offering %s. "
             "Available backends: %s. Falling back to default.",
             username_management_setting,
