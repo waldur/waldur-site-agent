@@ -259,6 +259,7 @@ class OfferingBaseProcessor(abc.ABC):
                     OfferingUserFieldEnum.STATE,
                     OfferingUserFieldEnum.UUID,
                     OfferingUserFieldEnum.USER_USERNAME,
+                    OfferingUserFieldEnum.USER_EMAIL,
                 ],
             )
         return self._offering_users_cache
@@ -1510,7 +1511,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         waldur_resource: WaldurResource,
         backend_resource_info: BackendResourceInfo,
         offering_users: list[OfferingUser],
-    ) -> tuple[set[str], set[str], set[str], dict[str, str]]:
+    ) -> tuple[set[str], set[str], set[str], dict[str, str], dict[str, str]]:
         logger.info("Fetching new, existing and stale resource users")
         usernames: list[str] = backend_resource_info.users
         local_usernames = set(usernames)
@@ -1545,6 +1546,14 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             if user.offering_user_username and user.role
         }
 
+        # Build user_emails mapping (username -> email) for backends that need it
+        user_emails = {
+            offering_user.username: offering_user.user_email
+            for offering_user in offering_users
+            if offering_user.username
+            and isinstance(offering_user.user_email, str)
+        }
+
         logger.info("Number of offering user usernames: %s", len(offering_user_usernames))
 
         existing_usernames: set[str] = resource_usernames & local_usernames
@@ -1562,7 +1571,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             "Resource stale usernames (%s): %s", len(stale_usernames), ", ".join(stale_usernames)
         )
 
-        return existing_usernames, stale_usernames, new_usernames, user_roles
+        return existing_usernames, stale_usernames, new_usernames, user_roles, user_emails
 
     def _sync_resource_users(
         self,
@@ -1576,7 +1585,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         """
         logger.info("Syncing user list for resource %s", waldur_resource.name)
 
-        existing_usernames, stale_usernames, new_usernames, user_roles = (
+        existing_usernames, stale_usernames, new_usernames, user_roles, user_emails = (
             self._group_resource_usernames(
                 waldur_resource, backend_resource_info, offering_users
             )
@@ -1597,6 +1606,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             new_usernames,
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
             user_roles=user_roles,
+            user_emails=user_emails,
         )
 
         self.resource_backend.remove_users_from_resource(

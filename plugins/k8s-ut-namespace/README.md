@@ -224,6 +224,7 @@ offerings:
 | `role_mapping` | object | No | See Role Mapping | Custom Waldur role to namespace role mapping (merged with defaults) |
 | `component_quota_mapping` | object | No | See Component Mapping | Custom component to K8s quota field mapping |
 | `keycloak_use_user_id` | boolean | No | `true` | Use Keycloak user ID for lookup (false = use username) |
+| `sync_users_to_cr` | boolean | No | `false` | Sync user emails to CR `adminUsers`/`rwUsers`/`roUsers` fields |
 
 ### Keycloak Settings (Optional)
 
@@ -295,6 +296,38 @@ When users are added to a Waldur resource:
 2. User is looked up in Keycloak
 3. User is removed from any incorrect role groups (role reconciliation)
 4. User is added to the correct role group
+
+#### Direct CR User Sync
+
+When `sync_users_to_cr` is enabled, user emails from Waldur are written directly to the
+ManagedNamespace CR's `adminUsers`, `rwUsers`, and `roUsers` fields.
+The managed-namespace-operator then creates RoleBindings with these emails as
+OIDC User subjects.
+
+Each user's Waldur role is mapped to a namespace role using the same
+`role_mapping` configuration (see [Role Mapping](#role-mapping)), and the
+email is placed in the corresponding CR field:
+
+| Namespace Role | CR Field |
+|---|---|
+| `admin` | `adminUsers` |
+| `readwrite` | `rwUsers` |
+| `readonly` | `roUsers` |
+
+On each membership sync cycle, the **full current set** of team members from
+Waldur is written to the CR. Users removed from the Waldur project team are
+automatically removed from the CR on the next sync, because empty lists are
+sent for roles with no members.
+
+This can be used **alongside** Keycloak groups (both mechanisms populate the
+same RoleBindings) or **without** Keycloak (`keycloak_enabled: false`) for
+deployments that rely solely on OIDC email-based authentication.
+
+```yaml
+backend_settings:
+  sync_users_to_cr: true
+  keycloak_enabled: false  # optional, can also be true for dual mode
+```
 
 When users are removed:
 

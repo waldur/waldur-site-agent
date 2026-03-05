@@ -66,6 +66,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         self.cr_namespace = backend_settings.get("cr_namespace", "waldur-system")
         self.default_role = backend_settings.get("default_role", "readwrite")
         self.keycloak_use_user_id = backend_settings.get("keycloak_use_user_id", True)
+        self.sync_users_to_cr = backend_settings.get("sync_users_to_cr", False)
 
         # Configurable mappings with sensible defaults
         self.role_mapping: dict[str, str] = {
@@ -262,16 +263,13 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         return backend_limits, waldur_limits
 
     def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
-        """Return zero usage for all components.
+        """Return empty report — usage reporting is not supported.
 
         Billing is based on limits (allocation), not actual consumption.
-        Waldur already tracks the limits, so usage is reported as 0.
+        The CRD does not expose usage data, so there is nothing to report.
         """
-        usage_report = {}
-        empty = dict.fromkeys(self.backend_components, 0)
-        for resource_id in resource_backend_ids:
-            usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE": dict(empty)}
-        return usage_report
+        del resource_backend_ids
+        return {}
 
     @staticmethod
     def _parse_k8s_quantity(value: str) -> int:
@@ -425,15 +423,24 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
     def add_users_to_resource(
         self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
     ) -> set[str]:
-        """Add users to correct Keycloak groups based on their Waldur roles.
+        """Add users to correct Keycloak groups and/or ManagedNamespace CR.
 
         Uses `user_roles` kwarg to determine which group each user belongs to.
+        Uses `user_emails` kwarg to populate CR user fields when sync_users_to_cr is enabled.
         Also reconciles role changes for all users in user_roles.
         """
         user_roles: dict[str, str] = kwargs.get("user_roles", {})
+        user_emails: dict[str, str] = kwargs.get("user_emails", {})
+
+        # Sync user emails to the ManagedNamespace CR if enabled.
+        # Only run when user_emails is provided (team sync), not for
+        # service account or course account syncs which would overwrite
+        # the CR with empty lists.
+        if self.sync_users_to_cr and "user_emails" in kwargs:
+            self._sync_users_to_cr(waldur_resource, user_roles, user_emails)
 
         if not self.keycloak_client:
-            logger.info("Keycloak not configured, skipping user management")
+            logger.info("Keycloak not configured, skipping Keycloak user management")
             return user_ids
 
         resource_slug = (
@@ -510,6 +517,48 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 added_users.add(username)
 
         return added_users
+
+    def _sync_users_to_cr(
+        self,
+        waldur_resource: WaldurResource,
+        user_roles: dict[str, str],
+        user_emails: dict[str, str],
+    ) -> None:
+        """Patch the ManagedNamespace CR with per-role user email lists.
+
+        Groups all users by their mapped namespace role and sets the
+        adminUsers/rwUsers/roUsers fields on the CR spec.
+        """
+        ns_name = waldur_resource.backend_id
+        if not ns_name or not ns_name.strip():
+            logger.warning("Resource has no backend_id, cannot sync users to CR")
+            return
+
+        # Build per-role email lists from ALL users with roles
+        role_emails: dict[str, list[str]] = {role: [] for role in NS_ROLES}
+        for username, waldur_role in user_roles.items():
+            email = user_emails.get(username)
+            if not email:
+                logger.debug("No email for user %s, skipping CR user sync", username)
+                continue
+            ns_role = self.role_mapping.get(waldur_role, self.default_role)
+            role_emails[ns_role].append(email)
+
+        # Build the patch with all role fields (empty lists clear removed users)
+        spec_patch: dict = {}
+        for role in NS_ROLES:
+            cr_field = NS_ROLE_TO_CR_USER_FIELD[role]
+            spec_patch[cr_field] = sorted(role_emails[role])
+
+        try:
+            self.k8s_client.patch_managed_namespace(ns_name, {"spec": spec_patch})
+            logger.info(
+                "Synced users to CR %s: %s",
+                ns_name,
+                {k: len(v) for k, v in spec_patch.items()},
+            )
+        except Exception as e:
+            logger.error("Failed to sync users to CR %s: %s", ns_name, e)
 
     def add_user(self, waldur_resource: WaldurResource, username: str) -> bool:
         """Add a single user to the default role group."""
