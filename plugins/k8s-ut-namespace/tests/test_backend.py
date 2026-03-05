@@ -363,6 +363,160 @@ class TestK8sUtNamespaceBackendUserManagement:
         assert result is True
 
 
+class TestK8sUtNamespaceBackendSyncUsersToCR:
+    """Tests for sync_users_to_cr feature."""
+
+    def test_sync_users_to_cr_patches_cr_with_emails(
+        self, backend_settings, backend_components, waldur_resource
+    ):
+        backend_settings["sync_users_to_cr"] = True
+        backend, mock_k8s, mock_kc = _make_backend(backend_settings, backend_components)
+        waldur_resource.backend_id = "waldur-test-ns"
+
+        # Mock Keycloak group lookup for the Keycloak path
+        mock_kc.get_group_by_name.side_effect = lambda name: {
+            "ns_test-ns_admin": {"id": "g-admin"},
+            "ns_test-ns_readwrite": {"id": "g-rw"},
+            "ns_test-ns_readonly": {"id": "g-ro"},
+        }.get(name)
+        mock_kc.find_user.side_effect = lambda uid, _: {"id": f"kc-{uid}"}
+        mock_kc.is_user_in_group.return_value = False
+
+        user_ids = {"alice", "bob"}
+        user_roles = {"alice": "manager", "bob": "member"}
+        user_emails = {"alice": "alice@example.com", "bob": "bob@example.com"}
+
+        backend.add_users_to_resource(
+            waldur_resource, user_ids, user_roles=user_roles, user_emails=user_emails
+        )
+
+        # Verify CR was patched with user emails
+        mock_k8s.patch_managed_namespace.assert_called_once_with(
+            "waldur-test-ns",
+            {
+                "spec": {
+                    "adminUsers": ["alice@example.com"],
+                    "rwUsers": ["bob@example.com"],
+                    "roUsers": [],
+                }
+            },
+        )
+
+    def test_sync_users_to_cr_disabled_does_not_patch(
+        self, backend_settings, backend_components, waldur_resource
+    ):
+        backend_settings["sync_users_to_cr"] = False
+        backend, mock_k8s, mock_kc = _make_backend(backend_settings, backend_components)
+        waldur_resource.backend_id = "waldur-test-ns"
+
+        mock_kc.get_group_by_name.side_effect = lambda name: {
+            "ns_test-ns_admin": {"id": "g-admin"},
+            "ns_test-ns_readwrite": {"id": "g-rw"},
+            "ns_test-ns_readonly": {"id": "g-ro"},
+        }.get(name)
+        mock_kc.find_user.side_effect = lambda uid, _: {"id": f"kc-{uid}"}
+        mock_kc.is_user_in_group.return_value = False
+
+        user_ids = {"alice"}
+        user_roles = {"alice": "manager"}
+        user_emails = {"alice": "alice@example.com"}
+
+        backend.add_users_to_resource(
+            waldur_resource, user_ids, user_roles=user_roles, user_emails=user_emails
+        )
+
+        # CR should not be patched
+        mock_k8s.patch_managed_namespace.assert_not_called()
+
+    def test_sync_users_to_cr_default_disabled(
+        self, backend_settings, backend_components
+    ):
+        backend, _, _ = _make_backend(backend_settings, backend_components)
+        assert backend.sync_users_to_cr is False
+
+    def test_sync_users_to_cr_skips_users_without_email(
+        self, backend_settings, backend_components, waldur_resource
+    ):
+        backend_settings["sync_users_to_cr"] = True
+        backend, mock_k8s, mock_kc = _make_backend(backend_settings, backend_components)
+        waldur_resource.backend_id = "waldur-test-ns"
+
+        mock_kc.get_group_by_name.side_effect = lambda name: {
+            "ns_test-ns_admin": {"id": "g-admin"},
+            "ns_test-ns_readwrite": {"id": "g-rw"},
+            "ns_test-ns_readonly": {"id": "g-ro"},
+        }.get(name)
+        mock_kc.find_user.side_effect = lambda uid, _: {"id": f"kc-{uid}"}
+        mock_kc.is_user_in_group.return_value = False
+
+        user_ids = {"alice", "bob"}
+        user_roles = {"alice": "manager", "bob": "member"}
+        # Only alice has an email
+        user_emails = {"alice": "alice@example.com"}
+
+        backend.add_users_to_resource(
+            waldur_resource, user_ids, user_roles=user_roles, user_emails=user_emails
+        )
+
+        mock_k8s.patch_managed_namespace.assert_called_once_with(
+            "waldur-test-ns",
+            {
+                "spec": {
+                    "adminUsers": ["alice@example.com"],
+                    "rwUsers": [],
+                    "roUsers": [],
+                }
+            },
+        )
+
+    def test_sync_users_to_cr_without_keycloak(
+        self, backend_settings_no_keycloak, backend_components, waldur_resource
+    ):
+        """sync_users_to_cr works even without Keycloak."""
+        backend_settings_no_keycloak["sync_users_to_cr"] = True
+        with patch(
+            "waldur_site_agent_k8s_ut_namespace.backend.K8sUtNamespaceClient"
+        ) as mock_k8s_cls:
+            mock_k8s = MagicMock()
+            mock_k8s_cls.return_value = mock_k8s
+            backend = K8sUtNamespaceBackend(
+                backend_settings_no_keycloak, backend_components
+            )
+
+        waldur_resource.backend_id = "waldur-test-ns"
+        user_ids = {"alice"}
+        user_roles = {"alice": "manager"}
+        user_emails = {"alice": "alice@example.com"}
+
+        result = backend.add_users_to_resource(
+            waldur_resource, user_ids, user_roles=user_roles, user_emails=user_emails
+        )
+
+        # CR should be patched even without Keycloak
+        mock_k8s.patch_managed_namespace.assert_called_once()
+        # All user_ids returned since no Keycloak filtering
+        assert result == {"alice"}
+
+    def test_sync_users_to_cr_no_backend_id_skips(
+        self, backend_settings, backend_components, waldur_resource
+    ):
+        backend_settings["sync_users_to_cr"] = True
+        backend, mock_k8s, mock_kc = _make_backend(backend_settings, backend_components)
+        waldur_resource.backend_id = ""
+
+        mock_kc.get_group_by_name.return_value = None
+
+        user_roles = {"alice": "manager"}
+        user_emails = {"alice": "alice@example.com"}
+
+        backend.add_users_to_resource(
+            waldur_resource, {"alice"}, user_roles=user_roles, user_emails=user_emails
+        )
+
+        # Should not attempt to patch CR when backend_id is empty
+        mock_k8s.patch_managed_namespace.assert_not_called()
+
+
 class TestK8sUtNamespaceBackendPullResource:
     """Tests for pull_resource method."""
 
@@ -392,7 +546,7 @@ class TestK8sUtNamespaceBackendPullResource:
         assert result is not None
         assert result.backend_id == "waldur-test-ns"
         assert set(result.users) == {"user1", "user2"}
-        assert result.usage["TOTAL_ACCOUNT_USAGE"]["cpu"] == 0
+        assert result.usage == {"TOTAL_ACCOUNT_USAGE": {}}
 
     def test_pull_resource_not_found(self, backend_settings, backend_components, waldur_resource):
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
@@ -441,21 +595,9 @@ class TestK8sUtNamespaceBackendStatusOps:
 class TestK8sUtNamespaceBackendUsageReport:
     """Tests for usage report generation."""
 
-    def test_usage_report_returns_zeros(self, backend_settings, backend_components):
+    def test_usage_report_returns_empty(self, backend_settings, backend_components):
         backend, _, _ = _make_backend(backend_settings, backend_components)
 
         report = backend._get_usage_report(["waldur-test-ns"])
 
-        assert "waldur-test-ns" in report
-        usage = report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"]
-        assert usage["cpu"] == 0
-        assert usage["ram"] == 0
-        assert usage["storage"] == 0
-        assert usage["gpu"] == 0
-
-    def test_usage_report_multiple_resources(self, backend_settings, backend_components):
-        backend, _, _ = _make_backend(backend_settings, backend_components)
-
-        report = backend._get_usage_report(["ns-1", "ns-2"])
-        assert report["ns-1"]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 0
-        assert report["ns-2"]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 0
+        assert report == {}
