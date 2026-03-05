@@ -612,34 +612,28 @@ def load_components_to_waldur(
             extra_kwargs = _build_component_kwargs(component_info)
 
             if component_type in waldur_offering_components:
-                if component_info["accounting_type"] == "usage":
-                    existing_component = waldur_offering_components[component_type]
-                    logger.info(
-                        "Offering component %s already exists, updating limit from %s to %s %s.",
-                        component_type,
-                        existing_component.limit_amount,
-                        component_info.get("limit"),
-                        component_info["measured_unit"],
-                    )
-                    component_update_body = UpdateOfferingComponentRequest(
-                        uuid=existing_component.uuid.hex,
-                        billing_type=BillingTypeEnum(accounting_type),
-                        type_=component_type,
-                        name=label,
-                        measured_unit=component_info["measured_unit"],
-                        limit_amount=limit_amount,
-                        **extra_kwargs,
-                    )
-                    marketplace_provider_offerings_update_offering_component.sync_detailed(
-                        client=waldur_rest_client,
-                        uuid=offering_uuid,
-                        body=component_update_body,
-                    )
-                else:
-                    logger.info(
-                        "Offering component %s already exists, skipping creation.",
-                        component_type,
-                    )
+                existing_component = waldur_offering_components[component_type]
+                logger.info(
+                    "Offering component %s already exists, updating limit from %s to %s %s.",
+                    component_type,
+                    existing_component.limit_amount,
+                    component_info.get("limit"),
+                    component_info["measured_unit"],
+                )
+                component_update_body = UpdateOfferingComponentRequest(
+                    uuid=existing_component.uuid.hex,
+                    billing_type=BillingTypeEnum(accounting_type),
+                    type_=component_type,
+                    name=label,
+                    measured_unit=component_info["measured_unit"],
+                    limit_amount=limit_amount,
+                    **extra_kwargs,
+                )
+                marketplace_provider_offerings_update_offering_component.sync_detailed(
+                    client=waldur_rest_client,
+                    uuid=offering_uuid,
+                    body=component_update_body,
+                )
             else:
                 logger.info(
                     "Creating offering component %s with type %s and limit %s %s.",
