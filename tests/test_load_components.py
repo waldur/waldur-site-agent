@@ -239,7 +239,7 @@ class TestLoadComponentsToWaldurUpdate:
         "waldur_site_agent.common.utils."
         "marketplace_provider_offerings_retrieve"
     )
-    def test_skips_update_for_limit_type_components(self, mock_retrieve, mock_update):
+    def test_updates_limit_type_components(self, mock_retrieve, mock_update):
         existing = _make_existing_component("ram")
         mock_retrieve.sync.return_value = _make_offering_mock([existing])
 
@@ -248,6 +248,7 @@ class TestLoadComponentsToWaldurUpdate:
                 measured_unit="GB",
                 accounting_type=AccountingType.LIMIT,
                 label="RAM",
+                limit=1024,
                 max_value=512,
             ),
         }
@@ -256,4 +257,9 @@ class TestLoadComponentsToWaldurUpdate:
             MagicMock(), "offering-uuid", "Test Offering", components
         )
 
-        mock_update.sync_detailed.assert_not_called()
+        mock_update.sync_detailed.assert_called_once()
+        body = mock_update.sync_detailed.call_args.kwargs["body"]
+        assert isinstance(body, UpdateOfferingComponentRequest)
+        assert body.billing_type == BillingTypeEnum("limit")
+        assert body.limit_amount == 1024
+        assert body.max_value == 512
