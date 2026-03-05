@@ -762,8 +762,16 @@ class BaseBackend(ABC):
         del existing_users
 
     def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
-        """Set limits for the resource on the backend."""
-        self.client.set_resource_limits(resource_backend_id, limits)
+        """Set limits for the resource on the backend.
+
+        Converts Waldur-unit limits to backend-native units using each
+        component's ``unit_factor`` before delegating to the client.
+        """
+        converted_limits = {
+            key: int(value * self.backend_components.get(key, {}).get("unit_factor", 1))
+            for key, value in limits.items()
+        }
+        self.client.set_resource_limits(resource_backend_id, converted_limits)
 
     def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
         """Get limits for the resource on the backend."""

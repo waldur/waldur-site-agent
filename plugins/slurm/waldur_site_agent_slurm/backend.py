@@ -444,15 +444,6 @@ class SlurmBackend(backends.BaseBackend):
             logger.info("Removing all users from account %s", backend_id)
             self.client.delete_all_users_from_account(backend_id)
 
-    def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
-        """Set limits for limit-based components in the SLURM allocation."""
-        # Convert limits
-        converted_limits = {
-            key: int(value * self.backend_components[key]["unit_factor"])
-            for key, value in limits.items()
-        }
-        super().set_resource_limits(resource_backend_id, converted_limits)
-
     def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
         """Get account limits converted to Waldur-readable values."""
         account_limits_raw = self.client.get_resource_limits(resource_backend_id)
