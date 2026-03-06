@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-harbor"
-version = "0.9.6"
+version = "0.9.7"
 description = "Harbor container registry plugin for Waldur Site Agent"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent>=0.9.6",
+    "waldur-site-agent>=0.9.7",
     "requests>=2.31.0"
 ]
 

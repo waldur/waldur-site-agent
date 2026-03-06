@@ -1,13 +1,13 @@
 [project]
 name = "waldur-site-agent-rancher"
-version = "0.9.6"
+version = "0.9.7"
 description = "Rancher plugin for Waldur Site Agent"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent>=0.9.6",
-    "waldur-site-agent-keycloak-client>=0.9.6",
+    "waldur-site-agent>=0.9.7",
+    "waldur-site-agent-keycloak-client>=0.9.7",
     "requests>=2.31.0",
 ]
 

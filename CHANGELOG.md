@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.7 - 2026-03-06
+
+This release adds new configuration options for the federation and Kubernetes namespace plugins, making user resolution and user synchronization behavior more flexible for operators. Resource limit handling is also improved with automatic unit factor conversion in the core backend. Additionally, offering component updates are now more accurate, and the codebase is cleaner with SLURM-specific logic removed from shared code.
+
+### What's New
+
+- **Federation**: Add configurable `user_resolve_method` setting to the Waldur federation plugin, allowing operators to control how users are resolved during synchronization.
+- **K8s-ut-namespace**: Add `sync_users_to_cr` setting to optionally control whether users are synchronized to cluster roles.
+- **Core**: Add `unit_factor` conversion support to `BaseBackend.set_resource_limits`, enabling backends to correctly scale resource limit values.
+
+### Improvements
+
+- **Core**: Update limit-type offering components instead of skipping them, improving accuracy of component state synchronization.
+- **Core**: Remove SLURM-specific references from generic agent code, making the shared processing layer properly backend-agnostic.
+- **Core**: Update Waldur Python client to the latest version.
+
+### Bug Fixes
+
+- **Core**: Fix incorrect log level in the username management backend.
+
+> 7 commits, 18 files changed (+633/-106 lines)
+
+---
+
 Now I have the full picture. Here's the changelog entry:
 
 ## 0.9.6 - 2026-03-03
