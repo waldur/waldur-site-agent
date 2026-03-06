@@ -679,22 +679,77 @@ waldur = "waldur_site_agent_waldur.schemas:WaldurBackendSettingsSchema"
 waldur-identity-bridge = "waldur_site_agent_waldur.username_backend:WaldurIdentityBridgeUsernameBackend"
 ```
 
-## User Matching
+## User Resolution
 
-The plugin supports three strategies for resolving Waldur A users on Waldur B:
+During membership sync, the agent must resolve local user identifiers (from Waldur A)
+to user UUIDs on Waldur B. Two settings control this:
 
-| Strategy | Setting | Waldur B API | Use Case |
-|----------|---------|-------------|----------|
-| eduTeams CUID | `cuid` | `remote_eduteams` endpoint | Both instances use eduTeams federation |
-| Email | `email` | `users_list(email=...)` | Shared email addresses between instances |
-| Username | `username` | `users_list(username=...)` | Shared usernames between instances |
+- **`user_resolve_method`** — *how* to look up the user (which API to call)
+- **`user_match_field`** — *what* field the local identifier represents
 
-Resolved user UUIDs are cached for the lifetime of the backend instance to minimize API calls.
+### `user_resolve_method`
+
+- **`identity_bridge`** (default) — `POST /api/identity-bridge/`.
+  Idempotent create/update, returns UUID. Requires `identity_bridge_source`.
+- **`remote_eduteams`** — `POST /api/remote-eduteams/`.
+  Server-side eduTEAMS OIDC lookup by CUID. Requires OIDC on Waldur B.
+- **`user_field`** — `GET /api/users/?{field}={value}`.
+  User list lookup. Field from `user_match_field` (`cuid` falls back to `username`).
+
+### `user_match_field`
+
+| Value | Description |
+|-------|-------------|
+| `cuid` (default) | Local identifier is an eduTeams CUID |
+| `email` | Local identifier is an email address |
+| `username` | Local identifier is a username |
+
+`user_match_field` is used directly by `remote_eduteams` and `user_field` methods.
+For `identity_bridge`, it is not used — the local identifier is always sent as the
+`username` parameter to the identity bridge API.
+
+### `user_not_found_action`
 
 When a user cannot be resolved on Waldur B:
 
 - **`warn`** (default): Log a warning and skip the user
 - **`fail`**: Raise a `BackendError` (caught per-user, does not abort the batch)
+
+Resolved user UUIDs are cached for the lifetime of the backend instance to minimize API calls.
+
+### Choosing the Right Combination
+
+| Scenario | `user_resolve_method` | `user_match_field` | Notes |
+|----------|-----------------------|--------------------|-------|
+| eduTEAMS federation, Waldur B has OIDC | `remote_eduteams` | `cuid` | Classic setup. |
+| Identity bridge pushes users | `identity_bridge` | `cuid` | No OIDC needed. |
+| Match by email | `user_field` | `email` | No IdP dependency. |
+| Match by username | `user_field` | `username` | No IdP dependency. |
+
+### Example: Identity Bridge Resolution
+
+```yaml
+backend_settings:
+  target_api_url: "https://waldur-b.example.com/"
+  target_api_token: "service-account-token"
+  target_offering_uuid: "..."
+  target_customer_uuid: "..."
+  user_resolve_method: "identity_bridge"
+  user_match_field: "cuid"
+  identity_bridge_source: "isd:efp"
+```
+
+### Example: Remote eduTEAMS Resolution (default)
+
+```yaml
+backend_settings:
+  target_api_url: "https://waldur-b.example.com/"
+  target_api_token: "service-account-token"
+  target_offering_uuid: "..."
+  target_customer_uuid: "..."
+  user_resolve_method: "remote_eduteams"  # override default (identity_bridge)
+  user_match_field: "cuid"
+```
 
 ## Identity Bridge Integration
 
@@ -724,6 +779,7 @@ offerings:
       target_api_token: "service-account-token-for-waldur-b"
       target_offering_uuid: "offering-uuid-on-waldur-b"
       target_customer_uuid: "customer-uuid-on-waldur-b"
+      user_resolve_method: "identity_bridge"
       identity_bridge_source: "isd:efp"  # Required for identity bridge
 ```
 
@@ -731,7 +787,7 @@ offerings:
 
 | Setting | Required | Default | Description |
 |---------|----------|---------|-------------|
-| `identity_bridge_source` | Yes | `""` | ISD source identifier (e.g. `isd:efp`) |
+| `identity_bridge_source` | Yes | `""` | ISD source identifier (e.g. `isd:efp`). Format: `<type>:<name>`. |
 
 ### User Attributes Synced
 

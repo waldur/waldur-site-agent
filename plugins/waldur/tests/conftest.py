@@ -70,6 +70,8 @@ def backend_settings():
         "target_offering_uuid": "offering-uuid-on-waldur-b",
         "target_customer_uuid": "customer-uuid-on-waldur-b",
         "user_match_field": "cuid",
+        "user_resolve_method": "identity_bridge",
+        "identity_bridge_source": "isd:test",
         "order_poll_timeout": 10,
         "order_poll_interval": 1,
         "user_not_found_action": "warn",

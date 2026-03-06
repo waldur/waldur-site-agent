@@ -67,6 +67,13 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
         gt=0,
         description="Seconds between order state poll attempts",
     )
+    user_resolve_method: Literal["remote_eduteams", "identity_bridge", "user_field"] = Field(
+        default="identity_bridge",
+        description="Method to resolve users on Waldur B during membership sync. "
+        "'remote_eduteams': POST /api/remote-eduteams/ (requires eduTEAMS OIDC on server). "
+        "'identity_bridge': POST /api/identity-bridge/ (idempotent, uses identity_bridge_source). "
+        "'user_field': GET /api/users/?{user_match_field}={value}.",
+    )
     user_not_found_action: Literal["warn", "fail"] = Field(
         default="warn",
         description="Action when a user cannot be resolved on Waldur B",

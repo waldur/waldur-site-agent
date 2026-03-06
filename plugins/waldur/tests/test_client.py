@@ -210,6 +210,33 @@ class TestUserResolution:
             result = client.resolve_user_by_field("user@example.com", "email")
             assert result == USER_UUID
 
+    def test_resolve_user_via_identity_bridge(self, client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "uuid": str(USER_UUID),
+            "created": False,
+            "updated_fields": [],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            client._api_client.get_httpx_client(),
+            "post",
+            return_value=mock_response,
+        ):
+            result = client.resolve_user_via_identity_bridge("user-cuid", "isd:test")
+            assert result == USER_UUID
+
+    def test_resolve_user_via_identity_bridge_error(self, client):
+        with patch.object(
+            client._api_client.get_httpx_client(),
+            "post",
+            side_effect=Exception("Connection error"),
+        ):
+            result = client.resolve_user_via_identity_bridge("user-cuid", "isd:test")
+            assert result is None
+
 
 class TestBaseClientMethods:
     def test_list_resources(self, client):
