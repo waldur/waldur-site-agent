@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.8 - 2026-03-06
+
+This release delivers a targeted fix for a data integrity issue in the Waldur Python SDK dependency. Operators who encountered errors related to nullable foreign key fields will benefit from this update.
+
+### Bug Fixes
+
+- **Core**: Bump Waldur Python SDK to resolve a nullable foreign key handling issue.
+
+### Statistics
+
+> 1 commit, 2 files changed (+5/-5 lines)
+
+---
+
 ## 0.9.7 - 2026-03-06
 
 This release adds new configuration options for the federation and Kubernetes namespace plugins, making user resolution and user synchronization behavior more flexible for operators. Resource limit handling is also improved with automatic unit factor conversion in the core backend. Additionally, offering component updates are now more accurate, and the codebase is cleaner with SLURM-specific logic removed from shared code.
