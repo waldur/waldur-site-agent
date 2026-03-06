@@ -463,6 +463,37 @@ class WaldurClient(BaseClient):
             logger.exception("Failed to resolve user by CUID: %s", cuid)
             return None
 
+    def resolve_user_via_identity_bridge(
+        self, username: str, source: str
+    ) -> Optional[UUID]:
+        """Resolve (or create) a user on Waldur B via the Identity Bridge API.
+
+        POST /api/identity-bridge/ is idempotent: it creates the user if absent
+        or returns the existing one.  The response always includes the user UUID.
+
+        Args:
+            username: CUID / username of the user.
+            source: ISD source identifier (e.g. ``isd:efp``).
+
+        Returns:
+            User UUID on Waldur B, or None on error.
+        """
+        try:
+            response = self._api_client.get_httpx_client().post(
+                "/api/identity-bridge/",
+                json={"username": username, "source": source},
+            )
+            response.raise_for_status()
+            data = response.json()
+            uuid_str = data.get("uuid")
+            if uuid_str:
+                return UUID(str(uuid_str))
+        except Exception:
+            logger.exception(
+                "Failed to resolve user via identity bridge: %s", username
+            )
+        return None
+
     def resolve_user_by_field(
         self, value: str, field: str = "email"
     ) -> Optional[UUID]:

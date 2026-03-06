@@ -57,6 +57,8 @@ class WaldurBackend(backends.BaseBackend):
         self.target_offering_uuid = backend_settings["target_offering_uuid"]
         self.target_customer_uuid = backend_settings["target_customer_uuid"]
         self.user_match_field = backend_settings.get("user_match_field", "cuid")
+        self.user_resolve_method = backend_settings.get("user_resolve_method", "identity_bridge")
+        self.identity_bridge_source = backend_settings.get("identity_bridge_source", "")
         self.order_poll_timeout = int(backend_settings.get("order_poll_timeout", 300))
         self.order_poll_interval = int(backend_settings.get("order_poll_interval", 5))
         self.user_not_found_action = backend_settings.get("user_not_found_action", "warn")
@@ -517,14 +519,30 @@ class WaldurBackend(backends.BaseBackend):
 
         remote_uuid: Optional[UUID] = None
 
-        if self.user_match_field == "cuid":
-            remote_uuid = self.client.resolve_user_by_cuid(local_username)
-        elif self.user_match_field in ("email", "username"):
-            remote_uuid = self.client.resolve_user_by_field(
-                local_username, self.user_match_field
-            )
+        if self.user_resolve_method == "identity_bridge":
+            if not self.identity_bridge_source:
+                logger.error(
+                    "identity_bridge_source is required when "
+                    "user_resolve_method=identity_bridge"
+                )
+            else:
+                remote_uuid = self.client.resolve_user_via_identity_bridge(
+                    local_username, self.identity_bridge_source
+                )
+        elif self.user_resolve_method == "user_field":
+            field = self.user_match_field if self.user_match_field in ("email", "username") else "username"
+            remote_uuid = self.client.resolve_user_by_field(local_username, field)
+        elif self.user_resolve_method == "remote_eduteams":
+            if self.user_match_field == "cuid":
+                remote_uuid = self.client.resolve_user_by_cuid(local_username)
+            elif self.user_match_field in ("email", "username"):
+                remote_uuid = self.client.resolve_user_by_field(
+                    local_username, self.user_match_field
+                )
+            else:
+                logger.error("Unknown user_match_field: %s", self.user_match_field)
         else:
-            logger.error("Unknown user_match_field: %s", self.user_match_field)
+            logger.error("Unknown user_resolve_method: %s", self.user_resolve_method)
 
         if remote_uuid is not None:
             self._user_uuid_cache[local_username] = remote_uuid

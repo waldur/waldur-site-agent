@@ -349,7 +349,7 @@ class TestUserSync:
         mock_resource.project_uuid = PROJECT_UUID
         mock_client.get_marketplace_resource.return_value = mock_resource
 
-        mock_client.resolve_user_by_cuid.return_value = USER_UUID
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
 
         waldur_resource = MagicMock()
         waldur_resource.backend_id = str(RESOURCE_UUID)
@@ -362,7 +362,7 @@ class TestUserSync:
         mock_resource = MagicMock()
         mock_resource.project_uuid = PROJECT_UUID
         mock_client.get_marketplace_resource.return_value = mock_resource
-        mock_client.resolve_user_by_cuid.return_value = None
+        mock_client.resolve_user_via_identity_bridge.return_value = None
 
         waldur_resource = MagicMock()
         waldur_resource.backend_id = str(RESOURCE_UUID)
@@ -381,7 +381,7 @@ class TestUserSync:
         mock_resource = MagicMock()
         mock_resource.project_uuid = PROJECT_UUID
         mock_client.get_marketplace_resource.return_value = mock_resource
-        mock_client.resolve_user_by_cuid.return_value = None
+        mock_client.resolve_user_via_identity_bridge.return_value = None
 
         waldur_resource = MagicMock()
         waldur_resource.backend_id = str(RESOURCE_UUID)
@@ -395,7 +395,7 @@ class TestUserSync:
         mock_resource.project_uuid = PROJECT_UUID
         mock_client.get_marketplace_resource.return_value = mock_resource
 
-        mock_client.resolve_user_by_cuid.return_value = USER_UUID
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
 
         waldur_resource = MagicMock()
         waldur_resource.backend_id = str(RESOURCE_UUID)
@@ -408,7 +408,7 @@ class TestUserSync:
         mock_resource = MagicMock()
         mock_resource.project_uuid = PROJECT_UUID
         mock_client.get_marketplace_resource.return_value = mock_resource
-        mock_client.resolve_user_by_cuid.return_value = USER_UUID
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
 
         waldur_resource = MagicMock()
         waldur_resource.backend_id = str(RESOURCE_UUID)
@@ -418,8 +418,8 @@ class TestUserSync:
         # Second call should use cache
         backend.add_users_to_resource(waldur_resource, {"user1"})
 
-        # resolve_user_by_cuid should only be called once due to caching
-        assert mock_client.resolve_user_by_cuid.call_count == 1
+        # resolve should only be called once due to caching
+        assert mock_client.resolve_user_via_identity_bridge.call_count == 1
 
     def test_resolve_remote_user_does_not_cache_none(self, backend, mock_client):
         """When user resolution fails, None should NOT be cached so retries work."""
@@ -428,17 +428,93 @@ class TestUserSync:
         mock_client.get_marketplace_resource.return_value = mock_resource
 
         # First call: user not found
-        mock_client.resolve_user_by_cuid.return_value = None
+        mock_client.resolve_user_via_identity_bridge.return_value = None
         result = backend._resolve_remote_user("unknown_user")
         assert result is None
 
-        # Second call: user now exists (e.g., identity bridge created them)
-        mock_client.resolve_user_by_cuid.return_value = USER_UUID
+        # Second call: user now exists
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
         result = backend._resolve_remote_user("unknown_user")
         assert result == USER_UUID
 
-        # resolve_user_by_cuid should be called twice (None was not cached)
-        assert mock_client.resolve_user_by_cuid.call_count == 2
+        # resolve should be called twice (None was not cached)
+        assert mock_client.resolve_user_via_identity_bridge.call_count == 2
+
+    def test_resolve_via_identity_bridge(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        backend_settings["user_resolve_method"] = "identity_bridge"
+        backend_settings["identity_bridge_source"] = "isd:test"
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
+
+        result = backend._resolve_remote_user("user-cuid")
+        assert result == USER_UUID
+        mock_client.resolve_user_via_identity_bridge.assert_called_once_with(
+            "user-cuid", "isd:test"
+        )
+        mock_client.resolve_user_by_cuid.assert_not_called()
+
+    def test_resolve_via_identity_bridge_missing_source(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        backend_settings["user_resolve_method"] = "identity_bridge"
+        backend_settings["identity_bridge_source"] = ""
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        result = backend._resolve_remote_user("user-cuid")
+        assert result is None
+        mock_client.resolve_user_via_identity_bridge.assert_not_called()
+
+    def test_resolve_via_remote_eduteams(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        backend_settings["user_resolve_method"] = "remote_eduteams"
+        backend_settings["user_match_field"] = "cuid"
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        mock_client.resolve_user_by_cuid.return_value = USER_UUID
+
+        result = backend._resolve_remote_user("user-cuid")
+        assert result == USER_UUID
+        mock_client.resolve_user_by_cuid.assert_called_once_with("user-cuid")
+        mock_client.resolve_user_via_identity_bridge.assert_not_called()
+
+    def test_resolve_via_user_field(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        backend_settings["user_resolve_method"] = "user_field"
+        backend_settings["user_match_field"] = "email"
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        mock_client.resolve_user_by_field.return_value = USER_UUID
+
+        result = backend._resolve_remote_user("user@example.com")
+        assert result == USER_UUID
+        mock_client.resolve_user_by_field.assert_called_once_with(
+            "user@example.com", "email"
+        )
+
+    def test_resolve_via_user_field_defaults_to_username(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        backend_settings["user_resolve_method"] = "user_field"
+        backend_settings["user_match_field"] = "cuid"
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        mock_client.resolve_user_by_field.return_value = USER_UUID
+
+        result = backend._resolve_remote_user("user-cuid")
+        assert result == USER_UUID
+        mock_client.resolve_user_by_field.assert_called_once_with(
+            "user-cuid", "username"
+        )
 
 
 class TestAttributePassthrough:
