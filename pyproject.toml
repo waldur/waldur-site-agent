@@ -30,6 +30,7 @@ Documentation = "https://docs.waldur.com"
 [project.scripts]
 waldur_site_agent = "waldur_site_agent.main:main"
 waldur_site_diagnostics = "waldur_site_agent.common.utils:diagnostics"
+waldur_site_healthz = "waldur_site_agent.common.healthz:cli"
 waldur_site_load_components = "waldur_site_agent.common.utils:load_offering_components"
 waldur_site_create_homedirs = "waldur_site_agent.common.utils:create_homedirs_for_offering_users"
 waldur_sync_offering_users = "waldur_site_agent.common.utils:sync_offering_users"
