@@ -87,6 +87,5 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.exec.command
           value:
-            - waldur_site_diagnostics
-            - --config-file
-            - /etc/waldur-site-agent/config.yaml
+            - waldur_site_healthz
+            - --liveness-only

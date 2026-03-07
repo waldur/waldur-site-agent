@@ -12,6 +12,7 @@ from waldur_site_agent.common import (
 )
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
+from waldur_site_agent.common.healthz import touch_heartbeat
 
 
 def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
@@ -69,4 +70,5 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
                 processor.process_offering()
             except Exception as e:
                 logger.exception("The application crashed due to the error: %s", e)
+        touch_heartbeat()
         sleep(WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES * 60)

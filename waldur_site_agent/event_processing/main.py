@@ -10,6 +10,7 @@ from waldur_site_agent.common import (
 from waldur_site_agent.common import (
     structures as common_structures,
 )
+from waldur_site_agent.common.healthz import touch_heartbeat
 from waldur_site_agent.event_processing import utils
 
 HEALTH_CHECK_INTERVAL = 30 * 60  # 30 minutes
@@ -48,6 +49,7 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
 def _run_health_checks_only(configuration: common_structures.WaldurAgentConfiguration) -> None:
     """Original main loop: health checks every 30 minutes."""
     while True:
+        touch_heartbeat()
         utils.send_agent_health_checks(
             configuration.waldur_offerings, configuration.waldur_user_agent
         )
@@ -74,4 +76,5 @@ def _run_with_reconciliation(configuration: common_structures.WaldurAgentConfigu
             )
             last_reconciliation = now
 
+        touch_heartbeat()
         time.sleep(TICK_INTERVAL)

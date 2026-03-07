@@ -54,17 +54,16 @@ spec:
           livenessProbe:
             exec:
               command:
-                - waldur_site_diagnostics
-                - --config-file
-                - /etc/waldur-site-agent/config.yaml
+                - waldur_site_healthz
+                - --liveness-only
             initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.periodSeconds }}
-            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
+            timeoutSeconds: 5
             failureThreshold: {{ .Values.healthCheck.failureThreshold }}
           readinessProbe:
             exec:
               command:
-                - waldur_site_diagnostics
+                - waldur_site_healthz
                 - --config-file
                 - /etc/waldur-site-agent/config.yaml
             initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}

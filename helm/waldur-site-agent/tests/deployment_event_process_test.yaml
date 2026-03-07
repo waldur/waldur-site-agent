@@ -160,9 +160,8 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.exec.command
           value:
-            - waldur_site_diagnostics
-            - --config-file
-            - /etc/waldur-site-agent/config.yaml
+            - waldur_site_healthz
+            - --liveness-only
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
           value: 30
@@ -171,7 +170,7 @@ tests:
           value: 60
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
-          value: 10
+          value: 5
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.failureThreshold
           value: 3
