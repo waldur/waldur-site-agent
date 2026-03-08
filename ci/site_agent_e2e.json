@@ -260,11 +260,11 @@
     {
       "uuid": "e2e40000000000000000000000000001",
       "offering_uuid": "e2ef0000000000000000000000000004",
-      "type": "cpu",
-      "name": "CPU",
-      "description": "CPU time in k-Hours",
+      "type": "node_hours",
+      "name": "Node Hours",
+      "description": "Node time in Hours (converted to CPU + GPU)",
       "billing_type": "limit",
-      "measured_unit": "k-Hours"
+      "measured_unit": "Hours"
     }
   ],
 
@@ -362,7 +362,7 @@
     {
       "plan_uuid": "e2e00000000000000000000000000014",
       "component_uuid": "e2e40000000000000000000000000001",
-      "component_type": "cpu",
+      "component_type": "node_hours",
       "price": "0.00",
       "amount": 0
     }

@@ -15,6 +15,7 @@ from waldur_site_agent.backend import (
 from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
+from waldur_site_agent.common.component_mapping import ComponentMapper
 from waldur_site_agent_slurm import utils
 from waldur_site_agent_slurm.client import SlurmClient
 
@@ -68,6 +69,9 @@ class SlurmBackend(backends.BaseBackend):
 
         # Optional partition assignment
         self._default_partition = self.backend_settings.get("default_partition")
+
+        # Optional component mapping (Waldur components → SLURM TRES)
+        self._component_mapper = ComponentMapper(slurm_tres)
 
     def _pre_create_resource(
         self,
@@ -237,46 +241,54 @@ class SlurmBackend(backends.BaseBackend):
     def _collect_resource_limits(
         self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
-        """Collect SLURM and Waldur limits separately."""
-        allocation_limits = {}
+        """Collect SLURM and Waldur limits separately.
+
+        When ``target_components`` are configured on any backend component,
+        the ComponentMapper converts Waldur-facing limits to backend-facing
+        SLURM TRES limits.  The ``factor`` in ``target_components`` encodes
+        the full conversion (including any unit scaling).
+
+        When no ``target_components`` are configured (passthrough mode),
+        the standard ``unit_factor`` conversion is used.
+        """
+        allocation_limits: dict[str, int] = {}
         usage_based_limits = backend_utils.get_usage_based_limits(self.backend_components)
         limit_based_components = [
             component
             for component, data in self.backend_components.items()
             if data["accounting_type"] == "limit"
         ]
-        # Waldur resource is expected to have limits set for limit-based components
         waldur_resource_limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
 
         # Add usage-based limits to allocation limits
         allocation_limits.update(usage_based_limits)
 
-        # Add limit-based limits to allocation limits
-        for component_key in limit_based_components:
-            if component_key in waldur_resource_limits:
-                allocation_limits[component_key] = (
-                    waldur_resource_limits[component_key]
-                    * self.backend_components[component_key]["unit_factor"]
-                )
+        if not self._component_mapper.is_passthrough:
+            # Component mapping mode: convert Waldur limits → SLURM TRES
+            limit_values = {
+                k: v for k, v in waldur_resource_limits.items() if k in limit_based_components
+            }
+            converted = self._component_mapper.convert_limits_to_target(limit_values)
+            allocation_limits.update(converted)
+        else:
+            # Standard mode: apply unit_factor per component
+            for component_key in limit_based_components:
+                if component_key in waldur_resource_limits:
+                    allocation_limits[component_key] = (
+                        waldur_resource_limits[component_key]
+                        * self.backend_components[component_key]["unit_factor"]
+                    )
 
         # Add usage-based limits to Waldur limits
         for component_key in usage_based_limits:
             waldur_resource_limits[component_key] = self.backend_components[component_key]["limit"]
 
-        # Convert allocation limits to integers
-        for limit_key, limit_value in allocation_limits.items():
-            allocation_limits[limit_key] = int(limit_value)
+        # Convert to integers
+        allocation_limits = {k: int(v) for k, v in allocation_limits.items()}
+        waldur_resource_limits = {k: int(v) for k, v in waldur_resource_limits.items()}
 
-        # Convert Waldur limits to integers
-        for limit_key, limit_value in waldur_resource_limits.items():
-            waldur_resource_limits[limit_key] = int(limit_value)
-
-        logger.info(
-            "SLURM allocation limits: %s", allocation_limits
-        )
-        logger.info(
-            "SLURM Waldur limits: %s", waldur_resource_limits
-        )
+        logger.info("SLURM allocation limits: %s", allocation_limits)
+        logger.info("SLURM Waldur limits: %s", waldur_resource_limits)
 
         return allocation_limits, waldur_resource_limits
 
@@ -588,17 +600,7 @@ class SlurmBackend(backends.BaseBackend):
             total = backend_utils.sum_dicts(usages_per_user)
             account_usage["TOTAL_ACCOUNT_USAGE"] = total
 
-        # Convert SLURM units to Waldur ones
-        report_converted: dict[str, dict[str, dict[str, int]]] = {}
-        for account, account_usage in report.items():
-            report_converted[account] = {}
-            for username, usage_dict in account_usage.items():
-                converted_usage_dict = utils.convert_slurm_units_to_waldur_ones(
-                    self.backend_components, usage_dict
-                )
-                report_converted[account][username] = converted_usage_dict
-
-        return report_converted
+        return self._convert_usage_report(report)
 
     def get_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int
@@ -628,16 +630,30 @@ class SlurmBackend(backends.BaseBackend):
             total = backend_utils.sum_dicts(usages_per_user)
             account_usage["TOTAL_ACCOUNT_USAGE"] = total
 
-        # Convert SLURM units to Waldur ones
+        return self._convert_usage_report(report)
+
+    def _convert_usage_report(
+        self, report: dict[str, dict[str, dict[str, int]]]
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Convert SLURM TRES usage to Waldur component units.
+
+        When ``target_components`` are configured, uses the ComponentMapper
+        reverse conversion.  Otherwise falls back to standard unit_factor
+        division.
+        """
         report_converted: dict[str, dict[str, dict[str, int]]] = {}
         for account, account_usage in report.items():
             report_converted[account] = {}
             for username, usage_dict in account_usage.items():
-                converted_usage_dict = utils.convert_slurm_units_to_waldur_ones(
-                    self.backend_components, usage_dict
-                )
-                report_converted[account][username] = converted_usage_dict
-
+                if not self._component_mapper.is_passthrough:
+                    float_usage = {k: float(v) for k, v in usage_dict.items()}
+                    source_usage = self._component_mapper.convert_usage_from_target(float_usage)
+                    converted = {k: round(v) for k, v in source_usage.items()}
+                else:
+                    converted = utils.convert_slurm_units_to_waldur_ones(
+                        self.backend_components, usage_dict
+                    )
+                report_converted[account][username] = converted
         return report_converted
 
     def list_active_user_jobs(self, account: str, user: str) -> list[str]:

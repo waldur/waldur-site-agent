@@ -367,7 +367,9 @@ class TestLdapResourceLifecycle:
             ldap_project_uuid,
         )
 
-        limits = {"cpu": 100}
+        # node_hours is the Waldur-facing component; the mapper
+        # converts to cpu (x64) and gpu (x8) for SLURM.
+        limits = {"node_hours": 100}
         resource_name = f"e2e-ldap-{uuid.uuid4().hex[:6]}"
 
         order_uuid = create_source_order(
@@ -414,6 +416,16 @@ class TestLdapResourceLifecycle:
         assert parent is not None
 
         logger.info("Resource created with backend_id=%s", backend_id)
+
+        # Verify component mapper converted node_hours → cpu + gpu
+        mapper = ldap_slurm_backend._component_mapper
+        assert not mapper.is_passthrough, "Mapper should be in conversion mode"
+        assert mapper.source_components == {"node_hours"}
+        assert mapper.target_components == {"cpu", "gpu"}
+
+        converted = mapper.convert_limits_to_target({"node_hours": 100})
+        assert converted == {"cpu": 6400, "gpu": 800}
+        logger.info("Component mapper conversion verified: %s", converted)
 
         # Verify LDAP project group was created
         ldap_assertions.assert_group_exists(backend_id)
@@ -474,7 +486,16 @@ class TestLdapResourceLifecycle:
         settings["project_prefix"] = "compat_proj_"
         settings["allocation_prefix"] = "compat_alloc_"
 
-        components = ldap_offering.backend_components_dict
+        # Use simple passthrough components (no target_components)
+        components = {
+            "cpu": {
+                "limit": 10000,
+                "measured_unit": "k-Hours",
+                "unit_factor": 60000,
+                "accounting_type": "limit",
+                "label": "CPU",
+            },
+        }
         backend = SlurmBackend(settings, components)
 
         # Should initialize without error and have no LDAP client
@@ -482,6 +503,7 @@ class TestLdapResourceLifecycle:
         assert backend._default_partition is None
         assert not backend._qos_config
         assert not backend._project_dir_config
+        assert backend._component_mapper.is_passthrough
         logger.info(
             "Backward compatibility check passed: no LDAP features active",
         )

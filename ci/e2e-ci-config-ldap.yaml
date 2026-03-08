@@ -68,9 +68,14 @@ offerings:
         set_acl: false
 
     backend_components:
-      cpu:
+      node_hours:
         limit: 10000
-        measured_unit: "k-Hours"
-        unit_factor: 60000
+        measured_unit: "Hours"
+        unit_factor: 1
         accounting_type: "limit"
-        label: "CPU"
+        label: "Node Hours"
+        target_components:
+          cpu:
+            factor: 64.0    # 1 node-hour = 64 CPU-hours
+          gpu:
+            factor: 8.0     # 1 node-hour = 8 GPU-hours

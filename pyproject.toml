@@ -133,11 +133,18 @@ convention = "google"
 "tests/**/*.py" = [
   "S101",   # we can (and MUST!) use 'assert' in test files.
   "ANN001", # annotations for fixtures are sometimes a pain for test files
+  "ANN201",
+  "D101",
+  "D102",
+  "D103",
 ]
 "plugins/**/tests/**/*.py" = [
   "S101",
   "ANN001",
   "ANN201",
+  "D101",
+  "D102",
+  "D103",
 ]
 
 [tool.ruff.lint.isort]
