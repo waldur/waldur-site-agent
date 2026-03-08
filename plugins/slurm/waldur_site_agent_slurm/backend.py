@@ -19,6 +19,24 @@ from waldur_site_agent_slurm import utils
 from waldur_site_agent_slurm.client import SlurmClient
 
 
+def _get_ldap_client(ldap_settings: dict):  # type: ignore[no-untyped-def]  # noqa: ANN202
+    """Lazily import and instantiate the LDAP client if configured.
+
+    Returns an LdapClient instance from waldur-site-agent-ldap.
+    The return type is not annotated because the ldap plugin is an optional dependency.
+    """
+    try:
+        from waldur_site_agent_ldap.client import LdapClient  # noqa: PLC0415
+    except ImportError as e:
+        msg = (
+            "LDAP settings are configured in SLURM backend_settings but the "
+            "waldur-site-agent-ldap package is not installed. "
+            "Install it with: pip install waldur-site-agent-ldap"
+        )
+        raise BackendError(msg) from e
+    return LdapClient(ldap_settings)
+
+
 class PeriodicSettingsMode(Enum):
     """Mode in which periodic settings are applied."""
 
@@ -36,12 +54,27 @@ class SlurmBackend(backends.BaseBackend):
         slurm_bin_path = self.backend_settings.get("slurm_bin_path", "/usr/bin")
         self.client: SlurmClient = SlurmClient(slurm_tres, slurm_bin_path=slurm_bin_path)
 
+        # Optional LDAP integration for project groups
+        self._ldap_client = None
+        ldap_settings = self.backend_settings.get("ldap")
+        if ldap_settings:
+            self._ldap_client = _get_ldap_client(ldap_settings)
+
+        # Optional QoS management
+        self._qos_config = self.backend_settings.get("qos_management", {})
+
+        # Optional project directory management
+        self._project_dir_config = self.backend_settings.get("project_directory", {})
+
+        # Optional partition assignment
+        self._default_partition = self.backend_settings.get("default_partition")
+
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
     ) -> None:
-        """Override parent method to validate slug fields."""
+        """Pre-creation setup: account hierarchy, LDAP groups, filesystem, QoS."""
         if not waldur_resource.customer_slug or not waldur_resource.project_slug:
             logger.warning(
                 "Resource %s has unset or missing slug fields. customer_slug: %s, project_slug: %s",
@@ -59,21 +92,48 @@ class SlurmBackend(backends.BaseBackend):
 
         del user_context
 
-        project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
+        resource_backend_id = self._get_resource_backend_id(waldur_resource.slug)
 
-        # Setup customer resource
-        customer_backend_id = self._get_customer_backend_id(waldur_resource.customer_slug)
-        self._create_backend_resource(
-            customer_backend_id, waldur_resource.customer_name, customer_backend_id
-        )
+        parent_account = self.backend_settings.get("parent_account")
+        if parent_account:
+            # Flat hierarchy: create account directly under configured parent
+            project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
+            self._create_backend_resource(
+                project_backend_id,
+                waldur_resource.project_name,
+                project_backend_id,
+                parent_account,
+            )
+        else:
+            # Default hierarchy: customer -> project -> allocation
+            project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
+            customer_backend_id = self._get_customer_backend_id(waldur_resource.customer_slug)
+            self._create_backend_resource(
+                customer_backend_id, waldur_resource.customer_name, customer_backend_id
+            )
+            self._create_backend_resource(
+                project_backend_id,
+                waldur_resource.project_name,
+                project_backend_id,
+                customer_backend_id,
+            )
 
-        # Create project resource
-        self._create_backend_resource(
-            project_backend_id,
-            waldur_resource.project_name,
-            project_backend_id,
-            customer_backend_id,
-        )
+        # Optional: create LDAP project group
+        if self._ldap_client:
+            try:
+                self._ldap_client.create_project_group(resource_backend_id)
+            except BackendError:
+                logger.exception(
+                    "Failed to create LDAP project group for %s", resource_backend_id
+                )
+
+        # Optional: create project directory and set quota
+        if self._project_dir_config.get("enabled"):
+            self._setup_project_directory(resource_backend_id)
+
+        # Optional: create QoS for the account
+        if self._qos_config.get("enabled"):
+            self._setup_account_qos(resource_backend_id)
 
     def diagnostics(self) -> bool:
         """Runs diagnostics for SLURM cluster."""
@@ -220,6 +280,55 @@ class SlurmBackend(backends.BaseBackend):
 
         return allocation_limits, waldur_resource_limits
 
+    def add_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+        """Add user to SLURM account, with optional partition and LDAP group."""
+        resource_backend_id = waldur_resource.backend_id
+        if not resource_backend_id.strip():
+            message = "Empty backend ID for resource"
+            raise BackendError(message)
+
+        logger.info("Adding user %s to resource %s", username, resource_backend_id)
+        if not username:
+            logger.warning("Username is blank, skipping creation of association")
+            return False
+
+        if not self.client.get_association(username, resource_backend_id):
+            logger.info("Creating association between %s and %s", username, resource_backend_id)
+            try:
+                default_account = self.backend_settings.get("default_account", "root")
+                if self._default_partition:
+                    self.client.create_association_with_partition(
+                        username,
+                        resource_backend_id,
+                        self._default_partition,
+                        default_account,
+                    )
+                else:
+                    self.client.create_association(
+                        username,
+                        resource_backend_id,
+                        default_account,
+                    )
+                logger.info("Created association between %s and %s", username, resource_backend_id)
+            except BackendError as err:
+                logger.exception("Unable to create association on backend: %s", err)
+                return False
+        else:
+            logger.info("Association already exists, skipping creation")
+
+        # Optional: add user to LDAP project group
+        if self._ldap_client:
+            try:
+                self._ldap_client.add_user_to_group(resource_backend_id, username)
+            except BackendError:
+                logger.exception(
+                    "Failed to add %s to LDAP project group %s",
+                    username,
+                    resource_backend_id,
+                )
+
+        return True
+
     def add_users_to_resource(
         self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
     ) -> set[str]:
@@ -228,11 +337,27 @@ class SlurmBackend(backends.BaseBackend):
 
         if self.backend_settings.get("enable_user_homedir_account_creation", True):
             umask: str = str(kwargs.get("homedir_umask", "0700"))
-            # Only create homedirs for users that don't already have them
-            # (avoids duplicates if they were created during resource creation)
             self.create_user_homedirs(added_users, umask=umask)
 
         return added_users
+
+    def remove_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+        """Remove user from SLURM account, with optional LDAP group cleanup."""
+        result = super().remove_user(waldur_resource, username)
+
+        # Optional: remove user from LDAP project group
+        if result and self._ldap_client:
+            resource_backend_id = waldur_resource.backend_id
+            try:
+                self._ldap_client.remove_user_from_group(resource_backend_id, username)
+            except BackendError:
+                logger.exception(
+                    "Failed to remove %s from LDAP project group %s",
+                    username,
+                    resource_backend_id,
+                )
+
+        return result
 
     def process_existing_users(self, existing_users: set[str]) -> None:
         """Process existing users on the backend."""
@@ -247,6 +372,112 @@ class SlurmBackend(backends.BaseBackend):
             )
             umask = self.backend_settings.get("homedir_umask", "0700")
             self.create_user_homedirs(existing_users, umask=umask)
+
+    # ===== QOS AND FILESYSTEM MANAGEMENT =====
+
+    def _setup_account_qos(self, account_name: str) -> None:
+        """Create a per-account QoS and attach it to the account."""
+        if self.client.qos_exists(account_name):
+            logger.info("QoS %s already exists, skipping creation", account_name)
+            return
+
+        flags = self._qos_config.get("flags", "DenyOnLimit,NoDecay")
+        grp_tres = self._qos_config.get("grp_tres")
+        max_jobs = self._qos_config.get("max_jobs")
+        max_submit = self._qos_config.get("max_submit")
+        max_wall = self._qos_config.get("max_wall")
+        min_tres_per_job = self._qos_config.get("min_tres_per_job")
+
+        self.client.create_qos(
+            name=account_name,
+            flags=flags,
+            grp_tres=grp_tres,
+            max_jobs=max_jobs,
+            max_submit=max_submit,
+            max_wall=max_wall,
+            min_tres_per_job=min_tres_per_job,
+        )
+
+        # Attach QoS to the account
+        self.client.add_account_qos(account_name, account_name)
+        self.client.set_account_default_qos(account_name, account_name)
+
+        # Attach additional QoSes if configured
+        additional_qos = self._qos_config.get("additional_qos", [])
+        for qos_name in additional_qos:
+            self.client.add_account_qos(account_name, qos_name)
+
+    def _setup_project_directory(self, project_id: str) -> None:
+        """Create project directory and set filesystem quota."""
+        base_path = self._project_dir_config.get("base_path", "/valhalla/projects")
+        project_path = f"{base_path}/{project_id}"
+
+        group_owner = self._project_dir_config.get("group_owner_source", "project_id")
+        if group_owner == "project_id":
+            group_name = project_id
+        else:
+            group_name = self._project_dir_config.get("group_name", project_id)
+
+        dir_owner = self._project_dir_config.get("owner", "nobody")
+        permissions = self._project_dir_config.get("permissions", "770")
+        set_gid = self._project_dir_config.get("set_gid", True)
+        set_acl = self._project_dir_config.get("set_acl", True)
+
+        try:
+            # Create directory
+            self.client.execute_command(["mkdir", "-p", project_path])
+            self.client.execute_command(["chmod", permissions, project_path])
+            if set_gid:
+                self.client.execute_command(["chmod", "g+s", project_path])
+            self.client.execute_command(
+                ["chown", f"{dir_owner}:{group_name}", project_path]
+            )
+            if set_acl:
+                self.client.execute_command([
+                    "setfacl", "-R", "-m",
+                    f"group:{group_name}:rwx,d:group:{group_name}:rwx",
+                    project_path,
+                ])
+            logger.info("Created project directory %s", project_path)
+        except BackendError:
+            logger.exception("Failed to create project directory %s", project_path)
+            return
+
+        # Set Lustre quota if configured
+        lustre_config = self._project_dir_config.get("lustre_quota")
+        if lustre_config and self._ldap_client:
+            gid = self._ldap_client.get_group_gid(group_name)
+            if gid is not None:
+                self._set_lustre_quota(gid, project_path, lustre_config)
+
+    def _set_lustre_quota(self, gid: int, project_path: str, config: dict) -> None:
+        """Set Lustre filesystem quota for a project."""
+        mount_point = config.get("mount_point", "/valhalla")
+        block_soft = config.get("block_softlimit")
+        block_hard = config.get("block_hardlimit")
+        inode_soft = config.get("inode_softlimit")
+        inode_hard = config.get("inode_hardlimit")
+
+        try:
+            quota_cmd = ["lfs", "setquota", "-p", str(gid)]
+            if block_soft is not None:
+                quota_cmd.extend(["-b", str(block_soft)])
+            if block_hard is not None:
+                quota_cmd.extend(["-B", str(block_hard)])
+            if inode_soft is not None:
+                quota_cmd.extend(["-i", str(inode_soft)])
+            if inode_hard is not None:
+                quota_cmd.extend(["-I", str(inode_hard)])
+            quota_cmd.append(mount_point)
+            self.client.execute_command(quota_cmd)
+
+            # Set project ID on directory
+            self.client.execute_command([
+                "lfs", "project", "-p", str(gid), "-r", "-s", project_path,
+            ])
+            logger.info("Set Lustre quota for GID %d on %s", gid, mount_point)
+        except BackendError:
+            logger.exception("Failed to set Lustre quota for GID %d", gid)
 
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale the resource QoS respecting the backend settings."""

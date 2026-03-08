@@ -1,0 +1,35 @@
+[project]
+name = "waldur-site-agent-ldap"
+version = "0.9.8"
+description = "LDAP plugin for Waldur Site Agent"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9, <4"
+dependencies = [
+    "waldur-site-agent>=0.9.8",
+    "ldap3>=2.9.0,<3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+
+# Entry points for exporting username management backend
+[project.entry-points."waldur_site_agent.username_management_backends"]
+ldap = "waldur_site_agent_ldap.backend:LdapUsernameBackend"
+
+# Entry points for plugin-specific schema validation
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+ldap = "waldur_site_agent_ldap.schemas:LdapBackendSettingsSchema"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+]

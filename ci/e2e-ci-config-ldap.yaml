@@ -1,0 +1,76 @@
+# E2E test configuration for LDAP-integrated SLURM offering.
+# Uses OpenLDAP container from docker-compose.e2e.yml.
+#
+# API host is "docker" — the DinD service hostname in GitLab CI.
+# For local testing, override with WALDUR_E2E_API_HOST=localhost.
+
+timezone: "UTC"
+offerings:
+  - name: "E2E SLURM LDAP"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000004"
+
+    stomp_enabled: false
+
+    backend_type: "slurm"
+    username_management_backend: "ldap"
+    order_processing_backend: "slurm"
+    reporting_backend: "slurm"
+    membership_sync_backend: "slurm"
+
+    backend_settings:
+      slurm_bin_path: ".venv/bin"
+      default_account: "root"
+      customer_prefix: ""
+      project_prefix: ""
+      allocation_prefix: ""
+      parent_account: "eurohpc"
+      default_partition: "cn"
+      enable_user_homedir_account_creation: false
+
+      # LDAP integration
+      ldap:
+        uri: "ldap://docker:389"
+        bind_dn: "cn=admin,dc=sofiatech,dc=bg"
+        bind_password: "e2e-ldap-password"
+        base_dn: "dc=sofiatech,dc=bg"
+        people_ou: "ou=People"
+        groups_ou: "ou=Groups"
+        uid_range_start: 5000
+        uid_range_end: 6000
+        gid_range_start: 800
+        gid_range_end: 1000
+        default_login_shell: "/bin/bash"
+        default_home_base: "/home"
+        username_format: "first_initial_lastname"
+        remove_user_on_deactivate: false
+        access_groups:
+          - name: "vpnusrgroup"
+            attribute: "member"
+
+      # Per-account QoS management
+      qos_management:
+        enabled: true
+        flags: "DenyOnLimit,NoDecay"
+        grp_tres: "cpu=25600,node=100"
+        max_jobs: 10
+        max_submit: 20
+        max_wall: "2880"
+
+      # Project directory (uses tmpdir, no Lustre)
+      project_directory:
+        enabled: true
+        base_path: "/tmp/e2e-projects"
+        owner: "nobody"
+        permissions: "770"
+        set_gid: false
+        set_acl: false
+
+    backend_components:
+      cpu:
+        limit: 10000
+        measured_unit: "k-Hours"
+        unit_factor: 60000
+        accounting_type: "limit"
+        label: "CPU"

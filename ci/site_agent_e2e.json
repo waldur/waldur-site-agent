@@ -1,7 +1,7 @@
 {
   "_metadata": {
     "title": "Site Agent E2E Tests",
-    "description": "Minimal fixture for waldur-site-agent CI end-to-end tests. Provides a service provider organization with three Marketplace.Slurm offerings (usage-based, limit-based, mixed) against a single SLURM emulator backend, plus a test project with member users.",
+    "description": "Minimal fixture for waldur-site-agent CI end-to-end tests. Provides a service provider organization with three Marketplace.Slurm offerings (usage-based, limit-based, mixed) and one LDAP-integrated offering against a SLURM emulator backend, plus a test project with member users.",
     "version": "1.0.0",
     "scenarios": [
       "Order processing (create, update, terminate) with SLURM emulator",
@@ -164,6 +164,20 @@
       "plugin_options": {
         "service_provider_can_create_offering_user": true
       }
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000004",
+      "name": "E2E SLURM LDAP",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "LDAP-integrated SLURM offering for E2E tests. Tests LDAP user provisioning, per-account QoS, project groups, and partition-aware associations.",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true
+      }
     }
   ],
 
@@ -241,6 +255,16 @@
       "description": "Storage allocation",
       "billing_type": "limit",
       "measured_unit": "TB"
+    },
+
+    {
+      "uuid": "e2e40000000000000000000000000001",
+      "offering_uuid": "e2ef0000000000000000000000000004",
+      "type": "cpu",
+      "name": "CPU",
+      "description": "CPU time in k-Hours",
+      "billing_type": "limit",
+      "measured_unit": "k-Hours"
     }
   ],
 
@@ -265,6 +289,13 @@
       "offering_uuid": "e2ef0000000000000000000000000003",
       "unit": "month",
       "description": "Standard plan for mixed SLURM offering"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000014",
+      "name": "E2E LDAP Standard",
+      "offering_uuid": "e2ef0000000000000000000000000004",
+      "unit": "month",
+      "description": "Standard plan for LDAP-integrated SLURM offering"
     }
   ],
 
@@ -324,6 +355,14 @@
       "plan_uuid": "e2e00000000000000000000000000013",
       "component_uuid": "e2e30000000000000000000000000003",
       "component_type": "storage",
+      "price": "0.00",
+      "amount": 0
+    },
+
+    {
+      "plan_uuid": "e2e00000000000000000000000000014",
+      "component_uuid": "e2e40000000000000000000000000001",
+      "component_type": "cpu",
       "price": "0.00",
       "amount": 0
     }
@@ -416,6 +455,25 @@
       "offering_uuid": "e2ef0000000000000000000000000001",
       "user_uuid": "e2ea0000000000000000000000000006",
       "username": "e2euser5"
+    },
+
+    {
+      "uuid": "e2e00000000000000000000000000041",
+      "offering_uuid": "e2ef0000000000000000000000000004",
+      "user_uuid": "e2ea0000000000000000000000000002",
+      "username": ""
+    },
+    {
+      "uuid": "e2e00000000000000000000000000042",
+      "offering_uuid": "e2ef0000000000000000000000000004",
+      "user_uuid": "e2ea0000000000000000000000000003",
+      "username": ""
+    },
+    {
+      "uuid": "e2e00000000000000000000000000043",
+      "offering_uuid": "e2ef0000000000000000000000000004",
+      "user_uuid": "e2ea0000000000000000000000000004",
+      "username": ""
     }
   ]
 }

@@ -134,6 +134,11 @@ convention = "google"
   "S101",   # we can (and MUST!) use 'assert' in test files.
   "ANN001", # annotations for fixtures are sometimes a pain for test files
 ]
+"plugins/**/tests/**/*.py" = [
+  "S101",
+  "ANN001",
+  "ANN201",
+]
 
 [tool.ruff.lint.isort]
 known-first-party = []

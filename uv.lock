@@ -16,6 +16,7 @@ members = [
     "waldur-site-agent-harbor",
     "waldur-site-agent-k8s-ut-namespace",
     "waldur-site-agent-keycloak-client",
+    "waldur-site-agent-ldap",
     "waldur-site-agent-moab",
     "waldur-site-agent-mup",
     "waldur-site-agent-okd",
@@ -679,6 +680,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7e/bd/ffcd3104155b467347cd9b3a64eb24182e459579845196b3a200569c8912/kubernetes-31.0.0.tar.gz", hash = "sha256:28945de906c8c259c1ebe62703b56a03b714049372196f854105afe4e6d014c0", size = 916096, upload-time = "2024-09-20T03:16:08.089Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/a8/17f5e28cecdbd6d48127c22abdb794740803491f422a11905c4569d8e139/kubernetes-31.0.0-py2.py3-none-any.whl", hash = "sha256:bf141e2d380c8520eada8b351f4e319ffee9636328c137aa432bc486ca1200e1", size = 1857013, upload-time = "2024-09-20T03:16:06.05Z" },
+]
+
+[[package]]
+name = "ldap3"
+version = "2.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyasn1" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/43/ac/96bd5464e3edbc61595d0d69989f5d9969ae411866427b2500a8e5b812c0/ldap3-2.9.1.tar.gz", hash = "sha256:f3e7fc4718e3f09dda568b57100095e0ce58633bcabbed8667ce3f8fbaa4229f", size = 398830, upload-time = "2021-07-18T06:34:21.786Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4e/f6/71d6ec9f18da0b2201287ce9db6afb1a1f637dedb3f0703409558981c723/ldap3-2.9.1-py2.py3-none-any.whl", hash = "sha256:5869596fc4948797020d3f03b7939da938778a0f9e2009f7a072ccf92b8e8d70", size = 432192, upload-time = "2021-07-18T06:34:12.905Z" },
 ]
 
 [[package]]
@@ -1959,6 +1972,21 @@ requires-dist = [
 ]
 
 [[package]]
+name = "waldur-site-agent-ldap"
+version = "0.9.8"
+source = { editable = "plugins/ldap" }
+dependencies = [
+    { name = "ldap3" },
+    { name = "waldur-site-agent" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ldap3", specifier = ">=2.9.0,<3" },
+    { name = "waldur-site-agent", editable = "." },
+]
+
+[[package]]
 name = "waldur-site-agent-moab"
 version = "0.9.8"
 source = { editable = "plugins/moab" }
@@ -2037,6 +2065,11 @@ dependencies = [
     { name = "waldur-site-agent" },
 ]
 
+[package.optional-dependencies]
+ldap = [
+    { name = "waldur-site-agent-ldap" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
@@ -2044,7 +2077,11 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "waldur-site-agent", editable = "." }]
+requires-dist = [
+    { name = "waldur-site-agent", editable = "." },
+    { name = "waldur-site-agent-ldap", marker = "extra == 'ldap'", editable = "plugins/ldap" },
+]
+provides-extras = ["ldap"]
 
 [package.metadata.requires-dev]
 dev = [

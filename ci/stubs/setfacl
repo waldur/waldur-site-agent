@@ -1,0 +1,3 @@
+#!/bin/bash
+# Stub for setfacl command — records calls for test assertions
+echo "setfacl $@" >> "${SETFACL_STUB_LOG:-/tmp/setfacl_commands.log}"
