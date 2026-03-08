@@ -4,24 +4,13 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from waldur_site_agent.common.plugin_schemas import (
     PluginBackendSettingsSchema,
     PluginComponentSchema,
+    TargetComponentConfig,
 )
-
-
-class TargetComponentConfig(BaseModel):
-    """Configuration for a single target component mapping."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    factor: float = Field(
-        default=1.0,
-        gt=0,
-        description="Conversion factor: target_value = source_value * factor",
-    )
 
 
 class WaldurComponentSchema(PluginComponentSchema):
@@ -67,12 +56,14 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
         gt=0,
         description="Seconds between order state poll attempts",
     )
-    user_resolve_method: Literal["remote_eduteams", "identity_bridge", "user_field"] = Field(
-        default="identity_bridge",
-        description="Method to resolve users on Waldur B during membership sync. "
-        "'remote_eduteams': POST /api/remote-eduteams/ (requires eduTEAMS OIDC on server). "
-        "'identity_bridge': POST /api/identity-bridge/ (idempotent, uses identity_bridge_source). "
-        "'user_field': GET /api/users/?{user_match_field}={value}.",
+    user_resolve_method: Literal["remote_eduteams", "identity_bridge", "user_field"] = (
+        Field(
+            default="identity_bridge",
+            description="Method to resolve users on Waldur B during membership sync. "
+            "'remote_eduteams': POST /api/remote-eduteams/ (requires eduTEAMS OIDC on server). "
+            "'identity_bridge': POST /api/identity-bridge/ (idempotent, uses identity_bridge_source). "
+            "'user_field': GET /api/users/?{user_match_field}={value}.",
+        )
     )
     user_not_found_action: Literal["warn", "fail"] = Field(
         default="warn",
