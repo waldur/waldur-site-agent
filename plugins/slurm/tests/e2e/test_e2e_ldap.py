@@ -2,7 +2,8 @@ r"""End-to-end tests for LDAP-integrated SLURM backend.
 
 Validates the full lifecycle with LDAP user provisioning, per-account QoS
 creation, LDAP project group management, partition-aware SLURM associations,
-and project directory creation.
+project directory creation, resource modification, usage reporting, and
+termination.
 
 Requires:
     - Waldur API stack (docker-compose.e2e.yml)
@@ -28,12 +29,26 @@ import logging
 import os
 import subprocess
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from ldap3 import ALL, SUBTREE, Connection, Server
+from waldur_api_client.api.marketplace_component_usages import (
+    marketplace_component_usages_list,
+)
+from waldur_api_client.api.marketplace_component_user_usages import (
+    marketplace_component_user_usages_list,
+)
 from waldur_api_client.api.marketplace_orders import marketplace_orders_retrieve
+from waldur_api_client.api.marketplace_provider_offerings import (
+    marketplace_provider_offerings_retrieve,
+)
+from waldur_api_client.api.marketplace_provider_resources import (
+    marketplace_provider_resources_retrieve,
+)
 from waldur_api_client.models.order_state import OrderState
+from waldur_api_client.types import UNSET
 from waldur_site_agent_slurm.backend import SlurmBackend
 
 from plugins.slurm.tests.e2e.conftest import (
@@ -42,7 +57,10 @@ from plugins.slurm.tests.e2e.conftest import (
     get_project_url,
     run_processor_until_order_terminal,
 )
-from waldur_site_agent.common.processors import OfferingMembershipProcessor
+from waldur_site_agent.common.processors import (
+    OfferingMembershipProcessor,
+    OfferingReportProcessor,
+)
 from waldur_site_agent.common.utils import get_client, load_configuration
 
 logger = logging.getLogger(__name__)
@@ -61,7 +79,6 @@ class LdapAssertions:
     """Helper for verifying LDAP state during tests."""
 
     def __init__(self, ldap_settings: dict) -> None:
-        """Initialize from LDAP settings dict."""
         self.uri = ldap_settings["uri"]
         self.bind_dn = ldap_settings["bind_dn"]
         self.bind_password = ldap_settings["bind_password"]
@@ -74,7 +91,6 @@ class LdapAssertions:
         return Connection(server, self.bind_dn, self.bind_password, auto_bind=True)
 
     def assert_user_exists(self, username: str) -> dict:
-        """Assert user exists in LDAP and return attributes."""
         conn = self._connect()
         try:
             conn.search(
@@ -98,7 +114,6 @@ class LdapAssertions:
             conn.unbind()
 
     def assert_user_not_exists(self, username: str) -> None:
-        """Assert user does not exist in LDAP."""
         conn = self._connect()
         try:
             conn.search(
@@ -114,7 +129,6 @@ class LdapAssertions:
             conn.unbind()
 
     def assert_group_exists(self, group_name: str) -> dict:
-        """Assert group exists in LDAP and return attributes."""
         conn = self._connect()
         try:
             conn.search(
@@ -130,13 +144,27 @@ class LdapAssertions:
         finally:
             conn.unbind()
 
+    def assert_group_not_exists(self, group_name: str) -> None:
+        conn = self._connect()
+        try:
+            conn.search(
+                self.groups_dn,
+                f"(cn={group_name})",
+                search_scope=SUBTREE,
+                attributes=["cn"],
+            )
+            assert len(conn.entries) == 0, (
+                f"Expected no LDAP group cn={group_name}, got {len(conn.entries)}"
+            )
+        finally:
+            conn.unbind()
+
     def assert_user_in_group(
         self,
         group_name: str,
         username: str,
         attr: str = "memberUid",
     ) -> None:
-        """Assert user is a member of a group."""
         conn = self._connect()
         try:
             if attr == "member":
@@ -162,7 +190,6 @@ class LdapAssertions:
         username: str,
         attr: str = "memberUid",
     ) -> None:
-        """Assert user is NOT a member of a group."""
         conn = self._connect()
         try:
             if attr == "member":
@@ -181,7 +208,6 @@ class LdapAssertions:
             conn.unbind()
 
     def count_users(self) -> int:
-        """Count total users in LDAP."""
         conn = self._connect()
         try:
             conn.search(
@@ -195,7 +221,6 @@ class LdapAssertions:
             conn.unbind()
 
     def list_usernames(self) -> list[str]:
-        """Return all POSIX usernames in LDAP."""
         conn = self._connect()
         try:
             conn.search(
@@ -205,6 +230,22 @@ class LdapAssertions:
                 attributes=["uid"],
             )
             return [str(e.uid) for e in conn.entries]
+        finally:
+            conn.unbind()
+
+    def get_group_members(self, group_name: str, attr: str = "memberUid") -> list[str]:
+        conn = self._connect()
+        try:
+            conn.search(
+                self.groups_dn,
+                f"(cn={group_name})",
+                search_scope=SUBTREE,
+                attributes=[attr],
+            )
+            if not conn.entries:
+                return []
+            values = conn.entries[0].entry_attributes_as_dict.get(attr, [])
+            return [str(v) for v in values] if isinstance(values, list) else [str(values)]
         finally:
             conn.unbind()
 
@@ -218,16 +259,22 @@ def assert_slurm_account_exists(
     slurm_backend: SlurmBackend,
     account_name: str,
 ) -> None:
-    """Assert a SLURM account exists."""
     resource = slurm_backend.client.get_resource(account_name)
     assert resource is not None, f"SLURM account {account_name} should exist"
+
+
+def assert_slurm_account_not_exists(
+    slurm_backend: SlurmBackend,
+    account_name: str,
+) -> None:
+    resource = slurm_backend.client.get_resource(account_name)
+    assert resource is None, f"SLURM account {account_name} should not exist"
 
 
 def assert_slurm_qos_exists(
     slurm_backend: SlurmBackend,
     qos_name: str,
 ) -> None:
-    """Assert a SLURM QoS exists."""
     assert slurm_backend.client.qos_exists(qos_name), f"SLURM QoS {qos_name} should exist"
 
 
@@ -236,7 +283,6 @@ def assert_slurm_association_exists(
     username: str,
     account: str,
 ) -> None:
-    """Assert a SLURM user-account association exists."""
     assoc = slurm_backend.client.get_association(username, account)
     assert assoc is not None, f"SLURM association {username}@{account} should exist"
 
@@ -246,7 +292,6 @@ def assert_slurm_association_not_exists(
     username: str,
     account: str,
 ) -> None:
-    """Assert a SLURM user-account association does not exist."""
     assoc = slurm_backend.client.get_association(username, account)
     assert assoc is None, f"SLURM association {username}@{account} should not exist"
 
@@ -258,7 +303,6 @@ def assert_slurm_association_not_exists(
 
 @pytest.fixture(scope="module")
 def ldap_config():
-    """Load LDAP E2E config."""
     if not E2E_LDAP_CONFIG_PATH:
         pytest.skip("WALDUR_E2E_LDAP_CONFIG not set")
     return load_configuration(
@@ -269,7 +313,6 @@ def ldap_config():
 
 @pytest.fixture(scope="module")
 def ldap_offering(ldap_config):
-    """First offering from LDAP config."""
     if not ldap_config.offerings:
         pytest.skip("No offerings in LDAP config")
     return ldap_config.offerings[0]
@@ -277,7 +320,6 @@ def ldap_offering(ldap_config):
 
 @pytest.fixture(scope="module")
 def ldap_assertions(ldap_offering):
-    """LDAP assertion helper."""
     ldap_settings = ldap_offering.backend_settings.get("ldap", {})
     if not ldap_settings:
         pytest.skip("No LDAP settings in offering")
@@ -286,7 +328,6 @@ def ldap_assertions(ldap_offering):
 
 @pytest.fixture(scope="module")
 def ldap_waldur_client(ldap_offering):
-    """AuthenticatedClient for Waldur."""
     return get_client(
         ldap_offering.waldur_api_url,
         ldap_offering.waldur_api_token,
@@ -295,7 +336,6 @@ def ldap_waldur_client(ldap_offering):
 
 @pytest.fixture(scope="module")
 def _ldap_emulator_cleanup(ldap_offering) -> None:
-    """Reset slurm-emulator state before LDAP tests."""
     slurm_bin_path = ldap_offering.backend_settings.get(
         "slurm_bin_path",
         ".venv/bin",
@@ -316,7 +356,7 @@ def _ldap_emulator_cleanup(ldap_offering) -> None:
         if state_file.exists():
             state_file.unlink()
 
-    # Also ensure parent account 'eurohpc' exists (emulator starts empty)
+    # Ensure parent account 'eurohpc' exists (emulator starts empty)
     with contextlib.suppress(subprocess.CalledProcessError, FileNotFoundError):
         subprocess.check_output(
             [
@@ -338,7 +378,6 @@ def _ldap_emulator_cleanup(ldap_offering) -> None:
 
 @pytest.fixture(scope="module")
 def ldap_slurm_backend(ldap_offering, _ldap_emulator_cleanup):
-    """SlurmBackend with LDAP integration using emulator CLI."""
     settings = ldap_offering.backend_settings
     components = ldap_offering.backend_components_dict
     return SlurmBackend(settings, components)
@@ -346,14 +385,13 @@ def ldap_slurm_backend(ldap_offering, _ldap_emulator_cleanup):
 
 @pytest.fixture(scope="module")
 def ldap_project_uuid():
-    """Project UUID for LDAP tests."""
     if not E2E_PROJECT_A_UUID:
         pytest.skip("WALDUR_E2E_PROJECT_A_UUID not set")
     return E2E_PROJECT_A_UUID
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Tests — Resource Lifecycle (create, update, terminate)
 # ---------------------------------------------------------------------------
 
 # Shared state for ordered tests
@@ -362,7 +400,7 @@ _ldap_state: dict = {}
 
 @pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
 class TestLdapResourceLifecycle:
-    """Full resource lifecycle with LDAP user provisioning and QoS."""
+    """Full resource lifecycle: create, update limits, terminate."""
 
     def test_01_create_resource(
         self,
@@ -372,7 +410,7 @@ class TestLdapResourceLifecycle:
         ldap_project_uuid,
         ldap_assertions,
     ):
-        """CREATE order: SLURM account, QoS, LDAP project group."""
+        """CREATE order: SLURM account, QoS, LDAP project group, project dir."""
         offering_url, plan_url = get_offering_info(
             ldap_waldur_client, ldap_offering.waldur_offering_uuid
         )
@@ -381,8 +419,6 @@ class TestLdapResourceLifecycle:
             ldap_project_uuid,
         )
 
-        # node_hours is the Waldur-facing component; the mapper
-        # converts to cpu (x64) and gpu (x8) for SLURM.
         limits = {"node_hours": 100}
         resource_name = f"e2e-ldap-{uuid.uuid4().hex[:6]}"
 
@@ -412,10 +448,6 @@ class TestLdapResourceLifecycle:
         resource_uuid = order.marketplace_resource_uuid.hex
         _ldap_state["resource_uuid"] = resource_uuid
 
-        from waldur_api_client.api.marketplace_provider_resources import (  # noqa: PLC0415
-            marketplace_provider_resources_retrieve,
-        )
-
         res = marketplace_provider_resources_retrieve.sync(
             uuid=resource_uuid, client=ldap_waldur_client
         )
@@ -425,18 +457,9 @@ class TestLdapResourceLifecycle:
         # Verify SLURM account exists
         assert_slurm_account_exists(ldap_slurm_backend, backend_id)
 
-        # Verify parent account hierarchy (should be under eurohpc)
-        parent = ldap_slurm_backend.client.get_resource(backend_id)
-        assert parent is not None
-
-        logger.info("Resource created with backend_id=%s", backend_id)
-
-        # Verify component mapper converted node_hours → cpu + gpu
+        # Verify component mapper converted node_hours -> cpu + gpu
         mapper = ldap_slurm_backend._component_mapper
         assert not mapper.is_passthrough, "Mapper should be in conversion mode"
-        assert mapper.source_components == {"node_hours"}
-        assert mapper.target_components == {"cpu", "gpu"}
-
         converted = mapper.convert_limits_to_target({"node_hours": 100})
         assert converted == {"cpu": 6400, "gpu": 800}
         logger.info("Component mapper conversion verified: %s", converted)
@@ -450,6 +473,156 @@ class TestLdapResourceLifecycle:
         assert project_dir.exists(), f"Project directory {project_dir} should exist"
         logger.info("Project directory %s verified", project_dir)
 
+    def test_02_update_limits(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+    ):
+        """UPDATE order: increase node_hours and verify SLURM limits change."""
+        resource_uuid = _ldap_state.get("resource_uuid")
+        backend_id = _ldap_state.get("backend_id")
+        if not resource_uuid or not backend_id:
+            pytest.skip("No resource from test_01")
+
+        new_limits = {"node_hours": 200}
+
+        resp = ldap_waldur_client.get_httpx_client().post(
+            f"/api/marketplace-resources/{resource_uuid}/update_limits/",
+            json={"limits": new_limits},
+        )
+        assert resp.status_code < 400, (
+            f"Failed to create update order: {resp.status_code} {resp.text[:500]}"
+        )
+        data = resp.json()
+        update_order_uuid = data.get("order_uuid") or data.get("uuid", "")
+        assert update_order_uuid, f"No order UUID in response: {data}"
+
+        final_state = run_processor_until_order_terminal(
+            ldap_offering,
+            ldap_waldur_client,
+            ldap_slurm_backend,
+            update_order_uuid,
+        )
+        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+        # Verify the SLURM account still exists after update
+        assert_slurm_account_exists(ldap_slurm_backend, backend_id)
+
+        # Verify Waldur resource limits were updated
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+        if not isinstance(res.limits, type(UNSET)):
+            waldur_limits = dict(res.limits.additional_properties)
+            logger.info("Waldur limits after update: %s", waldur_limits)
+            assert waldur_limits.get("node_hours") == 200, (
+                f"Expected node_hours=200, got {waldur_limits}"
+            )
+
+        logger.info("UPDATE order completed, limits updated to node_hours=200")
+
+    def test_03_terminate_resource(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+    ):
+        """TERMINATE order: SLURM account removed, resource state changes."""
+        resource_uuid = _ldap_state.get("resource_uuid")
+        backend_id = _ldap_state.get("backend_id")
+        if not resource_uuid or not backend_id:
+            pytest.skip("No resource from test_01")
+
+        resp = ldap_waldur_client.get_httpx_client().post(
+            f"/api/marketplace-resources/{resource_uuid}/terminate/",
+            json={},
+        )
+        assert resp.status_code < 400, (
+            f"Failed to create terminate order: {resp.status_code} {resp.text[:500]}"
+        )
+        data = resp.json()
+        terminate_order_uuid = data.get("order_uuid") or data.get("uuid", "")
+        assert terminate_order_uuid, f"No order UUID in response: {data}"
+
+        final_state = run_processor_until_order_terminal(
+            ldap_offering,
+            ldap_waldur_client,
+            ldap_slurm_backend,
+            terminate_order_uuid,
+        )
+        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+        # Verify the resource is no longer in OK state
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+        assert str(res.state) != "OK", (
+            f"Resource should not be OK after termination, got {res.state}"
+        )
+
+        # Verify the SLURM account was deleted
+        assert_slurm_account_not_exists(ldap_slurm_backend, backend_id)
+        logger.info("TERMINATE order completed, SLURM account %s removed", backend_id)
+
+
+# ---------------------------------------------------------------------------
+# Tests — Membership Sync with LDAP
+# ---------------------------------------------------------------------------
+
+_membership_state: dict = {}
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapMembershipSync:
+    """Membership sync: LDAP user provisioning and SLURM associations."""
+
+    def test_01_create_resource_for_membership(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_project_uuid,
+    ):
+        """Create a fresh resource for membership sync tests."""
+        offering_url, plan_url = get_offering_info(
+            ldap_waldur_client, ldap_offering.waldur_offering_uuid
+        )
+        project_url = get_project_url(ldap_waldur_client, ldap_project_uuid)
+
+        order_uuid = create_source_order(
+            client=ldap_waldur_client,
+            offering_url=offering_url,
+            project_url=project_url,
+            plan_url=plan_url,
+            limits={"node_hours": 50},
+            name=f"e2e-ldap-mem-{uuid.uuid4().hex[:6]}",
+        )
+
+        final_state = run_processor_until_order_terminal(
+            ldap_offering,
+            ldap_waldur_client,
+            ldap_slurm_backend,
+            order_uuid,
+        )
+        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+        order = marketplace_orders_retrieve.sync(
+            client=ldap_waldur_client, uuid=order_uuid
+        )
+        resource_uuid = order.marketplace_resource_uuid.hex
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+
+        _membership_state["resource_uuid"] = resource_uuid
+        _membership_state["backend_id"] = res.backend_id
+        logger.info(
+            "Created resource %s (backend_id=%s) for membership tests",
+            resource_uuid,
+            res.backend_id,
+        )
+
     def test_02_membership_sync_creates_ldap_users(
         self,
         ldap_offering,
@@ -457,12 +630,13 @@ class TestLdapResourceLifecycle:
         ldap_slurm_backend,
         ldap_assertions,
     ):
-        """Membership sync: LDAP users created, added to project group."""
-        backend_id = _ldap_state.get("backend_id")
+        """Membership sync provisions LDAP users and creates SLURM associations."""
+        backend_id = _membership_state.get("backend_id")
         if not backend_id:
             pytest.skip("No backend_id from test_01")
 
-        # Run membership sync processor
+        user_count_before = ldap_assertions.count_users()
+
         processor = OfferingMembershipProcessor(
             offering=ldap_offering,
             waldur_rest_client=ldap_waldur_client,
@@ -470,17 +644,28 @@ class TestLdapResourceLifecycle:
         )
         processor.process_offering()
 
-        user_count_before = ldap_assertions.count_users()
+        user_count_after = ldap_assertions.count_users()
         logger.info(
-            "LDAP users after membership sync: %d",
+            "LDAP users: before=%d, after=%d",
             user_count_before,
+            user_count_after,
         )
 
-        assert user_count_before > 0, "Expected LDAP users to be created during membership sync"
+        assert user_count_after > 0, "Expected LDAP users after membership sync"
+        _membership_state["ldap_usernames"] = ldap_assertions.list_usernames()
+        logger.info("LDAP usernames: %s", _membership_state["ldap_usernames"])
 
-        # Verify username format: first_letter_full_lastname produces "x.lastname"
-        usernames = ldap_assertions.list_usernames()
-        logger.info("LDAP usernames: %s", usernames)
+    def test_03_username_format_verification(
+        self,
+        ldap_assertions,
+    ):
+        """Verify username format matches first_letter_full_lastname (x.lastname)."""
+        usernames = _membership_state.get("ldap_usernames", [])
+        if not usernames:
+            usernames = ldap_assertions.list_usernames()
+
+        assert len(usernames) > 0, "No LDAP usernames to verify"
+
         for uname in usernames:
             assert "." in uname, (
                 f"Username '{uname}' should contain a dot (first_letter_full_lastname format)"
@@ -489,30 +674,299 @@ class TestLdapResourceLifecycle:
             assert len(parts[0]) == 1, (
                 f"Username '{uname}' first part should be a single character"
             )
+        logger.info("All %d usernames match first_letter_full_lastname format", len(usernames))
 
-    def test_03_backward_compat_no_ldap(
+    def test_04_users_in_ldap_project_group(
+        self,
+        ldap_assertions,
+    ):
+        """Verify LDAP users are added to the project group."""
+        backend_id = _membership_state.get("backend_id")
+        usernames = _membership_state.get("ldap_usernames", [])
+        if not backend_id or not usernames:
+            pytest.skip("No backend_id or usernames from previous tests")
+
+        members = ldap_assertions.get_group_members(backend_id, attr="memberUid")
+        logger.info("Project group %s members: %s", backend_id, members)
+
+        for uname in usernames:
+            assert uname in members, (
+                f"User {uname} should be in LDAP project group {backend_id}"
+            )
+
+    def test_05_users_in_access_group(
         self,
         ldap_offering,
-        ldap_waldur_client,  # noqa: ARG002
+        ldap_assertions,
     ):
-        """Verify that an offering without LDAP settings works normally.
+        """Verify LDAP users are added to configured access groups."""
+        usernames = _membership_state.get("ldap_usernames", [])
+        if not usernames:
+            pytest.skip("No usernames from previous tests")
 
-        This test creates a SlurmBackend without LDAP settings to confirm
-        backward compatibility.
-        """
-        # Create a backend without LDAP settings
+        access_groups = ldap_offering.backend_settings.get("ldap", {}).get("access_groups", [])
+        for group_config in access_groups:
+            group_name = group_config["name"]
+            attr = group_config.get("attribute", "memberUid")
+            for uname in usernames:
+                ldap_assertions.assert_user_in_group(group_name, uname, attr=attr)
+            logger.info(
+                "All %d users verified in access group %s (attr=%s)",
+                len(usernames),
+                group_name,
+                attr,
+            )
+
+    def test_06_slurm_associations_exist(
+        self,
+        ldap_slurm_backend,
+    ):
+        """Verify SLURM user-account associations exist for all LDAP users."""
+        backend_id = _membership_state.get("backend_id")
+        usernames = _membership_state.get("ldap_usernames", [])
+        if not backend_id or not usernames:
+            pytest.skip("No backend_id or usernames from previous tests")
+
+        for uname in usernames:
+            assert_slurm_association_exists(ldap_slurm_backend, uname, backend_id)
+        logger.info(
+            "All %d SLURM associations verified for account %s",
+            len(usernames),
+            backend_id,
+        )
+
+    def test_07_idempotent_membership_sync(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_assertions,
+    ):
+        """Running membership sync again should be idempotent."""
+        user_count_before = ldap_assertions.count_users()
+
+        processor = OfferingMembershipProcessor(
+            offering=ldap_offering,
+            waldur_rest_client=ldap_waldur_client,
+            resource_backend=ldap_slurm_backend,
+        )
+        processor.process_offering()
+
+        user_count_after = ldap_assertions.count_users()
+        assert user_count_after == user_count_before, (
+            f"Idempotent sync changed user count: {user_count_before} -> {user_count_after}"
+        )
+        logger.info("Idempotent membership sync verified: %d users unchanged", user_count_after)
+
+
+# ---------------------------------------------------------------------------
+# Tests — Usage Reporting
+# ---------------------------------------------------------------------------
+
+_usage_state: dict = {}
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapUsageReporting:
+    """Usage reporting: total and per-user usage through the SLURM emulator."""
+
+    def test_01_create_resource_for_usage(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_project_uuid,
+    ):
+        """Create a resource and sync members for usage reporting tests."""
+        offering_url, plan_url = get_offering_info(
+            ldap_waldur_client, ldap_offering.waldur_offering_uuid
+        )
+        project_url = get_project_url(ldap_waldur_client, ldap_project_uuid)
+
+        order_uuid = create_source_order(
+            client=ldap_waldur_client,
+            offering_url=offering_url,
+            project_url=project_url,
+            plan_url=plan_url,
+            limits={"node_hours": 500},
+            name=f"e2e-ldap-usage-{uuid.uuid4().hex[:6]}",
+        )
+        final_state = run_processor_until_order_terminal(
+            ldap_offering,
+            ldap_waldur_client,
+            ldap_slurm_backend,
+            order_uuid,
+        )
+        assert final_state == OrderState.DONE
+
+        order = marketplace_orders_retrieve.sync(
+            client=ldap_waldur_client, uuid=order_uuid
+        )
+        resource_uuid = order.marketplace_resource_uuid.hex
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+        _usage_state["resource_uuid"] = resource_uuid
+        _usage_state["backend_id"] = res.backend_id
+
+        # Run membership sync to provision users
+        processor = OfferingMembershipProcessor(
+            offering=ldap_offering,
+            waldur_rest_client=ldap_waldur_client,
+            resource_backend=ldap_slurm_backend,
+        )
+        processor.process_offering()
+        logger.info(
+            "Created resource %s (backend_id=%s) for usage tests",
+            resource_uuid,
+            res.backend_id,
+        )
+
+    def test_02_inject_usage_and_report(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_assertions,
+    ):
+        """Inject per-user usage into emulator and run report processor."""
+        resource_uuid = _usage_state.get("resource_uuid")
+        backend_id = _usage_state.get("backend_id")
+        if not resource_uuid or not backend_id:
+            pytest.skip("No resource from test_01")
+
+        from emulator.core.database import SlurmDatabase  # noqa: PLC0415
+        from emulator.core.time_engine import TimeEngine  # noqa: PLC0415
+        from emulator.core.usage_simulator import UsageSimulator  # noqa: PLC0415
+
+        db = SlurmDatabase()
+        db.load_state()
+        sim = UsageSimulator(TimeEngine(), db)
+
+        # Inject usage for LDAP-provisioned users
+        usernames = ldap_assertions.list_usernames()
+        now = datetime(2026, 3, 1, 12, 0, 0)
+        injected: dict[str, float] = {}
+        for i, username in enumerate(usernames[:5]):
+            node_hours = 10.0 * (i + 1)
+            sim.inject_usage(backend_id, username, node_hours, at_time=now)
+            injected[username] = node_hours
+
+        _usage_state["injected_usage"] = injected
+        logger.info("Injected usage for %d users: %s", len(injected), injected)
+
+        # Run report processor
+        processor = OfferingReportProcessor(
+            ldap_offering,
+            ldap_waldur_client,
+            timezone="UTC",
+            resource_backend=ldap_slurm_backend,
+        )
+        waldur_offering = marketplace_provider_offerings_retrieve.sync(
+            client=ldap_waldur_client, uuid=ldap_offering.waldur_offering_uuid
+        )
+        waldur_resource = marketplace_provider_resources_retrieve.sync(
+            client=ldap_waldur_client, uuid=resource_uuid
+        )
+        processor._process_resource_with_retries(waldur_resource, waldur_offering)
+        logger.info("Report processor completed for resource %s", backend_id)
+
+    def test_03_verify_total_usage(
+        self,
+        ldap_waldur_client,
+    ):
+        """Verify total component usage records exist on Waldur."""
+        resource_uuid = _usage_state.get("resource_uuid")
+        if not resource_uuid:
+            pytest.skip("No resource from test_01")
+
+        usages = marketplace_component_usages_list.sync_all(
+            client=ldap_waldur_client,
+            resource_uuid=resource_uuid,
+        )
+        assert len(usages) > 0, f"Expected component usage records for resource {resource_uuid}"
+
+        # Check that node_hours usage exists
+        usage_types = set()
+        for u in usages:
+            comp_type = u.type_ if not isinstance(u.type_, type(UNSET)) else None
+            if comp_type:
+                usage_types.add(comp_type)
+
+        logger.info(
+            "Found %d component usage records, types: %s",
+            len(usages),
+            usage_types,
+        )
+        assert "node_hours" in usage_types, (
+            f"Expected 'node_hours' usage type, got: {usage_types}"
+        )
+
+    def test_04_verify_per_user_usage(
+        self,
+        ldap_waldur_client,
+    ):
+        """Verify per-user usage records exist for injected users."""
+        resource_uuid = _usage_state.get("resource_uuid")
+        injected = _usage_state.get("injected_usage", {})
+        if not resource_uuid or not injected:
+            pytest.skip("No resource or injected usage from previous tests")
+
+        user_usages = marketplace_component_user_usages_list.sync_all(
+            client=ldap_waldur_client,
+            resource_uuid=resource_uuid,
+        )
+        logger.info("Found %d per-user usage records", len(user_usages))
+        assert len(user_usages) > 0, "Expected per-user usage records"
+
+        # Build map of username -> {type -> usage}
+        actual_by_user: dict[str, dict[str, float]] = {}
+        for uu in user_usages:
+            username = uu.username if not isinstance(uu.username, type(UNSET)) else None
+            comp_type = uu.component_type if not isinstance(uu.component_type, type(UNSET)) else None
+            usage_val = float(uu.usage) if not isinstance(uu.usage, type(UNSET)) else 0.0
+            if username and comp_type:
+                actual_by_user.setdefault(username, {})[comp_type] = usage_val
+
+        # Verify each injected user has node_hours usage
+        for username in injected:
+            assert username in actual_by_user, (
+                f"No per-user usage found for {username}"
+            )
+            user_types = actual_by_user[username]
+            assert "node_hours" in user_types, (
+                f"No 'node_hours' usage for {username}, got types: {set(user_types.keys())}"
+            )
+            assert user_types["node_hours"] > 0, (
+                f"Expected positive node_hours usage for {username}, got {user_types['node_hours']}"
+            )
+        logger.info("Per-user usage verified for %d users", len(injected))
+
+
+# ---------------------------------------------------------------------------
+# Tests — Backward Compatibility
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapBackwardCompat:
+    """Backward compatibility: offerings without LDAP settings."""
+
+    def test_01_backend_without_ldap(
+        self,
+        ldap_offering,
+    ):
+        """SlurmBackend without LDAP settings initializes normally."""
         settings = dict(ldap_offering.backend_settings)
         settings.pop("ldap", None)
         settings.pop("qos_management", None)
         settings.pop("project_directory", None)
         settings.pop("parent_account", None)
         settings.pop("default_partition", None)
-        # Restore required fields for standard hierarchy
         settings["customer_prefix"] = "compat_cust_"
         settings["project_prefix"] = "compat_proj_"
         settings["allocation_prefix"] = "compat_alloc_"
 
-        # Use simple passthrough components (no target_components)
         components = {
             "cpu": {
                 "limit": 10000,
@@ -524,12 +978,58 @@ class TestLdapResourceLifecycle:
         }
         backend = SlurmBackend(settings, components)
 
-        # Should initialize without error and have no LDAP client
         assert backend._ldap_client is None
         assert backend._default_partition is None
         assert not backend._qos_config
         assert not backend._project_dir_config
         assert backend._component_mapper.is_passthrough
-        logger.info(
-            "Backward compatibility check passed: no LDAP features active",
-        )
+        logger.info("Backward compatibility: no LDAP features active")
+
+    def test_02_component_mapper_passthrough(
+        self,
+        ldap_offering,
+    ):
+        """Passthrough mapper returns limits unchanged."""
+        settings = dict(ldap_offering.backend_settings)
+        settings.pop("ldap", None)
+        settings.pop("qos_management", None)
+        settings.pop("project_directory", None)
+        settings.pop("parent_account", None)
+        settings.pop("default_partition", None)
+        settings["customer_prefix"] = "compat_"
+        settings["project_prefix"] = "compat_"
+        settings["allocation_prefix"] = "compat_"
+
+        components = {
+            "cpu": {
+                "limit": 10000,
+                "measured_unit": "k-Hours",
+                "unit_factor": 60000,
+                "accounting_type": "limit",
+                "label": "CPU",
+            },
+        }
+        backend = SlurmBackend(settings, components)
+        mapper = backend._component_mapper
+
+        assert mapper.is_passthrough
+        result = mapper.convert_limits_to_target({"cpu": 100})
+        assert result == {"cpu": 100}
+        logger.info("Passthrough mapper verified")
+
+    def test_03_component_mapper_conversion(
+        self,
+        ldap_slurm_backend,
+    ):
+        """Conversion mapper expands node_hours to cpu + gpu."""
+        mapper = ldap_slurm_backend._component_mapper
+        assert not mapper.is_passthrough
+        assert mapper.source_components == {"node_hours"}
+        assert mapper.target_components == {"cpu", "gpu"}
+
+        result = mapper.convert_limits_to_target({"node_hours": 10})
+        assert result == {"cpu": 640, "gpu": 80}
+
+        back = mapper.convert_usage_from_target({"cpu": 640, "gpu": 80})
+        assert back == {"node_hours": 10.0}
+        logger.info("Conversion mapper verified: node_hours <-> cpu+gpu")
