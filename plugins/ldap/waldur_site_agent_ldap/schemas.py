@@ -14,6 +14,7 @@ class UsernameFormat(Enum):
     """Username generation strategies."""
 
     FIRST_INITIAL_LASTNAME = "first_initial_lastname"
+    FIRST_LETTER_FULL_LASTNAME = "first_letter_full_lastname"
     FIRSTNAME_DOT_LASTNAME = "firstname_dot_lastname"
     FIRSTNAME_LASTNAME = "firstname_lastname"
     WALDUR_USERNAME = "waldur_username"

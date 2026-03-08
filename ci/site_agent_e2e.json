@@ -176,7 +176,8 @@
       "customer_uuid": "e2ec0000000000000000000000000001",
       "description": "LDAP-integrated SLURM offering for E2E tests. Tests LDAP user provisioning, per-account QoS, project groups, and partition-aware associations.",
       "plugin_options": {
-        "service_provider_can_create_offering_user": true
+        "service_provider_can_create_offering_user": true,
+        "username_generation_policy": "service_provider"
       }
     }
   ],

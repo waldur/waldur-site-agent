@@ -80,8 +80,10 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
                 "insufficient user data (need first_name/last_name or user_username)"
             )
 
-        # Ensure uniqueness
-        username = self._ensure_unique_username(username)
+        # Ensure uniqueness (expand first name prefix before numeric suffix)
+        first_name_clean = self._normalize_name(first_name)
+        last_name_clean = self._normalize_name(last_name)
+        username = self._ensure_unique_username(username, first_name_clean, last_name_clean)
 
         # Prepare optional fields
         password = None
@@ -201,30 +203,51 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         last_name_clean = self._normalize_name(last_name)
 
         if not first_name_clean or not last_name_clean:
-            # Fall back to Waldur username
             return getattr(offering_user, "user_username", "") or ""
 
-        if self.username_format == "first_initial_lastname":
-            return f"{first_name_clean[0]}{last_name_clean}".lower()
+        fi = first_name_clean[0]
+        formats = {
+            "first_initial_lastname": f"{fi}{last_name_clean}",
+            "first_letter_full_lastname": f"{fi}.{last_name_clean}",
+            "firstname_dot_lastname": f"{first_name_clean}.{last_name_clean}",
+            "firstname_lastname": f"{first_name_clean}{last_name_clean}",
+        }
+        return formats.get(self.username_format, f"{fi}{last_name_clean}").lower()
 
-        if self.username_format == "firstname_dot_lastname":
-            return f"{first_name_clean}.{last_name_clean}".lower()
+    def _ensure_unique_username(
+        self,
+        base_username: str,
+        first_name: str = "",
+        last_name: str = "",
+    ) -> str:
+        """Ensure the username is unique.
 
-        if self.username_format == "firstname_lastname":
-            return f"{first_name_clean}{last_name_clean}".lower()
-
-        return f"{first_name_clean[0]}{last_name_clean}".lower()
-
-    def _ensure_unique_username(self, base_username: str) -> str:
-        """Ensure the username is unique by appending a number if needed."""
+        Resolution order:
+        1. Try the base username as-is.
+        2. Expand the first-name prefix (e.g. j.smith -> jo.smith -> joh.smith).
+        3. Fall back to a numeric suffix (e.g. j.smith2, j.smith3).
+        """
         if not self.client.user_exists(base_username):
             return base_username
 
+        # Try expanding the first-name prefix when format uses a separator
+        if first_name and last_name and "." in base_username:
+            for length in range(2, len(first_name) + 1):
+                candidate = f"{first_name[:length]}.{last_name}".lower()
+                if candidate != base_username and not self.client.user_exists(candidate):
+                    logger.info(
+                        "Username %s taken, using expanded prefix %s",
+                        base_username,
+                        candidate,
+                    )
+                    return candidate
+
+        # Numeric suffix fallback
         for i in range(2, 1000):
             candidate = f"{base_username}{i}"
             if not self.client.user_exists(candidate):
                 logger.info(
-                    "Username %s already exists, using %s instead",
+                    "Username %s taken, using %s",
                     base_username,
                     candidate,
                 )

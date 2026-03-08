@@ -43,8 +43,18 @@ offerings:
         gid_range_end: 1000
         default_login_shell: "/bin/bash"
         default_home_base: "/home"
-        username_format: "first_initial_lastname"
+        username_format: "first_letter_full_lastname"
         remove_user_on_deactivate: false
+        user_object_classes:
+          - "inetOrgPerson"
+          - "posixAccount"
+          - "top"
+        user_group_object_classes:
+          - "posixGroup"
+          - "top"
+        project_group_object_classes:
+          - "posixGroup"
+          - "top"
         access_groups:
           - name: "vpnusrgroup"
             attribute: "member"

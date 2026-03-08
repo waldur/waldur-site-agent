@@ -194,6 +194,20 @@ class LdapAssertions:
         finally:
             conn.unbind()
 
+    def list_usernames(self) -> list[str]:
+        """Return all POSIX usernames in LDAP."""
+        conn = self._connect()
+        try:
+            conn.search(
+                self.people_dn,
+                "(objectClass=posixAccount)",
+                search_scope=SUBTREE,
+                attributes=["uid"],
+            )
+            return [str(e.uid) for e in conn.entries]
+        finally:
+            conn.unbind()
+
 
 # ---------------------------------------------------------------------------
 # SLURM emulator assertion helpers
@@ -463,6 +477,18 @@ class TestLdapResourceLifecycle:
         )
 
         assert user_count_before > 0, "Expected LDAP users to be created during membership sync"
+
+        # Verify username format: first_letter_full_lastname produces "x.lastname"
+        usernames = ldap_assertions.list_usernames()
+        logger.info("LDAP usernames: %s", usernames)
+        for uname in usernames:
+            assert "." in uname, (
+                f"Username '{uname}' should contain a dot (first_letter_full_lastname format)"
+            )
+            parts = uname.split(".", 1)
+            assert len(parts[0]) == 1, (
+                f"Username '{uname}' first part should be a single character"
+            )
 
     def test_03_backward_compat_no_ldap(
         self,

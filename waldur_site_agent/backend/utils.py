@@ -55,10 +55,14 @@ def get_usage_based_limits(resource_limits: dict) -> dict[str, int]:
 
 def prettify_limits(limits: dict[str, int], backend_components: dict) -> str:
     """Makes limits human-readable."""
-    limits_info = {
-        backend_components[key]["label"]: f"{value} {backend_components[key]['measured_unit']}"
-        for key, value in limits.items()
-    }
+    limits_info = {}
+    for key, value in limits.items():
+        if key in backend_components:
+            label = backend_components[key]["label"]
+            unit = backend_components[key]["measured_unit"]
+            limits_info[label] = f"{value} {unit}"
+        else:
+            limits_info[key] = str(value)
     return yaml.dump(limits_info)
 
 

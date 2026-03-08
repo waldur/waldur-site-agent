@@ -251,14 +251,12 @@ class LdapClient:
         gid_number = self.get_next_gid()
 
         # Create the personal group first
+        extra_attrs: dict[str, str] = {"memberUid": username}
         self._create_group_entry(
             group_name=username,
             gid_number=gid_number,
             object_classes=self.user_group_object_classes,
-            extra_attributes={
-                "memberUid": username,
-                "ou": "groups",
-            },
+            extra_attributes=extra_attrs,
             member_dn=self._user_dn(username),
         )
 

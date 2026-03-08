@@ -260,6 +260,8 @@ class OfferingBaseProcessor(abc.ABC):
                     OfferingUserFieldEnum.UUID,
                     OfferingUserFieldEnum.USER_USERNAME,
                     OfferingUserFieldEnum.USER_EMAIL,
+                    OfferingUserFieldEnum.USER_FIRST_NAME,
+                    OfferingUserFieldEnum.USER_LAST_NAME,
                 ],
             )
         return self._offering_users_cache
