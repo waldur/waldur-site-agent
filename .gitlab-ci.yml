@@ -245,6 +245,27 @@ Lint helm chart:
     - source .venv/bin/activate
     - pytest --cov=plugins/cscs-dwdi --cov-report=xml --cov-report=term --junitxml=report.xml plugins/cscs-dwdi/
 
+.Run waldur tests template:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/waldur/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --cov=plugins/waldur --cov-report=xml --cov-report=term --junitxml=report.xml plugins/waldur/ --ignore=plugins/waldur/tests/e2e/
+
 Run python v3.9 linters:
   image: "registry.hpc.ut.ee/mirror/library/python:3.9"
   extends: .Run linters template
@@ -329,6 +350,11 @@ Run python v3.13 linters:
 
 .Cscs-dwdi test template:
   extends: .Run cscs-dwdi tests template
+  before_script:
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+
+.Waldur test template:
+  extends: .Run waldur tests template
   before_script:
     - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
 
@@ -499,6 +525,27 @@ Run python v3.12 cscs-dwdi tests:
 Run python v3.13 cscs-dwdi tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.13"
   extends: .Cscs-dwdi test template
+
+# Waldur federation plugin tests - Python versions
+Run python v3.9 waldur tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+  extends: .Waldur test template
+
+Run python v3.10 waldur tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
+  extends: .Waldur test template
+
+Run python v3.11 waldur tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
+  extends: .Waldur test template
+
+Run python v3.12 waldur tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
+  extends: .Waldur test template
+
+Run python v3.13 waldur tests:
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  extends: .Waldur test template
 
 # E2E integration tests: boots a minimal Waldur stack (PostgreSQL + RabbitMQ +
 # Mastermind API/Worker) via Docker-in-Docker, loads the site_agent_e2e demo

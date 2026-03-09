@@ -160,9 +160,8 @@ curl -sI https://<waldur-a-host>/rmqws-stomp
 **On Waldur B (target STOMP):**
 
 - Verify `/rmqws-stomp` WebSocket endpoint is available (same curl test)
-- The target offering is already `Marketplace.Slurm` (Step 1), so agent
-  identity registration works directly. Set `target_stomp_offering_uuid`
-  to the same UUID as `target_offering_uuid`.
+- The target offering must be `Marketplace.Slurm` for STOMP to work
+  (`Marketplace.Basic` does not support STOMP event signals)
 - Set `target_stomp_enabled: true` in backend settings
 
 If Waldur B does not have `/rmqws-stomp` configured (returns HTTP 200
@@ -211,10 +210,7 @@ offerings:
       order_poll_timeout: 300
       order_poll_interval: 5
       user_not_found_action: "warn"
-      # For target STOMP tests (optional); same UUID as target_offering_uuid
-      # since the target offering is Marketplace.Slurm
       target_stomp_enabled: true
-      target_stomp_offering_uuid: "<offering-uuid-on-B>"
 
     backend_components:
       # Example: passthrough (1:1) or with conversion factors
@@ -387,7 +383,6 @@ completion notifications.
 ```yaml
 backend_settings:
   target_stomp_enabled: true
-  target_stomp_offering_uuid: "<slurm-offering-uuid-on-B>"
 ```
 
 **Steps:**
@@ -400,8 +395,8 @@ backend_settings:
 
 **Expected:**
 
-- 1 target STOMP connection established (ORDER events on B)
-- Connection reports `is_connected() == True`
+- 2 target STOMP connections established (ORDER and OFFERING_USER events on B)
+- All connections report `is_connected() == True`
 - Skipped gracefully if `target_stomp_enabled=false`
 
 **Prerequisites:** Waldur B must have `/rmqws-stomp` WebSocket endpoint

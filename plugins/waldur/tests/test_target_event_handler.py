@@ -445,60 +445,6 @@ class TestSetupTargetEventSubscriptions:
                 listener = conn.get_listener.return_value
                 assert listener.on_message_callback is not None
 
-    def test_offering_user_uses_target_offering_uuid(
-        self, backend_settings, backend_components_passthrough
-    ):
-        """When target_stomp_offering_uuid differs, OFFERING_USER uses target_offering_uuid."""
-        backend_settings["target_stomp_enabled"] = True
-        backend_settings["target_stomp_offering_uuid"] = "stomp-offering-uuid"
-        backend = WaldurBackend(backend_settings, backend_components_passthrough)
-        backend.client = MagicMock()
-
-        source_offering = MagicMock()
-        source_offering.name = "Source"
-        source_offering.api_url = "https://waldur-a.example.com/api/"
-        source_offering.api_token = "source-token"
-        source_offering.uuid = OFFERING_UUID
-        source_offering.verify_ssl = True
-        source_offering.stomp_ws_host = None
-        source_offering.stomp_ws_port = None
-        source_offering.stomp_ws_path = None
-
-        def _make_consumer():
-            conn = MagicMock()
-            conn.get_listener.return_value = MagicMock()
-            return (conn, MagicMock(), MagicMock())
-
-        with (
-            patch(
-                "waldur_site_agent.event_processing.utils._register_agent_identity"
-            ) as mock_register,
-            patch(
-                "waldur_site_agent.event_processing.utils._setup_single_stomp_subscription"
-            ) as mock_setup,
-            patch(
-                "waldur_site_agent.common.utils.get_client"
-            ),
-            patch(
-                "waldur_site_agent.common.agent_identity_management.AgentIdentityManager"
-            ),
-        ):
-            mock_register.return_value = MagicMock()
-            mock_setup.side_effect = [_make_consumer(), _make_consumer()]
-
-            result = backend.setup_target_event_subscriptions(source_offering)
-
-            assert len(result) == 2
-            assert mock_setup.call_count == 2
-
-            # ORDER subscription uses target_stomp_offering_uuid
-            order_call_offering = mock_setup.call_args_list[0][0][0]
-            assert order_call_offering.uuid == "stomp-offering-uuid"
-
-            # OFFERING_USER subscription uses target_offering_uuid
-            ou_call_offering = mock_setup.call_args_list[1][0][0]
-            assert ou_call_offering.uuid == backend_settings["target_offering_uuid"]
-
     def test_enabled_but_registration_fails(
         self, backend_settings, backend_components_passthrough
     ):

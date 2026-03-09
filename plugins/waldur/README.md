@@ -441,8 +441,6 @@ offerings:
       user_not_found_action: "warn"
       # Target STOMP: subscribe to ORDER events on Waldur B
       target_stomp_enabled: true
-      # Agent identity on B requires a Marketplace.Slurm offering UUID
-      target_stomp_offering_uuid: "agent-based-offering-uuid-on-waldur-b"
 
     backend_components:
       node_hours:
@@ -499,8 +497,7 @@ These settings are on the offering itself (not inside `backend_settings`):
 | `order_poll_timeout` | No | `300` | Max seconds to wait for synchronous order completion (update/terminate) |
 | `order_poll_interval` | No | `5` | Seconds between synchronous order state polls |
 | `user_not_found_action` | No | `warn` | When user not found: `warn` or `fail` |
-| `target_stomp_enabled` | No | `false` | STOMP subscription on B for instant order completion |
-| `target_stomp_offering_uuid` | No | `target_offering_uuid` | `Marketplace.Slurm` offering on B for agent identity |
+| `target_stomp_enabled` | No | `false` | STOMP on B for instant order completion (requires Slurm offering) |
 
 ### Required User Permissions
 
