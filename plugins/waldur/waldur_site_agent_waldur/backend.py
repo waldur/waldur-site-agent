@@ -819,13 +819,6 @@ class WaldurBackend(backends.BaseBackend):
             target_api_url = self.backend_settings["target_api_url"]
             target_api_token = self.backend_settings["target_api_token"]
 
-            # The STOMP offering on B must be agent-based (Marketplace.Slurm)
-            # since agent identity registration only accepts those.
-            # Falls back to target_offering_uuid if not specified.
-            target_stomp_offering = self.backend_settings.get(
-                "target_stomp_offering_uuid", self.target_offering_uuid
-            )
-
             # Create synthetic Offering for Waldur B to set up STOMP connection
             target_offering = Offering(
                 name=f"Target: {source_offering.name}",
@@ -833,7 +826,7 @@ class WaldurBackend(backends.BaseBackend):
                 if target_api_url.endswith("/")
                 else target_api_url + "/",
                 waldur_api_token=target_api_token,
-                waldur_offering_uuid=target_stomp_offering,
+                waldur_offering_uuid=self.target_offering_uuid,
                 backend_type="waldur",
                 stomp_enabled=True,
                 # Copy STOMP WebSocket settings from source if available
@@ -882,50 +875,23 @@ class WaldurBackend(backends.BaseBackend):
                     listener.on_message_callback = custom_handler
                 consumers.append((connection, event_subscription, target_offering))
 
-            # Set up STOMP subscription for OFFERING_USER events.
-            # OFFERING_USER events are published against the actual target
-            # offering (target_offering_uuid), not the STOMP offering used for
-            # agent identity registration.  When these differ, we need a
-            # separate Offering/AgentIdentityManager so the
-            # EventSubscriptionQueue and STOMP queue name use the correct UUID.
-            if target_stomp_offering != self.target_offering_uuid:
-                target_ou_offering = Offering(
-                    name=f"Target OU: {source_offering.name}",
-                    waldur_api_url=target_api_url
-                    if target_api_url.endswith("/")
-                    else target_api_url + "/",
-                    waldur_api_token=target_api_token,
-                    waldur_offering_uuid=self.target_offering_uuid,
-                    backend_type="waldur",
-                    stomp_enabled=True,
-                    stomp_ws_host=getattr(source_offering, "stomp_ws_host", None),
-                    stomp_ws_port=getattr(source_offering, "stomp_ws_port", None),
-                    stomp_ws_path=getattr(source_offering, "stomp_ws_path", None),
-                )
-                ou_identity_manager = AgentIdentityManager(
-                    target_ou_offering, target_client
-                )
-            else:
-                target_ou_offering = target_offering
-                ou_identity_manager = agent_identity_manager
-
-            ou_consumer = _setup_single_stomp_subscription(
-                target_ou_offering,
+            offering_user_consumer = _setup_single_stomp_subscription(
+                target_offering,
                 agent_identity,
-                ou_identity_manager,
+                agent_identity_manager,
                 user_agent,
                 ObservableObjectTypeEnum.OFFERING_USER,
                 global_proxy,
             )
-            if ou_consumer is not None:
-                connection, event_subscription, _ = ou_consumer
+            if offering_user_consumer is not None:
+                connection, event_subscription, _ = offering_user_consumer
                 custom_handler = make_target_offering_user_handler(
                     source_offering, self
                 )
                 listener = connection.get_listener(WALDUR_LISTENER_NAME)
                 if listener is not None:
                     listener.on_message_callback = custom_handler
-                consumers.append((connection, event_subscription, target_ou_offering))
+                consumers.append((connection, event_subscription, target_offering))
 
             if not consumers:
                 logger.error(

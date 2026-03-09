@@ -29,9 +29,6 @@ import uuid
 import pytest
 
 from waldur_api_client.api.marketplace_orders import marketplace_orders_retrieve
-from waldur_api_client.api.marketplace_provider_resources import (
-    marketplace_provider_resources_retrieve,
-)
 from waldur_api_client.types import UNSET
 
 from plugins.waldur.tests.e2e.conftest import (
@@ -258,26 +255,24 @@ class TestE2EStompFederation:
             _state["resource_uuid_a"] = resource_uuid_a
 
         # 5. Check target STOMP event (if target STOMP active)
-        if stomp_consumers["target"] and resource_uuid_a:
-            our_resource = marketplace_provider_resources_retrieve.sync(
-                uuid=resource_uuid_a, client=waldur_client_a
+        # The source order's backend_id holds the target order UUID
+        # (set by the processor from pending_order_id).
+        target_order_uuid = order.backend_id or ""
+        if stomp_consumers["target"] and target_order_uuid:
+            target_event = target_capture.wait_for_order_event(
+                target_order_uuid, timeout=30
             )
-            target_order_uuid = our_resource.backend_id or ""
-            if target_order_uuid:
-                target_event = target_capture.wait_for_order_event(
-                    target_order_uuid, timeout=30
+            if target_event:
+                report.text(
+                    f"Target STOMP event received: "
+                    f"state=`{target_event.get('order_state')}` "
+                    f"uuid=`{target_event.get('order_uuid')}`"
                 )
-                if target_event:
-                    report.text(
-                        f"Target STOMP event received: "
-                        f"state=`{target_event.get('order_state')}` "
-                        f"uuid=`{target_event.get('order_uuid')}`"
-                    )
-                else:
-                    report.text(
-                        "No target STOMP event captured "
-                        "(may have arrived before capture started)"
-                    )
+            else:
+                report.text(
+                    "No target STOMP event captured "
+                    "(may have arrived before capture started)"
+                )
 
         # 6. Snapshots
         if resource_uuid_a:

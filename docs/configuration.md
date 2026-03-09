@@ -185,8 +185,8 @@ backend_settings:
   order_poll_interval: 5                     # Seconds between sync order polls
   user_not_found_action: "warn"              # warn | fail
   # Optional: target STOMP for instant async order completion
+  # Requires target_offering_uuid to be a Marketplace.Slurm offering
   target_stomp_enabled: false
-  target_stomp_offering_uuid: ""             # Marketplace.Slurm offering on B
 ```
 
 ## Backend Components
@@ -438,7 +438,6 @@ offerings:
       order_poll_interval: 5
       user_not_found_action: "warn"
       target_stomp_enabled: true
-      target_stomp_offering_uuid: "agent-offering-uuid-on-waldur-b"
 
     backend_components:
       node_hours:
