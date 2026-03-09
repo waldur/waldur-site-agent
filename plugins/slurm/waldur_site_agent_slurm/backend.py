@@ -441,19 +441,28 @@ class SlurmBackend(backends.BaseBackend):
             self.client.execute_command(["chmod", permissions, project_path])
             if set_gid:
                 self.client.execute_command(["chmod", "g+s", project_path])
+        except BackendError:
+            logger.exception("Failed to create project directory %s", project_path)
+            return
+
+        try:
             self.client.execute_command(
                 ["chown", f"{dir_owner}:{group_name}", project_path]
             )
-            if set_acl:
+        except BackendError:
+            logger.exception("Failed to chown project directory %s", project_path)
+
+        if set_acl:
+            try:
                 self.client.execute_command([
                     "setfacl", "-R", "-m",
                     f"group:{group_name}:rwx,d:group:{group_name}:rwx",
                     project_path,
                 ])
-            logger.info("Created project directory %s", project_path)
-        except BackendError:
-            logger.exception("Failed to create project directory %s", project_path)
-            return
+            except BackendError:
+                logger.exception("Failed to set ACL on project directory %s", project_path)
+
+        logger.info("Created project directory %s", project_path)
 
         # Set Lustre quota if configured
         lustre_config = self._project_dir_config.get("lustre_quota")
@@ -507,10 +516,12 @@ class SlurmBackend(backends.BaseBackend):
 
         if current_qos == qos_downscaled:
             logger.info("The account is already downscaled")
+            self._last_qos = qos_downscaled
             return True
 
         logger.info("Setting %s QoS for the SLURM account", qos_downscaled)
         self.client.set_account_qos(resource_backend_id, qos_downscaled)
+        self._last_qos = qos_downscaled
         logger.info("The new QoS successfully set")
         return True
 
@@ -530,10 +541,12 @@ class SlurmBackend(backends.BaseBackend):
 
         if current_qos == qos_paused:
             logger.info("The account is already paused")
+            self._last_qos = qos_paused
             return True
 
         logger.info("Setting %s QoS for the SLURM account", qos_paused)
         self.client.set_account_qos(resource_backend_id, qos_paused)
+        self._last_qos = qos_paused
         logger.info("The new QoS successfully set")
         return True
 
@@ -545,25 +558,35 @@ class SlurmBackend(backends.BaseBackend):
 
         if current_qos in [None, ""]:
             logger.info("The account does not have an active QoS set, skipping reset")
+            self._last_qos = current_qos
             return False
 
         logger.info("The current QoS is %s", current_qos)
 
         if current_qos == default_qos:
             logger.info("The account already has the default QoS (%s)", default_qos)
+            self._last_qos = current_qos
             return False
 
         logger.info("Setting %s QoS", default_qos)
         self.client.set_account_qos(resource_backend_id, default_qos)
-        new_qos = self.client.get_current_account_qos(resource_backend_id)
-        logger.info("The new QoS is %s", new_qos)
+        self._last_qos = default_qos
+        logger.info("The new QoS is %s", default_qos)
 
         return True
 
     def get_resource_metadata(self, resource_backend_id: str) -> dict:
-        """Return backend metadata for the SLURM account (QoS only for now)."""
-        current_qos = self.client.get_current_account_qos(resource_backend_id)
-        return {"qos": current_qos}
+        """Return backend metadata for the SLURM account (QoS only for now).
+
+        Reuses the QoS value cached by restore/pause/downscale if available,
+        avoiding a duplicate sacctmgr query.
+        """
+        qos = getattr(self, "_last_qos", None)
+        if qos is None:
+            qos = self.client.get_current_account_qos(resource_backend_id)
+        else:
+            self._last_qos = None  # consume the cached value
+        return {"qos": qos}
 
     def _get_usage_report(
         self, resource_backend_ids: list[str]
@@ -683,7 +706,7 @@ class SlurmBackend(backends.BaseBackend):
             self.cancel_active_jobs_for_account_user(resource_backend_id, username)
 
     def _pre_delete_resource(self, waldur_resource: WaldurResource) -> None:
-        """Delete all existing associations and cancel all the active jobs."""
+        """Delete all existing associations, cancel jobs, and clean up LDAP/QoS."""
         backend_id = waldur_resource.backend_id
         if self.client.account_has_users(backend_id):
             logger.info("Cancelling all active jobs for account %s", backend_id)
@@ -691,12 +714,48 @@ class SlurmBackend(backends.BaseBackend):
             logger.info("Removing all users from account %s", backend_id)
             self.client.delete_all_users_from_account(backend_id)
 
+        # Clean up per-account QoS
+        if self._qos_config.get("enabled") and self.client.qos_exists(backend_id):
+            try:
+                self.client.delete_qos(backend_id)
+                logger.info("Deleted QoS %s", backend_id)
+            except BackendError:
+                logger.exception("Failed to delete QoS %s", backend_id)
+
+        # Clean up LDAP project group
+        if self._ldap_client:
+            try:
+                self._ldap_client.delete_group(backend_id)
+                logger.info("Deleted LDAP project group %s", backend_id)
+            except BackendError:
+                logger.exception("Failed to delete LDAP project group %s", backend_id)
+
     def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
         """Get account limits converted to Waldur-readable values."""
         account_limits_raw = self.client.get_resource_limits(resource_backend_id)
         return utils.convert_slurm_units_to_waldur_ones(
             self.backend_components, account_limits_raw, to_int=True
         )
+
+    def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
+        """Set limits using ComponentMapper when target_components are configured.
+
+        The base class only applies unit_factor, which is incorrect when
+        ComponentMapper converts Waldur components (e.g. node_hours) to
+        SLURM TRES (e.g. cpu, gpu).
+        """
+        if not self._component_mapper.is_passthrough:
+            limit_based_components = [
+                component
+                for component, data in self.backend_components.items()
+                if data["accounting_type"] == "limit"
+            ]
+            limit_values = {k: v for k, v in limits.items() if k in limit_based_components}
+            converted = self._component_mapper.convert_limits_to_target(limit_values)
+            int_limits = {k: int(v) for k, v in converted.items()}
+            self.client.set_resource_limits(resource_backend_id, int_limits)
+        else:
+            super().set_resource_limits(resource_backend_id, limits)
 
     def set_resource_user_limits(
         self, resource_backend_id: str, username: str, limits: dict[str, int]

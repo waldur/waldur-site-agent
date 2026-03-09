@@ -1,0 +1,3 @@
+#!/bin/bash
+# Stub for chown command — records calls for test assertions
+echo "chown $@" >> "${CHOWN_STUB_LOG:-/tmp/chown_commands.log}"

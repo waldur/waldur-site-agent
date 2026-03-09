@@ -90,6 +90,8 @@ class ExternalCall:
     participant: str  # "Waldur API" | "LDAP" | "SLURM"
     operation: str  # e.g. "POST /api/marketplace-orders/"
     response: str  # e.g. "201", "OK", "GID 10001"
+    payload: str = ""  # response body (Waldur API only)
+    phase: str = ""  # "user" | "agent" | "assert"
 
 
 class CallRecorder:
@@ -97,18 +99,39 @@ class CallRecorder:
 
     def __init__(self) -> None:
         self._calls: dict[str, list[ExternalCall]] = {}
+        self._docs: dict[str, str] = {}
         self._current_test: str | None = None
+        self._phase: str = "user"
 
-    def set_test(self, test_id: str) -> None:
+    def set_test(self, test_id: str, doc: str = "") -> None:
         self._current_test = test_id
+        self._phase = "user"
         self._calls.setdefault(test_id, [])
+        if doc:
+            self._docs[test_id] = doc
+
+    def set_phase(self, phase: str) -> None:
+        self._phase = phase
+
+    @contextlib.contextmanager
+    def phase(self, name: str):
+        prev = self._phase
+        self._phase = name
+        try:
+            yield
+        finally:
+            self._phase = prev
 
     def record(self, call: ExternalCall) -> None:
+        call.phase = self._phase
         key = self._current_test or "__setup__"
         self._calls.setdefault(key, []).append(call)
 
     def get_calls(self, test_id: str) -> list[ExternalCall]:
         return self._calls.get(test_id, [])
+
+    def get_doc(self, test_id: str) -> str:
+        return self._docs.get(test_id, "")
 
     def all_test_ids(self) -> list[str]:
         return [k for k in self._calls if k != "__setup__"]
@@ -161,35 +184,120 @@ def _wrap_for_recording(
         setattr(obj, name, wrapper)
 
 
-def _generate_mermaid(calls: list[ExternalCall]) -> str:
-    """Generate a mermaid sequenceDiagram from a list of calls."""
-    if not calls:
+def _format_payload(payload: str) -> str:
+    """Pretty-print JSON payload, or return raw text if not JSON."""
+    import json  # noqa: PLC0415
+
+    if not payload or not payload.strip():
         return ""
-    participants = dict.fromkeys(c.participant for c in calls)
-    lines = ["```mermaid", "sequenceDiagram"]
-    lines.append("    participant Test")
-    for p in participants:
-        lines.append(f"    participant {p}")
-    lines.append("")
-    for c in calls:
-        op = c.operation.replace('"', "'")
-        resp = c.response.replace('"', "'")
-        lines.append(f"    Test->>{c.participant}: {op}")
-        lines.append(f"    {c.participant}-->>Test: {resp}")
-    lines.append("```")
-    return "\n".join(lines)
+    try:
+        obj = json.loads(payload)
+        return json.dumps(obj, indent=2, ensure_ascii=False)
+    except (json.JSONDecodeError, ValueError):
+        return payload
+
+
+def _generate_sequence_table(
+    calls: list[ExternalCall],
+) -> tuple[str, list[str]]:
+    """Generate a text table grouped by phase.
+
+    Returns:
+        (table_markdown, payload_sections) — payloads are returned separately
+        so the caller can route them to an annex document.
+    """
+    if not calls:
+        return "", []
+
+    phase_labels = {
+        "user": "User Actions (test setup)",
+        "agent": "Site Agent / Plugin",
+        "assert": "Assertions (verification)",
+    }
+    phase_order = ["user", "agent", "assert"]
+
+    # Group calls by phase, preserving order within each phase
+    grouped: dict[str, list[tuple[int, ExternalCall]]] = {}
+    for i, c in enumerate(calls, 1):
+        phase = c.phase or "user"
+        grouped.setdefault(phase, []).append((i, c))
+
+    lines: list[str] = []
+    agent_payloads: list[str] = []
+
+    for phase in phase_order:
+        phase_calls = grouped.get(phase, [])
+        if not phase_calls:
+            continue
+
+        label = phase_labels.get(phase, phase)
+        lines.append(f"\n### {label}\n")
+
+        # Compute column widths for this phase
+        num_w = max(len(str(idx)) for idx, _ in phase_calls)
+        target_w = max(len(c.participant) for _, c in phase_calls)
+        op_w = max(len(c.operation) for _, c in phase_calls)
+        resp_w = max(len(c.response) for _, c in phase_calls)
+
+        hdr = (
+            f"| {'#':>{num_w}} "
+            f"| {'Target':<{target_w}} "
+            f"| {'Operation':<{op_w}} "
+            f"| {'Result':<{resp_w}} |"
+        )
+        sep = f"|{'─' * (num_w + 2)}"
+        sep += f"|{'─' * (target_w + 2)}"
+        sep += f"|{'─' * (op_w + 2)}"
+        sep += f"|{'─' * (resp_w + 2)}|"
+
+        lines.extend(["```", sep, hdr, sep])
+        for idx, c in phase_calls:
+            lines.append(
+                f"| {idx:>{num_w}} "
+                f"| {c.participant:<{target_w}} "
+                f"| {c.operation:<{op_w}} "
+                f"| {c.response:<{resp_w}} |"
+            )
+        lines.extend([sep, "```"])
+
+        # Collect payloads only from agent phase
+        if phase == "agent":
+            for idx, c in phase_calls:
+                if c.payload:
+                    pretty = _format_payload(c.payload)
+                    if pretty:
+                        agent_payloads.append(
+                            f"<details><summary>#{idx} {c.operation} → {c.response}</summary>\n\n"
+                            f"```json\n{pretty}\n```\n\n</details>"
+                        )
+
+    return "\n".join(lines), agent_payloads
 
 
 def _write_report(recorder: CallRecorder, path: Path) -> None:
-    """Write a markdown report with mermaid sequence diagrams per test."""
+    """Write a markdown report and a separate payloads annex."""
+    annex_path = path.with_stem(path.stem + "-payloads")
+    date_str = datetime.now(tz=timezone.utc).isoformat()
+
     sections: list[str] = []
-    sections.append("# LDAP E2E Test — Sequence Diagrams\n")
-    sections.append(f"**Date:** {datetime.now(tz=timezone.utc).isoformat()}")
-    sections.append(f"**Config:** `{E2E_LDAP_CONFIG_PATH}`\n")
+    sections.append("# LDAP E2E Test — Call Sequences\n")
+    sections.append(f"**Date:** {date_str}")
+    sections.append(f"**Config:** `{E2E_LDAP_CONFIG_PATH}`")
+    sections.append(f"**Payloads:** [{annex_path.name}]({annex_path.name})\n")
+
+    annex: list[str] = []
+    annex.append("# LDAP E2E Test — Payloads Annex\n")
+    annex.append(f"**Date:** {date_str}")
+    annex.append(f"**Report:** [{path.name}]({path.name})\n")
+    annex.append("Only Waldur API response bodies received by the site agent are included.\n")
+    has_payloads = False
 
     for test_id in recorder.all_test_ids():
         calls = recorder.get_calls(test_id)
         sections.append(f"## {test_id}\n")
+        doc = recorder.get_doc(test_id)
+        if doc:
+            sections.append(f"> {doc}\n")
         if not calls:
             sections.append("*No external calls recorded (test skipped or pure assertion).*\n")
             continue
@@ -201,11 +309,24 @@ def _write_report(recorder: CallRecorder, path: Path) -> None:
         summary = ", ".join(f"{v} {k}" for k, v in counts.items())
         sections.append(f"**Calls:** {summary}\n")
 
-        sections.append(_generate_mermaid(calls))
+        table, payloads = _generate_sequence_table(calls)
+        sections.append(table)
         sections.append("")
+
+        if payloads:
+            has_payloads = True
+            annex.append(f"## {test_id}\n")
+            if doc:
+                annex.append(f"> {doc}\n")
+            annex.append("\n".join(payloads))
+            annex.append("")
 
     path.write_text("\n".join(sections))
     logger.info("LDAP E2E report written to %s", path)
+
+    if has_payloads:
+        annex_path.write_text("\n".join(annex))
+        logger.info("LDAP E2E payloads annex written to %s", annex_path)
 
 
 # ---------------------------------------------------------------------------
@@ -499,12 +620,16 @@ def ldap_waldur_client(ldap_offering, call_recorder):
 
     def _response_hook(response):
         response.read()
+        body = response.text
+        # Sanitise UUIDs in body to keep report stable across runs
+        body = _UUID_RE.sub("{uuid}", body)
         rec.record(
             ExternalCall(
                 ts=time.monotonic(),
                 participant="Waldur API",
                 operation=f"{response.request.method} {_sanitize_url(str(response.request.url))}",
                 response=str(response.status_code),
+                payload=body,
             )
         )
 
@@ -634,7 +759,12 @@ def _track_test(request, call_recorder):
     cls = request.node.cls.__name__ if request.node.cls else ""
     test_id = request.node.nodeid.split("::")[-1]
     label = f"{cls}::{test_id}" if cls else test_id
-    call_recorder.set_test(label)
+    # Extract first line of the test function docstring
+    doc = ""
+    func = getattr(request.node, "function", None)
+    if func and func.__doc__:
+        doc = func.__doc__.strip().split("\n")[0].strip()
+    call_recorder.set_test(label, doc=doc)
     yield
 
 
@@ -669,6 +799,7 @@ class TestLdapResourceLifecycle:
         ldap_slurm_backend,
         ldap_project_uuid,
         ldap_assertions,
+        call_recorder,
     ):
         """CREATE order: SLURM account, QoS, LDAP project group, project dir."""
         offering_url, plan_url = get_offering_info(
@@ -692,15 +823,17 @@ class TestLdapResourceLifecycle:
         )
         _ldap_state["order_uuid"] = order_uuid
 
-        final_state = run_processor_until_order_terminal(
-            ldap_offering,
-            ldap_waldur_client,
-            ldap_slurm_backend,
-            order_uuid,
-        )
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                order_uuid,
+            )
         assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
 
         # Get resource backend_id
+        call_recorder.set_phase("assert")
         order = marketplace_orders_retrieve.sync(
             client=ldap_waldur_client,
             uuid=order_uuid,
@@ -738,6 +871,7 @@ class TestLdapResourceLifecycle:
         ldap_offering,
         ldap_waldur_client,
         ldap_slurm_backend,
+        call_recorder,
     ):
         """UPDATE order: increase node_hours and verify SLURM limits change."""
         resource_uuid = _ldap_state.get("resource_uuid")
@@ -758,15 +892,17 @@ class TestLdapResourceLifecycle:
         update_order_uuid = data.get("order_uuid") or data.get("uuid", "")
         assert update_order_uuid, f"No order UUID in response: {data}"
 
-        final_state = run_processor_until_order_terminal(
-            ldap_offering,
-            ldap_waldur_client,
-            ldap_slurm_backend,
-            update_order_uuid,
-        )
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                update_order_uuid,
+            )
         assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
 
         # Verify the SLURM account still exists after update
+        call_recorder.set_phase("assert")
         assert_slurm_account_exists(ldap_slurm_backend, backend_id)
 
         # Verify Waldur resource limits were updated
@@ -787,6 +923,7 @@ class TestLdapResourceLifecycle:
         ldap_offering,
         ldap_waldur_client,
         ldap_slurm_backend,
+        call_recorder,
     ):
         """TERMINATE order: SLURM account removed, resource state changes."""
         resource_uuid = _ldap_state.get("resource_uuid")
@@ -805,15 +942,17 @@ class TestLdapResourceLifecycle:
         terminate_order_uuid = data.get("order_uuid") or data.get("uuid", "")
         assert terminate_order_uuid, f"No order UUID in response: {data}"
 
-        final_state = run_processor_until_order_terminal(
-            ldap_offering,
-            ldap_waldur_client,
-            ldap_slurm_backend,
-            terminate_order_uuid,
-        )
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                terminate_order_uuid,
+            )
         assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
 
         # Verify the resource is no longer in OK state
+        call_recorder.set_phase("assert")
         res = marketplace_provider_resources_retrieve.sync(
             uuid=resource_uuid, client=ldap_waldur_client
         )
@@ -843,6 +982,7 @@ class TestLdapMembershipSync:
         ldap_waldur_client,
         ldap_slurm_backend,
         ldap_project_uuid,
+        call_recorder,
     ):
         """Create a fresh resource for membership sync tests."""
         offering_url, plan_url = get_offering_info(
@@ -859,14 +999,16 @@ class TestLdapMembershipSync:
             name=f"e2e-ldap-mem-{uuid.uuid4().hex[:6]}",
         )
 
-        final_state = run_processor_until_order_terminal(
-            ldap_offering,
-            ldap_waldur_client,
-            ldap_slurm_backend,
-            order_uuid,
-        )
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                order_uuid,
+            )
         assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
 
+        call_recorder.set_phase("assert")
         order = marketplace_orders_retrieve.sync(
             client=ldap_waldur_client, uuid=order_uuid
         )
@@ -888,20 +1030,23 @@ class TestLdapMembershipSync:
         ldap_offering,
         ldap_waldur_client,
         ldap_slurm_backend,
+        call_recorder,
     ):
         """Membership sync adds users to SLURM account and LDAP project group."""
         backend_id = _membership_state.get("backend_id")
         if not backend_id:
             pytest.skip("No backend_id from test_01")
 
-        processor = OfferingMembershipProcessor(
-            offering=ldap_offering,
-            waldur_rest_client=ldap_waldur_client,
-            resource_backend=ldap_slurm_backend,
-        )
-        processor.process_offering()
+        with call_recorder.phase("agent"):
+            processor = OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            )
+            processor.process_offering()
 
         # Collect offering user usernames from Waldur
+        call_recorder.set_phase("assert")
         offering_users = processor._get_cached_offering_users()
         usernames = [
             ou.username
@@ -1002,6 +1147,7 @@ class TestLdapMembershipSync:
         ldap_offering,
         ldap_waldur_client,
         ldap_slurm_backend,
+        call_recorder,
     ):
         """Running membership sync again should be idempotent."""
         backend_id = _membership_state.get("backend_id")
@@ -1016,13 +1162,15 @@ class TestLdapMembershipSync:
             if ldap_slurm_backend.client.get_association(u, backend_id) is not None
         )
 
-        processor = OfferingMembershipProcessor(
-            offering=ldap_offering,
-            waldur_rest_client=ldap_waldur_client,
-            resource_backend=ldap_slurm_backend,
-        )
-        processor.process_offering()
+        with call_recorder.phase("agent"):
+            processor = OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            )
+            processor.process_offering()
 
+        call_recorder.set_phase("assert")
         assoc_count_after = sum(
             1
             for u in usernames
@@ -1054,6 +1202,7 @@ class TestLdapUsageReporting:
         ldap_waldur_client,
         ldap_slurm_backend,
         ldap_project_uuid,
+        call_recorder,
     ):
         """Create a resource and sync members for usage reporting tests."""
         offering_url, plan_url = get_offering_info(
@@ -1069,14 +1218,16 @@ class TestLdapUsageReporting:
             limits={"node_hours": 500},
             name=f"e2e-ldap-usage-{uuid.uuid4().hex[:6]}",
         )
-        final_state = run_processor_until_order_terminal(
-            ldap_offering,
-            ldap_waldur_client,
-            ldap_slurm_backend,
-            order_uuid,
-        )
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                order_uuid,
+            )
         assert final_state == OrderState.DONE
 
+        call_recorder.set_phase("assert")
         order = marketplace_orders_retrieve.sync(
             client=ldap_waldur_client, uuid=order_uuid
         )
@@ -1088,12 +1239,13 @@ class TestLdapUsageReporting:
         _usage_state["backend_id"] = res.backend_id
 
         # Run membership sync to provision users
-        processor = OfferingMembershipProcessor(
-            offering=ldap_offering,
-            waldur_rest_client=ldap_waldur_client,
-            resource_backend=ldap_slurm_backend,
-        )
-        processor.process_offering()
+        with call_recorder.phase("agent"):
+            processor = OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            )
+            processor.process_offering()
         logger.info(
             "Created resource %s (backend_id=%s) for usage tests",
             resource_uuid,
@@ -1105,6 +1257,7 @@ class TestLdapUsageReporting:
         ldap_offering,
         ldap_waldur_client,
         ldap_slurm_backend,
+        call_recorder,
     ):
         """Inject per-user usage into emulator and run report processor."""
         resource_uuid = _usage_state.get("resource_uuid")
@@ -1134,19 +1287,20 @@ class TestLdapUsageReporting:
         logger.info("Injected usage for %d users: %s", len(injected), injected)
 
         # Run report processor
-        processor = OfferingReportProcessor(
-            ldap_offering,
-            ldap_waldur_client,
-            timezone="UTC",
-            resource_backend=ldap_slurm_backend,
-        )
-        waldur_offering = marketplace_provider_offerings_retrieve.sync(
-            client=ldap_waldur_client, uuid=ldap_offering.waldur_offering_uuid
-        )
-        waldur_resource = marketplace_provider_resources_retrieve.sync(
-            client=ldap_waldur_client, uuid=resource_uuid
-        )
-        processor._process_resource_with_retries(waldur_resource, waldur_offering)
+        with call_recorder.phase("agent"):
+            processor = OfferingReportProcessor(
+                ldap_offering,
+                ldap_waldur_client,
+                timezone="UTC",
+                resource_backend=ldap_slurm_backend,
+            )
+            waldur_offering = marketplace_provider_offerings_retrieve.sync(
+                client=ldap_waldur_client, uuid=ldap_offering.waldur_offering_uuid
+            )
+            waldur_resource = marketplace_provider_resources_retrieve.sync(
+                client=ldap_waldur_client, uuid=resource_uuid
+            )
+            processor._process_resource_with_retries(waldur_resource, waldur_offering)
         logger.info("Report processor completed for resource %s", backend_id)
 
     def test_03_verify_total_usage(
