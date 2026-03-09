@@ -25,11 +25,15 @@ Usage:
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import os
+import re
 import subprocess
+import time
 import uuid
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -68,6 +72,140 @@ logger = logging.getLogger(__name__)
 E2E_TESTS = os.environ.get("WALDUR_E2E_TESTS", "false").lower() == "true"
 E2E_LDAP_CONFIG_PATH = os.environ.get("WALDUR_E2E_LDAP_CONFIG", "")
 E2E_PROJECT_A_UUID = os.environ.get("WALDUR_E2E_PROJECT_A_UUID", "")
+
+# UUID pattern for sanitising diagram labels
+_UUID_RE = re.compile(r"[0-9a-f]{32}|[0-9a-f-]{36}")
+
+
+# ---------------------------------------------------------------------------
+# Call recorder — captures real external calls for sequence diagrams
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ExternalCall:
+    """A single captured external call."""
+
+    ts: float
+    participant: str  # "Waldur API" | "LDAP" | "SLURM"
+    operation: str  # e.g. "POST /api/marketplace-orders/"
+    response: str  # e.g. "201", "OK", "GID 10001"
+
+
+class CallRecorder:
+    """Accumulates external calls keyed by test name."""
+
+    def __init__(self) -> None:
+        self._calls: dict[str, list[ExternalCall]] = {}
+        self._current_test: str | None = None
+
+    def set_test(self, test_id: str) -> None:
+        self._current_test = test_id
+        self._calls.setdefault(test_id, [])
+
+    def record(self, call: ExternalCall) -> None:
+        key = self._current_test or "__setup__"
+        self._calls.setdefault(key, []).append(call)
+
+    def get_calls(self, test_id: str) -> list[ExternalCall]:
+        return self._calls.get(test_id, [])
+
+    def all_test_ids(self) -> list[str]:
+        return [k for k in self._calls if k != "__setup__"]
+
+
+def _sanitize_url(url: str) -> str:
+    """Shorten a Waldur URL for diagram readability."""
+    if "://" in url:
+        url = "/" + url.split("/", 3)[-1]
+    return _UUID_RE.sub("{uuid}", url)
+
+
+def _wrap_for_recording(
+    obj: object,
+    method_names: list[str],
+    participant: str,
+    recorder: CallRecorder,
+) -> None:
+    """Monkey-patch public methods on *obj* to record calls."""
+    for name in method_names:
+        original = getattr(obj, name, None)
+        if original is None or not callable(original):
+            continue
+
+        @functools.wraps(original)
+        def wrapper(*args, _orig=original, _name=name, **kwargs):
+            t0 = time.monotonic()
+            try:
+                result = _orig(*args, **kwargs)
+                recorder.record(
+                    ExternalCall(
+                        ts=t0,
+                        participant=participant,
+                        operation=_name,
+                        response="OK",
+                    )
+                )
+                return result
+            except Exception as exc:
+                recorder.record(
+                    ExternalCall(
+                        ts=t0,
+                        participant=participant,
+                        operation=_name,
+                        response=f"ERR: {type(exc).__name__}",
+                    )
+                )
+                raise
+
+        setattr(obj, name, wrapper)
+
+
+def _generate_mermaid(calls: list[ExternalCall]) -> str:
+    """Generate a mermaid sequenceDiagram from a list of calls."""
+    if not calls:
+        return ""
+    participants = dict.fromkeys(c.participant for c in calls)
+    lines = ["```mermaid", "sequenceDiagram"]
+    lines.append("    participant Test")
+    for p in participants:
+        lines.append(f"    participant {p}")
+    lines.append("")
+    for c in calls:
+        op = c.operation.replace('"', "'")
+        resp = c.response.replace('"', "'")
+        lines.append(f"    Test->>{c.participant}: {op}")
+        lines.append(f"    {c.participant}-->>Test: {resp}")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def _write_report(recorder: CallRecorder, path: Path) -> None:
+    """Write a markdown report with mermaid sequence diagrams per test."""
+    sections: list[str] = []
+    sections.append("# LDAP E2E Test — Sequence Diagrams\n")
+    sections.append(f"**Date:** {datetime.now(tz=timezone.utc).isoformat()}")
+    sections.append(f"**Config:** `{E2E_LDAP_CONFIG_PATH}`\n")
+
+    for test_id in recorder.all_test_ids():
+        calls = recorder.get_calls(test_id)
+        sections.append(f"## {test_id}\n")
+        if not calls:
+            sections.append("*No external calls recorded (test skipped or pure assertion).*\n")
+            continue
+
+        # Count by participant
+        counts: dict[str, int] = {}
+        for c in calls:
+            counts[c.participant] = counts.get(c.participant, 0) + 1
+        summary = ", ".join(f"{v} {k}" for k, v in counts.items())
+        sections.append(f"**Calls:** {summary}\n")
+
+        sections.append(_generate_mermaid(calls))
+        sections.append("")
+
+    path.write_text("\n".join(sections))
+    logger.info("LDAP E2E report written to %s", path)
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +438,14 @@ def assert_slurm_association_not_exists(
 # Fixtures
 # ---------------------------------------------------------------------------
 
+# Module-level recorder shared by all fixtures and tests
+_recorder = CallRecorder()
+
+
+@pytest.fixture(scope="module")
+def call_recorder():
+    return _recorder
+
 
 @pytest.fixture(scope="module")
 def ldap_config():
@@ -319,19 +465,52 @@ def ldap_offering(ldap_config):
 
 
 @pytest.fixture(scope="module")
-def ldap_assertions(ldap_offering):
+def ldap_assertions(ldap_offering, call_recorder):
     ldap_settings = ldap_offering.backend_settings.get("ldap", {})
     if not ldap_settings:
         pytest.skip("No LDAP settings in offering")
-    return LdapAssertions(ldap_settings)
+    assertions = LdapAssertions(ldap_settings)
+    _wrap_for_recording(
+        assertions,
+        [
+            "assert_user_exists",
+            "assert_user_not_exists",
+            "assert_group_exists",
+            "assert_group_not_exists",
+            "assert_user_in_group",
+            "assert_user_not_in_group",
+            "count_users",
+            "list_usernames",
+            "get_group_members",
+        ],
+        "LDAP",
+        call_recorder,
+    )
+    return assertions
 
 
 @pytest.fixture(scope="module")
-def ldap_waldur_client(ldap_offering):
-    return get_client(
+def ldap_waldur_client(ldap_offering, call_recorder):
+    client = get_client(
         ldap_offering.waldur_api_url,
         ldap_offering.waldur_api_token,
     )
+    rec = call_recorder
+
+    def _response_hook(response):
+        response.read()
+        rec.record(
+            ExternalCall(
+                ts=time.monotonic(),
+                participant="Waldur API",
+                operation=f"{response.request.method} {_sanitize_url(str(response.request.url))}",
+                response=str(response.status_code),
+            )
+        )
+
+    httpx_client = client.get_httpx_client()
+    httpx_client.event_hooks["response"].append(_response_hook)
+    return client
 
 
 @pytest.fixture(scope="module")
@@ -377,10 +556,69 @@ def _ldap_emulator_cleanup(ldap_offering) -> None:
 
 
 @pytest.fixture(scope="module")
-def ldap_slurm_backend(ldap_offering, _ldap_emulator_cleanup):
+def ldap_slurm_backend(ldap_offering, _ldap_emulator_cleanup, call_recorder):
     settings = ldap_offering.backend_settings
     components = ldap_offering.backend_components_dict
-    return SlurmBackend(settings, components)
+    backend = SlurmBackend(settings, components)
+
+    # Wrap SLURM CLI calls (execute_command on the client)
+    original_exec = backend.client.execute_command
+
+    @functools.wraps(original_exec)
+    def _recording_exec(command, silent=False):
+        t0 = time.monotonic()
+        # Extract the binary name and subcommand for a readable label
+        cmd_parts = [os.path.basename(command[0])] + command[1:]  # noqa: PTH119
+        # Drop verbose flags for brevity
+        label = " ".join(
+            p for p in cmd_parts if p not in ("--immediate", "--parsable2", "--noheader")
+        )
+        try:
+            result = original_exec(command, silent=silent)
+            call_recorder.record(
+                ExternalCall(ts=t0, participant="SLURM", operation=label, response="OK")
+            )
+            return result
+        except Exception as exc:
+            call_recorder.record(
+                ExternalCall(
+                    ts=t0,
+                    participant="SLURM",
+                    operation=label,
+                    response=f"ERR: {type(exc).__name__}",
+                )
+            )
+            raise
+
+    backend.client.execute_command = _recording_exec
+
+    # Wrap LDAP client methods (if LDAP is configured)
+    if backend._ldap_client is not None:
+        _wrap_for_recording(
+            backend._ldap_client,
+            [
+                "ping",
+                "search_user",
+                "search_user_by_email",
+                "user_exists",
+                "group_exists",
+                "get_group_gid",
+                "get_next_uid",
+                "get_next_gid",
+                "create_user",
+                "delete_user",
+                "update_user_attributes",
+                "create_project_group",
+                "delete_group",
+                "add_user_to_group",
+                "remove_user_from_group",
+                "is_user_in_group",
+            ],
+            "LDAP",
+            call_recorder,
+        )
+
+    return backend
 
 
 @pytest.fixture(scope="module")
@@ -388,6 +626,28 @@ def ldap_project_uuid():
     if not E2E_PROJECT_A_UUID:
         pytest.skip("WALDUR_E2E_PROJECT_A_UUID not set")
     return E2E_PROJECT_A_UUID
+
+
+@pytest.fixture(autouse=True)
+def _track_test(request, call_recorder):
+    """Set current test name on the recorder before each test."""
+    cls = request.node.cls.__name__ if request.node.cls else ""
+    test_id = request.node.nodeid.split("::")[-1]
+    label = f"{cls}::{test_id}" if cls else test_id
+    call_recorder.set_test(label)
+    yield
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _write_report_on_teardown(request, call_recorder):
+    """Write the mermaid report after the entire test module completes."""
+
+    def finalizer():
+        stem = Path(E2E_LDAP_CONFIG_PATH).stem if E2E_LDAP_CONFIG_PATH else "e2e-ldap"
+        path = Path(__file__).parent / f"{stem}-report.md"
+        _write_report(call_recorder, path)
+
+    request.addfinalizer(finalizer)
 
 
 # ---------------------------------------------------------------------------
