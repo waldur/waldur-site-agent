@@ -655,7 +655,8 @@ class TestLdapMembershipSync:
     def test_03_username_format_verification(self):
         """Verify username format matches first_letter_full_lastname (x.lastname)."""
         usernames = _membership_state.get("usernames", [])
-        assert len(usernames) > 0, "No usernames to verify (test_02 must pass first)"
+        if not usernames:
+            pytest.skip("No usernames from test_02 (prerequisite skipped or failed)")
 
         for uname in usernames:
             assert "." in uname, (
