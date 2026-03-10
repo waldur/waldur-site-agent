@@ -77,16 +77,19 @@ from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
     ComponentUsageCreateRequest,
     ComponentUsageItemRequest,
+    ComponentUserUsageFieldEnum,
     CourseAccount,
     OfferingUserFieldEnum,
     OrderDetailsFieldEnum,
     OrderState,
+    ProjectFieldEnum,
     ProjectServiceAccount,
     ProviderOfferingDetailsFieldEnum,
     ResourceFieldEnum,
     ResourceSetLimitsRequest,
     ResourceState,
     ServiceAccountState,
+    ServiceProviderFieldEnum,
 )
 from waldur_api_client.models.agent_processor import AgentProcessor
 from waldur_api_client.models.agent_service import AgentService
@@ -221,13 +224,19 @@ class OfferingBaseProcessor(abc.ABC):
         self._print_current_user()
 
         self.waldur_offering = marketplace_provider_offerings_retrieve.sync(
-            client=self.waldur_rest_client, uuid=self.offering.uuid
+            client=self.waldur_rest_client,
+            uuid=self.offering.uuid,
+            field=[
+                ProviderOfferingDetailsFieldEnum.COMPONENTS,
+                ProviderOfferingDetailsFieldEnum.CUSTOMER_UUID,
+            ],
         )
         utils.extend_backend_components(self.offering, self.waldur_offering.components)
 
         service_providers = marketplace_service_providers_list.sync(
             customer_uuid=self.waldur_offering.customer_uuid.hex,
             client=self.waldur_rest_client,
+            field=[ServiceProviderFieldEnum.UUID],
         )
 
         self.service_provider = service_providers[0]
@@ -2019,7 +2028,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             self.offering.uuid,
         )
         waldur_offering = marketplace_provider_offerings_retrieve.sync(
-            client=self.waldur_rest_client, uuid=self.offering.uuid
+            client=self.waldur_rest_client,
+            uuid=self.offering.uuid,
+            field=[ProviderOfferingDetailsFieldEnum.COMPONENTS],
         )
         waldur_resources = marketplace_provider_resources_list.sync_all(
             client=self.waldur_rest_client,
@@ -2196,6 +2207,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 client=self.waldur_rest_client,
                 resource_uuid=resource_uuid,
                 component_usage_billing_period=billing_period_start,
+                field=[ComponentUserUsageFieldEnum.COMPONENT_USAGE],
             )
             user_usage_parent_uuids = set()
             for uu in user_usages:
@@ -2315,7 +2327,13 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             "Fetching Waldur resource data for %s (%s)", waldur_resource.name, resource_backend_id
         )
         waldur_resource_info: WaldurResource = marketplace_provider_resources_retrieve.sync(
-            client=self.waldur_rest_client, uuid=waldur_resource.uuid.hex
+            client=self.waldur_rest_client,
+            uuid=waldur_resource.uuid.hex,
+            field=[
+                ResourceFieldEnum.UUID,
+                ResourceFieldEnum.NAME,
+                ResourceFieldEnum.BACKEND_ID,
+            ],
         )
 
         current_time = backend_utils.get_current_time_in_timezone(self.timezone)
@@ -2479,6 +2497,7 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
         waldur_projects = projects_list.sync(
             slug=project_slug,
             client=self.waldur_rest_client,
+            field=[ProjectFieldEnum.UUID],
         )
         if not waldur_projects:
             logger.info(
