@@ -184,9 +184,14 @@ backend_settings:
   order_poll_timeout: 300                    # Max seconds for sync order completion
   order_poll_interval: 5                     # Seconds between sync order polls
   user_not_found_action: "warn"              # warn | fail
+  identity_bridge_source: "isd:efp"          # ISD source for identity bridge
+  user_resolve_method: "identity_bridge"     # identity_bridge | remote_eduteams | user_field
+  role_mapping:                              # Optional: translate role names A -> B
+    PROJECT.ADMIN: PROJECT.ADMIN
+    PROJECT.MANAGER: PROJECT.MANAGER
   # Optional: target STOMP for instant async order completion
+  # Requires target_offering_uuid to be a Marketplace.Slurm offering
   target_stomp_enabled: false
-  target_stomp_offering_uuid: ""             # Marketplace.Slurm offering on B
 ```
 
 ## Backend Components
@@ -438,7 +443,6 @@ offerings:
       order_poll_interval: 5
       user_not_found_action: "warn"
       target_stomp_enabled: true
-      target_stomp_offering_uuid: "agent-offering-uuid-on-waldur-b"
 
     backend_components:
       node_hours:

@@ -125,6 +125,7 @@ class BaseBackend(ABC):
         resource_backend_ids: list[str],  # noqa: ARG002
         year: int,  # noqa: ARG002
         month: int,  # noqa: ARG002
+        waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
     ) -> dict:
         """Collect usage report for a specific historical billing period.
 
@@ -136,6 +137,8 @@ class BaseBackend(ABC):
             resource_backend_ids: List of backend resource identifiers to report on.
             year: Year of the billing period (e.g., 2024).
             month: Month of the billing period (1-12).
+            waldur_resource: Optional Waldur resource object, can be used by backends
+                to extract context such as cluster filtering from offering_backend_id.
 
         Returns:
             Same structure as ``_get_usage_report``: nested dict keyed by
@@ -636,8 +639,11 @@ class BaseBackend(ABC):
 
         return added_users
 
-    def add_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def add_user(
+        self, waldur_resource: WaldurResource, username: str, **kwargs: str
+    ) -> bool:
         """Add association between user and backend resource if it doesn't exists."""
+        del kwargs  # Used by subclass overrides (e.g. WaldurBackend for role_name)
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             message = "Empty backend ID for resource"
@@ -706,8 +712,11 @@ class BaseBackend(ABC):
         """
         del resource_backend_id, username
 
-    def remove_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def remove_user(
+        self, waldur_resource: WaldurResource, username: str, **kwargs: str
+    ) -> bool:
         """Delete association between user and backend resource if it exists."""
+        del kwargs  # Used by subclass overrides (e.g. WaldurBackend for role_name)
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             message = "Empty resource backend ID"

@@ -276,8 +276,10 @@ class TestLogAttributeConfig:
             )
 
         # Verify Waldur A client was created with correct URL
+        # rstrip("/api") strips the /api/ suffix so AuthenticatedClient
+        # can prepend /api/ to endpoint paths correctly.
         MockClient.assert_any_call(
-            base_url="https://waldur-a.example.com/api",
+            base_url="https://waldur-a.example.com",
             token="test-token-waldur-a",
         )
 

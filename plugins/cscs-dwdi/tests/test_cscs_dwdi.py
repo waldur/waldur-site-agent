@@ -709,6 +709,123 @@ class TestCSCSDWDIComputeBackend:
             call_kwargs = mock_get.call_args.kwargs
             assert call_kwargs["clusters"] == ["alps"]
 
+    def test_get_usage_report_for_period_with_waldur_resource_cluster(self) -> None:
+        """Test historical usage passes cluster from waldur_resource.offering_backend_id."""
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 1,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+        assert backend.cluster is None
+
+        waldur_resource = MagicMock()
+        waldur_resource.offering_backend_id = "Alps-Dora"
+
+        with patch.object(backend.cscs_client, "get_usage_for_month") as mock_get:
+            mock_get.return_value = {"compute": []}
+
+            backend.get_usage_report_for_period(
+                ["acct1"], 2024, 6, waldur_resource=waldur_resource
+            )
+
+            call_kwargs = mock_get.call_args.kwargs
+            assert call_kwargs["clusters"] == ["alps-dora"]
+
+    def test_get_usage_report_for_period_waldur_resource_overrides_config_cluster(self) -> None:
+        """Test waldur_resource.offering_backend_id takes priority over config cluster."""
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+            "cscs_dwdi_cluster": "old-cluster",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 1,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+
+        waldur_resource = MagicMock()
+        waldur_resource.offering_backend_id = "Alps-Dora"
+
+        with patch.object(backend.cscs_client, "get_usage_for_month") as mock_get:
+            mock_get.return_value = {"compute": []}
+
+            backend.get_usage_report_for_period(
+                ["acct1"], 2024, 6, waldur_resource=waldur_resource
+            )
+
+            call_kwargs = mock_get.call_args.kwargs
+            assert call_kwargs["clusters"] == ["alps-dora"]
+
+    def test_get_usage_report_for_period_no_waldur_resource_uses_config(self) -> None:
+        """Test fallback to config cluster when waldur_resource is not provided."""
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+            "cscs_dwdi_cluster": "alps",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 1,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+
+        with patch.object(backend.cscs_client, "get_usage_for_month") as mock_get:
+            mock_get.return_value = {"compute": []}
+
+            backend.get_usage_report_for_period(["acct1"], 2024, 6)
+
+            call_kwargs = mock_get.call_args.kwargs
+            assert call_kwargs["clusters"] == ["alps"]
+
+    def test_get_usage_report_for_period_no_cluster_anywhere(self) -> None:
+        """Test no cluster filter when neither waldur_resource nor config provides one."""
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 1,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+
+        with patch.object(backend.cscs_client, "get_usage_for_month") as mock_get:
+            mock_get.return_value = {"compute": []}
+
+            backend.get_usage_report_for_period(["acct1"], 2024, 6)
+
+            call_kwargs = mock_get.call_args.kwargs
+            assert call_kwargs["clusters"] is None
+
     def test_get_usage_report_for_period_empty(self) -> None:
         """Test historical usage report with empty input returns empty dict."""
         backend_settings = {

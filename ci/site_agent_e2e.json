@@ -1,15 +1,19 @@
 {
   "_metadata": {
     "title": "Site Agent E2E Tests",
-    "description": "Minimal fixture for waldur-site-agent CI end-to-end tests. Provides a service provider organization with three Marketplace.Slurm offerings (usage-based, limit-based, mixed) and one LDAP-integrated offering against a SLURM emulator backend, plus a test project with member users.",
-    "version": "1.0.0",
+    "description": "Minimal fixture for waldur-site-agent CI end-to-end tests. Provides a service provider organization with Marketplace.Slurm offerings (usage-based, limit-based, mixed, one LDAP-integrated, and 11 policy-testing offerings) against a SLURM emulator backend, plus a test project with member users.",
+    "version": "2.0.0",
     "scenarios": [
       "Order processing (create, update, terminate) with SLURM emulator",
       "Usage-based reporting with per-user tracking and bulk submission",
       "Limit-based allocation management",
       "Mixed usage+limit component offerings",
       "Membership sync between Waldur and SLURM backend",
-      "Multiple offerings on a single backend instance"
+      "Multiple offerings on a single backend instance",
+      "SLURM periodic usage policy evaluation (11 distinct configs)",
+      "Policy downscaling and pausing at usage thresholds",
+      "Policy grace ratio and carryover behaviour",
+      "Policy raw usage reset across period types (month, quarter, total)"
     ]
   },
 
@@ -179,6 +183,128 @@
         "service_provider_can_create_offering_user": true,
         "username_generation_policy": "service_provider"
       }
+    },
+
+    {
+      "uuid": "e2ef0000000000000000000000000101",
+      "name": "E2E Policy: month g0 reset",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: monthly, grace=0%, no carryover, raw_reset=true (like mng0r)"
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000102",
+      "name": "E2E Policy: month g0",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: monthly, grace=0%, no carryover, raw_reset=false (like alps-dora-mR)"
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000103",
+      "name": "E2E Policy: month g15",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: monthly, grace=15%, no carryover, raw_reset=false (like mng15)"
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000104",
+      "name": "E2E Policy: month g15 reset",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: monthly, grace=15%, no carryover, raw_reset=true (like mng15r)"
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000105",
+      "name": "E2E Policy: month g15 carry15 reset",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: monthly, grace=15%, carryover=15%, raw_reset=true (like mnc15g15r)"
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000106",
+      "name": "E2E Policy: quarter g0 reset",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: quarterly, grace=0%, no carryover, raw_reset=true (like alps-dora-q)"
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000107",
+      "name": "E2E Policy: quarter g15",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: quarterly, grace=15%, no carryover, raw_reset=false (like qng15)"
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000108",
+      "name": "E2E Policy: quarter g15 reset",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: quarterly, grace=15%, no carryover, raw_reset=true (like qng15r)"
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000109",
+      "name": "E2E Policy: quarter g30 reset",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: quarterly, grace=30%, no carryover, raw_reset=true (like alps-dora-q-30)"
+    },
+    {
+      "uuid": "e2ef000000000000000000000000010a",
+      "name": "E2E Policy: total g0 reset",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: total, grace=0%, no carryover, raw_reset=true (like alps-errigal-s)"
+    },
+    {
+      "uuid": "e2ef000000000000000000000000010b",
+      "name": "E2E Policy: total g15 carry15",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Policy E2E: total, grace=15%, carryover=15%, raw_reset=false (like tnc15g15)"
     }
   ],
 
@@ -266,6 +392,115 @@
       "description": "Node time in Hours (converted to CPU + GPU)",
       "billing_type": "limit",
       "measured_unit": "Hours"
+    },
+
+    {
+      "uuid": "e2e50000000000000000000000000001",
+      "offering_uuid": "e2ef0000000000000000000000000101",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours",
+      "limit_period": "month"
+    },
+    {
+      "uuid": "e2e50000000000000000000000000002",
+      "offering_uuid": "e2ef0000000000000000000000000102",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours",
+      "limit_period": "month"
+    },
+    {
+      "uuid": "e2e50000000000000000000000000003",
+      "offering_uuid": "e2ef0000000000000000000000000103",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours",
+      "limit_period": "month"
+    },
+    {
+      "uuid": "e2e50000000000000000000000000004",
+      "offering_uuid": "e2ef0000000000000000000000000104",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours",
+      "limit_period": "month"
+    },
+    {
+      "uuid": "e2e50000000000000000000000000005",
+      "offering_uuid": "e2ef0000000000000000000000000105",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours",
+      "limit_period": "month"
+    },
+    {
+      "uuid": "e2e50000000000000000000000000006",
+      "offering_uuid": "e2ef0000000000000000000000000106",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours",
+      "limit_period": "quarterly"
+    },
+    {
+      "uuid": "e2e50000000000000000000000000007",
+      "offering_uuid": "e2ef0000000000000000000000000107",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours",
+      "limit_period": "quarterly"
+    },
+    {
+      "uuid": "e2e50000000000000000000000000008",
+      "offering_uuid": "e2ef0000000000000000000000000108",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours",
+      "limit_period": "quarterly"
+    },
+    {
+      "uuid": "e2e50000000000000000000000000009",
+      "offering_uuid": "e2ef0000000000000000000000000109",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours",
+      "limit_period": "quarterly"
+    },
+    {
+      "uuid": "e2e5000000000000000000000000000a",
+      "offering_uuid": "e2ef000000000000000000000000010a",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours"
+    },
+    {
+      "uuid": "e2e5000000000000000000000000000b",
+      "offering_uuid": "e2ef000000000000000000000000010b",
+      "type": "node",
+      "name": "Node Hours",
+      "description": "Node time in hours",
+      "billing_type": "limit",
+      "measured_unit": "Hours"
     }
   ],
 
@@ -297,6 +532,73 @@
       "offering_uuid": "e2ef0000000000000000000000000004",
       "unit": "month",
       "description": "Standard plan for LDAP-integrated SLURM offering"
+    },
+
+    {
+      "uuid": "e2e00000000000000000000000000101",
+      "name": "E2E Policy m-g0-r",
+      "offering_uuid": "e2ef0000000000000000000000000101",
+      "unit": "month"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000102",
+      "name": "E2E Policy m-g0",
+      "offering_uuid": "e2ef0000000000000000000000000102",
+      "unit": "month"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000103",
+      "name": "E2E Policy m-g15",
+      "offering_uuid": "e2ef0000000000000000000000000103",
+      "unit": "month"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000104",
+      "name": "E2E Policy m-g15-r",
+      "offering_uuid": "e2ef0000000000000000000000000104",
+      "unit": "month"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000105",
+      "name": "E2E Policy m-g15-c15-r",
+      "offering_uuid": "e2ef0000000000000000000000000105",
+      "unit": "month"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000106",
+      "name": "E2E Policy q-g0-r",
+      "offering_uuid": "e2ef0000000000000000000000000106",
+      "unit": "month"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000107",
+      "name": "E2E Policy q-g15",
+      "offering_uuid": "e2ef0000000000000000000000000107",
+      "unit": "month"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000108",
+      "name": "E2E Policy q-g15-r",
+      "offering_uuid": "e2ef0000000000000000000000000108",
+      "unit": "month"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000109",
+      "name": "E2E Policy q-g30-r",
+      "offering_uuid": "e2ef0000000000000000000000000109",
+      "unit": "month"
+    },
+    {
+      "uuid": "e2e0000000000000000000000000010a",
+      "name": "E2E Policy t-g0-r",
+      "offering_uuid": "e2ef000000000000000000000000010a",
+      "unit": "month"
+    },
+    {
+      "uuid": "e2e0000000000000000000000000010b",
+      "name": "E2E Policy t-g15-c15",
+      "offering_uuid": "e2ef000000000000000000000000010b",
+      "unit": "month"
     }
   ],
 
@@ -364,6 +666,84 @@
       "plan_uuid": "e2e00000000000000000000000000014",
       "component_uuid": "e2e40000000000000000000000000001",
       "component_type": "node_hours",
+      "price": "0.00",
+      "amount": 0
+    },
+
+    {
+      "plan_uuid": "e2e00000000000000000000000000101",
+      "component_uuid": "e2e50000000000000000000000000001",
+      "component_type": "node",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000102",
+      "component_uuid": "e2e50000000000000000000000000002",
+      "component_type": "node",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000103",
+      "component_uuid": "e2e50000000000000000000000000003",
+      "component_type": "node",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000104",
+      "component_uuid": "e2e50000000000000000000000000004",
+      "component_type": "node",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000105",
+      "component_uuid": "e2e50000000000000000000000000005",
+      "component_type": "node",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000106",
+      "component_uuid": "e2e50000000000000000000000000006",
+      "component_type": "node",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000107",
+      "component_uuid": "e2e50000000000000000000000000007",
+      "component_type": "node",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000108",
+      "component_uuid": "e2e50000000000000000000000000008",
+      "component_type": "node",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000109",
+      "component_uuid": "e2e50000000000000000000000000009",
+      "component_type": "node",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e0000000000000000000000000010a",
+      "component_uuid": "e2e5000000000000000000000000000a",
+      "component_type": "node",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e0000000000000000000000000010b",
+      "component_uuid": "e2e5000000000000000000000000000b",
+      "component_type": "node",
       "price": "0.00",
       "amount": 0
     }

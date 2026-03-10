@@ -21,7 +21,13 @@ from waldur_api_client.api.marketplace_offering_users import marketplace_offerin
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_list,
 )
-from waldur_api_client.models import ComponentUsageCreateRequest, ComponentUserUsageCreateRequest
+from waldur_api_client.models import (
+    ComponentUsageCreateRequest,
+    ComponentUsageFieldEnum,
+    ComponentUserUsageCreateRequest,
+    OfferingUserFieldEnum,
+    ResourceFieldEnum,
+)
 from waldur_api_client.models.component_usage_item_request import ComponentUsageItemRequest
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.offering_user_state import OfferingUserState
@@ -166,6 +172,11 @@ def load_historical_usage_for_month(
             ResourceState.OK,
             ResourceState.ERRED,
         ],
+        field=[
+            ResourceFieldEnum.UUID,
+            ResourceFieldEnum.BACKEND_ID,
+            ResourceFieldEnum.NAME,
+        ],
     )
 
     # Filter resources that have backend IDs
@@ -183,6 +194,10 @@ def load_historical_usage_for_month(
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
             state=[OfferingUserState.OK],
+            field=[
+                OfferingUserFieldEnum.USERNAME,
+                OfferingUserFieldEnum.URL,
+            ],
         )
         username_to_offering_user = {user.username: user for user in offering_users}
     else:
@@ -359,6 +374,10 @@ def _submit_user_usage(
     component_usages = marketplace_component_usages_list.sync_all(
         client=waldur_rest_client,
         resource_uuid=[resource.uuid.hex],
+        field=[
+            ComponentUsageFieldEnum.UUID,
+            ComponentUsageFieldEnum.TYPE,
+        ],
     )
 
     # Create component usage mapping

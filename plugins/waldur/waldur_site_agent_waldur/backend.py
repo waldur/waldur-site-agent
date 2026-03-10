@@ -25,7 +25,7 @@ from waldur_site_agent.backend import backends
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
-from waldur_site_agent_waldur.client import WaldurClient
+from waldur_site_agent_waldur.client import DEFAULT_PROJECT_ROLE_NAME, WaldurClient
 from waldur_site_agent_waldur.component_mapping import ComponentMapper
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ class WaldurBackend(backends.BaseBackend):
         self.order_poll_timeout = int(backend_settings.get("order_poll_timeout", 300))
         self.order_poll_interval = int(backend_settings.get("order_poll_interval", 5))
         self.user_not_found_action = backend_settings.get("user_not_found_action", "warn")
+        self.role_mapping: dict[str, str] = backend_settings.get("role_mapping", {})
 
         self.client: WaldurClient = WaldurClient(
             api_url=backend_settings["target_api_url"],
@@ -93,6 +94,8 @@ class WaldurBackend(backends.BaseBackend):
         logger.info("  Target offering UUID: %s", self.target_offering_uuid)
         logger.info("  Target customer UUID: %s", self.target_customer_uuid)
         logger.info("  User match field: %s", self.user_match_field)
+        if self.role_mapping:
+            logger.info("  Role mapping: %s", self.role_mapping)
         logger.info("  Component mapper passthrough: %s", self.component_mapper.is_passthrough)
         return self.ping()
 
@@ -482,7 +485,8 @@ class WaldurBackend(backends.BaseBackend):
         return resource_report
 
     def get_usage_report_for_period(
-        self, resource_backend_ids: list[str], year: int, month: int
+        self, resource_backend_ids: list[str], year: int, month: int,
+        waldur_resource=None,
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Pull usage from Waldur B for a specific billing period."""
         billing_period = datetime.date(year, month, 1)
@@ -507,6 +511,18 @@ class WaldurBackend(backends.BaseBackend):
         return report
 
     # --- User/Membership Sync ---
+
+    def _map_role(self, source_role: str) -> str:
+        """Map a source (Waldur A) role name to a target (Waldur B) role name.
+
+        Uses the ``role_mapping`` backend setting if configured, otherwise
+        passes the role name through unchanged.
+        """
+        if self.role_mapping and source_role in self.role_mapping:
+            target_role = self.role_mapping[source_role]
+            logger.info("Mapped role %s -> %s", source_role, target_role)
+            return target_role
+        return source_role
 
     def _resolve_remote_user(self, local_username: str) -> Optional[UUID]:
         """Resolve a local username to a user UUID on Waldur B.
@@ -561,6 +577,60 @@ class WaldurBackend(backends.BaseBackend):
             )
 
         return remote_uuid
+
+    def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
+        """Add a single user to the resource's project on Waldur B."""
+        resource_backend_id = waldur_resource.backend_id
+        project_uuid = self._get_resource_project_uuid(resource_backend_id)
+        if not project_uuid:
+            logger.error(
+                "Cannot find project for resource %s on Waldur B", resource_backend_id
+            )
+            return False
+
+        remote_user_uuid = self._resolve_remote_user(username)
+        if not remote_user_uuid:
+            return False
+
+        source_role = kwargs.get("role_name") or DEFAULT_PROJECT_ROLE_NAME
+        target_role = self._map_role(source_role)
+        self.client.add_user_to_project(
+            project_uuid=project_uuid,
+            user_uuid=remote_user_uuid,
+            role_name=target_role,
+        )
+        logger.info(
+            "Added user %s to Waldur B project %s (role %s)",
+            username, project_uuid, target_role,
+        )
+        return True
+
+    def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
+        """Remove a single user from the resource's project on Waldur B."""
+        resource_backend_id = waldur_resource.backend_id
+        project_uuid = self._get_resource_project_uuid(resource_backend_id)
+        if not project_uuid:
+            logger.error(
+                "Cannot find project for resource %s on Waldur B", resource_backend_id
+            )
+            return False
+
+        remote_user_uuid = self._resolve_remote_user(username)
+        if not remote_user_uuid:
+            return False
+
+        source_role = kwargs.get("role_name") or DEFAULT_PROJECT_ROLE_NAME
+        target_role = self._map_role(source_role)
+        self.client.remove_user_from_project(
+            project_uuid=project_uuid,
+            user_uuid=remote_user_uuid,
+            role_name=target_role,
+        )
+        logger.info(
+            "Removed user %s from Waldur B project %s (role %s)",
+            username, project_uuid, target_role,
+        )
+        return True
 
     def add_users_to_resource(
         self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
@@ -819,13 +889,6 @@ class WaldurBackend(backends.BaseBackend):
             target_api_url = self.backend_settings["target_api_url"]
             target_api_token = self.backend_settings["target_api_token"]
 
-            # The STOMP offering on B must be agent-based (Marketplace.Slurm)
-            # since agent identity registration only accepts those.
-            # Falls back to target_offering_uuid if not specified.
-            target_stomp_offering = self.backend_settings.get(
-                "target_stomp_offering_uuid", self.target_offering_uuid
-            )
-
             # Create synthetic Offering for Waldur B to set up STOMP connection
             target_offering = Offering(
                 name=f"Target: {source_offering.name}",
@@ -833,7 +896,7 @@ class WaldurBackend(backends.BaseBackend):
                 if target_api_url.endswith("/")
                 else target_api_url + "/",
                 waldur_api_token=target_api_token,
-                waldur_offering_uuid=target_stomp_offering,
+                waldur_offering_uuid=self.target_offering_uuid,
                 backend_type="waldur",
                 stomp_enabled=True,
                 # Copy STOMP WebSocket settings from source if available
@@ -882,50 +945,23 @@ class WaldurBackend(backends.BaseBackend):
                     listener.on_message_callback = custom_handler
                 consumers.append((connection, event_subscription, target_offering))
 
-            # Set up STOMP subscription for OFFERING_USER events.
-            # OFFERING_USER events are published against the actual target
-            # offering (target_offering_uuid), not the STOMP offering used for
-            # agent identity registration.  When these differ, we need a
-            # separate Offering/AgentIdentityManager so the
-            # EventSubscriptionQueue and STOMP queue name use the correct UUID.
-            if target_stomp_offering != self.target_offering_uuid:
-                target_ou_offering = Offering(
-                    name=f"Target OU: {source_offering.name}",
-                    waldur_api_url=target_api_url
-                    if target_api_url.endswith("/")
-                    else target_api_url + "/",
-                    waldur_api_token=target_api_token,
-                    waldur_offering_uuid=self.target_offering_uuid,
-                    backend_type="waldur",
-                    stomp_enabled=True,
-                    stomp_ws_host=getattr(source_offering, "stomp_ws_host", None),
-                    stomp_ws_port=getattr(source_offering, "stomp_ws_port", None),
-                    stomp_ws_path=getattr(source_offering, "stomp_ws_path", None),
-                )
-                ou_identity_manager = AgentIdentityManager(
-                    target_ou_offering, target_client
-                )
-            else:
-                target_ou_offering = target_offering
-                ou_identity_manager = agent_identity_manager
-
-            ou_consumer = _setup_single_stomp_subscription(
-                target_ou_offering,
+            offering_user_consumer = _setup_single_stomp_subscription(
+                target_offering,
                 agent_identity,
-                ou_identity_manager,
+                agent_identity_manager,
                 user_agent,
                 ObservableObjectTypeEnum.OFFERING_USER,
                 global_proxy,
             )
-            if ou_consumer is not None:
-                connection, event_subscription, _ = ou_consumer
+            if offering_user_consumer is not None:
+                connection, event_subscription, _ = offering_user_consumer
                 custom_handler = make_target_offering_user_handler(
                     source_offering, self
                 )
                 listener = connection.get_listener(WALDUR_LISTENER_NAME)
                 if listener is not None:
                     listener.on_message_callback = custom_handler
-                consumers.append((connection, event_subscription, target_ou_offering))
+                consumers.append((connection, event_subscription, target_offering))
 
             if not consumers:
                 logger.error(

@@ -292,8 +292,9 @@ class SlurmBackend(backends.BaseBackend):
 
         return allocation_limits, waldur_resource_limits
 
-    def add_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Add user to SLURM account, with optional partition and LDAP group."""
+        del kwargs
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             message = "Empty backend ID for resource"
@@ -353,8 +354,9 @@ class SlurmBackend(backends.BaseBackend):
 
         return added_users
 
-    def remove_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Remove user from SLURM account, with optional LDAP group cleanup."""
+        del kwargs
         result = super().remove_user(waldur_resource, username)
 
         # Optional: remove user from LDAP project group
@@ -626,7 +628,8 @@ class SlurmBackend(backends.BaseBackend):
         return self._convert_usage_report(report)
 
     def get_usage_report_for_period(
-        self, resource_backend_ids: list[str], year: int, month: int
+        self, resource_backend_ids: list[str], year: int, month: int,
+        waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
     ) -> dict[str, dict[str, dict[str, int]]]:
         """Generate usage report for a specific billing period.
 
@@ -634,6 +637,7 @@ class SlurmBackend(backends.BaseBackend):
             resource_backend_ids: List of SLURM account names to query
             year: Year to query (e.g., 2024)
             month: Month to query (1-12)
+            waldur_resource: Optional Waldur resource (unused for SLURM)
 
         Returns:
             Dictionary with same structure as _get_usage_report() but for historical data

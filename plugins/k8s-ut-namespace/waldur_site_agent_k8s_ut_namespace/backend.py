@@ -560,8 +560,9 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         except Exception as e:
             logger.error("Failed to sync users to CR %s: %s", ns_name, e)
 
-    def add_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Add a single user to the default role group."""
+        del kwargs
         if not self.keycloak_client:
             return True
 
@@ -588,8 +589,9 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             logger.warning("Failed to add user %s to group: %s", username, e)
             return False
 
-    def remove_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Remove user from ALL 3 Keycloak groups."""
+        del kwargs
         if not self.keycloak_client:
             return True
 

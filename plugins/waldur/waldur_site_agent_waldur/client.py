@@ -13,6 +13,7 @@ import time
 from typing import Optional
 from uuid import UUID
 
+from waldur_api_client.api.roles import roles_list
 from waldur_api_client.api.version import version_retrieve
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.component_usage import ComponentUsage
@@ -49,8 +50,8 @@ TERMINAL_ORDER_STATES = {
     OrderState.REJECTED,
 }
 
-# Default role for project members
-DEFAULT_PROJECT_ROLE = "admin"
+# Default role name for project members (used to look up role UUID)
+DEFAULT_PROJECT_ROLE_NAME = "PROJECT.ADMIN"
 
 
 class WaldurClient(BaseClient):
@@ -72,6 +73,20 @@ class WaldurClient(BaseClient):
             base_url=base_url,
             token=api_token,
         )
+        self._role_uuid_cache: dict[str, str] = {}
+
+    def _get_role_uuid(self, role_name: str = DEFAULT_PROJECT_ROLE_NAME) -> str:
+        """Look up a role UUID by name on Waldur B, with caching."""
+        if role_name in self._role_uuid_cache:
+            return self._role_uuid_cache[role_name]
+
+        roles = roles_list.sync(client=self._api_client, name=role_name)
+        if not roles:
+            msg = f"Role {role_name} not found on Waldur B"
+            raise ValueError(msg)
+        role_uuid = str(roles[0].uuid)
+        self._role_uuid_cache[role_name] = role_uuid
+        return role_uuid
 
     # --- Marketplace Order Operations ---
 
@@ -370,13 +385,14 @@ class WaldurClient(BaseClient):
         self,
         project_uuid: UUID,
         user_uuid: UUID,
-        role: str = DEFAULT_PROJECT_ROLE,
+        role_name: str = DEFAULT_PROJECT_ROLE_NAME,
     ) -> None:
         """Add a user to a project on Waldur B."""
         from waldur_api_client.api.projects import projects_add_user  # noqa: PLC0415
 
+        role_uuid = self._get_role_uuid(role_name)
         body = UserRoleCreateRequest(
-            role=role,
+            role=role_uuid,
             user=user_uuid,
         )
 
@@ -390,13 +406,14 @@ class WaldurClient(BaseClient):
         self,
         project_uuid: UUID,
         user_uuid: UUID,
-        role: str = DEFAULT_PROJECT_ROLE,
+        role_name: str = DEFAULT_PROJECT_ROLE_NAME,
     ) -> None:
         """Remove a user from a project on Waldur B."""
         from waldur_api_client.api.projects import projects_delete_user  # noqa: PLC0415
 
+        role_uuid = self._get_role_uuid(role_name)
         body = UserRoleDeleteRequest(
-            role=role,
+            role=role_uuid,
             user=user_uuid,
         )
 

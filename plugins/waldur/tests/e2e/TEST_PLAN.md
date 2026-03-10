@@ -160,9 +160,8 @@ curl -sI https://<waldur-a-host>/rmqws-stomp
 **On Waldur B (target STOMP):**
 
 - Verify `/rmqws-stomp` WebSocket endpoint is available (same curl test)
-- The target offering is already `Marketplace.Slurm` (Step 1), so agent
-  identity registration works directly. Set `target_stomp_offering_uuid`
-  to the same UUID as `target_offering_uuid`.
+- The target offering must be `Marketplace.Slurm` for STOMP to work
+  (`Marketplace.Basic` does not support STOMP event signals)
 - Set `target_stomp_enabled: true` in backend settings
 
 If Waldur B does not have `/rmqws-stomp` configured (returns HTTP 200
@@ -211,10 +210,7 @@ offerings:
       order_poll_timeout: 300
       order_poll_interval: 5
       user_not_found_action: "warn"
-      # For target STOMP tests (optional); same UUID as target_offering_uuid
-      # since the target offering is Marketplace.Slurm
       target_stomp_enabled: true
-      target_stomp_offering_uuid: "<offering-uuid-on-B>"
 
     backend_components:
       # Example: passthrough (1:1) or with conversion factors
@@ -387,7 +383,6 @@ completion notifications.
 ```yaml
 backend_settings:
   target_stomp_enabled: true
-  target_stomp_offering_uuid: "<slurm-offering-uuid-on-B>"
 ```
 
 **Steps:**
@@ -400,8 +395,8 @@ backend_settings:
 
 **Expected:**
 
-- 1 target STOMP connection established (ORDER events on B)
-- Connection reports `is_connected() == True`
+- 2 target STOMP connections established (ORDER and OFFERING_USER events on B)
+- All connections report `is_connected() == True`
 - Skipped gracefully if `target_stomp_enabled=false`
 
 **Prerequisites:** Waldur B must have `/rmqws-stomp` WebSocket endpoint
@@ -590,6 +585,48 @@ synchronous operations (update limits, terminate).
 Runs `process_offering()` in a loop (max 15 cycles, 3s between).
 Returns the final `OrderState` without failing on ERRED.
 
+## Test Scenarios: Membership Sync
+
+### Test 9: Membership Sync — Add/Remove User (`test_e2e_membership_sync.py`)
+
+**Purpose:** Verify `WaldurBackend.add_user()` and `remove_user()` work
+end-to-end with identity bridge resolution and role mapping.
+
+**Prerequisites:**
+
+- An OK resource on Waldur A with `backend_id` pointing to Waldur B
+  (created by Test 2 or an existing allocation)
+- A user with an offering_user on Waldur A whose identity resolves on
+  Waldur B (via CUID / identity bridge)
+
+**Steps:**
+
+1. Find an OK resource on Waldur A linked to Waldur B
+2. Find a shared user (offering_user on A resolvable on B via identity bridge)
+3. Call `backend.add_user(resource, username, role_name="PROJECT.MANAGER")`
+   - Backend resolves user via identity bridge
+   - Role mapped via `role_mapping` config (if present)
+   - User added to project on Waldur B via `add_user_to_project()`
+4. Verify user has role in the project on Waldur B
+5. Call `backend.remove_user(resource, username, role_name="PROJECT.MANAGER")`
+6. Verify user role was removed on Waldur B
+
+**Expected:**
+
+- `add_user` returns `True`, user appears in project on B
+- `remove_user` returns `True`, user role is removed on B
+- Role mapping applied correctly (e.g., `PROJECT.MANAGER` → `PROJECT.MANAGER`)
+
+**Configuration:**
+
+```yaml
+backend_settings:
+  role_mapping:
+    PROJECT.ADMIN: PROJECT.ADMIN
+    PROJECT.MANAGER: PROJECT.MANAGER
+    PROJECT.MEMBER: PROJECT.MEMBER
+```
+
 ## File Inventory
 
 | File | Purpose |
@@ -597,6 +634,11 @@ Returns the final `OrderState` without failing on ERRED.
 | `conftest.py` | Fixtures: config, offering, clients, AutoApproveWaldurBackend, MessageCapture |
 | `test_e2e_federation.py` | REST polling E2E tests (create -> update -> terminate) |
 | `test_e2e_stomp.py` | STOMP event E2E tests (connections + event capture + order flow) |
+| `test_e2e_membership_sync.py` | Membership sync: add/remove user with identity bridge + role mapping |
+| `test_e2e_username_sync.py` | Username sync from Waldur B to A |
+| `test_e2e_usage_sync.py` | Usage sync from Waldur B to A |
+| `test_e2e_offering_user_pubsub.py` | OFFERING_USER STOMP event tests |
+| `test_e2e_order_rejection.py` | Order rejection flow |
 | `../integration_helpers.py` | WaldurTestSetup, AutoApproveWaldurClient |
 | `../../waldur_site_agent_waldur/backend.py` | WaldurBackend with target STOMP |
 | `../../waldur_site_agent_waldur/target_event_handler.py` | STOMP handler for B's ORDER events |

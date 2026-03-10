@@ -16,7 +16,8 @@ from waldur_site_agent_waldur.target_event_handler import (
 )
 
 SOURCE_ORDER_UUID = UUID("aaaabbbb-1111-2222-3333-444455556666")
-TARGET_ORDER_UUID = "ccccdddd-1111-2222-3333-444455556666"
+TARGET_ORDER_UUID_DASHED = "ccccdddd-1111-2222-3333-444455556666"
+TARGET_ORDER_UUID_HEX = "ccccdddd111122223333444455556666"
 OFFERING_UUID = "eeeeeeee-1111-2222-3333-444455556666"
 
 
@@ -58,7 +59,7 @@ class TestTargetOrderHandler:
     def test_handler_ignores_non_terminal_states(self, source_offering, target_offering):
         """EXECUTING order_state -> handler returns without action."""
         handler = make_target_order_handler(source_offering)
-        frame = _make_frame(TARGET_ORDER_UUID, "executing")
+        frame = _make_frame(TARGET_ORDER_UUID_HEX, "executing")
 
         with patch(
             "waldur_site_agent_waldur.target_event_handler.get_client"
@@ -69,7 +70,7 @@ class TestTargetOrderHandler:
     def test_handler_ignores_pending_provider_state(self, source_offering, target_offering):
         """PENDING_PROVIDER order_state -> handler returns without action."""
         handler = make_target_order_handler(source_offering)
-        frame = _make_frame(TARGET_ORDER_UUID, "pending-provider")
+        frame = _make_frame(TARGET_ORDER_UUID_HEX, "pending-provider")
 
         with patch(
             "waldur_site_agent_waldur.target_event_handler.get_client"
@@ -77,14 +78,52 @@ class TestTargetOrderHandler:
             handler(frame, target_offering, "test-agent")
             mock_get_client.assert_not_called()
 
-    def test_handler_processes_done_state(self, source_offering, target_offering):
-        """DONE -> finds source order, calls set_state_done."""
+    def test_handler_matches_hex_uuid_to_dashed_backend_id(
+        self, source_offering, target_offering
+    ):
+        """STOMP sends hex UUID (no dashes), backend_id has dashes -> must match."""
         handler = make_target_order_handler(source_offering)
-        frame = _make_frame(TARGET_ORDER_UUID, OrderState.DONE.value)
+        # STOMP message uses hex format (no dashes), as waldur-mastermind sends uuid.hex
+        frame = _make_frame(TARGET_ORDER_UUID_HEX, OrderState.DONE.value)
 
         mock_source_order = MagicMock()
         mock_source_order.uuid = SOURCE_ORDER_UUID
-        mock_source_order.backend_id = TARGET_ORDER_UUID
+        # API stores backend_id with dashes
+        mock_source_order.backend_id = TARGET_ORDER_UUID_DASHED
+
+        with (
+            patch(
+                "waldur_site_agent_waldur.target_event_handler.get_client"
+            ) as mock_get_client,
+            patch(
+                "waldur_site_agent_waldur.target_event_handler.marketplace_orders_list"
+            ) as mock_orders_list,
+            patch(
+                "waldur_site_agent_waldur.target_event_handler."
+                "marketplace_orders_set_state_done"
+            ) as mock_set_done,
+        ):
+            mock_client = MagicMock()
+            mock_get_client.return_value = mock_client
+            mock_orders_list.sync_all.return_value = [mock_source_order]
+
+            handler(frame, target_offering, "test-agent")
+
+            mock_set_done.sync_detailed.assert_called_once_with(
+                uuid=SOURCE_ORDER_UUID,
+                client=mock_client,
+            )
+
+    def test_handler_matches_dashed_uuid_to_dashed_backend_id(
+        self, source_offering, target_offering
+    ):
+        """STOMP sends dashed UUID -> still matches dashed backend_id."""
+        handler = make_target_order_handler(source_offering)
+        frame = _make_frame(TARGET_ORDER_UUID_DASHED, OrderState.DONE.value)
+
+        mock_source_order = MagicMock()
+        mock_source_order.uuid = SOURCE_ORDER_UUID
+        mock_source_order.backend_id = TARGET_ORDER_UUID_DASHED
 
         with (
             patch(
@@ -112,11 +151,11 @@ class TestTargetOrderHandler:
     def test_handler_processes_erred_state(self, source_offering, target_offering):
         """ERRED -> finds source order, calls set_state_erred."""
         handler = make_target_order_handler(source_offering)
-        frame = _make_frame(TARGET_ORDER_UUID, OrderState.ERRED.value)
+        frame = _make_frame(TARGET_ORDER_UUID_HEX, OrderState.ERRED.value)
 
         mock_source_order = MagicMock()
         mock_source_order.uuid = SOURCE_ORDER_UUID
-        mock_source_order.backend_id = TARGET_ORDER_UUID
+        mock_source_order.backend_id = TARGET_ORDER_UUID_DASHED
 
         with (
             patch(
@@ -143,11 +182,11 @@ class TestTargetOrderHandler:
     def test_handler_processes_canceled_state(self, source_offering, target_offering):
         """CANCELED -> finds source order, calls set_state_erred."""
         handler = make_target_order_handler(source_offering)
-        frame = _make_frame(TARGET_ORDER_UUID, OrderState.CANCELED.value)
+        frame = _make_frame(TARGET_ORDER_UUID_HEX, OrderState.CANCELED.value)
 
         mock_source_order = MagicMock()
         mock_source_order.uuid = SOURCE_ORDER_UUID
-        mock_source_order.backend_id = TARGET_ORDER_UUID
+        mock_source_order.backend_id = TARGET_ORDER_UUID_DASHED
 
         with (
             patch(
@@ -172,7 +211,7 @@ class TestTargetOrderHandler:
     def test_handler_no_matching_source_order(self, source_offering, target_offering):
         """No EXECUTING order with matching backend_id -> no-op."""
         handler = make_target_order_handler(source_offering)
-        frame = _make_frame(TARGET_ORDER_UUID, OrderState.DONE.value)
+        frame = _make_frame(TARGET_ORDER_UUID_HEX, OrderState.DONE.value)
 
         with (
             patch(
@@ -200,7 +239,7 @@ class TestTargetOrderHandler:
     ):
         """Source order with UNSET backend_id should not match."""
         handler = make_target_order_handler(source_offering)
-        frame = _make_frame(TARGET_ORDER_UUID, OrderState.DONE.value)
+        frame = _make_frame(TARGET_ORDER_UUID_HEX, OrderState.DONE.value)
 
         mock_source_order = MagicMock()
         mock_source_order.uuid = SOURCE_ORDER_UUID
@@ -444,60 +483,6 @@ class TestSetupTargetEventSubscriptions:
             for conn, _, _ in result:
                 listener = conn.get_listener.return_value
                 assert listener.on_message_callback is not None
-
-    def test_offering_user_uses_target_offering_uuid(
-        self, backend_settings, backend_components_passthrough
-    ):
-        """When target_stomp_offering_uuid differs, OFFERING_USER uses target_offering_uuid."""
-        backend_settings["target_stomp_enabled"] = True
-        backend_settings["target_stomp_offering_uuid"] = "stomp-offering-uuid"
-        backend = WaldurBackend(backend_settings, backend_components_passthrough)
-        backend.client = MagicMock()
-
-        source_offering = MagicMock()
-        source_offering.name = "Source"
-        source_offering.api_url = "https://waldur-a.example.com/api/"
-        source_offering.api_token = "source-token"
-        source_offering.uuid = OFFERING_UUID
-        source_offering.verify_ssl = True
-        source_offering.stomp_ws_host = None
-        source_offering.stomp_ws_port = None
-        source_offering.stomp_ws_path = None
-
-        def _make_consumer():
-            conn = MagicMock()
-            conn.get_listener.return_value = MagicMock()
-            return (conn, MagicMock(), MagicMock())
-
-        with (
-            patch(
-                "waldur_site_agent.event_processing.utils._register_agent_identity"
-            ) as mock_register,
-            patch(
-                "waldur_site_agent.event_processing.utils._setup_single_stomp_subscription"
-            ) as mock_setup,
-            patch(
-                "waldur_site_agent.common.utils.get_client"
-            ),
-            patch(
-                "waldur_site_agent.common.agent_identity_management.AgentIdentityManager"
-            ),
-        ):
-            mock_register.return_value = MagicMock()
-            mock_setup.side_effect = [_make_consumer(), _make_consumer()]
-
-            result = backend.setup_target_event_subscriptions(source_offering)
-
-            assert len(result) == 2
-            assert mock_setup.call_count == 2
-
-            # ORDER subscription uses target_stomp_offering_uuid
-            order_call_offering = mock_setup.call_args_list[0][0][0]
-            assert order_call_offering.uuid == "stomp-offering-uuid"
-
-            # OFFERING_USER subscription uses target_offering_uuid
-            ou_call_offering = mock_setup.call_args_list[1][0][0]
-            assert ou_call_offering.uuid == backend_settings["target_offering_uuid"]
 
     def test_enabled_but_registration_fails(
         self, backend_settings, backend_components_passthrough

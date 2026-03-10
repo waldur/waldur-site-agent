@@ -77,16 +77,19 @@ from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
     ComponentUsageCreateRequest,
     ComponentUsageItemRequest,
+    ComponentUserUsageFieldEnum,
     CourseAccount,
     OfferingUserFieldEnum,
     OrderDetailsFieldEnum,
     OrderState,
+    ProjectFieldEnum,
     ProjectServiceAccount,
     ProviderOfferingDetailsFieldEnum,
     ResourceFieldEnum,
     ResourceSetLimitsRequest,
     ResourceState,
     ServiceAccountState,
+    ServiceProviderFieldEnum,
 )
 from waldur_api_client.models.agent_processor import AgentProcessor
 from waldur_api_client.models.agent_service import AgentService
@@ -221,13 +224,19 @@ class OfferingBaseProcessor(abc.ABC):
         self._print_current_user()
 
         self.waldur_offering = marketplace_provider_offerings_retrieve.sync(
-            client=self.waldur_rest_client, uuid=self.offering.uuid
+            client=self.waldur_rest_client,
+            uuid=self.offering.uuid,
+            field=[
+                ProviderOfferingDetailsFieldEnum.COMPONENTS,
+                ProviderOfferingDetailsFieldEnum.CUSTOMER_UUID,
+            ],
         )
         utils.extend_backend_components(self.offering, self.waldur_offering.components)
 
         service_providers = marketplace_service_providers_list.sync(
             customer_uuid=self.waldur_offering.customer_uuid.hex,
             client=self.waldur_rest_client,
+            field=[ServiceProviderFieldEnum.UUID],
         )
 
         self.service_provider = service_providers[0]
@@ -1334,7 +1343,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             filters["offering_uuid"] = [offering_uuid]
         return marketplace_offering_users_list.sync_all(client=self.waldur_rest_client, **filters)
 
-    def process_user_role_changed(self, user_uuid: str, project_uuid: str, granted: bool) -> None:
+    def process_user_role_changed(
+        self,
+        user_uuid: str,
+        project_uuid: str,
+        granted: bool,
+        role_name: str = "",
+    ) -> None:
         """Process a user role change event.
 
         Handles adding or removing a user from backend resources when their
@@ -1344,6 +1359,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             user_uuid: UUID of the user whose role changed
             project_uuid: UUID of the project where the role changed
             granted: True if access was granted, False if revoked
+            role_name: Name of the role granted/revoked (e.g. PROJECT.MANAGER)
         """
         offering_users: list[OfferingUser] = self._get_user_offering_users(
             user_uuid, self.offering.uuid
@@ -1376,9 +1392,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     if waldur_resource.restrict_member_access:
                         logger.info("The resource is restricted, skipping new role.")
                         continue
-                    self.resource_backend.add_user(waldur_resource, username)
+                    self.resource_backend.add_user(
+                        waldur_resource, username, role_name=role_name
+                    )
                 else:
-                    self.resource_backend.remove_user(waldur_resource, username)
+                    self.resource_backend.remove_user(
+                        waldur_resource, username, role_name=role_name
+                    )
             except Exception as exc:
                 logger.error(
                     "Unable to add user %s to the resource %s, error: %s",
@@ -2021,7 +2041,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             self.offering.uuid,
         )
         waldur_offering = marketplace_provider_offerings_retrieve.sync(
-            client=self.waldur_rest_client, uuid=self.offering.uuid
+            client=self.waldur_rest_client,
+            uuid=self.offering.uuid,
+            field=[ProviderOfferingDetailsFieldEnum.COMPONENTS],
         )
         waldur_resources = marketplace_provider_resources_list.sync_all(
             client=self.waldur_rest_client,
@@ -2198,6 +2220,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 client=self.waldur_rest_client,
                 resource_uuid=resource_uuid,
                 component_usage_billing_period=billing_period_start,
+                field=[ComponentUserUsageFieldEnum.COMPONENT_USAGE],
             )
             user_usage_parent_uuids = set()
             for uu in user_usages:
@@ -2317,7 +2340,13 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             "Fetching Waldur resource data for %s (%s)", waldur_resource.name, resource_backend_id
         )
         waldur_resource_info: WaldurResource = marketplace_provider_resources_retrieve.sync(
-            client=self.waldur_rest_client, uuid=waldur_resource.uuid.hex
+            client=self.waldur_rest_client,
+            uuid=waldur_resource.uuid.hex,
+            field=[
+                ResourceFieldEnum.UUID,
+                ResourceFieldEnum.NAME,
+                ResourceFieldEnum.BACKEND_ID,
+            ],
         )
 
         current_time = backend_utils.get_current_time_in_timezone(self.timezone)
@@ -2410,7 +2439,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 resource_backend_id, year, month,
             )
             period_report = self.resource_backend.get_usage_report_for_period(
-                [resource_backend_id], year, month
+                [resource_backend_id], year, month,
+                waldur_resource=waldur_resource_info,
             )
             usages = period_report.get(resource_backend_id, {})
             if not usages:
@@ -2480,6 +2510,7 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
         waldur_projects = projects_list.sync(
             slug=project_slug,
             client=self.waldur_rest_client,
+            field=[ProjectFieldEnum.UUID],
         )
         if not waldur_projects:
             logger.info(

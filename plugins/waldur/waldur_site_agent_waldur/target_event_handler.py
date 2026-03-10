@@ -96,12 +96,15 @@ def make_target_order_handler(
                 state=[OrderState.EXECUTING],
             )
 
+            # Normalize to dashed UUID format for comparison:
+            # STOMP messages send hex without dashes, API returns dashed UUIDs.
+            target_uuid_str = str(UUID(order_uuid))
             source_order = next(
                 (
                     o
                     for o in (executing_orders or [])
                     if not isinstance(o.backend_id, type(UNSET))
-                    and o.backend_id == order_uuid
+                    and o.backend_id == target_uuid_str
                 ),
                 None,
             )

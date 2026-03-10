@@ -173,7 +173,8 @@ class CSCSDWDIComputeBackend(BaseBackend):
         )
 
     def get_usage_report_for_period(
-        self, resource_backend_ids: list[str], year: int, month: int
+        self, resource_backend_ids: list[str], year: int, month: int,
+        waldur_resource: Optional[WaldurResource] = None,
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Get usage report for a specific billing period.
 
@@ -181,6 +182,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
             resource_backend_ids: List of account identifiers
             year: Year to query
             month: Month to query
+            waldur_resource: Optional Waldur resource object for cluster filtering
 
         Returns:
             Usage report in Waldur format for the specified month
@@ -190,10 +192,36 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
         from_date = date(year, month, 1)
         to_date = date(year, month, calendar.monthrange(year, month)[1])
-        clusters = [self.cluster] if self.cluster else None
+        clusters = self._resolve_clusters(waldur_resource)
         return self._get_compute_usage_for_dates(
             resource_backend_ids, from_date, to_date, clusters=clusters
         )
+
+    def _resolve_clusters(
+        self, waldur_resource: Optional[WaldurResource] = None,
+    ) -> Optional[list[str]]:
+        """Resolve cluster filter from waldur_resource or fallback to config.
+
+        Uses offering_backend_id from the Waldur resource (same as pull_resource),
+        falling back to self.cluster from backend_settings config.
+        """
+        if (
+            waldur_resource is not None
+            and hasattr(waldur_resource, "offering_backend_id")
+            and waldur_resource.offering_backend_id
+            and not isinstance(waldur_resource.offering_backend_id, Unset)
+        ):
+            cluster_name = waldur_resource.offering_backend_id.lower()
+            logger.info(
+                "Using cluster filter from offering_backend_id: %s",
+                cluster_name,
+            )
+            return [cluster_name]
+
+        if self.cluster:
+            return [self.cluster]
+
+        return None
 
     def _process_api_response(
         self, response: dict[str, Any]
@@ -667,7 +695,8 @@ class CSCSDWDIStorageBackend(BaseBackend):
         return self._get_storage_usage_for_month(resource_backend_ids, exact_month)
 
     def get_usage_report_for_period(
-        self, resource_backend_ids: list[str], year: int, month: int
+        self, resource_backend_ids: list[str], year: int, month: int,
+        waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Get storage usage report for a specific billing period."""
         if not resource_backend_ids:
