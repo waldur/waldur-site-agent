@@ -125,6 +125,7 @@ class BaseBackend(ABC):
         resource_backend_ids: list[str],  # noqa: ARG002
         year: int,  # noqa: ARG002
         month: int,  # noqa: ARG002
+        waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
     ) -> dict:
         """Collect usage report for a specific historical billing period.
 
@@ -136,6 +137,8 @@ class BaseBackend(ABC):
             resource_backend_ids: List of backend resource identifiers to report on.
             year: Year of the billing period (e.g., 2024).
             month: Month of the billing period (1-12).
+            waldur_resource: Optional Waldur resource object, can be used by backends
+                to extract context such as cluster filtering from offering_backend_id.
 
         Returns:
             Same structure as ``_get_usage_report``: nested dict keyed by

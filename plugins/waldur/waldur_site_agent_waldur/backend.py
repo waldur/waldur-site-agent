@@ -482,7 +482,8 @@ class WaldurBackend(backends.BaseBackend):
         return resource_report
 
     def get_usage_report_for_period(
-        self, resource_backend_ids: list[str], year: int, month: int
+        self, resource_backend_ids: list[str], year: int, month: int,
+        waldur_resource=None,
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Pull usage from Waldur B for a specific billing period."""
         billing_period = datetime.date(year, month, 1)

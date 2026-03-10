@@ -2408,7 +2408,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 resource_backend_id, year, month,
             )
             period_report = self.resource_backend.get_usage_report_for_period(
-                [resource_backend_id], year, month
+                [resource_backend_id], year, month,
+                waldur_resource=waldur_resource_info,
             )
             usages = period_report.get(resource_backend_id, {})
             if not usages:

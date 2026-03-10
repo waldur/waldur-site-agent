@@ -268,9 +268,10 @@ class TestMultiPeriodProcessorFlow(unittest.TestCase):
         # set_usage called for past month + current month = 2
         assert set_usage_response.call_count == 2
         # get_usage_report_for_period called once for the past month
-        self.mock_backend.get_usage_report_for_period.assert_called_once_with(
-            ["test-allocation-01"], 2024, 5
-        )
+        self.mock_backend.get_usage_report_for_period.assert_called_once()
+        call_args = self.mock_backend.get_usage_report_for_period.call_args
+        assert call_args[0] == (["test-allocation-01"], 2024, 5)
+        assert "waldur_resource" in call_args[1]
 
     def test_single_period_no_historical_call(self) -> None:
         """With reporting_periods=1, only current month is reported."""
