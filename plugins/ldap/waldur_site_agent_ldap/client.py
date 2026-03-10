@@ -16,6 +16,8 @@ from ldap3 import (
     Server,
 )
 from ldap3.core.exceptions import LDAPException
+from ldap3.utils.conv import escape_filter_chars
+from ldap3.utils.dn import escape_rdn
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.exceptions import BackendError
@@ -102,10 +104,10 @@ class LdapClient:
         return f"{self.groups_ou},{self.base_dn}"
 
     def _user_dn(self, username: str) -> str:
-        return f"uid={username},{self._people_dn}"
+        return f"uid={escape_rdn(username)},{self._people_dn}"
 
     def _group_dn(self, group_name: str) -> str:
-        return f"cn={group_name},{self._groups_dn}"
+        return f"cn={escape_rdn(group_name)},{self._groups_dn}"
 
     # ---- Search operations ----
 
@@ -115,7 +117,7 @@ class LdapClient:
         try:
             conn.search(
                 self._people_dn,
-                f"(uid={username})",
+                f"(uid={escape_filter_chars(username)})",
                 search_scope=SUBTREE,
                 attributes=["uid", "uidNumber", "gidNumber", "cn", "mail", "sshPublicKey"],
             )
@@ -134,7 +136,7 @@ class LdapClient:
         try:
             conn.search(
                 self._people_dn,
-                f"(mail={email})",
+                f"(mail={escape_filter_chars(email)})",
                 search_scope=SUBTREE,
                 attributes=["uid", "uidNumber", "gidNumber", "cn", "mail"],
             )
@@ -157,7 +159,7 @@ class LdapClient:
         try:
             conn.search(
                 self._groups_dn,
-                f"(cn={group_name})",
+                f"(cn={escape_filter_chars(group_name)})",
                 search_scope=SUBTREE,
                 attributes=["cn"],
             )
@@ -173,7 +175,7 @@ class LdapClient:
         try:
             conn.search(
                 self._groups_dn,
-                f"(cn={group_name})",
+                f"(cn={escape_filter_chars(group_name)})",
                 search_scope=SUBTREE,
                 attributes=["gidNumber"],
             )
@@ -472,9 +474,15 @@ class LdapClient:
         conn = self._connect()
         try:
             if membership_type == "member":
-                filter_str = f"(&(cn={group_name})(member={self._user_dn(username)}))"
+                filter_str = (
+                    f"(&(cn={escape_filter_chars(group_name)})"
+                    f"(member={escape_filter_chars(self._user_dn(username))}))"
+                )
             else:
-                filter_str = f"(&(cn={group_name})(memberUid={username}))"
+                filter_str = (
+                    f"(&(cn={escape_filter_chars(group_name)})"
+                    f"(memberUid={escape_filter_chars(username)}))"
+                )
 
             conn.search(self._groups_dn, filter_str, search_scope=SUBTREE, attributes=["cn"])
             return len(conn.entries) > 0
