@@ -370,7 +370,8 @@ class SlurmBackend(backends.BaseBackend):
         return report_converted
 
     def get_usage_report_for_period(
-        self, resource_backend_ids: list[str], year: int, month: int
+        self, resource_backend_ids: list[str], year: int, month: int,
+        waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
     ) -> dict[str, dict[str, dict[str, int]]]:
         """Generate usage report for a specific billing period.
 
@@ -378,6 +379,7 @@ class SlurmBackend(backends.BaseBackend):
             resource_backend_ids: List of SLURM account names to query
             year: Year to query (e.g., 2024)
             month: Month to query (1-12)
+            waldur_resource: Optional Waldur resource (unused for SLURM)
 
         Returns:
             Dictionary with same structure as _get_usage_report() but for historical data
