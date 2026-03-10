@@ -635,8 +635,11 @@ class BaseBackend(ABC):
 
         return added_users
 
-    def add_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def add_user(
+        self, waldur_resource: WaldurResource, username: str, **kwargs: str
+    ) -> bool:
         """Add association between user and backend resource if it doesn't exists."""
+        del kwargs  # Used by subclass overrides (e.g. WaldurBackend for role_name)
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             message = "Empty backend ID for resource"
@@ -705,8 +708,11 @@ class BaseBackend(ABC):
         """
         del resource_backend_id, username
 
-    def remove_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def remove_user(
+        self, waldur_resource: WaldurResource, username: str, **kwargs: str
+    ) -> bool:
         """Delete association between user and backend resource if it exists."""
+        del kwargs  # Used by subclass overrides (e.g. WaldurBackend for role_name)
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             message = "Empty resource backend ID"

@@ -120,8 +120,9 @@ class MockBackend(BaseBackend):
         self._log_operation("list_resources", count=len(self._created_resources))
         return list(self._created_resources.values())
 
-    def add_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Add a user to a mock resource."""
+        del kwargs  # Used by subclass overrides (e.g. WaldurBackend for role_name)
         backend_id = waldur_resource.backend_id
         self._log_operation("add_user", backend_id=backend_id, username=username)
 
@@ -131,8 +132,9 @@ class MockBackend(BaseBackend):
                 resource_info.users.append(username)
         return True
 
-    def remove_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Remove a user from a mock resource."""
+        del kwargs  # Used by subclass overrides (e.g. WaldurBackend for role_name)
         backend_id = waldur_resource.backend_id
         self._log_operation("remove_user", backend_id=backend_id, username=username)
 

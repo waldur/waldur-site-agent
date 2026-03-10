@@ -25,7 +25,7 @@ from waldur_site_agent.backend import backends
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
-from waldur_site_agent_waldur.client import WaldurClient
+from waldur_site_agent_waldur.client import DEFAULT_PROJECT_ROLE_NAME, WaldurClient
 from waldur_site_agent_waldur.component_mapping import ComponentMapper
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ class WaldurBackend(backends.BaseBackend):
         self.order_poll_timeout = int(backend_settings.get("order_poll_timeout", 300))
         self.order_poll_interval = int(backend_settings.get("order_poll_interval", 5))
         self.user_not_found_action = backend_settings.get("user_not_found_action", "warn")
+        self.role_mapping: dict[str, str] = backend_settings.get("role_mapping", {})
 
         self.client: WaldurClient = WaldurClient(
             api_url=backend_settings["target_api_url"],
@@ -93,6 +94,8 @@ class WaldurBackend(backends.BaseBackend):
         logger.info("  Target offering UUID: %s", self.target_offering_uuid)
         logger.info("  Target customer UUID: %s", self.target_customer_uuid)
         logger.info("  User match field: %s", self.user_match_field)
+        if self.role_mapping:
+            logger.info("  Role mapping: %s", self.role_mapping)
         logger.info("  Component mapper passthrough: %s", self.component_mapper.is_passthrough)
         return self.ping()
 
@@ -509,6 +512,18 @@ class WaldurBackend(backends.BaseBackend):
 
     # --- User/Membership Sync ---
 
+    def _map_role(self, source_role: str) -> str:
+        """Map a source (Waldur A) role name to a target (Waldur B) role name.
+
+        Uses the ``role_mapping`` backend setting if configured, otherwise
+        passes the role name through unchanged.
+        """
+        if self.role_mapping and source_role in self.role_mapping:
+            target_role = self.role_mapping[source_role]
+            logger.info("Mapped role %s -> %s", source_role, target_role)
+            return target_role
+        return source_role
+
     def _resolve_remote_user(self, local_username: str) -> Optional[UUID]:
         """Resolve a local username to a user UUID on Waldur B.
 
@@ -562,6 +577,60 @@ class WaldurBackend(backends.BaseBackend):
             )
 
         return remote_uuid
+
+    def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
+        """Add a single user to the resource's project on Waldur B."""
+        resource_backend_id = waldur_resource.backend_id
+        project_uuid = self._get_resource_project_uuid(resource_backend_id)
+        if not project_uuid:
+            logger.error(
+                "Cannot find project for resource %s on Waldur B", resource_backend_id
+            )
+            return False
+
+        remote_user_uuid = self._resolve_remote_user(username)
+        if not remote_user_uuid:
+            return False
+
+        source_role = kwargs.get("role_name") or DEFAULT_PROJECT_ROLE_NAME
+        target_role = self._map_role(source_role)
+        self.client.add_user_to_project(
+            project_uuid=project_uuid,
+            user_uuid=remote_user_uuid,
+            role_name=target_role,
+        )
+        logger.info(
+            "Added user %s to Waldur B project %s (role %s)",
+            username, project_uuid, target_role,
+        )
+        return True
+
+    def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
+        """Remove a single user from the resource's project on Waldur B."""
+        resource_backend_id = waldur_resource.backend_id
+        project_uuid = self._get_resource_project_uuid(resource_backend_id)
+        if not project_uuid:
+            logger.error(
+                "Cannot find project for resource %s on Waldur B", resource_backend_id
+            )
+            return False
+
+        remote_user_uuid = self._resolve_remote_user(username)
+        if not remote_user_uuid:
+            return False
+
+        source_role = kwargs.get("role_name") or DEFAULT_PROJECT_ROLE_NAME
+        target_role = self._map_role(source_role)
+        self.client.remove_user_from_project(
+            project_uuid=project_uuid,
+            user_uuid=remote_user_uuid,
+            role_name=target_role,
+        )
+        logger.info(
+            "Removed user %s from Waldur B project %s (role %s)",
+            username, project_uuid, target_role,
+        )
+        return True
 
     def add_users_to_resource(
         self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict

@@ -63,6 +63,7 @@ graph LR
 - **Passthrough Mode**: 1:1 forwarding when no conversion is needed
 - **Usage Pulling**: Fetches total and per-user usage from Waldur B, reverse-converts to Waldur A components
 - **Membership Sync**: Synchronizes project memberships with configurable user matching (CUID, email, username)
+- **Role Mapping**: Configurable role name translation between Waldur A and B (e.g., `PROJECT.ADMIN` → `PROJECT.MANAGER`)
 - **Project Tracking**: Automatic project creation on Waldur B with `backend_id` mapping
 
 ## Architecture
@@ -397,6 +398,11 @@ offerings:
       order_poll_timeout: 300          # seconds
       order_poll_interval: 5           # seconds
       user_not_found_action: "warn"    # warn | fail
+      identity_bridge_source: "isd:efp"  # Required for identity bridge user resolution
+      role_mapping:                      # Optional: translate role names A -> B
+        PROJECT.ADMIN: PROJECT.ADMIN
+        PROJECT.MANAGER: PROJECT.MANAGER
+        PROJECT.MEMBER: PROJECT.MEMBER
     backend_components:
       node_hours:
         measured_unit: "Hours"
@@ -439,6 +445,10 @@ offerings:
       order_poll_timeout: 300
       order_poll_interval: 5
       user_not_found_action: "warn"
+      identity_bridge_source: "isd:efp"
+      role_mapping:
+        PROJECT.ADMIN: PROJECT.ADMIN
+        PROJECT.MANAGER: PROJECT.MANAGER
       # Target STOMP: subscribe to ORDER events on Waldur B
       target_stomp_enabled: true
 
@@ -498,6 +508,9 @@ These settings are on the offering itself (not inside `backend_settings`):
 | `order_poll_interval` | No | `5` | Seconds between synchronous order state polls |
 | `user_not_found_action` | No | `warn` | When user not found: `warn` or `fail` |
 | `target_stomp_enabled` | No | `false` | STOMP on B for instant order completion (requires Slurm offering) |
+| `identity_bridge_source` | No | `""` | ISD source identifier for identity bridge (e.g. `isd:efp`) |
+| `user_resolve_method` | No | `identity_bridge` | User lookup: `identity_bridge`, `remote_eduteams`, `user_field` |
+| `role_mapping` | No | `{}` | Map source role names to target (e.g. `PROJECT.ADMIN: PROJECT.MANAGER`) |
 
 ### Required User Permissions
 
@@ -608,13 +621,15 @@ graph TB
 
     subgraph "membership_sync mode"
         M_DIFF[Compute membership diff<br/>Waldur A vs Waldur B]
-        M_RESOLVE[Resolve users<br/>cuid / email / username]
+        M_RESOLVE[Resolve users<br/>cuid / email / identity bridge]
+        M_MAP[Map role names<br/>via role_mapping]
         M_ADD[Add to project<br/>on Waldur B]
         M_REMOVE[Remove from project<br/>on Waldur B]
 
         M_DIFF --> M_RESOLVE
-        M_RESOLVE --> M_ADD
-        M_RESOLVE --> M_REMOVE
+        M_RESOLVE --> M_MAP
+        M_MAP --> M_ADD
+        M_MAP --> M_REMOVE
     end
 
     classDef orderMode fill:#e3f2fd
@@ -653,8 +668,13 @@ plugins/waldur/
     ├── test_username_backend.py           # Identity bridge username backend tests (22 tests)
     └── e2e/                               # End-to-end tests against live instances
         ├── conftest.py                    # E2E fixtures, AutoApproveWaldurBackend, MessageCapture
-        ├── test_e2e_federation.py         # REST polling lifecycle tests (Tests 1-4)
-        ├── test_e2e_stomp.py              # STOMP event tests (Tests 5-7)
+        ├── test_e2e_federation.py         # REST polling lifecycle tests (create, update, terminate)
+        ├── test_e2e_stomp.py              # STOMP event tests (connections + event flow)
+        ├── test_e2e_membership_sync.py    # Membership sync: add/remove user with role mapping
+        ├── test_e2e_username_sync.py      # Username sync from Waldur B to A
+        ├── test_e2e_usage_sync.py         # Usage sync from Waldur B to A
+        ├── test_e2e_offering_user_pubsub.py # OFFERING_USER STOMP event tests
+        ├── test_e2e_order_rejection.py    # Order rejection flow
         └── TEST_PLAN.md                   # Detailed E2E test plan
 ```
 
@@ -748,13 +768,47 @@ backend_settings:
   user_match_field: "cuid"
 ```
 
+## Role Mapping
+
+When user role events are forwarded from Waldur A to Waldur B, the agent can translate
+role names using the `role_mapping` backend setting. This is useful when the two Waldur
+instances use different role naming conventions.
+
+### Role Mapping Configuration
+
+```yaml
+backend_settings:
+  role_mapping:
+    PROJECT.ADMIN: PROJECT.ADMIN
+    PROJECT.MANAGER: PROJECT.MANAGER
+    PROJECT.MEMBER: PROJECT.MEMBER
+```
+
+If a role name is not found in the mapping, it is passed through unchanged.
+If `role_mapping` is empty or not set, all role names pass through unchanged.
+
+### Role Mapping Flow
+
+1. A `user_role` STOMP event arrives from Waldur A with `role_name` (e.g. `PROJECT.MANAGER`)
+2. The event handler passes `role_name` to `OfferingMembershipProcessor.process_user_role_changed()`
+3. The processor calls `WaldurBackend.add_user()` or `remove_user()` with `role_name=...`
+4. `WaldurBackend._map_role()` translates the role name via `role_mapping`
+5. The mapped role is looked up by name on Waldur B (`roles_list` API) to get its UUID
+6. The user is added/removed from the project on Waldur B with the correct role UUID
+
+### Default Role
+
+When no `role_name` is provided in a STOMP event (e.g. batch membership sync),
+the default role `PROJECT.ADMIN` is used. This can be overridden via `role_mapping`
+if needed.
+
 ## Identity Bridge Integration
 
 The plugin includes a username management backend (`waldur-identity-bridge`) that pushes
 user profiles from Waldur A to Waldur B via the Identity Bridge API before membership sync.
 This ensures users exist on Waldur B before the agent tries to resolve and add them to projects.
 
-### How It Works
+### Identity Bridge Flow
 
 1. During membership sync, `sync_user_profiles()` is called before user resolution
 2. For each offering user on Waldur A, it sends `POST /api/identity-bridge/` to Waldur B
@@ -847,13 +901,18 @@ WALDUR_E2E_PROJECT_A_UUID=<uuid> \
 |--------|-------|-------|
 | `test_component_mapping.py` | 22 | Forward/reverse conversion, passthrough, round-trip |
 | `test_client.py` | 20 | API operations with mocked `waldur_api_client` |
-| `test_backend.py` | 36 | Resource lifecycle, async orders, usage reporting, membership sync |
+| `test_backend.py` | 47 | Resource lifecycle, async orders, usage reporting, membership sync, role mapping |
 | `test_username_backend.py` | 22 | Identity bridge username backend, attribute mapping, user sync |
 | `test_target_event_handler.py` | -- | STOMP ORDER event handling, source order state updates |
 | `test_integration.py` | 56 | Integration tests against real single Waldur instance |
 | `test_integration_username_sync.py` | 18 | Username sync, STOMP event routing, periodic reconciliation |
 | `e2e/test_e2e_federation.py` | 4 | REST polling lifecycle (create, update, terminate) |
 | `e2e/test_e2e_stomp.py` | 4 | STOMP connections + event capture + order flow + cleanup |
+| `e2e/test_e2e_membership_sync.py` | 6 | Membership add/remove with identity bridge + role mapping |
+| `e2e/test_e2e_username_sync.py` | 7 | Username sync from Waldur B to A |
+| `e2e/test_e2e_usage_sync.py` | 7 | Usage sync with component reverse conversion |
+| `e2e/test_e2e_offering_user_pubsub.py` | 6 | OFFERING_USER STOMP events |
+| `e2e/test_e2e_order_rejection.py` | 5 | Order rejection propagation |
 
 ## Comparison with marketplace_remote
 
