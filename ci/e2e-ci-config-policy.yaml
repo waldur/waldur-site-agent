@@ -1,0 +1,95 @@
+# E2E policy test configuration for CI pipeline.
+# 11 offerings covering all distinct SLURM periodic usage policy configurations
+# found in the staging cluster. Each offering has a single "node" component.
+#
+# API host is "docker" — the DinD service hostname in GitLab CI.
+# For local testing, override with WALDUR_E2E_API_HOST=localhost.
+
+timezone: "UTC"
+
+# Shared anchors for repeated blocks
+_backend_settings: &backend_settings
+  slurm_bin_path: ".venv/bin"
+  default_account: "root"
+  customer_prefix: "e2e_pol_"
+  project_prefix: "e2e_pol_"
+  allocation_prefix: "e2e_pol_"
+  qos_downscaled: "limited"
+  qos_paused: "paused"
+  qos_default: "normal"
+  enable_user_homedir_account_creation: false
+
+_backend_components: &backend_components
+  node:
+    limit: 1000
+    measured_unit: "Hours"
+    unit_factor: 1
+    accounting_type: "limit"
+    label: "Node Hours"
+
+_common: &common
+  waldur_api_url: "http://docker:8080/api/"
+  waldur_api_token: "e2e0000000000000000000000000token001"
+  stomp_enabled: false
+  backend_type: "slurm"
+  order_processing_backend: "slurm"
+  reporting_backend: "slurm"
+  membership_sync_backend: "slurm"
+  backend_settings: *backend_settings
+  backend_components: *backend_components
+
+offerings:
+  # 1. month, grace=0%, no carryover, raw_reset=true (like mng0r)
+  - <<: *common
+    name: "E2E Policy: month g0 reset"
+    waldur_offering_uuid: "e2ef0000000000000000000000000101"
+
+  # 2. month, grace=0%, no carryover, raw_reset=false (like alps-dora-mR)
+  - <<: *common
+    name: "E2E Policy: month g0"
+    waldur_offering_uuid: "e2ef0000000000000000000000000102"
+
+  # 3. month, grace=15%, no carryover, raw_reset=false (like mng15)
+  - <<: *common
+    name: "E2E Policy: month g15"
+    waldur_offering_uuid: "e2ef0000000000000000000000000103"
+
+  # 4. month, grace=15%, no carryover, raw_reset=true (like mng15r)
+  - <<: *common
+    name: "E2E Policy: month g15 reset"
+    waldur_offering_uuid: "e2ef0000000000000000000000000104"
+
+  # 5. month, grace=15%, carryover=15%, raw_reset=true (like mnc15g15r)
+  - <<: *common
+    name: "E2E Policy: month g15 carry15 reset"
+    waldur_offering_uuid: "e2ef0000000000000000000000000105"
+
+  # 6. quarter, grace=0%, no carryover, raw_reset=true (like alps-dora-q)
+  - <<: *common
+    name: "E2E Policy: quarter g0 reset"
+    waldur_offering_uuid: "e2ef0000000000000000000000000106"
+
+  # 7. quarter, grace=15%, no carryover, raw_reset=false (like qng15)
+  - <<: *common
+    name: "E2E Policy: quarter g15"
+    waldur_offering_uuid: "e2ef0000000000000000000000000107"
+
+  # 8. quarter, grace=15%, no carryover, raw_reset=true (like qng15r)
+  - <<: *common
+    name: "E2E Policy: quarter g15 reset"
+    waldur_offering_uuid: "e2ef0000000000000000000000000108"
+
+  # 9. quarter, grace=30%, no carryover, raw_reset=true (like alps-dora-q-30)
+  - <<: *common
+    name: "E2E Policy: quarter g30 reset"
+    waldur_offering_uuid: "e2ef0000000000000000000000000109"
+
+  # 10. total, grace=0%, no carryover, raw_reset=true (like alps-errigal-s)
+  - <<: *common
+    name: "E2E Policy: total g0 reset"
+    waldur_offering_uuid: "e2ef000000000000000000000000010a"
+
+  # 11. total, grace=15%, carryover=15%, raw_reset=false (like tnc15g15)
+  - <<: *common
+    name: "E2E Policy: total g15 carry15"
+    waldur_offering_uuid: "e2ef000000000000000000000000010b"
