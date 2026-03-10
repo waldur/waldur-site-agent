@@ -7,6 +7,7 @@ from waldur_site_agent.common import utils
 from waldur_site_agent.common import structures
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.provider_offering_details import ProviderOfferingDetails
+from waldur_api_client.models.provider_offering_details_field_enum import ProviderOfferingDetailsFieldEnum
 from waldur_api_client.models.merged_plugin_options import MergedPluginOptions
 from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
@@ -302,7 +303,9 @@ class TestOfferingUserUpdate(unittest.TestCase):
 
         # Verify the API call was made to check username generation policy
         marketplace_provider_offerings_retrieve_mock.assert_called_once_with(
-            client=self.waldur_client, uuid=self.offering.uuid
+            client=self.waldur_client,
+            uuid=self.offering.uuid,
+            field=[ProviderOfferingDetailsFieldEnum.PLUGIN_OPTIONS],
         )
 
     @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")

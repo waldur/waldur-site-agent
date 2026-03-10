@@ -150,7 +150,8 @@ class ReportingTest(unittest.TestCase):
 
         service_provider = ServiceProvider(uuid=uuid.uuid4())
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering['customer_uuid']}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/",
+            params={"customer_uuid": self.waldur_offering["customer_uuid"], "field": "uuid"},
         ).respond(200, json=[service_provider.to_dict()])
 
         processor = OfferingReportProcessor(self.offering, self.mock_client)
@@ -211,7 +212,8 @@ class ReportingTest(unittest.TestCase):
 
         service_provider = ServiceProvider(uuid=uuid.uuid4())
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/?customer_uuid={self.waldur_offering['customer_uuid']}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/",
+            params={"customer_uuid": self.waldur_offering["customer_uuid"], "field": "uuid"},
         ).respond(200, json=[service_provider.to_dict()])
 
         processor = OfferingReportProcessor(self.offering, self.mock_client)

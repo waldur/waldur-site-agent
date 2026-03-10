@@ -83,7 +83,8 @@ class ServiceAccountMessageTest(TestCase):
             f"{self.BASE_URL}/api/marketplace-provider-offerings/{self.offering_uuid}/"
         ).respond(200, json={"customer_uuid": customer_uuid, "components": []})
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/?customer_uuid={customer_uuid}"
+            f"{self.BASE_URL}/api/marketplace-service-providers/",
+            params={"customer_uuid": customer_uuid, "field": "uuid"},
         ).respond(200, json=[self.service_provider.to_dict()])
         respx.get(url__regex=r".*/api/marketplace-provider-resources/.*").respond(
             200, json=[self.waldur_resource.to_dict()]
