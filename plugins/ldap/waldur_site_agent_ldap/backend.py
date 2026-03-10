@@ -13,6 +13,7 @@ from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common.structures import Offering
 from waldur_site_agent_ldap.client import LdapClient
+from waldur_site_agent_ldap.email_sender import WelcomeEmailSender
 
 
 class LdapUsernameBackend(AbstractUsernameManagementBackend):
@@ -41,6 +42,11 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         self.remove_user_on_deactivate = ldap_settings.get("remove_user_on_deactivate", False)
         self.access_groups = ldap_settings.get("access_groups", [])
         self.generate_vpn_password = ldap_settings.get("generate_vpn_password", False)
+
+        welcome_email_settings = ldap_settings.get("welcome_email")
+        self.email_sender = (
+            WelcomeEmailSender(welcome_email_settings) if welcome_email_settings else None
+        )
 
     def get_username(self, offering_user: OfferingUser) -> Optional[str]:
         """Check if a user already exists in LDAP.
@@ -91,7 +97,7 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
             password = LdapClient.generate_random_password()
 
         # Create the POSIX user in LDAP
-        self.client.create_user(
+        uid_number = self.client.create_user(
             username=username,
             first_name=first_name,
             last_name=last_name,
@@ -117,6 +123,21 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
             username,
             offering_user.uuid,
         )
+
+        # Send welcome email (non-blocking — failure is logged but does not abort)
+        if self.email_sender and email:
+            self.email_sender.send_welcome_email(
+                recipient_email=email,
+                username=username,
+                vpn_password=password or "",
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                home_directory=f"{self.client.default_home_base}/{username}",
+                login_shell=self.client.default_login_shell,
+                uid_number=str(uid_number),
+            )
+
         return username
 
     def sync_user_profiles(self, offering_users: list[OfferingUser]) -> None:

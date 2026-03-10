@@ -1976,12 +1976,14 @@ name = "waldur-site-agent-ldap"
 version = "0.9.8"
 source = { editable = "plugins/ldap" }
 dependencies = [
+    { name = "jinja2" },
     { name = "ldap3" },
     { name = "waldur-site-agent" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "jinja2", specifier = ">=3.0.0,<4.0" },
     { name = "ldap3", specifier = ">=2.9.0,<3" },
     { name = "waldur-site-agent", editable = "." },
 ]

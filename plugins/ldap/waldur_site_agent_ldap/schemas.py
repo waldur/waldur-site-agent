@@ -95,6 +95,13 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         description="LDAP groups to add new users to (e.g., VPN access, GPU access)",
     )
 
+    # Welcome email
+    welcome_email: Optional[WelcomeEmailSchema] = Field(
+        default=None,
+        description="SMTP settings for sending a welcome email on account creation. "
+        "Disabled when not configured.",
+    )
+
     # Object classes
     user_object_classes: Optional[list[str]] = Field(
         default=None,
@@ -117,6 +124,35 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
             msg = "ID range values must be non-negative"
             raise ValueError(msg)
         return v
+
+
+class WelcomeEmailSchema(PluginBackendSettingsSchema):
+    """SMTP and template settings for welcome emails sent on account creation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # SMTP connection
+    smtp_host: str = Field(..., description="SMTP server hostname")
+    smtp_port: int = Field(default=587, description="SMTP server port")
+    smtp_username: Optional[str] = Field(default=None, description="SMTP auth username")
+    smtp_password: Optional[str] = Field(default=None, description="SMTP auth password")
+    use_tls: bool = Field(default=True, description="Use STARTTLS (port 587)")
+    use_ssl: bool = Field(default=False, description="Use implicit SSL (port 465)")
+    timeout: int = Field(default=30, description="SMTP connection timeout in seconds")
+
+    # Sender
+    from_address: str = Field(..., description="Sender email address")
+    from_name: Optional[str] = Field(default=None, description="Sender display name")
+
+    # Email content
+    subject: str = Field(
+        default="Your new account has been created",
+        description="Email subject line (supports Jinja2 template variables)",
+    )
+    template_path: str = Field(
+        ...,
+        description="Path to Jinja2 email body template file (absolute or relative to CWD)",
+    )
 
 
 class LdapBackendSettingsSchema(PluginBackendSettingsSchema):

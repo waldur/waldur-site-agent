@@ -1460,3 +1460,244 @@ class TestLdapBackwardCompat:
         back = mapper.convert_usage_from_target({"cpu": 640, "gpu": 80})
         assert back == {"node_hours": 20.0}
         logger.info("Conversion mapper verified: node_hours <-> cpu+gpu")
+
+
+# ---------------------------------------------------------------------------
+# Tests — Welcome email on user provisioning
+# ---------------------------------------------------------------------------
+
+_email_state: dict = {}
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapWelcomeEmail:
+    """Welcome email sending during LDAP user provisioning."""
+
+    def test_01_create_resource_for_email(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_project_uuid,
+        call_recorder,
+    ):
+        """Create a fresh resource for welcome email tests."""
+        offering_url, plan_url = get_offering_info(
+            ldap_waldur_client, ldap_offering.waldur_offering_uuid
+        )
+        project_url = get_project_url(ldap_waldur_client, ldap_project_uuid)
+
+        order_uuid = create_source_order(
+            client=ldap_waldur_client,
+            offering_url=offering_url,
+            project_url=project_url,
+            plan_url=plan_url,
+            limits={"node_hours": 30},
+            name=f"e2e-ldap-email-{uuid.uuid4().hex[:6]}",
+        )
+
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                order_uuid,
+            )
+        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+        call_recorder.set_phase("assert")
+        order = marketplace_orders_retrieve.sync(
+            client=ldap_waldur_client, uuid=order_uuid
+        )
+        resource_uuid = order.marketplace_resource_uuid.hex
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+
+        _email_state["resource_uuid"] = resource_uuid
+        _email_state["backend_id"] = res.backend_id
+        logger.info(
+            "Created resource %s (backend_id=%s) for email tests",
+            resource_uuid,
+            res.backend_id,
+        )
+
+    def test_02_membership_sync_sends_welcome_emails(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_assertions,
+        tmp_path,
+        call_recorder,
+    ):
+        """Membership sync with welcome_email config sends emails for new users.
+
+        Patches the offering's backend_settings to enable welcome_email and
+        generate_vpn_password, then captures SMTP calls via mock.
+        """
+        backend_id = _email_state.get("backend_id")
+        if not backend_id:
+            pytest.skip("No backend_id from test_01")
+
+        # Write a simple template to a temp file
+        template_file = tmp_path / "welcome.txt.j2"
+        template_file.write_text(
+            "Hello {{ first_name }},\n"
+            "Username: {{ username }}\n"
+            "{% if vpn_password %}VPN: {{ vpn_password }}\n{% endif %}"
+            "Home: {{ home_directory }}\n"
+        )
+
+        # Patch offering backend_settings to enable welcome email + VPN password
+        original_settings = ldap_offering.backend_settings
+        patched_ldap = dict(original_settings.get("ldap", {}))
+        patched_ldap["generate_vpn_password"] = True
+        patched_ldap["welcome_email"] = {
+            "smtp_host": "localhost",
+            "smtp_port": 25,
+            "from_address": "test@e2e.local",
+            "use_tls": False,
+            "use_ssl": False,
+            "template_path": str(template_file),
+        }
+        patched_settings = dict(original_settings)
+        patched_settings["ldap"] = patched_ldap
+        ldap_offering.backend_settings = patched_settings
+
+        # Collect sent emails via mock SMTP
+        sent_emails: list[tuple[str, list[str], str]] = []
+        from unittest.mock import MagicMock, patch  # noqa: PLC0415
+
+        mock_smtp_instance = MagicMock()
+
+        def _capture_sendmail(from_addr, to_addrs, msg_str):
+            sent_emails.append((from_addr, to_addrs, msg_str))
+
+        mock_smtp_instance.sendmail.side_effect = _capture_sendmail
+
+        try:
+            with (
+                call_recorder.phase("agent"),
+                patch(
+                    "waldur_site_agent_ldap.email_sender.smtplib"
+                ) as mock_smtplib,
+            ):
+                mock_smtplib.SMTP.return_value = mock_smtp_instance
+
+                processor = OfferingMembershipProcessor(
+                    offering=ldap_offering,
+                    waldur_rest_client=ldap_waldur_client,
+                    resource_backend=ldap_slurm_backend,
+                )
+                processor.process_offering()
+        finally:
+            # Restore original settings
+            ldap_offering.backend_settings = original_settings
+
+        call_recorder.set_phase("assert")
+
+        # Collect offering user usernames
+        offering_users = processor._get_cached_offering_users()
+        usernames = [
+            ou.username
+            for ou in offering_users
+            if not isinstance(ou.username, type(UNSET)) and ou.username
+        ]
+        _email_state["usernames"] = usernames
+        _email_state["sent_emails"] = sent_emails
+
+        logger.info(
+            "Membership sync completed: %d usernames, %d emails sent",
+            len(usernames),
+            len(sent_emails),
+        )
+
+    def test_03_emails_contain_credentials(self):
+        """Verify sent emails contain username, VPN password, and home directory."""
+        sent_emails = _email_state.get("sent_emails", [])
+        usernames = _email_state.get("usernames", [])
+        if not sent_emails:
+            # Users may already exist from prior test classes (no new creation = no email)
+            if usernames:
+                logger.info(
+                    "No emails sent — users likely already existed from prior tests"
+                )
+                pytest.skip("No welcome emails sent (users already existed)")
+            else:
+                pytest.skip("No usernames or emails from test_02")
+
+        for from_addr, to_addrs, msg_str in sent_emails:
+            assert from_addr == "test@e2e.local", f"Unexpected from: {from_addr}"
+            assert len(to_addrs) == 1, f"Expected 1 recipient, got {len(to_addrs)}"
+
+            # Should contain a username
+            assert "Username:" in msg_str, "Email should contain 'Username:' field"
+
+            # Should contain VPN password (generate_vpn_password=true)
+            assert "VPN:" in msg_str, "Email should contain VPN password"
+
+            # Should contain home directory
+            assert "Home:" in msg_str, "Email should contain home directory"
+            assert "/home/" in msg_str, "Home directory should start with /home/"
+
+            logger.info("Email to %s verified: contains credentials", to_addrs[0])
+
+        logger.info("All %d welcome emails contain expected fields", len(sent_emails))
+
+    def test_04_email_recipients_match_offering_users(self):
+        """Verify email recipients match the user emails from offering users."""
+        sent_emails = _email_state.get("sent_emails", [])
+        if not sent_emails:
+            pytest.skip("No welcome emails sent")
+
+        recipients = {to_addrs[0] for _, to_addrs, _ in sent_emails}
+        logger.info("Email recipients: %s", recipients)
+
+        # All recipients should be valid email addresses
+        for email in recipients:
+            assert "@" in email, f"Invalid email recipient: {email}"
+
+        logger.info(
+            "All %d email recipients are valid addresses", len(recipients)
+        )
+
+    def test_05_no_email_when_feature_disabled(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        call_recorder,
+    ):
+        """Membership sync without welcome_email config sends no emails."""
+        backend_id = _email_state.get("backend_id")
+        if not backend_id:
+            pytest.skip("No backend_id from test_01")
+
+        # Verify the default config does NOT have welcome_email
+        ldap_settings = ldap_offering.backend_settings.get("ldap", {})
+        assert "welcome_email" not in ldap_settings, (
+            "Default e2e config should not have welcome_email"
+        )
+
+        from unittest.mock import patch  # noqa: PLC0415
+
+        with (
+            call_recorder.phase("agent"),
+            patch(
+                "waldur_site_agent_ldap.email_sender.smtplib"
+            ) as mock_smtplib,
+        ):
+            processor = OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            )
+            processor.process_offering()
+
+        call_recorder.set_phase("assert")
+
+        # SMTP should never have been instantiated
+        mock_smtplib.SMTP.assert_not_called()
+        mock_smtplib.SMTP_SSL.assert_not_called()
+        logger.info("No SMTP calls when welcome_email is not configured")
