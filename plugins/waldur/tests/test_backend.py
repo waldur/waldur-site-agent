@@ -517,6 +517,171 @@ class TestUserSync:
         )
 
 
+class TestAddRemoveUser:
+    """Tests for single-user add_user/remove_user methods and role mapping."""
+
+    def test_add_user_calls_add_user_to_project(self, backend, mock_client):
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        result = backend.add_user(waldur_resource, "user1")
+        assert result is True
+        mock_client.add_user_to_project.assert_called_once_with(
+            project_uuid=PROJECT_UUID,
+            user_uuid=USER_UUID,
+            role_name="PROJECT.ADMIN",
+        )
+
+    def test_add_user_passes_role_name(self, backend, mock_client):
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        result = backend.add_user(waldur_resource, "user1", role_name="PROJECT.MANAGER")
+        assert result is True
+        mock_client.add_user_to_project.assert_called_once_with(
+            project_uuid=PROJECT_UUID,
+            user_uuid=USER_UUID,
+            role_name="PROJECT.MANAGER",
+        )
+
+    def test_add_user_returns_false_when_user_not_found(self, backend, mock_client):
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+        mock_client.resolve_user_via_identity_bridge.return_value = None
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        result = backend.add_user(waldur_resource, "user1")
+        assert result is False
+        mock_client.add_user_to_project.assert_not_called()
+
+    def test_add_user_returns_false_when_project_not_found(self, backend, mock_client):
+        mock_client.get_marketplace_resource.side_effect = Exception("Not found")
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        result = backend.add_user(waldur_resource, "user1")
+        assert result is False
+
+    def test_remove_user_calls_remove_user_from_project(self, backend, mock_client):
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        result = backend.remove_user(waldur_resource, "user1", role_name="PROJECT.MANAGER")
+        assert result is True
+        mock_client.remove_user_from_project.assert_called_once_with(
+            project_uuid=PROJECT_UUID,
+            user_uuid=USER_UUID,
+            role_name="PROJECT.MANAGER",
+        )
+
+
+class TestRoleMapping:
+    """Tests for role_mapping backend setting."""
+
+    def test_no_mapping_passes_role_through(self, backend):
+        assert backend._map_role("PROJECT.MANAGER") == "PROJECT.MANAGER"
+        assert backend._map_role("PROJECT.ADMIN") == "PROJECT.ADMIN"
+
+    def test_mapping_translates_role(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        backend_settings["role_mapping"] = {
+            "PROJECT.MANAGER": "PROJECT.ADMIN",
+            "PROJECT.ADMIN": "PROJECT.ADMIN",
+        }
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        assert backend._map_role("PROJECT.MANAGER") == "PROJECT.ADMIN"
+        assert backend._map_role("PROJECT.ADMIN") == "PROJECT.ADMIN"
+
+    def test_unmapped_role_passes_through(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        backend_settings["role_mapping"] = {
+            "PROJECT.MANAGER": "PROJECT.ADMIN",
+        }
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        # PROJECT.ADMIN is not in the mapping, so it passes through
+        assert backend._map_role("PROJECT.ADMIN") == "PROJECT.ADMIN"
+
+    def test_role_mapping_used_in_add_user(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        backend_settings["role_mapping"] = {
+            "PROJECT.MANAGER": "PROJECT.ADMIN",
+        }
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        backend.add_user(waldur_resource, "user1", role_name="PROJECT.MANAGER")
+        mock_client.add_user_to_project.assert_called_once_with(
+            project_uuid=PROJECT_UUID,
+            user_uuid=USER_UUID,
+            role_name="PROJECT.ADMIN",  # mapped from PROJECT.MANAGER
+        )
+
+    def test_role_mapping_used_in_remove_user(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        backend_settings["role_mapping"] = {
+            "PROJECT.MANAGER": "PROJECT.ADMIN",
+        }
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        backend.remove_user(waldur_resource, "user1", role_name="PROJECT.MANAGER")
+        mock_client.remove_user_from_project.assert_called_once_with(
+            project_uuid=PROJECT_UUID,
+            user_uuid=USER_UUID,
+            role_name="PROJECT.ADMIN",  # mapped from PROJECT.MANAGER
+        )
+
+    def test_empty_role_mapping_is_passthrough(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        backend_settings["role_mapping"] = {}
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        assert backend._map_role("PROJECT.MANAGER") == "PROJECT.MANAGER"
+
+
 class TestAttributePassthrough:
     """Tests for passthrough_attributes forwarding in create_resource_with_id."""
 

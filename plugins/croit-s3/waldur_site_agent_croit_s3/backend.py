@@ -537,15 +537,17 @@ class CroitS3Backend(backends.BaseBackend):
         logger.info("Restore not applicable for S3 user: %s", resource_backend_id)
         return True
 
-    def add_user(self, resource_backend_id: str, username: str) -> bool:
+    def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Add user to S3 resource - not applicable for individual S3 users."""
-        logger.info("Add user not applicable for S3 storage: %s", resource_backend_id)
+        del kwargs
+        logger.info("Add user not applicable for S3 storage: %s", waldur_resource.backend_id)
         return True
 
-    def remove_user(self, resource_backend_id: str, username: str) -> bool:
+    def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Remove user from S3 resource - not applicable for individual S3 users."""
+        del kwargs
         logger.info(
-            "Remove user not applicable for S3 storage: %s", resource_backend_id
+            "Remove user not applicable for S3 storage: %s", waldur_resource.backend_id
         )
         return True
 

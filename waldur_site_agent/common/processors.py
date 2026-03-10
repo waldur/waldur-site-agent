@@ -1332,7 +1332,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             filters["offering_uuid"] = [offering_uuid]
         return marketplace_offering_users_list.sync_all(client=self.waldur_rest_client, **filters)
 
-    def process_user_role_changed(self, user_uuid: str, project_uuid: str, granted: bool) -> None:
+    def process_user_role_changed(
+        self,
+        user_uuid: str,
+        project_uuid: str,
+        granted: bool,
+        role_name: str = "",
+    ) -> None:
         """Process a user role change event.
 
         Handles adding or removing a user from backend resources when their
@@ -1342,6 +1348,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             user_uuid: UUID of the user whose role changed
             project_uuid: UUID of the project where the role changed
             granted: True if access was granted, False if revoked
+            role_name: Name of the role granted/revoked (e.g. PROJECT.MANAGER)
         """
         offering_users: list[OfferingUser] = self._get_user_offering_users(
             user_uuid, self.offering.uuid
@@ -1374,9 +1381,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     if waldur_resource.restrict_member_access:
                         logger.info("The resource is restricted, skipping new role.")
                         continue
-                    self.resource_backend.add_user(waldur_resource, username)
+                    self.resource_backend.add_user(
+                        waldur_resource, username, role_name=role_name
+                    )
                 else:
-                    self.resource_backend.remove_user(waldur_resource, username)
+                    self.resource_backend.remove_user(
+                        waldur_resource, username, role_name=role_name
+                    )
             except Exception as exc:
                 logger.error(
                     "Unable to add user %s to the resource %s, error: %s",

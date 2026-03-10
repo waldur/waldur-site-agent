@@ -190,7 +190,10 @@ def on_user_role_message_stomp(
                 project_name,
                 role_granted,
             )
-            processor.process_user_role_changed(user_uuid, project_uuid, role_granted)
+            role_name = message.get("role_name", "")
+            processor.process_user_role_changed(
+                user_uuid, project_uuid, role_granted, role_name=role_name
+            )
         else:
             logger.info("Processing full project all users sync event for project %s", project_name)
             processor.process_project_user_sync(project_uuid)

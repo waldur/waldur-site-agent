@@ -601,8 +601,9 @@ class RancherBackend(backends.BaseBackend):
             logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
             return None
 
-    def add_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Add user to Keycloak group (OIDC handles Rancher project access)."""
+        del kwargs
         resource_backend_id = waldur_resource.backend_id
 
         logger.info(f"Adding user {username} to resource {resource_backend_id}")
@@ -657,8 +658,9 @@ class RancherBackend(backends.BaseBackend):
             logger.error(f"Failed to add user {username}: {e}")
             return False
 
-    def remove_user(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Remove user from Keycloak group (OIDC handles Rancher project access removal)."""
+        del kwargs
         resource_backend_id = waldur_resource.backend_id
 
         logger.info(f"Removing user {username} from resource {resource_backend_id}")
