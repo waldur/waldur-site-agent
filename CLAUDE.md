@@ -22,6 +22,7 @@ scripts/                        # Release tooling
   bump_versions.py              # Auto-discover and bump versions
   changelog.sh                  # Generate changelog with Claude
   generate_changelog_data.py    # Collect commit data as JSON
+  generate_plugin_table.py      # Regenerate plugin table in README.md
   prompts/changelog-prompt.md   # Prompt template for changelog
 helm/                           # Helm chart
 docs/                           # Documentation
@@ -34,13 +35,16 @@ docs/                           # Documentation
 uv sync --all-packages
 
 # Run core tests
-.venv/bin/python -m pytest tests/
+uv run pytest tests/
 
 # Run a specific plugin's tests
-.venv/bin/python -m pytest plugins/slurm/
+uv run pytest plugins/slurm/
 
 # Lint and format
 pre-commit run --all-files
+
+# Regenerate plugin table in README.md (run after adding/removing plugins)
+uv run python scripts/generate_plugin_table.py
 ```
 
 ## Release Process

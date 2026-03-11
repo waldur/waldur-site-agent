@@ -9,15 +9,7 @@ management systems.
 The agent uses a **uv workspace architecture** with pluggable backends:
 
 - **Core Package**: `waldur-site-agent` (base classes, common utilities)
-- **Plugin Packages**: Standalone backend implementations
-  - `waldur-site-agent-slurm`: SLURM clusters
-  - `waldur-site-agent-moab`: MOAB clusters
-  - `waldur-site-agent-mup`: MUP portal
-  - `waldur-site-agent-okd`: OpenShift/OKD platforms
-  - `waldur-site-agent-harbor`: Harbor registries
-  - `waldur-site-agent-croit-s3`: Croit S3 storage
-  - `waldur-site-agent-cscs-dwdi`: CSCS DWDI accounting
-  - `waldur-site-agent-basic-username-management`: Username management
+- **Plugin Packages**: Standalone backend implementations under `plugins/` (see table below)
 
 ### Agent Modes
 
@@ -93,30 +85,27 @@ you push.
 - [SLURM Usage Reporting Setup](docs/slurm-usage-reporting-setup.md)
 - [Releasing Guide](docs/releasing.md)
 
-## Plugin Documentation
+## Plugins
 
-### Compute & HPC Plugins
-
-- [SLURM Plugin](plugins/slurm/README.md) - SLURM cluster management
-- [MOAB Plugin](plugins/moab/README.md) - MOAB cluster management
-- [MUP Plugin](plugins/mup/README.md) - MUP portal integration
-
-### Container & Cloud Plugins
-
-- [OpenShift/OKD Plugin](plugins/okd/README.md) - OpenShift and OKD container platform management
-- [Harbor Plugin](plugins/harbor/README.md) - Harbor container registry management
-
-### Storage Plugins
-
-- [Croit S3 Plugin](plugins/croit-s3/README.md) - Croit S3 storage management
-
-### Accounting Plugins
-
-- [CSCS DWDI Plugin](plugins/cscs-dwdi/README.md) - CSCS DWDI accounting integration
-
-### Utility Plugins
-
-- [Basic Username Management Plugin](plugins/basic_username_management/README.md) - Username generation and management
+<!-- BEGIN PLUGIN TABLE -->
+| Plugin | Description |
+| ------ | ----------- |
+| [basic_username_management](plugins/basic_username_management/README.md) | Basic username management plugin |
+| [croit-s3](plugins/croit-s3/README.md) | Croit S3 storage plugin |
+| [cscs-dwdi](plugins/cscs-dwdi/README.md) | CSCS-DWDI reporting plugin |
+| [digitalocean](plugins/digitalocean/README.md) | DigitalOcean plugin |
+| [harbor](plugins/harbor/README.md) | Harbor container registry plugin |
+| [k8s-ut-namespace](plugins/k8s-ut-namespace/README.md) | Kubernetes UT ManagedNamespace plugin |
+| keycloak-client | Shared Keycloak client for Waldur Site Agent plugins |
+| [ldap](plugins/ldap/README.md) | LDAP plugin |
+| [moab](plugins/moab/README.md) | MOAB plugin |
+| [mup](plugins/mup/README.md) | MUP plugin |
+| [okd](plugins/okd/README.md) | OKD/OpenShift plugin |
+| [opennebula](plugins/opennebula/README.md) | OpenNebula VDC plugin |
+| [rancher](plugins/rancher/README.md) | Rancher plugin |
+| [slurm](plugins/slurm/README.md) | SLURM plugin |
+| [waldur](plugins/waldur/README.md) | Waldur-to-Waldur federation plugin |
+<!-- END PLUGIN TABLE -->
 
 ## License
 

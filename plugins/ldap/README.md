@@ -412,7 +412,7 @@ The LDAP E2E tests (`plugins/slurm/tests/e2e/test_e2e_ldap.py`) cover:
 | Test Class | Tests | Focus |
 |------------|-------|-------|
 | `TestLdapResourceLifecycle` | 3 | Create, update limits, terminate SLURM resource with LDAP integration |
-| `TestLdapMembershipSync` | 5 | User provisioning, project groups, access groups, SLURM associations |
-| `TestLdapUsageReporting` | 3 | Usage injection and verification with component mapper |
-| `TestLdapBackwardCompatibility` | 2 | Passthrough vs conversion component mapping |
+| `TestLdapMembershipSync` | 7 | User provisioning, project groups, access groups, SLURM associations |
+| `TestLdapUsageReporting` | 4 | Usage injection and verification with component mapper |
+| `TestLdapBackwardCompat` | 3 | Passthrough vs conversion component mapping |
 | `TestLdapWelcomeEmail` | 5 | Email sending, credential delivery, recipient validation |

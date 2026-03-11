@@ -176,10 +176,12 @@ Waldur resource limits are translated to Kubernetes ResourceQuotas:
 
 | Waldur Component | OKD ResourceQuota Field | Example |
 |-----------------|------------------------|---------|
-| CPU (Cores) | `requests.cpu`, `limits.cpu` | `4` cores |
-| Memory (GB) | `requests.memory`, `limits.memory` | `16Gi` |
+| CPU (Cores) | `requests.cpu`, `limits.cpu` (2x requests) | requests: `4`, limits: `8` |
+| Memory (GB) | `requests.memory`, `limits.memory` (2x requests) | requests: `16Gi`, limits: `32Gi` |
 | Storage (GB) | `requests.storage` | `100Gi` |
 | Pod Count | `pods` | `50` |
+
+> **Note:** `limits.cpu` and `limits.memory` are automatically set to 2x the request values to allow bursting.
 
 #### 3. User Access Mapping
 
@@ -199,15 +201,10 @@ Waldur metadata is preserved in OKD annotations:
 metadata:
   name: waldur-alloc-prod-env
   annotations:
-    waldur.com/customer-uuid: "123e4567e89b12d3a456426614174000"
-    waldur.com/project-uuid: "456e7890f12c34d5b678537825285111"
-    waldur.com/resource-uuid: "789a0123g34h56i7j890648936396222"
-    waldur.com/customer-name: "ACME Corp"
-    waldur.com/project-name: "Web Development"
-  labels:
-    waldur.com/managed: "true"
-    waldur.com/customer: "acme"
-    waldur.com/project: "webdev"
+    openshift.io/description: "Production Environment"
+    openshift.io/display-name: "Production Environment"
+    waldur/organization: "waldur-org-acme"
+    waldur/parent: "waldur-proj-webdev"
 ```
 
 ## OKD/OpenShift Setup
@@ -399,6 +396,20 @@ The quotas enforce both request and limit constraints for:
 - **Memory**: Managed through `requests.memory` and `limits.memory`
 - **Storage**: Managed through persistent volume claims
 - **Pod count**: Maximum number of pods in the namespace
+
+### Lifecycle Operations
+
+The plugin supports pausing, downscaling, and restoring projects by adjusting their resource quotas.
+These operations use hardcoded values (not configurable):
+
+| Operation | CPU | Memory | Storage | Pods |
+|-----------|-----|--------|---------|------|
+| **Pause** | 0 | 0 GB | 0 GB | 0 |
+| **Downscale** | 1 core | 1 GB | 1 GB | 1 |
+| **Restore** (defaults) | 10 cores | 32 GB | 100 GB | 50 |
+
+> **Note:** The restore operation currently applies hardcoded default quotas rather than
+> restoring previously configured values.
 
 ### User Access
 

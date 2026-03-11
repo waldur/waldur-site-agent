@@ -275,6 +275,7 @@ The plugin implements the following Harbor API operations:
 - ✅ **report**: Report storage usage back to Waldur
 - ✅ **membership_sync**: Manage OIDC group memberships
 - ✅ **diagnostics**: Health checks and connectivity testing
+- ❌ **pause**: Not supported (Harbor has no pause concept, returns False)
 
 ## Testing
 

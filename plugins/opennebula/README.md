@@ -456,7 +456,7 @@ plugins/opennebula/
 |   +-- client.py           # OpenNebulaClient (BaseClient subclass)
 +-- tests/
 |   +-- conftest.py          # Shared fixtures
-|   +-- test_backend.py      # 239 unit tests
+|   +-- test_backend.py      # 233 unit tests
 |   +-- test_integration.py  # 20 integration tests (real OpenNebula)
 +-- pyproject.toml           # Package config + entry point
 ```
@@ -553,7 +553,7 @@ reset password, and clean up.
 ### Test Structure
 
 ```text
-tests/test_backend.py (239 unit tests)
+tests/test_backend.py (233 unit tests)
 +-- TestOpenNebulaClientQuotaTemplate      # Quota template building
 +-- TestOpenNebulaClientParseQuotaUsage    # Usage parsing from group info
 +-- TestOpenNebulaClientParseQuotaLimits   # Limits parsing from group info
