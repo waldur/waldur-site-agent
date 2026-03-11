@@ -32,6 +32,7 @@ offerings:
       qos_paused: "paused"
       qos_default: "normal"
       enable_user_homedir_account_creation: false
+      check_backend_id_uniqueness: true
 
     backend_components:
       cpu:

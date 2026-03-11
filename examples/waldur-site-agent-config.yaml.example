@@ -56,6 +56,127 @@ offerings: # Settings for offerings
           # to SLURM units (60 * 1024)
         accounting_type: "usage" # Can be usage or limit
         label: RAM # A label for a component in Waldur
+  # Example: EFP Discoverer CPU cluster with LDAP user management
+  - name: "Discoverer CPU"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: ""
+    waldur_offering_uuid: ""
+    username_management_backend: "ldap"
+    order_processing_backend: "slurm"
+    membership_sync_backend: "slurm"
+    reporting_backend: "slurm"
+    backend_type: "slurm"
+    backend_settings:
+      default_account: "normal"
+      customer_prefix: ""
+      project_prefix: ""
+      allocation_prefix: ""
+      parent_account: "eurohpc" # Flat hierarchy under a single parent
+      default_partition: "cn" # Assign users to partition 'cn' by default
+      enable_user_homedir_account_creation: true
+      homedir_umask: "0700"
+      # LDAP integration (requires waldur-site-agent-ldap plugin)
+      ldap:
+        uri: "ldap://ldap.sofiatech.bg"
+        bind_dn: "cn=admin,dc=sofiatech,dc=bg"
+        bind_password: "secret"
+        base_dn: "dc=sofiatech,dc=bg"
+        people_ou: "ou=People"
+        groups_ou: "ou=Groups"
+        uid_range_start: 5000
+        uid_range_end: 65000
+        gid_range_start: 800
+        gid_range_end: 65000
+        default_login_shell: "/bin/bash"
+        default_home_base: "/home"
+        username_format: "first_initial_lastname" # e.g. jsmith from John Smith
+        generate_vpn_password: false
+        remove_user_on_deactivate: false # Keep users in LDAP when removed from offering
+        access_groups: # Per-user access groups (configured per offering)
+          - name: "vpnusrgroup"
+            attribute: "member" # DN-based membership
+      # Per-account QoS management
+      qos_management:
+        enabled: true
+        flags: "DenyOnLimit,NoDecay"
+        grp_tres: "cpu=25600,node=100"
+        max_jobs: 10
+        max_submit: 20
+        max_wall: "2880"
+      # Project directory on shared filesystem
+      project_directory:
+        enabled: true
+        base_path: "/valhalla/projects"
+        owner: "nobody"
+        permissions: "770"
+        set_gid: true
+        set_acl: true
+        lustre_quota:
+          mount_point: "/valhalla"
+          block_softlimit: 5368709120
+          block_hardlimit: 6442450944
+          inode_softlimit: 5000000
+          inode_hardlimit: 7000000
+    backend_components:
+      cpu:
+        limit: 120000
+        measured_unit: "k-Hours"
+        unit_factor: 60000
+        accounting_type: "usage"
+        label: "CPU"
+  # Example: EFP Discoverer+ GPU cluster with LDAP and billing
+  - name: "Discoverer+ GPU"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: ""
+    waldur_offering_uuid: ""
+    username_management_backend: "ldap"
+    order_processing_backend: "slurm"
+    membership_sync_backend: "slurm"
+    reporting_backend: "slurm"
+    backend_type: "slurm"
+    backend_settings:
+      default_account: "normal"
+      customer_prefix: ""
+      project_prefix: ""
+      allocation_prefix: ""
+      parent_account: "eurohpc"
+      default_partition: "common"
+      enable_user_homedir_account_creation: true
+      ldap:
+        uri: "ldap://ldap.sofiatech.bg"
+        bind_dn: "cn=admin,dc=sofiatech,dc=bg"
+        bind_password: "secret"
+        base_dn: "dc=sofiatech,dc=bg"
+        uid_range_start: 5000
+        uid_range_end: 65000
+        gid_range_start: 800
+        gid_range_end: 65000
+        username_format: "first_initial_lastname"
+        access_groups:
+          - name: "plus"
+            attribute: "memberUid" # UID-based membership
+      qos_management:
+        enabled: true
+        flags: "DenyOnLimit,NoDecay"
+        grp_tres: "cpu=112,gres/gpu=8"
+        max_jobs: 4
+        max_submit: 8
+        max_wall: "120"
+        min_tres_per_job: "gres/gpu=1"
+        additional_qos: ["2cpu-single-host"]
+    backend_components:
+      billing:
+        limit: 2328000
+        measured_unit: "billing-Minutes"
+        unit_factor: 1
+        accounting_type: "usage"
+        label: "Billing"
+      gres/gpu:
+        limit: 300000
+        measured_unit: "GPU-Minutes"
+        unit_factor: 1
+        accounting_type: "usage"
+        label: "GPU"
   - name: "Example MOAB Offering"
     waldur_api_url: "http://localhost:8081/api/"
     waldur_api_token: ""

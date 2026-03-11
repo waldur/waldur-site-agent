@@ -1,0 +1,3 @@
+#!/bin/bash
+# Stub for Lustre lfs command — records calls for test assertions
+echo "lfs $@" >> "${LFS_STUB_LOG:-/tmp/lfs_commands.log}"
