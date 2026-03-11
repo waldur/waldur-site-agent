@@ -19,7 +19,7 @@ import abc
 import datetime
 import traceback
 from time import sleep
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 from zoneinfo import ZoneInfo
 
 from waldur_api_client.api.backend_resource_requests import (
@@ -55,6 +55,7 @@ from waldur_api_client.api.marketplace_plans import (
 from waldur_api_client.api.marketplace_provider_offerings import (
     marketplace_provider_offerings_check_unique_backend_id,
     marketplace_provider_offerings_retrieve,
+    marketplace_provider_offerings_user_attribute_config_retrieve,
 )
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_list,
@@ -245,33 +246,95 @@ class OfferingBaseProcessor(abc.ABC):
         # Per-cycle cache for offering users (avoids redundant API calls)
         self._offering_users_cache: list[OfferingUser] | None = None
 
+        # Build offering user field list from the offering's attribute config
+        self._offering_user_fields = self._build_offering_user_fields()
+
     def _print_current_user(self) -> None:
         """Log information about the current authenticated Waldur user."""
         current_user = utils.get_current_user_from_client(self.waldur_rest_client)
         utils.print_current_user(current_user)
 
+    # Mapping from OfferingUserAttributeConfig exposed field names to
+    # OfferingUserFieldEnum values that should be requested from the API.
+    _ATTRIBUTE_TO_FIELDS: ClassVar[dict[str, list[OfferingUserFieldEnum]]] = {
+        "username": [OfferingUserFieldEnum.USER_USERNAME],
+        "full_name": [
+            OfferingUserFieldEnum.USER_FULL_NAME,
+            OfferingUserFieldEnum.USER_FIRST_NAME,
+            OfferingUserFieldEnum.USER_LAST_NAME,
+        ],
+        "email": [OfferingUserFieldEnum.USER_EMAIL],
+        "phone_number": [OfferingUserFieldEnum.USER_PHONE_NUMBER],
+        "organization": [OfferingUserFieldEnum.USER_ORGANIZATION],
+        "job_title": [OfferingUserFieldEnum.USER_JOB_TITLE],
+        "affiliations": [OfferingUserFieldEnum.USER_AFFILIATIONS],
+    }
+
+    # Core fields always requested regardless of attribute config
+    _CORE_FIELDS: ClassVar[list[OfferingUserFieldEnum]] = [
+        OfferingUserFieldEnum.USER_UUID,
+        OfferingUserFieldEnum.USERNAME,
+        OfferingUserFieldEnum.URL,
+        OfferingUserFieldEnum.STATE,
+        OfferingUserFieldEnum.UUID,
+    ]
+
+    def _build_offering_user_fields(self) -> list[OfferingUserFieldEnum]:
+        """Build the field list for offering user API calls.
+
+        Fetches the offering's OfferingUserAttributeConfig to determine
+        which user attributes are exposed, then maps them to API field enums.
+        Falls back to the default set if the config cannot be retrieved.
+        """
+        fields = list(self._CORE_FIELDS)
+
+        try:
+            attr_config = (
+                marketplace_provider_offerings_user_attribute_config_retrieve.sync(
+                    uuid=self.offering.uuid,
+                    client=self.waldur_rest_client,
+                )
+            )
+            exposed = attr_config.exposed_fields
+            logger.info(
+                "Offering %s exposes user attributes: %s",
+                self.offering.name,
+                exposed,
+            )
+
+            for attr_name in exposed:
+                api_fields = self._ATTRIBUTE_TO_FIELDS.get(attr_name)
+                if api_fields:
+                    fields.extend(api_fields)
+
+        except Exception:
+            logger.warning(
+                "Could not fetch user attribute config for offering %s, "
+                "requesting default fields",
+                self.offering.name,
+            )
+            fields.extend([
+                OfferingUserFieldEnum.USER_USERNAME,
+                OfferingUserFieldEnum.USER_EMAIL,
+                OfferingUserFieldEnum.USER_FIRST_NAME,
+                OfferingUserFieldEnum.USER_LAST_NAME,
+            ])
+
+        return fields
+
     def _get_cached_offering_users(self) -> list[OfferingUser]:
         """Return cached offering users, fetching from API on first call.
 
         Uses a per-cycle cache to avoid redundant API calls when multiple
-        methods need the full offering users list.
+        methods need the full offering users list. The field list is built
+        from the offering's OfferingUserAttributeConfig.
         """
         if self._offering_users_cache is None:
             self._offering_users_cache = marketplace_offering_users_list.sync_all(
                 client=self.waldur_rest_client,
                 offering_uuid=[self.offering.uuid],
                 is_restricted=False,
-                field=[
-                    OfferingUserFieldEnum.USER_UUID,
-                    OfferingUserFieldEnum.USERNAME,
-                    OfferingUserFieldEnum.URL,
-                    OfferingUserFieldEnum.STATE,
-                    OfferingUserFieldEnum.UUID,
-                    OfferingUserFieldEnum.USER_USERNAME,
-                    OfferingUserFieldEnum.USER_EMAIL,
-                    OfferingUserFieldEnum.USER_FIRST_NAME,
-                    OfferingUserFieldEnum.USER_LAST_NAME,
-                ],
+                field=self._offering_user_fields,
             )
         return self._offering_users_cache
 
