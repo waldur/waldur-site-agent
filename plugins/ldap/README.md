@@ -357,7 +357,7 @@ Default object classes can be overridden per deployment:
 
 Defaults:
 
-- **user_object_classes**: `inetOrgPerson`, `ldapPublicKey`,
+- **user_object_classes**: `inetOrgPerson`,
   `organizationalPerson`, `person`, `posixAccount`, `top`
 - **user_group_object_classes**: `groupOfNames`, `nsMemberOf`,
   `organizationalUnit`, `posixGroup`, `top`

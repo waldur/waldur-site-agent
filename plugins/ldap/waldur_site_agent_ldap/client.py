@@ -47,7 +47,6 @@ class LdapClient:
             "user_object_classes",
             [
                 "inetOrgPerson",
-                "ldapPublicKey",
                 "organizationalPerson",
                 "person",
                 "posixAccount",
@@ -119,7 +118,7 @@ class LdapClient:
                 self._people_dn,
                 f"(uid={escape_filter_chars(username)})",
                 search_scope=SUBTREE,
-                attributes=["uid", "uidNumber", "gidNumber", "cn", "mail", "sshPublicKey"],
+                attributes=["uid", "uidNumber", "gidNumber", "cn", "mail"],
             )
             if conn.entries:
                 entry = conn.entries[0]
@@ -238,7 +237,6 @@ class LdapClient:
         first_name: str,
         last_name: str,
         email: str,
-        ssh_public_key: Optional[str] = None,
         password: Optional[str] = None,
         description: Optional[str] = None,
     ) -> int:
@@ -276,9 +274,6 @@ class LdapClient:
             "loginShell": self.default_login_shell,
             "mail": email,
         }
-
-        if ssh_public_key:
-            attributes["sshPublicKey"] = ssh_public_key
 
         if password:
             attributes["userPassword"] = password
