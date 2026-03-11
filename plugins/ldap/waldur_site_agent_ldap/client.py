@@ -238,9 +238,18 @@ class LdapClient:
         last_name: str,
         email: str,
         password: Optional[str] = None,
-        description: Optional[str] = None,
+        extra_attributes: Optional[dict[str, str]] = None,
     ) -> int:
         """Create a POSIX user and their personal group in LDAP.
+
+        Args:
+            username: POSIX username for the new account.
+            first_name: User's first name.
+            last_name: User's last name.
+            email: User's email address.
+            password: Optional cleartext password to set.
+            extra_attributes: Additional LDAP attributes to set on the user entry
+                (e.g. ``{"employeeNumber": "cuid123"}``).
 
         Returns the allocated UID.
         """
@@ -251,18 +260,18 @@ class LdapClient:
         gid_number = self.get_next_gid()
 
         # Create the personal group first
-        extra_attrs: dict[str, str] = {"memberUid": username}
+        group_extra_attrs: dict[str, str] = {"memberUid": username}
         self._create_group_entry(
             group_name=username,
             gid_number=gid_number,
             object_classes=self.user_group_object_classes,
-            extra_attributes=extra_attrs,
+            extra_attributes=group_extra_attrs,
             member_dn=self._user_dn(username),
         )
 
         # Create the user entry
         full_name = f"{first_name} {last_name}".strip() or username
-        attributes = {
+        attributes: dict[str, object] = {
             "objectClass": self.user_object_classes,
             "uid": username,
             "cn": full_name,
@@ -278,8 +287,8 @@ class LdapClient:
         if password:
             attributes["userPassword"] = password
 
-        if description:
-            attributes["description"] = description
+        if extra_attributes:
+            attributes.update(extra_attributes)
 
         conn = self._connect()
         try:

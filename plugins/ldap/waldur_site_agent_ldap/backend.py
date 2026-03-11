@@ -42,6 +42,7 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         self.remove_user_on_deactivate = ldap_settings.get("remove_user_on_deactivate", False)
         self.access_groups = ldap_settings.get("access_groups", [])
         self.generate_vpn_password = ldap_settings.get("generate_vpn_password", False)
+        self.waldur_username_attr = ldap_settings.get("waldur_username_attribute", "")
 
         welcome_email_settings = ldap_settings.get("welcome_email")
         self.email_sender = (
@@ -78,6 +79,7 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         first_name = getattr(offering_user, "user_first_name", "") or ""
         last_name = getattr(offering_user, "user_last_name", "") or ""
         email = getattr(offering_user, "user_email", "") or ""
+        waldur_username = getattr(offering_user, "user_username", "") or ""
 
         username = self._generate_username_string(first_name, last_name, offering_user)
         if not username:
@@ -97,12 +99,18 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
             password = LdapClient.generate_random_password()
 
         # Create the POSIX user in LDAP
+        # Optionally store the Waldur username (e.g. CUID) in a configured attribute
+        extra_attributes = {}
+        if self.waldur_username_attr and waldur_username:
+            extra_attributes[self.waldur_username_attr] = waldur_username
+
         uid_number = self.client.create_user(
             username=username,
             first_name=first_name,
             last_name=last_name,
             email=email,
             password=password,
+            extra_attributes=extra_attributes or None,
         )
 
         # Add user to configured access groups
@@ -157,6 +165,7 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
             first_name = getattr(offering_user, "user_first_name", None)
             last_name = getattr(offering_user, "user_last_name", None)
             email = getattr(offering_user, "user_email", None)
+            waldur_username = getattr(offering_user, "user_username", None)
 
             updates = {}
             if first_name:
@@ -167,6 +176,8 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
                 updates["cn"] = f"{first_name} {last_name}"
             if email:
                 updates["mail"] = email
+            if waldur_username and self.waldur_username_attr:
+                updates[self.waldur_username_attr] = waldur_username
 
             if updates:
                 try:

@@ -45,6 +45,7 @@ offerings:
         default_home_base: "/home"
         username_format: "first_letter_full_lastname"
         remove_user_on_deactivate: false
+        waldur_username_attribute: "employeeNumber"
         user_object_classes:
           - "inetOrgPerson"
           - "posixAccount"
