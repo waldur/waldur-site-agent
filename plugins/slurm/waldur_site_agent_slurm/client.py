@@ -86,6 +86,15 @@ class SlurmClient(clients.BaseClient):
             return None
         return self._parse_account(lines[0])
 
+    @staticmethod
+    def _sanitize_sacctmgr_value(value: str) -> str:
+        """Sanitize a value for use in sacctmgr key="value" arguments.
+
+        Strips double quotes to prevent breaking out of the quoted context
+        and injecting additional sacctmgr parameters.
+        """
+        return value.replace('"', "")
+
     def create_resource(
         self,
         name: str,
@@ -98,8 +107,8 @@ class SlurmClient(clients.BaseClient):
             "add",
             "account",
             name,
-            f'description="{description}"',
-            f'organization="{organization}"',
+            f'description="{self._sanitize_sacctmgr_value(description)}"',
+            f'organization="{self._sanitize_sacctmgr_value(organization)}"',
         ]
         if parent_name:
             parts.append(f"parent={parent_name}")
