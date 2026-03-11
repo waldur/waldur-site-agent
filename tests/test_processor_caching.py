@@ -109,7 +109,6 @@ def _make_processor(cls):
     """Create a processor instance bypassing __init__ and setting minimal attributes."""
     processor = cls.__new__(cls)
     processor._offering_users_cache = None
-    processor._offering_user_fields = list(cls._CORE_FIELDS)
     processor.waldur_rest_client = mock.Mock()
     processor.offering = mock.Mock()
     processor.offering.uuid = uuid.uuid4().hex

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import abc
 import datetime
+import time as _time
 import traceback
 from time import sleep
 from typing import Any, ClassVar, Optional
@@ -137,6 +138,13 @@ from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import agent_identity_management, structures, utils
 from waldur_site_agent.common.structures import AccountType
 
+# Module-level cache for offering user attribute configs.
+# Keyed by offering UUID, stores (fields_list, timestamp).
+# TTL of 300s avoids redundant API calls when event handlers
+# create a new processor per STOMP message.
+_ATTRIBUTE_CONFIG_CACHE: dict[str, tuple[list[OfferingUserFieldEnum], float]] = {}
+_ATTRIBUTE_CONFIG_TTL = 300  # seconds
+
 
 class UsageAnomalyError(Exception):
     """Raised when usage anomaly is detected.
@@ -246,9 +254,6 @@ class OfferingBaseProcessor(abc.ABC):
         # Per-cycle cache for offering users (avoids redundant API calls)
         self._offering_users_cache: list[OfferingUser] | None = None
 
-        # Build offering user field list from the offering's attribute config
-        self._offering_user_fields = self._build_offering_user_fields()
-
     def _print_current_user(self) -> None:
         """Log information about the current authenticated Waldur user."""
         current_user = utils.get_current_user_from_client(self.waldur_rest_client)
@@ -282,10 +287,19 @@ class OfferingBaseProcessor(abc.ABC):
     def _build_offering_user_fields(self) -> list[OfferingUserFieldEnum]:
         """Build the field list for offering user API calls.
 
-        Fetches the offering's OfferingUserAttributeConfig to determine
-        which user attributes are exposed, then maps them to API field enums.
-        Falls back to the default set if the config cannot be retrieved.
+        Uses a module-level TTL cache so that event-mode processors
+        (created per STOMP message) don't re-fetch the config every time.
+        In polling mode the cache refreshes every _ATTRIBUTE_CONFIG_TTL seconds.
         """
+        offering_uuid = self.offering.uuid
+        now = _time.monotonic()
+
+        cached = _ATTRIBUTE_CONFIG_CACHE.get(offering_uuid)
+        if cached is not None:
+            fields, ts = cached
+            if now - ts < _ATTRIBUTE_CONFIG_TTL:
+                return fields
+
         fields = list(self._CORE_FIELDS)
 
         try:
@@ -320,6 +334,7 @@ class OfferingBaseProcessor(abc.ABC):
                 OfferingUserFieldEnum.USER_LAST_NAME,
             ])
 
+        _ATTRIBUTE_CONFIG_CACHE[offering_uuid] = (fields, now)
         return fields
 
     def _get_cached_offering_users(self) -> list[OfferingUser]:
@@ -327,14 +342,15 @@ class OfferingBaseProcessor(abc.ABC):
 
         Uses a per-cycle cache to avoid redundant API calls when multiple
         methods need the full offering users list. The field list is built
-        from the offering's OfferingUserAttributeConfig.
+        dynamically from the offering's OfferingUserAttributeConfig (with
+        a module-level TTL cache to avoid per-event API calls).
         """
         if self._offering_users_cache is None:
             self._offering_users_cache = marketplace_offering_users_list.sync_all(
                 client=self.waldur_rest_client,
                 offering_uuid=[self.offering.uuid],
                 is_restricted=False,
-                field=self._offering_user_fields,
+                field=self._build_offering_user_fields(),
             )
         return self._offering_users_cache
 
