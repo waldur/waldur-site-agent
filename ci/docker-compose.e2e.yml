@@ -1,5 +1,6 @@
 # Minimal Waldur stack for site-agent E2E tests.
-# Boots: PostgreSQL, RabbitMQ (with STOMP), Mastermind API + Celery worker.
+# Boots: PostgreSQL, RabbitMQ (with STOMP), Mastermind API + Celery worker,
+# and an OpenLDAP server for LDAP-backend E2E tests.
 # No HomePort, Caddy, Keycloak, or Celery beat needed.
 #
 # Usage (from repo root):
@@ -74,3 +75,20 @@ services:
     ports:
       - "8080:8080"
     command: mastermind
+
+  waldur-ldap:
+    image: "${DOCKER_REGISTRY_PREFIX}osixia/openldap:1.5.0"
+    environment:
+      LDAP_ORGANISATION: "SofiaTech"
+      LDAP_DOMAIN: "sofiatech.bg"
+      LDAP_ADMIN_PASSWORD: "e2e-ldap-password"
+    volumes:
+      - ./ldap-seed.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/seed.ldif
+    command: --copy-service
+    ports:
+      - "389:389"
+    healthcheck:
+      test: ["CMD", "ldapsearch", "-x", "-H", "ldap://localhost", "-b", "dc=sofiatech,dc=bg", "-D", "cn=admin,dc=sofiatech,dc=bg", "-w", "e2e-ldap-password"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

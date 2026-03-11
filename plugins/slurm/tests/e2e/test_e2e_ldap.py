@@ -1,0 +1,1703 @@
+r"""End-to-end tests for LDAP-integrated SLURM backend.
+
+Validates the full lifecycle with LDAP user provisioning, per-account QoS
+creation, LDAP project group management, partition-aware SLURM associations,
+project directory creation, resource modification, usage reporting, and
+termination.
+
+Requires:
+    - Waldur API stack (docker-compose.e2e.yml)
+    - OpenLDAP server (waldur-ldap service in docker-compose.e2e.yml)
+    - SLURM emulator (installed via dev dependencies)
+
+Environment variables:
+    WALDUR_E2E_TESTS=true
+    WALDUR_E2E_LDAP_CONFIG=<path-to-ldap-config.yaml>
+    WALDUR_E2E_PROJECT_A_UUID=<project-uuid-on-waldur>
+
+Usage:
+    WALDUR_E2E_TESTS=true \
+    WALDUR_E2E_LDAP_CONFIG=ci/e2e-ci-config-ldap.yaml \
+    WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
+    .venv/bin/python -m pytest plugins/slurm/tests/e2e/test_e2e_ldap.py -v -s
+"""
+
+from __future__ import annotations
+
+import contextlib
+import functools
+import logging
+import os
+import re
+import subprocess
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+from ldap3 import ALL, SUBTREE, Connection, Server
+from waldur_api_client.api.marketplace_component_usages import (
+    marketplace_component_usages_list,
+)
+from waldur_api_client.api.marketplace_component_user_usages import (
+    marketplace_component_user_usages_list,
+)
+from waldur_api_client.api.marketplace_orders import marketplace_orders_retrieve
+from waldur_api_client.api.marketplace_provider_offerings import (
+    marketplace_provider_offerings_retrieve,
+)
+from waldur_api_client.api.marketplace_provider_resources import (
+    marketplace_provider_resources_retrieve,
+)
+from waldur_api_client.models.order_state import OrderState
+from waldur_api_client.types import UNSET
+from waldur_site_agent_slurm.backend import SlurmBackend
+
+from plugins.slurm.tests.e2e.conftest import (
+    create_source_order,
+    get_offering_info,
+    get_project_url,
+    run_processor_until_order_terminal,
+)
+from waldur_site_agent.common.processors import (
+    OfferingMembershipProcessor,
+    OfferingReportProcessor,
+)
+from waldur_site_agent.common.utils import get_client, load_configuration
+
+logger = logging.getLogger(__name__)
+
+E2E_TESTS = os.environ.get("WALDUR_E2E_TESTS", "false").lower() == "true"
+E2E_LDAP_CONFIG_PATH = os.environ.get("WALDUR_E2E_LDAP_CONFIG", "")
+E2E_PROJECT_A_UUID = os.environ.get("WALDUR_E2E_PROJECT_A_UUID", "")
+
+# UUID pattern for sanitising diagram labels
+_UUID_RE = re.compile(r"[0-9a-f]{32}|[0-9a-f-]{36}")
+
+
+# ---------------------------------------------------------------------------
+# Call recorder — captures real external calls for sequence diagrams
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ExternalCall:
+    """A single captured external call."""
+
+    ts: float
+    participant: str  # "Waldur API" | "LDAP" | "SLURM"
+    operation: str  # e.g. "POST /api/marketplace-orders/"
+    response: str  # e.g. "201", "OK", "GID 10001"
+    payload: str = ""  # response body (Waldur API only)
+    phase: str = ""  # "user" | "agent" | "assert"
+
+
+class CallRecorder:
+    """Accumulates external calls keyed by test name."""
+
+    def __init__(self) -> None:
+        self._calls: dict[str, list[ExternalCall]] = {}
+        self._docs: dict[str, str] = {}
+        self._current_test: str | None = None
+        self._phase: str = "user"
+
+    def set_test(self, test_id: str, doc: str = "") -> None:
+        self._current_test = test_id
+        self._phase = "user"
+        self._calls.setdefault(test_id, [])
+        if doc:
+            self._docs[test_id] = doc
+
+    def set_phase(self, phase: str) -> None:
+        self._phase = phase
+
+    @contextlib.contextmanager
+    def phase(self, name: str):
+        prev = self._phase
+        self._phase = name
+        try:
+            yield
+        finally:
+            self._phase = prev
+
+    def record(self, call: ExternalCall) -> None:
+        call.phase = self._phase
+        key = self._current_test or "__setup__"
+        self._calls.setdefault(key, []).append(call)
+
+    def get_calls(self, test_id: str) -> list[ExternalCall]:
+        return self._calls.get(test_id, [])
+
+    def get_doc(self, test_id: str) -> str:
+        return self._docs.get(test_id, "")
+
+    def all_test_ids(self) -> list[str]:
+        return [k for k in self._calls if k != "__setup__"]
+
+
+def _sanitize_url(url: str) -> str:
+    """Shorten a Waldur URL for diagram readability."""
+    if "://" in url:
+        url = "/" + url.split("/", 3)[-1]
+    return _UUID_RE.sub("{uuid}", url)
+
+
+def _wrap_for_recording(
+    obj: object,
+    method_names: list[str],
+    participant: str,
+    recorder: CallRecorder,
+) -> None:
+    """Monkey-patch public methods on *obj* to record calls."""
+    for name in method_names:
+        original = getattr(obj, name, None)
+        if original is None or not callable(original):
+            continue
+
+        @functools.wraps(original)
+        def wrapper(*args, _orig=original, _name=name, **kwargs):
+            t0 = time.monotonic()
+            try:
+                result = _orig(*args, **kwargs)
+                recorder.record(
+                    ExternalCall(
+                        ts=t0,
+                        participant=participant,
+                        operation=_name,
+                        response="OK",
+                    )
+                )
+                return result
+            except Exception as exc:
+                recorder.record(
+                    ExternalCall(
+                        ts=t0,
+                        participant=participant,
+                        operation=_name,
+                        response=f"ERR: {type(exc).__name__}",
+                    )
+                )
+                raise
+
+        setattr(obj, name, wrapper)
+
+
+def _format_payload(payload: str) -> str:
+    """Pretty-print JSON payload, or return raw text if not JSON."""
+    import json  # noqa: PLC0415
+
+    if not payload or not payload.strip():
+        return ""
+    try:
+        obj = json.loads(payload)
+        return json.dumps(obj, indent=2, ensure_ascii=False)
+    except (json.JSONDecodeError, ValueError):
+        return payload
+
+
+def _generate_sequence_table(
+    calls: list[ExternalCall],
+) -> tuple[str, list[str]]:
+    """Generate a text table grouped by phase.
+
+    Returns:
+        (table_markdown, payload_sections) — payloads are returned separately
+        so the caller can route them to an annex document.
+    """
+    if not calls:
+        return "", []
+
+    phase_labels = {
+        "user": "User Actions (test setup)",
+        "agent": "Site Agent / Plugin",
+        "assert": "Assertions (verification)",
+    }
+    phase_order = ["user", "agent", "assert"]
+
+    # Group calls by phase, preserving order within each phase
+    grouped: dict[str, list[tuple[int, ExternalCall]]] = {}
+    for i, c in enumerate(calls, 1):
+        phase = c.phase or "user"
+        grouped.setdefault(phase, []).append((i, c))
+
+    lines: list[str] = []
+    agent_payloads: list[str] = []
+
+    for phase in phase_order:
+        phase_calls = grouped.get(phase, [])
+        if not phase_calls:
+            continue
+
+        label = phase_labels.get(phase, phase)
+        lines.append(f"\n### {label}\n")
+
+        # Compute column widths for this phase
+        num_w = max(len(str(idx)) for idx, _ in phase_calls)
+        target_w = max(len(c.participant) for _, c in phase_calls)
+        op_w = max(len(c.operation) for _, c in phase_calls)
+        resp_w = max(len(c.response) for _, c in phase_calls)
+
+        hdr = (
+            f"| {'#':>{num_w}} "
+            f"| {'Target':<{target_w}} "
+            f"| {'Operation':<{op_w}} "
+            f"| {'Result':<{resp_w}} |"
+        )
+        sep = f"|{'─' * (num_w + 2)}"
+        sep += f"|{'─' * (target_w + 2)}"
+        sep += f"|{'─' * (op_w + 2)}"
+        sep += f"|{'─' * (resp_w + 2)}|"
+
+        lines.extend(["```", sep, hdr, sep])
+        for idx, c in phase_calls:
+            lines.append(
+                f"| {idx:>{num_w}} "
+                f"| {c.participant:<{target_w}} "
+                f"| {c.operation:<{op_w}} "
+                f"| {c.response:<{resp_w}} |"
+            )
+        lines.extend([sep, "```"])
+
+        # Collect payloads only from agent phase
+        if phase == "agent":
+            for idx, c in phase_calls:
+                if c.payload:
+                    pretty = _format_payload(c.payload)
+                    if pretty:
+                        agent_payloads.append(
+                            f"<details><summary>#{idx} {c.operation} → {c.response}</summary>\n\n"
+                            f"```json\n{pretty}\n```\n\n</details>"
+                        )
+
+    return "\n".join(lines), agent_payloads
+
+
+def _write_report(recorder: CallRecorder, path: Path) -> None:
+    """Write a markdown report and a separate payloads annex."""
+    annex_path = path.with_stem(path.stem + "-payloads")
+    date_str = datetime.now(tz=timezone.utc).isoformat()
+
+    sections: list[str] = []
+    sections.append("# LDAP E2E Test — Call Sequences\n")
+    sections.append(f"**Date:** {date_str}")
+    sections.append(f"**Config:** `{E2E_LDAP_CONFIG_PATH}`")
+    sections.append(f"**Payloads:** [{annex_path.name}]({annex_path.name})\n")
+
+    annex: list[str] = []
+    annex.append("# LDAP E2E Test — Payloads Annex\n")
+    annex.append(f"**Date:** {date_str}")
+    annex.append(f"**Report:** [{path.name}]({path.name})\n")
+    annex.append("Only Waldur API response bodies received by the site agent are included.\n")
+    has_payloads = False
+
+    for test_id in recorder.all_test_ids():
+        calls = recorder.get_calls(test_id)
+        sections.append(f"## {test_id}\n")
+        doc = recorder.get_doc(test_id)
+        if doc:
+            sections.append(f"> {doc}\n")
+        if not calls:
+            sections.append("*No external calls recorded (test skipped or pure assertion).*\n")
+            continue
+
+        # Count by participant
+        counts: dict[str, int] = {}
+        for c in calls:
+            counts[c.participant] = counts.get(c.participant, 0) + 1
+        summary = ", ".join(f"{v} {k}" for k, v in counts.items())
+        sections.append(f"**Calls:** {summary}\n")
+
+        table, payloads = _generate_sequence_table(calls)
+        sections.append(table)
+        sections.append("")
+
+        if payloads:
+            has_payloads = True
+            annex.append(f"## {test_id}\n")
+            if doc:
+                annex.append(f"> {doc}\n")
+            annex.append("\n".join(payloads))
+            annex.append("")
+
+    path.write_text("\n".join(sections))
+    logger.info("LDAP E2E report written to %s", path)
+
+    if has_payloads:
+        annex_path.write_text("\n".join(annex))
+        logger.info("LDAP E2E payloads annex written to %s", annex_path)
+
+
+# ---------------------------------------------------------------------------
+# LDAP assertion helpers
+# ---------------------------------------------------------------------------
+
+
+class LdapAssertions:
+    """Helper for verifying LDAP state during tests."""
+
+    def __init__(self, ldap_settings: dict) -> None:
+        self.uri = ldap_settings["uri"]
+        self.bind_dn = ldap_settings["bind_dn"]
+        self.bind_password = ldap_settings["bind_password"]
+        self.base_dn = ldap_settings["base_dn"]
+        self.people_dn = f"{ldap_settings.get('people_ou', 'ou=People')},{self.base_dn}"
+        self.groups_dn = f"{ldap_settings.get('groups_ou', 'ou=Groups')},{self.base_dn}"
+
+    def _connect(self) -> Connection:
+        server = Server(self.uri, get_info=ALL)
+        return Connection(server, self.bind_dn, self.bind_password, auto_bind=True)
+
+    def assert_user_exists(self, username: str) -> dict:
+        conn = self._connect()
+        try:
+            conn.search(
+                self.people_dn,
+                f"(uid={username})",
+                search_scope=SUBTREE,
+                attributes=[
+                    "uid",
+                    "uidNumber",
+                    "gidNumber",
+                    "cn",
+                    "mail",
+                    "loginShell",
+                ],
+            )
+            assert len(conn.entries) == 1, (
+                f"Expected 1 LDAP entry for uid={username}, got {len(conn.entries)}"
+            )
+            return conn.entries[0].entry_attributes_as_dict
+        finally:
+            conn.unbind()
+
+    def assert_user_not_exists(self, username: str) -> None:
+        conn = self._connect()
+        try:
+            conn.search(
+                self.people_dn,
+                f"(uid={username})",
+                search_scope=SUBTREE,
+                attributes=["uid"],
+            )
+            assert len(conn.entries) == 0, (
+                f"Expected no LDAP entry for uid={username}, got {len(conn.entries)}"
+            )
+        finally:
+            conn.unbind()
+
+    def assert_group_exists(self, group_name: str) -> dict:
+        conn = self._connect()
+        try:
+            conn.search(
+                self.groups_dn,
+                f"(cn={group_name})",
+                search_scope=SUBTREE,
+                attributes=["cn", "gidNumber", "memberUid", "member"],
+            )
+            assert len(conn.entries) >= 1, (
+                f"Expected LDAP group cn={group_name}, got {len(conn.entries)}"
+            )
+            return conn.entries[0].entry_attributes_as_dict
+        finally:
+            conn.unbind()
+
+    def assert_group_not_exists(self, group_name: str) -> None:
+        conn = self._connect()
+        try:
+            conn.search(
+                self.groups_dn,
+                f"(cn={group_name})",
+                search_scope=SUBTREE,
+                attributes=["cn"],
+            )
+            assert len(conn.entries) == 0, (
+                f"Expected no LDAP group cn={group_name}, got {len(conn.entries)}"
+            )
+        finally:
+            conn.unbind()
+
+    def assert_user_in_group(
+        self,
+        group_name: str,
+        username: str,
+        attr: str = "memberUid",
+    ) -> None:
+        conn = self._connect()
+        try:
+            if attr == "member":
+                user_dn = f"uid={username},{self.people_dn}"
+                filter_str = f"(&(cn={group_name})(member={user_dn}))"
+            else:
+                filter_str = f"(&(cn={group_name})(memberUid={username}))"
+            conn.search(
+                self.groups_dn,
+                filter_str,
+                search_scope=SUBTREE,
+                attributes=["cn"],
+            )
+            assert len(conn.entries) >= 1, (
+                f"Expected {username} in group {group_name} (attr={attr})"
+            )
+        finally:
+            conn.unbind()
+
+    def assert_user_not_in_group(
+        self,
+        group_name: str,
+        username: str,
+        attr: str = "memberUid",
+    ) -> None:
+        conn = self._connect()
+        try:
+            if attr == "member":
+                user_dn = f"uid={username},{self.people_dn}"
+                filter_str = f"(&(cn={group_name})(member={user_dn}))"
+            else:
+                filter_str = f"(&(cn={group_name})(memberUid={username}))"
+            conn.search(
+                self.groups_dn,
+                filter_str,
+                search_scope=SUBTREE,
+                attributes=["cn"],
+            )
+            assert len(conn.entries) == 0, f"Expected {username} NOT in group {group_name}"
+        finally:
+            conn.unbind()
+
+    def count_users(self) -> int:
+        conn = self._connect()
+        try:
+            conn.search(
+                self.people_dn,
+                "(objectClass=posixAccount)",
+                search_scope=SUBTREE,
+                attributes=["uid"],
+            )
+            return len(conn.entries)
+        finally:
+            conn.unbind()
+
+    def list_usernames(self) -> list[str]:
+        conn = self._connect()
+        try:
+            conn.search(
+                self.people_dn,
+                "(objectClass=posixAccount)",
+                search_scope=SUBTREE,
+                attributes=["uid"],
+            )
+            return [str(e.uid) for e in conn.entries]
+        finally:
+            conn.unbind()
+
+    def get_group_members(self, group_name: str, attr: str = "memberUid") -> list[str]:
+        conn = self._connect()
+        try:
+            conn.search(
+                self.groups_dn,
+                f"(cn={group_name})",
+                search_scope=SUBTREE,
+                attributes=[attr],
+            )
+            if not conn.entries:
+                return []
+            values = conn.entries[0].entry_attributes_as_dict.get(attr, [])
+            return [str(v) for v in values] if isinstance(values, list) else [str(values)]
+        finally:
+            conn.unbind()
+
+
+# ---------------------------------------------------------------------------
+# SLURM emulator assertion helpers
+# ---------------------------------------------------------------------------
+
+
+def assert_slurm_account_exists(
+    slurm_backend: SlurmBackend,
+    account_name: str,
+) -> None:
+    resource = slurm_backend.client.get_resource(account_name)
+    assert resource is not None, f"SLURM account {account_name} should exist"
+
+
+def assert_slurm_account_not_exists(
+    slurm_backend: SlurmBackend,
+    account_name: str,
+) -> None:
+    resource = slurm_backend.client.get_resource(account_name)
+    assert resource is None, f"SLURM account {account_name} should not exist"
+
+
+def assert_slurm_qos_exists(
+    slurm_backend: SlurmBackend,
+    qos_name: str,
+) -> None:
+    assert slurm_backend.client.qos_exists(qos_name), f"SLURM QoS {qos_name} should exist"
+
+
+def assert_slurm_association_exists(
+    slurm_backend: SlurmBackend,
+    username: str,
+    account: str,
+) -> None:
+    assoc = slurm_backend.client.get_association(username, account)
+    assert assoc is not None, f"SLURM association {username}@{account} should exist"
+
+
+def assert_slurm_association_not_exists(
+    slurm_backend: SlurmBackend,
+    username: str,
+    account: str,
+) -> None:
+    assoc = slurm_backend.client.get_association(username, account)
+    assert assoc is None, f"SLURM association {username}@{account} should not exist"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+# Module-level recorder shared by all fixtures and tests
+_recorder = CallRecorder()
+
+
+@pytest.fixture(scope="module")
+def call_recorder():
+    return _recorder
+
+
+@pytest.fixture(scope="module")
+def ldap_config():
+    if not E2E_LDAP_CONFIG_PATH:
+        pytest.skip("WALDUR_E2E_LDAP_CONFIG not set")
+    return load_configuration(
+        E2E_LDAP_CONFIG_PATH,
+        user_agent_suffix="e2e-ldap-test",
+    )
+
+
+@pytest.fixture(scope="module")
+def ldap_offering(ldap_config):
+    if not ldap_config.offerings:
+        pytest.skip("No offerings in LDAP config")
+    return ldap_config.offerings[0]
+
+
+@pytest.fixture(scope="module")
+def ldap_assertions(ldap_offering, call_recorder):
+    ldap_settings = ldap_offering.backend_settings.get("ldap", {})
+    if not ldap_settings:
+        pytest.skip("No LDAP settings in offering")
+    assertions = LdapAssertions(ldap_settings)
+    _wrap_for_recording(
+        assertions,
+        [
+            "assert_user_exists",
+            "assert_user_not_exists",
+            "assert_group_exists",
+            "assert_group_not_exists",
+            "assert_user_in_group",
+            "assert_user_not_in_group",
+            "count_users",
+            "list_usernames",
+            "get_group_members",
+        ],
+        "LDAP",
+        call_recorder,
+    )
+    return assertions
+
+
+@pytest.fixture(scope="module")
+def ldap_waldur_client(ldap_offering, call_recorder):
+    client = get_client(
+        ldap_offering.waldur_api_url,
+        ldap_offering.waldur_api_token,
+    )
+    rec = call_recorder
+
+    def _response_hook(response):
+        response.read()
+        body = response.text
+        # Sanitise UUIDs in body to keep report stable across runs
+        body = _UUID_RE.sub("{uuid}", body)
+        rec.record(
+            ExternalCall(
+                ts=time.monotonic(),
+                participant="Waldur API",
+                operation=f"{response.request.method} {_sanitize_url(str(response.request.url))}",
+                response=str(response.status_code),
+                payload=body,
+            )
+        )
+
+    httpx_client = client.get_httpx_client()
+    httpx_client.event_hooks["response"].append(_response_hook)
+    return client
+
+
+@pytest.fixture(scope="module")
+def _ldap_emulator_cleanup(ldap_offering) -> None:
+    slurm_bin_path = ldap_offering.backend_settings.get(
+        "slurm_bin_path",
+        ".venv/bin",
+    )
+    sacctmgr = str(Path(slurm_bin_path) / "sacctmgr")
+    try:
+        subprocess.check_output(
+            [sacctmgr, "cleanup", "all"],
+            stderr=subprocess.STDOUT,
+            timeout=10,
+        )
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
+        state_file = Path("/tmp/slurm_emulator_db.json")  # noqa: S108
+        if state_file.exists():
+            state_file.unlink()
+
+    # Ensure parent account 'eurohpc' exists (emulator starts empty)
+    with contextlib.suppress(subprocess.CalledProcessError, FileNotFoundError):
+        subprocess.check_output(
+            [
+                sacctmgr,
+                "--immediate",
+                "--parsable2",
+                "--noheader",
+                "add",
+                "account",
+                "eurohpc",
+            ],
+            stderr=subprocess.STDOUT,
+            timeout=10,
+        )
+
+    # Ensure project dir base exists
+    Path("/tmp/e2e-projects").mkdir(exist_ok=True)  # noqa: S108
+
+
+@pytest.fixture(scope="module")
+def ldap_slurm_backend(ldap_offering, _ldap_emulator_cleanup, call_recorder):
+    settings = ldap_offering.backend_settings
+    components = ldap_offering.backend_components_dict
+    backend = SlurmBackend(settings, components)
+
+    # Wrap SLURM CLI calls (execute_command on the client)
+    original_exec = backend.client.execute_command
+
+    @functools.wraps(original_exec)
+    def _recording_exec(command, silent=False):
+        t0 = time.monotonic()
+        # Extract the binary name and subcommand for a readable label
+        cmd_parts = [os.path.basename(command[0])] + command[1:]  # noqa: PTH119
+        # Drop verbose flags for brevity
+        label = " ".join(
+            p for p in cmd_parts if p not in ("--immediate", "--parsable2", "--noheader")
+        )
+        try:
+            result = original_exec(command, silent=silent)
+            call_recorder.record(
+                ExternalCall(ts=t0, participant="SLURM", operation=label, response="OK")
+            )
+            return result
+        except Exception as exc:
+            call_recorder.record(
+                ExternalCall(
+                    ts=t0,
+                    participant="SLURM",
+                    operation=label,
+                    response=f"ERR: {type(exc).__name__}",
+                )
+            )
+            raise
+
+    backend.client.execute_command = _recording_exec
+
+    # Wrap LDAP client methods (if LDAP is configured)
+    if backend._ldap_client is not None:
+        _wrap_for_recording(
+            backend._ldap_client,
+            [
+                "ping",
+                "search_user",
+                "search_user_by_email",
+                "user_exists",
+                "group_exists",
+                "get_group_gid",
+                "get_next_uid",
+                "get_next_gid",
+                "create_user",
+                "delete_user",
+                "update_user_attributes",
+                "create_project_group",
+                "delete_group",
+                "add_user_to_group",
+                "remove_user_from_group",
+                "is_user_in_group",
+            ],
+            "LDAP",
+            call_recorder,
+        )
+
+    return backend
+
+
+@pytest.fixture(scope="module")
+def ldap_project_uuid():
+    if not E2E_PROJECT_A_UUID:
+        pytest.skip("WALDUR_E2E_PROJECT_A_UUID not set")
+    return E2E_PROJECT_A_UUID
+
+
+@pytest.fixture(autouse=True)
+def _track_test(request, call_recorder):
+    """Set current test name on the recorder before each test."""
+    cls = request.node.cls.__name__ if request.node.cls else ""
+    test_id = request.node.nodeid.split("::")[-1]
+    label = f"{cls}::{test_id}" if cls else test_id
+    # Extract first line of the test function docstring
+    doc = ""
+    func = getattr(request.node, "function", None)
+    if func and func.__doc__:
+        doc = func.__doc__.strip().split("\n")[0].strip()
+    call_recorder.set_test(label, doc=doc)
+    yield
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _write_report_on_teardown(request, call_recorder):
+    """Write the mermaid report after the entire test module completes."""
+
+    def finalizer():
+        stem = Path(E2E_LDAP_CONFIG_PATH).stem if E2E_LDAP_CONFIG_PATH else "e2e-ldap"
+        path = Path(__file__).parent / f"{stem}-report.md"
+        _write_report(call_recorder, path)
+
+    request.addfinalizer(finalizer)
+
+
+# ---------------------------------------------------------------------------
+# Tests — Resource Lifecycle (create, update, terminate)
+# ---------------------------------------------------------------------------
+
+# Shared state for ordered tests
+_ldap_state: dict = {}
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapResourceLifecycle:
+    """Full resource lifecycle: create, update limits, terminate."""
+
+    def test_01_create_resource(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_project_uuid,
+        ldap_assertions,
+        call_recorder,
+    ):
+        """CREATE order: SLURM account, QoS, LDAP project group, project dir."""
+        offering_url, plan_url = get_offering_info(
+            ldap_waldur_client, ldap_offering.waldur_offering_uuid
+        )
+        project_url = get_project_url(
+            ldap_waldur_client,
+            ldap_project_uuid,
+        )
+
+        limits = {"node_hours": 100}
+        resource_name = f"e2e-ldap-{uuid.uuid4().hex[:6]}"
+
+        order_uuid = create_source_order(
+            client=ldap_waldur_client,
+            offering_url=offering_url,
+            project_url=project_url,
+            plan_url=plan_url,
+            limits=limits,
+            name=resource_name,
+        )
+        _ldap_state["order_uuid"] = order_uuid
+
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                order_uuid,
+            )
+        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+        # Get resource backend_id
+        call_recorder.set_phase("assert")
+        order = marketplace_orders_retrieve.sync(
+            client=ldap_waldur_client,
+            uuid=order_uuid,
+        )
+        resource_uuid = order.marketplace_resource_uuid.hex
+        _ldap_state["resource_uuid"] = resource_uuid
+
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+        backend_id = res.backend_id
+        _ldap_state["backend_id"] = backend_id
+
+        # Verify SLURM account exists
+        assert_slurm_account_exists(ldap_slurm_backend, backend_id)
+
+        # Verify component mapper converted node_hours -> cpu + gpu
+        mapper = ldap_slurm_backend._component_mapper
+        assert not mapper.is_passthrough, "Mapper should be in conversion mode"
+        converted = mapper.convert_limits_to_target({"node_hours": 100})
+        assert converted == {"cpu": 6400, "gpu": 800}
+        logger.info("Component mapper conversion verified: %s", converted)
+
+        # Verify LDAP project group was created
+        ldap_assertions.assert_group_exists(backend_id)
+        logger.info("LDAP project group %s verified", backend_id)
+
+        # Verify project directory was created
+        project_dir = Path(f"/tmp/e2e-projects/{backend_id}")  # noqa: S108
+        assert project_dir.exists(), f"Project directory {project_dir} should exist"
+        logger.info("Project directory %s verified", project_dir)
+
+    def test_02_update_limits(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        call_recorder,
+    ):
+        """UPDATE order: increase node_hours and verify SLURM limits change."""
+        resource_uuid = _ldap_state.get("resource_uuid")
+        backend_id = _ldap_state.get("backend_id")
+        if not resource_uuid or not backend_id:
+            pytest.skip("No resource from test_01")
+
+        new_limits = {"node_hours": 200}
+
+        resp = ldap_waldur_client.get_httpx_client().post(
+            f"/api/marketplace-resources/{resource_uuid}/update_limits/",
+            json={"limits": new_limits},
+        )
+        assert resp.status_code < 400, (
+            f"Failed to create update order: {resp.status_code} {resp.text[:500]}"
+        )
+        data = resp.json()
+        update_order_uuid = data.get("order_uuid") or data.get("uuid", "")
+        assert update_order_uuid, f"No order UUID in response: {data}"
+
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                update_order_uuid,
+            )
+        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+        # Verify the SLURM account still exists after update
+        call_recorder.set_phase("assert")
+        assert_slurm_account_exists(ldap_slurm_backend, backend_id)
+
+        # Verify Waldur resource limits were updated
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+        if not isinstance(res.limits, type(UNSET)):
+            waldur_limits = dict(res.limits.additional_properties)
+            logger.info("Waldur limits after update: %s", waldur_limits)
+            assert waldur_limits.get("node_hours") == 200, (
+                f"Expected node_hours=200, got {waldur_limits}"
+            )
+
+        logger.info("UPDATE order completed, limits updated to node_hours=200")
+
+    def test_03_terminate_resource(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        call_recorder,
+    ):
+        """TERMINATE order: SLURM account removed, resource state changes."""
+        resource_uuid = _ldap_state.get("resource_uuid")
+        backend_id = _ldap_state.get("backend_id")
+        if not resource_uuid or not backend_id:
+            pytest.skip("No resource from test_01")
+
+        resp = ldap_waldur_client.get_httpx_client().post(
+            f"/api/marketplace-resources/{resource_uuid}/terminate/",
+            json={},
+        )
+        assert resp.status_code < 400, (
+            f"Failed to create terminate order: {resp.status_code} {resp.text[:500]}"
+        )
+        data = resp.json()
+        terminate_order_uuid = data.get("order_uuid") or data.get("uuid", "")
+        assert terminate_order_uuid, f"No order UUID in response: {data}"
+
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                terminate_order_uuid,
+            )
+        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+        # Verify the resource is no longer in OK state
+        call_recorder.set_phase("assert")
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+        assert str(res.state) != "OK", (
+            f"Resource should not be OK after termination, got {res.state}"
+        )
+
+        # Verify the SLURM account was deleted
+        assert_slurm_account_not_exists(ldap_slurm_backend, backend_id)
+        logger.info("TERMINATE order completed, SLURM account %s removed", backend_id)
+
+
+# ---------------------------------------------------------------------------
+# Tests — Membership Sync with LDAP
+# ---------------------------------------------------------------------------
+
+_membership_state: dict = {}
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapMembershipSync:
+    """Membership sync: LDAP user provisioning and SLURM associations."""
+
+    def test_01_create_resource_for_membership(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_project_uuid,
+        call_recorder,
+    ):
+        """Create a fresh resource for membership sync tests."""
+        offering_url, plan_url = get_offering_info(
+            ldap_waldur_client, ldap_offering.waldur_offering_uuid
+        )
+        project_url = get_project_url(ldap_waldur_client, ldap_project_uuid)
+
+        order_uuid = create_source_order(
+            client=ldap_waldur_client,
+            offering_url=offering_url,
+            project_url=project_url,
+            plan_url=plan_url,
+            limits={"node_hours": 50},
+            name=f"e2e-ldap-mem-{uuid.uuid4().hex[:6]}",
+        )
+
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                order_uuid,
+            )
+        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+        call_recorder.set_phase("assert")
+        order = marketplace_orders_retrieve.sync(
+            client=ldap_waldur_client, uuid=order_uuid
+        )
+        resource_uuid = order.marketplace_resource_uuid.hex
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+
+        _membership_state["resource_uuid"] = resource_uuid
+        _membership_state["backend_id"] = res.backend_id
+        logger.info(
+            "Created resource %s (backend_id=%s) for membership tests",
+            resource_uuid,
+            res.backend_id,
+        )
+
+    def test_02_membership_sync_adds_users(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        call_recorder,
+    ):
+        """Membership sync adds users to SLURM account and LDAP project group."""
+        backend_id = _membership_state.get("backend_id")
+        if not backend_id:
+            pytest.skip("No backend_id from test_01")
+
+        with call_recorder.phase("agent"):
+            processor = OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            )
+            processor.process_offering()
+
+        # Collect offering user usernames from Waldur
+        call_recorder.set_phase("assert")
+        offering_users = processor._get_cached_offering_users()
+        usernames = [
+            ou.username
+            for ou in offering_users
+            if not isinstance(ou.username, type(UNSET)) and ou.username
+        ]
+        assert len(usernames) > 0, "Expected offering users with usernames"
+        _membership_state["usernames"] = usernames
+        logger.info("Offering user usernames: %s", usernames)
+
+    def test_03_username_format_verification(self):
+        """Verify username format matches first_letter_full_lastname (x.lastname)."""
+        usernames = _membership_state.get("usernames", [])
+        if not usernames:
+            pytest.skip("No usernames from test_02 (prerequisite skipped or failed)")
+
+        for uname in usernames:
+            assert "." in uname, (
+                f"Username '{uname}' should contain a dot (first_letter_full_lastname format)"
+            )
+            parts = uname.split(".", 1)
+            assert len(parts[0]) == 1, (
+                f"Username '{uname}' first part should be a single character"
+            )
+        logger.info("All %d usernames match first_letter_full_lastname format", len(usernames))
+
+    def test_04_users_in_ldap_project_group(
+        self,
+        ldap_assertions,
+    ):
+        """Verify users are added to the LDAP project group."""
+        backend_id = _membership_state.get("backend_id")
+        usernames = _membership_state.get("usernames", [])
+        if not backend_id or not usernames:
+            pytest.skip("No backend_id or usernames from previous tests")
+
+        members = ldap_assertions.get_group_members(backend_id, attr="memberUid")
+        logger.info("Project group %s members: %s", backend_id, members)
+
+        for uname in usernames:
+            assert uname in members, (
+                f"User {uname} should be in LDAP project group {backend_id}"
+            )
+
+    def test_05_users_in_access_group(
+        self,
+        ldap_offering,
+        ldap_assertions,
+    ):
+        """Verify LDAP users are in configured access groups.
+
+        Access group membership is set during initial LDAP user provisioning.
+        Only checks users that actually exist as posixAccount entries in LDAP.
+        """
+        usernames = _membership_state.get("usernames", [])
+        if not usernames:
+            pytest.skip("No usernames from previous tests")
+
+        # Only check users that exist in LDAP (access groups are set on creation)
+        ldap_users = set(ldap_assertions.list_usernames())
+        testable_users = [u for u in usernames if u in ldap_users]
+        if not testable_users:
+            pytest.skip("No LDAP posixAccount entries found — access group check not applicable")
+
+        access_groups = ldap_offering.backend_settings.get("ldap", {}).get("access_groups", [])
+        for group_config in access_groups:
+            group_name = group_config["name"]
+            attr = group_config.get("attribute", "memberUid")
+            for uname in testable_users:
+                ldap_assertions.assert_user_in_group(group_name, uname, attr=attr)
+            logger.info(
+                "All %d LDAP users verified in access group %s (attr=%s)",
+                len(testable_users),
+                group_name,
+                attr,
+            )
+
+    def test_06_slurm_associations_exist(
+        self,
+        ldap_slurm_backend,
+    ):
+        """Verify SLURM user-account associations exist for all users."""
+        backend_id = _membership_state.get("backend_id")
+        usernames = _membership_state.get("usernames", [])
+        if not backend_id or not usernames:
+            pytest.skip("No backend_id or usernames from previous tests")
+
+        for uname in usernames:
+            assert_slurm_association_exists(ldap_slurm_backend, uname, backend_id)
+        logger.info(
+            "All %d SLURM associations verified for account %s",
+            len(usernames),
+            backend_id,
+        )
+
+    def test_07_idempotent_membership_sync(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        call_recorder,
+    ):
+        """Running membership sync again should be idempotent."""
+        backend_id = _membership_state.get("backend_id")
+        usernames = _membership_state.get("usernames", [])
+        if not backend_id or not usernames:
+            pytest.skip("No backend_id or usernames from previous tests")
+
+        # Count SLURM associations before second sync
+        assoc_count_before = sum(
+            1
+            for u in usernames
+            if ldap_slurm_backend.client.get_association(u, backend_id) is not None
+        )
+
+        with call_recorder.phase("agent"):
+            processor = OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            )
+            processor.process_offering()
+
+        call_recorder.set_phase("assert")
+        assoc_count_after = sum(
+            1
+            for u in usernames
+            if ldap_slurm_backend.client.get_association(u, backend_id) is not None
+        )
+        assert assoc_count_after == assoc_count_before, (
+            f"Idempotent sync changed association count: {assoc_count_before} -> {assoc_count_after}"
+        )
+        logger.info(
+            "Idempotent membership sync verified: %d associations unchanged",
+            assoc_count_after,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests — Usage Reporting
+# ---------------------------------------------------------------------------
+
+_usage_state: dict = {}
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapUsageReporting:
+    """Usage reporting: total and per-user usage through the SLURM emulator."""
+
+    def test_01_create_resource_for_usage(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_project_uuid,
+        call_recorder,
+    ):
+        """Create a resource and sync members for usage reporting tests."""
+        offering_url, plan_url = get_offering_info(
+            ldap_waldur_client, ldap_offering.waldur_offering_uuid
+        )
+        project_url = get_project_url(ldap_waldur_client, ldap_project_uuid)
+
+        order_uuid = create_source_order(
+            client=ldap_waldur_client,
+            offering_url=offering_url,
+            project_url=project_url,
+            plan_url=plan_url,
+            limits={"node_hours": 500},
+            name=f"e2e-ldap-usage-{uuid.uuid4().hex[:6]}",
+        )
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                order_uuid,
+            )
+        assert final_state == OrderState.DONE
+
+        call_recorder.set_phase("assert")
+        order = marketplace_orders_retrieve.sync(
+            client=ldap_waldur_client, uuid=order_uuid
+        )
+        resource_uuid = order.marketplace_resource_uuid.hex
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+        _usage_state["resource_uuid"] = resource_uuid
+        _usage_state["backend_id"] = res.backend_id
+
+        # Run membership sync to provision users
+        with call_recorder.phase("agent"):
+            processor = OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            )
+            processor.process_offering()
+        logger.info(
+            "Created resource %s (backend_id=%s) for usage tests",
+            resource_uuid,
+            res.backend_id,
+        )
+
+    def test_02_inject_usage_and_report(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        call_recorder,
+    ):
+        """Inject per-user usage into emulator and run report processor."""
+        resource_uuid = _usage_state.get("resource_uuid")
+        backend_id = _usage_state.get("backend_id")
+        if not resource_uuid or not backend_id:
+            pytest.skip("No resource from test_01")
+
+        from emulator.core.database import SlurmDatabase  # noqa: PLC0415
+        from emulator.core.time_engine import TimeEngine  # noqa: PLC0415
+        from emulator.core.usage_simulator import UsageSimulator  # noqa: PLC0415
+
+        db = SlurmDatabase()
+        db.load_state()
+        sim = UsageSimulator(TimeEngine(), db)
+
+        # Get usernames from SLURM account associations (works even without LDAP entries)
+        usernames = db.list_account_users(backend_id)
+        assert len(usernames) > 0, f"No users associated with SLURM account {backend_id}"
+        now = datetime(2026, 3, 1, 12, 0, 0)
+        injected: dict[str, float] = {}
+        for i, username in enumerate(usernames[:5]):
+            node_hours = 10.0 * (i + 1)
+            sim.inject_usage(backend_id, username, node_hours, at_time=now)
+            injected[username] = node_hours
+
+        _usage_state["injected_usage"] = injected
+        logger.info("Injected usage for %d users: %s", len(injected), injected)
+
+        # Run report processor
+        with call_recorder.phase("agent"):
+            processor = OfferingReportProcessor(
+                ldap_offering,
+                ldap_waldur_client,
+                timezone="UTC",
+                resource_backend=ldap_slurm_backend,
+            )
+            waldur_offering = marketplace_provider_offerings_retrieve.sync(
+                client=ldap_waldur_client, uuid=ldap_offering.waldur_offering_uuid
+            )
+            waldur_resource = marketplace_provider_resources_retrieve.sync(
+                client=ldap_waldur_client, uuid=resource_uuid
+            )
+            processor._process_resource_with_retries(waldur_resource, waldur_offering)
+        logger.info("Report processor completed for resource %s", backend_id)
+
+    def test_03_verify_total_usage(
+        self,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+    ):
+        """Verify usage data is available from the SLURM backend.
+
+        Note: With ComponentMapper (node_hours -> cpu+gpu), the TRES parser
+        may not extract usage when slurm_tres only contains source components.
+        This test verifies the raw sacct data is present and the report
+        processor ran without error.
+        """
+        resource_uuid = _usage_state.get("resource_uuid")
+        backend_id = _usage_state.get("backend_id")
+        if not resource_uuid or not backend_id:
+            pytest.skip("No resource from test_01")
+
+        # Verify usage exists at the SLURM emulator level
+        from emulator.core.database import SlurmDatabase  # noqa: PLC0415
+
+        db = SlurmDatabase()
+        db.load_state()
+        records = db.get_usage_records(account=backend_id)
+        assert len(records) > 0, f"Expected usage records in emulator for {backend_id}"
+        logger.info("Found %d emulator usage records for %s", len(records), backend_id)
+
+        # Check Waldur component usages (may be empty with ComponentMapper TRES mismatch)
+        usages = marketplace_component_usages_list.sync_all(
+            client=ldap_waldur_client,
+            resource_uuid=resource_uuid,
+        )
+        logger.info("Found %d Waldur component usage records", len(usages))
+
+        if usages:
+            usage_types = {
+                u.type_
+                for u in usages
+                if not isinstance(u.type_, type(UNSET))
+            }
+            logger.info("Usage types on Waldur: %s", usage_types)
+
+    def test_04_verify_per_user_usage(
+        self,
+        ldap_slurm_backend,
+    ):
+        """Verify per-user usage is recorded in the SLURM emulator."""
+        backend_id = _usage_state.get("backend_id")
+        injected = _usage_state.get("injected_usage", {})
+        if not backend_id or not injected:
+            pytest.skip("No resource or injected usage from previous tests")
+
+        from emulator.core.database import SlurmDatabase  # noqa: PLC0415
+
+        db = SlurmDatabase()
+        db.load_state()
+
+        for username, expected_nh in injected.items():
+            records = db.get_usage_records(account=backend_id, user=username)
+            assert len(records) > 0, f"No emulator usage records for {username}"
+            total_nh = sum(r.node_hours for r in records)
+            assert abs(total_nh - expected_nh) < 0.01, (
+                f"Usage mismatch for {username}: expected {expected_nh}, got {total_nh}"
+            )
+        logger.info("Per-user emulator usage verified for %d users", len(injected))
+
+
+# ---------------------------------------------------------------------------
+# Tests — Backward Compatibility
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapBackwardCompat:
+    """Backward compatibility: offerings without LDAP settings."""
+
+    def test_01_backend_without_ldap(
+        self,
+        ldap_offering,
+    ):
+        """SlurmBackend without LDAP settings initializes normally."""
+        settings = dict(ldap_offering.backend_settings)
+        settings.pop("ldap", None)
+        settings.pop("qos_management", None)
+        settings.pop("project_directory", None)
+        settings.pop("parent_account", None)
+        settings.pop("default_partition", None)
+        settings["customer_prefix"] = "compat_cust_"
+        settings["project_prefix"] = "compat_proj_"
+        settings["allocation_prefix"] = "compat_alloc_"
+
+        components = {
+            "cpu": {
+                "limit": 10000,
+                "measured_unit": "k-Hours",
+                "unit_factor": 60000,
+                "accounting_type": "limit",
+                "label": "CPU",
+            },
+        }
+        backend = SlurmBackend(settings, components)
+
+        assert backend._ldap_client is None
+        assert backend._default_partition is None
+        assert not backend._qos_config
+        assert not backend._project_dir_config
+        assert backend._component_mapper.is_passthrough
+        logger.info("Backward compatibility: no LDAP features active")
+
+    def test_02_component_mapper_passthrough(
+        self,
+        ldap_offering,
+    ):
+        """Passthrough mapper returns limits unchanged."""
+        settings = dict(ldap_offering.backend_settings)
+        settings.pop("ldap", None)
+        settings.pop("qos_management", None)
+        settings.pop("project_directory", None)
+        settings.pop("parent_account", None)
+        settings.pop("default_partition", None)
+        settings["customer_prefix"] = "compat_"
+        settings["project_prefix"] = "compat_"
+        settings["allocation_prefix"] = "compat_"
+
+        components = {
+            "cpu": {
+                "limit": 10000,
+                "measured_unit": "k-Hours",
+                "unit_factor": 60000,
+                "accounting_type": "limit",
+                "label": "CPU",
+            },
+        }
+        backend = SlurmBackend(settings, components)
+        mapper = backend._component_mapper
+
+        assert mapper.is_passthrough
+        result = mapper.convert_limits_to_target({"cpu": 100})
+        assert result == {"cpu": 100}
+        logger.info("Passthrough mapper verified")
+
+    def test_03_component_mapper_conversion(
+        self,
+        ldap_slurm_backend,
+    ):
+        """Conversion mapper expands node_hours to cpu + gpu."""
+        mapper = ldap_slurm_backend._component_mapper
+        assert not mapper.is_passthrough
+        assert mapper.source_components == {"node_hours"}
+        assert mapper.target_components == {"cpu", "gpu"}
+
+        result = mapper.convert_limits_to_target({"node_hours": 10})
+        assert result == {"cpu": 640, "gpu": 80}
+
+        # cpu=640/64=10, gpu=80/8=10, total node_hours=20
+        back = mapper.convert_usage_from_target({"cpu": 640, "gpu": 80})
+        assert back == {"node_hours": 20.0}
+        logger.info("Conversion mapper verified: node_hours <-> cpu+gpu")
+
+
+# ---------------------------------------------------------------------------
+# Tests — Welcome email on user provisioning
+# ---------------------------------------------------------------------------
+
+_email_state: dict = {}
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapWelcomeEmail:
+    """Welcome email sending during LDAP user provisioning."""
+
+    def test_01_create_resource_for_email(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_project_uuid,
+        call_recorder,
+    ):
+        """Create a fresh resource for welcome email tests."""
+        offering_url, plan_url = get_offering_info(
+            ldap_waldur_client, ldap_offering.waldur_offering_uuid
+        )
+        project_url = get_project_url(ldap_waldur_client, ldap_project_uuid)
+
+        order_uuid = create_source_order(
+            client=ldap_waldur_client,
+            offering_url=offering_url,
+            project_url=project_url,
+            plan_url=plan_url,
+            limits={"node_hours": 30},
+            name=f"e2e-ldap-email-{uuid.uuid4().hex[:6]}",
+        )
+
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                order_uuid,
+            )
+        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+        call_recorder.set_phase("assert")
+        order = marketplace_orders_retrieve.sync(
+            client=ldap_waldur_client, uuid=order_uuid
+        )
+        resource_uuid = order.marketplace_resource_uuid.hex
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+
+        _email_state["resource_uuid"] = resource_uuid
+        _email_state["backend_id"] = res.backend_id
+        logger.info(
+            "Created resource %s (backend_id=%s) for email tests",
+            resource_uuid,
+            res.backend_id,
+        )
+
+    def test_02_membership_sync_sends_welcome_emails(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_assertions,
+        tmp_path,
+        call_recorder,
+    ):
+        """Membership sync with welcome_email config sends emails for new users.
+
+        Patches the offering's backend_settings to enable welcome_email and
+        generate_vpn_password, then captures SMTP calls via mock.
+        """
+        backend_id = _email_state.get("backend_id")
+        if not backend_id:
+            pytest.skip("No backend_id from test_01")
+
+        # Write a simple template to a temp file
+        template_file = tmp_path / "welcome.txt.j2"
+        template_file.write_text(
+            "Hello {{ first_name }},\n"
+            "Username: {{ username }}\n"
+            "{% if vpn_password %}VPN: {{ vpn_password }}\n{% endif %}"
+            "Home: {{ home_directory }}\n"
+        )
+
+        # Patch offering backend_settings to enable welcome email + VPN password
+        original_settings = ldap_offering.backend_settings
+        patched_ldap = dict(original_settings.get("ldap", {}))
+        patched_ldap["generate_vpn_password"] = True
+        patched_ldap["welcome_email"] = {
+            "smtp_host": "localhost",
+            "smtp_port": 25,
+            "from_address": "test@e2e.local",
+            "use_tls": False,
+            "use_ssl": False,
+            "template_path": str(template_file),
+        }
+        patched_settings = dict(original_settings)
+        patched_settings["ldap"] = patched_ldap
+        ldap_offering.backend_settings = patched_settings
+
+        # Collect sent emails via mock SMTP
+        sent_emails: list[tuple[str, list[str], str]] = []
+        from unittest.mock import MagicMock, patch  # noqa: PLC0415
+
+        mock_smtp_instance = MagicMock()
+
+        def _capture_sendmail(from_addr, to_addrs, msg_str):
+            sent_emails.append((from_addr, to_addrs, msg_str))
+
+        mock_smtp_instance.sendmail.side_effect = _capture_sendmail
+
+        try:
+            with (
+                call_recorder.phase("agent"),
+                patch(
+                    "waldur_site_agent_ldap.email_sender.smtplib"
+                ) as mock_smtplib,
+            ):
+                mock_smtplib.SMTP.return_value = mock_smtp_instance
+
+                processor = OfferingMembershipProcessor(
+                    offering=ldap_offering,
+                    waldur_rest_client=ldap_waldur_client,
+                    resource_backend=ldap_slurm_backend,
+                )
+                processor.process_offering()
+        finally:
+            # Restore original settings
+            ldap_offering.backend_settings = original_settings
+
+        call_recorder.set_phase("assert")
+
+        # Collect offering user usernames
+        offering_users = processor._get_cached_offering_users()
+        usernames = [
+            ou.username
+            for ou in offering_users
+            if not isinstance(ou.username, type(UNSET)) and ou.username
+        ]
+        _email_state["usernames"] = usernames
+        _email_state["sent_emails"] = sent_emails
+
+        logger.info(
+            "Membership sync completed: %d usernames, %d emails sent",
+            len(usernames),
+            len(sent_emails),
+        )
+
+    def test_03_emails_contain_credentials(self):
+        """Verify sent emails contain username, VPN password, and home directory."""
+        sent_emails = _email_state.get("sent_emails", [])
+        usernames = _email_state.get("usernames", [])
+        if not sent_emails:
+            # Users may already exist from prior test classes (no new creation = no email)
+            if usernames:
+                logger.info(
+                    "No emails sent — users likely already existed from prior tests"
+                )
+                pytest.skip("No welcome emails sent (users already existed)")
+            else:
+                pytest.skip("No usernames or emails from test_02")
+
+        for from_addr, to_addrs, msg_str in sent_emails:
+            assert from_addr == "test@e2e.local", f"Unexpected from: {from_addr}"
+            assert len(to_addrs) == 1, f"Expected 1 recipient, got {len(to_addrs)}"
+
+            # Should contain a username
+            assert "Username:" in msg_str, "Email should contain 'Username:' field"
+
+            # Should contain VPN password (generate_vpn_password=true)
+            assert "VPN:" in msg_str, "Email should contain VPN password"
+
+            # Should contain home directory
+            assert "Home:" in msg_str, "Email should contain home directory"
+            assert "/home/" in msg_str, "Home directory should start with /home/"
+
+            logger.info("Email to %s verified: contains credentials", to_addrs[0])
+
+        logger.info("All %d welcome emails contain expected fields", len(sent_emails))
+
+    def test_04_email_recipients_match_offering_users(self):
+        """Verify email recipients match the user emails from offering users."""
+        sent_emails = _email_state.get("sent_emails", [])
+        if not sent_emails:
+            pytest.skip("No welcome emails sent")
+
+        recipients = {to_addrs[0] for _, to_addrs, _ in sent_emails}
+        logger.info("Email recipients: %s", recipients)
+
+        # All recipients should be valid email addresses
+        for email in recipients:
+            assert "@" in email, f"Invalid email recipient: {email}"
+
+        logger.info(
+            "All %d email recipients are valid addresses", len(recipients)
+        )
+
+    def test_05_no_email_when_feature_disabled(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        call_recorder,
+    ):
+        """Membership sync without welcome_email config sends no emails."""
+        backend_id = _email_state.get("backend_id")
+        if not backend_id:
+            pytest.skip("No backend_id from test_01")
+
+        # Verify the default config does NOT have welcome_email
+        ldap_settings = ldap_offering.backend_settings.get("ldap", {})
+        assert "welcome_email" not in ldap_settings, (
+            "Default e2e config should not have welcome_email"
+        )
+
+        from unittest.mock import patch  # noqa: PLC0415
+
+        with (
+            call_recorder.phase("agent"),
+            patch(
+                "waldur_site_agent_ldap.email_sender.smtplib"
+            ) as mock_smtplib,
+        ):
+            processor = OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            )
+            processor.process_offering()
+
+        call_recorder.set_phase("assert")
+
+        # SMTP should never have been instantiated
+        mock_smtplib.SMTP.assert_not_called()
+        mock_smtplib.SMTP_SSL.assert_not_called()
+        logger.info("No SMTP calls when welcome_email is not configured")

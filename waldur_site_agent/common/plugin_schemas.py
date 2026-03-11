@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from waldur_site_agent.backend import logger
 
@@ -17,6 +17,22 @@ if sys.version_info >= (3, 10):
     from importlib.metadata import entry_points
 else:
     from importlib_metadata import entry_points
+
+
+class TargetComponentConfig(BaseModel):
+    """Configuration for a single target component mapping.
+
+    Used by plugins that need to convert Waldur-facing components
+    to backend-facing components with a conversion factor.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    factor: float = Field(
+        default=1.0,
+        gt=0,
+        description="Conversion factor: target_value = source_value * factor",
+    )
 
 
 class PluginComponentSchema(BaseModel):

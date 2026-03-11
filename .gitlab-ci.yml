@@ -571,6 +571,14 @@ E2E integration tests:
     - if: '$RUN_E2E_TESTS && $CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$RUN_E2E_TESTS && $CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/slurm/**/*
+        - plugins/ldap/**/*
+        - waldur_site_agent/**/*
+        - ci/**/*
+        - pyproject.toml
+        - uv.lock
     - if: '$RUN_E2E == "true"'
   before_script:
     # Install Docker CLI + Compose plugin (static binaries)
@@ -643,6 +651,31 @@ E2E integration tests:
       WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
       pytest plugins/slurm/tests/e2e/test_e2e_stomp.py -v \
         --junitxml=e2e-report-stomp.xml
+    # Wait for OpenLDAP to be ready
+    - |
+      echo "Waiting for OpenLDAP..."
+      for i in $(seq 1 30); do
+        if docker compose -f ci/docker-compose.e2e.yml exec -T waldur-ldap \
+          ldapsearch -x -H ldap://localhost -b "dc=sofiatech,dc=bg" \
+          -D "cn=admin,dc=sofiatech,dc=bg" -w "e2e-ldap-password" > /dev/null 2>&1; then
+          echo "OpenLDAP ready (attempt $i)"
+          break
+        fi
+        if [ "$i" -eq 30 ]; then
+          echo "ERROR: OpenLDAP not ready after 30 attempts"
+          docker compose -f ci/docker-compose.e2e.yml logs waldur-ldap
+          exit 1
+        fi
+        sleep 2
+      done
+    # Run LDAP E2E tests (LDAP + SLURM emulator)
+    - |
+      source .venv/bin/activate
+      WALDUR_E2E_TESTS=true \
+      WALDUR_E2E_LDAP_CONFIG=ci/e2e-ci-config-ldap.yaml \
+      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
+      pytest plugins/slurm/tests/e2e/test_e2e_ldap.py -v \
+        --junitxml=e2e-report-ldap.xml
     # Run Policy E2E tests (11 distinct SLURM policy configurations)
     - |
       source .venv/bin/activate
@@ -660,6 +693,7 @@ E2E integration tests:
       junit:
         - e2e-report-rest.xml
         - e2e-report-stomp.xml
+        - e2e-report-ldap.xml
         - e2e-report-policy.xml
     paths:
       - waldur-stack-logs.txt

@@ -450,8 +450,12 @@ def project_uuid():
 
 
 @pytest.fixture(autouse=True)
-def _track_api_calls(request, report):
+def _track_api_calls(request):
     """Track API call count and response bytes per test automatically."""
+    report = request.getfixturevalue("report") if "report" in request.fixturenames else None
+    if report is None:
+        yield
+        return
     start_calls = report.total_calls
     start_bytes = report.total_response_bytes
     yield

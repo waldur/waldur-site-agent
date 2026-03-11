@@ -569,13 +569,17 @@ class BaseBackend(ABC):
             logger.info("Skipping setting of limits")
             return {}
 
-        # Convert limits for logging
+        # Convert limits for logging (skip keys not in backend_components,
+        # e.g. when ComponentMapper expands source to target components)
         converted_limits = {
             key: value // self.backend_components[key].get("unit_factor", 1)
             for key, value in resource_backend_limits.items()
+            if key in self.backend_components
         }
 
-        limits_str = utils.prettify_limits(converted_limits, self.backend_components)
+        limits_str = utils.prettify_limits(
+            converted_limits or resource_backend_limits, self.backend_components
+        )
         logger.info("Setting resource backend limits to: \n%s", limits_str)
         self.client.set_resource_limits(resource_backend_id, resource_backend_limits)
         return waldur_limits

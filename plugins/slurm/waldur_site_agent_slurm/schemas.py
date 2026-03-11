@@ -137,6 +137,71 @@ class PeriodicLimitsConfig(PluginBackendSettingsSchema):
         return v
 
 
+class QosManagementConfig(PluginBackendSettingsSchema):
+    """QoS management configuration for per-account QoS creation."""
+
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = Field(default=False, description="Enable per-account QoS creation")
+    flags: Optional[str] = Field(
+        default="DenyOnLimit,NoDecay",
+        description="QoS flags (e.g., 'DenyOnLimit,NoDecay')",
+    )
+    grp_tres: Optional[str] = Field(
+        default=None,
+        description="Group TRES limits for the QoS (e.g., 'cpu=25600,node=100')",
+    )
+    max_jobs: Optional[int] = Field(default=None, description="Maximum concurrent jobs per QoS")
+    max_submit: Optional[int] = Field(default=None, description="Maximum submitted jobs per QoS")
+    max_wall: Optional[str] = Field(
+        default=None,
+        description="Maximum wall time (minutes or D-HH:MM:SS)",
+    )
+    min_tres_per_job: Optional[str] = Field(
+        default=None,
+        description="Minimum TRES per job (e.g., 'gres/gpu=1')",
+    )
+    additional_qos: Optional[list[str]] = Field(
+        default=None,
+        description="Additional QoS names to attach to accounts (e.g., ['2cpu-single-host'])",
+    )
+
+
+class LustreQuotaConfig(PluginBackendSettingsSchema):
+    """Lustre filesystem quota configuration."""
+
+    model_config = ConfigDict(extra="allow")
+
+    mount_point: str = Field(default="/valhalla", description="Lustre mount point")
+    block_softlimit: Optional[int] = Field(
+        default=None, description="Block soft limit in kilobytes"
+    )
+    block_hardlimit: Optional[int] = Field(
+        default=None, description="Block hard limit in kilobytes"
+    )
+    inode_softlimit: Optional[int] = Field(default=None, description="Inode soft limit")
+    inode_hardlimit: Optional[int] = Field(default=None, description="Inode hard limit")
+
+
+class ProjectDirectoryConfig(PluginBackendSettingsSchema):
+    """Project directory creation and quota configuration."""
+
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = Field(default=False, description="Enable project directory creation")
+    base_path: str = Field(
+        default="/valhalla/projects",
+        description="Base path for project directories",
+    )
+    owner: str = Field(default="nobody", description="Owner of the project directory")
+    permissions: str = Field(default="770", description="Directory permissions (octal)")
+    set_gid: bool = Field(default=True, description="Set the setgid bit on the directory")
+    set_acl: bool = Field(default=True, description="Set POSIX ACLs for the project group")
+    lustre_quota: Optional[LustreQuotaConfig] = Field(
+        default=None, description="Lustre quota settings"
+    )
+
+
 class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
     """SLURM-specific backend settings validation.
 
@@ -151,10 +216,31 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
     project_prefix: str = Field(..., description="Prefix for project account names")
     allocation_prefix: str = Field(..., description="Prefix for allocation account names")
 
+    # Optional: flat hierarchy with a single parent account
+    parent_account: Optional[str] = Field(
+        default=None,
+        description=(
+            "Parent account for new project accounts. "
+            "When set, accounts are created directly under this parent "
+            "instead of the customer/project hierarchy."
+        ),
+    )
+
+    # Optional: default partition for user associations
+    default_partition: Optional[str] = Field(
+        default=None,
+        description="Partition to assign to user-account associations (e.g., 'cn', 'common')",
+    )
+
     # QoS management (used by backend.py)
     qos_default: Optional[str] = Field(default="normal", description="Default QoS for accounts")
     qos_downscaled: Optional[str] = Field(default=None, description="QoS for downscaled accounts")
     qos_paused: Optional[str] = Field(default=None, description="QoS for paused accounts")
+
+    # Per-account QoS management (optional, for EFP-style deployments)
+    qos_management: Optional[QosManagementConfig] = Field(
+        default=None, description="Per-account QoS creation and management"
+    )
 
     # User home directory management (used by backend.py)
     enable_user_homedir_account_creation: Optional[bool] = Field(
@@ -162,6 +248,11 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
     )
     default_homedir_umask: Optional[str] = Field(
         default="0700", description="Umask for created home directories"
+    )
+
+    # Project directory management (optional, for sites with shared project storage)
+    project_directory: Optional[ProjectDirectoryConfig] = Field(
+        default=None, description="Project directory creation and quota settings"
     )
 
     # Periodic limits configuration (nested object)

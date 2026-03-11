@@ -1,0 +1,41 @@
+Hello {{ first_name }},
+
+Your personal user account has been created to access the HPC cluster.
+
+I. Access to the login nodes
+-----------------------------
+{% if vpn_password %}
+The first step is to establish a VPN tunnel to the HPC infrastructure.
+
+Your VPN username and password are:
+  username: {{ username }}
+  VPN password: {{ vpn_password }}
+
+IMPORTANT: Please change your VPN password after the first successful
+SSH login.
+
+The second step is to log into the login node using your username:
+{% else %}
+Log into the login node using your username:
+{% endif %}
+  {{ username }}
+and your SSH certificate.
+
+II. Storage allocations
+-----------------------
+
+Personal home folder:
+  {{ home_directory }}
+
+Note that the home folder has limited capacity (~2 GiB). Do not store
+anything large there.
+
+III. Slurm project account
+--------------------------
+
+Use the assigned SLURM project account when submitting jobs.
+
+Please let us know if you experience any issues accessing the cluster.
+
+Best regards,
+HPC Support Team

@@ -86,6 +86,15 @@ class SlurmClient(clients.BaseClient):
             return None
         return self._parse_account(lines[0])
 
+    @staticmethod
+    def _sanitize_sacctmgr_value(value: str) -> str:
+        """Sanitize a value for use in sacctmgr key="value" arguments.
+
+        Strips double quotes to prevent breaking out of the quoted context
+        and injecting additional sacctmgr parameters.
+        """
+        return value.replace('"', "")
+
     def create_resource(
         self,
         name: str,
@@ -98,8 +107,8 @@ class SlurmClient(clients.BaseClient):
             "add",
             "account",
             name,
-            f'description="{description}"',
-            f'organization="{organization}"',
+            f'description="{self._sanitize_sacctmgr_value(description)}"',
+            f'organization="{self._sanitize_sacctmgr_value(organization)}"',
         ]
         if parent_name:
             parts.append(f"parent={parent_name}")
@@ -398,6 +407,93 @@ class SlurmClient(clients.BaseClient):
                 # a real error — the desired state is already reached.
                 return ""
             raise
+
+    # ===== QOS MANAGEMENT EXTENSION =====
+
+    def qos_exists(self, qos_name: str) -> bool:
+        """Check if a QoS exists in the SLURM cluster."""
+        output = self._execute_command(["show", "qos", qos_name])
+        return any("|" in line for line in output.splitlines())
+
+    def create_qos(
+        self,
+        name: str,
+        flags: Optional[str] = None,
+        grp_tres: Optional[str] = None,
+        max_jobs: Optional[int] = None,
+        max_submit: Optional[int] = None,
+        max_wall: Optional[str] = None,
+        min_tres_per_job: Optional[str] = None,
+    ) -> None:
+        """Create a QoS with the specified parameters.
+
+        Args:
+            name: QoS name (typically matches the SLURM account name).
+            flags: Comma-separated flags (e.g., "DenyOnLimit,NoDecay").
+            grp_tres: Group TRES limits (e.g., "cpu=25600,node=100").
+            max_jobs: Maximum concurrent jobs.
+            max_submit: Maximum submitted jobs.
+            max_wall: Maximum wall time (minutes or D-HH:MM:SS).
+            min_tres_per_job: Minimum TRES per job (e.g., "gres/gpu=1").
+        """
+        parts = ["add", "qos", name]
+        if flags:
+            parts.append(f"set flags={flags}")
+        self._execute_command(parts)
+
+        # Apply settings in separate modify commands (matches EFP workflow)
+        if grp_tres:
+            self._execute_command(["modify", "qos", name, "set", f"GrpTRES={grp_tres}"])
+        if max_jobs is not None:
+            self._execute_command(["modify", "qos", name, "set", f"MaxJobs={max_jobs}"])
+        if max_submit is not None:
+            self._execute_command(["modify", "qos", name, "set", f"MaxSubmit={max_submit}"])
+        if max_wall is not None:
+            self._execute_command(["modify", "qos", name, "set", f"MaxWall={max_wall}"])
+        if min_tres_per_job:
+            self._execute_command(
+                ["modify", "qos", name, "set", f"MinTRESPerJob={min_tres_per_job}"]
+            )
+
+    def delete_qos(self, name: str) -> None:
+        """Delete a QoS from the SLURM cluster."""
+        self._execute_command(["remove", "qos", "where", f"name={name}"])
+
+    def set_account_qos_list(self, account: str, qos_list: list[str]) -> None:
+        """Set the full QoS list for an account (qos=qos1,qos2)."""
+        qos_str = ",".join(qos_list)
+        self._execute_command(["modify", "account", account, "set", f"qos={qos_str}"])
+
+    def add_account_qos(self, account: str, qos_name: str) -> None:
+        """Add a QoS to an account's list (qos+=name)."""
+        self._execute_command(["modify", "account", "set", f"qos+={qos_name}", "where",
+                               f"account={account}"])
+
+    def set_account_default_qos(self, account: str, qos_name: str) -> None:
+        """Set the default QoS for an account."""
+        self._execute_command(["modify", "account", "set", f"defaultqos={qos_name}", "where",
+                               f"account={account}"])
+
+    # ===== PARTITION-AWARE ASSOCIATION EXTENSION =====
+
+    def create_association_with_partition(
+        self,
+        username: str,
+        resource_id: str,
+        partition: str,
+        default_account: Optional[str] = "",
+    ) -> str:
+        """Create an association between a user and account with a specific partition."""
+        return self._execute_command(
+            [
+                "add",
+                "user",
+                username,
+                f"account={resource_id}",
+                f"DefaultAccount={default_account}",
+                f"Partition={partition}",
+            ]
+        )
 
     # ===== PERIODIC LIMITS EXTENSION =====
 

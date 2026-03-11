@@ -15,8 +15,27 @@ from waldur_site_agent.backend import (
 from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
+from waldur_site_agent.common.component_mapping import ComponentMapper
 from waldur_site_agent_slurm import utils
 from waldur_site_agent_slurm.client import SlurmClient
+
+
+def _get_ldap_client(ldap_settings: dict):  # type: ignore[no-untyped-def]  # noqa: ANN202
+    """Lazily import and instantiate the LDAP client if configured.
+
+    Returns an LdapClient instance from waldur-site-agent-ldap.
+    The return type is not annotated because the ldap plugin is an optional dependency.
+    """
+    try:
+        from waldur_site_agent_ldap.client import LdapClient  # noqa: PLC0415
+    except ImportError as e:
+        msg = (
+            "LDAP settings are configured in SLURM backend_settings but the "
+            "waldur-site-agent-ldap package is not installed. "
+            "Install it with: pip install waldur-site-agent-ldap"
+        )
+        raise BackendError(msg) from e
+    return LdapClient(ldap_settings)
 
 
 class PeriodicSettingsMode(Enum):
@@ -36,12 +55,30 @@ class SlurmBackend(backends.BaseBackend):
         slurm_bin_path = self.backend_settings.get("slurm_bin_path", "/usr/bin")
         self.client: SlurmClient = SlurmClient(slurm_tres, slurm_bin_path=slurm_bin_path)
 
+        # Optional LDAP integration for project groups
+        self._ldap_client = None
+        ldap_settings = self.backend_settings.get("ldap")
+        if ldap_settings:
+            self._ldap_client = _get_ldap_client(ldap_settings)
+
+        # Optional QoS management
+        self._qos_config = self.backend_settings.get("qos_management", {})
+
+        # Optional project directory management
+        self._project_dir_config = self.backend_settings.get("project_directory", {})
+
+        # Optional partition assignment
+        self._default_partition = self.backend_settings.get("default_partition")
+
+        # Optional component mapping (Waldur components → SLURM TRES)
+        self._component_mapper = ComponentMapper(slurm_tres)
+
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
     ) -> None:
-        """Override parent method to validate slug fields."""
+        """Pre-creation setup: account hierarchy, LDAP groups, filesystem, QoS."""
         if not waldur_resource.customer_slug or not waldur_resource.project_slug:
             logger.warning(
                 "Resource %s has unset or missing slug fields. customer_slug: %s, project_slug: %s",
@@ -59,21 +96,48 @@ class SlurmBackend(backends.BaseBackend):
 
         del user_context
 
-        project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
+        resource_backend_id = self._get_resource_backend_id(waldur_resource.slug)
 
-        # Setup customer resource
-        customer_backend_id = self._get_customer_backend_id(waldur_resource.customer_slug)
-        self._create_backend_resource(
-            customer_backend_id, waldur_resource.customer_name, customer_backend_id
-        )
+        parent_account = self.backend_settings.get("parent_account")
+        if parent_account:
+            # Flat hierarchy: create account directly under configured parent
+            project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
+            self._create_backend_resource(
+                project_backend_id,
+                waldur_resource.project_name,
+                project_backend_id,
+                parent_account,
+            )
+        else:
+            # Default hierarchy: customer -> project -> allocation
+            project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
+            customer_backend_id = self._get_customer_backend_id(waldur_resource.customer_slug)
+            self._create_backend_resource(
+                customer_backend_id, waldur_resource.customer_name, customer_backend_id
+            )
+            self._create_backend_resource(
+                project_backend_id,
+                waldur_resource.project_name,
+                project_backend_id,
+                customer_backend_id,
+            )
 
-        # Create project resource
-        self._create_backend_resource(
-            project_backend_id,
-            waldur_resource.project_name,
-            project_backend_id,
-            customer_backend_id,
-        )
+        # Optional: create LDAP project group
+        if self._ldap_client:
+            try:
+                self._ldap_client.create_project_group(resource_backend_id)
+            except BackendError:
+                logger.exception(
+                    "Failed to create LDAP project group for %s", resource_backend_id
+                )
+
+        # Optional: create project directory and set quota
+        if self._project_dir_config.get("enabled"):
+            self._setup_project_directory(resource_backend_id)
+
+        # Optional: create QoS for the account
+        if self._qos_config.get("enabled"):
+            self._setup_account_qos(resource_backend_id)
 
     def diagnostics(self) -> bool:
         """Runs diagnostics for SLURM cluster."""
@@ -177,48 +241,106 @@ class SlurmBackend(backends.BaseBackend):
     def _collect_resource_limits(
         self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
-        """Collect SLURM and Waldur limits separately."""
-        allocation_limits = {}
+        """Collect SLURM and Waldur limits separately.
+
+        When ``target_components`` are configured on any backend component,
+        the ComponentMapper converts Waldur-facing limits to backend-facing
+        SLURM TRES limits.  The ``factor`` in ``target_components`` encodes
+        the full conversion (including any unit scaling).
+
+        When no ``target_components`` are configured (passthrough mode),
+        the standard ``unit_factor`` conversion is used.
+        """
+        allocation_limits: dict[str, int] = {}
         usage_based_limits = backend_utils.get_usage_based_limits(self.backend_components)
         limit_based_components = [
             component
             for component, data in self.backend_components.items()
             if data["accounting_type"] == "limit"
         ]
-        # Waldur resource is expected to have limits set for limit-based components
         waldur_resource_limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
 
         # Add usage-based limits to allocation limits
         allocation_limits.update(usage_based_limits)
 
-        # Add limit-based limits to allocation limits
-        for component_key in limit_based_components:
-            if component_key in waldur_resource_limits:
-                allocation_limits[component_key] = (
-                    waldur_resource_limits[component_key]
-                    * self.backend_components[component_key]["unit_factor"]
-                )
+        if not self._component_mapper.is_passthrough:
+            # Component mapping mode: convert Waldur limits → SLURM TRES
+            limit_values = {
+                k: v for k, v in waldur_resource_limits.items() if k in limit_based_components
+            }
+            converted = self._component_mapper.convert_limits_to_target(limit_values)
+            allocation_limits.update(converted)
+        else:
+            # Standard mode: apply unit_factor per component
+            for component_key in limit_based_components:
+                if component_key in waldur_resource_limits:
+                    allocation_limits[component_key] = (
+                        waldur_resource_limits[component_key]
+                        * self.backend_components[component_key]["unit_factor"]
+                    )
 
         # Add usage-based limits to Waldur limits
         for component_key in usage_based_limits:
             waldur_resource_limits[component_key] = self.backend_components[component_key]["limit"]
 
-        # Convert allocation limits to integers
-        for limit_key, limit_value in allocation_limits.items():
-            allocation_limits[limit_key] = int(limit_value)
+        # Convert to integers
+        allocation_limits = {k: int(v) for k, v in allocation_limits.items()}
+        waldur_resource_limits = {k: int(v) for k, v in waldur_resource_limits.items()}
 
-        # Convert Waldur limits to integers
-        for limit_key, limit_value in waldur_resource_limits.items():
-            waldur_resource_limits[limit_key] = int(limit_value)
-
-        logger.info(
-            "SLURM allocation limits: %s", allocation_limits
-        )
-        logger.info(
-            "SLURM Waldur limits: %s", waldur_resource_limits
-        )
+        logger.info("SLURM allocation limits: %s", allocation_limits)
+        logger.info("SLURM Waldur limits: %s", waldur_resource_limits)
 
         return allocation_limits, waldur_resource_limits
+
+    def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
+        """Add user to SLURM account, with optional partition and LDAP group."""
+        del kwargs
+        resource_backend_id = waldur_resource.backend_id
+        if not resource_backend_id.strip():
+            message = "Empty backend ID for resource"
+            raise BackendError(message)
+
+        logger.info("Adding user %s to resource %s", username, resource_backend_id)
+        if not username:
+            logger.warning("Username is blank, skipping creation of association")
+            return False
+
+        if not self.client.get_association(username, resource_backend_id):
+            logger.info("Creating association between %s and %s", username, resource_backend_id)
+            try:
+                default_account = self.backend_settings.get("default_account", "root")
+                if self._default_partition:
+                    self.client.create_association_with_partition(
+                        username,
+                        resource_backend_id,
+                        self._default_partition,
+                        default_account,
+                    )
+                else:
+                    self.client.create_association(
+                        username,
+                        resource_backend_id,
+                        default_account,
+                    )
+                logger.info("Created association between %s and %s", username, resource_backend_id)
+            except BackendError as err:
+                logger.exception("Unable to create association on backend: %s", err)
+                return False
+        else:
+            logger.info("Association already exists, skipping creation")
+
+        # Optional: add user to LDAP project group
+        if self._ldap_client:
+            try:
+                self._ldap_client.add_user_to_group(resource_backend_id, username)
+            except BackendError:
+                logger.exception(
+                    "Failed to add %s to LDAP project group %s",
+                    username,
+                    resource_backend_id,
+                )
+
+        return True
 
     def add_users_to_resource(
         self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
@@ -228,11 +350,28 @@ class SlurmBackend(backends.BaseBackend):
 
         if self.backend_settings.get("enable_user_homedir_account_creation", True):
             umask: str = str(kwargs.get("homedir_umask", "0700"))
-            # Only create homedirs for users that don't already have them
-            # (avoids duplicates if they were created during resource creation)
             self.create_user_homedirs(added_users, umask=umask)
 
         return added_users
+
+    def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
+        """Remove user from SLURM account, with optional LDAP group cleanup."""
+        del kwargs
+        result = super().remove_user(waldur_resource, username)
+
+        # Optional: remove user from LDAP project group
+        if result and self._ldap_client:
+            resource_backend_id = waldur_resource.backend_id
+            try:
+                self._ldap_client.remove_user_from_group(resource_backend_id, username)
+            except BackendError:
+                logger.exception(
+                    "Failed to remove %s from LDAP project group %s",
+                    username,
+                    resource_backend_id,
+                )
+
+        return result
 
     def process_existing_users(self, existing_users: set[str]) -> None:
         """Process existing users on the backend."""
@@ -247,6 +386,121 @@ class SlurmBackend(backends.BaseBackend):
             )
             umask = self.backend_settings.get("homedir_umask", "0700")
             self.create_user_homedirs(existing_users, umask=umask)
+
+    # ===== QOS AND FILESYSTEM MANAGEMENT =====
+
+    def _setup_account_qos(self, account_name: str) -> None:
+        """Create a per-account QoS and attach it to the account."""
+        if self.client.qos_exists(account_name):
+            logger.info("QoS %s already exists, skipping creation", account_name)
+            return
+
+        flags = self._qos_config.get("flags", "DenyOnLimit,NoDecay")
+        grp_tres = self._qos_config.get("grp_tres")
+        max_jobs = self._qos_config.get("max_jobs")
+        max_submit = self._qos_config.get("max_submit")
+        max_wall = self._qos_config.get("max_wall")
+        min_tres_per_job = self._qos_config.get("min_tres_per_job")
+
+        self.client.create_qos(
+            name=account_name,
+            flags=flags,
+            grp_tres=grp_tres,
+            max_jobs=max_jobs,
+            max_submit=max_submit,
+            max_wall=max_wall,
+            min_tres_per_job=min_tres_per_job,
+        )
+
+        # Attach QoS to the account
+        self.client.add_account_qos(account_name, account_name)
+        self.client.set_account_default_qos(account_name, account_name)
+
+        # Attach additional QoSes if configured
+        additional_qos = self._qos_config.get("additional_qos", [])
+        for qos_name in additional_qos:
+            self.client.add_account_qos(account_name, qos_name)
+
+    def _setup_project_directory(self, project_id: str) -> None:
+        """Create project directory and set filesystem quota."""
+        base_path = self._project_dir_config.get("base_path", "/valhalla/projects")
+        project_path = f"{base_path}/{project_id}"
+
+        group_owner = self._project_dir_config.get("group_owner_source", "project_id")
+        if group_owner == "project_id":
+            group_name = project_id
+        else:
+            group_name = self._project_dir_config.get("group_name", project_id)
+
+        dir_owner = self._project_dir_config.get("owner", "nobody")
+        permissions = self._project_dir_config.get("permissions", "770")
+        set_gid = self._project_dir_config.get("set_gid", True)
+        set_acl = self._project_dir_config.get("set_acl", True)
+
+        try:
+            # Create directory
+            self.client.execute_command(["mkdir", "-p", project_path])
+            self.client.execute_command(["chmod", permissions, project_path])
+            if set_gid:
+                self.client.execute_command(["chmod", "g+s", project_path])
+        except BackendError:
+            logger.exception("Failed to create project directory %s", project_path)
+            return
+
+        try:
+            self.client.execute_command(
+                ["chown", f"{dir_owner}:{group_name}", project_path]
+            )
+        except BackendError:
+            logger.exception("Failed to chown project directory %s", project_path)
+
+        if set_acl:
+            try:
+                self.client.execute_command([
+                    "setfacl", "-R", "-m",
+                    f"group:{group_name}:rwx,d:group:{group_name}:rwx",
+                    project_path,
+                ])
+            except BackendError:
+                logger.exception("Failed to set ACL on project directory %s", project_path)
+
+        logger.info("Created project directory %s", project_path)
+
+        # Set Lustre quota if configured
+        lustre_config = self._project_dir_config.get("lustre_quota")
+        if lustre_config and self._ldap_client:
+            gid = self._ldap_client.get_group_gid(group_name)
+            if gid is not None:
+                self._set_lustre_quota(gid, project_path, lustre_config)
+
+    def _set_lustre_quota(self, gid: int, project_path: str, config: dict) -> None:
+        """Set Lustre filesystem quota for a project."""
+        mount_point = config.get("mount_point", "/valhalla")
+        block_soft = config.get("block_softlimit")
+        block_hard = config.get("block_hardlimit")
+        inode_soft = config.get("inode_softlimit")
+        inode_hard = config.get("inode_hardlimit")
+
+        try:
+            quota_cmd = ["lfs", "setquota", "-p", str(gid)]
+            if block_soft is not None:
+                quota_cmd.extend(["-b", str(block_soft)])
+            if block_hard is not None:
+                quota_cmd.extend(["-B", str(block_hard)])
+            if inode_soft is not None:
+                quota_cmd.extend(["-i", str(inode_soft)])
+            if inode_hard is not None:
+                quota_cmd.extend(["-I", str(inode_hard)])
+            quota_cmd.append(mount_point)
+            self.client.execute_command(quota_cmd)
+
+            # Set project ID on directory
+            self.client.execute_command([
+                "lfs", "project", "-p", str(gid), "-r", "-s", project_path,
+            ])
+            logger.info("Set Lustre quota for GID %d on %s", gid, mount_point)
+        except BackendError:
+            logger.exception("Failed to set Lustre quota for GID %d", gid)
 
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale the resource QoS respecting the backend settings."""
@@ -264,10 +518,12 @@ class SlurmBackend(backends.BaseBackend):
 
         if current_qos == qos_downscaled:
             logger.info("The account is already downscaled")
+            self._last_qos = qos_downscaled
             return True
 
         logger.info("Setting %s QoS for the SLURM account", qos_downscaled)
         self.client.set_account_qos(resource_backend_id, qos_downscaled)
+        self._last_qos = qos_downscaled
         logger.info("The new QoS successfully set")
         return True
 
@@ -287,10 +543,12 @@ class SlurmBackend(backends.BaseBackend):
 
         if current_qos == qos_paused:
             logger.info("The account is already paused")
+            self._last_qos = qos_paused
             return True
 
         logger.info("Setting %s QoS for the SLURM account", qos_paused)
         self.client.set_account_qos(resource_backend_id, qos_paused)
+        self._last_qos = qos_paused
         logger.info("The new QoS successfully set")
         return True
 
@@ -302,25 +560,35 @@ class SlurmBackend(backends.BaseBackend):
 
         if current_qos in [None, ""]:
             logger.info("The account does not have an active QoS set, skipping reset")
+            self._last_qos = current_qos
             return False
 
         logger.info("The current QoS is %s", current_qos)
 
         if current_qos == default_qos:
             logger.info("The account already has the default QoS (%s)", default_qos)
+            self._last_qos = current_qos
             return False
 
         logger.info("Setting %s QoS", default_qos)
         self.client.set_account_qos(resource_backend_id, default_qos)
-        new_qos = self.client.get_current_account_qos(resource_backend_id)
-        logger.info("The new QoS is %s", new_qos)
+        self._last_qos = default_qos
+        logger.info("The new QoS is %s", default_qos)
 
         return True
 
     def get_resource_metadata(self, resource_backend_id: str) -> dict:
-        """Return backend metadata for the SLURM account (QoS only for now)."""
-        current_qos = self.client.get_current_account_qos(resource_backend_id)
-        return {"qos": current_qos}
+        """Return backend metadata for the SLURM account (QoS only for now).
+
+        Reuses the QoS value cached by restore/pause/downscale if available,
+        avoiding a duplicate sacctmgr query.
+        """
+        qos = getattr(self, "_last_qos", None)
+        if qos is None:
+            qos = self.client.get_current_account_qos(resource_backend_id)
+        else:
+            self._last_qos = None  # consume the cached value
+        return {"qos": qos}
 
     def _get_usage_report(
         self, resource_backend_ids: list[str]
@@ -357,17 +625,7 @@ class SlurmBackend(backends.BaseBackend):
             total = backend_utils.sum_dicts(usages_per_user)
             account_usage["TOTAL_ACCOUNT_USAGE"] = total
 
-        # Convert SLURM units to Waldur ones
-        report_converted: dict[str, dict[str, dict[str, int]]] = {}
-        for account, account_usage in report.items():
-            report_converted[account] = {}
-            for username, usage_dict in account_usage.items():
-                converted_usage_dict = utils.convert_slurm_units_to_waldur_ones(
-                    self.backend_components, usage_dict
-                )
-                report_converted[account][username] = converted_usage_dict
-
-        return report_converted
+        return self._convert_usage_report(report)
 
     def get_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int,
@@ -399,16 +657,30 @@ class SlurmBackend(backends.BaseBackend):
             total = backend_utils.sum_dicts(usages_per_user)
             account_usage["TOTAL_ACCOUNT_USAGE"] = total
 
-        # Convert SLURM units to Waldur ones
+        return self._convert_usage_report(report)
+
+    def _convert_usage_report(
+        self, report: dict[str, dict[str, dict[str, int]]]
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Convert SLURM TRES usage to Waldur component units.
+
+        When ``target_components`` are configured, uses the ComponentMapper
+        reverse conversion.  Otherwise falls back to standard unit_factor
+        division.
+        """
         report_converted: dict[str, dict[str, dict[str, int]]] = {}
         for account, account_usage in report.items():
             report_converted[account] = {}
             for username, usage_dict in account_usage.items():
-                converted_usage_dict = utils.convert_slurm_units_to_waldur_ones(
-                    self.backend_components, usage_dict
-                )
-                report_converted[account][username] = converted_usage_dict
-
+                if not self._component_mapper.is_passthrough:
+                    float_usage = {k: float(v) for k, v in usage_dict.items()}
+                    source_usage = self._component_mapper.convert_usage_from_target(float_usage)
+                    converted = {k: round(v) for k, v in source_usage.items()}
+                else:
+                    converted = utils.convert_slurm_units_to_waldur_ones(
+                        self.backend_components, usage_dict
+                    )
+                report_converted[account][username] = converted
         return report_converted
 
     def list_active_user_jobs(self, account: str, user: str) -> list[str]:
@@ -438,7 +710,7 @@ class SlurmBackend(backends.BaseBackend):
             self.cancel_active_jobs_for_account_user(resource_backend_id, username)
 
     def _pre_delete_resource(self, waldur_resource: WaldurResource) -> None:
-        """Delete all existing associations and cancel all the active jobs."""
+        """Delete all existing associations, cancel jobs, and clean up LDAP/QoS."""
         backend_id = waldur_resource.backend_id
         if self.client.account_has_users(backend_id):
             logger.info("Cancelling all active jobs for account %s", backend_id)
@@ -446,12 +718,48 @@ class SlurmBackend(backends.BaseBackend):
             logger.info("Removing all users from account %s", backend_id)
             self.client.delete_all_users_from_account(backend_id)
 
+        # Clean up per-account QoS
+        if self._qos_config.get("enabled") and self.client.qos_exists(backend_id):
+            try:
+                self.client.delete_qos(backend_id)
+                logger.info("Deleted QoS %s", backend_id)
+            except BackendError:
+                logger.exception("Failed to delete QoS %s", backend_id)
+
+        # Clean up LDAP project group
+        if self._ldap_client:
+            try:
+                self._ldap_client.delete_group(backend_id)
+                logger.info("Deleted LDAP project group %s", backend_id)
+            except BackendError:
+                logger.exception("Failed to delete LDAP project group %s", backend_id)
+
     def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
         """Get account limits converted to Waldur-readable values."""
         account_limits_raw = self.client.get_resource_limits(resource_backend_id)
         return utils.convert_slurm_units_to_waldur_ones(
             self.backend_components, account_limits_raw, to_int=True
         )
+
+    def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
+        """Set limits using ComponentMapper when target_components are configured.
+
+        The base class only applies unit_factor, which is incorrect when
+        ComponentMapper converts Waldur components (e.g. node_hours) to
+        SLURM TRES (e.g. cpu, gpu).
+        """
+        if not self._component_mapper.is_passthrough:
+            limit_based_components = [
+                component
+                for component, data in self.backend_components.items()
+                if data["accounting_type"] == "limit"
+            ]
+            limit_values = {k: v for k, v in limits.items() if k in limit_based_components}
+            converted = self._component_mapper.convert_limits_to_target(limit_values)
+            int_limits = {k: int(v) for k, v in converted.items()}
+            self.client.set_resource_limits(resource_backend_id, int_limits)
+        else:
+            super().set_resource_limits(resource_backend_id, limits)
 
     def set_resource_user_limits(
         self, resource_backend_id: str, username: str, limits: dict[str, int]

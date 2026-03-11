@@ -1,0 +1,19 @@
+dn: ou=People,dc=sofiatech,dc=bg
+objectClass: organizationalUnit
+ou: People
+
+dn: ou=Groups,dc=sofiatech,dc=bg
+objectClass: organizationalUnit
+ou: Groups
+
+dn: cn=vpnusrgroup,ou=Groups,dc=sofiatech,dc=bg
+objectClass: groupOfNames
+objectClass: top
+cn: vpnusrgroup
+member: cn=admin,dc=sofiatech,dc=bg
+
+dn: cn=plus,ou=Groups,dc=sofiatech,dc=bg
+objectClass: posixGroup
+objectClass: top
+cn: plus
+gidNumber: 500

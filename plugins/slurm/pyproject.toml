@@ -9,6 +9,9 @@ dependencies = [
     "waldur-site-agent>=0.9.8"
 ]
 
+[project.optional-dependencies]
+ldap = ["waldur-site-agent-ldap>=0.9.8"]
+
 [dependency-groups]
 dev = [
     "slurm-emulator>=0.1.2",
@@ -21,6 +24,7 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 waldur-site-agent = { workspace = true }
+waldur-site-agent-ldap = { workspace = true }
 
 [project.scripts]
 waldur_site_diagnose_slurm_account = "waldur_site_agent_slurm.diagnostic_cli:main"

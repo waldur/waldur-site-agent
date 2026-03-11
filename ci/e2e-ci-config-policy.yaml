@@ -18,6 +18,7 @@ _backend_settings: &backend_settings
   qos_paused: "paused"
   qos_default: "normal"
   enable_user_homedir_account_creation: false
+  check_backend_id_uniqueness: true
 
 _backend_components: &backend_components
   node:
