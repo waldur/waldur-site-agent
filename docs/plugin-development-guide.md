@@ -143,6 +143,7 @@ backend needs custom behavior.
 | `_pre_delete_user_actions` | No-op | Per-user cleanup before removal |
 | `process_existing_users` | No-op | Process existing users (homedirs) |
 | `check_pending_order` | Returns `True` | Non-blocking order creation (see below) |
+| `evaluate_pending_order` | Returns `ACCEPT` | Custom approval logic for pending orders (see below) |
 | `setup_target_event_subscriptions` | Returns `[]` | STOMP subscriptions to target systems |
 
 ### Non-blocking order creation (optional)
@@ -184,6 +185,79 @@ def check_pending_order(self, order_backend_id: str) -> bool:
 - **Returns**: List of `StompConsumer` tuples for lifecycle management
 - **Called by**: `event_process` mode during STOMP setup
 
+### Pending order evaluation (optional)
+
+When an order arrives in `PENDING_PROVIDER` state, the agent calls
+`evaluate_pending_order` on the backend before taking any action. The
+default implementation returns `ACCEPT`, which preserves the existing
+auto-approve behaviour. Override this method to implement custom
+approval logic.
+
+#### `evaluate_pending_order(order, waldur_rest_client) -> PendingOrderDecision`
+
+- **Default**: Returns `PendingOrderDecision.ACCEPT`
+- **Override when**: You need to inspect or gate orders before approval
+- **Parameters**:
+  - `order` (`OrderDetails`) — full order data including `project_uuid`,
+    `customer_uuid`, `created_by_*`, `attributes`, and
+    `consumer_message` / `provider_message` fields.
+  - `waldur_rest_client` (`AuthenticatedClient`) — authenticated client
+    for fetching additional data from the Waldur API (e.g., project
+    members and roles).
+- **Returns** one of:
+  - `PendingOrderDecision.ACCEPT` — approve the order
+  - `PendingOrderDecision.REJECT` — reject the order
+  - `PendingOrderDecision.PENDING` — keep waiting; the order will be
+    re-evaluated on the next polling cycle
+
+> **Note:** This is the only hook that receives `waldur_rest_client`.
+> Other backend methods receive Waldur data via `user_context` instead.
+
+#### Use cases
+
+| Scenario | Approach |
+|---|---|
+| Wait for a PI | Query project members, return `PENDING` until a PI role exists |
+| Reject unprocessable orders | Inspect `order.attributes`, return `REJECT` |
+| Require a signed agreement | Set `provider_message`, return `PENDING` until `consumer_message` is set |
+
+#### Example: wait for a PI before approving
+
+```python
+from waldur_api_client.api.marketplace_provider_resources import (
+    marketplace_provider_resources_team_list,
+)
+from waldur_site_agent.backend.backends import BaseBackend, PendingOrderDecision
+
+
+class MyBackend(BaseBackend):
+    def evaluate_pending_order(self, order, waldur_rest_client):
+        team = marketplace_provider_resources_team_list.sync(
+            client=waldur_rest_client,
+            uuid=order.marketplace_resource_uuid.hex,
+        )
+        has_pi = any(
+            member.role_name == "PI" for member in (team or [])
+        )
+        if not has_pi:
+            return PendingOrderDecision.PENDING
+        return PendingOrderDecision.ACCEPT
+```
+
+#### Example: reject orders that lack a required attribute
+
+```python
+from waldur_site_agent.backend.backends import BaseBackend, PendingOrderDecision
+
+
+class MyBackend(BaseBackend):
+    def evaluate_pending_order(self, order, waldur_rest_client):
+        attrs = getattr(order, "attributes", None) or {}
+        if not attrs.get("project_justification"):
+            return PendingOrderDecision.REJECT
+        return PendingOrderDecision.ACCEPT
+```
+
 ## BaseClient method reference
 
 All methods below are abstract and must be implemented.
@@ -219,6 +293,7 @@ This table shows which `BaseBackend` methods are called by each agent mode.
 | `post_create_resource` | CREATE order | - | - | CREATE event |
 | `_collect_resource_limits` | CREATE order | - | - | CREATE event |
 | `check_pending_order` | CREATE order (async) | - | - | CREATE event (async) |
+| `evaluate_pending_order` | pending-provider orders | - | - | - |
 | `set_resource_limits` | UPDATE order | - | - | UPDATE event |
 | `delete_resource` | TERMINATE order | - | - | TERMINATE event |
 | `_pre_delete_resource` | TERMINATE order | - | - | TERMINATE event |
@@ -428,10 +503,14 @@ The entry point name (e.g., `mycustom`) is what users put in
 
 ## Processor-plugin data flow
 
-Plugins **never** have direct access to the Waldur API client. Instead,
-the core processor pre-resolves any Waldur data the plugin might need and
+Plugins generally do not have direct access to the Waldur API client.
+The core processor pre-resolves any Waldur data the plugin might need and
 passes it via `user_context`. Plugins return metadata to Waldur by setting
 `resource.backend_metadata`.
+
+> **Exception:** `evaluate_pending_order` receives `waldur_rest_client`
+> directly, because the order has not been approved yet and no resource
+> context exists at that point.
 
 ### Pre-resolved data in `user_context`
 
@@ -520,8 +599,10 @@ class MyBackend(BaseBackend):
 
 ### Design principles
 
-- **Plugins must not import `waldur_api_client`** for runtime API calls.
+- **Plugins should avoid importing `waldur_api_client`** for runtime API calls.
   All Waldur data should come via `user_context` or `BaseBackend` attributes.
+  The exception is `evaluate_pending_order`, which receives `waldur_rest_client`
+  for querying project or order data before approval.
 - **`service_provider_uuid`** is still set on `BaseBackend` by the processor
   and can be read by plugins for constructing backend-side identifiers.
 - **Handle missing context gracefully** — `user_context` may be `None` or
