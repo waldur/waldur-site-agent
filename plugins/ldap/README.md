@@ -2,8 +2,8 @@
 
 Provisions POSIX users and groups in an LDAP directory when Waldur offering
 members need local accounts on an HPC site. Handles the full user lifecycle:
-account creation, SSH key management, access group membership, optional VPN
-password generation, and welcome email delivery.
+account creation, access group membership, optional VPN password generation,
+and welcome email delivery.
 
 ## Overview
 
