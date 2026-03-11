@@ -54,14 +54,11 @@ offerings:
   - name: "My SLURM Cluster"
     backend_type: "slurm"
     backend_settings:
-      # Basic SLURM connection
-      cluster_name: "my_cluster"
-      account_prefix: "waldur_"
-
-      # Component mappings
-      cpu_unit_factor: 60000      # CPU-minutes to k-Hours
-      mem_unit_factor: 61440      # MB-minutes to GB-Hours
-      gpu_unit_factor: 60         # GPU-minutes to GPU-Hours
+      # Core SLURM account management
+      default_account: "root"
+      customer_prefix: "waldur_"
+      project_prefix: "waldur_"
+      allocation_prefix: "waldur_"
 
     backend_components:
       cpu:
@@ -90,7 +87,7 @@ backend_settings:
 
     # TRES billing configuration
     tres_billing_enabled: true
-    billing_weights:
+    tres_billing_weights:
       cpu: 1.0                        # 1 CPU-hour = 1 billing unit
       mem: 0.1                        # 10 GB-hours = 1 billing unit
       gpu: 10.0                       # 1 GPU-hour = 10 billing units
@@ -390,33 +387,50 @@ graph TB
 
 ### Backend Methods
 
-The SLURM backend implements all required methods from `BaseBackend`:
+The SLURM backend (`SlurmBackend`) extends `BaseBackend` and implements or overrides these methods:
 
-#### Account Management
+#### Resource Lifecycle
 
-- `create_account(name, description, parent=None)`
-- `delete_account(account_id)`
-- `list_accounts()`
-- `get_account(account_id)`
+- `create_resource(waldur_resource, user_context=None)` — inherited from `BaseBackend`
+- `delete_resource(waldur_resource, **kwargs)` — inherited from `BaseBackend`
+- `_pre_create_resource(waldur_resource, user_context=None)` — sets up SLURM account hierarchy,
+  LDAP groups, QoS, and project directories
+- `post_create_resource(resource, waldur_resource, user_context=None)` — creates home directories for users
+- `_pre_delete_resource(waldur_resource)` — cancels jobs, removes users, cleans up QoS and LDAP groups
+- `_collect_resource_limits(waldur_resource)` — converts Waldur limits to SLURM TRES limits (with ComponentMapper support)
+- `set_resource_limits(resource_backend_id, limits)` — sets limits using ComponentMapper when target_components are configured
+- `get_resource_limits(resource_backend_id)` — gets account limits converted to Waldur units
 
 #### User Management
 
-- `add_user_to_resource(resource_backend_id, user_backend_id)`
-- `remove_user_from_resource(resource_backend_id, user_backend_id)`
-- `set_resource_user_limits(resource_backend_id, username, limits)`
+- `add_user(waldur_resource, username, **kwargs)` — adds user to SLURM account with optional partition and LDAP group
+- `add_users_to_resource(waldur_resource, user_ids, **kwargs)` — adds users and creates home directories
+- `remove_user(waldur_resource, username, **kwargs)` — removes user from SLURM account and LDAP group
+- `remove_users_from_resource(waldur_resource, usernames)` — inherited from `BaseBackend`
+- `set_resource_user_limits(resource_backend_id, username, limits)` — sets per-user limits with unit_factor conversion
+- `process_existing_users(existing_users)` — ensures home directories exist for current users
 
 #### Usage Reporting
 
-- `get_usage_report(start_date, end_date)`
-- `get_usage_report_for_period(resource_backend_ids, year, month)`
+- `_get_usage_report(resource_backend_ids)` — collects current usage from SLURM accounting
+- `get_usage_report_for_period(resource_backend_ids, year, month)` — collects historical usage for a billing period
+
+#### Resource State Management
+
+- `downscale_resource(resource_backend_id)` — sets QoS to downscaled state
+- `pause_resource(resource_backend_id)` — sets QoS to paused state
+- `restore_resource(resource_backend_id)` — restores QoS to default
+- `get_resource_metadata(resource_backend_id)` — returns current QoS as metadata
 
 #### Periodic Limits
 
-- `apply_periodic_settings(resource_id, settings, config=None)`
+- `apply_periodic_settings(resource_id, settings, config=None)` — applies periodic settings (production or emulator mode)
 
-#### Health Monitoring
+#### Health and Diagnostics
 
-- `ping()`
+- `ping(raise_exception=False)` — checks if the SLURM cluster is online
+- `diagnostics()` — logs diagnostic information and validates cluster connectivity
+- `list_components()` — returns available TRES on the SLURM cluster
 
 ### Client Commands
 
@@ -493,8 +507,7 @@ plugins/slurm/tests/
 ├── test_diagnostics.py            # Account diagnostics CLI
 ├── test_order_processing.py       # Core functionality
 ├── test_reporing.py               # Usage reporting
-├── test_membership_sync.py        # User management
-└── conftest.py                    # Test configuration
+└── test_membership_sync.py        # User management
 ```
 
 ### Running Tests
@@ -504,10 +517,10 @@ plugins/slurm/tests/
 uv run pytest plugins/slurm/tests/ -v
 
 # Periodic limits tests only
-python plugins/slurm/run_periodic_limits_tests.py
+uv run pytest plugins/slurm/tests/test_periodic_limits/ -v
 
 # Historical usage tests only
-python plugins/slurm/run_historical_tests.py
+uv run pytest plugins/slurm/tests/test_historical_usage/ -v
 
 # With coverage
 uv run pytest plugins/slurm/tests/ --cov=waldur_site_agent_slurm --cov-report=html
@@ -547,7 +560,7 @@ uv add --dev slurm-emulator
 uv sync --all-packages
 
 # Run tests
-python run_periodic_limits_tests.py
+uv run pytest plugins/slurm/tests/ -v
 ```
 
 ### Adding New Features
@@ -585,8 +598,10 @@ offerings:
   - name: "HPC Cluster"
     backend_type: "slurm"
     backend_settings:
-      cluster_name: "hpc_cluster"
-      account_prefix: "waldur_"
+      default_account: "root"
+      customer_prefix: "waldur_"
+      project_prefix: "waldur_"
+      allocation_prefix: "waldur_"
 
       # Periodic limits for production
       periodic_limits:
@@ -595,7 +610,7 @@ offerings:
         limit_type: "GrpTRESMins"
         tres_billing_enabled: true
 
-        billing_weights:
+        tres_billing_weights:
           cpu: 1.0
           mem: 0.1
           gpu: 10.0
@@ -623,7 +638,10 @@ offerings:
   - name: "CPU Cluster"
     backend_type: "slurm"
     backend_settings:
-      cluster_name: "cpu_cluster"
+      default_account: "root"
+      customer_prefix: "cpu_"
+      project_prefix: "cpu_"
+      allocation_prefix: "cpu_"
       periodic_limits:
         limit_type: "MaxTRESMins"
         tres_billing_enabled: false
@@ -632,11 +650,14 @@ offerings:
   - name: "GPU Cluster"
     backend_type: "slurm"
     backend_settings:
-      cluster_name: "gpu_cluster"
+      default_account: "root"
+      customer_prefix: "gpu_"
+      project_prefix: "gpu_"
+      allocation_prefix: "gpu_"
       periodic_limits:
         limit_type: "GrpTRESMins"
         tres_billing_enabled: true
-        billing_weights:
+        tres_billing_weights:
           cpu: 0.5
           gpu: 20.0
 ```

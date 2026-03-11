@@ -659,10 +659,10 @@ plugins/waldur/
     ├── __init__.py
     ├── conftest.py                        # Shared test fixtures
     ├── integration_helpers.py             # Test setup helpers (WaldurTestSetup)
-    ├── test_backend.py                    # Backend unit tests (36 tests)
+    ├── test_backend.py                    # Backend unit tests (64 tests)
     ├── test_client.py                     # Client tests (20 tests)
     ├── test_component_mapping.py          # Mapper tests (22 tests)
-    ├── test_integration.py                # Integration tests (56 tests)
+    ├── test_integration.py                # Integration tests (76 tests)
     ├── test_integration_username_sync.py  # Username sync + STOMP event routing (18 tests)
     ├── test_target_event_handler.py       # Target event handler tests
     ├── test_username_backend.py           # Identity bridge username backend tests (22 tests)
@@ -901,10 +901,11 @@ WALDUR_E2E_PROJECT_A_UUID=<uuid> \
 |--------|-------|-------|
 | `test_component_mapping.py` | 22 | Forward/reverse conversion, passthrough, round-trip |
 | `test_client.py` | 20 | API operations with mocked `waldur_api_client` |
-| `test_backend.py` | 47 | Resource lifecycle, async orders, usage reporting, membership sync, role mapping |
+| `test_backend.py` | 64 | Resource lifecycle, async orders, usage reporting, membership sync, role mapping |
 | `test_username_backend.py` | 22 | Identity bridge username backend, attribute mapping, user sync |
-| `test_target_event_handler.py` | -- | STOMP ORDER event handling, source order state updates |
-| `test_integration.py` | 56 | Integration tests against real single Waldur instance |
+| `test_target_event_handler.py` | 19 | STOMP ORDER event handling, source order state updates |
+| `test_integration.py` | 76 | Integration tests against real single Waldur instance |
+| `test_identity_bridge_integration.py` | 8 | Identity bridge integration tests |
 | `test_integration_username_sync.py` | 18 | Username sync, STOMP event routing, periodic reconciliation |
 | `e2e/test_e2e_federation.py` | 4 | REST polling lifecycle (create, update, terminate) |
 | `e2e/test_e2e_stomp.py` | 4 | STOMP connections + event capture + order flow + cleanup |

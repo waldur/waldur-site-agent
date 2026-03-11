@@ -54,7 +54,7 @@ offerings:
       s3_storage:
         accounting_type: "usage"
         backend_name: "storage"
-        unit_factor: 1073741824  # Convert bytes to GB
+        unit_factor: 1073741824  # Convert GB to bytes
         enforce_limits: true
       s3_objects:
         accounting_type: "usage"
@@ -190,6 +190,11 @@ Each S3 user resource exposes comprehensive metadata:
 {
   "quotas": {
     "bucket_quota": {
+      "enabled": true,
+      "maxSize": 107374182400,
+      "maxObjects": 10000
+    },
+    "user_quota": {
       "enabled": true,
       "maxSize": 107374182400,
       "maxObjects": 10000

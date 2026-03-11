@@ -85,7 +85,7 @@ uv sync --all-packages
 
 #### Required Waldur Configuration
 
-1. **Marketplace Offering**: Created with type `Marketplace.Slurm`
+1. **Marketplace Offering**: Created in Waldur
 2. **Components**: Configured via `waldur_site_load_components`
 3. **Offering State**: Must be `Active` for order processing
 
@@ -205,7 +205,7 @@ offerings:
       backend_url: "https://rancher.example.com"
       username: "your-rancher-access-key"
       password: "your-rancher-secret-key"
-      cluster_id: "c-m-1234abcd:p-5678efgh"
+      cluster_id: "c-m-1234abcd"
       verify_cert: true
       project_prefix: "waldur-"
       default_role: "workloads-manage"
@@ -235,7 +235,7 @@ offerings:
       backend_url: "https://rancher.example.com"
       username: "your-rancher-access-key"
       password: "your-rancher-secret-key"
-      cluster_id: "c-m-1234abcd:p-5678efgh"
+      cluster_id: "c-m-1234abcd"
       verify_cert: true
       project_prefix: "waldur-"
       default_role: "project-member"
