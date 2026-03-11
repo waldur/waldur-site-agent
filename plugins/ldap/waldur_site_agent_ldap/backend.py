@@ -218,13 +218,15 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
     ) -> str:
         """Generate a username string based on the configured format."""
         if self.username_format == "waldur_username":
-            return getattr(offering_user, "user_username", "") or ""
+            raw = getattr(offering_user, "user_username", "") or ""
+            return self._sanitize_posix_username(raw)
 
         first_name_clean = self._normalize_name(first_name)
         last_name_clean = self._normalize_name(last_name)
 
         if not first_name_clean or not last_name_clean:
-            return getattr(offering_user, "user_username", "") or ""
+            raw = getattr(offering_user, "user_username", "") or ""
+            return self._sanitize_posix_username(raw)
 
         fi = first_name_clean[0]
         formats = {
@@ -287,3 +289,19 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
         # Keep only alphanumeric characters
         return re.sub(r"[^a-zA-Z0-9]", "", ascii_name)
+
+    @staticmethod
+    def _sanitize_posix_username(raw: str) -> str:
+        """Sanitize a raw string into a valid POSIX username.
+
+        Strips diacritics, keeps only [a-z0-9._-], removes leading
+        non-alpha characters, and truncates to 32 characters.
+        """
+        normalized = unicodedata.normalize("NFD", raw)
+        ascii_str = normalized.encode("ascii", "ignore").decode("ascii").lower()
+        # Keep POSIX-safe characters: alphanumeric, dot, underscore, hyphen
+        sanitized = re.sub(r"[^a-z0-9._-]", "", ascii_str)
+        # Username must start with a letter or underscore
+        sanitized = re.sub(r"^[^a-z_]+", "", sanitized)
+        # Truncate to 32 chars (POSIX limit)
+        return sanitized[:32]
