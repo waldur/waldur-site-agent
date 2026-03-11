@@ -51,6 +51,7 @@ dev = [
     "types-pyyaml>=6.0.12.20240311,<7",
     "slurm-emulator>=0.1.1",
     "jinja2>=3.0.0,<4.0",
+    "aiosmtpd>=1.4.6",
 ]
 
 [tool.hatch.metadata]

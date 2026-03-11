@@ -24,12 +24,15 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import email
 import functools
 import logging
 import os
 import re
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -51,6 +54,7 @@ from waldur_api_client.api.marketplace_provider_offerings import (
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_retrieve,
 )
+from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.types import UNSET
 from waldur_site_agent_slurm.backend import SlurmBackend
@@ -327,6 +331,102 @@ def _write_report(recorder: CallRecorder, path: Path) -> None:
     if has_payloads:
         annex_path.write_text("\n".join(annex))
         logger.info("LDAP E2E payloads annex written to %s", annex_path)
+
+
+# ---------------------------------------------------------------------------
+# Lightweight SMTP capture server for welcome email tests
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CapturedEmail:
+    """A single email captured by SmtpCaptureServer."""
+
+    from_addr: str
+    to_addrs: list[str]
+    subject: str
+    body: str
+    raw: str
+
+
+class _SmtpHandler:
+    """aiosmtpd handler that stores received messages into an inbox list."""
+
+    def __init__(self, inbox: list[CapturedEmail]) -> None:
+        self._inbox = inbox
+
+    async def handle_DATA(self, server, session, envelope) -> str:  # noqa: N802, ARG002
+        raw = envelope.content.decode("utf-8", errors="replace")
+        msg = email.message_from_string(raw)
+        body = msg.get_payload(decode=True)
+        if body is None:
+            for part in msg.walk():
+                if part.get_content_type() in ("text/plain", "text/html"):
+                    body = part.get_payload(decode=True)
+                    break
+        body_str = body.decode("utf-8", errors="replace") if body else ""
+        self._inbox.append(
+            CapturedEmail(
+                from_addr=envelope.mail_from,
+                to_addrs=list(envelope.rcpt_tos),
+                subject=msg.get("Subject", ""),
+                body=body_str,
+                raw=raw,
+            )
+        )
+        return "250 OK"
+
+
+class SmtpCaptureServer:
+    """Runs a lightweight SMTP server on a random port in a background thread.
+
+    Uses aiosmtpd with a manual asyncio event loop to avoid
+    Controller's _trigger_server issues on macOS.
+    """
+
+    def __init__(self) -> None:
+        self.inbox: list[CapturedEmail] = []
+        self.port: int = 0
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def start(self) -> int:
+        """Start the SMTP server and return the port it's listening on."""
+        from aiosmtpd.smtp import SMTP as SMTPServer  # noqa: PLC0415
+
+        ready = threading.Event()
+        handler = _SmtpHandler(self.inbox)
+
+        def _run() -> None:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            # Each connection needs its own SMTP protocol instance
+            srv_coro = self._loop.create_server(
+                lambda: SMTPServer(handler), host="127.0.0.1", port=0
+            )
+            tcp_server = self._loop.run_until_complete(srv_coro)
+            self.port = tcp_server.sockets[0].getsockname()[1]
+            ready.set()
+            self._loop.run_forever()
+            tcp_server.close()
+            self._loop.run_until_complete(tcp_server.wait_closed())
+            self._loop.close()
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+        ready.wait(timeout=5)
+        logger.info("SMTP capture server started on port %d", self.port)
+        return self.port
+
+    def stop(self) -> None:
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+        logger.info("SMTP capture server stopped")
+
+    def clear(self) -> None:
+        self.inbox.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -753,6 +853,15 @@ def ldap_project_uuid():
     return E2E_PROJECT_A_UUID
 
 
+@pytest.fixture(scope="module")
+def smtp_server():
+    """Module-scoped SMTP capture server for welcome email tests."""
+    server = SmtpCaptureServer()
+    server.start()
+    yield server
+    server.stop()
+
+
 @pytest.fixture(autouse=True)
 def _track_test(request, call_recorder):
     """Set current test name on the recorder before each test."""
@@ -963,6 +1072,316 @@ class TestLdapResourceLifecycle:
         # Verify the SLURM account was deleted
         assert_slurm_account_not_exists(ldap_slurm_backend, backend_id)
         logger.info("TERMINATE order completed, SLURM account %s removed", backend_id)
+
+
+# ---------------------------------------------------------------------------
+# Tests — Welcome email on user provisioning
+# ---------------------------------------------------------------------------
+# NOTE: This class MUST run before TestLdapMembershipSync so that offering
+# users are still in REQUESTED state (no username yet). When generate_username
+# is called for the first time, LDAP users are created and welcome emails sent.
+
+_email_state: dict = {}
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapWelcomeEmail:
+    """Welcome email sending during LDAP user provisioning.
+
+    Uses a real SMTP capture server (aiosmtpd) instead of mocking,
+    so we can inspect the actual rendered email content in the report.
+
+    test_02 resets LDAP users and offering user states before running
+    membership sync, so generate_username is always called fresh
+    (triggering welcome emails). This makes the test idempotent.
+    """
+
+    def test_01_create_resource_for_email(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_project_uuid,
+        call_recorder,
+    ):
+        """Create a fresh resource for welcome email tests."""
+        offering_url, plan_url = get_offering_info(
+            ldap_waldur_client, ldap_offering.waldur_offering_uuid
+        )
+        project_url = get_project_url(ldap_waldur_client, ldap_project_uuid)
+
+        order_uuid = create_source_order(
+            client=ldap_waldur_client,
+            offering_url=offering_url,
+            project_url=project_url,
+            plan_url=plan_url,
+            limits={"node_hours": 30},
+            name=f"e2e-ldap-email-{uuid.uuid4().hex[:6]}",
+        )
+
+        with call_recorder.phase("agent"):
+            final_state = run_processor_until_order_terminal(
+                ldap_offering,
+                ldap_waldur_client,
+                ldap_slurm_backend,
+                order_uuid,
+            )
+        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+        call_recorder.set_phase("assert")
+        order = marketplace_orders_retrieve.sync(
+            client=ldap_waldur_client, uuid=order_uuid
+        )
+        resource_uuid = order.marketplace_resource_uuid.hex
+        res = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=ldap_waldur_client
+        )
+
+        _email_state["resource_uuid"] = resource_uuid
+        _email_state["backend_id"] = res.backend_id
+        logger.info(
+            "Created resource %s (backend_id=%s) for email tests",
+            resource_uuid,
+            res.backend_id,
+        )
+
+    def test_02_membership_sync_sends_welcome_emails(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        tmp_path,
+        smtp_server,
+        call_recorder,
+    ):
+        """Membership sync with welcome_email sends real emails to capture server.
+
+        Resets LDAP users and offering user states first, so
+        generate_username is called fresh (triggering welcome emails).
+        """
+        from waldur_api_client.api.marketplace_offering_users import (
+            marketplace_offering_users_create,
+            marketplace_offering_users_destroy,
+            marketplace_offering_users_list,
+        )
+        from waldur_api_client.models.offering_user_request import OfferingUserRequest
+
+        backend_id = _email_state.get("backend_id")
+        if not backend_id:
+            pytest.skip("No backend_id from test_01")
+
+        # --- Reset state so generate_username triggers fresh ---
+        call_recorder.set_phase("user")
+
+        # Delete all LDAP posixAccount users
+        ldap_client = ldap_slurm_backend._ldap_client
+        if ldap_client is not None:
+            ldap_settings = ldap_offering.backend_settings.get("ldap", {})
+            base_dn = ldap_settings.get("base_dn", "")
+            people_ou = ldap_settings.get("people_ou", "ou=People")
+            search_base = f"{people_ou},{base_dn}"
+            conn = Connection(
+                Server(ldap_settings["uri"], get_info=ALL),
+                user=ldap_settings["bind_dn"],
+                password=ldap_settings["bind_password"],
+                auto_bind=True,
+            )
+            conn.search(search_base, "(objectClass=posixAccount)", attributes=["uid"])
+            for entry in conn.response:
+                uid = entry.get("attributes", {}).get("uid")
+                if uid:
+                    username = uid[0] if isinstance(uid, list) else uid
+                    try:
+                        ldap_client.delete_user(username)
+                        logger.info("Reset: deleted LDAP user %s", username)
+                    except Exception:
+                        logger.warning("Could not delete LDAP user %s", username, exc_info=True)
+            conn.unbind()
+
+        # Reset offering users to REQUESTED state (delete + recreate)
+        offering_users = marketplace_offering_users_list.sync_all(
+            client=ldap_waldur_client,
+            offering_uuid=[ldap_offering.waldur_offering_uuid],
+        )
+        for ou in offering_users:
+            if ou.username or ou.state != OfferingUserState.REQUESTED:
+                marketplace_offering_users_destroy.sync_detailed(
+                    uuid=ou.uuid, client=ldap_waldur_client
+                )
+                marketplace_offering_users_create.sync(
+                    client=ldap_waldur_client,
+                    body=OfferingUserRequest(
+                        offering_uuid=ou.offering_uuid,
+                        user_uuid=ou.user_uuid,
+                    ),
+                )
+                logger.info("Reset: recreated offering user %s as REQUESTED", ou.user_email)
+
+        smtp_server.clear()
+
+        # Write a simple template to a temp file
+        template_file = tmp_path / "welcome.txt.j2"
+        template_file.write_text(
+            "Hello {{ first_name }},\n"
+            "Username: {{ username }}\n"
+            "{% if vpn_password %}VPN password: {{ vpn_password }}\n{% endif %}"
+            "Home: {{ home_directory }}\n"
+            "Shell: {{ login_shell }}\n"
+            "UID: {{ uid_number }}\n"
+        )
+
+        # Patch offering backend_settings to enable welcome email + VPN password
+        original_settings = ldap_offering.backend_settings
+        patched_ldap = dict(original_settings.get("ldap", {}))
+        patched_ldap["generate_vpn_password"] = True
+        patched_ldap["welcome_email"] = {
+            "smtp_host": "127.0.0.1",
+            "smtp_port": smtp_server.port,
+            "from_address": "hpc-support@e2e.local",
+            "from_name": "HPC Support",
+            "subject": "Your {{ username }} account is ready",
+            "use_tls": False,
+            "use_ssl": False,
+            "template_path": str(template_file),
+        }
+        patched_settings = dict(original_settings)
+        patched_settings["ldap"] = patched_ldap
+        ldap_offering.backend_settings = patched_settings
+
+        try:
+            with call_recorder.phase("agent"):
+                processor = OfferingMembershipProcessor(
+                    offering=ldap_offering,
+                    waldur_rest_client=ldap_waldur_client,
+                    resource_backend=ldap_slurm_backend,
+                )
+                processor.process_offering()
+        finally:
+            ldap_offering.backend_settings = original_settings
+
+        # Record captured emails in agent phase (so payloads appear in annex)
+        call_recorder.set_phase("agent")
+        for em in smtp_server.inbox:
+            call_recorder.record(
+                ExternalCall(
+                    ts=time.monotonic(),
+                    participant="SMTP",
+                    operation=f"Email to {em.to_addrs[0]}",
+                    response=f"Subject: {em.subject}",
+                    payload=em.body,
+                )
+            )
+
+        call_recorder.set_phase("assert")
+
+        # Collect offering user usernames
+        offering_users = processor._get_cached_offering_users()
+        usernames = [
+            ou.username
+            for ou in offering_users
+            if not isinstance(ou.username, type(UNSET)) and ou.username
+        ]
+        _email_state["usernames"] = usernames
+        _email_state["captured_emails"] = list(smtp_server.inbox)
+
+        logger.info(
+            "Membership sync completed: %d usernames, %d emails captured",
+            len(usernames),
+            len(smtp_server.inbox),
+        )
+
+    def test_03_emails_contain_credentials(self):
+        """Verify captured emails contain username, VPN password, and home directory."""
+        captured = _email_state.get("captured_emails", [])
+        usernames = _email_state.get("usernames", [])
+        if not captured:
+            if usernames:
+                logger.info(
+                    "No emails captured — users likely already existed from prior tests"
+                )
+                pytest.skip("No welcome emails captured (users already existed)")
+            else:
+                pytest.skip("No usernames or emails from test_02")
+
+        for em in captured:
+            assert em.from_addr == "hpc-support@e2e.local", (
+                f"Unexpected from: {em.from_addr}"
+            )
+            assert len(em.to_addrs) == 1, (
+                f"Expected 1 recipient, got {len(em.to_addrs)}"
+            )
+
+            # Subject should contain the username
+            assert "account is ready" in em.subject, (
+                f"Subject should contain 'account is ready': {em.subject}"
+            )
+
+            # Body should contain credentials
+            assert "Username:" in em.body, "Email should contain 'Username:' field"
+            assert "VPN password:" in em.body, "Email should contain VPN password"
+            assert "Home:" in em.body, "Email should contain home directory"
+            assert "/home/" in em.body, "Home directory should start with /home/"
+            assert "UID:" in em.body, "Email should contain UID"
+
+            logger.info(
+                "Email to %s verified: subject=%r, has credentials",
+                em.to_addrs[0],
+                em.subject,
+            )
+
+        logger.info("All %d welcome emails contain expected fields", len(captured))
+
+    def test_04_email_recipients_match_offering_users(self):
+        """Verify email recipients match the user emails from offering users."""
+        captured = _email_state.get("captured_emails", [])
+        if not captured:
+            pytest.skip("No welcome emails captured")
+
+        recipients = {em.to_addrs[0] for em in captured}
+        logger.info("Email recipients: %s", recipients)
+
+        for addr in recipients:
+            assert "@" in addr, f"Invalid email recipient: {addr}"
+
+        logger.info(
+            "All %d email recipients are valid addresses", len(recipients)
+        )
+
+    def test_05_no_email_when_feature_disabled(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        smtp_server,
+        call_recorder,
+    ):
+        """Membership sync without welcome_email config sends no emails."""
+        backend_id = _email_state.get("backend_id")
+        if not backend_id:
+            pytest.skip("No backend_id from test_01")
+
+        # Verify the default config does NOT have welcome_email
+        ldap_settings = ldap_offering.backend_settings.get("ldap", {})
+        assert "welcome_email" not in ldap_settings, (
+            "Default e2e config should not have welcome_email"
+        )
+
+        smtp_server.clear()
+
+        with call_recorder.phase("agent"):
+            processor = OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            )
+            processor.process_offering()
+
+        call_recorder.set_phase("assert")
+
+        assert len(smtp_server.inbox) == 0, (
+            f"Expected no emails, got {len(smtp_server.inbox)}"
+        )
+        logger.info("No emails received when welcome_email is not configured")
 
 
 # ---------------------------------------------------------------------------
@@ -1460,244 +1879,3 @@ class TestLdapBackwardCompat:
         back = mapper.convert_usage_from_target({"cpu": 640, "gpu": 80})
         assert back == {"node_hours": 20.0}
         logger.info("Conversion mapper verified: node_hours <-> cpu+gpu")
-
-
-# ---------------------------------------------------------------------------
-# Tests — Welcome email on user provisioning
-# ---------------------------------------------------------------------------
-
-_email_state: dict = {}
-
-
-@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
-class TestLdapWelcomeEmail:
-    """Welcome email sending during LDAP user provisioning."""
-
-    def test_01_create_resource_for_email(
-        self,
-        ldap_offering,
-        ldap_waldur_client,
-        ldap_slurm_backend,
-        ldap_project_uuid,
-        call_recorder,
-    ):
-        """Create a fresh resource for welcome email tests."""
-        offering_url, plan_url = get_offering_info(
-            ldap_waldur_client, ldap_offering.waldur_offering_uuid
-        )
-        project_url = get_project_url(ldap_waldur_client, ldap_project_uuid)
-
-        order_uuid = create_source_order(
-            client=ldap_waldur_client,
-            offering_url=offering_url,
-            project_url=project_url,
-            plan_url=plan_url,
-            limits={"node_hours": 30},
-            name=f"e2e-ldap-email-{uuid.uuid4().hex[:6]}",
-        )
-
-        with call_recorder.phase("agent"):
-            final_state = run_processor_until_order_terminal(
-                ldap_offering,
-                ldap_waldur_client,
-                ldap_slurm_backend,
-                order_uuid,
-            )
-        assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
-
-        call_recorder.set_phase("assert")
-        order = marketplace_orders_retrieve.sync(
-            client=ldap_waldur_client, uuid=order_uuid
-        )
-        resource_uuid = order.marketplace_resource_uuid.hex
-        res = marketplace_provider_resources_retrieve.sync(
-            uuid=resource_uuid, client=ldap_waldur_client
-        )
-
-        _email_state["resource_uuid"] = resource_uuid
-        _email_state["backend_id"] = res.backend_id
-        logger.info(
-            "Created resource %s (backend_id=%s) for email tests",
-            resource_uuid,
-            res.backend_id,
-        )
-
-    def test_02_membership_sync_sends_welcome_emails(
-        self,
-        ldap_offering,
-        ldap_waldur_client,
-        ldap_slurm_backend,
-        ldap_assertions,
-        tmp_path,
-        call_recorder,
-    ):
-        """Membership sync with welcome_email config sends emails for new users.
-
-        Patches the offering's backend_settings to enable welcome_email and
-        generate_vpn_password, then captures SMTP calls via mock.
-        """
-        backend_id = _email_state.get("backend_id")
-        if not backend_id:
-            pytest.skip("No backend_id from test_01")
-
-        # Write a simple template to a temp file
-        template_file = tmp_path / "welcome.txt.j2"
-        template_file.write_text(
-            "Hello {{ first_name }},\n"
-            "Username: {{ username }}\n"
-            "{% if vpn_password %}VPN: {{ vpn_password }}\n{% endif %}"
-            "Home: {{ home_directory }}\n"
-        )
-
-        # Patch offering backend_settings to enable welcome email + VPN password
-        original_settings = ldap_offering.backend_settings
-        patched_ldap = dict(original_settings.get("ldap", {}))
-        patched_ldap["generate_vpn_password"] = True
-        patched_ldap["welcome_email"] = {
-            "smtp_host": "localhost",
-            "smtp_port": 25,
-            "from_address": "test@e2e.local",
-            "use_tls": False,
-            "use_ssl": False,
-            "template_path": str(template_file),
-        }
-        patched_settings = dict(original_settings)
-        patched_settings["ldap"] = patched_ldap
-        ldap_offering.backend_settings = patched_settings
-
-        # Collect sent emails via mock SMTP
-        sent_emails: list[tuple[str, list[str], str]] = []
-        from unittest.mock import MagicMock, patch  # noqa: PLC0415
-
-        mock_smtp_instance = MagicMock()
-
-        def _capture_sendmail(from_addr, to_addrs, msg_str):
-            sent_emails.append((from_addr, to_addrs, msg_str))
-
-        mock_smtp_instance.sendmail.side_effect = _capture_sendmail
-
-        try:
-            with (
-                call_recorder.phase("agent"),
-                patch(
-                    "waldur_site_agent_ldap.email_sender.smtplib"
-                ) as mock_smtplib,
-            ):
-                mock_smtplib.SMTP.return_value = mock_smtp_instance
-
-                processor = OfferingMembershipProcessor(
-                    offering=ldap_offering,
-                    waldur_rest_client=ldap_waldur_client,
-                    resource_backend=ldap_slurm_backend,
-                )
-                processor.process_offering()
-        finally:
-            # Restore original settings
-            ldap_offering.backend_settings = original_settings
-
-        call_recorder.set_phase("assert")
-
-        # Collect offering user usernames
-        offering_users = processor._get_cached_offering_users()
-        usernames = [
-            ou.username
-            for ou in offering_users
-            if not isinstance(ou.username, type(UNSET)) and ou.username
-        ]
-        _email_state["usernames"] = usernames
-        _email_state["sent_emails"] = sent_emails
-
-        logger.info(
-            "Membership sync completed: %d usernames, %d emails sent",
-            len(usernames),
-            len(sent_emails),
-        )
-
-    def test_03_emails_contain_credentials(self):
-        """Verify sent emails contain username, VPN password, and home directory."""
-        sent_emails = _email_state.get("sent_emails", [])
-        usernames = _email_state.get("usernames", [])
-        if not sent_emails:
-            # Users may already exist from prior test classes (no new creation = no email)
-            if usernames:
-                logger.info(
-                    "No emails sent — users likely already existed from prior tests"
-                )
-                pytest.skip("No welcome emails sent (users already existed)")
-            else:
-                pytest.skip("No usernames or emails from test_02")
-
-        for from_addr, to_addrs, msg_str in sent_emails:
-            assert from_addr == "test@e2e.local", f"Unexpected from: {from_addr}"
-            assert len(to_addrs) == 1, f"Expected 1 recipient, got {len(to_addrs)}"
-
-            # Should contain a username
-            assert "Username:" in msg_str, "Email should contain 'Username:' field"
-
-            # Should contain VPN password (generate_vpn_password=true)
-            assert "VPN:" in msg_str, "Email should contain VPN password"
-
-            # Should contain home directory
-            assert "Home:" in msg_str, "Email should contain home directory"
-            assert "/home/" in msg_str, "Home directory should start with /home/"
-
-            logger.info("Email to %s verified: contains credentials", to_addrs[0])
-
-        logger.info("All %d welcome emails contain expected fields", len(sent_emails))
-
-    def test_04_email_recipients_match_offering_users(self):
-        """Verify email recipients match the user emails from offering users."""
-        sent_emails = _email_state.get("sent_emails", [])
-        if not sent_emails:
-            pytest.skip("No welcome emails sent")
-
-        recipients = {to_addrs[0] for _, to_addrs, _ in sent_emails}
-        logger.info("Email recipients: %s", recipients)
-
-        # All recipients should be valid email addresses
-        for email in recipients:
-            assert "@" in email, f"Invalid email recipient: {email}"
-
-        logger.info(
-            "All %d email recipients are valid addresses", len(recipients)
-        )
-
-    def test_05_no_email_when_feature_disabled(
-        self,
-        ldap_offering,
-        ldap_waldur_client,
-        ldap_slurm_backend,
-        call_recorder,
-    ):
-        """Membership sync without welcome_email config sends no emails."""
-        backend_id = _email_state.get("backend_id")
-        if not backend_id:
-            pytest.skip("No backend_id from test_01")
-
-        # Verify the default config does NOT have welcome_email
-        ldap_settings = ldap_offering.backend_settings.get("ldap", {})
-        assert "welcome_email" not in ldap_settings, (
-            "Default e2e config should not have welcome_email"
-        )
-
-        from unittest.mock import patch  # noqa: PLC0415
-
-        with (
-            call_recorder.phase("agent"),
-            patch(
-                "waldur_site_agent_ldap.email_sender.smtplib"
-            ) as mock_smtplib,
-        ):
-            processor = OfferingMembershipProcessor(
-                offering=ldap_offering,
-                waldur_rest_client=ldap_waldur_client,
-                resource_backend=ldap_slurm_backend,
-            )
-            processor.process_offering()
-
-        call_recorder.set_phase("assert")
-
-        # SMTP should never have been instantiated
-        mock_smtplib.SMTP.assert_not_called()
-        mock_smtplib.SMTP_SSL.assert_not_called()
-        logger.info("No SMTP calls when welcome_email is not configured")
