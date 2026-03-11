@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.9.9 - 2026-03-11
+
+### Highlights
+
+This release introduces the new **LDAP username management plugin**, enabling automated LDAP account provisioning with welcome email notifications for SLURM-based sites. Plugins can now control order approval via the new `evaluate_pending_order` hook, and all deployments benefit from lighter health checks and reduced API bandwidth through field-level filtering.
+
+### What's New
+
+- **LDAP**: Add LDAP username management plugin with account creation, password generation, and configurable welcome email notifications (HTML and plain text templates).
+- **SLURM**: Extend backend to delegate username operations to the LDAP plugin, including `waldur_username_attribute` support for flexible user identity mapping.
+- **Core**: Add `evaluate_pending_order` hook allowing plugins to programmatically approve or reject pending orders before processing.
+- **SLURM**: Add E2E tests for periodic usage policies.
+
+### Improvements
+
+- **Core**: Replace heavy diagnostics probe with a lightweight `/healthz` endpoint across all deployment modes (event processing, order processing, membership sync, reporting).
+- **Core**: Limit API GET requests to only the fields used in code, reducing payload sizes and improving performance.
+- **Core**: Pass cluster filter to historical usage queries for more accurate multi-period reporting.
+- **Federation**: Remove deprecated `target_stomp_offering_uuid` configuration and fix STOMP subscription handling.
+- **Federation**: Fix Waldur-to-Waldur membership sync and stabilise integration tests.
+
+### Bug Fixes
+
+- **CSCS-DWDI**: Fix `storage_inodes` condition that never matched due to incorrectly chained `in` operators.
+- **Docs**: Fix outdated and inaccurate plugin documentation across all README files and plugin metadata.
+
+### Statistics
+
+> 11 commits, 94 files changed (+8297/−614 lines)
+
+---
+
 ## 0.9.8 - 2026-03-06
 
 This release delivers a targeted fix for a data integrity issue in the Waldur Python SDK dependency. Operators who encountered errors related to nullable foreign key fields will benefit from this update.

@@ -1,11 +1,11 @@
 [project]
 name = "waldur-site-agent-opennebula"
-version = "0.9.8"
+version = "0.9.9"
 description = "OpenNebula VDC plugin for Waldur Site Agent"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent>=0.9.8",
+    "waldur-site-agent>=0.9.9",
     "pyone>=6.8.0",
 ]
 
