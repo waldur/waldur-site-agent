@@ -179,7 +179,7 @@ def log_versions(configuration: structures.WaldurAgentConfiguration) -> None:
                         target_version_info.version,
                     )
                 except Exception:
-                    logger.warning(
+                    logger.debug(
                         'Offering "%s": unable to fetch remote Waldur B version',
                         offering.name,
                     )
