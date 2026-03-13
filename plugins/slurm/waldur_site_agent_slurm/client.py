@@ -111,7 +111,7 @@ class SlurmClient(clients.BaseClient):
             f'organization="{self._sanitize_sacctmgr_value(organization)}"',
         ]
         if parent_name:
-            parts.append(f"parent={parent_name}")
+            parts.append(f'parent="{parent_name}"')
         return self._execute_command(parts)
 
     def delete_all_users_from_account(self, name: str) -> str:
