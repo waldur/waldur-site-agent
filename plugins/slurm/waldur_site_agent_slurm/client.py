@@ -31,10 +31,19 @@ class SlurmClient(clients.BaseClient):
     # SLURM commands whose path should be resolved via slurm_bin_path
     SLURM_COMMANDS = frozenset({"sacctmgr", "sacct", "scancel", "sinfo"})
 
-    def __init__(self, slurm_tres: dict, slurm_bin_path: str = "/usr/bin") -> None:
+    # sacctmgr entity types that are cluster-independent (global).
+    _CLUSTER_INDEPENDENT_ENTITIES = frozenset({"qos", "tres", "cluster"})
+
+    def __init__(
+        self,
+        slurm_tres: dict,
+        slurm_bin_path: str = "/usr/bin",
+        cluster_name: Optional[str] = None,
+    ) -> None:
         """Inits SLURM-related data."""
         self.slurm_tres = slurm_tres
         self.slurm_bin_path = slurm_bin_path
+        self.cluster_name = cluster_name
         self.executed_commands: list[str] = []
 
     def clear_executed_commands(self) -> None:
@@ -77,6 +86,15 @@ class SlurmClient(clients.BaseClient):
             else:
                 tres_list.append(component_type)
         return tres_list
+
+    def list_clusters(self) -> list[str]:
+        """Returns a list of cluster names known to SLURM."""
+        output = self._execute_command(["list", "cluster", "format=cluster"])
+        return [
+            line.split("|")[0].strip()
+            for line in output.splitlines()
+            if line.strip() and "|" in line
+        ]
 
     def get_resource(self, resource_id: str) -> ClientResource | None:
         """Returns Account object from cluster based on the account name."""
@@ -368,6 +386,38 @@ class SlurmClient(clients.BaseClient):
             value=value_,
         )
 
+    def _inject_cluster_filter(self, command: list[str], command_name: str) -> list[str]:
+        """Inject cluster filtering into the command if cluster_name is set.
+
+        For sacctmgr: adds ``cluster=<name>`` to account/association/user commands.
+        Skips cluster-independent entities (QoS, TRES, cluster).
+        For sacct/scancel: adds ``--cluster=<name>`` flag.
+        """
+        if not self.cluster_name:
+            return command
+
+        if command_name == "sacctmgr":
+            # Skip cluster-independent operations and --version
+            if (
+                any(token in self._CLUSTER_INDEPENDENT_ENTITIES for token in command[:3])
+                or "--version" in command
+            ):
+                return command
+
+            cluster_arg = f"cluster={self.cluster_name}"
+            command = list(command)  # avoid mutating caller's list
+            if "set" in command:
+                # For modify commands, cluster filter goes before "set"
+                set_idx = command.index("set")
+                command.insert(set_idx, cluster_arg)
+            else:
+                command.append(cluster_arg)
+
+        elif command_name in ("sacct", "scancel"):
+            command = [f"--cluster={self.cluster_name}", *command]
+
+        return command
+
     def _execute_command(
         self,
         command: list[str],
@@ -387,6 +437,9 @@ class SlurmClient(clients.BaseClient):
                 f"--parsable2/--noheader are not supported by {command_name}. "
                 f"Use parsable=False for {command_name} commands."
             )
+
+        command = self._inject_cluster_filter(command, command_name)
+
         if self.slurm_bin_path and command_name in self.SLURM_COMMANDS:
             resolved_command = str(Path(self.slurm_bin_path) / command_name)
         else:
@@ -466,13 +519,15 @@ class SlurmClient(clients.BaseClient):
 
     def add_account_qos(self, account: str, qos_name: str) -> None:
         """Add a QoS to an account's list (qos+=name)."""
-        self._execute_command(["modify", "account", "set", f"qos+={qos_name}", "where",
-                               f"account={account}"])
+        self._execute_command(
+            ["modify", "account", "set", f"qos+={qos_name}", "where", f"account={account}"]
+        )
 
     def set_account_default_qos(self, account: str, qos_name: str) -> None:
         """Set the default QoS for an account."""
-        self._execute_command(["modify", "account", "set", f"defaultqos={qos_name}", "where",
-                               f"account={account}"])
+        self._execute_command(
+            ["modify", "account", "set", f"defaultqos={qos_name}", "where", f"account={account}"]
+        )
 
     # ===== PARTITION-AWARE ASSOCIATION EXTENSION =====
 

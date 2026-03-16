@@ -14,7 +14,7 @@ ldap = ["waldur-site-agent-ldap>=0.9.8"]
 
 [dependency-groups]
 dev = [
-    "slurm-emulator>=0.1.2",
+    "slurm-emulator>=0.2.0",
     "pytest>=7.1.0",
 ]
 
