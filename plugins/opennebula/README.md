@@ -22,6 +22,9 @@ Each mode is configured as a separate Waldur offering with its own
   (e.g. after connection resets)
 - **User Account Creation** (optional): Creates an OpenNebula user with VDC
   group membership, credentials displayed in Waldur Homeport via `backend_metadata`
+- **Keycloak SAML Integration** (optional): Manages Keycloak groups per VDC
+  for SSO access to Sunstone — see the
+  [SAML Setup Guide](docs/saml-setup/index.md)
 
 ### VM Management
 
