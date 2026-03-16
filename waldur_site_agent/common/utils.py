@@ -140,9 +140,7 @@ def log_versions(configuration: structures.WaldurAgentConfiguration) -> None:
     Args:
         configuration: Agent configuration with offerings
     """
-    dep_versions = ", ".join(
-        f"{dep['package']}={dep['version']}" for dep in DEPENDENCIES
-    )
+    dep_versions = ", ".join(f"{dep['package']}={dep['version']}" for dep in DEPENDENCIES)
     logger.info("Dependency versions: %s", dep_versions)
 
     for offering in configuration.waldur_offerings:
@@ -609,7 +607,7 @@ def load_components_to_waldur(
         component.type_: component for component in waldur_offering.components
     }
     for component_type, component_info in components.items():
-        component_info=component_info.to_dict()
+        component_info = component_info.to_dict()
         try:
             limit_amount = component_info.get("limit")
             accounting_type = component_info["accounting_type"]
@@ -749,6 +747,7 @@ def diagnostics() -> int:
                     ProviderOfferingDetailsFieldEnum.CUSTOMER_NAME,
                     ProviderOfferingDetailsFieldEnum.STATE,
                     ProviderOfferingDetailsFieldEnum.COMPONENTS,
+                    ProviderOfferingDetailsFieldEnum.BACKEND_ID,
                 ],
             )
             logger.info("Offering uuid: %s", offering_data.uuid)
@@ -801,6 +800,28 @@ def diagnostics() -> int:
             logger.error("Unable to fetch orders, reason: %s", err)
 
         backend, _ = get_backend_for_offering(offering, "order_processing_backend")
+
+        # Cross-validate offering backend_id with backend cluster_name
+        offering_backend_id = getattr(offering_data, "backend_id", UNSET)
+        if not isinstance(offering_backend_id, type(UNSET)) and offering_backend_id:
+            logger.info("Offering backend_id (cluster): %s", offering_backend_id)
+            backend_cluster = getattr(backend, "cluster_name", None)
+            if backend_cluster and backend_cluster != offering_backend_id:
+                logger.error(
+                    "Mismatch: backend_settings.cluster_name=%s but "
+                    "offering backend_id=%s. These must match.",
+                    backend_cluster,
+                    offering_backend_id,
+                )
+                return 1
+            if not backend_cluster:
+                logger.warning(
+                    "Offering has backend_id=%s but backend_settings has no "
+                    "cluster_name configured. Consider adding "
+                    'cluster_name: "%s" to backend_settings.',
+                    offering_backend_id,
+                    offering_backend_id,
+                )
 
         if not backend.diagnostics():
             return 1
@@ -1002,8 +1023,7 @@ def _can_generate_usernames(
         return False
 
     return (
-        plugin_options.username_generation_policy
-        == UsernameGenerationPolicyEnum.SERVICE_PROVIDER
+        plugin_options.username_generation_policy == UsernameGenerationPolicyEnum.SERVICE_PROVIDER
     )
 
 

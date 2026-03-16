@@ -58,6 +58,13 @@ class SlurmAccountDiagnosticService:
         self.offering = offering
         self.backend_settings = offering.backend_settings
         self.backend_components = offering.backend_components_dict
+        self._cluster_name = slurm_client.cluster_name
+
+    def _cluster_arg(self) -> str:
+        """Return sacctmgr cluster argument for fix commands, or empty string."""
+        if self._cluster_name:
+            return f" cluster={self._cluster_name}"
+        return ""
 
     def get_slurm_account_info(self, account_name: str) -> SlurmAccountInfo:
         """Retrieve account information from local SLURM cluster.
@@ -266,9 +273,7 @@ class SlurmAccountDiagnosticService:
                 policy.period_name if not isinstance(policy.period_name, type(UNSET)) else None
             ),
             limit_type=(
-                policy.limit_type.value
-                if not isinstance(policy.limit_type, type(UNSET))
-                else None
+                policy.limit_type.value if not isinstance(policy.limit_type, type(UNSET)) else None
             ),
             tres_billing_enabled=(
                 policy.tres_billing_enabled
@@ -354,9 +359,7 @@ class SlurmAccountDiagnosticService:
                     reasoning[f"limits.{comp_type}"] = f"{reason} = {calculated_limit}"
 
                     # Store unit conversion info
-                    conv_note = (
-                        f"{comp_value} {waldur_unit} -> {calculated_limit} {slurm_unit}"
-                    )
+                    conv_note = f"{comp_value} {waldur_unit} -> {calculated_limit} {slurm_unit}"
                     unit_info[comp_type] = ComponentUnitInfo(
                         component_type=comp_type,
                         waldur_unit=waldur_unit,
@@ -384,9 +387,7 @@ class SlurmAccountDiagnosticService:
                     reasoning[f"limits.{comp_type}"] = f"{reason} = {calculated_limit}"
 
                     # Store unit conversion info
-                    conv_note = (
-                        f"{comp_value} {waldur_unit} -> {calculated_limit} {slurm_unit}"
-                    )
+                    conv_note = f"{comp_value} {waldur_unit} -> {calculated_limit} {slurm_unit}"
                     unit_info[comp_type] = ComponentUnitInfo(
                         component_type=comp_type,
                         waldur_unit=waldur_unit,
@@ -462,7 +463,10 @@ class SlurmAccountDiagnosticService:
                     )
                 )
             else:
-                fix_cmd = f"sacctmgr -i modify account {account_name} set qos={expected.qos}"
+                fix_cmd = (
+                    f"sacctmgr -i modify account {account_name}"
+                    f"{self._cluster_arg()} set qos={expected.qos}"
+                )
                 comparisons.append(
                     ComparisonResult(
                         field="qos",
@@ -488,7 +492,8 @@ class SlurmAccountDiagnosticService:
                 )
             else:
                 fix_cmd = (
-                    f"sacctmgr -i modify account {account_name} set fairshare={expected.fairshare}"
+                    f"sacctmgr -i modify account {account_name}"
+                    f"{self._cluster_arg()} set fairshare={expected.fairshare}"
                 )
                 comparisons.append(
                     ComparisonResult(
@@ -508,9 +513,7 @@ class SlurmAccountDiagnosticService:
             slurm_unit = self._get_slurm_unit_for_limit_type(limit_type)
 
             # Build expected TRES string for fix command
-            expected_tres_parts = [
-                f"{k}={v}" for k, v in sorted(expected.limits.items())
-            ]
+            expected_tres_parts = [f"{k}={v}" for k, v in sorted(expected.limits.items())]
             expected_tres_str = ",".join(expected_tres_parts)
 
             for comp_type, expected_value in expected.limits.items():
@@ -546,8 +549,8 @@ class SlurmAccountDiagnosticService:
                     )
                 else:
                     fix_cmd = (
-                        f"sacctmgr -i modify account {account_name} "
-                        f"set {limit_type}={expected_tres_str}"
+                        f"sacctmgr -i modify account {account_name}"
+                        f"{self._cluster_arg()} set {limit_type}={expected_tres_str}"
                     )
                     comparisons.append(
                         ComparisonResult(
@@ -566,9 +569,7 @@ class SlurmAccountDiagnosticService:
 
         return comparisons
 
-    def _get_actual_limits(
-        self, slurm_info: SlurmAccountInfo, limit_type: str
-    ) -> dict[str, Any]:
+    def _get_actual_limits(self, slurm_info: SlurmAccountInfo, limit_type: str) -> dict[str, Any]:
         """Get actual limits from SLURM info based on limit type."""
         if limit_type == "GrpTRESMins":
             return slurm_info.grp_tres_mins or {}

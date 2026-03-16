@@ -80,9 +80,7 @@ class TestFlagValidationGuard:
 
     def test_id_without_flags_allowed(self, client):
         """id works when both immediate=False and parsable=False."""
-        client._execute_command(
-            ["-u", "user1"], command_name="id", parsable=False, immediate=False
-        )
+        client._execute_command(["-u", "user1"], command_name="id", parsable=False, immediate=False)
         assert client.executed_commands[0] == "id -u user1"
 
 
@@ -359,3 +357,259 @@ class TestModifyNothingChanged:
         ):
             with pytest.raises(BackendError):
                 client.list_resources()
+
+
+class TestClusterFiltering:
+    """Verify cluster=<name> is injected into commands when cluster_name is set."""
+
+    @pytest.fixture
+    def client_with_cluster(self):
+        """SlurmClient with cluster_name set and mocked execute_command."""
+        client = SlurmClient({"cpu": "TRES_CPU"}, slurm_bin_path="", cluster_name="mycluster")
+        with patch.object(client, "execute_command", return_value=""):
+            yield client
+
+    @pytest.fixture
+    def client_without_cluster(self):
+        """SlurmClient without cluster_name and mocked execute_command."""
+        client = SlurmClient({"cpu": "TRES_CPU"}, slurm_bin_path="")
+        with patch.object(client, "execute_command", return_value=""):
+            yield client
+
+    # --- sacctmgr account/association commands get cluster= ---
+
+    def test_list_resources_includes_cluster(self, client_with_cluster):
+        client_with_cluster.list_resources()
+        assert "cluster=mycluster" in client_with_cluster.executed_commands[0]
+
+    def test_get_resource_includes_cluster(self, client_with_cluster):
+        client_with_cluster.get_resource("acct1")
+        assert "cluster=mycluster" in client_with_cluster.executed_commands[0]
+
+    def test_create_resource_includes_cluster(self, client_with_cluster):
+        client_with_cluster.create_resource("acct1", "desc", "org")
+        assert "cluster=mycluster" in client_with_cluster.executed_commands[0]
+
+    def test_delete_resource_includes_cluster(self, client_with_cluster):
+        client_with_cluster.delete_resource("acct1")
+        assert "cluster=mycluster" in client_with_cluster.executed_commands[0]
+
+    def test_create_association_includes_cluster(self, client_with_cluster):
+        client_with_cluster.create_association("user1", "acct1")
+        assert "cluster=mycluster" in client_with_cluster.executed_commands[0]
+
+    def test_delete_association_includes_cluster(self, client_with_cluster):
+        client_with_cluster.delete_association("user1", "acct1")
+        assert "cluster=mycluster" in client_with_cluster.executed_commands[0]
+
+    def test_show_association_includes_cluster(self, client_with_cluster):
+        client_with_cluster.account_has_users("acct1")
+        assert "cluster=mycluster" in client_with_cluster.executed_commands[0]
+
+    # --- modify commands: cluster= goes before "set" ---
+
+    def test_set_resource_limits_cluster_before_set(self, client_with_cluster):
+        client_with_cluster.set_resource_limits("acct1", {"cpu": 100})
+        cmd = client_with_cluster.executed_commands[0]
+        assert "cluster=mycluster" in cmd
+        cluster_pos = cmd.index("cluster=mycluster")
+        set_pos = cmd.index(" set ")
+        assert cluster_pos < set_pos
+
+    def test_set_account_fairshare_cluster_before_set(self, client_with_cluster):
+        client_with_cluster.set_account_fairshare("acct1", 500)
+        cmd = client_with_cluster.executed_commands[0]
+        assert "cluster=mycluster" in cmd
+        cluster_pos = cmd.index("cluster=mycluster")
+        set_pos = cmd.index(" set ")
+        assert cluster_pos < set_pos
+
+    def test_modify_account_qos_cluster_before_set(self, client_with_cluster):
+        client_with_cluster.set_account_qos("acct1", "normal")
+        cmd = client_with_cluster.executed_commands[0]
+        assert "cluster=mycluster" in cmd
+        cluster_pos = cmd.index("cluster=mycluster")
+        set_pos = cmd.index(" set ")
+        assert cluster_pos < set_pos
+
+    # --- QoS and TRES commands do NOT get cluster= ---
+
+    def test_list_tres_no_cluster(self, client_with_cluster):
+        client_with_cluster.list_tres()
+        assert "cluster=mycluster" not in client_with_cluster.executed_commands[0]
+
+    def test_qos_exists_no_cluster(self, client_with_cluster):
+        client_with_cluster.qos_exists("normal")
+        assert "cluster=mycluster" not in client_with_cluster.executed_commands[0]
+
+    def test_create_qos_no_cluster(self, client_with_cluster):
+        client_with_cluster.create_qos("normal")
+        for cmd in client_with_cluster.executed_commands:
+            assert "cluster=mycluster" not in cmd
+
+    def test_delete_qos_no_cluster(self, client_with_cluster):
+        client_with_cluster.delete_qos("normal")
+        assert "cluster=mycluster" not in client_with_cluster.executed_commands[0]
+
+    # --- sacct/scancel get --cluster= flag ---
+
+    def test_get_usage_report_includes_cluster(self, client_with_cluster):
+        client_with_cluster.get_usage_report(["acct1"])
+        cmd = client_with_cluster.executed_commands[0]
+        assert "--cluster=mycluster" in cmd
+
+    def test_cancel_active_user_jobs_includes_cluster(self, client_with_cluster):
+        client_with_cluster.cancel_active_user_jobs("acct1")
+        cmd = client_with_cluster.executed_commands[0]
+        assert "--cluster=mycluster" in cmd
+
+    def test_list_active_user_jobs_includes_cluster(self, client_with_cluster):
+        client_with_cluster.list_active_user_jobs("acct1", "user1")
+        cmd = client_with_cluster.executed_commands[0]
+        assert "--cluster=mycluster" in cmd
+
+    # --- list_clusters itself does NOT get cluster= ---
+
+    def test_list_clusters_no_cluster_filter(self, client_with_cluster):
+        client_with_cluster.list_clusters()
+        assert "cluster=mycluster" not in client_with_cluster.executed_commands[0]
+
+    # --- No cluster_name → no injection ---
+
+    def test_no_cluster_name_no_injection(self, client_without_cluster):
+        client_without_cluster.list_resources()
+        assert "cluster=" not in client_without_cluster.executed_commands[0]
+
+    def test_no_cluster_name_sacct_no_injection(self, client_without_cluster):
+        client_without_cluster.get_usage_report(["acct1"])
+        assert "--cluster=" not in client_without_cluster.executed_commands[0]
+
+
+# ---- Emulator integration tests (require slurm-emulator >= 0.2.0) ----
+
+try:
+    from emulator.commands.sacctmgr import SacctmgrEmulator
+    from emulator.commands.sacct import SacctEmulator
+    from emulator.core.database import SlurmDatabase
+    from emulator.core.time_engine import TimeEngine
+
+    EMULATOR_AVAILABLE = True
+except ImportError:
+    EMULATOR_AVAILABLE = False
+
+
+@pytest.mark.skipif(not EMULATOR_AVAILABLE, reason="slurm-emulator not installed")
+class TestClusterFilteringWithEmulator:
+    """Integration tests: SlurmClient cluster filtering against the emulator."""
+
+    @pytest.fixture
+    def emulator_env(self):
+        """Set up emulator with two clusters and a test account."""
+        db = SlurmDatabase()
+        db.add_cluster("prod")
+        te = TimeEngine()
+        sacctmgr = SacctmgrEmulator(db, te)
+        sacct = SacctEmulator(db, te)
+
+        # Create account on prod cluster
+        sacctmgr.handle_command(["add", "account", "testacct", "cluster=prod"])
+
+        def _route_to_emulator(command_parts, silent=False):
+            """Route a full command list (with binary prefix) to the emulator."""
+            # Determine which emulator to use from the binary name
+            binary = command_parts[0].rsplit("/", 1)[-1]
+            # Strip --parsable2, --noheader, --immediate flags
+            args = [
+                a
+                for a in command_parts[1:]
+                if a not in ("--parsable2", "--noheader", "--immediate")
+            ]
+            if binary == "sacctmgr":
+                return sacctmgr.handle_command(args)
+            if binary == "sacct":
+                return sacct.handle_command(args)
+            if binary == "sinfo":
+                return "slurm-emulator 0.2.0"
+            return ""
+
+        return db, _route_to_emulator
+
+    def test_list_clusters(self, emulator_env):
+        """list_clusters returns cluster names from emulator."""
+        db, route = emulator_env
+        client = SlurmClient({"cpu": "CPU"}, slurm_bin_path="", cluster_name="prod")
+        with patch.object(client, "execute_command", side_effect=route):
+            clusters = client.list_clusters()
+        assert "default" in clusters
+        assert "prod" in clusters
+
+    def test_create_account_on_cluster(self, emulator_env):
+        """Creating an account with cluster_name routes to the correct cluster."""
+        db, route = emulator_env
+        client = SlurmClient({"cpu": "CPU"}, slurm_bin_path="", cluster_name="prod")
+        with patch.object(client, "execute_command", side_effect=route):
+            client.create_resource("newacct", "desc", "org")
+        # Account exists globally
+        assert db.get_account("newacct") is not None
+        # Association exists on prod cluster
+        assoc_key = db._association_key("", "newacct", "prod")
+        assert assoc_key in db.associations
+
+    def test_add_user_association_on_cluster(self, emulator_env):
+        """Creating a user association routes to the correct cluster."""
+        db, route = emulator_env
+        client = SlurmClient({"cpu": "CPU"}, slurm_bin_path="", cluster_name="prod")
+        with patch.object(client, "execute_command", side_effect=route):
+            client.create_association("testuser", "testacct")
+        assoc_key = db._association_key("testuser", "testacct", "prod")
+        assert assoc_key in db.associations
+
+    def test_cluster_name_validated_in_diagnostics(self, emulator_env):
+        """SlurmBackend.diagnostics validates cluster existence."""
+        from waldur_site_agent_slurm.backend import SlurmBackend
+
+        _, route = emulator_env
+        settings = {
+            "default_account": "root",
+            "customer_prefix": "c_",
+            "project_prefix": "p_",
+            "allocation_prefix": "a_",
+            "cluster_name": "prod",
+        }
+        components = {
+            "cpu": {
+                "limit": 10,
+                "measured_unit": "k-Hours",
+                "unit_factor": 60000,
+                "accounting_type": "usage",
+                "label": "CPU",
+            }
+        }
+        backend = SlurmBackend(settings, components)
+        with patch.object(backend.client, "execute_command", side_effect=route):
+            assert backend.diagnostics() is True
+
+    def test_invalid_cluster_name_fails_diagnostics(self, emulator_env):
+        """SlurmBackend.diagnostics fails for non-existent cluster."""
+        from waldur_site_agent_slurm.backend import SlurmBackend
+
+        _, route = emulator_env
+        settings = {
+            "default_account": "root",
+            "customer_prefix": "c_",
+            "project_prefix": "p_",
+            "allocation_prefix": "a_",
+            "cluster_name": "nonexistent",
+        }
+        components = {
+            "cpu": {
+                "limit": 10,
+                "measured_unit": "k-Hours",
+                "unit_factor": 60000,
+                "accounting_type": "usage",
+                "label": "CPU",
+            }
+        }
+        backend = SlurmBackend(settings, components)
+        with patch.object(backend.client, "execute_command", side_effect=route):
+            assert backend.diagnostics() is False

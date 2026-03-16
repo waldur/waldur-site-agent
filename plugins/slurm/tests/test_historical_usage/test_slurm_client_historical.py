@@ -190,3 +190,35 @@ class TestSlurmClientHistorical:
         # Test empty account list
         usage_lines = client.get_historical_usage_report([], 2024, 1)
         assert len(usage_lines) == 0
+
+
+class TestSlurmClientHistoricalClusterFiltering:
+    """Test that historical usage respects --cluster= filtering."""
+
+    def test_usage_report_filtered_by_cluster(
+        self,
+        emulator_available,
+        patched_slurm_client_with_cluster,
+        mock_slurm_tres,
+    ):
+        """Usage report with cluster_name only returns data from that cluster."""
+        client = SlurmClient(mock_slurm_tres, cluster_name="testcluster")
+        usage_lines = client.get_historical_usage_report(["test_account_123"], 2024, 1)
+
+        # Should only see testcluster data (100h), not default cluster data (999h)
+        assert len(usage_lines) > 0
+        for line in usage_lines:
+            assert line.account == "test_account_123"
+
+    def test_usage_report_without_cluster_gets_default(
+        self,
+        emulator_available,
+        patched_slurm_client_with_cluster,
+        mock_slurm_tres,
+    ):
+        """Usage report without cluster_name gets default cluster data."""
+        client = SlurmClient(mock_slurm_tres)
+        usage_lines = client.get_historical_usage_report(["test_account_123"], 2024, 1)
+
+        # Without cluster_name, sacct uses current_cluster (default)
+        assert len(usage_lines) > 0

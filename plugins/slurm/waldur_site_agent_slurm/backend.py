@@ -53,7 +53,10 @@ class SlurmBackend(backends.BaseBackend):
         super().__init__(slurm_settings, slurm_tres)
         self.backend_type = BackendType.SLURM.value
         slurm_bin_path = self.backend_settings.get("slurm_bin_path", "/usr/bin")
-        self.client: SlurmClient = SlurmClient(slurm_tres, slurm_bin_path=slurm_bin_path)
+        self.cluster_name: Optional[str] = self.backend_settings.get("cluster_name")
+        self.client: SlurmClient = SlurmClient(
+            slurm_tres, slurm_bin_path=slurm_bin_path, cluster_name=self.cluster_name
+        )
 
         # Optional LDAP integration for project groups
         self._ldap_client = None
@@ -127,9 +130,7 @@ class SlurmBackend(backends.BaseBackend):
             try:
                 self._ldap_client.create_project_group(resource_backend_id)
             except BackendError:
-                logger.exception(
-                    "Failed to create LDAP project group for %s", resource_backend_id
-                )
+                logger.exception("Failed to create LDAP project group for %s", resource_backend_id)
 
         # Optional: create project directory and set quota
         if self._project_dir_config.get("enabled"):
@@ -182,6 +183,29 @@ class SlurmBackend(backends.BaseBackend):
             logger.info("SLURM cluster ping is successful")
         except BackendError as err:
             logger.error("Unable to ping SLURM cluster, reason: %s", err)
+
+        # Validate cluster filtering
+        try:
+            known_clusters = self.client.list_clusters()
+            logger.info("SLURM clusters: %s", ", ".join(known_clusters) or "(none)")
+            if self.cluster_name:
+                if self.cluster_name in known_clusters:
+                    logger.info('Cluster filter "%s" is valid', self.cluster_name)
+                else:
+                    logger.error(
+                        'Configured cluster_name "%s" not found in SLURM. Known clusters: %s',
+                        self.cluster_name,
+                        ", ".join(known_clusters),
+                    )
+                    return False
+            else:
+                logger.warning(
+                    "No cluster_name configured in backend_settings. "
+                    "sacctmgr commands will not be scoped to a specific cluster. "
+                    "Set cluster_name in backend_settings to match the offering backend_id."
+                )
+        except BackendError as err:
+            logger.error("Unable to list SLURM clusters: %s", err)
 
         tres = self.list_components()
         logger.info("Available tres in the cluster: %s", ",".join(tres))
@@ -448,19 +472,21 @@ class SlurmBackend(backends.BaseBackend):
             return
 
         try:
-            self.client.execute_command(
-                ["chown", f"{dir_owner}:{group_name}", project_path]
-            )
+            self.client.execute_command(["chown", f"{dir_owner}:{group_name}", project_path])
         except BackendError:
             logger.exception("Failed to chown project directory %s", project_path)
 
         if set_acl:
             try:
-                self.client.execute_command([
-                    "setfacl", "-R", "-m",
-                    f"group:{group_name}:rwx,d:group:{group_name}:rwx",
-                    project_path,
-                ])
+                self.client.execute_command(
+                    [
+                        "setfacl",
+                        "-R",
+                        "-m",
+                        f"group:{group_name}:rwx,d:group:{group_name}:rwx",
+                        project_path,
+                    ]
+                )
             except BackendError:
                 logger.exception("Failed to set ACL on project directory %s", project_path)
 
@@ -495,9 +521,17 @@ class SlurmBackend(backends.BaseBackend):
             self.client.execute_command(quota_cmd)
 
             # Set project ID on directory
-            self.client.execute_command([
-                "lfs", "project", "-p", str(gid), "-r", "-s", project_path,
-            ])
+            self.client.execute_command(
+                [
+                    "lfs",
+                    "project",
+                    "-p",
+                    str(gid),
+                    "-r",
+                    "-s",
+                    project_path,
+                ]
+            )
             logger.info("Set Lustre quota for GID %d on %s", gid, mount_point)
         except BackendError:
             logger.exception("Failed to set Lustre quota for GID %d", gid)
@@ -628,7 +662,10 @@ class SlurmBackend(backends.BaseBackend):
         return self._convert_usage_report(report)
 
     def get_usage_report_for_period(
-        self, resource_backend_ids: list[str], year: int, month: int,
+        self,
+        resource_backend_ids: list[str],
+        year: int,
+        month: int,
         waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
     ) -> dict[str, dict[str, dict[str, int]]]:
         """Generate usage report for a specific billing period.

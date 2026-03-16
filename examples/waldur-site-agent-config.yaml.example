@@ -17,7 +17,9 @@ offerings: # Settings for offerings
     backend_type: "slurm" # type of backend, for now only `slurm` is supported
     backend_settings: # backend-specific settings
       default_account: "root" # Default parent account name in SLURM cluster
-        # for new ones
+      # cluster_name: "mycluster" # SLURM cluster name for multi-cluster setups.
+        # Must match the offering backend_id in Waldur. When set, all sacctmgr
+        # commands are scoped to this cluster.
       customer_prefix: "hpc_" # Prefix for customer's accounts.
       project_prefix: "hpc_" # Prefix for project's accounts.
       allocation_prefix: "hpc_" # Prefix used for allocation's accounts.

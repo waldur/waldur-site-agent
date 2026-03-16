@@ -76,9 +76,14 @@ class ReportWriter:
         self._sections.append(text)
 
     def api_call(self, method: str, url: str, status_code: int, response_bytes: int = 0):
-        self._api_log.append({
-            "method": method, "url": url, "status": status_code, "bytes": response_bytes,
-        })
+        self._api_log.append(
+            {
+                "method": method,
+                "url": url,
+                "status": status_code,
+                "bytes": response_bytes,
+            }
+        )
         self.total_calls += 1
         self.total_response_bytes += response_bytes
 
@@ -123,8 +128,7 @@ class ReportWriter:
             size = _fmt_bytes(self._test_bytes.get(test_id, 0))
             self._sections.append(f"| {test_id} | {count} | {size} |")
         self._sections.append(
-            f"| **TOTAL** | **{self.total_calls}** "
-            f"| **{_fmt_bytes(self.total_response_bytes)}** |"
+            f"| **TOTAL** | **{self.total_calls}** | **{_fmt_bytes(self.total_response_bytes)}** |"
         )
         self._sections.append("")
 
@@ -208,9 +212,7 @@ def snapshot_order(report: ReportWriter, client, order_uuid: str, label: str):
 
 def snapshot_resource(report: ReportWriter, client, resource_uuid: str, label: str):
     """Fetch resource and write status snapshot to the report."""
-    res = marketplace_provider_resources_retrieve.sync(
-        uuid=resource_uuid, client=client
-    )
+    res = marketplace_provider_resources_retrieve.sync(uuid=resource_uuid, client=client)
     limits_str = (
         str(dict(res.limits.additional_properties))
         if not isinstance(res.limits, type(UNSET))
@@ -242,9 +244,7 @@ def get_offering_info(client, offering_uuid: str) -> tuple[str, str]:
     Returns:
         (offering_url, plan_url)
     """
-    resp = client.get_httpx_client().get(
-        f"/api/marketplace-public-offerings/{offering_uuid}/"
-    )
+    resp = client.get_httpx_client().get(f"/api/marketplace-public-offerings/{offering_uuid}/")
     resp.raise_for_status()
     data = resp.json()
     offering_url = data["url"]
@@ -411,7 +411,7 @@ def waldur_client(offering, report):
 
 @pytest.fixture(scope="module")
 def _emulator_cleanup(offering):
-    """Reset slurm-emulator state before the test module runs."""
+    """Reset slurm-emulator state and create configured cluster."""
     slurm_bin_path = offering.backend_settings.get("slurm_bin_path", ".venv/bin")
     sacctmgr = str(Path(slurm_bin_path) / "sacctmgr")
 
@@ -428,6 +428,19 @@ def _emulator_cleanup(offering):
         if state_file.exists():
             state_file.unlink()
             logger.info("Deleted emulator state file %s", state_file)
+
+    # Create the cluster if cluster_name is configured
+    cluster_name = offering.backend_settings.get("cluster_name")
+    if cluster_name:
+        try:
+            subprocess.check_output(
+                [sacctmgr, "--immediate", "add", "cluster", cluster_name],
+                stderr=subprocess.STDOUT,
+                timeout=10,
+            )
+            logger.info("Created emulator cluster '%s'", cluster_name)
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            logger.warning("Failed to create cluster '%s': %s", cluster_name, exc)
 
 
 @pytest.fixture(scope="module")

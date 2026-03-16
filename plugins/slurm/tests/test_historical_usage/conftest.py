@@ -9,7 +9,7 @@ import pytest
 try:
     from emulator.commands.sacct import SacctEmulator
     from emulator.commands.sacctmgr import SacctmgrEmulator
-    from emulator.core.database import Account, SlurmDatabase, UsageRecord, User
+    from emulator.core.database import Account, Association, SlurmDatabase, UsageRecord, User
     from emulator.core.time_engine import TimeEngine
 
     EMULATOR_AVAILABLE = True
@@ -216,6 +216,92 @@ def patched_slurm_client(sacct_emulator, sacctmgr_emulator):
             return sacctmgr_emulator.handle_command(args)
         if command_name == "sinfo":
             return "slurm-emulator 0.1.0"
+        return f"Unknown command: {command_name}"
+
+    with patch(
+        "waldur_site_agent_slurm.client.SlurmClient._execute_command",
+        side_effect=mock_execute_command,
+    ):
+        yield
+
+
+@pytest.fixture
+def clustered_slurm_database():
+    """Create a SLURM database with a named cluster for testing."""
+    database = SlurmDatabase()
+    database.add_cluster("testcluster")
+
+    # Add test account (global)
+    test_account = Account(
+        name="test_account_123",
+        description="Test Account for Historical Usage",
+        organization="test_org",
+        allocation=1000,
+    )
+    database.accounts["test_account_123"] = test_account
+
+    # Add test users
+    user1 = User(name="testuser1", default_account="test_account_123")
+    database.users["testuser1"] = user1
+
+    # Create associations on testcluster
+    key = database._association_key("testuser1", "test_account_123", "testcluster")
+    database.associations[key] = Association(
+        account="test_account_123", user="testuser1", cluster="testcluster"
+    )
+
+    return database
+
+
+@pytest.fixture
+def clustered_usage_data(clustered_slurm_database, time_engine):
+    """Setup usage data on a specific cluster."""
+    time_engine.set_time(datetime(2024, 1, 15))
+
+    # Usage on testcluster
+    clustered_slurm_database.usage_records.append(
+        UsageRecord(
+            account="test_account_123",
+            user="testuser1",
+            node_hours=100.0,
+            billing_units=100.0,
+            timestamp=datetime(2024, 1, 15),
+            period="2024-01",
+            raw_tres={"CPU": 6400, "Mem": 102400},
+            cluster="testcluster",
+        )
+    )
+    # Usage on default cluster (should be isolated)
+    clustered_slurm_database.usage_records.append(
+        UsageRecord(
+            account="test_account_123",
+            user="testuser1",
+            node_hours=999.0,
+            billing_units=999.0,
+            timestamp=datetime(2024, 1, 15),
+            period="2024-01",
+            raw_tres={"CPU": 99999, "Mem": 99999},
+            cluster="default",
+        )
+    )
+    return clustered_slurm_database
+
+
+@pytest.fixture
+def patched_slurm_client_with_cluster(clustered_usage_data, time_engine):
+    """Patch SlurmClient to use emulator with cluster filtering via --cluster=."""
+    sacct = SacctEmulator(clustered_usage_data, time_engine)
+    sacctmgr = SacctmgrEmulator(clustered_usage_data, time_engine)
+
+    def mock_execute_command(
+        args, command_name="sacctmgr", immediate=True, parsable=True, silent=False
+    ):
+        if command_name == "sacct":
+            return sacct.handle_command(args)
+        if command_name == "sacctmgr":
+            return sacctmgr.handle_command(args)
+        if command_name == "sinfo":
+            return "slurm-emulator 0.2.0"
         return f"Unknown command: {command_name}"
 
     with patch(
