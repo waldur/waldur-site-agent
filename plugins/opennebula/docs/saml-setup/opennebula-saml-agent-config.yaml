@@ -1,0 +1,56 @@
+# Site agent configuration for OpenNebula VDC with Keycloak SAML
+# This config matches the offering created in Waldur Homeport
+
+offerings:
+  - name: "OpenNebula VDC"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "your-waldur-api-token"
+    waldur_offering_uuid: "your-offering-uuid-from-step-4"
+
+    # Processing backends
+    order_processing_backend: "opennebula"
+    membership_sync_backend: "opennebula"
+    reporting_backend: "opennebula"
+
+    backend_type: "opennebula"
+
+    backend_settings:
+      api_url: "http://opennebula-frontend:2633/RPC2"
+      credentials: "oneadmin:your-opennebula-password"
+      zone_id: 0
+      cluster_ids: [0, 100]
+      resource_type: "vdc"
+
+      # Keycloak SAML integration
+      keycloak_enabled: true
+      keycloak:
+        keycloak_url: "https://keycloak.example.com/keycloak/"
+        keycloak_realm: "opennebula"
+        keycloak_user_realm: "master"
+        client_id: "admin-cli"
+        keycloak_username: "keycloak-admin"
+        keycloak_password: "your-keycloak-admin-password"
+        keycloak_ssl_verify: true
+
+      saml_mapping_file: "/var/lib/one/keycloak_groups.yaml"
+      default_user_role: "user"
+
+    backend_components:
+      cpu:
+        limit: 100
+        measured_unit: "cores"
+        unit_factor: 1
+        accounting_type: "limit"
+        label: "CPU"
+      ram:
+        limit: 102400
+        measured_unit: "MB"
+        unit_factor: 1
+        accounting_type: "limit"
+        label: "RAM"
+      storage:
+        limit: 1048576
+        measured_unit: "MB"
+        unit_factor: 1
+        accounting_type: "limit"
+        label: "Storage"

@@ -6,7 +6,9 @@ authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
     "waldur-site-agent>=0.9.9",
+    "waldur-site-agent-keycloak-client>=0.9.9",
     "pyone>=6.8.0",
+    "pyyaml>=6.0",
 ]
 
 [build-system]
@@ -15,6 +17,7 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 waldur-site-agent = { workspace = true }
+waldur-site-agent-keycloak-client = { workspace = true }
 
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]

@@ -70,7 +70,9 @@ so manual tagging still works.
 - **Workspace sources**: Each plugin uses `[tool.uv.sources]`
   to map internal deps to the workspace during development.
 - **Python compatibility**: 3.9 through 3.13. CI runs tests
-  and linters across all five versions.
+  and linters across all five versions. Do **not** use
+  `X | Y` union syntax or other 3.10+ features — use
+  `Optional[X]` and `Union[X, Y]` from `typing` instead.
 - **Structured logging**: JSON format via structlog to stdout.
 - **Test config**: Tests expect
   `waldur-site-agent-config.yaml` in the repo root, copied

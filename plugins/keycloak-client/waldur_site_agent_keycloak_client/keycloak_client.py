@@ -32,6 +32,7 @@ class KeycloakClient:
                 username=self.username,
                 password=self.password,
                 realm_name=self.realm_name,
+                user_realm_name=self.user_realm,
                 client_id=self.client_id,
                 verify=self.verify_cert,
             )

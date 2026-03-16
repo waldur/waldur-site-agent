@@ -1,0 +1,91 @@
+# OpenNebula Plugin Configuration with Keycloak SAML Integration
+# This configuration enables VDC management with Keycloak group-based
+# SAML authentication for OpenNebula Sunstone/FireEdge.
+
+
+# Waldur API configuration
+waldur:
+  api_url: "https://waldur.example.com/api/"
+  token: "your-waldur-api-token-here"
+
+offerings:
+  - name: "opennebula-vdc"
+    uuid: "12345678-1234-5678-9abc-123456789012"
+
+    # Backend type - must be 'opennebula'
+    backend_type: "opennebula"
+
+    # Backend configuration
+    backend:
+      api_url: "http://opennebula-frontend:2633/RPC2"
+      credentials: "oneadmin:your-opennebula-password"
+      zone_id: 0
+      cluster_ids: [0, 100]
+      resource_type: "vdc"
+
+      # Keycloak SAML integration
+      keycloak_enabled: true
+      keycloak:
+        keycloak_url: "https://keycloak.example.com/keycloak/"
+        keycloak_realm: "opennebula"
+        keycloak_user_realm: "master"
+        client_id: "admin-cli"
+        keycloak_username: "admin"
+        keycloak_password: "admin"
+        keycloak_ssl_verify: true
+
+      # Path to the SAML group mapping file on the OpenNebula frontend host.
+      # This file maps Keycloak group paths to OpenNebula group IDs and is
+      # read by the OpenNebula SAML auth driver.
+      saml_mapping_file: "/var/lib/one/keycloak_groups.yaml"
+
+      # Default role assigned when adding users without an explicit role.
+      default_user_role: "user"
+
+      # VDC role definitions. Each role creates:
+      #   - A Keycloak child group under vdc_{slug}/{name}
+      #   - An OpenNebula group {slug}-{one_group_suffix}
+      #   - SAML_GROUP + FIREEDGE template attributes on the ONE group
+      #
+      # Uncomment to override the built-in defaults:
+      # vdc_roles:
+      #   - name: "admin"
+      #     one_group_suffix: "admins"
+      #     default_view: "groupadmin"
+      #     views: "groupadmin,user,cloud"
+      #     group_admin: true
+      #   - name: "user"
+      #     one_group_suffix: "users"
+      #     default_view: "user"
+      #     views: "user"
+      #   - name: "cloud"
+      #     one_group_suffix: "cloud"
+      #     default_view: "cloud"
+      #     views: "cloud"
+
+      # Networking configuration (optional, same as non-SAML setup)
+      # external_network_id: 45
+      # virtual_router_template_id: 1
+
+    # Component definitions for VDC quota management
+    components:
+      cpu:
+        type: "cpu"
+        name: "CPU Cores"
+        measured_unit: "cores"
+        billing_type: "limit"
+        unit_factor: 1
+
+      ram:
+        type: "ram"
+        name: "RAM"
+        measured_unit: "MB"
+        billing_type: "limit"
+        unit_factor: 1
+
+      storage:
+        type: "storage"
+        name: "Storage"
+        measured_unit: "MB"
+        billing_type: "limit"
+        unit_factor: 1
