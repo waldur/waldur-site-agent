@@ -222,6 +222,36 @@ class OpenNebulaClient(BaseClient):
         except pyone.OneException as e:
             raise BackendError(f"Failed to get group info {group_id}: {e}") from e
 
+    def _update_group_template(self, group_id: int, template_str: str) -> None:
+        """Update a group's template (merge mode).
+
+        Uses update type 1 (merge) so existing template attributes are preserved.
+
+        Args:
+            group_id: Numeric group ID.
+            template_str: Template string to merge (e.g. SAML_GROUP, FIREEDGE attrs).
+        """
+        try:
+            self.one.group.update(group_id, template_str, 1)
+        except pyone.OneException as e:
+            raise BackendError(
+                f"Failed to update template for group {group_id}: {e}"
+            ) from e
+
+    def _add_admin_to_group(self, group_id: int, user_id: int) -> None:
+        """Add a user as admin of a group.
+
+        Args:
+            group_id: Numeric group ID.
+            user_id: Numeric user ID to grant admin role.
+        """
+        try:
+            self.one.group.addadmin(group_id, user_id)
+        except pyone.OneException as e:
+            raise BackendError(
+                f"Failed to add admin {user_id} to group {group_id}: {e}"
+            ) from e
+
     # ── Quota helpers ────────────────────────────────────────────────
 
     @staticmethod
