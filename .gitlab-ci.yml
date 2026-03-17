@@ -827,6 +827,16 @@ Publish new chart version and update docs on github:
 
 Publish multiarch waldur-site-agent docker image latest:
   extends: .Publish multiarch latest docker image template
+  script:
+    - docker context create builder
+    - docker buildx create builder --use
+    - docker buildx imagetools create --tag opennode/${CI_PROJECT_NAME}:latest opennode/${CI_PROJECT_NAME}:yolo
 
 Publish multiarch waldur-site-agent docker image with version:
   extends: .Publish multiarch docker image with specific version template
+
+Publish multiarch waldur-site-agent docker image (YOLO):
+  extends: .Publish multiarch latest docker image template
+  stage: .pre
+  variables:
+    IMAGE_TAG: "opennode/${CI_PROJECT_NAME}:yolo"
