@@ -837,6 +837,6 @@ Publish multiarch waldur-site-agent docker image with version:
 
 Publish multiarch waldur-site-agent docker image (YOLO):
   extends: .Publish multiarch latest docker image template
-  stage: .pre
+  stage: test
   variables:
     IMAGE_TAG: "opennode/${CI_PROJECT_NAME}:yolo"
