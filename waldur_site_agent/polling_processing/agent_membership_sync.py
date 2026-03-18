@@ -1,6 +1,6 @@
 """Agent responsible for membership control."""
 
-from time import sleep
+import time
 
 from waldur_api_client.models import AgentIdentity
 
@@ -14,66 +14,84 @@ from waldur_site_agent.common import structures as common_structures
 from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.common.healthz import touch_heartbeat
 
+SYNC_INTERVAL = WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES * 60
+TICK_INTERVAL = 60  # Wake up every minute to touch heartbeat
 
-def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
-    """Starts the main loop for offering processing."""
+
+def _process_offerings(
+    configuration: common_structures.WaldurAgentConfiguration,
+    agent_identities: dict[str, AgentIdentity],
+) -> None:
+    """Run a single membership sync cycle for all offerings."""
     waldur_offerings = configuration.waldur_offerings
     user_agent = configuration.waldur_user_agent
-    # Local cache for agent identities per offering
+
+    logger.info("Number of offerings to process: %s", len(waldur_offerings))
+    for offering in waldur_offerings:
+        try:
+            if offering.stomp_enabled:
+                logger.info(
+                    "Skipping HTTP polling for the offering %s, "
+                    "because it uses event-based processing",
+                    offering.name,
+                )
+                continue
+
+            waldur_rest_client = common_utils.get_client(
+                offering.api_url,
+                offering.api_token,
+                user_agent,
+                offering.verify_ssl,
+                configuration.global_proxy,
+            )
+
+            agent_identity_manager = agent_identity_management.AgentIdentityManager(
+                offering, waldur_rest_client
+            )
+
+            identity_name = f"agent-{offering.uuid}"
+
+            # Get an identity from the local cache
+            agent_identity = agent_identities.get(offering.uuid)
+            if agent_identity is None:
+                # If no identities found locally, registering one
+                agent_identity = agent_identity_manager.register_identity(identity_name)
+
+            agent_service = agent_identity_manager.register_service(
+                agent_identity,
+                configuration.waldur_site_agent_mode,
+                configuration.waldur_site_agent_mode,
+            )
+
+            # Create backend instance for dependency injection
+            resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
+                offering, "membership_sync_backend"
+            )
+
+            processor = common_processors.OfferingMembershipProcessor(
+                offering,
+                waldur_rest_client,
+                resource_backend=resource_backend,
+                resource_backend_version=resource_backend_version,
+            )
+            processor.register(agent_service)
+
+            processor.process_offering()
+        except Exception as e:
+            logger.exception("Unable to process the offering due to the error: %s", e)
+
+
+def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
+    """Starts the tick-based main loop for offering processing."""
+    last_sync = 0.0
     agent_identities: dict[str, AgentIdentity] = {}
+
     while True:
-        logger.info("Number of offerings to process: %s", len(waldur_offerings))
-        for offering in waldur_offerings:
-            try:
-                if offering.stomp_enabled:
-                    logger.info(
-                        "Skipping HTTP polling for the offering %s, "
-                        "because it uses event-based processing",
-                        offering.name,
-                    )
-                    continue
+        now = time.time()
 
-                waldur_rest_client = common_utils.get_client(
-                    offering.api_url,
-                    offering.api_token,
-                    user_agent,
-                    offering.verify_ssl,
-                    configuration.global_proxy,
-                )
+        if now - last_sync >= SYNC_INTERVAL:
+            _process_offerings(configuration, agent_identities)
+            last_sync = time.time()
 
-                agent_identity_manager = agent_identity_management.AgentIdentityManager(
-                    offering, waldur_rest_client
-                )
-
-                identity_name = f"agent-{offering.uuid}"
-
-                # Get an identity from the local cache
-                agent_identity = agent_identities.get(offering.uuid)
-                if agent_identity is None:
-                    # If no identities found locally, registering one
-                    agent_identity = agent_identity_manager.register_identity(identity_name)
-
-                agent_service = agent_identity_manager.register_service(
-                    agent_identity,
-                    configuration.waldur_site_agent_mode,
-                    configuration.waldur_site_agent_mode,
-                )
-
-                # Create backend instance for dependency injection
-                resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
-                    offering, "membership_sync_backend"
-                )
-
-                processor = common_processors.OfferingMembershipProcessor(
-                    offering,
-                    waldur_rest_client,
-                    resource_backend=resource_backend,
-                    resource_backend_version=resource_backend_version,
-                )
-                processor.register(agent_service)
-
-                processor.process_offering()
-            except Exception as e:
-                logger.exception("Unable to process the offering due to the error: %s", e)
         touch_heartbeat()
-        sleep(WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES * 60)
+        time.sleep(TICK_INTERVAL)
