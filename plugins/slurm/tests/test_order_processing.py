@@ -864,7 +864,7 @@ class DuplicateResourceCreationTest(unittest.TestCase):
     def test_duplicate_resource_all_retries_exhausted_with_project_slug_policy(
         self, slurm_client_class: mock.Mock
     ) -> None:
-        """With project_slug policy, all 10 retries fail with DuplicateResourceError.
+        """With project_slug policy, all retries fail with DuplicateResourceError.
 
         Every generated allocation ID already exists in the backend.
         """
@@ -908,7 +908,7 @@ class DuplicateResourceCreationTest(unittest.TestCase):
         self, slurm_client_class: mock.Mock
     ) -> None:
         """With check_backend_id_uniqueness enabled and resource_name policy,
-        max_retries=10. DuplicateResourceError on first attempt, success on retry.
+        max_retries=50 (default). DuplicateResourceError on first attempt, success on retry.
         """
         offering_with_uniqueness = OFFERING.model_copy(
             update={

@@ -442,11 +442,14 @@ class OfferingBaseProcessor(abc.ABC):
             waldur_resource.project_slug if use_project_slug else waldur_resource.slug
         )
 
-        # Use 10 retries if uniqueness checking is enabled or project_slug naming is used
+        # Use configurable retries if uniqueness checking is enabled or project_slug naming is used
         uniqueness_check_enabled = self.offering.backend_settings.get(
             "check_backend_id_uniqueness", False
         )
-        max_retries = 10 if (use_project_slug or uniqueness_check_enabled) else 1
+        configured_retries = self.offering.backend_settings.get(
+            "backend_id_max_retries", 50
+        )
+        max_retries = configured_retries if (use_project_slug or uniqueness_check_enabled) else 1
 
         # Try creating resource with generated IDs
         for retry in range(max_retries):

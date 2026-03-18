@@ -36,6 +36,7 @@ offerings:
       # Backend ID uniqueness checking (optional, defaults to False)
       check_backend_id_uniqueness: false # Set to true to check if backend_id is unique in offering history
       check_all_offerings: false # Set to true to check uniqueness across all customer offerings (defaults to False)
+      backend_id_max_retries: 50 # Max retries when uniqueness checking or project_slug naming is used (default: 50)
 
       # User creation defaults - customize these for your institution/country
       # These settings are used when creating user requests in MUP for team members

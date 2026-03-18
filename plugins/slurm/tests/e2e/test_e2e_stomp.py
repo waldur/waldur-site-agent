@@ -22,6 +22,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,9 +60,39 @@ from .conftest import (
     create_source_order,
     get_offering_info,
     get_project_url,
-    run_processor_until_order_terminal,
     snapshot_resource,
 )
+
+
+def wait_for_order_terminal(
+    waldur_client,
+    order_uuid: str,
+    max_polls: int = 30,
+    poll_delay: float = 2,
+) -> OrderState:
+    """Poll the order state until it reaches a terminal state (DONE or ERRED).
+
+    Unlike run_processor_until_order_terminal, this does NOT run the polling
+    processor — it only checks the order state. Use this when a STOMP handler
+    is already processing orders in the background to avoid race conditions.
+    """
+    for poll in range(max_polls):
+        order = marketplace_orders_retrieve.sync(client=waldur_client, uuid=order_uuid)
+        state = order.state if not isinstance(order.state, type(UNSET)) else None
+        logger.info("Order %s state: %s (poll %d/%d)", order_uuid, state, poll + 1, max_polls)
+
+        if state == OrderState.DONE:
+            return OrderState.DONE
+        if state == OrderState.ERRED:
+            error_msg = getattr(order, "error_message", "unknown")
+            logger.warning("Order %s ERRED: %s", order_uuid, error_msg)
+            return OrderState.ERRED
+
+        time.sleep(poll_delay)
+
+    raise TimeoutError(
+        f"Order {order_uuid} not terminal after {max_polls} polls ({max_polls * poll_delay}s)"
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +329,7 @@ def stomp_consumers(request, stomp_offering, order_capture):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("stomp_consumers")
+@pytest.mark.usefixtures("stomp_consumers", "_stomp_emulator_cleanup")
 class TestStompEventProcessing:
     """STOMP event delivery and processing tests.
 
@@ -399,7 +430,6 @@ class TestStompEventProcessing:
         self,
         stomp_offering,
         stomp_waldur_client,
-        stomp_slurm_backend,
         stomp_report,
     ):
         """Verify full order processing works with STOMP active."""
@@ -409,15 +439,14 @@ class TestStompEventProcessing:
         if not order_uuid:
             pytest.skip("No order from test_02")
 
-        # Run processor to handle the order
-        final_state = run_processor_until_order_terminal(
-            stomp_offering,
+        # Wait for the STOMP handler (running in background thread) to process
+        # the order. Do NOT run the polling processor here — that would race
+        # with the STOMP handler and cause duplicate approve_by_provider calls.
+        final_state = wait_for_order_terminal(
             stomp_waldur_client,
-            stomp_slurm_backend,
             order_uuid,
-            max_cycles=10,
-            cycle_delay=2,
-            report=stomp_report,
+            max_polls=30,
+            poll_delay=2,
         )
 
         stomp_report.text(f"\n**Final order state:** `{final_state}`\n")
@@ -442,7 +471,6 @@ class TestStompEventProcessing:
         self,
         stomp_offering,
         stomp_waldur_client,
-        stomp_slurm_backend,
         stomp_report,
     ):
         """Terminate test resources created by STOMP tests."""
@@ -479,14 +507,11 @@ class TestStompEventProcessing:
             terminate_uuid = order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
             stomp_report.text(f"**Terminate order:** `{terminate_uuid}`\n")
 
-            final_state = run_processor_until_order_terminal(
-                stomp_offering,
+            final_state = wait_for_order_terminal(
                 stomp_waldur_client,
-                stomp_slurm_backend,
                 terminate_uuid,
-                max_cycles=10,
-                cycle_delay=2,
-                report=stomp_report,
+                max_polls=30,
+                poll_delay=2,
             )
             stomp_report.text(f"**Terminate final state:** `{final_state}`\n")
         except Exception as exc:
