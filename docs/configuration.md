@@ -129,6 +129,34 @@ username_management_backend: "base"  # Backend for username management
 - **Default**: `false`
 - **Description**: Whether to expose importable resources to Waldur
 
+## Common Backend Settings
+
+These settings can be used in `backend_settings` for any backend type.
+
+### `check_backend_id_uniqueness`
+
+- **Type**: Boolean
+- **Default**: `false`
+- **Description**: Enable checking that the generated backend ID is unique
+  across offering history before creating a resource. When enabled, the agent
+  queries Waldur to verify uniqueness and retries with a new ID on collision.
+
+### `check_all_offerings`
+
+- **Type**: Boolean
+- **Default**: `false`
+- **Description**: When `check_backend_id_uniqueness` is enabled, check
+  uniqueness across all customer offerings instead of only the current offering.
+
+### `backend_id_max_retries`
+
+- **Type**: Integer
+- **Default**: `50`
+- **Description**: Maximum number of retry attempts when generating a unique
+  backend ID. Applies when `check_backend_id_uniqueness` is enabled or the
+  `project_slug` account name generation policy is used. Set to a lower value
+  if collisions are rare or a higher value for large deployments.
+
 ## Backend-Specific Settings
 
 ### SLURM Backend Settings
