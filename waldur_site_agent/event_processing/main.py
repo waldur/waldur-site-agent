@@ -47,13 +47,20 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
 
 
 def _run_health_checks_only(configuration: common_structures.WaldurAgentConfiguration) -> None:
-    """Original main loop: health checks every 30 minutes."""
+    """Tick-based main loop: health checks every 30 minutes."""
+    last_health_check = 0.0
+
     while True:
+        now = time.time()
+
+        if now - last_health_check >= HEALTH_CHECK_INTERVAL:
+            utils.send_agent_health_checks(
+                configuration.waldur_offerings, configuration.waldur_user_agent
+            )
+            last_health_check = now
+
         touch_heartbeat()
-        utils.send_agent_health_checks(
-            configuration.waldur_offerings, configuration.waldur_user_agent
-        )
-        time.sleep(HEALTH_CHECK_INTERVAL)
+        time.sleep(TICK_INTERVAL)
 
 
 def _run_with_reconciliation(configuration: common_structures.WaldurAgentConfiguration) -> None:
