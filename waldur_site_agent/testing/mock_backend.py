@@ -165,9 +165,10 @@ class MockBackend(BaseBackend):
         return user_ids  # Mock backend adds all users successfully
 
     def remove_users_from_resource(
-        self, waldur_resource: WaldurResource, usernames: set[str]
+        self, waldur_resource: WaldurResource, usernames: set[str], **kwargs: dict
     ) -> list[str]:
         """Remove multiple users from a mock resource."""
+        del kwargs
         backend_id = waldur_resource.backend_id
         self._log_operation(
             "remove_users_from_resource", backend_id=backend_id, usernames=list(usernames)

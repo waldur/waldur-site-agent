@@ -390,6 +390,19 @@ When `False` (default), the reporting processor skips updates where the new
 usage value is lower than the previously reported value, treating it as a
 data anomaly.
 
+## `handled_resource_states` class attribute
+
+Controls which resource states the membership processor fetches and processes.
+Defaults to `[ResourceState.OK, ResourceState.ERRED]`. Override this when your
+backend needs to manage users on resources that are still being provisioned.
+
+```python
+from waldur_api_client.models.resource_state import ResourceState
+
+class MyAsyncBackend(BaseBackend):
+    handled_resource_states = [ResourceState.OK, ResourceState.ERRED, ResourceState.CREATING]
+```
+
 ## Decision matrix for no-op implementations
 
 If your backend does not support a certain operation, use these return values:

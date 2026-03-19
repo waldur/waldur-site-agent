@@ -19,6 +19,7 @@ import abc
 import datetime
 import time as _time
 import traceback
+from enum import Enum
 from time import sleep
 from typing import Any, ClassVar, Optional
 from zoneinfo import ZoneInfo
@@ -147,11 +148,20 @@ from waldur_site_agent.common import agent_identity_management, structures, util
 from waldur_site_agent.common.structures import AccountType
 
 # Module-level cache for offering user attribute configs.
-# Keyed by offering UUID, stores (fields_list, timestamp).
+# Keyed by offering UUID, stores (fields_list, exposed_names, timestamp).
 # TTL of 300s avoids redundant API calls when event handlers
 # create a new processor per STOMP message.
-_ATTRIBUTE_CONFIG_CACHE: dict[str, tuple[list[OfferingUserFieldEnum], float]] = {}
+_ATTRIBUTE_CONFIG_CACHE: dict[str, tuple[list[OfferingUserFieldEnum], list[str], float]] = {}
 _ATTRIBUTE_CONFIG_TTL = 300  # seconds
+
+
+def _serialize_attr_value(val: object) -> object:
+    """Convert OfferingUser attribute values to JSON-serializable types."""
+    if isinstance(val, datetime.date):
+        return val.isoformat()
+    if isinstance(val, Enum):
+        return val.value
+    return val
 
 
 class UsageAnomalyError(Exception):
@@ -281,6 +291,20 @@ class OfferingBaseProcessor(abc.ABC):
         "organization": [OfferingUserFieldEnum.USER_ORGANIZATION],
         "job_title": [OfferingUserFieldEnum.USER_JOB_TITLE],
         "affiliations": [OfferingUserFieldEnum.USER_AFFILIATIONS],
+        "gender": [OfferingUserFieldEnum.USER_GENDER],
+        "personal_title": [OfferingUserFieldEnum.USER_PERSONAL_TITLE],
+        "place_of_birth": [OfferingUserFieldEnum.USER_PLACE_OF_BIRTH],
+        "country_of_residence": [OfferingUserFieldEnum.USER_COUNTRY_OF_RESIDENCE],
+        "nationality": [OfferingUserFieldEnum.USER_NATIONALITY],
+        "nationalities": [OfferingUserFieldEnum.USER_NATIONALITIES],
+        "organization_country": [OfferingUserFieldEnum.USER_ORGANIZATION_COUNTRY],
+        "organization_type": [OfferingUserFieldEnum.USER_ORGANIZATION_TYPE],
+        "organization_registry_code": [OfferingUserFieldEnum.USER_ORGANIZATION_REGISTRY_CODE],
+        "eduperson_assurance": [OfferingUserFieldEnum.USER_EDUPERSON_ASSURANCE],
+        "civil_number": [OfferingUserFieldEnum.USER_CIVIL_NUMBER],
+        "birth_date": [OfferingUserFieldEnum.USER_BIRTH_DATE],
+        "identity_source": [OfferingUserFieldEnum.USER_IDENTITY_SOURCE],
+        "active_isds": [OfferingUserFieldEnum.USER_ACTIVE_ISDS],
     }
 
     # Core fields always requested regardless of attribute config
@@ -291,6 +315,9 @@ class OfferingBaseProcessor(abc.ABC):
         OfferingUserFieldEnum.STATE,
         OfferingUserFieldEnum.UUID,
     ]
+
+    # Default exposed fields used when the attribute config API is unavailable.
+    _DEFAULT_EXPOSED_FIELDS: ClassVar[list[str]] = ["username", "full_name", "email"]
 
     def _build_offering_user_fields(self) -> list[OfferingUserFieldEnum]:
         """Build the field list for offering user API calls.
@@ -304,11 +331,12 @@ class OfferingBaseProcessor(abc.ABC):
 
         cached = _ATTRIBUTE_CONFIG_CACHE.get(offering_uuid)
         if cached is not None:
-            fields, ts = cached
+            fields, _exposed, ts = cached
             if now - ts < _ATTRIBUTE_CONFIG_TTL:
                 return fields
 
         fields = list(self._CORE_FIELDS)
+        exposed_names: list[str] = []
 
         try:
             attr_config = (
@@ -317,14 +345,14 @@ class OfferingBaseProcessor(abc.ABC):
                     client=self.waldur_rest_client,
                 )
             )
-            exposed = attr_config.exposed_fields
+            exposed_names = attr_config.exposed_fields
             logger.info(
                 "Offering %s exposes user attributes: %s",
                 self.offering.name,
-                exposed,
+                exposed_names,
             )
 
-            for attr_name in exposed:
+            for attr_name in exposed_names:
                 api_fields = self._ATTRIBUTE_TO_FIELDS.get(attr_name)
                 if api_fields:
                     fields.extend(api_fields)
@@ -335,15 +363,29 @@ class OfferingBaseProcessor(abc.ABC):
                 "requesting default fields",
                 self.offering.name,
             )
-            fields.extend([
-                OfferingUserFieldEnum.USER_USERNAME,
-                OfferingUserFieldEnum.USER_EMAIL,
-                OfferingUserFieldEnum.USER_FIRST_NAME,
-                OfferingUserFieldEnum.USER_LAST_NAME,
-            ])
+            exposed_names = list(self._DEFAULT_EXPOSED_FIELDS)
+            for attr_name in exposed_names:
+                api_fields = self._ATTRIBUTE_TO_FIELDS.get(attr_name)
+                if api_fields:
+                    fields.extend(api_fields)
 
-        _ATTRIBUTE_CONFIG_CACHE[offering_uuid] = (fields, now)
+        _ATTRIBUTE_CONFIG_CACHE[offering_uuid] = (fields, exposed_names, now)
         return fields
+
+    def _get_exposed_fields(self) -> list[str]:
+        """Return the list of exposed field names from the attribute config.
+
+        Must be called after _build_offering_user_fields (or _get_cached_offering_users)
+        so that the cache is populated.
+        """
+        offering_uuid = self.offering.uuid
+        cached = _ATTRIBUTE_CONFIG_CACHE.get(offering_uuid)
+        if cached is not None:
+            return cached[1]
+        # Fallback: trigger a cache build and return exposed fields
+        self._build_offering_user_fields()
+        cached = _ATTRIBUTE_CONFIG_CACHE.get(offering_uuid)
+        return cached[1] if cached else list(self._DEFAULT_EXPOSED_FIELDS)
 
     def _get_cached_offering_users(self) -> list[OfferingUser]:
         """Return cached offering users, fetching from API on first call.
@@ -1327,14 +1369,11 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             project_uuid: If provided, only return resources from this project
 
         Returns:
-            List of resources that have backend IDs and are in OK or ERRED state
+            List of resources that have backend IDs and are in a non-terminated state
         """
         filters: dict[str, Any] = {
             "offering_uuid": [self.offering.uuid],
-            "state": [
-                ResourceState.OK,
-                ResourceState.ERRED,
-            ],
+            "state": self.resource_backend.handled_resource_states,
             "field": [
                 ResourceFieldEnum.UUID,
                 ResourceFieldEnum.BACKEND_ID,
@@ -1391,10 +1430,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         waldur_resource = marketplace_provider_resources_retrieve.sync(
             uuid=resource_uuid, client=self.waldur_rest_client
         )
-        if waldur_resource.state not in [
-            ResourceState.OK,
-            ResourceState.ERRED,
-        ]:
+        if waldur_resource.state not in self.resource_backend.handled_resource_states:
             logger.info(
                 "Resource %s (%s) is in state %s, skipping processing",
                 waldur_resource.name,
@@ -1485,11 +1521,17 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             # Refresh offering users after username generation
             offering_users = self._get_user_offering_users(user_uuid, self.offering.uuid)
 
-        username = offering_users[0].username
+        offering_user = offering_users[0]
+        username = offering_user.username
         logger.info("Using offering user with username %s", username)
         if not username:
             logger.warning("Username is blank, skipping processing")
             return
+
+        # Extract CUID (user_username) for identity resolution on remote backends
+        user_cuid = offering_user.user_username
+        if isinstance(user_cuid, type(UNSET)) or not user_cuid:
+            user_cuid = None
 
         resources: list[WaldurResource] = self._get_waldur_resources(project_uuid=project_uuid)
         resource_report = self.resource_backend.pull_resources(resources)
@@ -1501,11 +1543,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                         logger.info("The resource is restricted, skipping new role.")
                         continue
                     self.resource_backend.add_user(
-                        waldur_resource, username, role_name=role_name
+                        waldur_resource, username,
+                        role_name=role_name, user_cuid=user_cuid,
                     )
                 else:
                     self.resource_backend.remove_user(
-                        waldur_resource, username, role_name=role_name
+                        waldur_resource, username,
+                        role_name=role_name, user_cuid=user_cuid,
                     )
             except Exception as exc:
                 logger.error(
@@ -1641,7 +1685,26 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         waldur_resource: WaldurResource,
         backend_resource_info: BackendResourceInfo,
         offering_users: list[OfferingUser],
-    ) -> tuple[set[str], set[str], set[str], dict[str, str], dict[str, str]]:
+    ) -> tuple[
+        set[str], set[str], set[str],
+        dict[str, str], dict[str, str],
+        dict[str, str], dict[str, dict],
+    ]:
+        """Group resource usernames into existing, stale, and new sets.
+
+        Compares the backend's current user list against the Waldur team
+        to determine which users need to be added or removed.
+
+        Returns:
+            A 7-tuple of:
+            - existing_usernames: users present in both Waldur and backend
+            - stale_usernames: users in Waldur team but not in resource permissions
+            - new_usernames: users in resource permissions but not on backend
+            - user_roles: mapping of username to role name
+            - user_emails: mapping of username to email address
+            - user_cuids: mapping of offering username to CUID (user_username)
+            - user_attributes: mapping of offering username to profile attributes
+        """
         logger.info("Fetching new, existing and stale resource users")
         usernames: list[str] = backend_resource_info.users
         local_usernames = set(usernames)
@@ -1701,7 +1764,50 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             "Resource stale usernames (%s): %s", len(stale_usernames), ", ".join(stale_usernames)
         )
 
-        return existing_usernames, stale_usernames, new_usernames, user_roles, user_emails
+        # Build user_cuids mapping (offering_username -> user_username/CUID)
+        # for backends that need the CUID for identity resolution
+        user_cuids = {
+            user.offering_user_username: user.username
+            for user in team
+            if user.offering_user_username and user.username
+        }
+
+        # Build user_attributes mapping (offering_username -> attribute dict)
+        # for backends that enrich identity bridge calls with user profile data.
+        # Attributes are driven by OfferingUserAttributeConfig exposed fields.
+        offering_user_by_username = {
+            ou.username: ou
+            for ou in offering_users
+            if ou.username
+        }
+        exposed_fields = self._get_exposed_fields()
+        user_attributes: dict[str, dict] = {}
+        for ou_username, ou in offering_user_by_username.items():
+            attrs: dict = {}
+            for field_name in exposed_fields:
+                if field_name == "username":
+                    continue  # handled separately via user_cuids
+                # "full_name" exposes first_name and last_name as well
+                if field_name == "full_name":
+                    ou_attr_names = ["full_name", "first_name", "last_name"]
+                else:
+                    ou_attr_names = [field_name]
+                for attr_name in ou_attr_names:
+                    val = getattr(ou, f"user_{attr_name}", None)
+                    if val is not None and not isinstance(val, type(UNSET)):
+                        attrs[attr_name] = _serialize_attr_value(val)
+            if attrs:
+                user_attributes[ou_username] = attrs
+
+        return (
+            existing_usernames,
+            stale_usernames,
+            new_usernames,
+            user_roles,
+            user_emails,
+            user_cuids,
+            user_attributes,
+        )
 
     def _sync_resource_users(
         self,
@@ -1715,10 +1821,16 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         """
         logger.info("Syncing user list for resource %s", waldur_resource.name)
 
-        existing_usernames, stale_usernames, new_usernames, user_roles, user_emails = (
-            self._group_resource_usernames(
-                waldur_resource, backend_resource_info, offering_users
-            )
+        (
+            existing_usernames,
+            stale_usernames,
+            new_usernames,
+            user_roles,
+            user_emails,
+            user_cuids,
+            user_attributes,
+        ) = self._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users
         )
 
         if waldur_resource.restrict_member_access:
@@ -1728,7 +1840,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 "Resource is restricted for members, removing all the existing associations"
             )
 
-            self.resource_backend.remove_users_from_resource(waldur_resource, existing_usernames)
+            self.resource_backend.remove_users_from_resource(
+                waldur_resource, existing_usernames, user_cuids=user_cuids,
+            )
             return set()
 
         added_usernames = self.resource_backend.add_users_to_resource(
@@ -1737,11 +1851,14 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
             user_roles=user_roles,
             user_emails=user_emails,
+            user_cuids=user_cuids,
+            user_attributes=user_attributes,
         )
 
         self.resource_backend.remove_users_from_resource(
             waldur_resource,
             stale_usernames,
+            user_cuids=user_cuids,
         )
 
         self.resource_backend.process_existing_users(existing_usernames)

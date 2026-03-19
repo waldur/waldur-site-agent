@@ -281,6 +281,39 @@ updates. To address this, the main event loop includes a periodic reconciliation
 WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES=60
 ```
 
+## User Attribute Forwarding
+
+During membership synchronization, the processor can forward user profile
+attributes to backends that need them (e.g., the Waldur federation backend
+sends attributes to the Identity Bridge API when resolving remote users).
+
+### Attribute resolution flow
+
+Which attributes are forwarded is driven by the offering's
+`OfferingUserAttributeConfig`. Providers configure which user fields are
+*exposed* via the Waldur admin UI (e.g., `expose_email`, `expose_organization`,
+`expose_gender`). The agent:
+
+1. Fetches the attribute config from the API (cached for 5 minutes).
+2. Requests only the exposed fields when listing offering users.
+3. During user sync, extracts exposed attribute values from each
+   `OfferingUser` and passes them to the backend via `user_attributes`.
+
+### Supported attributes
+
+All 20+ attributes from `OfferingUserAttributeConfig` are supported:
+`username`, `full_name` (includes `first_name`, `last_name`), `email`,
+`phone_number`, `organization`, `job_title`, `affiliations`, `gender`,
+`personal_title`, `place_of_birth`, `country_of_residence`, `nationality`,
+`nationalities`, `organization_country`, `organization_type`,
+`organization_registry_code`, `eduperson_assurance`, `civil_number`,
+`birth_date`, `identity_source`, `active_isds`.
+
+### Fallback behavior
+
+When the attribute config API is unavailable, the agent defaults to
+exposing `username`, `full_name`, and `email`.
+
 ## Best Practices
 
 ### Username Backend Implementation

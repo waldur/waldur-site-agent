@@ -573,10 +573,10 @@ class MUPBackendTest(unittest.TestCase):
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
         usernames = {"user1"}
-        resource_backend_id = "1"
+        self.sample_waldur_resource.backend_id = "1"
 
         removed_users = backend.remove_users_from_resource(
-            resource_backend_id, usernames
+            self.sample_waldur_resource, usernames
         )
 
         assert removed_users == ["user1"]

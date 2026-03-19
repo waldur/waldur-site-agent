@@ -237,6 +237,33 @@ class TestUserResolution:
             result = client.resolve_user_via_identity_bridge("user-cuid", "isd:test")
             assert result is None
 
+    def test_resolve_user_via_identity_bridge_with_attributes(self, client):
+        """Attributes are merged into the identity bridge POST payload."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"uuid": str(USER_UUID)}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            client._api_client.get_httpx_client(),
+            "post",
+            return_value=mock_response,
+        ) as mock_post:
+            attrs = {"email": "sz@example.com", "first_name": "S"}
+            result = client.resolve_user_via_identity_bridge(
+                "user-cuid", "isd:test", attributes=attrs,
+            )
+            assert result == USER_UUID
+            mock_post.assert_called_once_with(
+                "/api/identity-bridge/",
+                json={
+                    "username": "user-cuid",
+                    "source": "isd:test",
+                    "email": "sz@example.com",
+                    "first_name": "S",
+                },
+            )
+
 
 class TestBaseClientMethods:
     def test_list_resources(self, client):

@@ -1001,9 +1001,10 @@ class MUPBackend(backends.BaseBackend):
         return added_users
 
     def remove_users_from_resource(
-        self, resource_backend_id: str, usernames: set[str]
+        self, waldur_resource: WaldurResource, usernames: set[str], **kwargs: dict
     ) -> list[str]:
         """Remove specified users from the MUP project."""
+        resource_backend_id = waldur_resource.backend_id
         logger.info(
             "Removing users from MUP project for resource %s: %s",
             resource_backend_id,

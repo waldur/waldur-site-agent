@@ -453,7 +453,7 @@ class TestUserSync:
         result = backend._resolve_remote_user("user-cuid")
         assert result == USER_UUID
         mock_client.resolve_user_via_identity_bridge.assert_called_once_with(
-            "user-cuid", "isd:test"
+            "user-cuid", "isd:test", attributes=None,
         )
         mock_client.resolve_user_by_cuid.assert_not_called()
 
@@ -514,6 +514,85 @@ class TestUserSync:
         assert result == USER_UUID
         mock_client.resolve_user_by_field.assert_called_once_with(
             "user-cuid", "username"
+        )
+
+    def test_add_users_uses_cuid_for_identity_bridge(self, backend, mock_client):
+        """add_users_to_resource should resolve via CUID, not offering username."""
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        user_cuids = {"testuser": "testuser-cuid@idp.example.org"}
+        result = backend.add_users_to_resource(
+            waldur_resource, {"testuser"}, user_cuids=user_cuids,
+        )
+        assert "testuser" in result
+        # Identity bridge should be called with the CUID, not the offering username
+        mock_client.resolve_user_via_identity_bridge.assert_called_once_with(
+            "testuser-cuid@idp.example.org", "isd:test", attributes=None,
+        )
+
+    def test_add_users_passes_attributes_to_identity_bridge(self, backend, mock_client):
+        """add_users_to_resource should forward user attributes to identity bridge."""
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        user_cuids = {"testuser": "testuser-cuid@idp.example.org"}
+        user_attributes = {"testuser": {"email": "sz@example.com", "first_name": "S"}}
+        result = backend.add_users_to_resource(
+            waldur_resource, {"testuser"},
+            user_cuids=user_cuids, user_attributes=user_attributes,
+        )
+        assert "testuser" in result
+        mock_client.resolve_user_via_identity_bridge.assert_called_once_with(
+            "testuser-cuid@idp.example.org", "isd:test",
+            attributes={"email": "sz@example.com", "first_name": "S"},
+        )
+
+    def test_add_users_falls_back_to_offering_username_without_cuid(
+        self, backend, mock_client,
+    ):
+        """Without user_cuids, offering username is used as fallback."""
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        result = backend.add_users_to_resource(waldur_resource, {"testuser"})
+        assert "testuser" in result
+        mock_client.resolve_user_via_identity_bridge.assert_called_once_with(
+            "testuser", "isd:test", attributes=None,
+        )
+
+    def test_remove_users_uses_cuid_for_identity_bridge(self, backend, mock_client):
+        """remove_users_from_resource should resolve via CUID."""
+        mock_resource = MagicMock()
+        mock_resource.project_uuid = PROJECT_UUID
+        mock_client.get_marketplace_resource.return_value = mock_resource
+        mock_client.resolve_user_via_identity_bridge.return_value = USER_UUID
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        user_cuids = {"testuser": "testuser-cuid@idp.example.org"}
+        result = backend.remove_users_from_resource(
+            waldur_resource, {"testuser"}, user_cuids=user_cuids,
+        )
+        assert "testuser" in result
+        mock_client.resolve_user_via_identity_bridge.assert_called_once_with(
+            "testuser-cuid@idp.example.org", "isd:test", attributes=None,
         )
 
 
