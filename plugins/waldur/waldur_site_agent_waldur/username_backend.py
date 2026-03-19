@@ -86,8 +86,10 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
         target_api_url = (self.backend_settings.get("target_api_url") or "").rstrip("/")
         target_api_token = self.backend_settings.get("target_api_token") or ""
         self.identity_bridge_source = self.backend_settings.get("identity_bridge_source", "")
+        # Strip /api suffix — httpx paths already include /api/ prefix
+        base_url = target_api_url.removesuffix("/api")
         self._http_client = AuthenticatedClient(
-            base_url=target_api_url,
+            base_url=base_url,
             token=target_api_token,
         )
         self._previous_offering_usernames: set[str] | None = None
@@ -192,6 +194,10 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
             "/api/identity-bridge/",
             json=payload,
         )
+        if response.status_code >= 400:
+            logger.error(
+                "Identity bridge error %s: %s", response.status_code, response.text
+            )
         response.raise_for_status()
         return response.json()
 
