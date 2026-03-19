@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, ClassVar, Optional
 
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.order_details import OrderDetails
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.models.resource_state import ResourceState
 
 from waldur_site_agent.backend import logger, structures, utils
 
@@ -41,6 +42,11 @@ class BaseBackend(ABC):
     # When enabled, the processor checks order.backend_id on EXECUTING orders
     # and calls check_pending_order() to track remote order completion.
     supports_async_orders: bool = False
+
+    # Resource states the membership processor should fetch and handle.
+    # Override in subclasses that need to process resources in additional
+    # states (e.g., CREATING for backends with async order tracking).
+    handled_resource_states: ClassVar[list] = [ResourceState.OK, ResourceState.ERRED]
 
     def __init__(self, backend_settings: dict, backend_components: dict[str, dict]) -> None:
         """Init backend info."""
@@ -710,9 +716,10 @@ class BaseBackend(ABC):
         return True
 
     def remove_users_from_resource(
-        self, waldur_resource: WaldurResource, usernames: set[str]
+        self, waldur_resource: WaldurResource, usernames: set[str], **kwargs: dict
     ) -> list[str]:
         """Remove specified users from the resource on the backend."""
+        del kwargs
         resource_backend_id = waldur_resource.backend_id
         if len(usernames) < 1:
             logger.info("No users to remove")

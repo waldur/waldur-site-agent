@@ -453,7 +453,7 @@ class HarborBackend(backends.BaseBackend):
         return set()
 
     def remove_users_from_resource(
-        self, resource_backend_id: str, usernames: set[str]
+        self, waldur_resource: WaldurResource, usernames: set[str], **kwargs: dict
     ) -> list[str]:
         """Remove users from Harbor project (not directly supported).
 
@@ -461,7 +461,7 @@ class HarborBackend(backends.BaseBackend):
         user associations. This method is a no-op for Harbor.
 
         Args:
-            resource_backend_id: Harbor project name
+            waldur_resource: Waldur resource containing project information
             usernames: Set of usernames to remove
 
         Returns:
@@ -469,7 +469,7 @@ class HarborBackend(backends.BaseBackend):
         """
         logger.info(
             "User management is handled through OIDC groups for Harbor project %s",
-            resource_backend_id,
+            waldur_resource.backend_id,
         )
         return []
 

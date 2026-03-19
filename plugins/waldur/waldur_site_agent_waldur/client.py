@@ -481,7 +481,7 @@ class WaldurClient(BaseClient):
             return None
 
     def resolve_user_via_identity_bridge(
-        self, username: str, source: str
+        self, username: str, source: str, attributes: Optional[dict] = None,
     ) -> Optional[UUID]:
         """Resolve (or create) a user on Waldur B via the Identity Bridge API.
 
@@ -491,14 +491,19 @@ class WaldurClient(BaseClient):
         Args:
             username: CUID / username of the user.
             source: ISD source identifier (e.g. ``isd:efp``).
+            attributes: Optional user profile attributes (email, first_name, etc.)
+                to merge into the identity bridge payload.
 
         Returns:
             User UUID on Waldur B, or None on error.
         """
         try:
+            payload: dict = {"username": username, "source": source}
+            if attributes:
+                payload.update(attributes)
             response = self._api_client.get_httpx_client().post(
                 "/api/identity-bridge/",
-                json={"username": username, "source": source},
+                json=payload,
             )
             response.raise_for_status()
             data = response.json()

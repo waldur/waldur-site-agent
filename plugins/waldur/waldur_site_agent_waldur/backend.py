@@ -15,6 +15,7 @@ from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET
 
 from waldur_api_client.models.observable_object_type_enum import (
@@ -41,6 +42,7 @@ class WaldurBackend(backends.BaseBackend):
     """
 
     supports_async_orders = True
+    handled_resource_states = [ResourceState.OK, ResourceState.ERRED, ResourceState.CREATING]
 
     def __init__(
         self, backend_settings: dict, backend_components: dict[str, dict]
@@ -524,11 +526,17 @@ class WaldurBackend(backends.BaseBackend):
             return target_role
         return source_role
 
-    def _resolve_remote_user(self, local_username: str) -> Optional[UUID]:
+    def _resolve_remote_user(
+        self, local_username: str, attributes: Optional[dict] = None,
+    ) -> Optional[UUID]:
         """Resolve a local username to a user UUID on Waldur B.
 
         Uses the configured user_match_field to look up the user.
         Results are cached to minimize API calls.
+
+        Args:
+            local_username: Username or CUID to resolve.
+            attributes: Optional user profile attributes for identity bridge calls.
         """
         if local_username in self._user_uuid_cache:
             return self._user_uuid_cache[local_username]
@@ -543,7 +551,8 @@ class WaldurBackend(backends.BaseBackend):
                 )
             else:
                 remote_uuid = self.client.resolve_user_via_identity_bridge(
-                    local_username, self.identity_bridge_source
+                    local_username, self.identity_bridge_source,
+                    attributes=attributes,
                 )
         elif self.user_resolve_method == "user_field":
             field = self.user_match_field if self.user_match_field in ("email", "username") else "username"
@@ -588,7 +597,9 @@ class WaldurBackend(backends.BaseBackend):
             )
             return False
 
-        remote_user_uuid = self._resolve_remote_user(username)
+        # Use CUID for identity bridge resolution when available
+        identity = kwargs.get("user_cuid") or username
+        remote_user_uuid = self._resolve_remote_user(identity)
         if not remote_user_uuid:
             return False
 
@@ -615,7 +626,9 @@ class WaldurBackend(backends.BaseBackend):
             )
             return False
 
-        remote_user_uuid = self._resolve_remote_user(username)
+        # Use CUID for identity bridge resolution when available
+        identity = kwargs.get("user_cuid") or username
+        remote_user_uuid = self._resolve_remote_user(identity)
         if not remote_user_uuid:
             return False
 
@@ -636,7 +649,6 @@ class WaldurBackend(backends.BaseBackend):
         self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
     ) -> set[str]:
         """Add users to the resource's project on Waldur B."""
-        del kwargs
         resource_backend_id = waldur_resource.backend_id
         if not user_ids:
             return set()
@@ -655,14 +667,28 @@ class WaldurBackend(backends.BaseBackend):
             )
             return set()
 
+        # Extract CUID and attribute mappings for identity resolution
+        user_cuids: dict = kwargs.get("user_cuids", {})
+        user_attributes: dict = kwargs.get("user_attributes", {})
+        user_roles: dict = kwargs.get("user_roles", {})
+
         added_users: set[str] = set()
         for username in user_ids:
             try:
-                remote_user_uuid = self._resolve_remote_user(username)
+                # Use CUID (user_username) for identity bridge resolution
+                # when available, falling back to offering username
+                identity = user_cuids.get(username, username)
+                attributes = user_attributes.get(username)
+                remote_user_uuid = self._resolve_remote_user(
+                    identity, attributes=attributes,
+                )
                 if remote_user_uuid:
+                    source_role = user_roles.get(username, DEFAULT_PROJECT_ROLE_NAME)
+                    target_role = self._map_role(source_role)
                     self.client.add_user_to_project(
                         project_uuid=project_uuid,
                         user_uuid=remote_user_uuid,
+                        role_name=target_role,
                     )
                     added_users.add(username)
                     logger.info("Added user %s to Waldur B project %s", username, project_uuid)
@@ -674,7 +700,7 @@ class WaldurBackend(backends.BaseBackend):
         return added_users
 
     def remove_users_from_resource(
-        self, waldur_resource: WaldurResource, usernames: set[str]
+        self, waldur_resource: WaldurResource, usernames: set[str], **kwargs: dict
     ) -> list[str]:
         """Remove users from the resource's project on Waldur B."""
         resource_backend_id = waldur_resource.backend_id
@@ -694,10 +720,15 @@ class WaldurBackend(backends.BaseBackend):
             )
             return []
 
+        # Extract CUID mapping for identity resolution
+        user_cuids: dict = kwargs.get("user_cuids", {})
+
         removed_users: list[str] = []
         for username in usernames:
             try:
-                remote_user_uuid = self._resolve_remote_user(username)
+                # Use CUID for identity bridge resolution when available
+                identity = user_cuids.get(username, username)
+                remote_user_uuid = self._resolve_remote_user(identity)
                 if remote_user_uuid:
                     self.client.remove_user_from_project(
                         project_uuid=project_uuid,
