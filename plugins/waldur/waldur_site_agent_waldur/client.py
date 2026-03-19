@@ -69,6 +69,7 @@ class WaldurClient(BaseClient):
         # Strip /api suffix for AuthenticatedClient base_url —
         # the SDK prepends /api/ to all endpoint paths.
         base_url = self.api_url.removesuffix("/api")
+        self.base_url = base_url
         self._api_client = AuthenticatedClient(
             base_url=base_url,
             token=api_token,
@@ -500,11 +501,20 @@ class WaldurClient(BaseClient):
         try:
             payload: dict = {"username": username, "source": source}
             if attributes:
-                payload.update(attributes)
+                # Filter out empty/None values and non-IB fields to avoid
+                # "Fields not allowed by Identity Bridge configuration" errors.
+                payload.update(
+                    {k: v for k, v in attributes.items() if v not in (None, "", [])}
+                )
             response = self._api_client.get_httpx_client().post(
                 "/api/identity-bridge/",
                 json=payload,
             )
+            if response.status_code >= 400:
+                logger.error(
+                    "Identity bridge error %s: %s (payload: %s)",
+                    response.status_code, response.text, payload,
+                )
             response.raise_for_status()
             data = response.json()
             uuid_str = data.get("uuid")
@@ -742,15 +752,15 @@ class WaldurClient(BaseClient):
 
     def get_offering_url(self) -> str:
         """Get the API URL for the target offering."""
-        return f"{self.api_url}/api/marketplace-public-offerings/{self._normalize_uuid(self.offering_uuid)}/"
+        return f"{self.base_url}/api/marketplace-public-offerings/{self._normalize_uuid(self.offering_uuid)}/"
 
     def get_customer_url(self, customer_uuid: str) -> str:
         """Get the API URL for a customer on Waldur B."""
-        return f"{self.api_url}/api/customers/{self._normalize_uuid(customer_uuid)}/"
+        return f"{self.base_url}/api/customers/{self._normalize_uuid(customer_uuid)}/"
 
     def get_project_url(self, project_uuid: str) -> str:
         """Get the API URL for a project on Waldur B."""
-        return f"{self.api_url}/api/projects/{self._normalize_uuid(project_uuid)}/"
+        return f"{self.base_url}/api/projects/{self._normalize_uuid(project_uuid)}/"
 
     def get_version(self) -> str:
         """Get the version of the remote Waldur B instance.

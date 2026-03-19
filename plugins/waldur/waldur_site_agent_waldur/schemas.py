@@ -80,3 +80,9 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
         description="ISD source identifier for identity bridge (e.g. 'isd:efp'). "
         "Required when username_management_backend is 'waldur-identity-bridge'.",
     )
+    role_mapping: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map source role names to target role names "
+        "(e.g. PROJECT.ADMIN: PROJECT.MANAGER). "
+        "Empty = passthrough (roles forwarded unchanged).",
+    )

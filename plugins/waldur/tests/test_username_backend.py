@@ -105,6 +105,56 @@ def username_backend(identity_bridge_settings, mock_offering, mock_httpx_client)
     return backend
 
 
+class TestBaseUrlStripping:
+    """AuthenticatedClient base_url must not include /api suffix."""
+
+    def test_target_api_url_with_api_suffix(self, identity_bridge_settings, mock_offering):
+        with patch(
+            "waldur_site_agent_waldur.username_backend.AuthenticatedClient"
+        ) as MockClient:
+            mock_instance = MagicMock()
+            mock_instance.get_httpx_client.return_value = MagicMock()
+            MockClient.return_value = mock_instance
+
+            WaldurIdentityBridgeUsernameBackend(
+                backend_settings=identity_bridge_settings,
+                offering=mock_offering,
+            )
+
+        # The target client (second call) must strip /api
+        target_call = [
+            c for c in MockClient.call_args_list
+            if c[1].get("base_url", "").endswith("waldur-b.example.com")
+        ]
+        assert target_call, "Expected AuthenticatedClient call for target Waldur B"
+        assert target_call[0][1]["base_url"] == "https://waldur-b.example.com"
+
+    def test_target_api_url_without_trailing_slash(self, mock_offering):
+        settings = {
+            "target_api_url": "https://waldur-b.example.com/api",
+            "target_api_token": "test-token",
+            "identity_bridge_source": "isd:test",
+        }
+        with patch(
+            "waldur_site_agent_waldur.username_backend.AuthenticatedClient"
+        ) as MockClient:
+            mock_instance = MagicMock()
+            mock_instance.get_httpx_client.return_value = MagicMock()
+            MockClient.return_value = mock_instance
+
+            WaldurIdentityBridgeUsernameBackend(
+                backend_settings=settings,
+                offering=mock_offering,
+            )
+
+        target_call = [
+            c for c in MockClient.call_args_list
+            if "waldur-b" in c[1].get("base_url", "")
+        ]
+        assert target_call
+        assert not target_call[0][1]["base_url"].endswith("/api")
+
+
 class TestGetWaldurUsername:
     def test_returns_username(self):
         ou = _make_offering_user(user_username="alice")

@@ -327,3 +327,70 @@ class TestBaseClientMethods:
     def test_get_customer_url(self, client):
         url = client.get_customer_url("aabbccdd-1234-1234-1234-123456789abc")
         assert "customers/aabbccdd12341234123412345678" in url
+
+    def test_url_no_double_api_prefix(self, client):
+        """URL helpers must not produce /api/api/ when api_url ends with /api/."""
+        customer_url = client.get_customer_url("aabbccdd-1234-1234-1234-123456789abc")
+        project_url = client.get_project_url("aabbccdd-1234-1234-1234-123456789abc")
+        offering_url = client.get_offering_url()
+        for url in (customer_url, project_url, offering_url):
+            assert "/api/api/" not in url, f"Double /api/ prefix in {url}"
+            assert url.startswith("https://waldur-b.example.com/api/")
+
+    def test_url_no_double_api_without_trailing_slash(self):
+        """URL helpers work when api_url lacks a trailing slash."""
+        c = WaldurClient(
+            api_url="https://host.example.com/api",
+            api_token="t",
+            offering_uuid="abcdef01-0000-0000-0000-000000000001",
+        )
+        assert "/api/api/" not in c.get_customer_url("aabb0000-0000-0000-0000-000000000000")
+
+
+class TestIdentityBridgePayloadFiltering:
+    """Empty/None attribute values must be stripped before POSTing."""
+
+    def test_empty_values_filtered(self, client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"uuid": str(USER_UUID)}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            client._api_client.get_httpx_client(),
+            "post",
+            return_value=mock_response,
+        ) as mock_post:
+            client.resolve_user_via_identity_bridge(
+                "user-cuid",
+                "isd:test",
+                attributes={
+                    "email": "a@b.com",
+                    "identity_source": "",
+                    "affiliations": [],
+                    "phone_number": None,
+                },
+            )
+            payload = mock_post.call_args[1]["json"]
+            assert payload == {
+                "username": "user-cuid",
+                "source": "isd:test",
+                "email": "a@b.com",
+            }
+
+    def test_none_attributes_skipped(self, client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"uuid": str(USER_UUID)}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            client._api_client.get_httpx_client(),
+            "post",
+            return_value=mock_response,
+        ) as mock_post:
+            client.resolve_user_via_identity_bridge(
+                "user-cuid", "isd:test", attributes=None,
+            )
+            payload = mock_post.call_args[1]["json"]
+            assert payload == {"username": "user-cuid", "source": "isd:test"}

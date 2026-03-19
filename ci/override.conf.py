@@ -28,3 +28,22 @@ RABBITMQ = {
     "PASSWORD": RABBITMQ_PASSWORD,
     "MANAGEMENT_PORT": 15672,
 }
+
+INSTALLED_APPS += ("corsheaders",)
+MIDDLEWARE = ("corsheaders.middleware.CorsMiddleware",) + MIDDLEWARE
+CORS_ORIGIN_ALLOW_ALL = True
+CORS_EXPOSE_HEADERS = ("link", "x-result-count", "x-impersonated-user-uuid")
+from corsheaders.defaults import default_headers
+
+CORS_ALLOW_HEADERS = (*default_headers, "X-Impersonated-User-Uuid")
+
+
+class DisableMigrations:
+    def __contains__(self, item):
+        return True
+
+    def __getitem__(self, item):
+        return None
+
+
+MIGRATION_MODULES = DisableMigrations()
