@@ -1846,7 +1846,7 @@ wheels = [
 
 [[package]]
 name = "waldur-site-agent"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "importlib-metadata", marker = "python_full_version < '3.10'" },
@@ -1905,7 +1905,7 @@ dev = [
 
 [[package]]
 name = "waldur-site-agent-basic-username-management"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/basic_username_management" }
 dependencies = [
     { name = "waldur-site-agent" },
@@ -1916,7 +1916,7 @@ requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "waldur-site-agent-croit-s3"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/croit-s3" }
 dependencies = [
     { name = "boto3" },
@@ -1936,7 +1936,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-cscs-dwdi"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/cscs-dwdi" }
 dependencies = [
     { name = "httpx" },
@@ -1951,7 +1951,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-digitalocean"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/digitalocean" }
 dependencies = [
     { name = "python-digitalocean" },
@@ -1966,7 +1966,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-harbor"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/harbor" }
 dependencies = [
     { name = "requests" },
@@ -1981,7 +1981,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-k8s-ut-namespace"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/k8s-ut-namespace" }
 dependencies = [
     { name = "kubernetes" },
@@ -1998,7 +1998,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-keycloak-client"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/keycloak-client" }
 dependencies = [
     { name = "python-keycloak" },
@@ -2013,7 +2013,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-ldap"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/ldap" }
 dependencies = [
     { name = "jinja2" },
@@ -2030,7 +2030,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-moab"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/moab" }
 dependencies = [
     { name = "waldur-site-agent" },
@@ -2041,7 +2041,7 @@ requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "waldur-site-agent-mup"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/mup" }
 dependencies = [
     { name = "waldur-site-agent" },
@@ -2052,7 +2052,7 @@ requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "waldur-site-agent-okd"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/okd" }
 dependencies = [
     { name = "kubernetes" },
@@ -2069,7 +2069,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-opennebula"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/opennebula" }
 dependencies = [
     { name = "pyone" },
@@ -2088,7 +2088,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-rancher"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/rancher" }
 dependencies = [
     { name = "requests" },
@@ -2105,7 +2105,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-slurm"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/slurm" }
 dependencies = [
     { name = "waldur-site-agent" },
@@ -2137,7 +2137,7 @@ dev = [
 
 [[package]]
 name = "waldur-site-agent-waldur"
-version = "0.9.9"
+version = "1.0.0"
 source = { editable = "plugins/waldur" }
 dependencies = [
     { name = "waldur-site-agent" },

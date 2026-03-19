@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.0 - 2026-03-20
+
+### Highlights
+
+This release adds Keycloak SAML integration for the OpenNebula VDC plugin, enabling SSO-based user provisioning through Keycloak identity providers. SLURM operators can now scope commands to specific clusters in multi-cluster environments. The core agent is also more resilient, with fixes for liveness probe timeouts and improved federation identity handling.
+
+### What's New
+
+- **OpenNebula**: Add Keycloak SAML integration for VDC provisioning, including automatic group mapping and end-to-end setup documentation ([WAL-9218]).
+- **SLURM**: Add cluster filtering to `sacctmgr` and `sacct` commands for multi-cluster deployments.
+- **Core**: Make backend ID retry count configurable.
+
+### Improvements
+
+- **Core**: Downgrade remote Waldur version fetch failure to debug level to reduce log noise when the target instance restricts `/api/version/`.
+
+### Bug Fixes
+
+- **Core**: Fix liveness probe failures by replacing blocking sleeps with tick-based main loops.
+- **Federation**: Fix URL construction and identity bridge payload in the Waldur federation client.
+- **Federation**: Fix user identity resolution in the Waldur federation backend.
+- **SLURM**: Fix parent account quoting in `sacctmgr` commands.
+
+> 12 commits, 72 files changed (+4275/−684 lines)
+
+---
+
 ## 0.9.9 - 2026-03-11
 
 ### Highlights
