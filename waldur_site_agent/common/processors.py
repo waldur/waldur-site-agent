@@ -875,8 +875,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         except Exception as e:
             logger.exception(
-                "Error while processing order %s: %s",
-                order.uuid,
+                "Error while processing order %s (%s %s): %s",
+                order.uuid.hex,
+                order.type_,
+                order.resource_name,
                 e,
             )
             if order.state != OrderState.DONE:

@@ -116,7 +116,10 @@ class SlurmBackend(backends.BaseBackend):
             project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
             customer_backend_id = self._get_customer_backend_id(waldur_resource.customer_slug)
             self._create_backend_resource(
-                customer_backend_id, waldur_resource.customer_name, customer_backend_id
+                customer_backend_id,
+                waldur_resource.customer_name,
+                customer_backend_id,
+                self.backend_settings.get("default_account"),
             )
             self._create_backend_resource(
                 project_backend_id,
