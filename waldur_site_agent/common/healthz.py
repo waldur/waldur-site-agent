@@ -3,8 +3,8 @@
 Liveness: checks that the agent's main loop touched the heartbeat file
 recently (within ``max_age`` seconds).
 
-Readiness: verifies connectivity to Waldur A with a single
-``GET /api/version/`` call.
+Readiness: verifies connectivity to Waldur A with an authenticated
+``GET /api/users/me/?field=uuid`` call.
 """
 
 from __future__ import annotations
@@ -15,7 +15,8 @@ import sys
 import time
 from pathlib import Path
 
-from waldur_api_client.api.version import version_retrieve
+from waldur_api_client.api.users import users_me_retrieve
+from waldur_api_client.models.user_field_enum import UserFieldEnum
 
 from waldur_site_agent.common.utils import get_client, init_configuration_from_file
 
@@ -40,7 +41,7 @@ def check_liveness(max_age: int = DEFAULT_MAX_AGE, path: str = HEARTBEAT_PATH) -
 
 
 def check_readiness(config_file: str) -> bool:
-    """Return True if Waldur A responds to GET /api/version/."""
+    """Return True if Waldur A responds to GET /api/users/me/?field=uuid."""
     try:
         configuration = init_configuration_from_file(config_file)
     except Exception:
@@ -54,7 +55,7 @@ def check_readiness(config_file: str) -> bool:
                 configuration.waldur_user_agent,
                 offering.verify_ssl,
             )
-            version_retrieve.sync(client=client)
+            users_me_retrieve.sync(client=client, field=[UserFieldEnum.UUID])
             return True
         except Exception:
             logger.debug("Readiness check failed for %s", offering.api_url)
