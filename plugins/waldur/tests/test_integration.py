@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import datetime
 import os
 import uuid
 from unittest.mock import MagicMock
@@ -1158,3 +1159,198 @@ class TestNonBlockingOrderFlow:
         resource_mock = MagicMock()
         resource_mock.backend_id = backend_id
         passthrough_backend.delete_resource(resource_mock)
+
+
+# ============================================================================
+# Scenario 12: End-Date Sync
+# ============================================================================
+
+
+@pytest.mark.skipif(not INTEGRATION_TESTS, reason="Integration tests not enabled")
+class TestEndDateSyncIntegration:
+    """Integration tests for end_date sync between Waldur A and Waldur B.
+
+    Creates a resource, sets end_date on one side, and verifies sync
+    propagates it to the other side using sync_resource_end_date().
+    """
+
+    _state: dict = {}
+
+    def test_create_resource_for_end_date_sync(
+        self, passthrough_backend, passthrough_env, waldur_setup
+    ):
+        """Create a resource to use for end_date sync tests."""
+        waldur_resource = _make_waldur_resource(
+            project_uuid=passthrough_env.project_a_uuid,
+            customer_uuid=passthrough_env.offering_a.customer_uuid,
+            limits={"cpu": 10, "mem": 20},
+            name=f"enddate-{uuid.uuid4().hex[:6]}",
+        )
+        result = passthrough_backend.create_resource(waldur_resource)
+        assert result.backend_id
+        _complete_pending_order(waldur_setup, result)
+        self.__class__._state["resource_backend_id"] = result.backend_id
+
+    def test_sync_end_date_a_to_b(self, passthrough_backend, passthrough_env):
+        """Set end_date on A resource, sync pushes it to B."""
+        resource_id = self.__class__._state.get("resource_backend_id")
+        assert resource_id
+
+        future_date = datetime.date.today() + datetime.timedelta(days=90)
+
+        # Build a mock Waldur A resource with end_date set
+        a_resource = _make_waldur_resource(
+            project_uuid=passthrough_env.project_a_uuid,
+            customer_uuid=passthrough_env.offering_a.customer_uuid,
+            limits={"cpu": 10, "mem": 20},
+            backend_id=resource_id,
+        )
+        a_resource.end_date = future_date
+        a_resource.end_date_updated_at = datetime.datetime.now(tz=datetime.timezone.utc)
+
+        # Create an authenticated REST client for Waldur A
+        from waldur_site_agent.common.utils import get_client
+
+        waldur_rest_client = get_client(WALDUR_API_URL, WALDUR_API_TOKEN)
+
+        # Sync should push A's end_date to B
+        passthrough_backend.sync_resource_end_date(a_resource, waldur_rest_client)
+
+        # Verify B resource has the end_date
+        b_resource = passthrough_backend.client.get_marketplace_resource(
+            uuid.UUID(resource_id)
+        )
+        assert b_resource.end_date == future_date
+
+    def test_sync_end_date_same_date_no_op(self, passthrough_backend, passthrough_env):
+        """When both sides have the same end_date, sync is a no-op."""
+        resource_id = self.__class__._state.get("resource_backend_id")
+        assert resource_id
+
+        b_resource = passthrough_backend.client.get_marketplace_resource(
+            uuid.UUID(resource_id)
+        )
+        current_date = b_resource.end_date
+
+        a_resource = _make_waldur_resource(
+            project_uuid=passthrough_env.project_a_uuid,
+            customer_uuid=passthrough_env.offering_a.customer_uuid,
+            limits={"cpu": 10, "mem": 20},
+            backend_id=resource_id,
+        )
+        a_resource.end_date = current_date
+        a_resource.end_date_updated_at = datetime.datetime.now(tz=datetime.timezone.utc)
+
+        from waldur_site_agent.common.utils import get_client
+
+        waldur_rest_client = get_client(WALDUR_API_URL, WALDUR_API_TOKEN)
+
+        # Should not raise or make any changes
+        passthrough_backend.sync_resource_end_date(a_resource, waldur_rest_client)
+
+        # Verify B resource unchanged
+        b_after = passthrough_backend.client.get_marketplace_resource(
+            uuid.UUID(resource_id)
+        )
+        assert b_after.end_date == current_date
+
+    def test_sync_end_date_clear(self, passthrough_backend, passthrough_env):
+        """Sync with end_date=None clears the end_date on B."""
+        resource_id = self.__class__._state.get("resource_backend_id")
+        assert resource_id
+
+        a_resource = _make_waldur_resource(
+            project_uuid=passthrough_env.project_a_uuid,
+            customer_uuid=passthrough_env.offering_a.customer_uuid,
+            limits={"cpu": 10, "mem": 20},
+            backend_id=resource_id,
+        )
+        a_resource.end_date = None
+        a_resource.end_date_updated_at = datetime.datetime.now(tz=datetime.timezone.utc)
+
+        from waldur_site_agent.common.utils import get_client
+
+        waldur_rest_client = get_client(WALDUR_API_URL, WALDUR_API_TOKEN)
+
+        passthrough_backend.sync_resource_end_date(a_resource, waldur_rest_client)
+
+        b_resource = passthrough_backend.client.get_marketplace_resource(
+            uuid.UUID(resource_id)
+        )
+        assert b_resource.end_date is None
+
+    def test_sync_end_date_a_to_b_mode(self, passthrough_env, waldur_setup):
+        """a_to_b mode: A always wins regardless of timestamps."""
+        resource_id = self.__class__._state.get("resource_backend_id")
+        assert resource_id
+
+        future_date = datetime.date.today() + datetime.timedelta(days=60)
+
+        # Create backend with a_to_b mode
+        settings = {
+            **passthrough_env.backend_settings,
+            "end_date_sync_direction": "a_to_b",
+        }
+        backend = _make_test_backend(settings, passthrough_env.backend_components)
+
+        a_resource = _make_waldur_resource(
+            project_uuid=passthrough_env.project_a_uuid,
+            customer_uuid=passthrough_env.offering_a.customer_uuid,
+            limits={"cpu": 10, "mem": 20},
+            backend_id=resource_id,
+        )
+        a_resource.end_date = future_date
+        # Intentionally use an old timestamp — a_to_b mode should ignore it
+        a_resource.end_date_updated_at = datetime.datetime(
+            2020, 1, 1, tzinfo=datetime.timezone.utc
+        )
+
+        from waldur_site_agent.common.utils import get_client
+
+        waldur_rest_client = get_client(WALDUR_API_URL, WALDUR_API_TOKEN)
+        backend.sync_resource_end_date(a_resource, waldur_rest_client)
+
+        b_resource = backend.client.get_marketplace_resource(uuid.UUID(resource_id))
+        assert b_resource.end_date == future_date
+
+    def test_sync_end_date_disabled_mode(self, passthrough_env):
+        """disabled mode: no sync happens."""
+        resource_id = self.__class__._state.get("resource_backend_id")
+        assert resource_id
+
+        settings = {
+            **passthrough_env.backend_settings,
+            "end_date_sync_direction": "disabled",
+        }
+        backend = _make_test_backend(settings, passthrough_env.backend_components)
+
+        a_resource = _make_waldur_resource(
+            project_uuid=passthrough_env.project_a_uuid,
+            customer_uuid=passthrough_env.offering_a.customer_uuid,
+            limits={"cpu": 10, "mem": 20},
+            backend_id=resource_id,
+        )
+        # Set a different date than what's on B
+        a_resource.end_date = datetime.date.today() + datetime.timedelta(days=365)
+        a_resource.end_date_updated_at = datetime.datetime.now(tz=datetime.timezone.utc)
+
+        from waldur_site_agent.common.utils import get_client
+
+        waldur_rest_client = get_client(WALDUR_API_URL, WALDUR_API_TOKEN)
+
+        # Get B's current end_date before sync
+        b_before = backend.client.get_marketplace_resource(uuid.UUID(resource_id))
+
+        backend.sync_resource_end_date(a_resource, waldur_rest_client)
+
+        # B should be unchanged
+        b_after = backend.client.get_marketplace_resource(uuid.UUID(resource_id))
+        assert b_after.end_date == b_before.end_date
+
+    def test_cleanup(self, passthrough_backend):
+        """Delete the resource used for end_date sync tests."""
+        resource_id = self.__class__._state.get("resource_backend_id")
+        if resource_id:
+            resource_mock = MagicMock()
+            resource_mock.backend_id = resource_id
+            passthrough_backend.delete_resource(resource_mock)

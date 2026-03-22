@@ -437,7 +437,7 @@ class TestSetupTargetEventSubscriptions:
     def test_enabled_calls_stomp_setup(
         self, backend_settings, backend_components_passthrough
     ):
-        """target_stomp_enabled=True -> sets up ORDER and OFFERING_USER subscriptions."""
+        """target_stomp_enabled=True -> sets up ORDER, OFFERING_USER, and RESOURCE subscriptions."""
         backend_settings["target_stomp_enabled"] = True
         backend = WaldurBackend(backend_settings, backend_components_passthrough)
         backend.client = MagicMock()
@@ -473,12 +473,12 @@ class TestSetupTargetEventSubscriptions:
             ),
         ):
             mock_register.return_value = MagicMock()
-            mock_setup.side_effect = [_make_consumer(), _make_consumer()]
+            mock_setup.side_effect = [_make_consumer(), _make_consumer(), _make_consumer()]
 
             result = backend.setup_target_event_subscriptions(source_offering)
 
-            assert len(result) == 2
-            assert mock_setup.call_count == 2
+            assert len(result) == 3
+            assert mock_setup.call_count == 3
             # Verify custom handlers were set on both listeners
             for conn, _, _ in result:
                 listener = conn.get_listener.return_value

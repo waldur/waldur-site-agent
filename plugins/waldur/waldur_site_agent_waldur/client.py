@@ -13,6 +13,7 @@ import time
 from typing import Optional
 from uuid import UUID
 
+from waldur_api_client.api.marketplace_resources import marketplace_resources_set_end_date
 from waldur_api_client.api.roles import roles_list
 from waldur_api_client.api.version import version_retrieve
 from waldur_api_client.client import AuthenticatedClient
@@ -29,6 +30,7 @@ from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.models.resource import Resource
 from waldur_api_client.models.resource_terminate_request import ResourceTerminateRequest
 from waldur_api_client.models.resource_update_limits_request import ResourceUpdateLimitsRequest
+from waldur_api_client.models.resource_end_date_request import ResourceEndDateRequest
 from waldur_api_client.models.resource_update_limits_request_limits import (
     ResourceUpdateLimitsRequestLimits,
 )
@@ -290,6 +292,16 @@ class WaldurClient(BaseClient):
         return marketplace_resources_list.sync(
             client=self._api_client,
             **kwargs,
+        )
+
+    def set_resource_end_date(
+        self, resource_uuid: UUID, end_date: Optional[datetime.date]
+    ) -> None:
+        """Set end_date on a resource on Waldur B via the consumer set_end_date endpoint."""
+        marketplace_resources_set_end_date.sync_detailed(
+            uuid=resource_uuid,
+            client=self._api_client,
+            body=ResourceEndDateRequest(end_date=end_date),
         )
 
     def get_resource_team(self, resource_uuid: UUID) -> list:
