@@ -11,16 +11,17 @@ import logging
 from typing import Optional
 from uuid import UUID
 
+from waldur_api_client.api.marketplace_provider_resources import (
+    marketplace_provider_resources_set_end_date,
+)
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.errors import UnexpectedStatus
+from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.models.resource_end_date_request import ResourceEndDateRequest
 from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET
-
-from waldur_api_client.models.observable_object_type_enum import (
-    ObservableObjectTypeEnum,
-)
 
 from waldur_site_agent.backend import backends
 from waldur_site_agent.backend.exceptions import BackendError
@@ -65,6 +66,9 @@ class WaldurBackend(backends.BaseBackend):
         self.order_poll_interval = int(backend_settings.get("order_poll_interval", 5))
         self.user_not_found_action = backend_settings.get("user_not_found_action", "warn")
         self.role_mapping: dict[str, str] = backend_settings.get("role_mapping", {})
+        self.end_date_sync_direction: str = backend_settings.get(
+            "end_date_sync_direction", "bidirectional"
+        )
 
         self.client: WaldurClient = WaldurClient(
             api_url=backend_settings["target_api_url"],
@@ -207,6 +211,14 @@ class WaldurBackend(backends.BaseBackend):
                 for key in passthrough_keys:
                     if key in attrs_dict:
                         attributes[key] = attrs_dict[key]
+
+        # Forward end_date to the target order so the B resource
+        # gets the same termination date as the A resource.
+        end_date = getattr(waldur_resource, "end_date", None)
+        if end_date and not isinstance(end_date, type(UNSET)):
+            attributes["end_date"] = (
+                end_date.isoformat() if hasattr(end_date, "isoformat") else str(end_date)
+            )
 
         logger.info(
             "Creating marketplace order on Waldur B: offering=%s, project=%s, limits=%s",
@@ -870,6 +882,117 @@ class WaldurBackend(backends.BaseBackend):
             logger.exception("Failed to sync offering user usernames from Waldur B")
             return False
 
+    # --- End Date Sync ---
+
+    def sync_resource_end_date(
+        self,
+        waldur_resource: WaldurResource,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> None:
+        """Sync end_date between Waldur A and Waldur B.
+
+        Behavior depends on ``end_date_sync_direction`` setting:
+        - ``"bidirectional"`` (default): last-update-wins based on timestamps.
+        - ``"a_to_b"``: A is source of truth, always pushes A's end_date to B.
+        - ``"b_to_a"``: B is source of truth, always pushes B's end_date to A.
+        - ``"disabled"``: no end_date sync at all.
+
+        Short-circuits if both end_dates are already equal (prevents
+        infinite sync loops).
+
+        Args:
+            waldur_resource: Resource from Waldur A (source).
+            waldur_rest_client: Authenticated client for Waldur A API.
+        """
+        try:
+            if self.end_date_sync_direction == "disabled":
+                return
+
+            backend_id = waldur_resource.backend_id
+            if isinstance(backend_id, type(UNSET)) or not backend_id:
+                return
+
+            # Extract A's end_date and timestamp
+            a_end_date = waldur_resource.end_date
+            if isinstance(a_end_date, type(UNSET)):
+                a_end_date = None
+            a_updated_at = getattr(waldur_resource, "end_date_updated_at", None)
+            if isinstance(a_updated_at, type(UNSET)):
+                a_updated_at = None
+
+            # Fetch B resource
+            b_resource = self.client.get_marketplace_resource(UUID(backend_id))
+            b_end_date = b_resource.end_date
+            if isinstance(b_end_date, type(UNSET)):
+                b_end_date = None
+            b_updated_at = getattr(b_resource, "end_date_updated_at", None)
+            if isinstance(b_updated_at, type(UNSET)):
+                b_updated_at = None
+
+            # Short-circuit: same end_date on both sides → nothing to do
+            if a_end_date == b_end_date:
+                return
+
+            # Determine which side wins based on sync direction
+            if self.end_date_sync_direction == "a_to_b":
+                a_wins = True
+            elif self.end_date_sync_direction == "b_to_a":
+                a_wins = False
+            else:
+                # bidirectional — use timestamp comparison
+                # Both timestamps null → no information to decide direction
+                if a_updated_at is None and b_updated_at is None:
+                    return
+
+                if a_updated_at is not None and b_updated_at is None:
+                    a_wins = True
+                elif a_updated_at is None and b_updated_at is not None:
+                    a_wins = False
+                elif a_updated_at is not None and b_updated_at is not None:
+                    if a_updated_at > b_updated_at:
+                        a_wins = True
+                    elif b_updated_at > a_updated_at:
+                        a_wins = False
+                    else:
+                        # Equal timestamps, different dates — no-op
+                        return
+                else:
+                    return
+
+            # Extract user who requested the end_date change
+            a_requested_by = getattr(waldur_resource, "end_date_requested_by", None)
+            if isinstance(a_requested_by, type(UNSET)):
+                a_requested_by = None
+            b_requested_by = getattr(b_resource, "end_date_requested_by", None)
+            if isinstance(b_requested_by, type(UNSET)):
+                b_requested_by = None
+
+            if a_wins:
+                logger.info(
+                    "Syncing end_date from Waldur A to B for resource %s: %s (requested by: %s)",
+                    backend_id,
+                    a_end_date,
+                    a_requested_by,
+                )
+                self.client.set_resource_end_date(UUID(backend_id), a_end_date)
+            else:
+                logger.info(
+                    "Syncing end_date from Waldur B to A for resource %s: %s (requested by: %s)",
+                    waldur_resource.uuid,
+                    b_end_date,
+                    b_requested_by,
+                )
+                marketplace_provider_resources_set_end_date.sync_detailed(
+                    uuid=waldur_resource.uuid,
+                    client=waldur_rest_client,
+                    body=ResourceEndDateRequest(end_date=b_end_date),
+                )
+        except Exception:
+            logger.exception(
+                "Failed to sync end_date for resource %s",
+                getattr(waldur_resource, "backend_id", "unknown"),
+            )
+
     # --- Target Event Subscriptions ---
 
     def setup_target_event_subscriptions(
@@ -915,6 +1038,7 @@ class WaldurBackend(backends.BaseBackend):
             from waldur_site_agent_waldur.target_event_handler import (
                 make_target_offering_user_handler,
                 make_target_order_handler,
+                make_target_resource_end_date_handler,
             )
 
             target_api_url = self.backend_settings["target_api_url"]
@@ -987,6 +1111,25 @@ class WaldurBackend(backends.BaseBackend):
             if offering_user_consumer is not None:
                 connection, event_subscription, _ = offering_user_consumer
                 custom_handler = make_target_offering_user_handler(
+                    source_offering, self
+                )
+                listener = connection.get_listener(WALDUR_LISTENER_NAME)
+                if listener is not None:
+                    listener.on_message_callback = custom_handler
+                consumers.append((connection, event_subscription, target_offering))
+
+            # Set up STOMP subscription for RESOURCE events (end_date sync)
+            resource_consumer = _setup_single_stomp_subscription(
+                target_offering,
+                agent_identity,
+                agent_identity_manager,
+                user_agent,
+                ObservableObjectTypeEnum.RESOURCE,
+                global_proxy,
+            )
+            if resource_consumer is not None:
+                connection, event_subscription, _ = resource_consumer
+                custom_handler = make_target_resource_end_date_handler(
                     source_offering, self
                 )
                 listener = connection.get_listener(WALDUR_LISTENER_NAME)

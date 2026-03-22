@@ -394,3 +394,27 @@ class TestIdentityBridgePayloadFiltering:
             )
             payload = mock_post.call_args[1]["json"]
             assert payload == {"username": "user-cuid", "source": "isd:test"}
+
+
+class TestSetResourceEndDate:
+    def test_set_resource_end_date(self, client):
+        import datetime
+
+        with patch(
+            "waldur_api_client.api.marketplace_resources."
+            "marketplace_resources_set_end_date.sync_detailed"
+        ) as mock_set:
+            client.set_resource_end_date(RESOURCE_UUID, datetime.date(2025, 6, 1))
+            mock_set.assert_called_once()
+            call_kwargs = mock_set.call_args.kwargs
+            assert call_kwargs["uuid"] == RESOURCE_UUID
+            assert call_kwargs["body"].end_date == datetime.date(2025, 6, 1)
+
+    def test_set_resource_end_date_clear(self, client):
+        with patch(
+            "waldur_api_client.api.marketplace_resources."
+            "marketplace_resources_set_end_date.sync_detailed"
+        ) as mock_set:
+            client.set_resource_end_date(RESOURCE_UUID, None)
+            mock_set.assert_called_once()
+            assert mock_set.call_args.kwargs["body"].end_date is None

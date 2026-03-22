@@ -1,5 +1,6 @@
 """Tests for WaldurBackend with mocked WaldurClient."""
 
+import datetime
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
@@ -791,6 +792,7 @@ class TestAttributePassthrough:
         resource.customer_uuid = "cust-uuid-a"
         resource.project_name = "Test Project"
         resource.name = "Test Resource"
+        resource.end_date = None
         resource.limits = MagicMock()
         resource.limits.__contains__ = lambda self, key: key in {"cpu", "mem"}
         resource.limits.__getitem__ = lambda self, key: {"cpu": 100, "mem": 200}[key]
@@ -883,6 +885,72 @@ class TestAttributePassthrough:
 
         with pytest.raises(BackendError, match="Target Waldur rejected order"):
             backend.create_resource_with_id(waldur_resource, "test-backend-id")
+
+
+class TestEndDateForwardingOnCreate:
+    """Tests that end_date is forwarded to Waldur B during order creation."""
+
+    def _setup_create_mocks(self, mock_client):
+        mock_client.find_or_create_project.return_value = {
+            "uuid": str(PROJECT_UUID),
+            "url": f"/api/projects/{PROJECT_UUID}/",
+            "name": "Test Project",
+        }
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": str(PROJECT_UUID),
+        }
+        mock_client.get_project_url.return_value = f"/api/projects/{PROJECT_UUID}/"
+        mock_client.get_offering_url.return_value = "/api/offerings/off-uuid/"
+        mock_client.get_customer_url.return_value = "/api/customers/cust-uuid/"
+
+        mock_order = MagicMock()
+        mock_order.uuid = ORDER_UUID
+        mock_order.marketplace_resource_uuid = RESOURCE_UUID
+        mock_client.create_marketplace_order.return_value = mock_order
+
+    def test_end_date_forwarded_to_target_order(
+        self, backend, mock_client
+    ):
+        """When source resource has end_date, it is included in target order attributes."""
+        self._setup_create_mocks(mock_client)
+
+        resource = MagicMock()
+        resource.uuid = "source-uuid"
+        resource.project_uuid = "proj-uuid-a"
+        resource.customer_uuid = "cust-uuid-a"
+        resource.project_name = "Test Project"
+        resource.name = "Test Resource"
+        resource.end_date = datetime.date(2026, 12, 31)
+        resource.limits = {"cpu": 10, "mem": 20}
+        resource.attributes = UNSET
+        resource.offering_plugin_options = {}
+
+        backend.create_resource_with_id(resource, "backend-id")
+
+        call_kwargs = mock_client.create_marketplace_order.call_args.kwargs
+        assert call_kwargs["attributes"]["end_date"] == "2026-12-31"
+
+    def test_no_end_date_when_source_has_none(
+        self, backend, mock_client
+    ):
+        """When source resource has no end_date, attributes omit it."""
+        self._setup_create_mocks(mock_client)
+
+        resource = MagicMock()
+        resource.uuid = "source-uuid"
+        resource.project_uuid = "proj-uuid-a"
+        resource.customer_uuid = "cust-uuid-a"
+        resource.project_name = "Test Project"
+        resource.name = "Test Resource"
+        resource.end_date = None
+        resource.limits = {"cpu": 10, "mem": 20}
+        resource.attributes = UNSET
+        resource.offering_plugin_options = {}
+
+        backend.create_resource_with_id(resource, "backend-id")
+
+        call_kwargs = mock_client.create_marketplace_order.call_args.kwargs
+        assert "end_date" not in call_kwargs["attributes"]
 
 
 class TestNoOpMethods:
@@ -1105,3 +1173,316 @@ class TestSyncOfferingUserUsernames:
         assert result is True
         assert mock_update.call_count == 1
         assert mock_update.call_args.kwargs["body"].username == "hpc_alice"
+
+
+class TestEndDateSync:
+    """Tests for sync_resource_end_date bidirectional sync."""
+
+    BACKEND_ID = "bbbbbbbb-1234-1234-1234-123456789abc"
+
+    _SENTINEL = object()
+
+    def _make_waldur_resource(self, end_date, updated_at, backend_id=_SENTINEL):
+        resource = MagicMock()
+        resource.uuid = RESOURCE_UUID
+        resource.backend_id = self.BACKEND_ID if backend_id is self._SENTINEL else backend_id
+        resource.end_date = end_date
+        resource.end_date_updated_at = updated_at
+        return resource
+
+    def _make_b_resource(self, end_date, updated_at):
+        resource = MagicMock()
+        resource.end_date = end_date
+        resource.end_date_updated_at = updated_at
+        return resource
+
+    def test_sync_end_date_a_newer(self, backend, mock_client):
+        """A's timestamp newer → pushes A's end_date to B."""
+        a_date = datetime.date(2025, 6, 1)
+        a_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+        b_date = datetime.date(2025, 5, 1)
+        b_ts = datetime.datetime(2025, 1, 5, 12, 0, 0)
+
+        waldur_resource = self._make_waldur_resource(a_date, a_ts)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(b_date, b_ts)
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.set_resource_end_date.assert_called_once_with(
+            UUID(self.BACKEND_ID), a_date
+        )
+
+    def test_sync_end_date_b_newer(self, backend, mock_client):
+        """B's timestamp newer → pushes B's end_date to A."""
+        a_date = datetime.date(2025, 5, 1)
+        a_ts = datetime.datetime(2025, 1, 5, 12, 0, 0)
+        b_date = datetime.date(2025, 6, 1)
+        b_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+
+        waldur_resource = self._make_waldur_resource(a_date, a_ts)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(b_date, b_ts)
+
+        waldur_rest_client = MagicMock()
+
+        with patch(
+            "waldur_api_client.api.marketplace_provider_resources."
+            "marketplace_provider_resources_set_end_date.sync_detailed"
+        ) as mock_set:
+            backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+            mock_set.assert_called_once()
+            call_kwargs = mock_set.call_args
+            assert call_kwargs.kwargs["uuid"] == RESOURCE_UUID
+            assert call_kwargs.kwargs["body"].end_date == b_date
+
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_same_timestamp(self, backend, mock_client):
+        """Equal timestamps → no API calls."""
+        ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+        a_date = datetime.date(2025, 6, 1)
+        b_date = datetime.date(2025, 5, 1)
+
+        waldur_resource = self._make_waldur_resource(a_date, ts)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(b_date, ts)
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_both_null_timestamp(self, backend, mock_client):
+        """Both timestamps null → no-op."""
+        a_date = datetime.date(2025, 6, 1)
+        b_date = datetime.date(2025, 5, 1)
+
+        waldur_resource = self._make_waldur_resource(a_date, None)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(b_date, None)
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_only_a_has_timestamp(self, backend, mock_client):
+        """Only A has timestamp → A is authoritative, pushes to B."""
+        a_date = datetime.date(2025, 6, 1)
+        a_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+        b_date = datetime.date(2025, 5, 1)
+
+        waldur_resource = self._make_waldur_resource(a_date, a_ts)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(b_date, None)
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.set_resource_end_date.assert_called_once_with(
+            UUID(self.BACKEND_ID), a_date
+        )
+
+    def test_sync_end_date_only_b_has_timestamp(self, backend, mock_client):
+        """Only B has timestamp → B is authoritative, pushes to A."""
+        a_date = datetime.date(2025, 5, 1)
+        b_date = datetime.date(2025, 6, 1)
+        b_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+
+        waldur_resource = self._make_waldur_resource(a_date, None)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(b_date, b_ts)
+
+        waldur_rest_client = MagicMock()
+
+        with patch(
+            "waldur_api_client.api.marketplace_provider_resources."
+            "marketplace_provider_resources_set_end_date.sync_detailed"
+        ) as mock_set:
+            backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+            mock_set.assert_called_once()
+
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_clear_from_a(self, backend, mock_client):
+        """A cleared end_date (None), A newer → clears B."""
+        a_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+        b_date = datetime.date(2025, 5, 1)
+        b_ts = datetime.datetime(2025, 1, 5, 12, 0, 0)
+
+        waldur_resource = self._make_waldur_resource(None, a_ts)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(b_date, b_ts)
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.set_resource_end_date.assert_called_once_with(
+            UUID(self.BACKEND_ID), None
+        )
+
+    def test_sync_end_date_clear_from_b(self, backend, mock_client):
+        """B cleared end_date (None), B newer → clears A."""
+        a_date = datetime.date(2025, 5, 1)
+        a_ts = datetime.datetime(2025, 1, 5, 12, 0, 0)
+        b_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+
+        waldur_resource = self._make_waldur_resource(a_date, a_ts)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(None, b_ts)
+
+        waldur_rest_client = MagicMock()
+
+        with patch(
+            "waldur_api_client.api.marketplace_provider_resources."
+            "marketplace_provider_resources_set_end_date.sync_detailed"
+        ) as mock_set:
+            backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+            mock_set.assert_called_once()
+            assert mock_set.call_args.kwargs["body"].end_date is None
+
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_neither_has_date(self, backend, mock_client):
+        """Both end_dates None → no-op (short-circuit on equal)."""
+        waldur_resource = self._make_waldur_resource(None, None)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(None, None)
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_api_error(self, backend, mock_client):
+        """API error → logs warning, doesn't crash."""
+        a_date = datetime.date(2025, 6, 1)
+        a_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+
+        waldur_resource = self._make_waldur_resource(a_date, a_ts)
+        mock_client.get_marketplace_resource.side_effect = Exception("API error")
+
+        waldur_rest_client = MagicMock()
+        # Should not raise
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_same_end_date(self, backend, mock_client):
+        """Both have same end_date → no API calls regardless of timestamps."""
+        same_date = datetime.date(2025, 6, 1)
+        a_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+        b_ts = datetime.datetime(2025, 1, 5, 12, 0, 0)
+
+        waldur_resource = self._make_waldur_resource(same_date, a_ts)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(same_date, b_ts)
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_unset_backend_id(self, backend, mock_client):
+        """Resource with UNSET backend_id → no-op."""
+        waldur_resource = self._make_waldur_resource(
+            datetime.date(2025, 6, 1),
+            datetime.datetime(2025, 1, 10, 12, 0, 0),
+            backend_id=UNSET,
+        )
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.get_marketplace_resource.assert_not_called()
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_a_to_b_mode(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        """a_to_b mode: A wins even when A has older timestamp."""
+        backend_settings["end_date_sync_direction"] = "a_to_b"
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        a_date = datetime.date(2025, 6, 1)
+        a_ts = datetime.datetime(2025, 1, 5, 12, 0, 0)  # older
+        b_date = datetime.date(2025, 5, 1)
+        b_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)  # newer
+
+        waldur_resource = self._make_waldur_resource(a_date, a_ts)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(
+            b_date, b_ts
+        )
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.set_resource_end_date.assert_called_once_with(
+            UUID(self.BACKEND_ID), a_date
+        )
+
+    def test_sync_end_date_b_to_a_mode(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        """b_to_a mode: B wins even when B has older timestamp."""
+        backend_settings["end_date_sync_direction"] = "b_to_a"
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        a_date = datetime.date(2025, 6, 1)
+        a_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)  # newer
+        b_date = datetime.date(2025, 5, 1)
+        b_ts = datetime.datetime(2025, 1, 5, 12, 0, 0)  # older
+
+        waldur_resource = self._make_waldur_resource(a_date, a_ts)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(
+            b_date, b_ts
+        )
+
+        waldur_rest_client = MagicMock()
+
+        with patch(
+            "waldur_api_client.api.marketplace_provider_resources."
+            "marketplace_provider_resources_set_end_date.sync_detailed"
+        ) as mock_set:
+            backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+            mock_set.assert_called_once()
+            call_kwargs = mock_set.call_args
+            assert call_kwargs.kwargs["uuid"] == RESOURCE_UUID
+            assert call_kwargs.kwargs["body"].end_date == b_date
+
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_disabled_mode(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        """disabled mode: no API calls made at all."""
+        backend_settings["end_date_sync_direction"] = "disabled"
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        a_date = datetime.date(2025, 6, 1)
+        a_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+
+        waldur_resource = self._make_waldur_resource(a_date, a_ts)
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.get_marketplace_resource.assert_not_called()
+        mock_client.set_resource_end_date.assert_not_called()
+
+    def test_sync_end_date_a_to_b_same_date(
+        self, backend_settings, backend_components_passthrough, mock_client
+    ):
+        """a_to_b mode: no API calls when dates already match."""
+        backend_settings["end_date_sync_direction"] = "a_to_b"
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = mock_client
+
+        same_date = datetime.date(2025, 6, 1)
+        a_ts = datetime.datetime(2025, 1, 5, 12, 0, 0)
+        b_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
+
+        waldur_resource = self._make_waldur_resource(same_date, a_ts)
+        mock_client.get_marketplace_resource.return_value = self._make_b_resource(
+            same_date, b_ts
+        )
+
+        waldur_rest_client = MagicMock()
+        backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
+
+        mock_client.set_resource_end_date.assert_not_called()

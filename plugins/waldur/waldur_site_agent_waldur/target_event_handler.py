@@ -7,6 +7,9 @@ its state.
 OFFERING_USER handler: when a target offering user is created or updated with
 a username, triggers a full username sync from Waldur B to Waldur A so the
 username is propagated instantly without waiting for the next polling cycle.
+
+RESOURCE handler: when a target resource's end_date changes, triggers
+bidirectional end_date sync between Waldur A and Waldur B.
 """
 
 from __future__ import annotations
@@ -222,6 +225,83 @@ def make_target_offering_user_handler(
             logger.exception(
                 "Failed to sync offering user usernames after event for %s",
                 offering_user_uuid,
+            )
+
+    return handler
+
+
+def make_target_resource_end_date_handler(
+    source_offering: Offering,
+    backend,  # WaldurBackend — not type-hinted to avoid circular import
+):
+    """Create a STOMP handler for RESOURCE end_date events from Waldur B.
+
+    When a resource's end_date changes on Waldur B, triggers a bidirectional
+    sync via ``backend.sync_resource_end_date`` using last-update-wins logic.
+
+    Args:
+        source_offering: The source Waldur offering (Waldur A).
+        backend: The WaldurBackend instance.
+
+    Returns:
+        Handler function for STOMP RESOURCE messages from Waldur B.
+    """
+
+    def handler(
+        frame: stomp.utils.Frame,
+        target_offering: Offering,
+        user_agent: str,
+    ) -> None:
+        """Process RESOURCE end_date event from Waldur B and sync to Waldur A."""
+        del target_offering  # Not used — source_offering from closure is used instead
+        message = json.loads(frame.body)
+        action = message.get("action", "")
+        resource_uuid = message.get("resource_uuid", "")
+
+        if action != "end_date_updated":
+            return
+
+        requested_by = message.get("end_date_requested_by_full_name") or message.get(
+            "end_date_requested_by_uuid", "unknown"
+        )
+        logger.info(
+            "Resource %s end_date updated on Waldur B to %s by %s, triggering sync",
+            resource_uuid,
+            message.get("end_date"),
+            requested_by,
+        )
+
+        try:
+            source_client = get_client(
+                source_offering.api_url,
+                source_offering.api_token,
+                user_agent,
+                verify_ssl=source_offering.verify_ssl,
+            )
+
+            # Find the Waldur A resource that maps to this Waldur B resource
+            from waldur_api_client.api.marketplace_provider_resources import (  # noqa: PLC0415
+                marketplace_provider_resources_list,
+            )
+
+            resources = marketplace_provider_resources_list.sync(
+                client=source_client,
+                backend_id=resource_uuid,
+                offering_uuid=[source_offering.uuid],
+            )
+
+            if not resources:
+                logger.warning(
+                    "No Waldur A resource found with backend_id=%s", resource_uuid
+                )
+                return
+
+            waldur_resource = resources[0]
+            backend.sync_resource_end_date(waldur_resource, source_client)
+        except Exception:
+            logger.exception(
+                "Failed to sync end_date after event for resource %s",
+                resource_uuid,
             )
 
     return handler
