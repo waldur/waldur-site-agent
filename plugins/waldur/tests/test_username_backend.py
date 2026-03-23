@@ -209,9 +209,10 @@ class TestExtractAttributes:
 
 
 class TestGetUsername:
-    def test_returns_waldur_username(self, username_backend):
+    def test_always_returns_none(self, username_backend):
+        """get_username always returns None — username comes from Waldur B."""
         ou = _make_offering_user(user_username="alice")
-        assert username_backend.get_username(ou) == "alice"
+        assert username_backend.get_username(ou) is None
 
     def test_returns_none_for_unset(self, username_backend):
         ou = _make_offering_user(user_username=UNSET)
@@ -222,7 +223,7 @@ class TestGenerateUsername:
     def test_pushes_to_identity_bridge(self, username_backend, mock_httpx_client):
         ou = _make_offering_user(user_username="alice")
         result = username_backend.generate_username(ou)
-        assert result == "alice"
+        assert result == ""
         mock_httpx_client.post.assert_called_once()
         call_kwargs = mock_httpx_client.post.call_args
         assert call_kwargs[0][0] == "/api/identity-bridge/"

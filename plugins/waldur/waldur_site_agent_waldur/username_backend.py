@@ -138,13 +138,22 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
             logger.exception("Failed to fetch attribute config from Waldur A")
 
     def get_username(self, offering_user: OfferingUser) -> Optional[str]:
-        """Return existing user_username as local username."""
-        return _get_waldur_username(offering_user)
+        """Identity bridge does not own username assignment.
+
+        Usernames are assigned by Waldur B's service provider and pulled
+        back via sync_offering_user_usernames().
+        """
+        del offering_user
+        return None
 
     def generate_username(self, offering_user: OfferingUser) -> str:
-        """Push user to identity bridge, return user_username as local username."""
+        """Push user profile to identity bridge.
+
+        Returns empty string because the actual username is assigned by
+        Waldur B's service provider and synced back separately.
+        """
         self._push_user_to_identity_bridge(offering_user)
-        return offering_user.user_username or ""
+        return ""
 
     def sync_user_profiles(self, offering_users: list[OfferingUser]) -> None:
         """Batch push all offering user profiles to Waldur B."""
