@@ -47,3 +47,4 @@ End the entry with a `---` separator line.
 5. **Use sentence case**: Start each bullet with a capital letter, end with a period.
 6. **Preserve issue references**: Keep Jira/issue keys like [HPCMP-438] or [WAL-9725] in parentheses at the end of the relevant bullet point.
 7. **Deduplicate**: If two commits clearly address the same change (e.g., fix + follow-up fix), combine them into one bullet.
+8. **RC releases**: If the version contains `-rc.`, keep the entry shorter and more focused. Skip the Highlights section and use a single flat list of changes.
