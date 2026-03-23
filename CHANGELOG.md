@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.1-rc.1 - 2026-03-23
+
+- **Federation**: Add configurable `end_date_sync_direction` setting for controlling how resource end dates are synchronized between Waldur instances.
+- **SLURM**: Add default account setting to SLURM customer account creation.
+- **Core**: Fix readiness probe to use authenticated endpoint.
+- **Release**: Add RC release support with `-rc.N` version format.
+
+> 4 commits, 18 files changed (+981/-42 lines)
+
+---
+
 ## 1.0.0 - 2026-03-20
 
 ### Highlights
