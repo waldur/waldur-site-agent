@@ -109,6 +109,31 @@ class WaldurBackend(backends.BaseBackend):
         """Return source component names from configuration."""
         return list(self.backend_components.keys())
 
+    def _get_project_description(self, waldur_resource: WaldurResource) -> str:
+        """Extract project description from a Waldur resource, defaulting to empty string."""
+        if isinstance(waldur_resource.project_description, type(UNSET)):
+            return ""
+        return waldur_resource.project_description
+
+    def sync_resource_project(self, waldur_resource: WaldurResource) -> None:
+        """Sync project description from Waldur A to the corresponding project on Waldur B."""
+        project_uuid = waldur_resource.project_uuid
+        customer_uuid = waldur_resource.customer_uuid
+
+        if not project_uuid:
+            return
+
+        backend_id = f"{customer_uuid}_{project_uuid}"
+        description = self._get_project_description(waldur_resource)
+
+        existing = self.client.find_project_by_backend_id(backend_id)
+        if existing and description and existing.get("description", "") != description:
+            logger.info(
+                "Syncing project description for backend_id=%s",
+                backend_id,
+            )
+            self.client.update_project(existing["uuid"], description)
+
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
@@ -124,6 +149,7 @@ class WaldurBackend(backends.BaseBackend):
         project_uuid = waldur_resource.project_uuid
         customer_uuid = waldur_resource.customer_uuid
         project_name = waldur_resource.project_name or f"Project {project_uuid}"
+        project_description = self._get_project_description(waldur_resource)
 
         if not project_uuid:
             msg = "No project UUID in Waldur resource"
@@ -136,6 +162,7 @@ class WaldurBackend(backends.BaseBackend):
             customer_url=customer_url,
             name=project_name,
             backend_id=backend_id,
+            description=project_description,
         )
 
         if not project or not project.get("uuid"):

@@ -14,6 +14,7 @@ from typing import Optional
 from uuid import UUID
 
 from waldur_api_client.api.marketplace_resources import marketplace_resources_set_end_date
+from waldur_api_client.api.projects import projects_partial_update
 from waldur_api_client.api.roles import roles_list
 from waldur_api_client.api.version import version_retrieve
 from waldur_api_client.client import AuthenticatedClient
@@ -23,6 +24,7 @@ from waldur_api_client.models.generic_order_attributes import GenericOrderAttrib
 from waldur_api_client.models.order_create_request import OrderCreateRequest
 from waldur_api_client.models.order_create_request_limits import OrderCreateRequestLimits
 from waldur_api_client.models.order_details import OrderDetails
+from waldur_api_client.models.patched_project_request import PatchedProjectRequest
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.project_request import ProjectRequest
 from waldur_api_client.models.remote_eduteams_request_request import RemoteEduteamsRequestRequest
@@ -336,6 +338,7 @@ class WaldurClient(BaseClient):
                         "uuid": project.get("uuid", ""),
                         "url": project.get("url", ""),
                         "name": project.get("name", ""),
+                        "description": project.get("description", ""),
                     }
         except Exception:
             logger.exception("Failed to find project by backend_id=%s", backend_id)
@@ -373,13 +376,41 @@ class WaldurClient(BaseClient):
             "name": project.name if not isinstance(project.name, type(UNSET)) else "",
         }
 
+    def update_project(
+        self,
+        project_uuid: str,
+        description: str,
+    ) -> dict:
+        """Update a project's description on Waldur B.
+
+        Returns:
+            Dict with uuid, url and name of the updated project.
+        """
+        body = PatchedProjectRequest(description=description)
+
+        project = projects_partial_update.sync(
+            uuid=UUID(project_uuid),
+            client=self._api_client,
+            body=body,
+        )
+
+        return {
+            "uuid": str(project.uuid) if not isinstance(project.uuid, type(UNSET)) else "",
+            "url": project.url if not isinstance(project.url, type(UNSET)) else "",
+            "name": project.name if not isinstance(project.name, type(UNSET)) else "",
+            "description": project.description if not isinstance(project.description, type(UNSET)) else "",
+        }
+
     def find_or_create_project(
         self,
         customer_url: str,
         name: str,
         backend_id: str,
+        description: str = "",
     ) -> dict:
         """Find a project by backend_id, or create one if not found.
+
+        If the project exists but the description differs, updates it.
 
         Returns:
             Dict with uuid and url of the project.
@@ -387,10 +418,17 @@ class WaldurClient(BaseClient):
         existing = self.find_project_by_backend_id(backend_id)
         if existing:
             logger.info("Found existing project with backend_id=%s", backend_id)
+            if description and existing.get("description", "") != description:
+                logger.info(
+                    "Updating description for project %s (backend_id=%s)",
+                    existing["uuid"],
+                    backend_id,
+                )
+                return self.update_project(existing["uuid"], description)
             return existing
 
         logger.info("Creating new project %s with backend_id=%s", name, backend_id)
-        return self.create_project(customer_url, name, backend_id)
+        return self.create_project(customer_url, name, backend_id, description)
 
     # --- User Operations ---
 

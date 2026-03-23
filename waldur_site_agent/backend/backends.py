@@ -812,6 +812,14 @@ class BaseBackend(ABC):
         del waldur_a_offering_uuid, waldur_rest_client
         return False
 
+    def sync_resource_project(self, waldur_resource: WaldurResource) -> None:
+        """Sync project metadata (e.g. description) from Waldur to the backend.
+
+        Called once per resource during membership sync. Override in backends
+        that manage their own projects (e.g., Waldur federation). Default: no-op.
+        """
+        del waldur_resource
+
     def process_existing_users(self, existing_users: set[str]) -> None:
         """Process existing users on the backend.
 

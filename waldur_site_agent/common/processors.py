@@ -1392,6 +1392,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 ResourceFieldEnum.DOWNSCALED,
                 ResourceFieldEnum.OFFERING_PLUGIN_OPTIONS,
                 ResourceFieldEnum.OFFERING_BACKEND_ID,
+                ResourceFieldEnum.PROJECT_NAME,
+                ResourceFieldEnum.PROJECT_DESCRIPTION,
+                ResourceFieldEnum.CUSTOMER_UUID,
             ],
         }
 
@@ -2061,6 +2064,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         for waldur_resource, backend_resource_info in resource_report.values():
             try:
+                self.resource_backend.sync_resource_project(waldur_resource)
                 resource_usernames = self._sync_resource_users(
                     waldur_resource, backend_resource_info, offering_users
                 )
