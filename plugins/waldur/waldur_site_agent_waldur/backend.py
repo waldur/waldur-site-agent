@@ -355,6 +355,23 @@ class WaldurBackend(backends.BaseBackend):
             )
             raise
 
+    def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
+        """Get resource limits from Waldur B converted to source component names.
+        """
+        target_limits = self.client.get_resource_limits(resource_backend_id)
+        if not target_limits:
+            return {}
+
+        source_limits_float = self.component_mapper.convert_usage_from_target(
+            {key: float(value) for key, value in target_limits.items()}
+        )
+
+        source_limits: dict[str, int] = {
+            key: int(value) for key, value in source_limits_float.items()
+        }
+
+        return source_limits
+
     def _collect_resource_limits(
         self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:

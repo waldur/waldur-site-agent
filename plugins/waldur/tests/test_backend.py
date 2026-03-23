@@ -277,6 +277,36 @@ class TestSetLimits:
         assert target_limits == {"gpu_hours": 500, "storage_gb_hours": 1000}
 
 
+class TestGetLimits:
+    def test_get_resource_limits_passthrough(self, backend, mock_client):
+        mock_client.get_resource_limits.return_value = {"cpu": 200, "mem": 100}
+
+        limits = backend.get_resource_limits(str(RESOURCE_UUID))
+
+        assert limits == {"cpu": 200, "mem": 100}
+
+    def test_get_resource_limits_with_conversion(self, backend_with_conversion, mock_client):
+        mock_client.get_resource_limits.return_value = {
+            "gpu_hours": 500,
+            "storage_gb_hours": 800,
+        }
+
+        limits = backend_with_conversion.get_resource_limits(str(RESOURCE_UUID))
+
+        # node_hours = 500/5 + 800/10 = 100 + 80 = 180
+        assert limits["node_hours"] == 180
+
+    def test_get_resource_limits_with_conversion_missing_target_component(
+        self, backend_with_conversion, mock_client
+    ):
+        mock_client.get_resource_limits.return_value = {"gpu_hours": 250}
+
+        limits = backend_with_conversion.get_resource_limits(str(RESOURCE_UUID))
+
+        # node_hours = 250/5 = 50
+        assert limits["node_hours"] == 50
+
+
 class TestUsageReporting:
     def test_get_usage_report_passthrough(self, backend, mock_client):
         mock_usage = MagicMock()
