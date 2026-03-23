@@ -1,17 +1,16 @@
 # Changelog
 
-## 1.0.1-rc.2 - 2026-03-23
+## 1.0.1-rc.3 - 2026-03-23
 
-### Changes
-
-- **Federation**: Add configurable `end_date_sync_direction` setting for controlling resource end date synchronization.
+- **Federation**: Add configurable `end_date_sync_direction` setting for controlling resource end date synchronization between Waldur instances.
+- **Federation**: Sync project description from source Waldur to target Waldur.
 - **Federation**: Fix resource limits being overridden during event processing.
-- **Federation**: Fix identity bridge backend writing CUID as offering user username instead of the correct value.
+- **Federation**: Fix identity bridge backend writing CUID as offering user username.
 - **SLURM**: Add default account setting to SLURM customer account.
 - **Core**: Fix readiness probe to use authenticated endpoint.
 - **Release tooling**: Add RC release support with `-rc.N` format.
 
-> 7 commits, 37 files changed (+1112/-105 lines)
+> 9 commits, 38 files changed (+1329/-106 lines)
 
 ---
 
