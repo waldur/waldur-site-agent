@@ -6,8 +6,13 @@ waldur-site-agent.
 ## Quick Start
 
 ```bash
+# Stable release
 ./scripts/release.sh 0.10.0
 # Review the commit, then push:
+git push origin main --tags
+
+# Release candidate
+./scripts/release.sh 0.10.0-rc.1
 git push origin main --tags
 ```
 
@@ -114,6 +119,37 @@ python3 scripts/generate_changelog_data.py <CURRENT_REF> <PREVIOUS_REF>
 All packages (core + plugins) share the same version number,
 following `MAJOR.MINOR.PATCH` (e.g. `0.10.0`). Tags do **not**
 use a `v` prefix.
+
+Release candidates use the `-rc.N` suffix in git tags
+(e.g. `0.10.0-rc.1`). The release script automatically converts
+this to PEP 440 format (`0.10.0rc1`) for `pyproject.toml` files
+and PyPI publishing. Helm and Docker use the git tag as-is.
+
+## Release Candidates
+
+RC releases follow the same workflow as stable releases:
+
+```bash
+./scripts/release.sh 0.10.0-rc.1
+git push origin main --tags
+```
+
+### How RCs differ from stable releases
+
+| Aspect | Stable | RC |
+|---|---|---|
+| Git tag | `0.10.0` | `0.10.0-rc.1` |
+| pyproject.toml version | `0.10.0` | `0.10.0rc1` (PEP 440) |
+| Helm chart version | `0.10.0` | `0.10.0-rc.1` |
+| Docker `:latest` tag | Updated | **Not** updated |
+| Changelog | New entry | Replaces prior RC entries for same base version |
+
+### Typical RC workflow
+
+1. `./scripts/release.sh 0.10.0-rc.1` — first candidate
+2. Test, find issues, fix on main
+3. `./scripts/release.sh 0.10.0-rc.2` — replaces rc.1 changelog entry
+4. `./scripts/release.sh 0.10.0` — stable release, includes all changes since last stable
 
 ## Troubleshooting
 

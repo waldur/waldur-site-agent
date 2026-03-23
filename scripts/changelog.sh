@@ -24,12 +24,24 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 # ── Determine previous version ────────────────────────────────────────────
+IS_RC="${IS_RC:-false}"
+BASE_VERSION=$(echo "$VERSION" | sed 's/-rc\.[0-9]*$//')
+
 if [ -f "$CHANGELOG" ]; then
-    PREV_TAG=$(grep -m 1 "^## " "$CHANGELOG" | sed 's/^## \([^ ]*\).*/\1/')
+    if [ "$IS_RC" = "true" ]; then
+        # For RC releases, find the last *stable* version (skip RC entries)
+        PREV_TAG=$(grep "^## " "$CHANGELOG" | grep -v "\-rc\." | head -n 1 | sed 's/^## \([^ ]*\).*/\1/')
+    else
+        PREV_TAG=$(grep -m 1 "^## " "$CHANGELOG" | sed 's/^## \([^ ]*\).*/\1/')
+    fi
 fi
 
 if [ -z "${PREV_TAG:-}" ]; then
-    PREV_TAG=$(git -C "$PROJECT_DIR" tag --sort=-v:refname | head -n 1)
+    if [ "$IS_RC" = "true" ]; then
+        PREV_TAG=$(git -C "$PROJECT_DIR" tag --sort=-v:refname | grep -v "\-rc\." | head -n 1)
+    else
+        PREV_TAG=$(git -C "$PROJECT_DIR" tag --sort=-v:refname | head -n 1)
+    fi
 fi
 
 if [ -z "${PREV_TAG:-}" ]; then
@@ -110,6 +122,26 @@ echo ""
 echo "[3/3] Updating CHANGELOG.md..."
 
 if [ -f "$CHANGELOG" ]; then
+    # Remove prior RC entries for the same base version
+    if [ "$IS_RC" = "true" ]; then
+        python3 -c "
+import re, sys
+
+base = '$BASE_VERSION'
+lines = open('$CHANGELOG').readlines()
+out = []
+skip = False
+for line in lines:
+    if re.match(r'^## ' + re.escape(base) + r'-rc\.\d+', line):
+        skip = True
+        continue
+    if skip and re.match(r'^## ', line):
+        skip = False
+    if not skip:
+        out.append(line)
+open('$CHANGELOG', 'w').writelines(out)
+"
+    fi
     {
         echo "# Changelog"
         echo ""

@@ -27,6 +27,19 @@ INTERNAL_PACKAGES = [
 ]
 
 
+def to_pep440(version: str) -> str:
+    """Convert SemVer RC version to PEP 440 format.
+
+    Examples:
+        1.0.0-rc.1 -> 1.0.0rc1
+        1.0.0      -> 1.0.0  (unchanged)
+    """
+    m = re.match(r"^(\d+\.\d+\.\d+)-rc\.(\d+)$", version)
+    if m:
+        return f"{m.group(1)}rc{m.group(2)}"
+    return version
+
+
 def bump_file(path: Path, version: str) -> list[str]:
     """Update version and internal dependency pins in a pyproject.toml.
 
@@ -68,16 +81,20 @@ def main() -> int:
 
     version = args.version
 
-    if not re.match(r"^\d+\.\d+\.\d+", version):
+    if not re.match(r"^\d+\.\d+\.\d+(-rc\.\d+)?$", version):
         print(
-            f"Error: '{version}' does not look like a valid version (expected X.Y.Z)",
+            f"Error: '{version}' does not look like a valid version (expected X.Y.Z or X.Y.Z-rc.N)",
             file=sys.stderr,
         )
         return 1
 
+    pypi_version = to_pep440(version)
+    if pypi_version != version:
+        print(f"  RC detected: {version} -> {pypi_version} (PEP 440)")
+
     # Root pyproject.toml
     root_toml = ROOT / "pyproject.toml"
-    changes = bump_file(root_toml, version)
+    changes = bump_file(root_toml, pypi_version)
     if changes:
         print(f"  {root_toml.relative_to(ROOT)}: {', '.join(changes)}")
 
@@ -97,11 +114,11 @@ def main() -> int:
                 file=sys.stderr,
             )
             continue
-        changes = bump_file(toml, version)
+        changes = bump_file(toml, pypi_version)
         if changes:
             print(f"  {toml.relative_to(ROOT)}: {', '.join(changes)}")
 
-    print(f"\nAll packages bumped to {version}")
+    print(f"\nAll packages bumped to {pypi_version}")
     return 0
 
 
