@@ -206,19 +206,19 @@ class TestIdentityBridgeSync:
 class TestIdentityBridgeGetUsername:
     """Test get_username and generate_username methods."""
 
-    def test_get_username_returns_waldur_username(self, backend):
-        """get_username extracts user_username from OfferingUser."""
+    def test_get_username_always_returns_none(self, backend):
+        """get_username always returns None — username comes from Waldur B."""
         ou = _make_offering_user(username="some-user@acc.myaccessid.org")
-        assert backend.get_username(ou) == "some-user@acc.myaccessid.org"
+        assert backend.get_username(ou) is None
 
-    def test_generate_username_pushes_and_returns(self, backend, test_username):
-        """generate_username pushes to identity bridge and returns username."""
+    def test_generate_username_pushes_and_returns_empty(self, backend, test_username):
+        """generate_username pushes to identity bridge and returns empty string."""
         ou = _make_offering_user(
             username=test_username,
             first_name="Gen",
             last_name="User",
         )
         result = backend.generate_username(ou)
-        assert result == test_username
+        assert result == ""
 
         _cleanup(backend, test_username)
