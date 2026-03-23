@@ -148,6 +148,7 @@ class TestProjectOperations:
             "uuid": "proj-uuid",
             "url": "/api/projects/proj-uuid/",
             "name": "Existing",
+            "description": "",
         }
 
         with patch.object(
@@ -175,8 +176,67 @@ class TestProjectOperations:
                 customer_url="/api/customers/cust-uuid/",
                 name="New Project",
                 backend_id="test_backend_id",
+                description="A test project",
             )
             assert result["uuid"] == "new-proj-uuid"
+            client.create_project.assert_called_once_with(
+                "/api/customers/cust-uuid/",
+                "New Project",
+                "test_backend_id",
+                "A test project",
+            )
+
+    def test_find_or_create_project_updates_description(self, client):
+        existing_project = {
+            "uuid": "proj-uuid",
+            "url": "/api/projects/proj-uuid/",
+            "name": "Existing",
+            "description": "Old description",
+        }
+        updated_project = {
+            "uuid": "proj-uuid",
+            "url": "/api/projects/proj-uuid/",
+            "name": "Existing",
+            "description": "New description",
+        }
+
+        with (
+            patch.object(
+                client, "find_project_by_backend_id", return_value=existing_project
+            ),
+            patch.object(client, "update_project", return_value=updated_project),
+        ):
+            result = client.find_or_create_project(
+                customer_url="/api/customers/cust-uuid/",
+                name="Existing",
+                backend_id="test_backend_id",
+                description="New description",
+            )
+            assert result["description"] == "New description"
+            client.update_project.assert_called_once_with("proj-uuid", "New description")
+
+    def test_find_or_create_project_skips_update_when_description_matches(self, client):
+        existing_project = {
+            "uuid": "proj-uuid",
+            "url": "/api/projects/proj-uuid/",
+            "name": "Existing",
+            "description": "Same description",
+        }
+
+        with (
+            patch.object(
+                client, "find_project_by_backend_id", return_value=existing_project
+            ),
+            patch.object(client, "update_project") as mock_update,
+        ):
+            result = client.find_or_create_project(
+                customer_url="/api/customers/cust-uuid/",
+                name="Existing",
+                backend_id="test_backend_id",
+                description="Same description",
+            )
+            assert result["uuid"] == "proj-uuid"
+            mock_update.assert_not_called()
 
 
 class TestUserResolution:

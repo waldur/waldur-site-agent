@@ -1516,3 +1516,78 @@ class TestEndDateSync:
         backend.sync_resource_end_date(waldur_resource, waldur_rest_client)
 
         mock_client.set_resource_end_date.assert_not_called()
+
+
+class TestSyncResourceProject:
+    """Tests for sync_resource_project updating project description on Waldur B."""
+
+    def test_updates_description_when_changed(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Old description",
+        }
+
+        resource = MagicMock()
+        resource.project_uuid = "proj-uuid-a"
+        resource.customer_uuid = "cust-uuid-a"
+        resource.project_description = "New description"
+
+        backend.sync_resource_project(resource)
+
+        mock_client.update_project.assert_called_once_with("proj-b-uuid", "New description")
+
+    def test_skips_update_when_description_matches(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Same description",
+        }
+
+        resource = MagicMock()
+        resource.project_uuid = "proj-uuid-a"
+        resource.customer_uuid = "cust-uuid-a"
+        resource.project_description = "Same description"
+
+        backend.sync_resource_project(resource)
+
+        mock_client.update_project.assert_not_called()
+
+    def test_skips_when_no_project_uuid(self, backend, mock_client):
+        resource = MagicMock()
+        resource.project_uuid = None
+
+        backend.sync_resource_project(resource)
+
+        mock_client.find_project_by_backend_id.assert_not_called()
+
+    def test_skips_when_project_not_found(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = None
+
+        resource = MagicMock()
+        resource.project_uuid = "proj-uuid-a"
+        resource.customer_uuid = "cust-uuid-a"
+        resource.project_description = "Some description"
+
+        backend.sync_resource_project(resource)
+
+        mock_client.update_project.assert_not_called()
+
+    def test_skips_when_description_is_unset(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Existing",
+        }
+
+        resource = MagicMock()
+        resource.project_uuid = "proj-uuid-a"
+        resource.customer_uuid = "cust-uuid-a"
+        resource.project_description = UNSET
+
+        backend.sync_resource_project(resource)
+
+        mock_client.update_project.assert_not_called()
