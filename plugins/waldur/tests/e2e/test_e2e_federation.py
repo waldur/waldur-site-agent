@@ -302,6 +302,39 @@ class TestE2EFederationLifecycle:
             resource_b.state,
         )
 
+        # Verify: effective_id sync
+        # If B's resource already has a backend_id (assigned by B's provider),
+        # it should have been synced to A's effective_id during order completion.
+        resource_b_backend_id = resource_b.backend_id
+        if isinstance(resource_b_backend_id, type(UNSET)):
+            resource_b_backend_id = ""
+
+        # Re-fetch A's resource to see the effective_id after sync
+        our_resource = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid_a, client=waldur_client_a
+        )
+        resource_a_effective_id = our_resource.effective_id
+        if isinstance(resource_a_effective_id, type(UNSET)):
+            resource_a_effective_id = ""
+
+        if resource_b_backend_id:
+            assert resource_a_effective_id == resource_b_backend_id, (
+                f"effective_id on A ({resource_a_effective_id!r}) should match "
+                f"backend_id on B ({resource_b_backend_id!r})"
+            )
+            logger.info(
+                "effective_id synced: A.effective_id=%s == B.backend_id=%s",
+                resource_a_effective_id,
+                resource_b_backend_id,
+            )
+        else:
+            logger.info(
+                "B's resource has no backend_id yet — effective_id sync skipped "
+                "(A.effective_id=%r)",
+                resource_a_effective_id,
+            )
+        _state["effective_id"] = resource_a_effective_id
+
         # Report final snapshots
         report.flush_api_log()
         snapshot_resource(
@@ -318,6 +351,7 @@ class TestE2EFederationLifecycle:
         report.text(
             f"\n**Changes:** Resource created on B. "
             f"A's backend_id = B's resource UUID (`{our_resource.backend_id}`). "
+            f"A's effective_id = B's backend_id (`{resource_a_effective_id or 'not set'}`). "
             f"Order final state: `{final_state}`."
         )
 

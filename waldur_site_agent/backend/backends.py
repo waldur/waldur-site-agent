@@ -410,6 +410,31 @@ class BaseBackend(ABC):
             usage=usage,
         )
 
+    def sync_resource_end_date(
+        self,
+        waldur_resource: WaldurResource,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> None:
+        """Sync resource end_date between source and target systems.
+
+        No-op by default. Override in backends that manage end_date
+        synchronization (e.g., Waldur-to-Waldur federation).
+        """
+        del waldur_resource, waldur_rest_client
+
+    def sync_resource_effective_id(
+        self,
+        waldur_resource: WaldurResource,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> None:
+        """Sync effective_id from the backend to the source Waldur instance.
+
+        No-op by default. Override in backends where a downstream provider
+        assigns a backend_id that should be reflected as effective_id on
+        the source resource (e.g., Waldur-to-Waldur federation).
+        """
+        del waldur_resource, waldur_rest_client
+
     def _pre_delete_resource(self, waldur_resource: WaldurResource) -> None:
         """Perform actions before deleting the resource in the backend.
 

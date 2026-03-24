@@ -12,8 +12,11 @@ from typing import Optional
 from uuid import UUID
 
 from waldur_api_client.api.marketplace_provider_resources import (
+    marketplace_provider_resources_set_effective_id,
     marketplace_provider_resources_set_end_date,
 )
+from waldur_api_client.models.resource_effective_id_request import ResourceEffectiveIDRequest
+from waldur_api_client.models.resource_field_enum import ResourceFieldEnum
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
@@ -439,6 +442,119 @@ class WaldurBackend(backends.BaseBackend):
     def get_resource_metadata(self, resource_backend_id: str) -> dict:
         """Return metadata about the resource on Waldur B."""
         return {"waldur_b_resource_uuid": resource_backend_id}
+
+    # --- Effective ID ---
+
+    def get_effective_id(self, resource_backend_id: str) -> str:
+        """Get the backend_id of the resource on Waldur B (to use as effective_id on Waldur A).
+
+        The resource_backend_id is the UUID of the resource on Waldur B.
+        Waldur B's own provider assigns a backend_id to that resource
+        (e.g., a SLURM allocation name). We read that and return it.
+
+        Only fetches the ``backend_id`` field to avoid transferring the
+        full resource payload.
+
+        Args:
+            resource_backend_id: UUID of the resource on Waldur B.
+
+        Returns:
+            The backend_id from Waldur B, or empty string if not available.
+        """
+        try:
+            resource = self.client.get_marketplace_resource(
+                UUID(resource_backend_id),
+                field=[ResourceFieldEnum.BACKEND_ID],
+            )
+            if resource is None:
+                return ""
+            backend_id = resource.backend_id
+            if isinstance(backend_id, type(UNSET)) or not backend_id:
+                return ""
+            return backend_id
+        except Exception:
+            logger.exception(
+                "Failed to get effective_id for resource %s from Waldur B",
+                resource_backend_id,
+            )
+            return ""
+
+    def sync_resource_effective_id(
+        self,
+        waldur_resource: WaldurResource,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> None:
+        """Sync effective_id from Waldur B to Waldur A for a resource.
+
+        Reads the backend_id assigned by B's own provider and writes it
+        to the Waldur A resource as effective_id. Skips if unchanged.
+
+        Args:
+            waldur_resource: The resource on Waldur A.
+            waldur_rest_client: Authenticated client for the Waldur A API.
+        """
+        resource_backend_id = waldur_resource.backend_id
+        if isinstance(resource_backend_id, type(UNSET)) or not resource_backend_id:
+            return
+
+        effective_id = self.get_effective_id(resource_backend_id)
+        if not effective_id:
+            return
+
+        current_effective_id = getattr(waldur_resource, "effective_id", "")
+        if isinstance(current_effective_id, type(UNSET)):
+            current_effective_id = ""
+
+        if effective_id == current_effective_id:
+            return
+
+        logger.info(
+            "Syncing effective_id for resource %s (%s): %s -> %s",
+            waldur_resource.name,
+            waldur_resource.backend_id,
+            current_effective_id,
+            effective_id,
+        )
+        marketplace_provider_resources_set_effective_id.sync(
+            client=waldur_rest_client,
+            uuid=waldur_resource.uuid.hex,
+            body=ResourceEffectiveIDRequest(effective_id=effective_id),
+        )
+
+    def _pull_backend_resource(
+        self, resource_backend_id: str
+    ) -> Optional[BackendResourceInfo]:
+        """Pull resource data from Waldur B, including backend_id for effective_id sync."""
+        logger.info("Pulling resource %s from Waldur B", resource_backend_id)
+
+        resource = self.client.get_marketplace_resource(UUID(resource_backend_id))
+        if resource is None:
+            logger.warning("Resource %s not found on Waldur B", resource_backend_id)
+            return None
+
+        # Extract Waldur B's backend_id as effective_id
+        effective_id = ""
+        backend_id_val = resource.backend_id
+        if not isinstance(backend_id_val, type(UNSET)) and backend_id_val:
+            effective_id = backend_id_val
+
+        users = self.client.list_resource_users(resource_backend_id)
+
+        report = self._get_usage_report([resource_backend_id])
+        usage = report.get(resource_backend_id)
+
+        if usage is None:
+            empty_usage: dict[str, float] = {
+                comp: 0.0 for comp in self.backend_components
+            }
+            usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
+
+        return BackendResourceInfo(
+            backend_id=resource_backend_id,
+            effective_id=effective_id,
+            users=users,
+            usage=usage,
+        )
 
     # --- Usage Reporting ---
 

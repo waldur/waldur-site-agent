@@ -13,7 +13,14 @@ import time
 from typing import Optional
 from uuid import UUID
 
-from waldur_api_client.api.marketplace_resources import marketplace_resources_set_end_date
+from waldur_api_client.api.marketplace_resources import (
+    marketplace_resources_list,
+    marketplace_resources_retrieve,
+    marketplace_resources_set_end_date,
+    marketplace_resources_team_list,
+    marketplace_resources_terminate,
+    marketplace_resources_update_limits,
+)
 from waldur_api_client.api.projects import projects_partial_update
 from waldur_api_client.api.roles import roles_list
 from waldur_api_client.api.version import version_retrieve
@@ -180,10 +187,6 @@ class WaldurClient(BaseClient):
         Returns:
             Order UUID.
         """
-        from waldur_api_client.api.marketplace_resources import (  # noqa: PLC0415
-            marketplace_resources_update_limits,
-        )
-
         request_limits = ResourceUpdateLimitsRequestLimits()
         for key, value in limits.items():
             request_limits[key] = value
@@ -202,10 +205,6 @@ class WaldurClient(BaseClient):
         Returns:
             Order UUID.
         """
-        from waldur_api_client.api.marketplace_resources import (  # noqa: PLC0415
-            marketplace_resources_terminate,
-        )
-
         body = ResourceTerminateRequest()
         result = marketplace_resources_terminate.sync(
             uuid=resource_uuid,
@@ -267,15 +266,26 @@ class WaldurClient(BaseClient):
 
     # --- Resource Operations ---
 
-    def get_marketplace_resource(self, resource_uuid: UUID) -> Resource:
-        """Retrieve a marketplace resource by UUID from Waldur B."""
-        from waldur_api_client.api.marketplace_resources import (  # noqa: PLC0415
-            marketplace_resources_retrieve,
-        )
+    def get_marketplace_resource(
+        self,
+        resource_uuid: UUID,
+        field: Optional[list] = None,
+    ) -> Resource:
+        """Retrieve a marketplace resource by UUID from Waldur B.
+
+        Args:
+            resource_uuid: UUID of the resource to retrieve.
+            field: Optional list of ResourceFieldEnum values to limit
+                the response to specific fields.
+        """
+        kwargs = {}
+        if field is not None:
+            kwargs["field"] = field
 
         return marketplace_resources_retrieve.sync(
             uuid=resource_uuid,
             client=self._api_client,
+            **kwargs,
         )
 
     def list_marketplace_resources(
@@ -283,10 +293,6 @@ class WaldurClient(BaseClient):
         offering_uuid: Optional[UUID] = None,
     ) -> list[Resource]:
         """List marketplace resources, optionally filtered by offering."""
-        from waldur_api_client.api.marketplace_resources import (  # noqa: PLC0415
-            marketplace_resources_list,
-        )
-
         kwargs = {}
         if offering_uuid:
             kwargs["offering_uuid"] = [offering_uuid]
@@ -308,10 +314,6 @@ class WaldurClient(BaseClient):
 
     def get_resource_team(self, resource_uuid: UUID) -> list:
         """Get the team (users) associated with a resource on Waldur B."""
-        from waldur_api_client.api.marketplace_resources import (  # noqa: PLC0415
-            marketplace_resources_team_list,
-        )
-
         return marketplace_resources_team_list.sync(
             uuid=resource_uuid,
             client=self._api_client,
