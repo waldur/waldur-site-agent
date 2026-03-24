@@ -873,6 +873,12 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             else:
                 logger.warning("The order processing was not finished, skipping to the next one")
 
+        except backend_exceptions.BackendNotReadyError as e:
+            logger.warning(
+                "Order %s not ready for processing yet, will retry on next cycle: %s",
+                order.uuid,
+                e,
+            )
         except Exception as e:
             logger.exception(
                 "Error while processing order %s (%s %s): %s",
@@ -1701,6 +1707,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         set[str], set[str], set[str],
         dict[str, str], dict[str, str],
         dict[str, str], dict[str, dict],
+        dict[str, OfferingUserState],
     ]:
         """Group resource usernames into existing, stale, and new sets.
 
@@ -1708,7 +1715,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         to determine which users need to be added or removed.
 
         Returns:
-            A 7-tuple of:
+            An 8-tuple of:
             - existing_usernames: users present in both Waldur and backend
             - stale_usernames: users in Waldur team but not in resource permissions
             - new_usernames: users in resource permissions but not on backend
@@ -1716,6 +1723,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             - user_emails: mapping of username to email address
             - user_cuids: mapping of offering username to CUID (user_username)
             - user_attributes: mapping of offering username to profile attributes
+            - offering_user_states: mapping of offering username to OfferingUserState
         """
         logger.info("Fetching new, existing and stale resource users")
         usernames: list[str] = backend_resource_info.users
@@ -1811,6 +1819,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             if attrs:
                 user_attributes[ou_username] = attrs
 
+        offering_user_states: dict[str, OfferingUserState] = {
+            ou.username: ou.state
+            for ou in offering_users
+            if ou.username
+        }
+
         return (
             existing_usernames,
             stale_usernames,
@@ -1819,6 +1833,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             user_emails,
             user_cuids,
             user_attributes,
+            offering_user_states,
         )
 
     def _sync_resource_users(
@@ -1841,6 +1856,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             user_emails,
             user_cuids,
             user_attributes,
+            offering_user_states,
         ) = self._group_resource_usernames(
             waldur_resource, backend_resource_info, offering_users
         )
@@ -1865,6 +1881,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             user_emails=user_emails,
             user_cuids=user_cuids,
             user_attributes=user_attributes,
+            offering_user_states=offering_user_states,
         )
 
         self.resource_backend.remove_users_from_resource(

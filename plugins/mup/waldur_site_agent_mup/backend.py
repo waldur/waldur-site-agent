@@ -5,25 +5,49 @@ This module provides integration between Waldur Mastermind and MUP
 for managing project allocations and user memberships.
 
 Mapping:
-- Waldur Project -> MUP Project
-- Waldur Resource -> MUP Allocation
+- Waldur Project -> MUP Project (1:1, using grant number from project name)
+- Waldur Resource -> MUP Allocation (multiple allocations per project)
 - Waldur User -> MUP User
 """
 
 import logging
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import date, datetime, timedelta
+from typing import Any, Optional, cast
 
+import pycountry
+
+from waldur_api_client.models.offering_user import OfferingUser
+from waldur_api_client.models.offering_user_state import OfferingUserState
+from waldur_api_client.models.project_user import ProjectUser
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_limits import ResourceLimits
 
 from waldur_site_agent.backend import BackendType, backends
 from waldur_site_agent.backend.structures import BackendResourceInfo
-from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.exceptions import BackendError, BackendNotReadyError
 from waldur_site_agent_mup.client import MUPClient, MUPError
 
 logger = logging.getLogger(__name__)
 
+GENDER_MAP = {
+    0: "Don't want to reply",
+    1: "Male",
+    2: "Female",
+    9: "Don't want to reply",
+}
+
+ORG_TYPE_MAPPING = {
+    "university": "Academia",
+    "research-institution": "Academia",
+    "research": "Academia",
+    "company": "Industry",
+    "government": "Public Administration",
+}
+
+COUNTRIES = [(country.alpha_2, country.name) for country in pycountry.countries]
+COUNTRIES_DICT = cast(dict[str, str], dict(COUNTRIES))
+
+PROJECT_MANAGER_ROLE = "PROJECT.MANAGER"
 
 class MUPBackend(backends.BaseBackend):
     """MUP backend implementation for Waldur Site Agent.
@@ -125,6 +149,134 @@ class MUPBackend(backends.BaseBackend):
         msg = "No allocations were created - all components had zero limits or failed"
         raise BackendError(msg)
 
+    def _map_gender(self, gender_code: Optional[int]) -> Optional[str]:
+
+        if gender_code is None:
+            return None
+
+        return GENDER_MAP.get(gender_code, "Other")
+
+    def _map_country(self, country_code: Optional[str]) -> Optional[str]:
+        if not country_code:
+            return None
+
+        return COUNTRIES_DICT.get(country_code.upper(), country_code)
+
+    def _extract_birth_year(self, birth_date) -> Optional[int]:
+        if birth_date is None:
+            return None
+
+        if isinstance(birth_date, (date, datetime)):
+            return birth_date.year
+
+        return None
+
+    def _map_organization_type_to_mup_type(self, org_type: Optional[str]) -> str:
+        if not org_type:
+            return "Other"
+
+        # The field can be SCHAC URN or simple identifier
+        if org_type.startswith("urn:schac:homeOrganizationType:"):
+            parts = org_type.split(":")
+            if len(parts) >= 4:
+                org_type = parts[-1]
+
+        org_type = org_type.lower()
+        return ORG_TYPE_MAPPING.get(org_type, "Other")
+
+    def _year_from_attr_birth_date(self, val: object) -> Optional[int]:
+        """Extract birth year from serialized user_attributes birth_date."""
+        if val is None:
+            return None
+        if isinstance(val, str) and len(val) >= 4:
+            try:
+                return int(val[:4])
+            except ValueError:
+                return None
+        if isinstance(val, (date, datetime)):
+            return val.year
+        return None
+
+    def _build_waldur_user_dict_from_attributes(
+        self, username: str, attrs: dict[str, Any], email: str
+    ) -> dict[str, Any]:
+        """Build the waldur_user dict for _get_or_create_user from membership kwargs.
+
+        Keys match what _get_or_create_user reads from OfferingUser-backed dicts.
+        """
+        full_name = str(attrs.get("full_name") or "")
+        name_parts = full_name.split(" ", 1) if full_name else ["", ""]
+        first_name = str(attrs.get("first_name") or name_parts[0])
+        last_name = str(
+            attrs.get("last_name") or (name_parts[1] if len(name_parts) > 1 else "")
+        )
+
+        gender_raw = attrs.get("gender")
+        gender_out: Optional[str] = None
+        if isinstance(gender_raw, int):
+            gender_out = self._map_gender(gender_raw)
+        elif isinstance(gender_raw, str) and gender_raw:
+            gender_out = gender_raw
+
+        country_raw = attrs.get("country_of_residence")
+        country_out: Optional[str] = None
+        if isinstance(country_raw, str) and country_raw:
+            country_out = self._map_country(country_raw) or country_raw
+
+        org_type_raw = attrs.get("organization_type")
+        inst_out: Optional[str] = None
+        if org_type_raw:
+            inst_out = self._map_organization_type_to_mup_type(str(org_type_raw))
+
+        affil_raw = attrs.get("organization")
+        affil_str = str(affil_raw) if isinstance(affil_raw, str) else ""
+
+        return {
+            "username": username,
+            "email": email,
+            "first_name": first_name,
+            "last_name": last_name,
+            "personal_title": attrs.get("personal_title"),
+            "gender": gender_out,
+            "year_of_birth": self._year_from_attr_birth_date(attrs.get("birth_date")),
+            "country": country_out,
+            "type_of_institution": inst_out,
+            "affiliated_institution": affil_str,
+        }
+
+    def _parse_backend_id(self, backend_id: str) -> tuple[int, Optional[int]]:
+        """Parse a backend_id string into (project_id, allocation_id)."""
+        if "_" in backend_id:
+            parts = backend_id.split("_", 1)
+            try:
+                return int(parts[0]), int(parts[1])
+            except ValueError:
+                pass
+        return int(backend_id), None
+
+    def _extract_grant_from_project_name(self, project_name: str) -> str:
+        if not project_name or not project_name.strip():
+            msg = "Project name is required to extract grant number"
+            raise BackendError(msg)
+
+        parts = [part.strip() for part in project_name.split("/")]
+
+        if len(parts) < 2:
+            msg = (
+                f"Project name '{project_name}' does not contain grant number. "
+            )
+            raise BackendError(msg)
+
+        grant_number = parts[1]
+        if not grant_number:
+            msg = (
+                f"Grant number is empty in project name '{project_name}'. "
+            )
+            raise BackendError(msg)
+
+        logger.debug("Extracted grant number '%s' from project name '%s'", grant_number, project_name)
+        return grant_number
+
     def _get_or_create_user(self, waldur_user: dict) -> Optional[int]:  # noqa: PLR0911
         """Get or create MUP user based on Waldur user information.
 
@@ -146,19 +298,18 @@ class MUPBackend(backends.BaseBackend):
 
         # Search for existing active user by email
         try:
-            users = self.client.get_users()
-            for user in users:
-                if user.get("email") == email:
-                    self._user_cache[email] = user["id"]
-                    logger.info("Found existing MUP user %s for %s", user["id"], email)
-                    return user["id"]
+            user = self.client.get_user_by_email(email)
+            if user and user.get("id"):
+                user_id = user["id"]
+                self._user_cache[email] = user_id
+                logger.info("Found existing MUP user %s for %s", user_id, email)
+                return user_id
         except MUPError as e:
             logger.warning("Failed to search for existing user %s: %s", email, e)
             # Continue to attempt user creation
         except Exception as e:
             logger.exception("Unexpected error searching for user %s: %s", email, e)
             return None
-
         # Create new user request and attempt to find the created request
         logger.info("Attempting to create new MUP user for %s", email)
         try:
@@ -167,16 +318,16 @@ class MUPBackend(backends.BaseBackend):
                 # Required fields
                 "username": username,
                 "email": email,
-                "research_fields": self.default_research_field,
+                "research_fields": [self.default_research_field],  # Must be a list
                 # Personal information - use configurable defaults
                 "first_name": waldur_user.get("first_name", ""),
                 "last_name": waldur_user.get("last_name", ""),
-                "salutation": self.user_defaults["salutation"],
-                "gender": self.user_defaults["gender"],
-                "year_of_birth": self.user_defaults["year_of_birth"],
-                "country": self.user_defaults["country"],
-                "type_of_institution": self.user_defaults["type_of_institution"],
-                "affiliated_institution": self.user_defaults["affiliated_institution"],
+                "salutation": waldur_user.get("personal_title") or self.user_defaults["salutation"],
+                "gender": waldur_user.get("gender") or self.user_defaults["gender"],
+                "year_of_birth": waldur_user.get("year_of_birth") or self.user_defaults["year_of_birth"],
+                "country": waldur_user.get("country") or self.user_defaults["country"],
+                "type_of_institution": waldur_user.get("type_of_institution") or self.user_defaults["type_of_institution"],
+                "affiliated_institution": waldur_user.get("affiliated_institution") or self.user_defaults["affiliated_institution"],
                 # Agency and funding information
                 "agency": self.default_agency,
                 "funding_agency": self.default_agency,
@@ -202,10 +353,9 @@ class MUPBackend(backends.BaseBackend):
                 "groups": [],
                 "user_permissions": [],
             }
-
             result = self.client.create_user_request(user_data)
 
-            # The API response may not contain an ID, so try to find the created request
+            # The API should now return an ID directly, but keep fallback for robustness
             user_id = result.get("id")
 
             if not user_id:
@@ -268,146 +418,235 @@ class MUPBackend(backends.BaseBackend):
             logger.warning("Error searching for user request by email %s: %s", email, e)
             return None
 
-    def _get_project_by_waldur_id(self, waldur_resource_uuid: str) -> Optional[dict]:
-        """Find MUP project by Waldur resource UUID."""
-        if waldur_resource_uuid in self._project_cache:
-            return self._project_cache[waldur_resource_uuid]
+    def _get_project_by_grant(self, grant_number: str) -> Optional[dict]:
+        """Find MUP project by grant number (from Waldur project name)."""
+        if grant_number in self._project_cache:
+            return self._project_cache[grant_number]
 
         try:
-            projects = self.client.get_projects()
-            for project in projects:
-                # Look for our project by grant_number (we store Waldur Resource UUID there)
-                if (
-                    project.get("grant_number")
-                    == f"{self.project_prefix}{waldur_resource_uuid}"
-                ):
-                    self._project_cache[waldur_resource_uuid] = project
-                    return project
+            project = self.client.get_project_by_grant(grant_number)
+            if project:
+                self._project_cache[grant_number] = project
+                logger.debug("Found MUP project %s for grant %s", project.get("id"), grant_number)
+                return project
         except MUPError:
-            logger.exception("Failed to search for resource %s", waldur_resource_uuid)
+            logger.debug("Project with grant %s not found in MUP", grant_number)
+        except Exception as e:
+            logger.exception("Unexpected error searching for project with grant %s: %s", grant_number, e)
 
         return None
 
     def _create_mup_project(
-        self, waldur_project: dict, pi_user_email: str
+        self, project_name: str, grant_number: str, project_uuid: str, pi_user_email: str, description: Optional[str] = None
     ) -> Optional[dict]:
-        """Create MUP project from Waldur project data."""
-        try:
-            # Extract project information
-            project_name = waldur_project.get(
-                "name", f"Project {waldur_project['uuid']}"
-            )
-            resource_uuid = waldur_project["uuid"]  # This is actually resource UUID now
+        """Create MUP project from Waldur project data.
 
+        """
+        try:
             # Calculate project dates (default to 1 year if not specified)
             start_date = datetime.now()
             end_date = start_date + timedelta(days=365)
 
             project_data = {
                 "title": project_name,
-                "description": waldur_project.get(
-                    "description", f"Waldur project {project_name}"
-                ),
+                "description": description or f"Waldur project {project_name}",
                 "pi": pi_user_email,  # PI email
-                "co_pi": None,  # Could be mapped from project managers
+                "co_pi": "",  # Could be mapped from project managers
                 "science_field": self.default_research_field,
                 "start_date": start_date.strftime("%Y-%m-%d"),
                 "end_date": end_date.strftime("%Y-%m-%d"),
                 "agency": self.default_agency,
-                "grant_number": (
-                    f"{self.project_prefix}{resource_uuid}"  # Store Waldur Resource UUID
-                ),
+                "grant_number": grant_number,
                 "max_storage": self.default_storage_limit,
                 "ai_included": False,
             }
 
             result = self.client.create_project(project_data)
             logger.info(
-                "Created MUP project %s for Waldur resource %s",
+                "Created MUP project %s for Waldur project %s (grant: %s)",
                 result.get("id"),
-                resource_uuid,
+                project_uuid,
+                grant_number,
             )
 
             # Cache the result
-            self._project_cache[resource_uuid] = result
+            self._project_cache[grant_number] = result
             return result
 
         except MUPError:
             logger.exception(
-                "Failed to create MUP project for resource %s", resource_uuid
+                "Failed to create MUP project for grant %s (project %s)", grant_number, project_uuid
             )
             return None
 
-    def _get_pi_email_from_context(
-        self, user_context: Optional[dict], project_uuid: str
-    ) -> str:
-        """Get PI email from user context or return a fallback.
+    def _find_pi_from_context(
+        self, user_context: Optional[dict]
+    ) -> Optional[ProjectUser]:
+        """Find Principal Investigator (PI) from user context by role.
+
+        PI is identified as the user with PROJECT_MANAGER_ROLE in the project team.
 
         Args:
             user_context: User context with team members and offering users
-            project_uuid: Project UUID for fallback generation
 
         Returns:
-            PI email address
+            ProjectUser object for PI, or None if not found
         """
         if not user_context:
             logger.warning("No user context provided, using fallback PI email")
-            return f"admin@{project_uuid}.example.com"
+            return None
 
-        # Try to get the first available user email from team members
+        # Look for users with PROJECT.MANAGER role (PI)
         team = user_context.get("team", [])
-        offering_user_mappings = user_context.get("offering_user_mappings", {})
-        # Look for users with offering usernames (these are the active ones)
         for user in team:
-            user_uuid = user.uuid
-            if user_uuid in offering_user_mappings:
-                # This user has an offering username, use their email
-                email = user.email
-                if email and "@" in email and not email.endswith(".example.com"):
-                    logger.info(
-                        "Using team member %s as PI for project %s", email, project_uuid
-                    )
-                    return email
+            # Check if user has manager role (PI role)
+            if hasattr(user, "role") and user.role == PROJECT_MANAGER_ROLE:
+                logger.info("Found PI with role '%s': %s", user.role, user.email)
+                return user
 
-        # Fallback to first team member email
-        for user in team:
-            email = user.email
-            if email and "@" in email and not email.endswith(".example.com"):
-                logger.info(
-                    "Using first team member %s as PI for project %s",
-                    email,
-                    project_uuid,
-                )
-                return email
+        logger.warning("No user with role '%s' found in team, Team roles: %s", PROJECT_MANAGER_ROLE, [getattr(user, "role", None) for user in team])
+        return None
 
-        # Final fallback
-        logger.warning(
-            "No suitable PI email found in user context, using fallback for project %s",
-            project_uuid,
-        )
-        return f"admin@{project_uuid}.example.com"
+    def _build_user_data_from_context(
+        self, team_user: ProjectUser, offering_user: Optional[OfferingUser] = None
+    ) -> Optional[dict]:
+        """Build user data dict from team user and offering user.
+
+        Args:
+            team_user: ProjectUser object with basic user info
+            offering_user: Optional OfferingUser object with additional attributes
+
+        Returns:
+            User data dict ready for MUP API, or None if username/email is missing.
+        """
+        if not offering_user or not offering_user.username:
+            logger.warning(
+                "No offering user username for %s, cannot build MUP user data",
+                getattr(team_user, "email", "unknown"),
+            )
+            return None
+
+        # Get full name from offering user or team user
+        full_name = offering_user.user_full_name or getattr(team_user, "full_name", "")
+        name_parts = full_name.split(" ", 1) if full_name else ["", ""]
+
+        user_data = {
+            "username": offering_user.username,
+            "email": offering_user.user_email if offering_user else team_user.email,
+            "first_name": getattr(team_user, "first_name", name_parts[0]),
+            "last_name": getattr(
+                team_user,
+                "last_name",
+                name_parts[1] if len(name_parts) > 1 else "",
+            ),
+            "personal_title": (
+                offering_user.user_personal_title if offering_user else None
+            ),
+            "gender": (
+                self._map_gender(offering_user.user_gender) if offering_user else None
+            ),
+            "year_of_birth": (
+                self._extract_birth_year(offering_user.user_birth_date)
+                if offering_user
+                else None
+            ),
+            "country": (
+                self._map_country(offering_user.user_country_of_residence)
+                if offering_user
+                else None
+            ),
+            "affiliated_institution": (
+                offering_user.customer_name or offering_user.user_organization
+                if offering_user
+                else None
+            ),
+            "type_of_institution": (
+                self._map_organization_type_to_mup_type(offering_user.user_organization_type)
+                if offering_user
+                else None
+            ),
+        }
+
+        if not user_data["email"]:
+            return None
+
+        return user_data
+
+    def _create_mup_user(
+        self, team_user: ProjectUser, offering_user: Optional[OfferingUser] = None
+    ) -> Optional[int]:
+        """Create a single user in MUP from team user and optional offering user.
+
+        Args:
+            team_user: ProjectUser object with basic user info
+            offering_user: Optional OfferingUser object with additional attributes
+
+        Returns:
+            MUP user ID if created successfully, None otherwise
+        """
+        user_data = self._build_user_data_from_context(team_user, offering_user)
+        if not user_data:
+            logger.error("User has no email address, cannot create in MUP")
+            return None
+
+        mup_user_id = self._get_or_create_user(user_data)
+        if mup_user_id:
+            logger.debug("Created/found MUP user %s (ID: %s)", user_data["email"], mup_user_id)
+
+        return mup_user_id
 
     def _create_and_add_users_from_context(
         self, project_id: int, user_context: dict
     ) -> None:
-        """Create users and add them to the MUP project during resource creation.
+        """Create users and add them to the MUP project.
+
+        Checks per-user if they're already members (doesn't skip entirely if project has members).
+        Only adds users that are not already in the project.
 
         Args:
             project_id: MUP project ID
             user_context: User context with team members and offering users
         """
-        offering_user_mappings = user_context.get("offering_user_mappings", {})
+        offering_user_mappings: dict[str, OfferingUser] = user_context.get("offering_user_mappings", {})
+        user_mappings: dict[str, ProjectUser] = user_context.get("user_mappings", {})
+
+        # Get existing project members
+        existing_member_emails = set()
+        try:
+            existing_members = self.client.get_project_members(project_id)
+            for member in existing_members:
+                email = member.get("email")
+                if email:
+                    existing_member_emails.add(email)
+        except MUPError as e:
+            logger.warning(
+                "Failed to get existing project members, will attempt to add all users: %s", e
+            )
+
         total_users = len(offering_user_mappings)
         successful_users = 0
+        skipped_users = 0
         failed_users = 0
 
-        logger.info("Adding %d users to MUP project %d", total_users, project_id)
+        logger.info("Processing %d users for MUP project %d", total_users, project_id)
 
         # Create and add users who have offering usernames
         for user_uuid, offering_user in offering_user_mappings.items():
+
             try:
+                # Only process users whose offering account is fully approved
+                if offering_user.state != OfferingUserState.OK:
+                    logger.debug(
+                        "Offering user %s is not in OK state (%s), skipping for now "
+                        "(will be added by membership sync once approved)",
+                        offering_user.user_email or user_uuid,
+                        offering_user.state,
+                    )
+                    skipped_users += 1
+                    continue
+
                 # Get user info from team
-                team_user = user_context.get("user_mappings", {}).get(user_uuid)
+                team_user = user_mappings.get(user_uuid)
                 if not team_user:
                     logger.warning(
                         "No team user found for UUID %s, skipping", user_uuid
@@ -415,39 +654,38 @@ class MUPBackend(backends.BaseBackend):
                     failed_users += 1
                     continue
 
-                # Create user data combining team and offering info
-                # NB! first_name and last_name do not exist on ProjectUser, only full_name
-                # Extract names from full_name if needed
-                full_name = getattr(team_user, "full_name", "")
-                name_parts = full_name.split(" ", 1) if full_name else ["", ""]
-
-                user_data = {
-                    "username": offering_user.username,
-                    "email": team_user.email,
-                    "first_name": getattr(team_user, "first_name", name_parts[0]),
-                    "last_name": getattr(
-                        team_user,
-                        "last_name",
-                        name_parts[1] if len(name_parts) > 1 else "",
-                    ),
-                }
-
-                if not user_data["email"]:
+                # Build user data
+                user_data = self._build_user_data_from_context(team_user, offering_user)
+                if not user_data:
                     logger.warning(
-                        "User %s has no email, skipping", user_data["username"]
+                        "User %s has no email, skipping", team_user.username
                     )
                     failed_users += 1
                     continue
 
+                # Check if user is already a member
+                if user_data["email"] in existing_member_emails:
+                    logger.info(
+                        "User %s is already a member of project %d, skipping",
+                        user_data["email"],
+                        project_id,
+                    )
+                    skipped_users += 1
+                    continue
+
                 # Create or get user in MUP
-                mup_user_id = self._get_or_create_user(user_data)
+                mup_user_id = self._create_mup_user(team_user, offering_user)
                 if mup_user_id:
                     try:
                         # Add user to project
-                        member_data = {"user_id": mup_user_id, "active": True}
+                        member_data = {
+                            "user_id": mup_user_id,
+                            "email": user_data["email"],
+                            "active": True,
+                        }
                         self.client.add_project_member(project_id, member_data)
                         logger.info(
-                            "Added user %s to MUP project %d during creation",
+                            "Added user %s to MUP project %d",
                             user_data["email"],
                             project_id,
                         )
@@ -485,6 +723,10 @@ class MUPBackend(backends.BaseBackend):
                 total_users,
                 project_id,
             )
+        if skipped_users > 0:
+            logger.warning(
+                "Skipped %d users (already members or PI)", skipped_users
+            )
         if failed_users > 0:
             logger.warning(
                 "Failed to add %d/%d users to MUP project %d (check logs above for details)",
@@ -498,31 +740,85 @@ class MUPBackend(backends.BaseBackend):
         waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
     ) -> None:
-        """Create and activate MUP project."""
+        """Create and activate MUP project (if needed) for Waldur project.
+        Uses grant number from project name to map Waldur Project -> MUP Project (1:1).
+        """
         # Get project information
         project_uuid = waldur_resource.project_uuid
         project_name = waldur_resource.project_name
-        if not project_name:
-            project_name = f"Project {project_uuid}"
 
         if not project_uuid:
             msg = "No project UUID found in resource data"
             raise BackendError(msg)
 
-        # Get or create MUP project (Resource = Project in MUP)
-        mup_project = self._get_project_by_waldur_id(waldur_resource.uuid.hex)
-        if not mup_project:
-            # Get PI email from user context or use a fallback
-            pi_email = self._get_pi_email_from_context(user_context, project_uuid)
+        if not project_name:
+            msg = (
+                f"Project name is required to extract grant number."
+                f"Resource: {waldur_resource.name}, Project UUID: {project_uuid}"
+            )
+            raise BackendError(msg)
 
-            project_data = {
-                "uuid": waldur_resource.uuid.hex,  # Use resource UUID for MUP project
-                "name": project_name,
-                "description": f"Waldur project {project_name}",
-            }
-            mup_project = self._create_mup_project(project_data, pi_email)
+        grant_number = self._extract_grant_from_project_name(project_name)
+
+        mup_project = self._get_project_by_grant(grant_number)
+        if not mup_project:
+            # Find and create PI user FIRST (before project creation)
+            pi_user = None
+            pi_email = None
+
+            if user_context:
+                pi_user = self._find_pi_from_context(user_context)
+                if pi_user:
+                    # Get offering user for PI if available (for attribute mapping)
+                    offering_user_mappings = user_context.get("offering_user_mappings", {})
+                    pi_offering_user = offering_user_mappings.get(pi_user.uuid)
+
+
+                    if pi_offering_user is None or pi_offering_user.state != OfferingUserState.OK:
+                        pi_state = (
+                            pi_offering_user.state if pi_offering_user else "missing"
+                        )
+                        raise BackendNotReadyError(
+                            f"PI {pi_user.email} offering user is not in OK state yet "
+                            f"(current state: {pi_state}). "
+                            f"Will retry on the next polling cycle."
+                        )
+
+                    # Create PI user in MUP
+                    pi_mup_user_id = self._create_mup_user(pi_user, pi_offering_user)
+                    if not pi_mup_user_id:
+                        msg = (
+                            f"Failed to create PI user for project {project_uuid}. "
+                            f"PI email: {pi_user.email}"
+                        )
+                        raise BackendError(msg)
+
+                    pi_email = pi_user.email
+                    logger.info("Created PI user %s in MUP before project creation", pi_email)
+                else:
+                    msg = (
+                        f"No user with role '{PROJECT_MANAGER_ROLE}' found in project team. "
+                        f"Project: {project_uuid}, Grant: {grant_number}"
+                    )
+                    # PI is required for project creation, do not fail the order but wait for PI
+                    raise BackendNotReadyError(msg)
+            else:
+                msg = (
+                    f"No user context provided. Cannot identify PI for project {project_uuid}. "
+                    f"Grant: {grant_number}"
+                )
+                raise BackendError(msg)
+
+            # Create MUP project
+            mup_project = self._create_mup_project(
+                project_name=project_name,
+                grant_number=grant_number,
+                project_uuid=str(project_uuid),
+                pi_user_email=pi_email,
+                description=waldur_resource.project_description,
+            )
             if not mup_project:
-                msg = "Failed to create MUP project"
+                msg = f"Failed to create MUP project for grant {grant_number}"
                 raise BackendError(msg)
 
         # Activate project if needed
@@ -535,9 +831,12 @@ class MUPBackend(backends.BaseBackend):
                     "Failed to activate project %s: %s", mup_project["id"], e
                 )
 
-        # Create users and add them to project if user context is available
+        # Create and add users to project if user context is available
+
         if user_context:
-            self._create_and_add_users_from_context(mup_project["id"], user_context)
+            self._create_and_add_users_from_context(
+                mup_project["id"], user_context
+            )
 
     def post_create_resource(
         self,
@@ -546,29 +845,43 @@ class MUPBackend(backends.BaseBackend):
         user_context: Optional[dict] = None,
     ) -> None:
         """Perform actions after resource creation - create allocations."""
-        # Get the project for allocation creation
-        mup_project = self._get_project_by_waldur_id(waldur_resource.uuid.hex)
+        # Extract grant number from project name
+        if not waldur_resource.project_name:
+            msg = (
+                f"Project name is required to extract grant number. "
+                f"Resource: {waldur_resource.name}, Project UUID: {waldur_resource.project_uuid}"
+            )
+            raise BackendError(msg)
+
+        grant_number = self._extract_grant_from_project_name(waldur_resource.project_name)
+
+        # Get the MUP project by grant (same project for all resources in Waldur project)
+        mup_project = self._get_project_by_grant(grant_number)
         if not mup_project:
             logger.error(
-                "No MUP project found for resource %s", waldur_resource.uuid.hex
+                "No MUP project found for grant %s (resource %s)",
+                grant_number,
+                waldur_resource.uuid.hex
             )
             return
 
-        # Create allocations for each component
+        # Create allocations for each configured backend component.
+        # Iterate backend_components (not backend_resource_info.limits) so that
+        # an allocation is always created even when the resource was ordered with
+        # no limits (limits can be updated later via Update orders).
         limits = backend_resource_info.limits
         created_allocations = []
 
-        for component_key, component_limit in limits.items():
-            if component_limit <= 0:
-                continue
+        for component_key, component_config in self.backend_components.items():
+            # Use whatever limit was provided; default to 0 if not set.
+            component_limit = limits.get(component_key, 0)
 
-            component_config = self.backend_components.get(component_key, {})
             allocation_type = component_config.get(
                 "mup_allocation_type",
                 "Deucalion x86_64",  # Default fallback
             )
 
-            # Apply unit factor for the allocation size
+            # Apply unit factor for the allocation size; size=0 is valid in MUP.
             unit_factor = component_config.get("unit_factor", 1)
             allocation_size = int(component_limit * unit_factor)
 
@@ -616,6 +929,25 @@ class MUPBackend(backends.BaseBackend):
             waldur_resource.uuid.hex,
         )
 
+        if not created_allocations:
+            raise BackendError(
+                f"Failed to create any MUP allocations for resource "
+                f"{waldur_resource.uuid.hex} (project {mup_project['id']}). "
+                f"Check logs above for individual component errors."
+            )
+
+        # Update backend_id to combined "project_id_allocation_id" format.
+        primary_alloc_id = created_allocations[0]["id"]
+        combined_id = f"{mup_project['id']}_{primary_alloc_id}"
+        backend_resource_info.backend_id = combined_id
+        logger.info(
+            "Set backend_id to '%s' for resource %s (project %s, allocation %s)",
+            combined_id,
+            waldur_resource.uuid.hex,
+            mup_project["id"],
+            primary_alloc_id,
+        )
+
     def _setup_resource_limits(
         self, resource_backend_id: str, waldur_resource: WaldurResource
     ) -> dict[str, int]:
@@ -624,12 +956,28 @@ class MUPBackend(backends.BaseBackend):
         return waldur_resource.limits.to_dict()
 
     def _create_resource_in_backend(self, waldur_resource: WaldurResource) -> str:
-        """Create MUP resource within the MUP project."""
-        mup_project = self._get_project_by_waldur_id(waldur_resource.uuid.hex)
+        """Create MUP allocations for Waldur resource within the MUP project.
+
+        Multiple resources in the same Waldur project create multiple allocations
+        in the same MUP project.
+        """
+        # Extract grant number from project name
+        if not waldur_resource.project_name:
+            msg = (
+                f"Project name is required to extract grant number. "
+                f"Resource: {waldur_resource.name}, Project UUID: {waldur_resource.project_uuid}"
+            )
+            raise BackendError(msg)
+
+        grant_number = self._extract_grant_from_project_name(waldur_resource.project_name)
+
+        # Get the MUP project by grant (should exist from _pre_create_resource)
+        mup_project = self._get_project_by_grant(grant_number)
         if not mup_project:
             msg = (
-                f"MUP project is expected to be created upon MUP resource creation, "
-                f"resource {waldur_resource['name']}, project {waldur_resource['project_uuid']}"
+                f"MUP project is expected to be created in _pre_create_resource. "
+                f"Grant: {grant_number}, resource: {waldur_resource.name}, "
+                f"project: {waldur_resource.project_uuid}"
             )
             raise BackendError(msg)
 
@@ -757,58 +1105,55 @@ class MUPBackend(backends.BaseBackend):
             if key in self.backend_components
         }
 
-        # resource_backend_id is now the MUP project ID
         try:
-            project_id = int(resource_backend_id)
-            updated_allocations = 0
+            project_id, alloc_id = self._parse_backend_id(resource_backend_id)
+            if alloc_id is None:
+                raise BackendError(
+                    f"backend_id '{resource_backend_id}' has no allocation ID – "
+                    "cannot update limits."
+                )
 
-            # Get all allocations for this project directly
-            allocations = self.client.get_project_allocations(project_id)
+            # Fetch the specific allocation directly – no full list scan needed
+            allocation = self.client.get_allocation(project_id, alloc_id)
 
-            # Update each allocation based on component limits
-            for allocation in allocations:
-                allocation_id = allocation.get("identifier", "")
-                # Extract component from allocation identifier (format: alloc_{uuid}_{component})
-                if "_" in allocation_id:
-                    parts = allocation_id.split("_")
-                    min_parts = 3
-                    if len(parts) >= min_parts:
-                        component_key = parts[-1]  # Last part is the component
+            # Determine which component this allocation belongs to from its identifier
+            alloc_identifier = allocation.get("identifier", "")
+            component_key = None
+            parts = alloc_identifier.split("_")
+            if len(parts) >= 3:
+                component_key = parts[-1]
 
-                        # Update allocation if we have a limit for this component
-                        if component_key in converted_limits:
-                            new_size = converted_limits[component_key]
-                            allocation_data = {
-                                "type": allocation["type"],
-                                "identifier": allocation["identifier"],
-                                "size": new_size,
-                                "used": allocation.get("used", 0),
-                                "active": allocation.get("active", True),
-                                "project": project_id,
-                            }
-
-                            self.client.update_allocation(
-                                project_id, allocation["id"], allocation_data
-                            )
-                            updated_allocations += 1
-                            logger.info(
-                                "Updated MUP allocation %s (%s) size to %s",
-                                allocation["id"],
-                                component_key,
-                                new_size,
-                            )
-
-            if updated_allocations == 0:
+            if not component_key or component_key not in converted_limits:
                 logger.warning(
-                    "No allocations were updated for resource %s", resource_backend_id
+                    "No matching limit found for allocation %s (identifier: %s, "
+                    "component: %s). Available limits: %s",
+                    alloc_id,
+                    alloc_identifier,
+                    component_key,
+                    list(converted_limits.keys()),
                 )
-            else:
-                logger.info(
-                    "Updated %d allocations for resource %s",
-                    updated_allocations,
-                    resource_backend_id,
-                )
+                return
 
+            new_size = converted_limits[component_key]
+            allocation_data = {
+                "type": allocation["type"],
+                "identifier": allocation["identifier"],
+                "size": new_size,
+                "used": allocation.get("used", 0),
+                "active": allocation.get("active", True),
+                "project": project_id,
+            }
+            self.client.update_allocation(project_id, alloc_id, allocation_data)
+            logger.info(
+                "Updated MUP allocation %s (%s) size to %s for resource %s",
+                alloc_id,
+                component_key,
+                new_size,
+                resource_backend_id,
+            )
+
+        except BackendError:
+            raise
         except Exception as e:
             logger.exception(
                 "Failed to update resource limits for %s", resource_backend_id
@@ -817,22 +1162,26 @@ class MUPBackend(backends.BaseBackend):
 
     def get_resource_metadata(self, resource_backend_id: str) -> dict:
         """Get backend-specific resource metadata."""
-        # Find project and allocation by account name (project ID)
         try:
-            project_id = int(resource_backend_id)
-            projects = self.client.get_projects()
-            for project in projects:
-                if project.get("id") == project_id:
-                    allocations = self.client.get_project_allocations(project["id"])
-                    if allocations:
-                        allocation = allocations[0]
-                        return {
-                            "mup_project_id": project["id"],
-                            "mup_allocation_id": allocation["id"],
-                            "allocation_type": allocation.get("type"),
-                            "allocation_size": allocation.get("size"),
-                            "allocation_used": allocation.get("used"),
-                        }
+            project_id, allocation_id = self._parse_backend_id(resource_backend_id)
+            project = self.client.get_project(project_id)
+            if not project:
+                return {}
+            allocations = self.client.get_project_allocations(project_id)
+            if not allocations:
+                return {}
+            # Use the specific allocation if we have its ID, otherwise fall back to first
+            allocation = next(
+                (alloc for alloc in allocations if alloc.get("id") == allocation_id),
+                allocations[0],
+            )
+            return {
+                "mup_project_id": project["id"],
+                "mup_allocation_id": allocation["id"],
+                "allocation_type": allocation.get("type"),
+                "allocation_size": allocation.get("size"),
+                "allocation_used": allocation.get("used"),
+            }
         except (ValueError, Exception):
             logger.exception(
                 "Failed to get resource metadata for %s", resource_backend_id
@@ -845,109 +1194,157 @@ class MUPBackend(backends.BaseBackend):
         """Collect usage report for the specified accounts from MUP."""
         report: dict[str, dict[str, dict[str, int]]] = {}
 
+        # Build a mapping from MUP project ID → original backend_id string so we
+        project_id_to_backend_id: dict[int, str] = {}
+        for backend_id in resource_backend_ids:
+            try:
+                proj_id, _ = self._parse_backend_id(backend_id)
+                project_id_to_backend_id[proj_id] = backend_id
+            except ValueError:
+                logger.warning("Cannot parse backend_id '%s', skipping usage report", backend_id)
+
         try:
             projects = self.client.get_projects()
 
             for project in projects:
-                project_id_str = str(project.get("id"))
-                if project_id_str in resource_backend_ids:
-                    allocations = self.client.get_project_allocations(project["id"])
+                project_id = project.get("id")
+                if project_id not in project_id_to_backend_id:
+                    continue
 
-                    # Initialize account usage
-                    report[project_id_str] = {}
-                    total_usage: dict[str, int] = {}
+                backend_id_key = project_id_to_backend_id[project_id]
+                allocations = self.client.get_project_allocations(project["id"])
 
-                    for allocation in allocations:
-                        # Map allocation usage to component usage based on allocation identifier
-                        allocation_id = allocation.get("identifier", "")
-                        allocation_type = allocation.get("type", "")
-                        used = allocation.get("used", 0)
+                # Initialize account usage
+                report[backend_id_key] = {}
+                total_usage: dict[str, int] = {}
 
-                        # Extract component from identifier (format: alloc_{uuid}_{component})
-                        component_key = None
-                        if "_" in allocation_id:
-                            parts = allocation_id.split("_")
-                            min_parts = 3
-                            if len(parts) >= min_parts:
-                                component_key = parts[-1]  # Last part is the component
+                for allocation in allocations:
+                    # Map allocation usage to component usage based on allocation identifier
+                    alloc_identifier = allocation.get("identifier", "")
+                    allocation_type = allocation.get("type", "")
+                    used = allocation.get("used", 0)
 
-                        # If we can't extract component from identifier, map by allocation type
-                        if not component_key:
-                            # Build reverse mapping from allocation type to component from config
-                            type_to_component = {
-                                config.get("mup_allocation_type"): comp_key
-                                for comp_key, config in self.backend_components.items()
-                                if config.get("mup_allocation_type")
-                            }
-                            component_key = type_to_component.get(
-                                allocation_type, "cpu"
+                    # Extract component from identifier (format: alloc_{uuid}_{component})
+                    component_key = None
+                    if "_" in alloc_identifier:
+                        parts = alloc_identifier.split("_")
+                        min_parts = 3
+                        if len(parts) >= min_parts:
+                            component_key = parts[-1]  # Last part is the component
+
+                    # If we can't extract component from identifier, map by allocation type
+                    if not component_key:
+                        # Build reverse mapping from allocation type to component from config
+                        type_to_component = {
+                            config.get("mup_allocation_type"): comp_key
+                            for comp_key, config in self.backend_components.items()
+                            if config.get("mup_allocation_type")
+                        }
+                        component_key = type_to_component.get(
+                            allocation_type, "cpu"
+                        )
+
+                    # Add usage for this component
+                    if component_key and component_key in self.backend_components:
+                        # Apply reverse unit factor to get Waldur units
+                        unit_factor = self.backend_components[component_key].get(
+                            "unit_factor", 1
+                        )
+                        waldur_usage = used // max(unit_factor, 1)
+                        total_usage[component_key] = (
+                            total_usage.get(component_key, 0) + waldur_usage
+                        )
+
+                # Set total account usage
+                report[backend_id_key]["TOTAL_ACCOUNT_USAGE"] = total_usage
+
+                # Get project members and create per-user usage (placeholder)
+                members = self.client.get_project_members(project["id"])
+                for member in members:
+                    if member.get("active", False):
+                        username = member.get("username", "")
+                        if username:
+                            # For now, assign equal share of usage to active users
+                            user_count = len(
+                                [m for m in members if m.get("active", False)]
                             )
-
-                        # Add usage for this component
-                        if component_key and component_key in self.backend_components:
-                            # Apply reverse unit factor to get Waldur units
-                            unit_factor = self.backend_components[component_key].get(
-                                "unit_factor", 1
-                            )
-                            waldur_usage = used // max(unit_factor, 1)
-                            total_usage[component_key] = (
-                                total_usage.get(component_key, 0) + waldur_usage
-                            )
-
-                    # Set total account usage
-                    report[project_id_str]["TOTAL_ACCOUNT_USAGE"] = total_usage
-
-                    # Get project members and create per-user usage (placeholder)
-                    members = self.client.get_project_members(project["id"])
-                    for member in members:
-                        if member.get("active", False):
-                            username = member.get("member", {}).get("username", "")
-                            if username:
-                                # For now, assign equal share of usage to active users
-                                user_count = len(
-                                    [m for m in members if m.get("active", False)]
+                            # Distribute usage across all components for this user
+                            user_usage = {}
+                            for (
+                                comp_key,
+                                component_total,
+                            ) in total_usage.items():
+                                user_usage[comp_key] = component_total // max(
+                                    user_count, 1
                                 )
-                                # Distribute usage across all components for this user
-                                user_usage = {}
-                                for (
-                                    component_key,
-                                    component_total,
-                                ) in total_usage.items():
-                                    user_usage[component_key] = component_total // max(
-                                        user_count, 1
-                                    )
-                                report[project_id_str][username] = user_usage
+                            report[backend_id_key][username] = user_usage
 
         except Exception:
             logger.exception("Failed to get usage report")
 
         return report
 
-    def _find_project_by_resource_id(self, resource_backend_id: str) -> Optional[dict]:
-        """Find MUP project by resource backend ID (project ID)."""
+    def _pull_backend_resource(
+        self, resource_backend_id: str
+    ) -> Optional[BackendResourceInfo]:
+        """Pull resource data from MUP. Necessary for membership sync."""
+        logger.info("Pulling MUP resource %s", resource_backend_id)
+        project = self._find_project_by_resource_id(resource_backend_id)
+
+        if not project:
+            logger.warning(
+                "There is no MUP project for resource %s", resource_backend_id
+            )
+            return None
+
+        # Collect current project members as the user list for this resource.
         try:
-            project_id = int(resource_backend_id)
-            projects = self.client.get_projects()
+            members = self.client.get_project_members(project["id"])
+            users = [
+                member.get("username")
+                for member in members
+                if member.get("username")
+            ]
+        except Exception:
+            logger.exception(
+                "Failed to fetch project members for resource %s", resource_backend_id
+            )
+            users = []
 
-            # Find project by ID
-            for project in projects:
-                if project.get("id") == project_id:
-                    return project
+        report = self._get_usage_report([resource_backend_id])
+        usage = report.get(resource_backend_id)
+        if usage is None:
+            usage = {"TOTAL_ACCOUNT_USAGE": dict.fromkeys(self.backend_components, 0)}
 
+        return BackendResourceInfo(
+            backend_id=resource_backend_id,
+            users=users,
+            usage=usage,
+        )
+
+    def _find_project_by_resource_id(self, resource_backend_id: str) -> Optional[dict]:
+        """Find MUP project by resource backend ID.
+
+
+        """
+        try:
+            project_id, _ = self._parse_backend_id(resource_backend_id)
+            project = self.client.get_project(project_id)
+            return project or None
         except (ValueError, Exception):
             logger.exception(
                 "Failed to find project for resource %s", resource_backend_id
             )
-
         return None
 
     def add_users_to_resource(
-        self, waldur_resource: WaldurResource, user_ids: set[str], **_kwargs: dict
+        self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
     ) -> set[str]:
         """Add specified users to the MUP project.
 
-        Note: Most users are already added during resource creation. This method
-        handles additional users that may be added later.
+        Handles both users that already exist in MUP (looked up by username or
+        email) and users that need to be created first (using ``user_attributes``
+        and ``offering_user_states`` from the membership sync processor).
         """
         resource_backend_id = waldur_resource.backend_id
         logger.info(
@@ -957,53 +1354,121 @@ class MUPBackend(backends.BaseBackend):
         )
         added_users: set[str] = set()
 
-        # Find the project by resource backend ID
         target_project = self._find_project_by_resource_id(resource_backend_id)
-
         if not target_project:
             logger.error("No MUP project found for resource %s", resource_backend_id)
             return added_users
 
-        # Get existing project members to avoid duplicates
+        user_emails: dict[str, str] = kwargs.get("user_emails", {})
+        user_attributes: dict[str, dict] = kwargs.get("user_attributes") or {}
+        offering_user_states_raw: Any = kwargs.get("offering_user_states", {})
+        offering_user_states: dict[str, OfferingUserState] = (
+            offering_user_states_raw
+            if isinstance(offering_user_states_raw, dict)
+            else {}
+        )
+
+        # Existing project members — used to skip users already in the project.
         existing_members = self.client.get_project_members(target_project["id"])
-        existing_emails = {
-            member.get("member", {}).get("email")
+        existing_usernames = {
+            member.get("username")
             for member in existing_members
-            if member.get("active", False)
+            if member.get("username")
         }
 
-        # Add each user to the project (if not already a member)
         for user_id in user_ids:
             try:
-                # Assume user_id is email for simplicity
-                if user_id in existing_emails:
+                if user_id in existing_usernames:
                     logger.info(
-                        "User %s is already a member of project %s",
+                        "User %s is already a member of MUP project %s",
                         user_id,
                         target_project["id"],
                     )
                     added_users.add(user_id)
                     continue
 
-                user_data = {"username": user_id, "email": user_id}
-                mup_user_id = self._get_or_create_user(user_data)
-                if mup_user_id:
-                    member_data = {"user_id": mup_user_id, "active": True}
+                mup_user = self.client.get_user_by_username(user_id)
+
+                if not mup_user:
+                    email = user_emails.get(user_id)
+                    if email:
+                        mup_user = self.client.get_user_by_email(email)
+                # If user not found we may need to create them.
+                if not mup_user:
+                    state = offering_user_states.get(user_id)
+                    if state != OfferingUserState.OK:
+                        logger.warning(
+                            "User %s not found in MUP and offering user state is %s "
+                            "(need OK to create), skipping",
+                            user_id,
+                            state,
+                        )
+                        continue
+                    attrs = user_attributes.get(user_id) or {}
+                    email = user_emails.get(user_id) or attrs.get("email")
+                    if not email or not isinstance(email, str):
+                        logger.warning(
+                            "User %s not found in MUP and no email available, skipping",
+                            user_id,
+                        )
+                        continue
+                    waldur_user = self._build_waldur_user_dict_from_attributes(
+                        user_id, attrs, email
+                    )
+                    mup_user_id = self._get_or_create_user(waldur_user)
+                    if mup_user_id:
+                        mup_user = self.client.get_user_by_username(user_id) or self.client.get_user_by_email(
+                            email
+                        )
+                    else:
+                        logger.warning(
+                            "User %s not found in MUP and user creation failed, skipping",
+                            user_id,
+                        )
+                        continue
+
+                if not mup_user:
+                    logger.warning(
+                        "User %s could not be found or created in MUP, skipping.",
+                        user_id,
+                    )
+                    continue
+
+                member_data = {
+                    "user_id": mup_user["id"],
+                    "email": mup_user["email"],
+                    "active": True,
+                }
+                try:
                     self.client.add_project_member(target_project["id"], member_data)
                     added_users.add(user_id)
                     logger.info(
                         "Added user %s to MUP project %s", user_id, target_project["id"]
                     )
+                except MUPError as e:
+                    if "already a member" in str(e).lower():
+                        logger.info(
+                            "User %s is already a member of MUP project %s (PI or pre-existing)",
+                            user_id,
+                            target_project["id"],
+                        )
+                        added_users.add(user_id)
+                    else:
+                        raise
 
-            except Exception:
+            except MUPError:
                 logger.exception("Failed to add user %s to MUP project", user_id)
 
         return added_users
 
     def remove_users_from_resource(
-        self, waldur_resource: WaldurResource, usernames: set[str], **kwargs: dict
+        self,
+        waldur_resource: WaldurResource,
+        usernames: set[str],
+        **kwargs: dict[Any, Any],
     ) -> list[str]:
         """Remove specified users from the MUP project."""
+        del kwargs
         resource_backend_id = waldur_resource.backend_id
         logger.info(
             "Removing users from MUP project for resource %s: %s",
@@ -1024,12 +1489,11 @@ class MUPBackend(backends.BaseBackend):
             members = self.client.get_project_members(target_project["id"])
 
             for username in usernames:
-                # Find member by username or email
+                # Find member by username or email.
                 for member in members:
-                    member_info = member.get("member", {})
                     if (
-                        member_info.get("username") == username
-                        or member_info.get("email") == username
+                        member.get("username") == username
+                        or member.get("email") == username
                     ):
                         # Deactivate member instead of deleting
                         status_data = {"active": False}

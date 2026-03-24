@@ -388,7 +388,7 @@ class MUPClientTest(unittest.TestCase):
 
             self.assertEqual(result, {"id": 2, "status": "pending"})
             mock_request.assert_called_once_with(
-                "POST", "/api/user/add/", json=user_data
+                "POST", "/api/user/", json=user_data
             )
 
     def test_update_user(self):
