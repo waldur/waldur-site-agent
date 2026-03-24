@@ -55,6 +55,8 @@ class MUPClient(BaseClient):
         except requests.exceptions.RequestException as e:
             try:
                 headers = dict(self.session.headers)
+                if "Authorization" in headers:
+                    headers["Authorization"] = "***REDACTED***"
                 headers_str = str(headers)
             except (TypeError, AttributeError):
                 headers_str = "Unable to retrieve headers"
@@ -178,6 +180,14 @@ class MUPClient(BaseClient):
         response = self._make_request("GET", "/api/projects/list/")
         return cast("list[dict]", self._parse_json_response(response))
 
+    def get_project_by_grant(self, grant_number: str) -> Optional[dict]:
+        """Get project by grant number."""
+        try:
+            response = self._make_request("GET", f"/api/projects/by-grant/{grant_number}")
+            return cast("dict", self._parse_json_response(response))
+        except MUPError:
+            return None
+
     def get_project(self, project_id: int) -> dict:
         """Get specific project by ID."""
         response = self._make_request("GET", f"/api/projects/view/{project_id}")
@@ -279,9 +289,25 @@ class MUPClient(BaseClient):
         response = self._make_request("GET", f"/api/user/view/{user_id}")
         return cast("dict", self._parse_json_response(response))
 
+    def get_user_by_email(self, email: str) -> Optional[dict]:
+        """Get user by email address."""
+        try:
+            response = self._make_request("GET", f"/api/user/by-email/{email}")
+            return cast("dict", self._parse_json_response(response))
+        except MUPError:
+            return None
+
+    def get_user_by_username(self, username: str) -> Optional[dict]:
+        """Get user by MUP username."""
+        try:
+            response = self._make_request("GET", f"/api/user/by-username/{username}")
+            return cast("dict", self._parse_json_response(response))
+        except MUPError:
+            return None
+
     def create_user_request(self, user_data: dict) -> dict:
         """Create user registration request."""
-        response = self._make_request("POST", "/api/user/add/", json=user_data)
+        response = self._make_request("POST", "/api/user/", json=user_data)
         return cast("dict", self._parse_json_response(response))
 
     def update_user(self, user_id: int, user_data: dict) -> dict:

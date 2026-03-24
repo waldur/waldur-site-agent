@@ -38,6 +38,10 @@ class OfferingUserAdditionalValidationRequiredError(Exception):
         super().__init__(message)
         self.comment_url = comment_url
 
+class BackendNotReadyError(Exception):
+    """Backend cannot process the order yet, the PI's offering user is not in OK state."""
+
+
 class DuplicateResourceError(BackendError):
     """The resource with ID already exists in the cluster."""
 

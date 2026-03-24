@@ -215,13 +215,14 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             "customer_slug": "customer-1",
         }
 
+        grant_number = f"GRANT-{self.project_uuid[:8]}"
         self.waldur_resource = {
             "uuid": str(self.resource_uuid),
             "name": "sample_resource",
             "resource_uuid": self.allocation_uuid,
             "project_uuid": self.project_uuid,
             "customer_uuid": self.customer_uuid,
-            "project_name": "Test project",
+            "project_name": f"Test project / {grant_number} / Description",
             "customer_name": "Test customer",
             "limits": {"cpu": 10},
             "state": "Creating",
@@ -231,6 +232,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             "backend_id": "",
             "offering": {"uuid": uuid.uuid4().hex, "name": "MUP Offering"},
         }
+        self.grant_number = grant_number
 
     def _setup_order_mocks(
         self, order_uuid, marketplace_resource_uuid, order_data=None, order_states=None
@@ -269,7 +271,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         ]
 
         # Mock existing users (empty - will create new)
-        mup_client.get_users.return_value = []
+        mup_client.get_user_by_email.return_value = None
 
         # Mock user creation
         mup_client.create_user_request.return_value = {"id": 1}
@@ -278,13 +280,16 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
         mup_client.get_resource.return_value = None
 
         # Mock project creation first (empty projects list initially)
+        grant_number = f"GRANT-{self.project_uuid[:8]}"
         created_project = {
             "id": 1,
-            "title": "Test project",
+            "title": f"Test project / {grant_number} / Description",
             "pi": f"admin@{self.project_uuid}.example.com",  # Default PI that will be updated
-            "grant_number": f"waldur_{self.project_uuid}",
+            "grant_number": grant_number,
             "active": True,
         }
+
+        mup_client.get_project_by_grant.return_value = None
 
         created_allocation = {
             "id": 1,
@@ -410,14 +415,18 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             200, json={}
         )
 
-        # Mock existing project (inactive) - use the correct resource UUID
+        # Mock existing project (inactive) - use grant number from project name
+        grant_number = f"GRANT-{self.project_uuid[:8]}"
         existing_project = {
             "id": 1,
-            "title": "Test project",
+            "title": f"Test project / {grant_number} / Description",
             "pi": "pi@example.com",
-            "grant_number": f"waldur_{marketplace_resource_uuid}",  # Use the actual resource UUID
+            "grant_number": grant_number,
             "active": False,
         }
+
+        # Mock get_project_by_grant to return existing project
+        mup_client.get_project_by_grant.return_value = existing_project
 
         created_allocation = {
             "id": 1,
@@ -429,13 +438,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             "project": 1,
         }
 
-        # Mock get_projects to return existing project
-        mup_client.get_projects.side_effect = [
-            [existing_project],  # First call - project exists (during create_resource)
-            [
-                existing_project
-            ],  # Second call - same project (during add_users_to_resource)
-        ]
+        mup_client.get_projects.return_value = [existing_project]
 
         mup_client.activate_project.return_value = {"status": "activated"}
         mup_client.create_allocation.return_value = created_allocation
@@ -596,7 +599,7 @@ class MUPUpdateOrderTest(BaseMUPOrderTest):
 
     def setUp(self) -> None:
         super().setUp()
-        self.backend_id = "1"  # Project ID as backend ID
+        self.backend_id = "1_1"
 
         self.waldur_order = {
             "uuid": self.order_uuid,
@@ -645,25 +648,18 @@ class MUPUpdateOrderTest(BaseMUPOrderTest):
 
         mup_client = mup_client_class.return_value
 
-        # Mock existing project and allocation (using backend_id format)
-        existing_project = {
-            "id": 1,
-            "title": "Test project",
-            "grant_number": f"waldur_{self.resource_uuid!s}",  # Use str() for UUID
-            "active": True,
-        }
+        # Mock the specific allocation fetched directly via get_allocation(project_id, alloc_id)
         existing_allocation = {
             "id": 1,
-            "type": "Deucalion x86_64",  # Updated to match new allocation type mapping
-            "identifier": f"alloc_{self.resource_uuid!s}_cpu",  # Use str() for UUID
+            "type": "Deucalion x86_64",
+            "identifier": f"alloc_{self.resource_uuid!s}_cpu",
             "size": 10,
             "used": 0,
             "active": True,
             "project": 1,
         }
 
-        mup_client.get_projects.return_value = [existing_project]
-        mup_client.get_project_allocations.return_value = [existing_allocation]
+        mup_client.get_allocation.return_value = existing_allocation
         mup_client.update_allocation.return_value = existing_allocation
 
         processor = OfferingOrderProcessor(MUP_OFFERING, self.waldur_rest_client)
