@@ -22,23 +22,26 @@ def mock_k8s_client():
         patch("waldur_site_agent_k8s_ut_namespace.k8s_client.k8s_client") as mock_client_module,
     ):
         mock_custom_api = MagicMock()
+        mock_core_api = MagicMock()
         mock_client_module.CustomObjectsApi.return_value = mock_custom_api
+        mock_client_module.CoreV1Api.return_value = mock_core_api
         mock_client_module.ApiClient.return_value = MagicMock()
 
         client = K8sUtNamespaceClient({"kubeconfig_path": "/tmp/fake", "cr_namespace": "test-ns"})
         client.custom_api = mock_custom_api
-        yield client, mock_custom_api
+        client.core_api = mock_core_api
+        yield client, mock_custom_api, mock_core_api
 
 
 class TestK8sUtNamespaceClient:
     """Tests for K8sUtNamespaceClient."""
 
     def test_initialization(self, mock_k8s_client):
-        client, _ = mock_k8s_client
+        client, _, _ = mock_k8s_client
         assert client.cr_namespace == "test-ns"
 
     def test_ping_success(self, mock_k8s_client):
-        client, _ = mock_k8s_client
+        client, _, _ = mock_k8s_client
         with patch(
             "waldur_site_agent_k8s_ut_namespace.k8s_client.k8s_client"
         ) as mock_mod:
@@ -47,7 +50,7 @@ class TestK8sUtNamespaceClient:
             assert client.ping() is True
 
     def test_ping_failure(self, mock_k8s_client):
-        client, _ = mock_k8s_client
+        client, _, _ = mock_k8s_client
         with patch(
             "waldur_site_agent_k8s_ut_namespace.k8s_client.k8s_client"
         ) as mock_mod:
@@ -57,7 +60,7 @@ class TestK8sUtNamespaceClient:
             assert client.ping() is False
 
     def test_create_managed_namespace(self, mock_k8s_client):
-        client, mock_api = mock_k8s_client
+        client, mock_api, mock_core = mock_k8s_client
         mock_api.create_namespaced_custom_object.return_value = {
             "metadata": {"name": "test-cr"},
         }
@@ -80,14 +83,14 @@ class TestK8sUtNamespaceClient:
         )
 
     def test_create_managed_namespace_failure(self, mock_k8s_client):
-        client, mock_api = mock_k8s_client
+        client, mock_api, mock_core = mock_k8s_client
         mock_api.create_namespaced_custom_object.side_effect = ApiException(status=409)
 
         with pytest.raises(BackendError, match="Failed to create ManagedNamespace"):
             client.create_managed_namespace("test-cr", {})
 
     def test_get_managed_namespace_found(self, mock_k8s_client):
-        client, mock_api = mock_k8s_client
+        client, mock_api, mock_core = mock_k8s_client
         expected = {"metadata": {"name": "test-cr"}, "spec": {"quota": {}}}
         mock_api.get_namespaced_custom_object.return_value = expected
 
@@ -95,21 +98,21 @@ class TestK8sUtNamespaceClient:
         assert result == expected
 
     def test_get_managed_namespace_not_found(self, mock_k8s_client):
-        client, mock_api = mock_k8s_client
+        client, mock_api, mock_core = mock_k8s_client
         mock_api.get_namespaced_custom_object.side_effect = ApiException(status=404)
 
         result = client.get_managed_namespace("missing-cr")
         assert result is None
 
     def test_get_managed_namespace_error(self, mock_k8s_client):
-        client, mock_api = mock_k8s_client
+        client, mock_api, mock_core = mock_k8s_client
         mock_api.get_namespaced_custom_object.side_effect = ApiException(status=500)
 
         with pytest.raises(BackendError, match="Failed to get ManagedNamespace"):
             client.get_managed_namespace("test-cr")
 
     def test_list_managed_namespaces(self, mock_k8s_client):
-        client, mock_api = mock_k8s_client
+        client, mock_api, mock_core = mock_k8s_client
         mock_api.list_namespaced_custom_object.return_value = {
             "items": [
                 {"metadata": {"name": "ns1"}},
@@ -122,7 +125,7 @@ class TestK8sUtNamespaceClient:
         assert result[0]["metadata"]["name"] == "ns1"
 
     def test_patch_managed_namespace(self, mock_k8s_client):
-        client, mock_api = mock_k8s_client
+        client, mock_api, mock_core = mock_k8s_client
         mock_api.patch_namespaced_custom_object.return_value = {"metadata": {"name": "test-cr"}}
 
         patch = {"spec": {"quota": {"cpu": "8"}}}
@@ -139,7 +142,7 @@ class TestK8sUtNamespaceClient:
         )
 
     def test_delete_managed_namespace(self, mock_k8s_client):
-        client, mock_api = mock_k8s_client
+        client, mock_api, mock_core = mock_k8s_client
         client.delete_managed_namespace("test-cr")
 
         mock_api.delete_namespaced_custom_object.assert_called_once_with(
@@ -152,15 +155,47 @@ class TestK8sUtNamespaceClient:
 
     def test_delete_managed_namespace_not_found(self, mock_k8s_client):
         """Deleting a non-existent CR should not raise."""
-        client, mock_api = mock_k8s_client
+        client, mock_api, mock_core = mock_k8s_client
         mock_api.delete_namespaced_custom_object.side_effect = ApiException(status=404)
 
         # Should not raise
         client.delete_managed_namespace("missing-cr")
 
     def test_delete_managed_namespace_error(self, mock_k8s_client):
-        client, mock_api = mock_k8s_client
+        client, mock_api, mock_core = mock_k8s_client
         mock_api.delete_namespaced_custom_object.side_effect = ApiException(status=500)
 
         with pytest.raises(BackendError, match="Failed to delete ManagedNamespace"):
             client.delete_managed_namespace("test-cr")
+
+    def test_get_resource_quota_found(self, mock_k8s_client):
+        client, _, mock_core = mock_k8s_client
+        mock_rq = MagicMock()
+        mock_rq.to_dict.return_value = {
+            "status": {
+                "used": {"limits.cpu": "2", "limits.memory": "4Gi"},
+            },
+        }
+        mock_core.read_namespaced_resource_quota.return_value = mock_rq
+
+        result = client.get_resource_quota("waldur-test-ns")
+
+        assert result == {"status": {"used": {"limits.cpu": "2", "limits.memory": "4Gi"}}}
+        mock_core.read_namespaced_resource_quota.assert_called_once_with(
+            name="managed-quota",
+            namespace="waldur-test-ns",
+        )
+
+    def test_get_resource_quota_not_found(self, mock_k8s_client):
+        client, _, mock_core = mock_k8s_client
+        mock_core.read_namespaced_resource_quota.side_effect = ApiException(status=404)
+
+        result = client.get_resource_quota("waldur-missing-ns")
+        assert result is None
+
+    def test_get_resource_quota_error(self, mock_k8s_client):
+        client, _, mock_core = mock_k8s_client
+        mock_core.read_namespaced_resource_quota.side_effect = ApiException(status=500)
+
+        with pytest.raises(BackendError, match="Failed to get ResourceQuota"):
+            client.get_resource_quota("waldur-test-ns")

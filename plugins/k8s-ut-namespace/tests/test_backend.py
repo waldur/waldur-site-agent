@@ -384,10 +384,14 @@ class TestK8sUtNamespaceBackendSyncUsersToCR:
 
         user_ids = {"alice", "bob"}
         user_roles = {"alice": "manager", "bob": "member"}
-        user_emails = {"alice": "alice@example.com", "bob": "bob@example.com"}
+        user_attributes = {
+            "alice": {"email": "alice@example.com"},
+            "bob": {"email": "bob@example.com"},
+        }
 
         backend.add_users_to_resource(
-            waldur_resource, user_ids, user_roles=user_roles, user_emails=user_emails
+            waldur_resource, user_ids, user_roles=user_roles,
+            user_attributes=user_attributes,
         )
 
         # Verify CR was patched with user emails
@@ -419,10 +423,11 @@ class TestK8sUtNamespaceBackendSyncUsersToCR:
 
         user_ids = {"alice"}
         user_roles = {"alice": "manager"}
-        user_emails = {"alice": "alice@example.com"}
+        user_attributes = {"alice": {"email": "alice@example.com"}}
 
         backend.add_users_to_resource(
-            waldur_resource, user_ids, user_roles=user_roles, user_emails=user_emails
+            waldur_resource, user_ids, user_roles=user_roles,
+            user_attributes=user_attributes,
         )
 
         # CR should not be patched
@@ -434,7 +439,7 @@ class TestK8sUtNamespaceBackendSyncUsersToCR:
         backend, _, _ = _make_backend(backend_settings, backend_components)
         assert backend.sync_users_to_cr is False
 
-    def test_sync_users_to_cr_skips_users_without_email(
+    def test_sync_users_to_cr_skips_users_without_identity(
         self, backend_settings, backend_components, waldur_resource
     ):
         backend_settings["sync_users_to_cr"] = True
@@ -451,11 +456,12 @@ class TestK8sUtNamespaceBackendSyncUsersToCR:
 
         user_ids = {"alice", "bob"}
         user_roles = {"alice": "manager", "bob": "member"}
-        # Only alice has an email
-        user_emails = {"alice": "alice@example.com"}
+        # Only alice has an email attribute
+        user_attributes = {"alice": {"email": "alice@example.com"}}
 
         backend.add_users_to_resource(
-            waldur_resource, user_ids, user_roles=user_roles, user_emails=user_emails
+            waldur_resource, user_ids, user_roles=user_roles,
+            user_attributes=user_attributes,
         )
 
         mock_k8s.patch_managed_namespace.assert_called_once_with(
@@ -486,10 +492,11 @@ class TestK8sUtNamespaceBackendSyncUsersToCR:
         waldur_resource.backend_id = "waldur-test-ns"
         user_ids = {"alice"}
         user_roles = {"alice": "manager"}
-        user_emails = {"alice": "alice@example.com"}
+        user_attributes = {"alice": {"email": "alice@example.com"}}
 
         result = backend.add_users_to_resource(
-            waldur_resource, user_ids, user_roles=user_roles, user_emails=user_emails
+            waldur_resource, user_ids, user_roles=user_roles,
+            user_attributes=user_attributes,
         )
 
         # CR should be patched even without Keycloak
@@ -507,10 +514,11 @@ class TestK8sUtNamespaceBackendSyncUsersToCR:
         mock_kc.get_group_by_name.return_value = None
 
         user_roles = {"alice": "manager"}
-        user_emails = {"alice": "alice@example.com"}
+        user_attributes = {"alice": {"email": "alice@example.com"}}
 
         backend.add_users_to_resource(
-            waldur_resource, {"alice"}, user_roles=user_roles, user_emails=user_emails
+            waldur_resource, {"alice"}, user_roles=user_roles,
+            user_attributes=user_attributes,
         )
 
         # Should not attempt to patch CR when backend_id is empty
@@ -527,7 +535,11 @@ class TestK8sUtNamespaceBackendPullResource:
         mock_k8s.get_managed_namespace.return_value = {
             "metadata": {"name": "waldur-test-ns"},
             "spec": {"quota": {"cpu": "4", "memory": "8Gi", "storage": "100Gi", "gpu": "1"}},
+            "status": {"conditions": [
+                {"type": "Ready", "status": "True", "message": "All resources reconciled successfully"},
+            ]},
         }
+        mock_k8s.get_resource_quota.return_value = None
 
         # Mock group members
         mock_kc.get_group_by_name.side_effect = lambda name: {
@@ -546,7 +558,9 @@ class TestK8sUtNamespaceBackendPullResource:
         assert result is not None
         assert result.backend_id == "waldur-test-ns"
         assert set(result.users) == {"user1", "user2"}
-        assert result.usage == {"TOTAL_ACCOUNT_USAGE": {}}
+        assert result.backend_metadata == {
+            "status": {"ready": True, "message": "All resources reconciled successfully"},
+        }
 
     def test_pull_resource_not_found(self, backend_settings, backend_components, waldur_resource):
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
@@ -595,9 +609,274 @@ class TestK8sUtNamespaceBackendStatusOps:
 class TestK8sUtNamespaceBackendUsageReport:
     """Tests for usage report generation."""
 
-    def test_usage_report_returns_empty(self, backend_settings, backend_components):
-        backend, _, _ = _make_backend(backend_settings, backend_components)
+    def test_usage_report_with_resource_quota(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+
+        mock_k8s.get_resource_quota.return_value = {
+            "status": {
+                "used": {
+                    "limits.cpu": "2",
+                    "limits.memory": "4Gi",
+                    "requests.storage": "50Gi",
+                    "requests.nvidia.com/gpu": "1",
+                },
+            },
+        }
 
         report = backend._get_usage_report(["waldur-test-ns"])
 
-        assert report == {}
+        assert report == {
+            "waldur-test-ns": {
+                "TOTAL_ACCOUNT_USAGE": {"cpu": 2, "ram": 4, "storage": 50, "gpu": 1},
+            },
+        }
+
+    def test_usage_report_quota_not_found(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_resource_quota.return_value = None
+
+        report = backend._get_usage_report(["waldur-test-ns"])
+
+        assert report == {
+            "waldur-test-ns": {
+                "TOTAL_ACCOUNT_USAGE": {"cpu": 0, "ram": 0, "storage": 0, "gpu": 0},
+            },
+        }
+
+    def test_usage_report_empty_used(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_resource_quota.return_value = {"status": {"used": {}}}
+
+        report = backend._get_usage_report(["waldur-test-ns"])
+
+        assert report == {
+            "waldur-test-ns": {
+                "TOTAL_ACCOUNT_USAGE": {"cpu": 0, "ram": 0, "storage": 0, "gpu": 0},
+            },
+        }
+
+    def test_usage_report_error_returns_zeros(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_resource_quota.side_effect = Exception("connection error")
+
+        report = backend._get_usage_report(["waldur-test-ns"])
+
+        assert report == {
+            "waldur-test-ns": {
+                "TOTAL_ACCOUNT_USAGE": {"cpu": 0, "ram": 0, "storage": 0, "gpu": 0},
+            },
+        }
+
+
+class TestK8sUtNamespaceBackendNameValidation:
+    """Tests for namespace name validation."""
+
+    def test_valid_names(self):
+        # Should not raise
+        K8sUtNamespaceBackend._validate_namespace_name("waldur-test-ns")
+        K8sUtNamespaceBackend._validate_namespace_name("a")
+        K8sUtNamespaceBackend._validate_namespace_name("a-b-c")
+        K8sUtNamespaceBackend._validate_namespace_name("abc123")
+
+    def test_empty_name(self):
+        with pytest.raises(BackendError, match="must not be empty"):
+            K8sUtNamespaceBackend._validate_namespace_name("")
+
+    def test_too_long(self):
+        name = "a" * 64
+        with pytest.raises(BackendError, match="exceeds 63 characters"):
+            K8sUtNamespaceBackend._validate_namespace_name(name)
+
+    def test_uppercase(self):
+        with pytest.raises(BackendError, match="not a valid RFC 1123"):
+            K8sUtNamespaceBackend._validate_namespace_name("Waldur-Test")
+
+    def test_starts_with_hyphen(self):
+        with pytest.raises(BackendError, match="not a valid RFC 1123"):
+            K8sUtNamespaceBackend._validate_namespace_name("-bad")
+
+    def test_ends_with_hyphen(self):
+        with pytest.raises(BackendError, match="not a valid RFC 1123"):
+            K8sUtNamespaceBackend._validate_namespace_name("bad-")
+
+    def test_special_chars(self):
+        with pytest.raises(BackendError, match="not a valid RFC 1123"):
+            K8sUtNamespaceBackend._validate_namespace_name("bad_name!")
+
+    def test_create_resource_invalid_name_rejected(
+        self, backend_settings, backend_components
+    ):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+
+        resource = WaldurResource(
+            uuid=uuid4(), name="Test", slug="Bad_Slug!", backend_id=""
+        )
+
+        with pytest.raises(BackendError, match="not a valid RFC 1123"):
+            backend.create_resource(resource)
+
+        # Should not have attempted to create CR or groups
+        mock_k8s.create_managed_namespace.assert_not_called()
+
+
+class TestK8sUtNamespaceBackendLabelsAnnotations:
+    """Tests for labels and annotations support."""
+
+    def test_create_resource_with_labels_and_annotations(
+        self, backend_settings, backend_components, waldur_resource
+    ):
+        backend_settings["namespace_labels"] = {"env": "prod", "team": "hpc"}
+        backend_settings["namespace_annotations"] = {"contact": "admin@example.com"}
+        backend, mock_k8s, mock_kc = _make_backend(backend_settings, backend_components)
+
+        mock_kc.get_group_by_name.return_value = None
+        mock_kc.create_group.side_effect = ["g1", "g2", "g3"]
+        mock_k8s.create_managed_namespace.return_value = {
+            "metadata": {"name": "waldur-test-ns"}
+        }
+
+        backend.create_resource(waldur_resource)
+
+        spec = mock_k8s.create_managed_namespace.call_args[0][1]
+        assert spec["labels"] == {"env": "prod", "team": "hpc"}
+        assert spec["annotations"] == {"contact": "admin@example.com"}
+
+    def test_create_resource_without_labels_annotations(
+        self, backend_settings, backend_components, waldur_resource
+    ):
+        backend, mock_k8s, mock_kc = _make_backend(backend_settings, backend_components)
+
+        mock_kc.get_group_by_name.return_value = None
+        mock_kc.create_group.side_effect = ["g1", "g2", "g3"]
+        mock_k8s.create_managed_namespace.return_value = {
+            "metadata": {"name": "waldur-test-ns"}
+        }
+
+        backend.create_resource(waldur_resource)
+
+        spec = mock_k8s.create_managed_namespace.call_args[0][1]
+        assert "labels" not in spec
+        assert "annotations" not in spec
+
+
+class TestK8sUtNamespaceBackendReadyCondition:
+    """Tests for status condition parsing."""
+
+    def test_parse_ready_true(self):
+        status = {"conditions": [
+            {"type": "Ready", "status": "True", "message": "All good"},
+        ]}
+        result = K8sUtNamespaceBackend._parse_ready_condition(status)
+        assert result == {"ready": True, "message": "All good"}
+
+    def test_parse_ready_false(self):
+        status = {"conditions": [
+            {"type": "Ready", "status": "False", "message": "quota exceeded"},
+        ]}
+        result = K8sUtNamespaceBackend._parse_ready_condition(status)
+        assert result == {"ready": False, "message": "quota exceeded"}
+
+    def test_parse_ready_unknown(self):
+        status = {"conditions": [
+            {"type": "Ready", "status": "Unknown", "message": ""},
+        ]}
+        result = K8sUtNamespaceBackend._parse_ready_condition(status)
+        assert result == {"ready": None, "message": ""}
+
+    def test_parse_no_conditions(self):
+        result = K8sUtNamespaceBackend._parse_ready_condition({})
+        assert result == {"ready": None, "message": ""}
+
+    def test_get_resource_metadata_parses_status(
+        self, backend_settings, backend_components
+    ):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = {
+            "metadata": {"name": "waldur-test-ns"},
+            "spec": {"quota": {"cpu": "4"}},
+            "status": {"conditions": [
+                {"type": "Ready", "status": "True", "message": "Reconciled"},
+            ]},
+        }
+
+        metadata = backend.get_resource_metadata("waldur-test-ns")
+
+        assert metadata["status"] == {"ready": True, "message": "Reconciled"}
+
+
+class TestK8sUtNamespaceBackendCrUserIdentity:
+    """Tests for configurable CR user identity field."""
+
+    def test_custom_identity_field(
+        self, backend_settings, backend_components, waldur_resource
+    ):
+        backend_settings["sync_users_to_cr"] = True
+        backend_settings["cr_user_identity_field"] = "username"
+        backend, mock_k8s, mock_kc = _make_backend(backend_settings, backend_components)
+        waldur_resource.backend_id = "waldur-test-ns"
+
+        mock_kc.get_group_by_name.side_effect = lambda name: {
+            "ns_test-ns_admin": {"id": "g-admin"},
+            "ns_test-ns_readwrite": {"id": "g-rw"},
+            "ns_test-ns_readonly": {"id": "g-ro"},
+        }.get(name)
+        mock_kc.find_user.side_effect = lambda uid, _: {"id": f"kc-{uid}"}
+        mock_kc.is_user_in_group.return_value = False
+
+        user_ids = {"alice"}
+        user_roles = {"alice": "manager"}
+        user_attributes = {"alice": {"username": "alice_123", "email": "alice@example.com"}}
+
+        backend.add_users_to_resource(
+            waldur_resource, user_ids, user_roles=user_roles,
+            user_attributes=user_attributes,
+        )
+
+        mock_k8s.patch_managed_namespace.assert_called_once_with(
+            "waldur-test-ns",
+            {
+                "spec": {
+                    "adminUsers": ["alice_123"],
+                    "rwUsers": [],
+                    "roUsers": [],
+                }
+            },
+        )
+
+    def test_missing_identity_field_skips_user(
+        self, backend_settings, backend_components, waldur_resource
+    ):
+        backend_settings["sync_users_to_cr"] = True
+        backend_settings["cr_user_identity_field"] = "civil_number"
+        backend, mock_k8s, mock_kc = _make_backend(backend_settings, backend_components)
+        waldur_resource.backend_id = "waldur-test-ns"
+
+        mock_kc.get_group_by_name.side_effect = lambda name: {
+            "ns_test-ns_admin": {"id": "g-admin"},
+            "ns_test-ns_readwrite": {"id": "g-rw"},
+            "ns_test-ns_readonly": {"id": "g-ro"},
+        }.get(name)
+        mock_kc.find_user.side_effect = lambda uid, _: {"id": f"kc-{uid}"}
+        mock_kc.is_user_in_group.return_value = False
+
+        user_ids = {"alice"}
+        user_roles = {"alice": "manager"}
+        # No civil_number attribute
+        user_attributes = {"alice": {"email": "alice@example.com"}}
+
+        backend.add_users_to_resource(
+            waldur_resource, user_ids, user_roles=user_roles,
+            user_attributes=user_attributes,
+        )
+
+        # All user lists should be empty since identity field is missing
+        mock_k8s.patch_managed_namespace.assert_called_once_with(
+            "waldur-test-ns",
+            {
+                "spec": {
+                    "adminUsers": [],
+                    "rwUsers": [],
+                    "roUsers": [],
+                }
+            },
+        )
