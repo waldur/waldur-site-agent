@@ -28,6 +28,7 @@ class BackendResourceInfo:
 
     backend_id: str = ""
     parent_id: str = ""
+    effective_id: str = ""
     users: list[str] = field(default_factory=list)
     usage: dict = field(default_factory=dict)
     limits: dict = field(default_factory=dict)

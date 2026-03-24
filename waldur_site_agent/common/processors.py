@@ -1107,6 +1107,13 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 is_done = self.resource_backend.check_pending_order(order_backend_id)
                 if is_done:
                     logger.info("Target order %s completed successfully", order_backend_id)
+                    waldur_resource = marketplace_provider_resources_retrieve.sync(
+                        uuid=order.marketplace_resource_uuid.hex,
+                        client=self.waldur_rest_client,
+                    )
+                    self.resource_backend.sync_resource_effective_id(
+                        waldur_resource, self.waldur_rest_client
+                    )
                     return True
                 logger.info("Target order %s still pending", order_backend_id)
                 return False
@@ -2071,6 +2078,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 self._sync_resource_service_accounts(waldur_resource)
                 self._sync_resource_course_accounts(waldur_resource)
                 self._sync_resource_status(waldur_resource)
+                self.resource_backend.sync_resource_end_date(
+                    waldur_resource, self.waldur_rest_client
+                )
+                self.resource_backend.sync_resource_effective_id(
+                    waldur_resource, self.waldur_rest_client
+                )
                 self._sync_resource_limits(waldur_resource)
                 self._sync_resource_user_limits(waldur_resource, resource_usernames)
 
