@@ -11,7 +11,11 @@ RBAC group integration.
 - **Role-Based Access Control**: Creates 3 Keycloak groups per namespace (admin, readwrite, readonly)
 - **Waldur Role Mapping**: Maps Waldur roles to namespace access levels automatically
 - **User Management**: Adds/removes users from Keycloak groups, reconciles role changes
-- **Usage Reporting**: Reports namespace quota allocations back to Waldur
+- **Usage Reporting**: Reports actual resource consumption from K8s ResourceQuota or quota allocations
+- **Namespace Labels & Annotations**: Configurable labels and annotations propagated to created namespaces
+- **Status Monitoring**: Parses operator Ready condition and exposes readiness in Waldur metadata
+- **Configurable User Identity**: Choose which user attribute (email, civil_number, etc.) populates CR user fields
+- **Namespace Name Validation**: Validates generated names against RFC 1123 before CR creation
 - **Status Operations**: Supports downscale (minimal quota), pause (zero quota), and restore
 
 ## Architecture
@@ -132,6 +136,12 @@ offerings:
       cr_namespace: "waldur-system"
       namespace_prefix: "waldur-"
       keycloak_enabled: false
+      sync_users_to_cr: true
+      cr_user_identity_field: "email"
+      namespace_labels:
+        tenant: "waldur"
+      namespace_annotations:
+        description: "Managed by Waldur"
 
     backend_components:
       cpu:
@@ -224,7 +234,10 @@ offerings:
 | `role_mapping` | object | No | See Role Mapping | Custom Waldur role to namespace role mapping (merged with defaults) |
 | `component_quota_mapping` | object | No | See Component Mapping | Custom component to K8s quota field mapping |
 | `keycloak_use_user_id` | boolean | No | `true` | Use Keycloak user ID for lookup (false = use username) |
-| `sync_users_to_cr` | boolean | No | `false` | Sync user emails to CR `adminUsers`/`rwUsers`/`roUsers` fields |
+| `sync_users_to_cr` | boolean | No | `false` | Sync user identities to CR `adminUsers`/`rwUsers`/`roUsers` fields |
+| `cr_user_identity_field` | string | No | `email` | User attribute for CR user fields |
+| `namespace_labels` | object | No | `{}` | Labels to set on created namespaces (e.g., `tenant: waldur`) |
+| `namespace_annotations` | object | No | `{}` | Annotations to set on created namespaces |
 
 ### Keycloak Settings (Optional)
 
@@ -299,14 +312,18 @@ When users are added to a Waldur resource:
 
 #### Direct CR User Sync
 
-When `sync_users_to_cr` is enabled, user emails from Waldur are written directly to the
+When `sync_users_to_cr` is enabled, user identities from Waldur are written directly to the
 ManagedNamespace CR's `adminUsers`, `rwUsers`, and `roUsers` fields.
-The managed-namespace-operator then creates RoleBindings with these emails as
-OIDC User subjects.
+The managed-namespace-operator then creates RoleBindings with these identities as
+User subjects (optionally prefixed with `CONTROLLER_USER_PREFIX` on the operator side).
+
+The `cr_user_identity_field` setting controls which user attribute is used as the
+identity value. The default is `email`, but any attribute exposed by the offering's
+user attribute config can be used (e.g., `civil_number`, `username`).
 
 Each user's Waldur role is mapped to a namespace role using the same
 `role_mapping` configuration (see [Role Mapping](#role-mapping)), and the
-email is placed in the corresponding CR field:
+identity value is placed in the corresponding CR field:
 
 | Namespace Role | CR Field |
 |---|---|
@@ -321,17 +338,47 @@ sent for roles with no members.
 
 This can be used **alongside** Keycloak groups (both mechanisms populate the
 same RoleBindings) or **without** Keycloak (`keycloak_enabled: false`) for
-deployments that rely solely on OIDC email-based authentication.
+deployments that rely solely on OIDC-based authentication.
 
 ```yaml
 backend_settings:
   sync_users_to_cr: true
+  cr_user_identity_field: "civil_number"  # or "email", "username", etc.
   keycloak_enabled: false  # optional, can also be true for dual mode
 ```
+
+The chosen field must be enabled in the offering's user attribute config
+(`expose_civil_number: true`) in Waldur. Users missing the configured
+attribute are skipped with a warning log.
 
 When users are removed:
 
 1. User is removed from all 3 Keycloak groups
+
+### Usage Reporting
+
+The plugin reports actual resource consumption by reading `ResourceQuota.status.used`
+from the managed namespace. The K8s service account needs `get` permission on
+`resourcequotas` in the target namespaces for this to work. If the ResourceQuota is
+not accessible, usage is reported as zeros.
+
+Usage values are converted back to Waldur component units using the reverse of
+the component quota mapping (e.g., K8s `limits.memory: 4Gi` → Waldur `ram: 4`).
+
+### Namespace Labels & Annotations
+
+Labels and annotations configured in `backend_settings` are included in the
+ManagedNamespace CR spec. The operator propagates them to the actual namespace.
+This is useful for cluster policies (e.g., Kyverno requiring a `tenant` label):
+
+```yaml
+backend_settings:
+  namespace_labels:
+    tenant: "waldur"
+    cost-center: "HPC-001"
+  namespace_annotations:
+    description: "Managed by Waldur Site Agent"
+```
 
 ### Status Operations
 

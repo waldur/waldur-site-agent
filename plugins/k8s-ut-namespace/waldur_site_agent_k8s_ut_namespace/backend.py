@@ -1,6 +1,7 @@
 """K8s UT ManagedNamespace backend for Waldur Site Agent."""
 
 import pprint
+import re
 from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -39,6 +40,9 @@ NS_ROLE_TO_CR_USER_FIELD = {
     "readonly": "roUsers",
 }
 
+_NS_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+_NS_NAME_MAX_LEN = 63
+
 
 class K8sUtNamespaceBackend(backends.BaseBackend):
     """Backend for managing Kubernetes ManagedNamespace CRs and Keycloak RBAC groups."""
@@ -67,6 +71,16 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         self.default_role = backend_settings.get("default_role", "readwrite")
         self.keycloak_use_user_id = backend_settings.get("keycloak_use_user_id", True)
         self.sync_users_to_cr = backend_settings.get("sync_users_to_cr", False)
+        self.cr_user_identity_field = backend_settings.get(
+            "cr_user_identity_field", "email"
+        )
+
+        self.namespace_labels: dict[str, str] = backend_settings.get(
+            "namespace_labels", {}
+        )
+        self.namespace_annotations: dict[str, str] = backend_settings.get(
+            "namespace_annotations", {}
+        )
 
         # Configurable mappings with sensible defaults
         self.role_mapping: dict[str, str] = {
@@ -155,6 +169,28 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
     # ── Quota conversion ───────────────────────────────────────────────────
 
     @staticmethod
+    def _validate_namespace_name(name: str) -> None:
+        """Validate that name is a valid RFC 1123 label.
+
+        Raises BackendError if the name is empty, too long, or contains
+        invalid characters.
+        """
+        if not name:
+            msg = "Namespace name must not be empty"
+            raise BackendError(msg)
+        if len(name) > _NS_NAME_MAX_LEN:
+            raise BackendError(
+                f"Namespace name '{name}' exceeds {_NS_NAME_MAX_LEN} characters "
+                f"({len(name)})"
+            )
+        if not _NS_NAME_RE.match(name):
+            raise BackendError(
+                f"Namespace name '{name}' is not a valid RFC 1123 label: "
+                "must be lowercase alphanumeric or '-', must start and end "
+                "with an alphanumeric character"
+            )
+
+    @staticmethod
     def _validate_limits(limits: dict[str, int]) -> None:
         """Raise BackendError if any limit value is negative."""
         negative = {k: v for k, v in limits.items() if v < 0}
@@ -225,6 +261,12 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         logger.info(
             fmt.format("Keycloak enabled", "Yes" if self.keycloak_client else "No")
         )
+        if self.namespace_labels:
+            logger.info(fmt.format("Namespace labels", str(self.namespace_labels)))
+        if self.namespace_annotations:
+            logger.info(
+                fmt.format("Namespace annotations", str(self.namespace_annotations))
+            )
 
         logger.info("")
         logger.info("Backend components configuration:")
@@ -262,14 +304,59 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         backend_limits = dict(waldur_limits)
         return backend_limits, waldur_limits
 
-    def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
-        """Return empty report — usage reporting is not supported.
+    def _build_reverse_quota_mapping(self) -> dict[str, str]:
+        """Build reverse mapping from K8s quota field to Waldur component key.
 
-        Billing is based on limits (allocation), not actual consumption.
-        The CRD does not expose usage data, so there is nothing to report.
+        E.g., {"cpu": "cpu", "memory": "ram", "storage": "storage", "gpu": "gpu"}
         """
-        del resource_backend_ids
-        return {}
+        reverse = {}
+        for component_key, component_config in self.backend_components.items():
+            component_type = component_config.get("type", component_key)
+            quota_field = self.component_quota_mapping.get(component_type)
+            if quota_field:
+                reverse[quota_field] = component_key
+        return reverse
+
+    def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
+        """Return usage report based on ResourceQuota status.used.
+
+        Reads actual resource consumption from the K8s ResourceQuota
+        object in each managed namespace.
+        """
+        report = {}
+        reverse_mapping = self._build_reverse_quota_mapping()
+
+        # K8s ResourceQuota status.used keys for each quota field
+        quota_field_to_used_key = {
+            "cpu": "limits.cpu",
+            "memory": "limits.memory",
+            "storage": "requests.storage",
+            "gpu": "requests.nvidia.com/gpu",
+        }
+
+        for backend_id in resource_backend_ids:
+            usage = dict.fromkeys(self.backend_components, 0)
+            try:
+                rq = self.k8s_client.get_resource_quota(backend_id)
+                if rq:
+                    used = rq.get("status", {}).get("used", {})
+                    for quota_field, component_key in reverse_mapping.items():
+                        used_key = quota_field_to_used_key.get(
+                            quota_field, quota_field
+                        )
+                        raw_value = used.get(used_key)
+                        if raw_value is not None:
+                            usage[component_key] = self._parse_k8s_quantity(
+                                str(raw_value)
+                            )
+            except Exception as e:
+                logger.warning(
+                    "Failed to get ResourceQuota for %s: %s", backend_id, e
+                )
+
+            report[backend_id] = {"TOTAL_ACCOUNT_USAGE": usage}
+
+        return report
 
     @staticmethod
     def _parse_k8s_quantity(value: str) -> int:
@@ -286,6 +373,25 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         except ValueError:
             return 0
 
+    @staticmethod
+    def _parse_ready_condition(status: dict) -> dict:
+        """Extract the Ready condition from a ManagedNamespace status.
+
+        Returns a dict with keys: ready (bool or None), message (str).
+        None means the condition is not yet set.
+        """
+        conditions = status.get("conditions", [])
+        for cond in conditions:
+            if cond.get("type") == "Ready":
+                cond_status = cond.get("status", "Unknown")
+                return {
+                    "ready": True
+                    if cond_status == "True"
+                    else (False if cond_status == "False" else None),
+                    "message": cond.get("message", ""),
+                }
+        return {"ready": None, "message": ""}
+
     def get_resource_metadata(self, resource_backend_id: str) -> dict:
         """Get K8s-specific metadata for the resource."""
         metadata = {}
@@ -294,7 +400,9 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             if cr:
                 metadata["name"] = cr.get("metadata", {}).get("name", "")
                 metadata["quota"] = cr.get("spec", {}).get("quota", {})
-                metadata["status"] = cr.get("status", {})
+                metadata["status"] = self._parse_ready_condition(
+                    cr.get("status", {})
+                )
         except Exception as e:
             logger.warning("Failed to get metadata for %s: %s", resource_backend_id, e)
         return metadata
@@ -313,6 +421,8 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 f"Resource {waldur_resource.uuid} has no slug, "
                 "cannot create ManagedNamespace"
             )
+        ns_name = f"{self.namespace_prefix}{waldur_resource.slug}"
+        self._validate_namespace_name(ns_name)
 
     def create_resource_with_id(
         self,
@@ -352,6 +462,12 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 group_name = self._get_keycloak_group_name(resource_slug, role)
                 cr_field = NS_ROLE_TO_CR_GROUP_FIELD[role]
                 spec[cr_field] = [group_name]
+
+        # Add namespace labels and annotations
+        if self.namespace_labels:
+            spec["labels"] = dict(self.namespace_labels)
+        if self.namespace_annotations:
+            spec["annotations"] = dict(self.namespace_annotations)
 
         # Add owner info as object (CRD expects {orgID, projectID})
         owner: dict[str, str] = {}
@@ -426,18 +542,20 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         """Add users to correct Keycloak groups and/or ManagedNamespace CR.
 
         Uses `user_roles` kwarg to determine which group each user belongs to.
-        Uses `user_emails` kwarg to populate CR user fields when sync_users_to_cr is enabled.
+        Uses `user_attributes` kwarg to populate CR user fields when
+        sync_users_to_cr is enabled. The field used for user identity is
+        configured via `cr_user_identity_field` backend setting.
         Also reconciles role changes for all users in user_roles.
         """
         user_roles: dict[str, str] = kwargs.get("user_roles", {})
-        user_emails: dict[str, str] = kwargs.get("user_emails", {})
+        user_attributes: dict[str, dict] = kwargs.get("user_attributes", {})
 
-        # Sync user emails to the ManagedNamespace CR if enabled.
-        # Only run when user_emails is provided (team sync), not for
+        # Sync user identities to the ManagedNamespace CR if enabled.
+        # Only run when user_attributes is provided (team sync), not for
         # service account or course account syncs which would overwrite
         # the CR with empty lists.
-        if self.sync_users_to_cr and "user_emails" in kwargs:
-            self._sync_users_to_cr(waldur_resource, user_roles, user_emails)
+        if self.sync_users_to_cr and "user_attributes" in kwargs:
+            self._sync_users_to_cr(waldur_resource, user_roles, user_attributes)
 
         if not self.keycloak_client:
             logger.info("Keycloak not configured, skipping Keycloak user management")
@@ -522,33 +640,41 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         user_roles: dict[str, str],
-        user_emails: dict[str, str],
+        user_attributes: dict[str, dict],
     ) -> None:
-        """Patch the ManagedNamespace CR with per-role user email lists.
+        """Patch the ManagedNamespace CR with per-role user identity lists.
 
         Groups all users by their mapped namespace role and sets the
-        adminUsers/rwUsers/roUsers fields on the CR spec.
+        adminUsers/rwUsers/roUsers fields on the CR spec. The identity
+        value is determined by the cr_user_identity_field setting.
         """
         ns_name = waldur_resource.backend_id
         if not ns_name or not ns_name.strip():
             logger.warning("Resource has no backend_id, cannot sync users to CR")
             return
 
-        # Build per-role email lists from ALL users with roles
-        role_emails: dict[str, list[str]] = {role: [] for role in NS_ROLES}
+        identity_field = self.cr_user_identity_field
+
+        # Build per-role identity lists from ALL users with roles
+        role_identities: dict[str, list[str]] = {role: [] for role in NS_ROLES}
         for username, waldur_role in user_roles.items():
-            email = user_emails.get(username)
-            if not email:
-                logger.debug("No email for user %s, skipping CR user sync", username)
+            attrs = user_attributes.get(username, {})
+            identity = attrs.get(identity_field)
+            if not identity:
+                logger.warning(
+                    "No '%s' attribute for user %s, skipping CR user sync",
+                    identity_field,
+                    username,
+                )
                 continue
             ns_role = self.role_mapping.get(waldur_role, self.default_role)
-            role_emails[ns_role].append(email)
+            role_identities[ns_role].append(str(identity))
 
         # Build the patch with all role fields (empty lists clear removed users)
         spec_patch: dict = {}
         for role in NS_ROLES:
             cr_field = NS_ROLE_TO_CR_USER_FIELD[role]
-            spec_patch[cr_field] = sorted(role_emails[role])
+            spec_patch[cr_field] = sorted(role_identities[role])
 
         try:
             self.k8s_client.patch_managed_namespace(ns_name, {"spec": spec_patch})
@@ -638,6 +764,15 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 logger.warning("ManagedNamespace %s not found", ns_name)
                 return None
 
+            # Check readiness
+            ready_info = self._parse_ready_condition(cr.get("status", {}))
+            if ready_info["ready"] is False:
+                logger.warning(
+                    "ManagedNamespace %s is not ready: %s",
+                    ns_name,
+                    ready_info["message"],
+                )
+
             # Collect users from all Keycloak groups
             users = self._list_all_keycloak_users(waldur_resource)
 
@@ -649,6 +784,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 backend_id=ns_name,
                 users=users,
                 usage=usage,
+                backend_metadata={"status": ready_info},
             )
         except Exception as e:
             logger.exception("Error pulling resource %s: %s", ns_name, e)
