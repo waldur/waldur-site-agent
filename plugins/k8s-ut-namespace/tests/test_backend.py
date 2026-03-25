@@ -880,3 +880,40 @@ class TestK8sUtNamespaceBackendCrUserIdentity:
                 }
             },
         )
+
+    def test_identity_lowercase(
+        self, backend_settings, backend_components, waldur_resource
+    ):
+        backend_settings["sync_users_to_cr"] = True
+        backend_settings["cr_user_identity_field"] = "civil_number"
+        backend_settings["cr_user_identity_lowercase"] = True
+        backend, mock_k8s, mock_kc = _make_backend(backend_settings, backend_components)
+        waldur_resource.backend_id = "waldur-test-ns"
+
+        mock_kc.get_group_by_name.side_effect = lambda name: {
+            "ns_test-ns_admin": {"id": "g-admin"},
+            "ns_test-ns_readwrite": {"id": "g-rw"},
+            "ns_test-ns_readonly": {"id": "g-ro"},
+        }.get(name)
+        mock_kc.find_user.side_effect = lambda uid, _: {"id": f"kc-{uid}"}
+        mock_kc.is_user_in_group.return_value = False
+
+        user_ids = {"alice"}
+        user_roles = {"alice": "member"}
+        user_attributes = {"alice": {"civil_number": "XX12345678901"}}
+
+        backend.add_users_to_resource(
+            waldur_resource, user_ids, user_roles=user_roles,
+            user_attributes=user_attributes,
+        )
+
+        mock_k8s.patch_managed_namespace.assert_called_once_with(
+            "waldur-test-ns",
+            {
+                "spec": {
+                    "adminUsers": [],
+                    "rwUsers": ["xx12345678901"],
+                    "roUsers": [],
+                }
+            },
+        )

@@ -74,6 +74,9 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         self.cr_user_identity_field = backend_settings.get(
             "cr_user_identity_field", "email"
         )
+        self.cr_user_identity_lowercase = backend_settings.get(
+            "cr_user_identity_lowercase", False
+        )
 
         self.namespace_labels: dict[str, str] = backend_settings.get(
             "namespace_labels", {}
@@ -667,8 +670,11 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                     username,
                 )
                 continue
+            identity_str = str(identity)
+            if self.cr_user_identity_lowercase:
+                identity_str = identity_str.lower()
             ns_role = self.role_mapping.get(waldur_role, self.default_role)
-            role_identities[ns_role].append(str(identity))
+            role_identities[ns_role].append(identity_str)
 
         # Build the patch with all role fields (empty lists clear removed users)
         spec_patch: dict = {}
