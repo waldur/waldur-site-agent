@@ -1159,15 +1159,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pycountry"
-version = "24.6.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/76/57/c389fa68c50590881a75b7883eeb3dc15e9e73a0fdc001cdd45c13290c92/pycountry-24.6.1.tar.gz", hash = "sha256:b61b3faccea67f87d10c1f2b0fc0be714409e8fcdcc1315613174f6466c10221", size = 6043910, upload-time = "2024-06-01T04:12:15.05Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b1/ec/1fb891d8a2660716aadb2143235481d15ed1cbfe3ad669194690b0604492/pycountry-24.6.1-py3-none-any.whl", hash = "sha256:f1a4fb391cd7214f8eefd39556d740adcc233c778a27f8942c8dca351d6ce06f", size = 6335189, upload-time = "2024-06-01T04:11:49.711Z" },
-]
-
-[[package]]
 name = "pyasn1"
 version = "0.6.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1186,6 +1177,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e9/e6/78ebbb10a8c8e4b61a59249394a4a594c1a7af95593dc933a349c8d00964/pyasn1_modules-0.4.2.tar.gz", hash = "sha256:677091de870a80aae844b1ca6134f54652fa2c8c5a52aa396440ac3106e941e6", size = 307892, upload-time = "2025-03-28T02:41:22.17Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl", hash = "sha256:29253a9207ce32b64c3ac6600edc75368f98473906e8fd1043bd6b5b1de2c14a", size = 181259, upload-time = "2025-03-28T02:41:19.028Z" },
+]
+
+[[package]]
+name = "pycountry"
+version = "24.6.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/76/57/c389fa68c50590881a75b7883eeb3dc15e9e73a0fdc001cdd45c13290c92/pycountry-24.6.1.tar.gz", hash = "sha256:b61b3faccea67f87d10c1f2b0fc0be714409e8fcdcc1315613174f6466c10221", size = 6043910, upload-time = "2024-06-01T04:12:15.05Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/ec/1fb891d8a2660716aadb2143235481d15ed1cbfe3ad669194690b0604492/pycountry-24.6.1-py3-none-any.whl", hash = "sha256:f1a4fb391cd7214f8eefd39556d740adcc233c778a27f8942c8dca351d6ce06f", size = 6335189, upload-time = "2024-06-01T04:11:49.711Z" },
 ]
 
 [[package]]
@@ -1856,7 +1856,7 @@ wheels = [
 
 [[package]]
 name = "waldur-site-agent"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "." }
 dependencies = [
     { name = "importlib-metadata", marker = "python_full_version < '3.10'" },
@@ -1915,7 +1915,7 @@ dev = [
 
 [[package]]
 name = "waldur-site-agent-basic-username-management"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/basic_username_management" }
 dependencies = [
     { name = "waldur-site-agent" },
@@ -1926,7 +1926,7 @@ requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "waldur-site-agent-croit-s3"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/croit-s3" }
 dependencies = [
     { name = "boto3" },
@@ -1946,7 +1946,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-cscs-dwdi"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/cscs-dwdi" }
 dependencies = [
     { name = "httpx" },
@@ -1961,7 +1961,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-digitalocean"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/digitalocean" }
 dependencies = [
     { name = "python-digitalocean" },
@@ -1976,7 +1976,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-harbor"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/harbor" }
 dependencies = [
     { name = "requests" },
@@ -1991,7 +1991,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-k8s-ut-namespace"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/k8s-ut-namespace" }
 dependencies = [
     { name = "kubernetes" },
@@ -2008,7 +2008,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-keycloak-client"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/keycloak-client" }
 dependencies = [
     { name = "python-keycloak" },
@@ -2023,7 +2023,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-ldap"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/ldap" }
 dependencies = [
     { name = "jinja2" },
@@ -2040,7 +2040,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-moab"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/moab" }
 dependencies = [
     { name = "waldur-site-agent" },
@@ -2051,7 +2051,7 @@ requires-dist = [{ name = "waldur-site-agent", editable = "." }]
 
 [[package]]
 name = "waldur-site-agent-mup"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/mup" }
 dependencies = [
     { name = "pycountry" },
@@ -2066,7 +2066,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-okd"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/okd" }
 dependencies = [
     { name = "kubernetes" },
@@ -2083,7 +2083,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-opennebula"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/opennebula" }
 dependencies = [
     { name = "pyone" },
@@ -2102,7 +2102,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-rancher"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/rancher" }
 dependencies = [
     { name = "requests" },
@@ -2119,7 +2119,7 @@ requires-dist = [
 
 [[package]]
 name = "waldur-site-agent-slurm"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/slurm" }
 dependencies = [
     { name = "waldur-site-agent" },
@@ -2151,7 +2151,7 @@ dev = [
 
 [[package]]
 name = "waldur-site-agent-waldur"
-version = "1.0.1rc4"
+version = "1.0.1rc5"
 source = { editable = "plugins/waldur" }
 dependencies = [
     { name = "waldur-site-agent" },

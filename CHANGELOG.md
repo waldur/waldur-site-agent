@@ -1,16 +1,19 @@
 # Changelog
 
-## 1.0.1-rc.4 - 2026-03-24
+## 1.0.1-rc.5 - 2026-03-25
 
-- **Federation**: Sync project description and effective_id from Waldur B to Waldur A.
-- **Federation**: Add configurable `end_date_sync_direction` setting for controlling end date synchronization.
+- **MUP**: Add initial resource mappings for the MUP backend plugin (WAL-9686).
+- **Federation**: Sync project description from source Waldur to target Waldur instance.
+- **Federation**: Sync effective_id from target Waldur back to source instance.
+- **Federation**: Add configurable `end_date_sync_direction` setting for resource end date propagation.
 - **Federation**: Fix resource limits being overridden during event processing.
-- **Federation**: Fix identity bridge backend writing CUID as offering user username.
-- **SLURM**: Add default account setting to customer account.
+- **Federation**: Fix identity bridge backend incorrectly writing CUID as offering user username.
+- **K8s Namespace**: Align plugin with latest managed-namespace-operator API.
+- **SLURM**: Add default account setting to customer account creation.
 - **Core**: Fix readiness probe to use authenticated endpoint.
-- **Release tooling**: Add RC release support with `-rc.N` format.
+- **CI/CD**: Add RC release support with `-rc.N` version format.
 
-> 11 commits, 40 files changed (+1540/-127 lines)
+> 14 commits, 52 files changed (+3726/−763 lines)
 
 ---
 
