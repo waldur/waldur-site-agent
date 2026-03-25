@@ -1,20 +1,20 @@
 # Changelog
 
-## 1.0.1-rc.6 - 2026-03-25
+## 1.0.1-rc.7 - 2026-03-25
 
-- **MUP**: Add initial resource mappings and order processing ([WAL-9686]).
-- **Federation**: Sync project description from source to target Waldur instance.
-- **Federation**: Sync effective_id from target back to source Waldur instance.
-- **Federation**: Add configurable `end_date_sync_direction` setting for resource end dates.
+- **MUP**: Add initial backend and client mappings for MUP plugin with order processing support (WAL-9686).
+- **Federation**: Add configurable `end_date_sync_direction` setting for controlling resource end date propagation.
+- **Federation**: Sync project description from source Waldur to target Waldur.
+- **Federation**: Sync `effective_id` from target Waldur back to source Waldur.
 - **Federation**: Fix resource limits being overridden during event processing.
-- **Federation**: Fix identity bridge backend writing CUID as offering user username.
-- **K8s-ut-namespace**: Align plugin with latest managed-namespace-operator.
-- **K8s-ut-namespace**: Add `cr_user_identity_lowercase` setting for case control.
+- **Federation**: Fix identity bridge backend incorrectly writing CUID as offering user username.
+- **K8s-ut-namespace**: Align plugin with latest managed-namespace-operator CRD and add `cr_user_identity_lowercase` setting.
+- **K8s-ut-namespace**: Remove usage reporting due to missing cross-namespace ResourceQuota access.
 - **SLURM**: Add default account setting to customer account creation.
 - **Core**: Fix readiness probe to use authenticated endpoint.
-- **Core**: Add RC release support with `-rc.N` version format.
+- **Tooling**: Add RC release support with `-rc.N` version format in CI and release scripts.
 
-> 17 commits, 52 files changed (+3779/−763 lines)
+> 19 commits, 50 files changed (+3605/−743 lines)
 
 ---
 
