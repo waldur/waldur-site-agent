@@ -539,8 +539,6 @@ class TestK8sUtNamespaceBackendPullResource:
                 {"type": "Ready", "status": "True", "message": "All resources reconciled successfully"},
             ]},
         }
-        mock_k8s.get_resource_quota.return_value = None
-
         # Mock group members
         mock_kc.get_group_by_name.side_effect = lambda name: {
             "ns_test-ns_admin": {"id": "g-admin"},
@@ -609,63 +607,12 @@ class TestK8sUtNamespaceBackendStatusOps:
 class TestK8sUtNamespaceBackendUsageReport:
     """Tests for usage report generation."""
 
-    def test_usage_report_with_resource_quota(self, backend_settings, backend_components):
-        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
-
-        mock_k8s.get_resource_quota.return_value = {
-            "status": {
-                "used": {
-                    "limits.cpu": "2",
-                    "limits.memory": "4Gi",
-                    "requests.storage": "50Gi",
-                    "requests.nvidia.com/gpu": "1",
-                },
-            },
-        }
+    def test_usage_report_returns_empty(self, backend_settings, backend_components):
+        backend, _, _ = _make_backend(backend_settings, backend_components)
 
         report = backend._get_usage_report(["waldur-test-ns"])
 
-        assert report == {
-            "waldur-test-ns": {
-                "TOTAL_ACCOUNT_USAGE": {"cpu": 2, "ram": 4, "storage": 50, "gpu": 1},
-            },
-        }
-
-    def test_usage_report_quota_not_found(self, backend_settings, backend_components):
-        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
-        mock_k8s.get_resource_quota.return_value = None
-
-        report = backend._get_usage_report(["waldur-test-ns"])
-
-        assert report == {
-            "waldur-test-ns": {
-                "TOTAL_ACCOUNT_USAGE": {"cpu": 0, "ram": 0, "storage": 0, "gpu": 0},
-            },
-        }
-
-    def test_usage_report_empty_used(self, backend_settings, backend_components):
-        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
-        mock_k8s.get_resource_quota.return_value = {"status": {"used": {}}}
-
-        report = backend._get_usage_report(["waldur-test-ns"])
-
-        assert report == {
-            "waldur-test-ns": {
-                "TOTAL_ACCOUNT_USAGE": {"cpu": 0, "ram": 0, "storage": 0, "gpu": 0},
-            },
-        }
-
-    def test_usage_report_error_returns_zeros(self, backend_settings, backend_components):
-        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
-        mock_k8s.get_resource_quota.side_effect = Exception("connection error")
-
-        report = backend._get_usage_report(["waldur-test-ns"])
-
-        assert report == {
-            "waldur-test-ns": {
-                "TOTAL_ACCOUNT_USAGE": {"cpu": 0, "ram": 0, "storage": 0, "gpu": 0},
-            },
-        }
+        assert report == {}
 
 
 class TestK8sUtNamespaceBackendNameValidation:

@@ -307,59 +307,13 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         backend_limits = dict(waldur_limits)
         return backend_limits, waldur_limits
 
-    def _build_reverse_quota_mapping(self) -> dict[str, str]:
-        """Build reverse mapping from K8s quota field to Waldur component key.
-
-        E.g., {"cpu": "cpu", "memory": "ram", "storage": "storage", "gpu": "gpu"}
-        """
-        reverse = {}
-        for component_key, component_config in self.backend_components.items():
-            component_type = component_config.get("type", component_key)
-            quota_field = self.component_quota_mapping.get(component_type)
-            if quota_field:
-                reverse[quota_field] = component_key
-        return reverse
-
     def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
-        """Return usage report based on ResourceQuota status.used.
+        """Return empty report — usage reporting is not supported.
 
-        Reads actual resource consumption from the K8s ResourceQuota
-        object in each managed namespace.
+        Billing is based on limits (allocation), not actual consumption.
         """
-        report = {}
-        reverse_mapping = self._build_reverse_quota_mapping()
-
-        # K8s ResourceQuota status.used keys for each quota field
-        quota_field_to_used_key = {
-            "cpu": "limits.cpu",
-            "memory": "limits.memory",
-            "storage": "requests.storage",
-            "gpu": "requests.nvidia.com/gpu",
-        }
-
-        for backend_id in resource_backend_ids:
-            usage = dict.fromkeys(self.backend_components, 0)
-            try:
-                rq = self.k8s_client.get_resource_quota(backend_id)
-                if rq:
-                    used = rq.get("status", {}).get("used", {})
-                    for quota_field, component_key in reverse_mapping.items():
-                        used_key = quota_field_to_used_key.get(
-                            quota_field, quota_field
-                        )
-                        raw_value = used.get(used_key)
-                        if raw_value is not None:
-                            usage[component_key] = self._parse_k8s_quantity(
-                                str(raw_value)
-                            )
-            except Exception as e:
-                logger.warning(
-                    "Failed to get ResourceQuota for %s: %s", backend_id, e
-                )
-
-            report[backend_id] = {"TOTAL_ACCOUNT_USAGE": usage}
-
-        return report
+        del resource_backend_ids
+        return {}
 
     @staticmethod
     def _parse_k8s_quantity(value: str) -> int:

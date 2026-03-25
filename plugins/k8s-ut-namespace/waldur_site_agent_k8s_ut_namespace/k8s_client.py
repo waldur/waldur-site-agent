@@ -12,7 +12,6 @@ from waldur_site_agent.backend.exceptions import BackendError
 MNS_API_GROUP = "provisioning.hpc.ut.ee"
 MNS_API_VERSION = "v1"
 MNS_PLURAL = "managednamespaces"
-RESOURCE_QUOTA_NAME = "managed-quota"
 
 HTTP_NOT_FOUND = 404
 
@@ -33,7 +32,6 @@ class K8sUtNamespaceClient:
 
         self.api_client = k8s_client.ApiClient()
         self.custom_api = k8s_client.CustomObjectsApi(self.api_client)
-        self.core_api = k8s_client.CoreV1Api(self.api_client)
         self.cr_namespace = backend_settings.get("cr_namespace", "waldur-system")
 
         logger.info(
@@ -132,22 +130,3 @@ class K8sUtNamespaceClient:
                 logger.warning("ManagedNamespace %s not found, skipping deletion", name)
                 return
             raise BackendError(f"Failed to delete ManagedNamespace {name}: {e}") from e
-
-    def get_resource_quota(self, namespace: str) -> Optional[dict]:
-        """Get the managed-quota ResourceQuota from a namespace.
-
-        Returns the ResourceQuota as a dict with status.used containing
-        actual resource consumption, or None if not found.
-        """
-        try:
-            quota = self.core_api.read_namespaced_resource_quota(
-                name=RESOURCE_QUOTA_NAME,
-                namespace=namespace,
-            )
-            return quota.to_dict()
-        except ApiException as e:
-            if e.status == HTTP_NOT_FOUND:
-                return None
-            raise BackendError(
-                f"Failed to get ResourceQuota in {namespace}: {e}"
-            ) from e
