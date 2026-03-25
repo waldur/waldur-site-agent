@@ -236,6 +236,7 @@ offerings:
 | `keycloak_use_user_id` | boolean | No | `true` | Use Keycloak user ID for lookup (false = use username) |
 | `sync_users_to_cr` | boolean | No | `false` | Sync user identities to CR `adminUsers`/`rwUsers`/`roUsers` fields |
 | `cr_user_identity_field` | string | No | `email` | User attribute for CR user fields |
+| `cr_user_identity_lowercase` | bool | No | `false` | Lowercase the identity value before writing to CR |
 | `namespace_labels` | object | No | `{}` | Labels to set on created namespaces (e.g., `tenant: waldur`) |
 | `namespace_annotations` | object | No | `{}` | Annotations to set on created namespaces |
 
@@ -344,12 +345,18 @@ deployments that rely solely on OIDC-based authentication.
 backend_settings:
   sync_users_to_cr: true
   cr_user_identity_field: "civil_number"  # or "email", "username", etc.
+  cr_user_identity_lowercase: true        # optional, lowercase the value
   keycloak_enabled: false  # optional, can also be true for dual mode
 ```
 
 The chosen field must be enabled in the offering's user attribute config
 (`expose_civil_number: true`) in Waldur. Users missing the configured
 attribute are skipped with a warning log.
+
+When `cr_user_identity_lowercase` is enabled, the identity value is
+lowercased before writing to the CR (e.g., `EE12345678901` becomes
+`ee12345678901`). This is useful when OIDC subject matching is
+case-sensitive and the identity source has mixed case.
 
 When users are removed:
 
