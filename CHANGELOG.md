@@ -1,20 +1,24 @@
 # Changelog
 
-## 1.0.1-rc.7 - 2026-03-25
+## 1.0.1-rc.8 - 2026-03-26
 
-- **MUP**: Add initial backend and client mappings for MUP plugin with order processing support (WAL-9686).
-- **Federation**: Add configurable `end_date_sync_direction` setting for controlling resource end date propagation.
-- **Federation**: Sync project description from source Waldur to target Waldur.
-- **Federation**: Sync `effective_id` from target Waldur back to source Waldur.
-- **Federation**: Fix resource limits being overridden during event processing.
-- **Federation**: Fix identity bridge backend incorrectly writing CUID as offering user username.
-- **K8s-ut-namespace**: Align plugin with latest managed-namespace-operator CRD and add `cr_user_identity_lowercase` setting.
-- **K8s-ut-namespace**: Remove usage reporting due to missing cross-namespace ResourceQuota access.
-- **SLURM**: Add default account setting to customer account creation.
+- **SLURM**: Create associations on `username_set` offering user message.
+- **SLURM**: Add default account setting to customer account.
+- **MUP**: Add initial backend mappings and order processing (WAL-9686).
+- **MUP**: Adjust reporting to use the new usage endpoint (WAL-9800).
+- **Federation**: Sync project description from source to target Waldur.
+- **Federation**: Sync `effective_id` from target back to source Waldur.
+- **Federation**: Add configurable `end_date_sync_direction` setting.
+- **Federation**: Filter identity bridge payloads by allowed fields.
+- **Federation**: Fix overriding resource limits during event processing.
+- **Federation**: Fix identity bridge writing CUID as offering user username.
+- **k8s-ut-namespace**: Align plugin with latest managed-namespace-operator.
+- **k8s-ut-namespace**: Add `cr_user_identity_lowercase` setting.
+- **k8s-ut-namespace**: Remove usage reporting due to missing cross-namespace access.
 - **Core**: Fix readiness probe to use authenticated endpoint.
-- **Tooling**: Add RC release support with `-rc.N` version format in CI and release scripts.
+- **Core**: Add RC release support with `-rc.N` format.
 
-> 19 commits, 50 files changed (+3605/−743 lines)
+> 23 commits, 55 files changed (+4679/−882 lines)
 
 ---
 
