@@ -527,18 +527,11 @@ class MUPBackendTest(unittest.TestCase):
     def test_get_usage_report(self, mock_client_class) -> None:
         """Test usage report generation."""
         mock_client = mock_client_class.return_value
-        mock_client.get_projects.return_value = [self.sample_mup_project]
-        mock_client.get_project_allocations.return_value = [
-            {"id": 1, "type": "compute", "used": 5, "size": 10}
-        ]
-        mock_client.get_project_members.return_value = [
-            {
-                "id": 1,
-                "active": True,
-                "username": "user1",
-                "email": "user1@example.com",
-            }
-        ]
+        mock_client.get_allocation_usage.return_value = {
+            "total": 5,
+            "users": {"user1": 5},
+            "unit": "node.hour",
+        }
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
 
@@ -550,6 +543,8 @@ class MUPBackendTest(unittest.TestCase):
         assert "TOTAL_ACCOUNT_USAGE" in report[account_key]
         assert report[account_key]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 5
         assert "user1" in report[account_key]
+        assert report[account_key]["user1"]["cpu"] == 5
+        mock_client.get_allocation_usage.assert_called_once_with(1, 1)
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_add_users_to_resource(self, mock_client_class) -> None:
@@ -698,8 +693,11 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.get_project_members.return_value = [
             {"id": 1, "username": "deucalion.user", "email": "du@example.com", "active": True},
         ]
-        # _get_usage_report internally calls get_projects
-        mock_client.get_projects.return_value = []
+        mock_client.get_allocation_usage.return_value = {
+            "total": 0,
+            "users": {},
+            "unit": "node.hour",
+        }
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
         result = backend._pull_backend_resource("1_1")

@@ -251,6 +251,14 @@ class MUPClient(BaseClient):
         )
         return cast("dict", self._parse_json_response(response))
 
+    def get_allocation_usage(self, project_id: int, allocation_id: int) -> dict:
+        """Get usage information for an allocation."""
+        response = self._make_request(
+            "GET",
+            f"/api/projects/{project_id}/allocations/{allocation_id}/usage",
+        )
+        return cast("dict", self._parse_json_response(response))
+
     def get_project_members(self, project_id: int) -> list[dict]:
         """Get project members."""
         response = self._make_request("GET", f"/api/projects/{project_id}/members/list")
