@@ -9,7 +9,18 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Optional
 
-from waldur_api_client import AuthenticatedClient
+from waldur_api_client import AuthenticatedClient, errors
+from waldur_api_client.api.identity_bridge import (
+    identity_bridge,
+    identity_bridge_allowed_fields_retrieve,
+    identity_bridge_remove,
+)
+from waldur_api_client.models.identity_bridge_remove_request import (
+    IdentityBridgeRemoveRequest,
+)
+from waldur_api_client.models.identity_bridge_request_request import (
+    IdentityBridgeRequestRequest,
+)
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.types import UNSET
 
@@ -93,6 +104,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
             token=target_api_token,
         )
         self._previous_offering_usernames: set[str] | None = None
+        self._allowed_fields_cache: Optional[set[str]] = None
         self._log_attribute_config()
 
     def _log_attribute_config(self) -> None:
@@ -136,6 +148,62 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
                 )
         except Exception:
             logger.exception("Failed to fetch attribute config from Waldur A")
+
+    def _fetch_allowed_fields(self) -> Optional[set[str]]:
+        """Fetch allowed fields from Waldur B identity bridge.
+
+        Calls GET /api/identity-bridge/allowed-fields/ to discover which
+        attribute fields the target instance accepts.
+        """
+        try:
+            result = identity_bridge_allowed_fields_retrieve.sync(
+                client=self._http_client,
+            )
+            fields = set(result.allowed_fields)
+            logger.info(
+                "Fetched allowed identity bridge fields from target: %s",
+                sorted(fields),
+            )
+            return fields
+        except Exception:
+            logger.warning(
+                "Failed to fetch allowed fields from identity bridge, "
+                "will send all attributes without filtering",
+                exc_info=True,
+            )
+            return None
+
+    def _filter_attributes(self, attributes: dict) -> dict:
+        """Remove attribute fields not accepted by the identity bridge.
+
+        If no allowed fields are cached (fetch failed), returns
+        attributes unmodified.
+        """
+        if self._allowed_fields_cache is None:
+            return attributes
+
+        filtered = {}
+        removed = []
+        for key, value in attributes.items():
+            if key in self._allowed_fields_cache:
+                filtered[key] = value
+            else:
+                removed.append(key)
+
+        if removed:
+            logger.info(
+                "Filtered out fields not accepted by identity bridge: %s",
+                sorted(removed),
+            )
+        return filtered
+
+    def _build_request(
+        self, username: str, attributes: dict
+    ) -> IdentityBridgeRequestRequest:
+        """Build a typed SDK request from username and filtered attributes."""
+        return IdentityBridgeRequestRequest.from_dict(
+            {"username": username, "source": self.identity_bridge_source, **attributes}
+        )
 
     def get_username(self, offering_user: OfferingUser) -> Optional[str]:
         """Identity bridge does not own username assignment.
@@ -191,31 +259,36 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
                     "Failed to deactivate user %s via identity bridge", username
                 )
 
-    def _push_user_to_identity_bridge(self, offering_user: OfferingUser) -> dict:
+    def _push_user_to_identity_bridge(self, offering_user: OfferingUser) -> None:
         """POST /api/identity-bridge/ on Waldur B."""
-        waldur_username = _get_waldur_username(offering_user)
-        payload: dict = {
-            "username": waldur_username,
-            "source": self.identity_bridge_source,
-        }
-        payload.update(_extract_attributes(offering_user))
-        response = self._http_client.get_httpx_client().post(
-            "/api/identity-bridge/",
-            json=payload,
-        )
-        if response.status_code >= 400:
-            logger.error(
-                "Identity bridge error %s: %s", response.status_code, response.text
-            )
-        response.raise_for_status()
-        return response.json()
+        waldur_username = _get_waldur_username(offering_user) or ""
+        attributes = _extract_attributes(offering_user)
 
-    def _remove_user_from_identity_bridge(self, username: str) -> dict:
+        # Lazy-init allowed fields cache
+        if self._allowed_fields_cache is None:
+            self._allowed_fields_cache = self._fetch_allowed_fields()
+
+        filtered = self._filter_attributes(attributes)
+        body = self._build_request(waldur_username, filtered)
+
+        try:
+            identity_bridge.sync(client=self._http_client, body=body)
+        except errors.UnexpectedStatus as e:
+            if e.status_code != 400:
+                raise
+            # On 400, invalidate cache and retry once with fresh allowed fields
+            logger.warning(
+                "Identity bridge returned 400, refreshing allowed fields cache and retrying"
+            )
+            self._allowed_fields_cache = self._fetch_allowed_fields()
+            filtered = self._filter_attributes(attributes)
+            body = self._build_request(waldur_username, filtered)
+            identity_bridge.sync(client=self._http_client, body=body)
+
+    def _remove_user_from_identity_bridge(self, username: str) -> None:
         """POST /api/identity-bridge/remove/ on Waldur B."""
-        payload = {"username": username, "source": self.identity_bridge_source}
-        response = self._http_client.get_httpx_client().post(
-            "/api/identity-bridge/remove/",
-            json=payload,
+        body = IdentityBridgeRemoveRequest(
+            username=username,
+            source=self.identity_bridge_source,
         )
-        response.raise_for_status()
-        return response.json()
+        identity_bridge_remove.sync(client=self._http_client, body=body)

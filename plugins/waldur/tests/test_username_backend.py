@@ -3,9 +3,12 @@
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
-import httpx
 import pytest
 
+from waldur_api_client import errors
+from waldur_api_client.models.identity_bridge_request_request import (
+    IdentityBridgeRequestRequest,
+)
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent_waldur.username_backend import (
@@ -13,6 +16,8 @@ from waldur_site_agent_waldur.username_backend import (
     _extract_attributes,
     _get_waldur_username,
 )
+
+MODULE = "waldur_site_agent_waldur.username_backend"
 
 
 @pytest.fixture()
@@ -79,19 +84,7 @@ def _make_offering_user(**kwargs):
 
 
 @pytest.fixture()
-def mock_httpx_client():
-    """Create a mock httpx client that returns success responses."""
-    client = MagicMock()
-    response = MagicMock()
-    response.status_code = 200
-    response.json.return_value = {"uuid": "new-user-uuid", "username": "testuser"}
-    client.post.return_value = response
-    client.get.return_value = response
-    return client
-
-
-@pytest.fixture()
-def username_backend(identity_bridge_settings, mock_offering, mock_httpx_client):
+def username_backend(identity_bridge_settings, mock_offering):
     """Create WaldurIdentityBridgeUsernameBackend with mocked HTTP client."""
     with patch.object(
         WaldurIdentityBridgeUsernameBackend, "_log_attribute_config"
@@ -100,8 +93,6 @@ def username_backend(identity_bridge_settings, mock_offering, mock_httpx_client)
             backend_settings=identity_bridge_settings,
             offering=mock_offering,
         )
-    backend._http_client = MagicMock()
-    backend._http_client.get_httpx_client.return_value = mock_httpx_client
     return backend
 
 
@@ -110,7 +101,7 @@ class TestBaseUrlStripping:
 
     def test_target_api_url_with_api_suffix(self, identity_bridge_settings, mock_offering):
         with patch(
-            "waldur_site_agent_waldur.username_backend.AuthenticatedClient"
+            f"{MODULE}.AuthenticatedClient"
         ) as MockClient:
             mock_instance = MagicMock()
             mock_instance.get_httpx_client.return_value = MagicMock()
@@ -136,7 +127,7 @@ class TestBaseUrlStripping:
             "identity_bridge_source": "isd:test",
         }
         with patch(
-            "waldur_site_agent_waldur.username_backend.AuthenticatedClient"
+            f"{MODULE}.AuthenticatedClient"
         ) as MockClient:
             mock_instance = MagicMock()
             mock_instance.get_httpx_client.return_value = MagicMock()
@@ -220,86 +211,93 @@ class TestGetUsername:
 
 
 class TestGenerateUsername:
-    def test_pushes_to_identity_bridge(self, username_backend, mock_httpx_client):
+    def test_pushes_to_identity_bridge(self, username_backend):
         ou = _make_offering_user(user_username="alice")
-        result = username_backend.generate_username(ou)
+        with patch(f"{MODULE}.identity_bridge") as mock_ib:
+            result = username_backend.generate_username(ou)
         assert result == ""
-        mock_httpx_client.post.assert_called_once()
-        call_kwargs = mock_httpx_client.post.call_args
-        assert call_kwargs[0][0] == "/api/identity-bridge/"
-        payload = call_kwargs[1]["json"]
-        assert payload["username"] == "alice"
-        assert payload["source"] == "isd:test"
+        mock_ib.sync.assert_called_once()
+        body = mock_ib.sync.call_args[1]["body"]
+        assert isinstance(body, IdentityBridgeRequestRequest)
+        assert body.username == "alice"
+        assert body.source == "isd:test"
 
 
 class TestSyncUserProfiles:
-    def test_pushes_all_users(self, username_backend, mock_httpx_client):
+    def test_pushes_all_users(self, username_backend):
         users = [
             _make_offering_user(user_username="alice"),
             _make_offering_user(user_username="bob"),
         ]
-        username_backend.sync_user_profiles(users)
-        assert mock_httpx_client.post.call_count == 2
+        with patch(f"{MODULE}.identity_bridge") as mock_ib:
+            username_backend.sync_user_profiles(users)
+        assert mock_ib.sync.call_count == 2
 
-    def test_skips_without_source(self, username_backend, mock_httpx_client):
+    def test_skips_without_source(self, username_backend):
         username_backend.identity_bridge_source = ""
         users = [_make_offering_user(user_username="alice")]
-        username_backend.sync_user_profiles(users)
-        mock_httpx_client.post.assert_not_called()
+        with patch(f"{MODULE}.identity_bridge") as mock_ib:
+            username_backend.sync_user_profiles(users)
+        mock_ib.sync.assert_not_called()
 
-    def test_detects_stale_users(self, username_backend, mock_httpx_client):
-        # First sync: alice and bob
+    def test_detects_stale_users(self, username_backend):
         users_1 = [
             _make_offering_user(user_username="alice"),
             _make_offering_user(user_username="bob"),
         ]
-        username_backend.sync_user_profiles(users_1)
-        assert username_backend._previous_offering_usernames == {"alice", "bob"}
+        with (
+            patch(f"{MODULE}.identity_bridge"),
+            patch(f"{MODULE}.identity_bridge_remove") as mock_remove,
+        ):
+            username_backend.sync_user_profiles(users_1)
+            assert username_backend._previous_offering_usernames == {"alice", "bob"}
 
-        # Second sync: only alice (bob departed)
-        mock_httpx_client.post.reset_mock()
-        users_2 = [_make_offering_user(user_username="alice")]
-        username_backend.sync_user_profiles(users_2)
+            # Second sync: only alice (bob departed)
+            users_2 = [_make_offering_user(user_username="alice")]
+            username_backend.sync_user_profiles(users_2)
 
-        # alice pushed + bob deactivated via /remove/
-        calls = mock_httpx_client.post.call_args_list
-        urls = [call[0][0] for call in calls]
-        assert "/api/identity-bridge/" in urls
-        assert "/api/identity-bridge/remove/" in urls
+            # bob should be removed
+            mock_remove.sync.assert_called_once()
+            remove_body = mock_remove.sync.call_args[1]["body"]
+            assert remove_body.username == "bob"
 
-    def test_no_deactivation_on_first_sync(self, username_backend, mock_httpx_client):
+    def test_no_deactivation_on_first_sync(self, username_backend):
         """First sync should not deactivate anyone (no baseline)."""
         users = [_make_offering_user(user_username="alice")]
-        username_backend.sync_user_profiles(users)
-        # Only push calls, no remove calls
-        for call in mock_httpx_client.post.call_args_list:
-            assert call[0][0] != "/api/identity-bridge/remove/"
+        with (
+            patch(f"{MODULE}.identity_bridge"),
+            patch(f"{MODULE}.identity_bridge_remove") as mock_remove,
+        ):
+            username_backend.sync_user_profiles(users)
+            mock_remove.sync.assert_not_called()
 
-    def test_push_user_handles_http_error(self, username_backend, mock_httpx_client):
-        mock_httpx_client.post.side_effect = httpx.HTTPStatusError(
-            "Forbidden", request=MagicMock(), response=MagicMock(status_code=403)
-        )
-        users = [_make_offering_user(user_username="alice")]
-        # Should not raise — errors are logged per-user
-        username_backend.sync_user_profiles(users)
+    def test_push_user_handles_error(self, username_backend):
+        with patch(f"{MODULE}.identity_bridge") as mock_ib:
+            mock_ib.sync.side_effect = errors.UnexpectedStatus(
+                403, b"Forbidden", "http://example.com"
+            )
+            users = [_make_offering_user(user_username="alice")]
+            # Should not raise — errors are logged per-user
+            username_backend.sync_user_profiles(users)
 
 
 class TestDeactivateUsers:
-    def test_calls_remove_endpoint(self, username_backend, mock_httpx_client):
-        username_backend.deactivate_users({"alice", "bob"})
-        assert mock_httpx_client.post.call_count == 2
-        for call in mock_httpx_client.post.call_args_list:
-            assert call[0][0] == "/api/identity-bridge/remove/"
-            payload = call[1]["json"]
-            assert payload["source"] == "isd:test"
-            assert payload["username"] in {"alice", "bob"}
+    def test_calls_remove_endpoint(self, username_backend):
+        with patch(f"{MODULE}.identity_bridge_remove") as mock_remove:
+            username_backend.deactivate_users({"alice", "bob"})
+        assert mock_remove.sync.call_count == 2
+        usernames = {
+            call[1]["body"].username for call in mock_remove.sync.call_args_list
+        }
+        assert usernames == {"alice", "bob"}
 
-    def test_handles_http_error(self, username_backend, mock_httpx_client):
-        mock_httpx_client.post.side_effect = httpx.HTTPStatusError(
-            "Server Error", request=MagicMock(), response=MagicMock(status_code=500)
-        )
-        # Should not raise — errors are logged per-user
-        username_backend.deactivate_users({"alice"})
+    def test_handles_error(self, username_backend):
+        with patch(f"{MODULE}.identity_bridge_remove") as mock_remove:
+            mock_remove.sync.side_effect = errors.UnexpectedStatus(
+                500, b"Server Error", "http://example.com"
+            )
+            # Should not raise — errors are logged per-user
+            username_backend.deactivate_users({"alice"})
 
 
 class TestLogAttributeConfig:
@@ -315,20 +313,17 @@ class TestLogAttributeConfig:
         mock_httpx.get.return_value = mock_response
 
         with patch(
-            "waldur_site_agent_waldur.username_backend.AuthenticatedClient"
+            f"{MODULE}.AuthenticatedClient"
         ) as MockClient:
             mock_instance = MagicMock()
             mock_instance.get_httpx_client.return_value = mock_httpx
             MockClient.return_value = mock_instance
 
-            backend = WaldurIdentityBridgeUsernameBackend(
+            WaldurIdentityBridgeUsernameBackend(
                 backend_settings=identity_bridge_settings,
                 offering=mock_offering,
             )
 
-        # Verify Waldur A client was created with correct URL
-        # rstrip("/api") strips the /api/ suffix so AuthenticatedClient
-        # can prepend /api/ to endpoint paths correctly.
         MockClient.assert_any_call(
             base_url="https://waldur-a.example.com",
             token="test-token-waldur-a",
@@ -347,9 +342,9 @@ class TestLogAttributeConfig:
 
         with (
             patch(
-                "waldur_site_agent_waldur.username_backend.AuthenticatedClient"
+                f"{MODULE}.AuthenticatedClient"
             ) as MockClient,
-            patch("waldur_site_agent_waldur.username_backend.logger") as mock_logger,
+            patch(f"{MODULE}.logger") as mock_logger,
         ):
             mock_instance = MagicMock()
             mock_instance.get_httpx_client.return_value = mock_httpx
@@ -368,7 +363,7 @@ class TestLogAttributeConfig:
 
     def test_handles_no_offering(self, identity_bridge_settings):
         """Graceful no-op when offering is None."""
-        with patch("waldur_site_agent_waldur.username_backend.logger") as mock_logger:
+        with patch(f"{MODULE}.logger") as mock_logger:
             backend = WaldurIdentityBridgeUsernameBackend.__new__(
                 WaldurIdentityBridgeUsernameBackend
             )
@@ -376,9 +371,154 @@ class TestLogAttributeConfig:
             backend.offering = None
             backend.identity_bridge_source = "isd:test"
             backend._previous_offering_usernames = None
-            # Call the real method directly (bypass __init__)
             WaldurIdentityBridgeUsernameBackend._log_attribute_config(backend)
 
         mock_logger.warning.assert_any_call(
             "No offering context \u2014 cannot fetch attribute config"
         )
+
+
+class TestFetchAllowedFields:
+    """Tests for _fetch_allowed_fields discovery from Waldur B."""
+
+    def test_returns_field_set(self, username_backend):
+        """Successful fetch returns a set of field names."""
+        mock_result = MagicMock()
+        mock_result.allowed_fields = ["email", "first_name", "last_name", "organization"]
+
+        with patch(
+            f"{MODULE}.identity_bridge_allowed_fields_retrieve"
+        ) as mock_retrieve:
+            mock_retrieve.sync.return_value = mock_result
+            result = username_backend._fetch_allowed_fields()
+
+        assert result == {"email", "first_name", "last_name", "organization"}
+        mock_retrieve.sync.assert_called_once_with(client=username_backend._http_client)
+
+    def test_returns_none_on_error(self, username_backend):
+        """SDK error returns None (graceful degradation)."""
+        with patch(
+            f"{MODULE}.identity_bridge_allowed_fields_retrieve"
+        ) as mock_retrieve:
+            mock_retrieve.sync.side_effect = errors.UnexpectedStatus(
+                403, b"Forbidden", "http://example.com"
+            )
+            result = username_backend._fetch_allowed_fields()
+
+        assert result is None
+
+    def test_returns_none_on_connection_error(self, username_backend):
+        """Connection error returns None."""
+        with patch(
+            f"{MODULE}.identity_bridge_allowed_fields_retrieve"
+        ) as mock_retrieve:
+            mock_retrieve.sync.side_effect = Exception("Connection refused")
+            result = username_backend._fetch_allowed_fields()
+
+        assert result is None
+
+
+class TestFilterAttributes:
+    """Tests for _filter_attributes field filtering."""
+
+    def test_filters_disallowed_fields(self, username_backend):
+        username_backend._allowed_fields_cache = {"email", "first_name"}
+        attributes = {
+            "email": "alice@example.com",
+            "first_name": "Alice",
+            "gender": 1,
+            "country_of_residence": "FI",
+        }
+        result = username_backend._filter_attributes(attributes)
+        assert result == {
+            "email": "alice@example.com",
+            "first_name": "Alice",
+        }
+
+    def test_empty_allowed_filters_all(self, username_backend):
+        username_backend._allowed_fields_cache = set()
+        attributes = {"email": "x", "first_name": "Alice"}
+        result = username_backend._filter_attributes(attributes)
+        assert result == {}
+
+    def test_no_filtering_when_cache_is_none(self, username_backend):
+        """When fetch failed (cache is None), pass everything through."""
+        username_backend._allowed_fields_cache = None
+        attributes = {"email": "x", "gender": 1}
+        result = username_backend._filter_attributes(attributes)
+        assert result == attributes
+
+
+class TestPushWithFieldFiltering:
+    """Tests for _push_user_to_identity_bridge with allowed-fields filtering."""
+
+    def test_lazy_fetches_allowed_fields(self, username_backend):
+        """First push fetches allowed fields from target."""
+        mock_allowed = MagicMock()
+        mock_allowed.allowed_fields = ["email", "first_name", "last_name"]
+
+        ou = _make_offering_user(
+            user_username="alice",
+            user_email="a@b.com",
+            user_country_of_residence="FI",
+        )
+        with (
+            patch(f"{MODULE}.identity_bridge_allowed_fields_retrieve") as mock_retrieve,
+            patch(f"{MODULE}.identity_bridge") as mock_ib,
+        ):
+            mock_retrieve.sync.return_value = mock_allowed
+            username_backend._push_user_to_identity_bridge(ou)
+            mock_retrieve.sync.assert_called_once()
+
+        # Verify body was filtered
+        body = mock_ib.sync.call_args[1]["body"]
+        body_dict = body.to_dict()
+        assert "email" in body_dict
+        assert "country_of_residence" not in body_dict
+
+    def test_uses_cached_fields_on_second_push(self, username_backend):
+        """Second push uses cached fields, no SDK fetch."""
+        username_backend._allowed_fields_cache = {"email", "first_name"}
+
+        ou = _make_offering_user(user_username="alice", user_email="a@b.com")
+        with (
+            patch(f"{MODULE}.identity_bridge_allowed_fields_retrieve") as mock_retrieve,
+            patch(f"{MODULE}.identity_bridge"),
+        ):
+            username_backend._push_user_to_identity_bridge(ou)
+            mock_retrieve.sync.assert_not_called()
+
+    def test_retries_on_400_with_cache_refresh(self, username_backend):
+        """On 400, invalidate cache, re-fetch, and retry once."""
+        username_backend._allowed_fields_cache = {
+            "email", "first_name", "country_of_residence"
+        }
+
+        mock_allowed = MagicMock()
+        mock_allowed.allowed_fields = ["email", "first_name"]
+
+        ou = _make_offering_user(
+            user_username="alice",
+            user_email="a@b.com",
+            user_country_of_residence="FI",
+        )
+        with (
+            patch(f"{MODULE}.identity_bridge_allowed_fields_retrieve") as mock_retrieve,
+            patch(f"{MODULE}.identity_bridge") as mock_ib,
+        ):
+            mock_retrieve.sync.return_value = mock_allowed
+            # First call raises 400, second succeeds
+            mock_ib.sync.side_effect = [
+                errors.UnexpectedStatus(400, b"Fields not allowed", "http://example.com"),
+                MagicMock(),
+            ]
+            username_backend._push_user_to_identity_bridge(ou)
+            mock_retrieve.sync.assert_called_once()
+
+        # Should have called sync twice (first 400, then retry)
+        assert mock_ib.sync.call_count == 2
+        # Retry body should be filtered
+        retry_body = mock_ib.sync.call_args_list[1][1]["body"]
+        retry_dict = retry_body.to_dict()
+        assert "country_of_residence" not in retry_dict
+        assert "email" in retry_dict
