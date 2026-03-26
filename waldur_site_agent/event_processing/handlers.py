@@ -7,11 +7,19 @@ import stomp
 import stomp.utils
 from stomp.constants import HDR_DESTINATION
 from waldur_api_client import AuthenticatedClient
+from waldur_api_client.api.marketplace_provider_resources import (
+    marketplace_provider_resources_list,
+)
 from waldur_api_client.api.marketplace_slurm_periodic_usage_policies import (
     marketplace_slurm_periodic_usage_policies_report_command_result,
 )
 from waldur_api_client.errors import UnexpectedStatus
-from waldur_api_client.models import ObservableObjectTypeEnum, OrderState
+from waldur_api_client.models import (
+    ObservableObjectTypeEnum,
+    OrderState,
+    ResourceFieldEnum,
+    ResourceState,
+)
 from waldur_api_client.models.agent_service import AgentService
 from waldur_api_client.models.slurm_command_result_request import (
     SlurmCommandResultRequest,
@@ -394,7 +402,6 @@ def on_offering_user_message_stomp(
     _process_offering_user_message(message, offering, user_agent)
 
 
-
 def _process_offering_user_message(
     message: OfferingUserMessage,
     offering: structures.Offering,
@@ -432,6 +439,14 @@ def _process_offering_user_message(
             logger.info(
                 "Offering user %s action: %s (no attribute forwarding)", username, action
             )
+        elif action == "username_set":
+            resource_backend_ids = message.get("resource_backend_ids", [])
+            logger.info(
+                "Username set for user %s, creating associations for %d resources",
+                username,
+                len(resource_backend_ids),
+            )
+            _add_user_to_resources(offering, username, resource_backend_ids, waldur_rest_client)
         else:
             logger.warning("Unknown offering user action: %s", action)
     except Exception:
@@ -475,3 +490,63 @@ def _forward_user_attributes_to_backend(
             )
     except Exception:
         logger.exception("Failed to forward attributes for user %s", username)
+
+
+def _add_user_to_resources(
+    offering: structures.Offering,
+    username: str,
+    resource_backend_ids: list,
+    waldur_rest_client: AuthenticatedClient,
+) -> None:
+    """Add a user to backend resources identified by their backend IDs.
+
+    Fetches the resources matching the given backend IDs for this offering and
+    calls add_user on the membership sync backend for each non-restricted resource.
+    Mirrors the access-restriction logic of process_user_role_changed.
+    """
+    if not offering.membership_sync_backend:
+        logger.debug(
+            "No membership_sync_backend for offering %s, skipping association creation",
+            offering.name,
+        )
+        return
+
+    if not resource_backend_ids:
+        logger.debug("No resource_backend_ids provided for user %s, skipping", username)
+        return
+
+    try:
+        backend, _ = common_utils.get_backend_for_offering(offering, "membership_sync_backend")
+
+        resources = marketplace_provider_resources_list.sync_all(
+            client=waldur_rest_client,
+            offering_uuid=[offering.uuid],
+            state=[ResourceState.OK, ResourceState.ERRED],
+            field=[
+                ResourceFieldEnum.UUID,
+                ResourceFieldEnum.BACKEND_ID,
+                ResourceFieldEnum.RESTRICT_MEMBER_ACCESS,
+            ],
+        )
+
+        backend_id_set = set(resource_backend_ids)
+        for resource in resources:
+            if resource.backend_id not in backend_id_set:
+                continue
+            if resource.restrict_member_access:
+                logger.info(
+                    "Resource %s is restricted, skipping association for user %s",
+                    resource.backend_id,
+                    username,
+                )
+                continue
+            try:
+                backend.add_user(resource, username)
+            except Exception:
+                logger.exception(
+                    "Failed to add user %s to resource %s",
+                    username,
+                    resource.backend_id,
+                )
+    except Exception:
+        logger.exception("Failed to create associations for user %s", username)
