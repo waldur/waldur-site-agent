@@ -254,6 +254,18 @@ class MUPBackend(backends.BaseBackend):
                 pass
         return int(backend_id), None
 
+    @staticmethod
+    def _to_waldur_units(raw: Any, unit_factor: int) -> int:
+        """Convert MUP usage to Waldur units using unit_factor."""
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            try:
+                value = int(float(raw))
+            except (TypeError, ValueError):
+                return 0
+        return value // max(unit_factor, 1)
+
     def _extract_grant_from_project_name(self, project_name: str) -> str:
         if not project_name or not project_name.strip():
             msg = "Project name is required to extract grant number"
@@ -1194,93 +1206,72 @@ class MUPBackend(backends.BaseBackend):
         """Collect usage report for the specified accounts from MUP."""
         report: dict[str, dict[str, dict[str, int]]] = {}
 
-        # Build a mapping from MUP project ID → original backend_id string so we
-        project_id_to_backend_id: dict[int, str] = {}
+        component_keys = list(self.backend_components.keys())
+        comp_key = component_keys[0]
+        if len(component_keys) > 1:
+            logger.warning(
+                "Warning, more than one component is configured for this MUP offering;"
+                "attributing usage to the first component %r only (%d components configured)",
+                comp_key,
+                len(component_keys),
+            )
+
         for backend_id in resource_backend_ids:
             try:
-                proj_id, _ = self._parse_backend_id(backend_id)
-                project_id_to_backend_id[proj_id] = backend_id
+                project_id, allocation_id = self._parse_backend_id(backend_id)
             except ValueError:
-                logger.warning("Cannot parse backend_id '%s', skipping usage report", backend_id)
+                logger.warning(
+                    "Cannot parse backend_id '%s', skipping usage report",
+                    backend_id,
+                )
+                continue
 
-        try:
-            projects = self.client.get_projects()
+            if allocation_id is None:
+                logger.warning(
+                    "backend_id '%s' has no allocation id, skipping usage report",
+                    backend_id,
+                )
+                continue
 
-            for project in projects:
-                project_id = project.get("id")
-                if project_id not in project_id_to_backend_id:
-                    continue
+            total_usage: dict[str, int] = dict.fromkeys(self.backend_components, 0)
+            merged_users: dict[str, dict[str, int]] = {}
 
-                backend_id_key = project_id_to_backend_id[project_id]
-                allocations = self.client.get_project_allocations(project["id"])
+            unit_factor = self.backend_components[comp_key].get("unit_factor", None)
+            if not unit_factor:
+                logger.error("Unit factor not found for component %s", comp_key)
+                raise BackendError(f"Unit factor not found for component {comp_key}")
 
-                # Initialize account usage
-                report[backend_id_key] = {}
-                total_usage: dict[str, int] = {}
+            logger.info("Unit factor for %s: %s", comp_key, unit_factor)
+            try:
+                data = self.client.get_allocation_usage(project_id, allocation_id)
+            except MUPError:
+                logger.exception(
+                    "Failed to fetch allocation usage for project=%s allocation=%s",
+                    project_id,
+                    allocation_id,
+                )
+                report[backend_id] = {"TOTAL_ACCOUNT_USAGE": total_usage}
+                continue
 
-                for allocation in allocations:
-                    # Map allocation usage to component usage based on allocation identifier
-                    alloc_identifier = allocation.get("identifier", "")
-                    allocation_type = allocation.get("type", "")
-                    used = allocation.get("used", 0)
+            total_raw = data.get("total", 0)
+            logger.info("Total raw usage from MUP for %s: %s", comp_key, total_raw)
+            total_usage[comp_key] = self._to_waldur_units(total_raw, unit_factor)
 
-                    # Extract component from identifier (format: alloc_{uuid}_{component})
-                    component_key = None
-                    if "_" in alloc_identifier:
-                        parts = alloc_identifier.split("_")
-                        min_parts = 3
-                        if len(parts) >= min_parts:
-                            component_key = parts[-1]  # Last part is the component
+            users_raw = data.get("users") or {}
+            if isinstance(users_raw, dict):
+                for username, raw_val in users_raw.items():
+                    if not username:
+                        continue
+                    waldur_val = self._to_waldur_units(raw_val, unit_factor)
+                    user_row = dict.fromkeys(self.backend_components, 0)
+                    user_row[comp_key] = waldur_val
+                    merged_users[username] = user_row
 
-                    # If we can't extract component from identifier, map by allocation type
-                    if not component_key:
-                        # Build reverse mapping from allocation type to component from config
-                        type_to_component = {
-                            config.get("mup_allocation_type"): comp_key
-                            for comp_key, config in self.backend_components.items()
-                            if config.get("mup_allocation_type")
-                        }
-                        component_key = type_to_component.get(
-                            allocation_type, "cpu"
-                        )
-
-                    # Add usage for this component
-                    if component_key and component_key in self.backend_components:
-                        # Apply reverse unit factor to get Waldur units
-                        unit_factor = self.backend_components[component_key].get(
-                            "unit_factor", 1
-                        )
-                        waldur_usage = used // max(unit_factor, 1)
-                        total_usage[component_key] = (
-                            total_usage.get(component_key, 0) + waldur_usage
-                        )
-
-                # Set total account usage
-                report[backend_id_key]["TOTAL_ACCOUNT_USAGE"] = total_usage
-
-                # Get project members and create per-user usage (placeholder)
-                members = self.client.get_project_members(project["id"])
-                for member in members:
-                    if member.get("active", False):
-                        username = member.get("username", "")
-                        if username:
-                            # For now, assign equal share of usage to active users
-                            user_count = len(
-                                [m for m in members if m.get("active", False)]
-                            )
-                            # Distribute usage across all components for this user
-                            user_usage = {}
-                            for (
-                                comp_key,
-                                component_total,
-                            ) in total_usage.items():
-                                user_usage[comp_key] = component_total // max(
-                                    user_count, 1
-                                )
-                            report[backend_id_key][username] = user_usage
-
-        except Exception:
-            logger.exception("Failed to get usage report")
+            entry: dict[str, dict[str, int]] = {
+                "TOTAL_ACCOUNT_USAGE": total_usage,
+            }
+            entry.update(merged_users)
+            report[backend_id] = entry
 
         return report
 
