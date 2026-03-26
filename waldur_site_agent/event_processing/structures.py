@@ -111,10 +111,11 @@ class OfferingUserMessage(TypedDict):
         offering_user_uuid (str): UUID of the offering user
         user_uuid (str): UUID of the user
         username (str): Username of the user
-        action (str): Action type ("create", "update", "delete", "attribute_update")
+        action (str): Action type ("create", "update", "delete", "attribute_update", "username_set")
         offering_uuid (str): UUID of the offering
         attributes (dict): Filtered user profile attributes
         changed_attributes (list[str]): Fields that changed (attribute_update only)
+        resource_backend_ids (list[str]): Backend IDs of resources to associate (username_set only)
     """
 
     offering_user_uuid: str
@@ -124,3 +125,4 @@ class OfferingUserMessage(TypedDict):
     offering_uuid: str
     attributes: dict
     changed_attributes: list[str]
+    resource_backend_ids: list[str]

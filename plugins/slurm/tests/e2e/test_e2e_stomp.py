@@ -4,6 +4,7 @@ These tests verify that the STOMP event pipeline works end-to-end:
   1. STOMP connections establish to RabbitMQ via web_stomp
   2. Order events arrive via WebSocket when orders are created
   3. The full order-processing pipeline works with STOMP active
+  4. Offering user username_set events create SLURM associations
 
 The STOMP tests use a separate config (WALDUR_E2E_STOMP_CONFIG) with
 stomp_enabled=true and a single offering. The same Docker stack (including
@@ -282,8 +283,14 @@ def order_capture():
 
 
 @pytest.fixture(scope="module")
-def stomp_consumers(request, stomp_offering, order_capture):
-    """Set up STOMP subscriptions, replacing the ORDER handler with capture handler.
+def offering_user_capture():
+    """MessageCapture instance for intercepting OFFERING_USER events."""
+    return MessageCapture()
+
+
+@pytest.fixture(scope="module")
+def stomp_consumers(request, stomp_offering, order_capture, offering_user_capture):
+    """Set up STOMP subscriptions, replacing handlers with capture+delegate handlers.
 
     Yields the list of StompConsumer tuples. Teardown stops all consumers.
     """
@@ -297,19 +304,29 @@ def stomp_consumers(request, stomp_offering, order_capture):
     if not consumers:
         pytest.skip("No STOMP consumers could be established")
 
-    # Replace the ORDER handler in each ORDER consumer's listener with our capture handler
-    capture_handler = order_capture.make_handler(delegate=handlers.on_order_message_stomp)
+    # Replace handlers with capture handlers that also delegate to the real handler
+    order_handler = order_capture.make_handler(delegate=handlers.on_order_message_stomp)
+    offering_user_handler = offering_user_capture.make_handler(
+        delegate=handlers.on_offering_user_message_stomp
+    )
+
+    handler_map = {
+        ObservableObjectTypeEnum.ORDER.value: (order_handler, "ORDER"),
+        ObservableObjectTypeEnum.OFFERING_USER.value: (offering_user_handler, "OFFERING_USER"),
+    }
 
     for conn, event_subscription, offering in consumers:
-        # Check if this consumer handles ORDER events
         observable_objects = getattr(event_subscription, "observable_objects", [])
         for obj in observable_objects:
-            if obj.get("object_type") == ObservableObjectTypeEnum.ORDER.value:
+            obj_type = obj.get("object_type")
+            if obj_type in handler_map:
                 listener = conn.get_listener(WALDUR_LISTENER_NAME)
                 if listener:
-                    listener.on_message_callback = capture_handler
+                    handler, label = handler_map[obj_type]
+                    listener.on_message_callback = handler
                     logger.info(
-                        "Replaced ORDER handler with capture handler for offering %s",
+                        "Replaced %s handler with capture handler for offering %s",
+                        label,
                         offering.name,
                     )
                 break
@@ -467,14 +484,130 @@ class TestStompEventProcessing:
             snapshot_resource(stomp_report, stomp_waldur_client, resource_uuid, "Created resource")
             stomp_report.flush_api_log()
 
-    def test_04_cleanup(
+    def test_04_username_set_creates_slurm_association(
+        self,
+        stomp_offering,
+        stomp_waldur_client,
+        stomp_slurm_backend,
+        offering_user_capture,
+        stomp_report,
+    ):
+        """Verify that a username_set OFFERING_USER event creates a SLURM association.
+
+        Flow:
+        1. Find an existing offering user without a username, or create one
+        2. Set/update the username via the API
+        3. Waldur emits a username_set STOMP message
+        4. The site agent's OFFERING_USER handler processes it
+        5. Verify the SLURM association was created
+        """
+        stomp_report.heading(2, "Test 04: username_set STOMP → SLURM association")
+
+        resource_uuid = TestStompEventProcessing._state.get("resource_uuid")
+        if not resource_uuid:
+            pytest.skip("No resource from test_03")
+
+        # Get the resource backend_id (the SLURM account name)
+        resource = marketplace_provider_resources_retrieve.sync(
+            uuid=resource_uuid, client=stomp_waldur_client
+        )
+        backend_id = resource.backend_id
+        if not backend_id or isinstance(backend_id, type(UNSET)):
+            pytest.skip("Resource has no backend_id")
+
+        stomp_report.text(f"**Resource backend_id:** `{backend_id}`\n")
+
+        # Find offering users for this offering that we can use.
+        # Look for one without a username (ideal) or create a fresh one.
+        httpx_client = stomp_waldur_client.get_httpx_client()
+        ou_resp = httpx_client.get(
+            "/api/marketplace-offering-users/",
+            params={"offering_uuid": stomp_offering.waldur_offering_uuid},
+        )
+        ou_resp.raise_for_status()
+        ou_data = ou_resp.json()
+        # Handle both paginated ({"results": [...]}) and list ([...]) responses
+        offering_users = ou_data if isinstance(ou_data, list) else ou_data.get("results", [])
+
+        # Pick an offering user without a username, or the last one to update
+        target_ou = None
+        test_username = "e2e_username_set_test"
+        for ou in offering_users:
+            if not ou.get("username"):
+                target_ou = ou
+                break
+
+        if target_ou is None:
+            # All have usernames; pick one and set a new unique username
+            if offering_users:
+                target_ou = offering_users[-1]
+                test_username = f"e2e_uname_set_{target_ou['uuid'][:8]}"
+            else:
+                stomp_report.text("**SKIP:** No offering users found for this offering\n")
+                pytest.skip("No offering users available")
+
+        ou_uuid = target_ou["uuid"]
+        stomp_report.text(f"**Offering user UUID:** `{ou_uuid}`\n")
+        stomp_report.text(f"**Setting username to:** `{test_username}`\n")
+        stomp_report.flush_api_log("Setup API calls")
+
+        # Clear any previously captured OFFERING_USER events
+        messages_before = len(offering_user_capture.messages)
+
+        # PATCH the offering user to set the username
+        patch_resp = httpx_client.patch(
+            f"/api/marketplace-offering-users/{ou_uuid}/",
+            json={"username": test_username},
+        )
+        patch_resp.raise_for_status()
+        stomp_report.text(f"**PATCH status:** `{patch_resp.status_code}`\n")
+        stomp_report.flush_api_log("Username PATCH API calls")
+
+        # Wait for the OFFERING_USER STOMP event with action=username_set
+        msg = offering_user_capture.wait_for_event("action", "username_set", timeout=30)
+
+        if msg:
+            stomp_report.status_snapshot(
+                "Received OFFERING_USER event",
+                {
+                    "action": msg.get("action", "?"),
+                    "username": msg.get("username", "?"),
+                    "resource_backend_ids": str(msg.get("resource_backend_ids", [])),
+                },
+            )
+        else:
+            stomp_report.text("**WARNING:** No username_set event received within timeout\n")
+
+        assert msg is not None, (
+            f"No STOMP OFFERING_USER event with action=username_set received within 30s"
+        )
+        assert msg.get("username") == test_username
+
+        # Give the handler a moment to process (it runs in the STOMP listener thread)
+        time.sleep(2)
+
+        # Verify the SLURM association was created
+        assoc = stomp_slurm_backend.client.get_association(test_username, backend_id)
+        stomp_report.text(
+            f"**SLURM association ({test_username} ↔ {backend_id}):** "
+            f"`{'EXISTS' if assoc else 'MISSING'}`\n"
+        )
+
+        assert assoc is not None, (
+            f"Expected SLURM association for user '{test_username}' "
+            f"on account '{backend_id}' after username_set event"
+        )
+
+        stomp_report.flush_api_log()
+
+    def test_05_cleanup(
         self,
         stomp_offering,
         stomp_waldur_client,
         stomp_report,
     ):
         """Terminate test resources created by STOMP tests."""
-        stomp_report.heading(2, "Test 04: Cleanup")
+        stomp_report.heading(2, "Test 05: Cleanup")
 
         resource_uuid = TestStompEventProcessing._state.get("resource_uuid")
         if not resource_uuid:
