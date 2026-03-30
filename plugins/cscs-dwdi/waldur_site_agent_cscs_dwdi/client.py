@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 
 HTTP_OK = 200
 
+# Refresh token 30 seconds before expiry
+REFRESH_MARGIN_SECONDS = 30
+TOKEN_EXPIRATION_SECONDS = 300
 
 class CSCSDWDIClient:
     """Client for interacting with CSCS-DWDI API."""
@@ -112,16 +115,15 @@ class CSCSDWDIClient:
                 raise ValueError(msg)
 
             # Calculate token expiry time
-            expires_in = token_response.get("expires_in", 3600)  # Default to 1 hour
-            # Subtract 5 minutes from expiry for safety margin
-            safe_expires_in = max(300, expires_in - 300)
+            expires_in = token_response.get("expires_in", TOKEN_EXPIRATION_SECONDS)
+            safe_expires_in = expires_in - REFRESH_MARGIN_SECONDS
 
             self._token = access_token
             self._token_expires_at = datetime.now(tz=timezone.utc) + timedelta(
                 seconds=safe_expires_in
             )
 
-            logger.info("Successfully acquired OIDC token, expires in %d seconds", expires_in)
+            logger.info("Successfully acquired OIDC token, expires in %d seconds", safe_expires_in)
 
             return self._token
 
