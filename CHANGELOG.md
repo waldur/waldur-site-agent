@@ -1,25 +1,25 @@
 # Changelog
 
-## 1.0.1-rc.9 - 2026-03-30
+## 1.0.1-rc.10 - 2026-03-30
 
-- **MUP**: Add initial backend mappings, client, and order processing (WAL-9686).
-- **MUP**: Adjust usage reporting to use the new usage endpoint (WAL-9800).
-- **Federation**: Sync project description from Waldur A to Waldur B.
-- **Federation**: Sync effective_id from Waldur B to Waldur A.
-- **Federation**: Add configurable `end_date_sync_direction` setting.
-- **Federation**: Filter identity bridge payloads by allowed fields.
-- **Federation**: Fix identity bridge backend writing CUID as offering user username.
+- **MUP**: Add initial backend mappings, order processing, and usage reporting via new endpoint (WAL-9686, WAL-9800).
+- **Federation**: Sync project description and effective_id from target Waldur instance back to source.
+- **Federation**: Add configurable `end_date_sync_direction` setting for controlling end date propagation.
 - **Federation**: Fix resource limits being overridden during event processing.
-- **SLURM**: Create SLURM associations on `username_set` offering user message.
+- **Federation**: Fix identity bridge backend writing CUID as offering user username.
+- **Federation**: Filter identity bridge payloads by allowed fields.
+- **SLURM**: Create associations on `username_set` offering user message to handle race conditions.
 - **SLURM**: Add default account setting to customer account creation.
-- **K8s Namespace**: Align plugin with latest managed-namespace-operator.
+- **K8s Namespace**: Align plugin with latest managed-namespace-operator CRD.
 - **K8s Namespace**: Add `cr_user_identity_lowercase` setting.
-- **K8s Namespace**: Remove usage reporting due to missing cross-namespace access.
+- **K8s Namespace**: Remove usage reporting due to missing cross-namespace access for ResourceQuota.
+- **CSCS-DWDI**: Fix Keycloak secure token refresh.
 - **CSCS-DWDI**: Fix inodes component name.
 - **Core**: Fix readiness probe to use authenticated endpoint.
-- **Core**: Add RC release support with `-rc.N` format to release tooling.
+- **Core**: Fix historical usage loader.
+- **Release tooling**: Add RC release support with `-rc.N` format.
 
-> 25 commits, 56 files changed (+4684/−883 lines)
+> 28 commits, 58 files changed (+4692/-889 lines)
 
 ---
 
