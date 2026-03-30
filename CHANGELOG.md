@@ -1,24 +1,25 @@
 # Changelog
 
-## 1.0.1-rc.8 - 2026-03-26
+## 1.0.1-rc.9 - 2026-03-30
 
-- **SLURM**: Create associations on `username_set` offering user message.
-- **SLURM**: Add default account setting to customer account.
-- **MUP**: Add initial backend mappings and order processing (WAL-9686).
-- **MUP**: Adjust reporting to use the new usage endpoint (WAL-9800).
-- **Federation**: Sync project description from source to target Waldur.
-- **Federation**: Sync `effective_id` from target back to source Waldur.
+- **MUP**: Add initial backend mappings, client, and order processing (WAL-9686).
+- **MUP**: Adjust usage reporting to use the new usage endpoint (WAL-9800).
+- **Federation**: Sync project description from Waldur A to Waldur B.
+- **Federation**: Sync effective_id from Waldur B to Waldur A.
 - **Federation**: Add configurable `end_date_sync_direction` setting.
 - **Federation**: Filter identity bridge payloads by allowed fields.
-- **Federation**: Fix overriding resource limits during event processing.
-- **Federation**: Fix identity bridge writing CUID as offering user username.
-- **k8s-ut-namespace**: Align plugin with latest managed-namespace-operator.
-- **k8s-ut-namespace**: Add `cr_user_identity_lowercase` setting.
-- **k8s-ut-namespace**: Remove usage reporting due to missing cross-namespace access.
+- **Federation**: Fix identity bridge backend writing CUID as offering user username.
+- **Federation**: Fix resource limits being overridden during event processing.
+- **SLURM**: Create SLURM associations on `username_set` offering user message.
+- **SLURM**: Add default account setting to customer account creation.
+- **K8s Namespace**: Align plugin with latest managed-namespace-operator.
+- **K8s Namespace**: Add `cr_user_identity_lowercase` setting.
+- **K8s Namespace**: Remove usage reporting due to missing cross-namespace access.
+- **CSCS-DWDI**: Fix inodes component name.
 - **Core**: Fix readiness probe to use authenticated endpoint.
-- **Core**: Add RC release support with `-rc.N` format.
+- **Core**: Add RC release support with `-rc.N` format to release tooling.
 
-> 23 commits, 55 files changed (+4679/−882 lines)
+> 25 commits, 56 files changed (+4684/−883 lines)
 
 ---
 

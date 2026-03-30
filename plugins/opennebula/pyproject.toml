@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-opennebula"
-version = "1.0.1rc8"
+version = "1.0.1rc9"
 description = "OpenNebula VDC plugin for Waldur Site Agent"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent>=1.0.1rc8",
-    "waldur-site-agent-keycloak-client>=1.0.1rc8",
+    "waldur-site-agent>=1.0.1rc9",
+    "waldur-site-agent-keycloak-client>=1.0.1rc9",
     "pyone>=6.8.0",
     "pyyaml>=6.0",
 ]
