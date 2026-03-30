@@ -667,7 +667,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
                         storage_usage[component_name] = round(
                             space_used_bytes * (1.0 / unit_factor), 2
                         )
-                    elif "storage_inodes" in component_name.lower():
+                    elif "inodes_usage" in component_name.lower():
                         unit_factor = component_config.get(
                             "unit_factor_reporting", component_config.get("unit_factor", 1)
                         )
