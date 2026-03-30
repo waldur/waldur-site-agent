@@ -302,7 +302,6 @@ def load_historical_usage_for_month(
 
     except Exception as e:
         logger.error("Failed to process %04d-%02d: %s", year, month, e)
-        raise
 
 
 def _submit_resource_usage(
@@ -373,7 +372,7 @@ def _submit_user_usage(
     # Get component usages for this resource
     component_usages = marketplace_component_usages_list.sync_all(
         client=waldur_rest_client,
-        resource_uuid=[resource.uuid.hex],
+        resource_uuid=resource.uuid.hex,
         field=[
             ComponentUsageFieldEnum.UUID,
             ComponentUsageFieldEnum.TYPE,
