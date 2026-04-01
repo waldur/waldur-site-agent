@@ -584,7 +584,7 @@ class TestReportingOptimizations:
         te = TimeEngine()
         sim = UsageSimulator(te, db)
 
-        now = datetime(2026, 3, 1, 12, 0, 0)
+        now = datetime.now().replace(day=1, hour=12, minute=0, second=0, microsecond=0)
         injected = {}
         for i in range(NUM_USAGE_USERS):
             username = f"e2euser{i + 1}"
