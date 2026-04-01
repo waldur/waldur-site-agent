@@ -112,7 +112,7 @@ def on_order_message_stomp(
 ) -> None:
     """Order-processing handler for STOMP message event."""
     message: OrderMessage = json.loads(frame.body)
-    logger.info("Processing message: %s", message)
+    logger.info("Processing order message: %s (offering: %s)", message, offering.name)
     order_uuid = message["order_uuid"]
     order_state = message.get("order_state", "")
 
@@ -148,11 +148,19 @@ def on_order_message_stomp(
 
         order = processor.get_order_info(order_uuid)
         if order is None:
-            logger.error("Failed to process order %s", order_uuid)
+            logger.error("Failed to get order info for %s", order_uuid)
             return
+        logger.info(
+            "Fetched order %s: type=%s, state=%s, resource=%s",
+            order_uuid,
+            order.type_,
+            order.state,
+            order.resource_name,
+        )
         processor.process_order_with_retries(order)
+        logger.info("Finished processing order %s", order_uuid)
     except Exception as e:
-        logger.error("Failed to process order %s: %s", order_uuid, e)
+        logger.exception("Failed to process order %s: %s", order_uuid, e)
 
 
 def on_user_role_message_stomp(

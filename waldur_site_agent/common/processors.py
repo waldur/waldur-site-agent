@@ -805,14 +805,22 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 )
                 if decision == PendingOrderDecision.ACCEPT:
                     logger.info("Approving the order")
-                    marketplace_orders_approve_by_provider.sync_detailed(
+                    approval_response = marketplace_orders_approve_by_provider.sync_detailed(
                         client=self.waldur_rest_client,
                         uuid=order.uuid.hex,
                         body=OrderApproveByProviderRequest(),
                     )
+                    logger.info(
+                        "Approval response status: %s",
+                        approval_response.status_code,
+                    )
                     logger.info("Refreshing the order")
                     order = marketplace_orders_retrieve.sync(
                         client=self.waldur_rest_client, uuid=order.uuid.hex
+                    )
+                    logger.info(
+                        "Order state after approval: %s",
+                        order.state,
                     )
                 elif decision == PendingOrderDecision.REJECT:
                     logger.info("Rejecting the order")
@@ -847,8 +855,15 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
             if order.type_ == RequestTypes.TERMINATE:
                 order_is_done = self._process_terminate_order(order)
+
+            logger.info(
+                "Order %s processing result: order_is_done=%s",
+                order.uuid,
+                order_is_done,
+            )
+
             if order_is_done:
-                logger.info("Marking order as done")
+                logger.info("Marking order %s as done", order.uuid)
                 waldur_order_refreshed = marketplace_orders_retrieve.sync(
                     client=self.waldur_rest_client,
                     uuid=order.uuid.hex,
@@ -857,21 +872,37 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                         OrderDetailsFieldEnum.STATE,
                     ],
                 )
+                logger.info(
+                    "Order %s refreshed state: %s",
+                    order.uuid,
+                    waldur_order_refreshed.state,
+                )
                 if waldur_order_refreshed.state == OrderState.EXECUTING:
-                    marketplace_orders_set_state_done.sync_detailed(
+                    done_response = marketplace_orders_set_state_done.sync_detailed(
                         client=self.waldur_rest_client, uuid=order.uuid.hex
                     )
-                else:
                     logger.info(
-                        "Order is not in EXECUTING state, "
-                        "skipping set_state_done operation"
+                        "set_state_done response for order %s: %s",
+                        order.uuid,
+                        done_response.status_code,
+                    )
+                else:
+                    logger.warning(
+                        "Order %s is in state %s instead of EXECUTING, "
+                        "skipping set_state_done operation",
+                        order.uuid,
+                        waldur_order_refreshed.state,
                     )
 
-                logger.info("The order has been successfully processed")
+                logger.info("The order %s has been successfully processed", order.uuid)
 
                 self._post_process_order(order)
             else:
-                logger.warning("The order processing was not finished, skipping to the next one")
+                logger.warning(
+                    "Order %s processing was not finished (order_is_done=False), "
+                    "skipping to the next one",
+                    order.uuid,
+                )
 
         except backend_exceptions.BackendNotReadyError as e:
             logger.warning(
@@ -881,10 +912,11 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             )
         except Exception as e:
             logger.exception(
-                "Error while processing order %s (%s %s): %s",
+                "Error while processing order %s (%s %s), current state %s: %s",
                 order.uuid.hex,
                 order.type_,
                 order.resource_name,
+                order.state,
                 e,
             )
             if order.state != OrderState.DONE:
@@ -892,10 +924,23 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     error_message=str(e),
                     error_traceback=traceback.format_exc(),
                 )
-                marketplace_orders_set_state_erred.sync_detailed(
-                    client=self.waldur_rest_client,
-                    uuid=order.uuid,
-                    body=order_error_details_request,
+                try:
+                    marketplace_orders_set_state_erred.sync_detailed(
+                        client=self.waldur_rest_client,
+                        uuid=order.uuid,
+                        body=order_error_details_request,
+                    )
+                    logger.info("Order %s set to erred", order.uuid)
+                except Exception as erred_exc:
+                    logger.exception(
+                        "Failed to set order %s to erred state: %s",
+                        order.uuid,
+                        erred_exc,
+                    )
+            else:
+                logger.warning(
+                    "Order %s is already in DONE state, not setting to erred",
+                    order.uuid,
                 )
 
     def _create_resource(
@@ -1142,6 +1187,13 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     waldur_resource.backend_id,
                 )
                 create_resource = False
+            else:
+                logger.warning(
+                    "Resource %s has backend_id %s but pull_resource returned None, "
+                    "will re-create",
+                    waldur_resource.name,
+                    waldur_resource.backend_id,
+                )
 
         # Fetch user context for resource creation
         user_context = self._fetch_user_context_for_resource(order.marketplace_resource_uuid.hex)
@@ -1176,6 +1228,12 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 return False  # Order stays EXECUTING
 
         if backend_resource_info is None:
+            logger.warning(
+                "Order %s: backend_resource_info is None "
+                "(create_resource=%s), returning False",
+                order.uuid,
+                create_resource,
+            )
             return False
 
         waldur_resource.backend_id = backend_resource_info.backend_id
