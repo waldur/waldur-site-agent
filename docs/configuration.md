@@ -23,6 +23,14 @@ offerings:
 - **Default**: Empty (disabled)
 - **Example**: `"https://key@sentry.io/project"`
 
+### `elastic_apm_server_url`
+
+- **Type**: String
+- **Description**: Elastic APM server URL. When set, enables Elastic APM monitoring with automatic
+  instrumentation.
+- **Default**: Empty (disabled)
+- **Example**: `"https://apm-server.example.com:8200"`
+
 ### `timezone`
 
 - **Type**: String

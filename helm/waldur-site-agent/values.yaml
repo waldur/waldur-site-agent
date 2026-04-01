@@ -75,6 +75,7 @@ secret:
     # This should be a complete YAML configuration
     config.yaml: |
       sentry_dsn: ""
+      elastic_apm_server_url: ""
       timezone: "UTC"
       log_level: "INFO"
       reporting_periods: 2
