@@ -236,6 +236,28 @@ def is_uuid(value: str) -> bool:
         return False
 
 
+def _add_apm_logging_handler() -> None:
+    """Add a logging handler that forwards ERROR+ records to Elastic APM.
+
+    Mirrors Sentry's LoggingIntegration default behaviour: captures exceptions
+    """
+    import logging  # noqa: PLC0415
+
+    import elasticapm  # noqa: PLC0415
+
+    class _ApmHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            client = elasticapm.get_client()
+            if client is None:
+                return
+            if record.exc_info and record.exc_info[0] is not None:
+                client.capture_exception(exc_info=record.exc_info)
+            else:
+                client.capture_message(record.getMessage(), level=record.levelname.lower())
+
+    logging.getLogger().addHandler(_ApmHandler(level=logging.ERROR))
+
+
 def load_configuration(
     config_file_path: str, user_agent_suffix: str = "generic"
 ) -> structures.WaldurAgentConfiguration:
@@ -267,6 +289,16 @@ def load_configuration(
 
             sentry_sdk.init(dsn=configuration.sentry_dsn)
 
+        # Handle Elastic APM configuration - initialize if server URL is provided
+        if configuration.elastic_apm_server_url:
+            import elasticapm  # noqa: PLC0415
+
+            elasticapm.Client(
+                service_name="waldur-site-agent",
+                server_url=configuration.elastic_apm_server_url,
+            )
+            elasticapm.instrument()
+
     except Exception as e:
         # Provide helpful error messages for configuration validation failures
         if "ValidationError" in str(type(e)):
@@ -283,6 +315,10 @@ def load_configuration(
     # Configure logger with the specified log level
     configure_logger(configuration.log_level)
 
+    # Add APM logging handler after configure_logger (which clears handlers) so it persists
+    if configuration.elastic_apm_server_url:
+        _add_apm_logging_handler()
+
     return configuration
 
 
@@ -290,8 +326,9 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
     """Initialize agent configuration from CLI arguments and config file.
 
     Parses command-line arguments, loads the YAML configuration file,
-    and creates offering configurations. Also initializes Sentry if
-    configured and sets up user agent strings for different modes.
+    and creates offering configurations. Also initializes Sentry and
+    Elastic APM if configured, and sets up user agent strings for
+    different modes.
 
     Returns:
         Complete agent configuration with all offerings and settings
@@ -727,6 +764,11 @@ def diagnostics() -> int:
         logger.info(format_string.format("Offering UUID", offering_uuid))
         logger.info(format_string.format("Waldur API URL", offering_api_url))
         logger.info(format_string.format("SENTRY_DSN", str(configuration.sentry_dsn)))
+        logger.info(
+            format_string.format(
+                "ELASTIC_APM_SERVER_URL", str(configuration.elastic_apm_server_url)
+            )
+        )
 
         waldur_rest_client = get_client(
             offering_api_url,

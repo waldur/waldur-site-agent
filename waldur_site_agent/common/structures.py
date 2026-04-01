@@ -213,6 +213,7 @@ class WaldurAgentConfiguration(BaseModel):
     YAML Configuration Fields:
         offerings: List of offering configurations from config file
         sentry_dsn: Sentry DSN URL for error reporting (optional)
+        elastic_apm_server_url: Elastic APM server URL (optional, enables APM if set)
         timezone: Timezone for billing period calculations
         global_proxy: Global proxy URL for all API connections (optional)
 
@@ -229,6 +230,9 @@ class WaldurAgentConfiguration(BaseModel):
     )
     sentry_dsn: Optional[str] = Field(
         default=None, description="Sentry DSN for error reporting (URL)"
+    )
+    elastic_apm_server_url: Optional[str] = Field(
+        default=None, description="Elastic APM server URL (enables APM when set)"
     )
     timezone: str = Field(default="UTC", description="Timezone for billing calculations")
     global_proxy: str = Field(default="", description="Global proxy URL for API connections")
@@ -263,6 +267,19 @@ class WaldurAgentConfiguration(BaseModel):
             msg = f"sentry_dsn must be a valid URL: {e}"
             raise ValueError(msg) from e
 
+    @field_validator("elastic_apm_server_url")
+    @classmethod
+    def validate_elastic_apm_server_url(cls, v: Optional[str]) -> Optional[str]:
+        """Validate that elastic_apm_server_url is a valid URL when provided."""
+        if v is None or v == "":
+            return None
+        try:
+            HttpUrl(v)
+            return v
+        except ValidationError as e:
+            msg = f"elastic_apm_server_url must be a valid URL: {e}"
+            raise ValueError(msg) from e
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
@@ -292,6 +309,9 @@ class RootConfiguration(BaseModel):
     sentry_dsn: Optional[str] = Field(
         default=None, description="Sentry DSN for error reporting (URL)"
     )
+    elastic_apm_server_url: Optional[str] = Field(
+        default=None, description="Elastic APM server URL (enables APM when set)"
+    )
     timezone: str = Field(default="UTC", description="Timezone for billing calculations")
     global_proxy: str = Field(default="", description="Global proxy URL for API connections")
     log_level: str = Field(
@@ -317,6 +337,19 @@ class RootConfiguration(BaseModel):
             return v
         except ValidationError as e:
             msg = f"sentry_dsn must be a valid URL: {e}"
+            raise ValueError(msg) from e
+
+    @field_validator("elastic_apm_server_url")
+    @classmethod
+    def validate_elastic_apm_server_url(cls, v: Optional[str]) -> Optional[str]:
+        """Validate that elastic_apm_server_url is a valid URL when provided."""
+        if v is None or v == "":
+            return None
+        try:
+            HttpUrl(v)
+            return v
+        except ValidationError as e:
+            msg = f"elastic_apm_server_url must be a valid URL: {e}"
             raise ValueError(msg) from e
 
     @field_validator("log_level")
@@ -365,6 +398,7 @@ class RootConfiguration(BaseModel):
         return WaldurAgentConfiguration(
             offerings=parsed_offerings,
             sentry_dsn=self.sentry_dsn,
+            elastic_apm_server_url=self.elastic_apm_server_url,
             timezone=self.timezone,
             global_proxy=self.global_proxy,
             log_level=self.log_level,
