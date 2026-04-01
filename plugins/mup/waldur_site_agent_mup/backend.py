@@ -298,6 +298,7 @@ class MUPBackend(backends.BaseBackend):
         username = waldur_user.get(
             "username", email.split("@")[0] if email else "unknown"
         )
+        cuid = waldur_user.get("cuid") or username
 
         if not email:
             logger.error("User %s has no email address", username)
@@ -378,6 +379,16 @@ class MUPBackend(backends.BaseBackend):
                 user_id = self._find_user_request_by_email(email)
 
             if user_id:
+                try:
+                    logger.info("Setting cuid for MUP user %s (%s): %s", user_id, email, cuid)
+                    self.client.set_user_myaccessid(user_id, str(cuid))
+                except Exception as e:
+                    logger.warning(
+                        "Failed to set myaccessid for MUP user %s (%s): %s",
+                        user_id,
+                        email,
+                        e,
+                    )
                 self._user_cache[email] = user_id
                 logger.info("Created MUP user request %s for %s", user_id, email)
                 return user_id
@@ -531,6 +542,7 @@ class MUPBackend(backends.BaseBackend):
         Returns:
             User data dict ready for MUP API, or None if username/email is missing.
         """
+        team_username = getattr(team_user, "username", None)
         if not offering_user or not offering_user.username:
             logger.warning(
                 "No offering user username for %s, cannot build MUP user data",
@@ -577,6 +589,7 @@ class MUPBackend(backends.BaseBackend):
                 if offering_user
                 else None
             ),
+            "cuid": team_username,
         }
 
         if not user_data["email"]:

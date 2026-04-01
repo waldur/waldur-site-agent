@@ -318,6 +318,15 @@ class MUPClient(BaseClient):
         response = self._make_request("POST", "/api/user/", json=user_data)
         return cast("dict", self._parse_json_response(response))
 
+    def set_user_myaccessid(self, user_id: int, myaccessid: str) -> dict:
+        """Set myaccessid for a user."""
+        response = self._make_request(
+            "POST",
+            f"/api/user/{user_id}/myaccessid",
+            json={"myaccessid": myaccessid},
+        )
+        return cast("dict", self._parse_json_response(response))
+
     def update_user(self, user_id: int, user_data: dict) -> dict:
         """Update user information."""
         response = self._make_request(
