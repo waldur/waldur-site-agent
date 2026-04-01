@@ -391,6 +391,25 @@ class MUPClientTest(unittest.TestCase):
                 "POST", "/api/user/", json=user_data
             )
 
+    def test_set_user_myaccessid(self):
+        """Test setting user myaccessid"""
+        user_id = 2
+        myaccessid = "someuser"
+
+        with patch.object(self.client, "_make_request") as mock_request:
+            mock_response = Mock()
+            mock_response.json.return_value = {"status": "ok"}
+            mock_request.return_value = mock_response
+
+            result = self.client.set_user_myaccessid(user_id, myaccessid)
+
+            self.assertEqual(result, {"status": "ok"})
+            mock_request.assert_called_once_with(
+                "POST",
+                f"/api/user/{user_id}/myaccessid",
+                json={"myaccessid": myaccessid},
+            )
+
     def test_update_user(self):
         """Test updating user information"""
         user_id = 1

@@ -290,6 +290,7 @@ class MUPBackendTest(unittest.TestCase):
         waldur_user = {
             "email": email,
             "username": "new_user",
+            "cuid": "idp_user",
             "first_name": "New",
             "last_name": "User",
         }
@@ -299,6 +300,7 @@ class MUPBackendTest(unittest.TestCase):
         assert user_id == 2
         mock_client.get_user_by_email.assert_called_once_with(email)
         mock_client.create_user_request.assert_called_once()
+        mock_client.set_user_myaccessid.assert_called_once_with(2, "idp_user")
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_get_or_create_user_no_email(self, mock_client_class) -> None:
