@@ -142,12 +142,27 @@ class SlurmReportLine:
         return parse_int(self._resources[field])
 
     @cached_property
+    def _allowed_tres_names(self) -> set:
+        """Build set of TRES names to accept from SLURM output.
+
+        In passthrough mode these are the source component names.
+        When target_components mapping is configured, the SLURM output
+        contains the *target* names (e.g. cpu, gpu) rather than the
+        source names (e.g. node_hours), so we must include those too.
+        """
+        names = set(self.slurm_tres.keys())
+        for comp_config in self.slurm_tres.values():
+            target_components = comp_config.get("target_components", {})
+            if target_components:
+                names.update(target_components.keys())
+        return names
+
+    @cached_property
     def tres_usage(self) -> dict:
         """TRES usage for the line."""
         usage = {}
-        slurm_tres_set = set(self.slurm_tres.keys())
         for resource in self._resources:
-            if resource not in slurm_tres_set:
+            if resource not in self._allowed_tres_names:
                 continue
             usage_raw = self.parse_field(resource)
             usage[resource] = usage_raw * self.duration
