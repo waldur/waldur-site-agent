@@ -377,8 +377,15 @@ class CSCSDWDIComputeBackend(BaseBackend):
             usage_report = self._get_usage_report([account_name], clusters=clusters)
 
             if account_name not in usage_report:
-                logger.warning("There is no account with ID %s in the DWDI backend", account_name)
-                return None
+                logger.info(
+                    "No data for account %s in DWDI backend, reporting zero usage",
+                    account_name,
+                )
+                empty_usage = dict.fromkeys(self.backend_components, 0.0)
+                return structures.BackendResourceInfo(
+                    users=[],
+                    usage={"TOTAL_ACCOUNT_USAGE": empty_usage},
+                )
 
             # Extract usage data for this account
             account_usage = usage_report[account_name]
