@@ -1,25 +1,27 @@
 # Changelog
 
-## 1.0.1-rc.10 - 2026-03-30
+## 1.0.1-rc.11 - 2026-04-02
 
-- **MUP**: Add initial backend mappings, order processing, and usage reporting via new endpoint (WAL-9686, WAL-9800).
-- **Federation**: Sync project description and effective_id from target Waldur instance back to source.
-- **Federation**: Add configurable `end_date_sync_direction` setting for controlling end date propagation.
-- **Federation**: Fix resource limits being overridden during event processing.
-- **Federation**: Fix identity bridge backend writing CUID as offering user username.
+- **MUP**: Add initial backend mappings, usage reporting via new endpoint, and myaccessid username support (WAL-9686, WAL-9800).
+- **Federation**: Sync project description and effective_id between Waldur instances.
+- **Federation**: Add configurable `end_date_sync_direction` setting.
 - **Federation**: Filter identity bridge payloads by allowed fields.
-- **SLURM**: Create associations on `username_set` offering user message to handle race conditions.
-- **SLURM**: Add default account setting to customer account creation.
-- **K8s Namespace**: Align plugin with latest managed-namespace-operator CRD.
-- **K8s Namespace**: Add `cr_user_identity_lowercase` setting.
-- **K8s Namespace**: Remove usage reporting due to missing cross-namespace access for ResourceQuota.
-- **CSCS-DWDI**: Fix Keycloak secure token refresh.
-- **CSCS-DWDI**: Fix inodes component name.
+- **SLURM**: Create associations on `username_set` offering user message to avoid race conditions.
+- **SLURM**: Add default account setting to customer account.
+- **K8s-ut-namespace**: Align with latest managed-namespace-operator and add `cr_user_identity_lowercase` setting.
+- **K8s-ut-namespace**: Remove usage reporting due to missing cross-namespace access.
+- **Core**: Add Elastic APM integration support (WAL-8988).
+- **Core**: Improve order processing logging for easier debugging.
 - **Core**: Fix readiness probe to use authenticated endpoint.
 - **Core**: Fix historical usage loader.
-- **Release tooling**: Add RC release support with `-rc.N` format.
+- **SLURM**: Fix mapped component usage reporting (WAL-9815).
+- **CSCS-DWDI**: Fix inodes component name and Keycloak secure token refresh.
+- **CSCS-DWDI**: Report zero usage when API returns no data for an account.
+- **Federation**: Fix resource limits being overridden during event processing.
+- **Federation**: Fix identity bridge writing CUID as offering user username.
+- **Release**: Add RC release support with `-rc.N` format.
 
-> 28 commits, 58 files changed (+4692/-889 lines)
+> 34 commits, 67 files changed (+5571/-911 lines)
 
 ---
 
