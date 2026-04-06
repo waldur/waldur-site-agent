@@ -491,7 +491,7 @@ class SlurmClient(clients.BaseClient):
         """
         parts = ["add", "qos", name]
         if flags:
-            parts.append(f"set flags={flags}")
+            parts.extend(["set", f"flags={flags}"])
         self._execute_command(parts)
 
         # Apply settings in separate modify commands (matches EFP workflow)

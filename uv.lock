@@ -1640,7 +1640,7 @@ wheels = [
 
 [[package]]
 name = "slurm-emulator"
-version = "0.2.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1652,9 +1652,9 @@ dependencies = [
     { name = "uvicorn", version = "0.39.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "uvicorn", version = "0.40.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/43/ca/32d990b028a8a26d30d2483e909de58f7e56662c8382a0f5e052fde282e9/slurm_emulator-0.2.0.tar.gz", hash = "sha256:9d5e6cdf39b42fe6c57b1df62b8ab256a58a57151639ad0ee810b7afb45bf5bc", size = 73828, upload-time = "2026-03-14T09:16:29.703Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d4/c2/5aac976e3f5d55bbe51b31d24981db7b561842c4a6ee9c736f460a795c5d/slurm_emulator-0.3.0.tar.gz", hash = "sha256:ac29a74270861419726cfaec36f076475a61f36a8e5af2555de524373990c95b", size = 74576, upload-time = "2026-04-06T09:38:22.403Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7c/3b/6d61e9f67dfe81ba61d65ae239c4b12f982e115583a5ac44a2232cecdd79/slurm_emulator-0.2.0-py3-none-any.whl", hash = "sha256:ce0d16d01b65990ab290a407b7a992bf955e7d66fe62374b25bb783ba5235d38", size = 84188, upload-time = "2026-03-14T09:16:31.205Z" },
+    { url = "https://files.pythonhosted.org/packages/65/ec/d4628c66516589e7ca7b4c19632b33066f65a744e1ceff8846e4a2784fbd/slurm_emulator-0.3.0-py3-none-any.whl", hash = "sha256:e8a9ede13cc2d0e67b1eaa7a6a535b538d86669d542a5163bd3a35c1746a1443", size = 84917, upload-time = "2026-04-06T09:38:20.789Z" },
 ]
 
 [[package]]
@@ -1907,7 +1907,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "respx" },
     { name = "ruff" },
-    { name = "slurm-emulator" },
     { name = "types-pyyaml" },
 ]
 
@@ -1936,7 +1935,6 @@ dev = [
     { name = "pytest-cov", specifier = "==3.0.0" },
     { name = "respx", specifier = ">=0.22.0,<0.23" },
     { name = "ruff", specifier = ">=0.12.1,<0.13" },
-    { name = "slurm-emulator", specifier = ">=0.2.0" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20240311,<7" },
 ]
 
@@ -2173,7 +2171,7 @@ provides-extras = ["ldap"]
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=7.1.0" },
-    { name = "slurm-emulator", specifier = ">=0.2.0" },
+    { name = "slurm-emulator", specifier = ">=0.3.0" },
 ]
 
 [[package]]
