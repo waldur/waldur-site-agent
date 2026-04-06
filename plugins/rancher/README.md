@@ -287,6 +287,7 @@ offerings:
 | `project_prefix` | string | No | "waldur-" | Prefix for created Rancher project names |
 | `default_role` | string | No | "workloads-manage" | Default role assigned to users in Rancher |
 | `keycloak_use_user_id` | boolean | No | true | Use Keycloak user ID for lookup (false = use username) |
+| `namespace_labels` | map | No | {} | Extra labels applied to namespaces (e.g., `gpu-pool: h100-2x`) |
 
 ### Keycloak Settings (optional, matching waldur-mastermind format)
 
@@ -373,6 +374,7 @@ The plugin supports the following resource components (all with `billing_type: "
 - **CPU**: Measured in cores
 - **Memory**: Measured in GB
 - **Storage**: Measured in GB
+- **GPU**: Measured in units (optional, see [GPU Scheduling](#gpu-scheduling))
 
 ### Accounting Model
 
@@ -393,6 +395,178 @@ All components report **actual allocated resources**:
 
 1. **Project Creation**: CPU and memory limits → Rancher project quotas
 2. **Usage Reporting**: All components → actual allocated resources from Kubernetes
+
+## GPU Scheduling
+
+The plugin supports GPU quota management via Kubernetes ResourceQuotas combined with
+namespace-label-based scheduling. This approach uses a single generic `nvidia.com/gpu`
+resource for quotas, and a **Kyverno policy** on the cluster to steer GPU workloads
+to the correct node pool based on a namespace label.
+
+### How It Works
+
+1. **Site agent** creates a namespace with a `gpu-pool` label (configured via `namespace_labels`)
+2. **Site agent** applies a ResourceQuota with `requests.nvidia.com/gpu: N` (generic GPU count)
+3. **Kyverno policy** on the cluster reads the namespace's `gpu-pool` label and injects
+   a matching `nodeSelector` into every pod, ensuring GPU workloads land on the correct nodes
+4. **GPU nodes** are labeled with `gpu-pool=<type>` (e.g., `gpu-pool=h100-2x`)
+
+### Offering Setup
+
+Create a **separate Waldur offering per GPU pool type**. Each offering's backend config
+specifies the GPU pool label:
+
+```yaml
+offerings:
+  # Offering for H100 GPU pool
+  - name: "k8s-gpu-h100"
+    uuid: "..."
+    backend_type: "rancher"
+    backend:
+      backend_url: "https://rancher.example.com"
+      username: "..."
+      password: "..."
+      cluster_id: "c-m-1234abcd"
+      namespace_labels:
+        gpu-pool: "h100-2x"
+    components:
+      cpu:
+        type: "cpu"
+        name: "CPU"
+        measured_unit: "cores"
+      memory:
+        type: "ram"
+        name: "RAM"
+        measured_unit: "GB"
+      gpu:
+        type: "gpu"
+        name: "GPU"
+        measured_unit: "units"
+
+  # Offering for H200 GPU pool
+  - name: "k8s-gpu-h200"
+    uuid: "..."
+    backend_type: "rancher"
+    backend:
+      backend_url: "https://rancher.example.com"
+      username: "..."
+      password: "..."
+      cluster_id: "c-m-1234abcd"
+      namespace_labels:
+        gpu-pool: "h200-8x"
+    components:
+      cpu:
+        type: "cpu"
+        name: "CPU"
+        measured_unit: "cores"
+      memory:
+        type: "ram"
+        name: "RAM"
+        measured_unit: "GB"
+      gpu:
+        type: "gpu"
+        name: "GPU"
+        measured_unit: "units"
+```
+
+### Required Kubernetes Setup
+
+#### 1. Label GPU Nodes
+
+Each GPU node must be labeled with its pool type matching the `namespace_labels` values:
+
+```bash
+kubectl label node gpu-h100-node-01 gpu-pool=h100-2x
+kubectl label node gpu-h100-node-02 gpu-pool=h100-2x
+kubectl label node gpu-h200-node-01 gpu-pool=h200-8x
+```
+
+#### 2. Deploy Kyverno Policy
+
+A Kyverno `ClusterPolicy` must be deployed on the cluster to inject `nodeSelector`
+into pods based on the namespace's `gpu-pool` label. This is the minimal policy:
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: enforce-gpu-pool-node-selector
+spec:
+  rules:
+    - name: set-node-selector-from-namespace-label
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      context:
+        - name: gpupool
+          apiCall:
+            urlPath: /api/v1/namespaces/{{ request.namespace }}
+            jmesPath: metadata.labels."gpu-pool" || ''
+            method: GET
+      preconditions:
+        all:
+          - key: "{{ gpupool }}"
+            operator: NotEquals
+            value: ""
+      mutate:
+        patchStrategicMerge:
+          spec:
+            nodeSelector:
+              gpu-pool: "{{ gpupool }}"
+```
+
+This policy:
+
+- Matches **all Pods** in every namespace
+- Fetches the namespace's `gpu-pool` label via Kubernetes API
+- **Precondition**: only fires if the label is non-empty (CPU-only namespaces are unaffected)
+- **Mutates**: injects `nodeSelector: {gpu-pool: "<value>"}` into the Pod spec
+- Kyverno **auto-generates** equivalent rules for Deployments, StatefulSets, Jobs, CronJobs, etc.
+
+#### 3. Optional: Default No-GPU Quota Policy
+
+To prevent accidental GPU usage in namespaces without a GPU pool label,
+deploy a generate policy that creates a zero-GPU ResourceQuota:
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: default-no-gpu-quota
+spec:
+  rules:
+    - name: generate-no-gpu-quota
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+              selector:
+                matchExpressions:
+                  - key: gpu-pool
+                    operator: DoesNotExist
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+      generate:
+        apiVersion: v1
+        kind: ResourceQuota
+        name: no-gpu-quota
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            hard:
+              requests.nvidia.com/gpu: "0"
+              limits.nvidia.com/gpu: "0"
+```
 
 ## Complete Workflow
 

@@ -411,11 +411,13 @@ class TestRancherBackend:
         limits = {"cpu": 4, "memory": 8, "storage": 100, "pods": 50}
         backend.set_resource_limits("project-123", limits)
 
-        # Should call set_namespace_custom_resource_quotas with namespace and limits
+        # Should call set_namespace_custom_resource_quotas with namespace, limits, and mapping
         mock_client.get_project_namespaces.assert_called_once_with("project-123")
-        mock_client.set_namespace_custom_resource_quotas.assert_called_once_with(
-            "test-namespace", limits
-        )
+        mock_client.set_namespace_custom_resource_quotas.assert_called_once()
+        call_args = mock_client.set_namespace_custom_resource_quotas.call_args
+        assert call_args[0][0] == "test-namespace"
+        assert call_args[0][1] == limits
+        assert "component_k8s_mapping" in call_args[1]
 
     @patch("waldur_site_agent_rancher.backend.RancherClient")
     def test_filter_quota_components(
@@ -505,7 +507,10 @@ class TestRancherBackend:
         report = backend._get_usage_report(["project-123"])
 
         mock_client.get_project_namespaces.assert_called_once_with("project-123")
-        mock_client.get_namespace_quota_usage.assert_called_once_with("waldur-test-ns")
+        mock_client.get_namespace_quota_usage.assert_called_once()
+        call_args = mock_client.get_namespace_quota_usage.call_args
+        assert call_args[0][0] == "waldur-test-ns"
+        assert "reverse_k8s_mapping" in call_args[1]
         assert "project-123" in report
         assert report["project-123"]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 2.5
         assert report["project-123"]["TOTAL_ACCOUNT_USAGE"]["memory"] == 4.0
@@ -535,3 +540,192 @@ class TestRancherBackend:
         assert metadata["description"] == "Test Project"
         assert metadata["quotas"]["cpu"] == 4
         assert len(metadata["users"]) == 2
+
+
+class TestRancherBackendNamespaceLabels:
+    """Test cases for namespace label support (e.g. gpu-pool)."""
+
+    @patch("waldur_site_agent_rancher.backend.RancherClient")
+    def test_namespace_labels_passed_during_create(
+        self, mock_rancher_client, rancher_components, waldur_resource
+    ):
+        """Test that namespace_labels from backend config are passed to create_namespace."""
+        settings = {
+            "api_url": "https://rancher.example.com/v3",
+            "cluster_id": "c-m-test:p-test",
+            "verify_cert": False,
+            "project_prefix": "waldur-",
+            "keycloak_enabled": False,
+            "namespace_labels": {"gpu-pool": "h100-2x"},
+        }
+        mock_client = MagicMock()
+        mock_client.list_projects.return_value = []
+        mock_client.create_project.return_value = "project-123"
+        mock_client.create_namespace.return_value = None
+        mock_client.set_namespace_custom_resource_quotas.return_value = None
+        mock_rancher_client.return_value = mock_client
+
+        backend = RancherBackend(settings, rancher_components)
+        backend.create_resource(waldur_resource)
+
+        mock_client.create_namespace.assert_called_once()
+        call_kwargs = mock_client.create_namespace.call_args
+        assert call_kwargs[1]["extra_labels"] == {"gpu-pool": "h100-2x"}
+
+    @patch("waldur_site_agent_rancher.backend.RancherClient")
+    def test_no_namespace_labels_when_not_configured(
+        self, mock_rancher_client, rancher_settings, rancher_components, waldur_resource
+    ):
+        """Test that extra_labels is None when namespace_labels not in config."""
+        mock_client = MagicMock()
+        mock_client.list_projects.return_value = []
+        mock_client.create_project.return_value = "project-123"
+        mock_client.create_namespace.return_value = None
+        mock_client.set_namespace_custom_resource_quotas.return_value = None
+        mock_rancher_client.return_value = mock_client
+
+        backend = RancherBackend(rancher_settings, rancher_components)
+        backend.create_resource(waldur_resource)
+
+        mock_client.create_namespace.assert_called_once()
+        call_kwargs = mock_client.create_namespace.call_args
+        assert call_kwargs[1]["extra_labels"] is None
+
+
+class TestRancherBackendGpuTypes:
+    """Test cases for per-GPU-type limit support."""
+
+    @pytest.fixture
+    def gpu_components(self):
+        """Component definitions with multiple GPU types."""
+        return {
+            "cpu": {"type": "cpu", "name": "CPU", "measured_unit": "cores"},
+            "memory": {"type": "ram", "name": "RAM", "measured_unit": "GB"},
+            "gpu_h100": {
+                "type": "gpu",
+                "name": "GPU H100",
+                "measured_unit": "units",
+                "k8s_resource": "nvidia.com/gpu-h100",
+            },
+            "gpu_h200": {
+                "type": "gpu",
+                "name": "GPU H200",
+                "measured_unit": "units",
+                "k8s_resource": "nvidia.com/gpu-h200",
+            },
+        }
+
+    @patch("waldur_site_agent_rancher.backend.RancherClient")
+    def test_build_k8s_resource_mapping(
+        self, mock_rancher_client, rancher_settings, gpu_components
+    ):
+        """Test building K8s resource mapping with custom GPU types."""
+        backend = RancherBackend(rancher_settings, gpu_components)
+
+        mapping = backend._build_k8s_resource_mapping()
+
+        assert mapping["cpu"] == "limits.cpu"
+        assert mapping["memory"] == "limits.memory"
+        assert mapping["gpu_h100"] == "requests.nvidia.com/gpu-h100"
+        assert mapping["gpu_h200"] == "requests.nvidia.com/gpu-h200"
+
+    @patch("waldur_site_agent_rancher.backend.RancherClient")
+    def test_build_k8s_resource_mapping_default_gpu(
+        self, mock_rancher_client, rancher_settings
+    ):
+        """Test backward compat: type 'gpu' without k8s_resource uses default."""
+        components = {
+            "cpu": {"type": "cpu", "name": "CPU", "measured_unit": "cores"},
+            "gpu": {"type": "gpu", "name": "GPU", "measured_unit": "units"},
+        }
+        backend = RancherBackend(rancher_settings, components)
+
+        mapping = backend._build_k8s_resource_mapping()
+
+        assert mapping["cpu"] == "limits.cpu"
+        assert mapping["gpu"] == "requests.nvidia.com/gpu"
+
+    @patch("waldur_site_agent_rancher.backend.RancherClient")
+    def test_build_reverse_k8s_resource_mapping(
+        self, mock_rancher_client, rancher_settings, gpu_components
+    ):
+        """Test building reverse mapping from K8s resource names to component keys."""
+        backend = RancherBackend(rancher_settings, gpu_components)
+
+        reverse = backend._build_reverse_k8s_resource_mapping()
+
+        assert reverse["limits.cpu"] == "cpu"
+        assert reverse["limits.memory"] == "memory"
+        assert reverse["requests.nvidia.com/gpu-h100"] == "gpu_h100"
+        assert reverse["requests.nvidia.com/gpu-h200"] == "gpu_h200"
+
+    @patch("waldur_site_agent_rancher.backend.RancherClient")
+    def test_filter_quota_components_multi_gpu(
+        self, mock_rancher_client, rancher_settings, gpu_components
+    ):
+        """Test that multiple GPU types pass quota filtering."""
+        backend = RancherBackend(rancher_settings, gpu_components)
+
+        limits = {"cpu": 4, "memory": 8, "gpu_h100": 2, "gpu_h200": 4}
+        filtered = backend._filter_quota_components(limits)
+
+        assert "cpu" in filtered
+        assert "memory" in filtered
+        assert "gpu_h100" in filtered
+        assert "gpu_h200" in filtered
+        assert filtered["gpu_h100"] == 2
+        assert filtered["gpu_h200"] == 4
+
+    @patch("waldur_site_agent_rancher.backend.RancherClient")
+    def test_set_resource_limits_multi_gpu(
+        self, mock_rancher_client, rancher_settings, gpu_components
+    ):
+        """Test that set_resource_limits passes K8s mapping to client."""
+        mock_client = MagicMock()
+        mock_client.get_project_namespaces.return_value = ["test-namespace"]
+        mock_client.set_namespace_custom_resource_quotas.return_value = None
+        mock_rancher_client.return_value = mock_client
+
+        backend = RancherBackend(rancher_settings, gpu_components)
+
+        limits = {"cpu": 4, "memory": 8, "gpu_h100": 2, "gpu_h200": 4}
+        backend.set_resource_limits("project-123", limits)
+
+        mock_client.set_namespace_custom_resource_quotas.assert_called_once()
+        call_kwargs = mock_client.set_namespace_custom_resource_quotas.call_args
+        # Verify the mapping was passed
+        k8s_mapping = call_kwargs[1]["component_k8s_mapping"]
+        assert k8s_mapping["gpu_h100"] == "requests.nvidia.com/gpu-h100"
+        assert k8s_mapping["gpu_h200"] == "requests.nvidia.com/gpu-h200"
+
+    @patch("waldur_site_agent_rancher.backend.RancherClient")
+    def test_get_usage_report_multi_gpu(
+        self, mock_rancher_client, rancher_settings, gpu_components
+    ):
+        """Test usage report with multiple GPU types."""
+        mock_client = MagicMock()
+        mock_client.get_project_namespaces.return_value = ["waldur-test-ns"]
+        mock_client.get_namespace_quota_usage.return_value = {
+            "cpu": 2.5,
+            "memory": 4.0,
+            "gpu_h100": 1.0,
+            "gpu_h200": 3.0,
+        }
+        mock_rancher_client.return_value = mock_client
+
+        backend = RancherBackend(rancher_settings, gpu_components)
+
+        report = backend._get_usage_report(["project-123"])
+
+        # Verify reverse mapping was passed
+        mock_client.get_namespace_quota_usage.assert_called_once()
+        call_kwargs = mock_client.get_namespace_quota_usage.call_args
+        reverse_mapping = call_kwargs[1]["reverse_k8s_mapping"]
+        assert reverse_mapping["requests.nvidia.com/gpu-h100"] == "gpu_h100"
+        assert reverse_mapping["requests.nvidia.com/gpu-h200"] == "gpu_h200"
+
+        # Verify usage report
+        usage = report["project-123"]["TOTAL_ACCOUNT_USAGE"]
+        assert usage["gpu_h100"] == 1.0
+        assert usage["gpu_h200"] == 3.0
+        assert usage["cpu"] == 2.5

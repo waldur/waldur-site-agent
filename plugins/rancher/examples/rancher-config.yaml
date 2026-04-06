@@ -37,6 +37,14 @@ offerings:
         keycloak_password: "your-keycloak-admin-password"
         keycloak_ssl_verify: true
 
+      # Extra labels applied to every namespace created by this offering.
+      # Use this for GPU pool steering: a Kyverno policy on the cluster reads
+      # the gpu-pool label and injects a matching nodeSelector into pods,
+      # so GPU workloads land on the correct node pool.
+      # See GPU Scheduling section in the plugin README for required policies.
+      # namespace_labels:
+      #   gpu-pool: "h100-2x"
+
     # Component definitions for resource management
     components:
       cpu:
@@ -56,3 +64,23 @@ offerings:
         name: "Storage"
         measured_unit: "GB"
         billing_type: "limit"
+
+      # GPU component (optional).
+      # Uses the generic nvidia.com/gpu K8s resource for ResourceQuota.
+      # GPU pool steering (which GPU type) is handled via namespace_labels
+      # + Kyverno policy, not via separate K8s resource names.
+      # gpu:
+      #   type: "gpu"
+      #   name: "GPU"
+      #   measured_unit: "units"
+      #   billing_type: "limit"
+
+      # Custom K8s resource mapping (advanced, optional).
+      # Components can specify a k8s_resource field to map to a non-default
+      # K8s extended resource name in ResourceQuota:
+      # custom_resource:
+      #   type: "gpu"
+      #   name: "Custom Resource"
+      #   measured_unit: "units"
+      #   billing_type: "limit"
+      #   k8s_resource: "example.com/custom"   # maps to requests.example.com/custom
