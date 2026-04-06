@@ -485,7 +485,7 @@ class TestClusterFiltering:
         assert "--cluster=" not in client_without_cluster.executed_commands[0]
 
 
-# ---- Emulator integration tests (require slurm-emulator >= 0.2.0) ----
+# ---- Emulator integration tests (require slurm-emulator >= 0.3.0) ----
 
 try:
     from emulator.commands.sacctmgr import SacctmgrEmulator
@@ -613,3 +613,38 @@ class TestClusterFilteringWithEmulator:
         backend = SlurmBackend(settings, components)
         with patch.object(backend.client, "execute_command", side_effect=route):
             assert backend.diagnostics() is False
+
+    def test_create_qos_with_flags(self, emulator_env):
+        """create_qos with flags must pass 'set' and 'flags=...' as separate args.
+
+        Regression test for WAL-9816: the flags argument was passed as a single
+        string "set flags=DenyOnLimit,NoDecay" instead of two separate elements
+        ["set", "flags=DenyOnLimit,NoDecay"], causing sacctmgr to reject it with
+        "Unknown option".
+        """
+        db, route = emulator_env
+        client = SlurmClient({"cpu": "CPU"}, slurm_bin_path="")
+        with patch.object(client, "execute_command", side_effect=route):
+            client.create_qos("test_qos", flags="DenyOnLimit,NoDecay")
+
+        # Verify QOS was actually created in the emulator database
+        assert "test_qos" in db.qos_list
+        assert db.qos_list["test_qos"].flags == "DenyOnLimit,NoDecay"
+
+    def test_create_qos_with_flags_and_modify(self, emulator_env):
+        """create_qos with flags and additional settings works end-to-end."""
+        db, route = emulator_env
+        client = SlurmClient({"cpu": "CPU"}, slurm_bin_path="")
+        with patch.object(client, "execute_command", side_effect=route):
+            client.create_qos(
+                "full_qos",
+                flags="DenyOnLimit,NoDecay",
+                grp_tres="cpu=100",
+                max_jobs=50,
+            )
+
+        assert "full_qos" in db.qos_list
+        qos = db.qos_list["full_qos"]
+        assert qos.flags == "DenyOnLimit,NoDecay"
+        assert qos.grp_tres == "cpu=100"
+        assert qos.max_jobs == 50
