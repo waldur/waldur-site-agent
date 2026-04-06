@@ -408,6 +408,29 @@ class TestRancherClient:
         assert "resourceQuota" not in posted_data
 
     @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    def test_create_namespace_with_extra_labels(self, mock_session, rancher_settings):
+        """Test namespace creation with extra labels (e.g. gpu-pool)."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"id": "namespace-123", "name": "gpu-namespace"}
+
+        mock_session_instance = MagicMock()
+        mock_session_instance.post.return_value = mock_response
+        mock_session.return_value = mock_session_instance
+
+        client = RancherClient(rancher_settings)
+        client.create_namespace(
+            "c-m-test:p-test", "gpu-namespace", extra_labels={"gpu-pool": "h100-2x"}
+        )
+
+        call_args = mock_session_instance.post.call_args
+        posted_data = call_args[1]["json"]
+
+        # Default labels preserved
+        assert posted_data["labels"]["pod-security.kubernetes.io/enforce"] == "restricted"
+        # Extra label added
+        assert posted_data["labels"]["gpu-pool"] == "h100-2x"
+
+    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
     def test_create_namespace_failure(self, mock_session, rancher_settings):
         """Test namespace creation failure handling."""
         mock_session_instance = MagicMock()
@@ -418,3 +441,106 @@ class TestRancherClient:
 
         with pytest.raises(BackendError):
             client.create_namespace("c-m-test:p-test", "test-namespace")
+
+    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    def test_set_namespace_custom_resource_quotas_multi_gpu(self, mock_session, rancher_settings):
+        """Test setting namespace quotas with multiple GPU types via component_k8s_mapping."""
+        mock_post_response = MagicMock()
+        mock_post_response.json.return_value = {"status": "success"}
+
+        mock_login_response = MagicMock()
+        mock_login_response.json.return_value = {}
+
+        mock_session_instance = MagicMock()
+        mock_session_instance.post.return_value = mock_login_response
+        mock_session.return_value = mock_session_instance
+
+        client = RancherClient(rancher_settings)
+        mock_session_instance.post.return_value = mock_post_response
+
+        limits = {"cpu": 4, "memory": 8, "gpu_h100": 2, "gpu_h200": 4}
+        mapping = {
+            "cpu": "limits.cpu",
+            "memory": "limits.memory",
+            "gpu_h100": "requests.nvidia.com/gpu-h100",
+            "gpu_h200": "requests.nvidia.com/gpu-h200",
+        }
+        client.set_namespace_custom_resource_quotas(
+            "test-namespace", limits, component_k8s_mapping=mapping
+        )
+
+        # Check the importYaml call
+        post_calls = list(mock_session_instance.post.call_args_list)
+        import_yaml_call = post_calls[-1]
+        payload = import_yaml_call[1]["json"]
+
+        yaml_content = payload["yaml"]
+        assert "4000m" in yaml_content  # CPU in millicores
+        assert "8192Mi" in yaml_content  # Memory in Mi
+        assert "nvidia.com/gpu-h100" in yaml_content
+        assert "nvidia.com/gpu-h200" in yaml_content
+        # GPU values are plain integers
+        assert "'2'" in yaml_content or ": '2'" in yaml_content or "\"2\"" in yaml_content
+        assert "'4'" in yaml_content or ": '4'" in yaml_content or "\"4\"" in yaml_content
+
+    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    def test_get_namespace_quota_usage_multi_gpu(self, mock_session, rancher_settings):
+        """Test getting usage with multiple GPU types via reverse_k8s_mapping."""
+        mock_quota_response = MagicMock()
+        mock_quota_response.json.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "custom-resource-quota"},
+                    "status": {
+                        "used": {
+                            "limits.cpu": "5",
+                            "limits.memory": "3Gi",
+                            "requests.nvidia.com/gpu-h100": "2",
+                            "requests.nvidia.com/gpu-h200": "4",
+                        },
+                    },
+                },
+            ]
+        }
+
+        mock_login_response = MagicMock()
+        mock_login_response.json.return_value = {}
+
+        mock_session_instance = MagicMock()
+        mock_session_instance.get.return_value = mock_quota_response
+        mock_session_instance.post.return_value = mock_login_response
+        mock_session.return_value = mock_session_instance
+
+        client = RancherClient(rancher_settings)
+        reverse_mapping = {
+            "limits.cpu": "cpu",
+            "limits.memory": "memory",
+            "requests.nvidia.com/gpu-h100": "gpu_h100",
+            "requests.nvidia.com/gpu-h200": "gpu_h200",
+        }
+        usage = client.get_namespace_quota_usage(
+            "waldur-test-ns", reverse_k8s_mapping=reverse_mapping
+        )
+
+        assert usage["cpu"] == 5.0
+        assert usage["memory"] == 3.0
+        assert usage["gpu_h100"] == 2.0
+        assert usage["gpu_h200"] == 4.0
+
+    def test_format_k8s_quota_value(self):
+        """Test formatting Waldur limit values for K8s ResourceQuota."""
+        assert RancherClient._format_k8s_quota_value("limits.cpu", 4) == "4000m"
+        assert RancherClient._format_k8s_quota_value("limits.memory", 8) == "8192Mi"
+        assert RancherClient._format_k8s_quota_value("requests.storage", 100) == "102400Mi"
+        assert RancherClient._format_k8s_quota_value("requests.nvidia.com/gpu", 2) == "2"
+        assert RancherClient._format_k8s_quota_value("requests.nvidia.com/gpu-h100", 4) == "4"
+
+    def test_parse_k8s_quota_value(self):
+        """Test parsing K8s ResourceQuota status.used values."""
+        assert RancherClient._parse_k8s_quota_value("limits.cpu", "5000m") == 5.0
+        assert RancherClient._parse_k8s_quota_value("limits.cpu", "5") == 5.0
+        assert RancherClient._parse_k8s_quota_value("limits.memory", "3Gi") == 3.0
+        assert RancherClient._parse_k8s_quota_value("limits.memory", "3072Mi") == 3.0
+        assert RancherClient._parse_k8s_quota_value("requests.storage", "10Gi") == 10.0
+        assert RancherClient._parse_k8s_quota_value("requests.nvidia.com/gpu", "2") == 2.0
+        assert RancherClient._parse_k8s_quota_value("requests.nvidia.com/gpu-h100", "4") == 4.0

@@ -5,7 +5,7 @@ from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_site_agent_keycloak_client import KeycloakClient
-from waldur_site_agent_rancher.rancher_client import RancherClient
+from waldur_site_agent_rancher.rancher_client import DEFAULT_K8S_RESOURCE_MAP, RancherClient
 
 from waldur_site_agent.backend import backends, logger
 from waldur_site_agent.backend.exceptions import BackendError
@@ -43,6 +43,7 @@ class RancherBackend(backends.BaseBackend):
         self.keycloak_use_user_id = rancher_settings.get(
             "keycloak_use_user_id", True
         )  # Default: lookup by ID
+        self.namespace_labels: dict[str, str] = rancher_settings.get("namespace_labels", {})
 
         logger.info("Initialized Rancher backend with cluster ID: %s", self.cluster_id)
 
@@ -386,9 +387,14 @@ class RancherBackend(backends.BaseBackend):
             try:
                 # Create a namespace
                 logger.info("Using quota components %s", quota_components.keys())
-                self.client.create_namespace(project_id, project_name)
+                self.client.create_namespace(
+                    project_id, project_name, extra_labels=self.namespace_labels or None
+                )
                 # Setup namespace resource quotas
-                self.client.set_namespace_custom_resource_quotas(project_name, quota_components)
+                k8s_mapping = self._build_k8s_resource_mapping()
+                self.client.set_namespace_custom_resource_quotas(
+                    project_name, quota_components, component_k8s_mapping=k8s_mapping
+                )
             except Exception as e:
                 logger.warning("Failed to set project quotas: %s", e)
 
@@ -437,6 +443,30 @@ class RancherBackend(backends.BaseBackend):
         """Collect current and requested resource limits."""
         return {}, waldur_resource.limits.to_dict()
 
+    def _build_k8s_resource_mapping(self) -> dict[str, str]:
+        """Build component_key → K8s resource name mapping from backend_components.
+
+        For components with an explicit ``k8s_resource`` config field, uses
+        ``requests.<k8s_resource>`` as the K8s resource name.
+        For built-in types (cpu, ram, storage, gpu), falls back to well-known
+        defaults from :data:`DEFAULT_K8S_RESOURCE_MAP`.
+        """
+        mapping: dict[str, str] = {}
+        for component_key, config in self.backend_components.items():
+            custom = config.get("k8s_resource")
+            if custom:
+                mapping[component_key] = f"requests.{custom}"
+            else:
+                component_type = config.get("type", "")
+                default = DEFAULT_K8S_RESOURCE_MAP.get(component_type)
+                if default:
+                    mapping[component_key] = default
+        return mapping
+
+    def _build_reverse_k8s_resource_mapping(self) -> dict[str, str]:
+        """Build K8s resource name → component_key mapping (inverse of forward mapping)."""
+        return {v: k for k, v in self._build_k8s_resource_mapping().items()}
+
     def _filter_quota_components(self, limits: dict[str, int]) -> dict[str, int]:
         """Filter to only include components that should be set as Rancher project quotas."""
         quota_components = {}
@@ -468,7 +498,10 @@ class RancherBackend(backends.BaseBackend):
             namespaces = self.client.get_project_namespaces(resource_backend_id)
             if len(namespaces) > 0 and namespaces[0]:
                 namespace = namespaces[0]
-                self.client.set_namespace_custom_resource_quotas(namespace, limits)
+                k8s_mapping = self._build_k8s_resource_mapping()
+                self.client.set_namespace_custom_resource_quotas(
+                    namespace, limits, component_k8s_mapping=k8s_mapping
+                )
         except Exception as e:
             logger.error(f"Failed to set limits for {resource_backend_id}: {e}")
             raise BackendError(f"Failed to set limits: {e}") from e
@@ -480,13 +513,16 @@ class RancherBackend(backends.BaseBackend):
         in each project namespace.
         """
         usage_report = {}
+        reverse_mapping = self._build_reverse_k8s_resource_mapping()
 
         for resource_id in resource_backend_ids:
             try:
                 namespaces = self.client.get_project_namespaces(resource_id)
                 aggregated: dict[str, float] = {}
                 for namespace in namespaces:
-                    ns_usage = self.rancher_client.get_namespace_quota_usage(namespace)
+                    ns_usage = self.rancher_client.get_namespace_quota_usage(
+                        namespace, reverse_k8s_mapping=reverse_mapping
+                    )
                     for key, value in ns_usage.items():
                         aggregated[key] = aggregated.get(key, 0) + value
 

@@ -12,6 +12,15 @@ from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import ClientResource
 
+# Default K8s resource mappings by component type.
+# Used as fallback when components don't specify a custom k8s_resource.
+DEFAULT_K8S_RESOURCE_MAP = {
+    "cpu": "limits.cpu",
+    "ram": "limits.memory",
+    "storage": "requests.storage",
+    "gpu": "requests.nvidia.com/gpu",
+}
+
 
 class SSLAdapter(HTTPAdapter):
     """HTTPAdapter with custom SSL configuration."""
@@ -215,16 +224,23 @@ class RancherClient(BaseClient):
             logger.error(f"Failed to delete project {project_id}: {e}")
             raise BackendError(f"Failed to delete project {project_id}: {e}") from e
 
-    def create_namespace(self, project_id: str, namespace: str) -> None:
-        """Create a namespace in a Rancher project with optional resource quotas.
+    def create_namespace(
+        self,
+        project_id: str,
+        namespace: str,
+        extra_labels: Optional[dict[str, str]] = None,
+    ) -> None:
+        """Create a namespace in a Rancher project.
 
         Args:
-            project_id: The ID of the project to create the namespace in
-            namespace: The name of the namespace to create
-            quotas: Optional dictionary of resource quotas (e.g., {"cpu": 4.0, "memory": 8.0})
+            project_id: The ID of the project to create the namespace in.
+            namespace: The name of the namespace to create.
+            extra_labels: Optional additional labels to set on the namespace
+                (e.g. ``{"gpu-pool": "h100-2x"}``).  Merged with the
+                default labels; extra labels take precedence on conflicts.
 
         Raises:
-            BackendError: If namespace creation fails
+            BackendError: If namespace creation fails.
         """
         try:
             logger.info("Creating namespace '%s' in project %s", namespace, project_id)
@@ -232,14 +248,18 @@ class RancherClient(BaseClient):
             # Extract cluster ID from project ID (format: "c-xxx:p-yyy")
             cluster_id = project_id.split(":")[0] if ":" in project_id else self.cluster_id
 
+            labels = {
+                "pod-security.kubernetes.io/enforce": "restricted",
+                "pod-security.kubernetes.io/enforce-version": "latest",
+            }
+            if extra_labels:
+                labels.update(extra_labels)
+
             namespace_data = {
                 "type": "namespace",
                 "name": namespace,
                 "projectId": project_id,
-                "labels": {
-                    "pod-security.kubernetes.io/enforce": "restricted",
-                    "pod-security.kubernetes.io/enforce-version": "latest",
-                },
+                "labels": labels,
                 "annotations": {
                     "waldur/managed": "true",
                 },
@@ -314,11 +334,21 @@ class RancherClient(BaseClient):
             logger.debug(f"No quotas found for project {project_id}: {e}")
             return {}
 
-    def get_namespace_quota_usage(self, namespace: str) -> dict[str, float]:
+    def get_namespace_quota_usage(
+        self,
+        namespace: str,
+        reverse_k8s_mapping: Optional[dict[str, str]] = None,
+    ) -> dict[str, float]:
         """Get used resources from ResourceQuotas in a namespace.
 
         Lists all ResourceQuota objects in the namespace via the Rancher
         k8s proxy and merges their ``status.used`` fields.
+
+        Args:
+            namespace: The namespace to query.
+            reverse_k8s_mapping: Optional mapping of K8s resource names to
+                component keys (e.g. ``{"requests.nvidia.com/gpu-h100": "gpu_h100"}``).
+                When provided, uses this mapping instead of the hardcoded defaults.
         """
         url = (
             f"{self.backend_url}/k8s/clusters/{self.cluster_id}"
@@ -340,6 +370,16 @@ class RancherClient(BaseClient):
 
         usage: dict[str, float] = {}
 
+        if reverse_k8s_mapping:
+            # Use the provided mapping to extract and parse values
+            for k8s_resource, component_key in reverse_k8s_mapping.items():
+                if k8s_resource in used:
+                    usage[component_key] = self._parse_k8s_quota_value(
+                        k8s_resource, used[k8s_resource]
+                    )
+            return usage
+
+        # Fallback: hardcoded parsing for backward compatibility
         # Parse CPU (e.g., "5", "5000m")
         if "limits.cpu" in used:
             cpu_str = used["limits.cpu"]
@@ -489,13 +529,57 @@ class RancherClient(BaseClient):
         # For now, return empty list - the backend will override this
         return []
 
+    @staticmethod
+    def _format_k8s_quota_value(k8s_resource: str, value: float) -> str:
+        """Format a Waldur limit value for a K8s ResourceQuota hard spec."""
+        if k8s_resource == "limits.cpu":
+            return f"{int(value * 1000)}m"
+        if k8s_resource == "limits.memory":
+            return f"{int(value * 1024)}Mi"
+        if k8s_resource == "requests.storage":
+            return f"{int(value) * 1024}Mi"
+        # GPU and other extended resources are plain integers
+        return str(int(value))
+
+    @staticmethod
+    def _parse_memory_value(raw: str) -> float:
+        """Parse a K8s memory/storage value (e.g. '3Gi', '3072Mi') to GB."""
+        if raw.endswith("Gi"):
+            return float(raw[:-2])
+        if raw.endswith("Mi"):
+            return float(raw[:-2]) / 1024
+        if raw.endswith("Ki"):
+            return float(raw[:-2]) / (1024 * 1024)
+        return float(raw)
+
+    @staticmethod
+    def _parse_k8s_quota_value(k8s_resource: str, raw: str) -> float:
+        """Parse a K8s ResourceQuota status.used value to a Waldur-style float."""
+        if k8s_resource == "limits.cpu":
+            return float(raw[:-1]) / 1000 if raw.endswith("m") else float(raw)
+        if k8s_resource == "limits.memory":
+            return RancherClient._parse_memory_value(raw)
+        if k8s_resource == "requests.storage":
+            return RancherClient._parse_memory_value(raw)
+        return float(raw)
+
     def set_namespace_custom_resource_quotas(
-        self, namespace: str, waldur_limits: dict[str, int]
+        self,
+        namespace: str,
+        waldur_limits: dict[str, int],
+        component_k8s_mapping: Optional[dict[str, str]] = None,
     ) -> None:
         """Set resource quotas for a specific namespace.
 
-        The method excepts a quota dictionary with the Waldur resource limits
+        The method accepts a quota dictionary with the Waldur resource limits
         and applies it as resource quotas to the given namespace within the cluster.
+
+        Args:
+            namespace: The namespace to apply quotas to.
+            waldur_limits: Dict mapping component keys to limit values.
+            component_k8s_mapping: Optional mapping of component keys to K8s resource
+                names (e.g. ``{"gpu_h100": "requests.nvidia.com/gpu-h100"}``).
+                When provided, uses this mapping instead of the hardcoded defaults.
         """
         logger.info(
             "Setting resource quota for namespace '%s' in cluster %s: %s",
@@ -507,20 +591,19 @@ class RancherClient(BaseClient):
         url = f"/clusters/{self.cluster_id}?action=importYaml"
         hard_quotas = {}
 
-        # Map component quotas to Rancher format
+        # Map component quotas to K8s format
         for component, value in waldur_limits.items():
-            if component == "cpu":
-                # Convert to millicores (e.g., 4 cores -> "4000m")
+            if component_k8s_mapping and component in component_k8s_mapping:
+                k8s_key = component_k8s_mapping[component]
+                hard_quotas[k8s_key] = self._format_k8s_quota_value(k8s_key, value)
+            elif component == "cpu":
                 hard_quotas["limits.cpu"] = f"{int(value * 1000)}m"
             elif component == "memory":
-                # Convert to Mi (e.g., 8 GB -> "8192Mi")
                 hard_quotas["limits.memory"] = f"{int(value * 1024)}Mi"
             elif component == "storage":
-                # Convert to Gi (e.g., 100 GB -> "100Gi")
                 hard_quotas["requests.storage"] = f"{int(value) * 1024}Mi"
             elif component == "gpu":
                 # K8s requires requests == limits for GPU; using requests is sufficient.
-                # See get_namespace_quota_usage() for the corresponding read side.
                 hard_quotas["requests.nvidia.com/gpu"] = str(int(value))
 
         if not hard_quotas:
