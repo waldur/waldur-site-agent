@@ -12,9 +12,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "requests==2.32.3",
+    "requests>=2.32.3",
     "pyyaml==6.0.1",
-    "sentry-sdk==2.3.1",
+    "sentry-sdk==2.8.0",
     "elastic-apm>=6.0.0,<7",
 
     "stomp-py>=8.2.0,<9",
@@ -42,9 +42,9 @@ waldur_site_load_historical_usage = "waldur_site_agent.common.historical_usage_l
 [dependency-groups]
 dev = [
     "freezegun==0.3.4",
-    "coverage==6.3.2",
-    "pytest==7.1.2",
-    "pytest-cov==3.0.0",
+    "coverage>=7.5.0",
+    "pytest==8.3.5",
+    "pytest-cov==6.1.1",
     "respx>=0.22.0,<0.23",
     "httpx>=0.28.1,<0.29",
     "ruff>=0.12.1,<0.13",

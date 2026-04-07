@@ -1,0 +1,24 @@
+[[IgnoredVulns]]
+id = "GHSA-2xpw-w6gg-jr37"
+reason = "urllib3 v1→v2 is a breaking change. Requires migration effort. requests 2.32.x pins urllib3<2."
+ignoreUntil = 2026-07-07T00:00:00Z
+
+[[IgnoredVulns]]
+id = "GHSA-38jv-5279-wg99"
+reason = "urllib3 v1→v2 is a breaking change. Requires migration effort. requests 2.32.x pins urllib3<2."
+ignoreUntil = 2026-07-07T00:00:00Z
+
+[[IgnoredVulns]]
+id = "GHSA-gm62-xv2j-4w53"
+reason = "urllib3 v1→v2 is a breaking change. Requires migration effort. requests 2.32.x pins urllib3<2."
+ignoreUntil = 2026-07-07T00:00:00Z
+
+[[IgnoredVulns]]
+id = "GHSA-pq67-6m6q-mj2v"
+reason = "urllib3 v1→v2 is a breaking change. Requires migration effort. requests 2.32.x pins urllib3<2."
+ignoreUntil = 2026-07-07T00:00:00Z
+
+[[IgnoredVulns]]
+id = "GHSA-gc5v-m9x4-r6x2"
+reason = "requests 2.33.0 requires urllib3>=2, which is a breaking change for this project."
+ignoreUntil = 2026-07-07T00:00:00Z
