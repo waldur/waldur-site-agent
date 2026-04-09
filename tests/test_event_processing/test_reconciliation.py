@@ -1,4 +1,4 @@
-"""Tests for periodic username reconciliation and event processing main loop."""
+"""Tests for periodic username/order reconciliation and event processing main loop."""
 
 import unittest
 from unittest import mock
@@ -172,6 +172,150 @@ class TestRunPeriodicUsernameReconciliation(unittest.TestCase):
         mock_get_backend.assert_called_with(enabled, "membership_sync_backend")
 
 
+class TestRunPeriodicOrderReconciliation(unittest.TestCase):
+    """Tests for run_periodic_order_reconciliation function."""
+
+    def test_skips_offering_without_order_processing_backend(self):
+        """Offerings without order_processing_backend are skipped entirely."""
+        offering = _make_offering(
+            stomp_enabled=True,
+        )
+        with mock.patch(
+            "waldur_site_agent.event_processing.utils.get_client"
+        ) as mock_get_client:
+            utils.run_periodic_order_reconciliation([offering], "agent")
+            mock_get_client.assert_not_called()
+
+    @mock.patch(
+        "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
+    )
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_orders_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    def test_processes_stuck_orders(
+        self, mock_get_client, mock_orders_list, mock_processor_cls
+    ):
+        """Reconciliation fetches stuck orders and processes each one."""
+        offering = _make_offering(
+            order_processing_backend="slurm",
+        )
+        stuck_order = mock.Mock()
+        mock_orders_list.sync_all.return_value = [stuck_order]
+        mock_processor = mock.Mock()
+        mock_processor_cls.return_value = mock_processor
+
+        utils.run_periodic_order_reconciliation([offering], "agent")
+
+        mock_get_client.assert_called_once()
+        # Verify modified_before cutoff is passed
+        call_kwargs = mock_orders_list.sync_all.call_args.kwargs
+        self.assertIn("modified_before", call_kwargs)
+        # Processor processes each stuck order individually
+        mock_processor.process_order_with_retries.assert_called_once_with(stuck_order)
+
+    @mock.patch(
+        "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
+    )
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_orders_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    def test_skips_when_no_stuck_orders(
+        self, mock_get_client, mock_orders_list, mock_processor_cls
+    ):
+        """No processing when there are no stuck orders."""
+        offering = _make_offering(
+            order_processing_backend="slurm",
+        )
+        mock_orders_list.sync_all.return_value = []
+
+        utils.run_periodic_order_reconciliation([offering], "agent")
+
+        mock_processor_cls.assert_not_called()
+
+    @mock.patch(
+        "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
+    )
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_orders_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    def test_exception_is_logged_and_does_not_propagate(
+        self, mock_get_client, mock_orders_list, mock_processor_cls
+    ):
+        """Backend exceptions are logged and don't crash the loop."""
+        offering = _make_offering(
+            order_processing_backend="slurm",
+        )
+        mock_orders_list.sync_all.side_effect = RuntimeError("backend down")
+
+        with mock.patch(
+            "waldur_site_agent.event_processing.utils.logger"
+        ) as mock_logger:
+            utils.run_periodic_order_reconciliation([offering], "agent")
+            mock_logger.exception.assert_called_with(
+                "Order reconciliation failed for offering %s", offering.name
+            )
+
+    @mock.patch(
+        "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
+    )
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_orders_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    def test_processes_multiple_offerings_independently(
+        self, mock_get_client, mock_orders_list, mock_processor_cls
+    ):
+        """Each qualifying offering is processed even if one fails."""
+        offering_a = _make_offering(
+            name="offering-a",
+            waldur_offering_uuid="uuid-a",
+            order_processing_backend="slurm",
+        )
+        offering_b = _make_offering(
+            name="offering-b",
+            waldur_offering_uuid="uuid-b",
+            order_processing_backend="slurm",
+        )
+
+        order_a = mock.Mock()
+        order_b = mock.Mock()
+        mock_orders_list.sync_all.side_effect = [[order_a], [order_b]]
+
+        mock_proc_a = mock.Mock()
+        mock_proc_a.process_order_with_retries.side_effect = RuntimeError("fail")
+        mock_proc_b = mock.Mock()
+        mock_processor_cls.side_effect = [mock_proc_a, mock_proc_b]
+
+        utils.run_periodic_order_reconciliation([offering_a, offering_b], "agent")
+
+        mock_proc_a.process_order_with_retries.assert_called_once_with(order_a)
+        mock_proc_b.process_order_with_retries.assert_called_once_with(order_b)
+
+    @mock.patch(
+        "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
+    )
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_orders_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    def test_mixed_offerings_only_processes_qualifying(
+        self, mock_get_client, mock_orders_list, mock_processor_cls
+    ):
+        """Only offerings with order_processing_backend are processed."""
+        with_backend = _make_offering(
+            name="with-backend",
+            order_processing_backend="slurm",
+        )
+        without_backend = _make_offering(
+            name="without-backend",
+        )
+
+        stuck_order = mock.Mock()
+        mock_orders_list.sync_all.return_value = [stuck_order]
+        mock_processor = mock.Mock()
+        mock_processor_cls.return_value = mock_processor
+
+        utils.run_periodic_order_reconciliation(
+            [with_backend, without_backend], "agent"
+        )
+
+        self.assertEqual(mock_processor_cls.call_count, 1)
+        mock_processor.process_order_with_retries.assert_called_once_with(stuck_order)
+
+
 class TestMainLoopTimers(unittest.TestCase):
     """Tests for the event processing main loop timer logic."""
 
@@ -195,9 +339,10 @@ class TestMainLoopTimers(unittest.TestCase):
         with self.assertRaises(BaseException):
             main.start(config)
 
-        # Both should have been called on the first tick (last_* starts at 0.0)
+        # All should have been called on the first tick (last_* starts at 0.0)
         mock_utils.send_agent_health_checks.assert_called()
         mock_utils.run_periodic_username_reconciliation.assert_called()
+        mock_utils.run_periodic_order_reconciliation.assert_called()
 
     @mock.patch("waldur_site_agent.event_processing.main.time")
     @mock.patch("waldur_site_agent.event_processing.main.utils")

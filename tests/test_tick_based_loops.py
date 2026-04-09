@@ -24,14 +24,14 @@ def _make_config(**overrides):
 
 
 class TestEventProcessHealthChecksOnly(unittest.TestCase):
-    """Tests for event_processing._run_health_checks_only tick loop."""
+    """Tests for event_processing._run_without_username_reconciliation tick loop."""
 
     @mock.patch("waldur_site_agent.event_processing.main.touch_heartbeat")
     @mock.patch("waldur_site_agent.event_processing.main.time")
     @mock.patch("waldur_site_agent.event_processing.main.utils")
     def test_heartbeat_touched_every_tick(self, mock_utils, mock_time, mock_touch):
         """touch_heartbeat is called on every tick, not just when health check runs."""
-        from waldur_site_agent.event_processing.main import _run_health_checks_only
+        from waldur_site_agent.event_processing.main import _run_without_username_reconciliation
 
         config = _make_config()
 
@@ -40,7 +40,7 @@ class TestEventProcessHealthChecksOnly(unittest.TestCase):
         mock_time.sleep.side_effect = [None, None, StopIteration("break")]
 
         with self.assertRaises(StopIteration):
-            _run_health_checks_only(config)
+            _run_without_username_reconciliation(config)
 
         # Heartbeat touched on every tick (3 times)
         self.assertEqual(mock_touch.call_count, 3)
@@ -54,7 +54,7 @@ class TestEventProcessHealthChecksOnly(unittest.TestCase):
         """Health check runs again after HEALTH_CHECK_INTERVAL elapses."""
         from waldur_site_agent.event_processing.main import (
             HEALTH_CHECK_INTERVAL,
-            _run_health_checks_only,
+            _run_without_username_reconciliation,
         )
 
         config = _make_config()
@@ -66,7 +66,7 @@ class TestEventProcessHealthChecksOnly(unittest.TestCase):
         mock_time.sleep.side_effect = [None, StopIteration("break")]
 
         with self.assertRaises(StopIteration):
-            _run_health_checks_only(config)
+            _run_without_username_reconciliation(config)
 
         self.assertEqual(mock_utils.send_agent_health_checks.call_count, 2)
 
@@ -75,14 +75,14 @@ class TestEventProcessHealthChecksOnly(unittest.TestCase):
     @mock.patch("waldur_site_agent.event_processing.main.utils")
     def test_sleeps_tick_interval(self, mock_utils, mock_time, mock_touch):
         """Loop sleeps for TICK_INTERVAL (60s), not HEALTH_CHECK_INTERVAL."""
-        from waldur_site_agent.event_processing.main import TICK_INTERVAL, _run_health_checks_only
+        from waldur_site_agent.event_processing.main import TICK_INTERVAL, _run_without_username_reconciliation
 
         config = _make_config()
         mock_time.time.return_value = 5000.0
         mock_time.sleep.side_effect = StopIteration("break")
 
         with self.assertRaises(StopIteration):
-            _run_health_checks_only(config)
+            _run_without_username_reconciliation(config)
 
         mock_time.sleep.assert_called_once_with(TICK_INTERVAL)
 

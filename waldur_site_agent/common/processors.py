@@ -1195,46 +1195,44 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     waldur_resource.backend_id,
                 )
 
+        if not create_resource:
+            # Resource already exists on backend — complete the order.
+            # post_create_resource is NOT called here because the resource
+            # was fully set up during its original creation. Calling it again
+            # would be redundant for idempotent plugins (SLURM home dirs) and
+            # dangerous for non-idempotent ones (MUP allocations, OpenNebula
+            # users). Membership sync will handle any user association gaps.
+            return True
+
         # Fetch user context for resource creation
         user_context = self._fetch_user_context_for_resource(order.marketplace_resource_uuid.hex)
 
-        backend_resource_info = None
-        if create_resource:
-            backend_resource_info = self._create_resource(
-                waldur_resource, user_context
-            )
-            if backend_resource_info is None:
-                msg = f"Unable to create the resource {waldur_resource.name}"
-                raise backend_exceptions.BackendError(msg)
-
-            # Handle async creation: set order backend_id and stay EXECUTING.
-            # Only used by backends with supports_async_orders enabled.
-            if (
-                backend_resource_info.pending_order_id
-                and self.resource_backend.supports_async_orders
-            ):
-                logger.info(
-                    "Async order created: setting order %s backend_id to %s",
-                    order.uuid,
-                    backend_resource_info.pending_order_id,
-                )
-                marketplace_orders_set_backend_id.sync(
-                    client=self.waldur_rest_client,
-                    uuid=order.uuid,
-                    body=OrderBackendIDRequest(
-                        backend_id=backend_resource_info.pending_order_id
-                    ),
-                )
-                return False  # Order stays EXECUTING
-
+        backend_resource_info = self._create_resource(
+            waldur_resource, user_context
+        )
         if backend_resource_info is None:
-            logger.warning(
-                "Order %s: backend_resource_info is None "
-                "(create_resource=%s), returning False",
+            msg = f"Unable to create the resource {waldur_resource.name}"
+            raise backend_exceptions.BackendError(msg)
+
+        # Handle async creation: set order backend_id and stay EXECUTING.
+        # Only used by backends with supports_async_orders enabled.
+        if (
+            backend_resource_info.pending_order_id
+            and self.resource_backend.supports_async_orders
+        ):
+            logger.info(
+                "Async order created: setting order %s backend_id to %s",
                 order.uuid,
-                create_resource,
+                backend_resource_info.pending_order_id,
             )
-            return False
+            marketplace_orders_set_backend_id.sync(
+                client=self.waldur_rest_client,
+                uuid=order.uuid,
+                body=OrderBackendIDRequest(
+                    backend_id=backend_resource_info.pending_order_id
+                ),
+            )
+            return False  # Order stays EXECUTING
 
         waldur_resource.backend_id = backend_resource_info.backend_id
 

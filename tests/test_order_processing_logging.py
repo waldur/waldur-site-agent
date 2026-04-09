@@ -360,7 +360,7 @@ class TestOrderProcessingLogging:
         assert _log_contains(caplog, "skipping set_state_done")
         mock_set_done.sync_detailed.assert_not_called()
 
-    def test_logs_warning_when_order_is_done_false(
+    def test_existing_resource_completes_order(
         self,
         _mock_course_accounts,
         _mock_service_accounts,
@@ -379,7 +379,7 @@ class TestOrderProcessingLogging:
         mock_resource,
         caplog,
     ):
-        """Warning is logged when _process_create_order returns False."""
+        """Order completes when resource already exists on backend."""
         # Approval returns 200
         mock_approve.sync_detailed.return_value = mock.Mock(
             status_code=HTTPStatus.OK
@@ -405,12 +405,11 @@ class TestOrderProcessingLogging:
 
         processor = _make_processor(mock_resource_backend)
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             processor.process_order(mock_order)
 
-        assert _log_contains(caplog, "order_is_done=False")
-        assert _log_contains(caplog, "processing was not finished")
-        mock_set_done.sync_detailed.assert_not_called()
+        assert _log_contains(caplog, "already created, skipping creation")
+        assert _log_contains(caplog, "order_is_done=True")
 
     def test_logs_set_state_erred_failure(
         self,
@@ -509,7 +508,7 @@ class TestOrderProcessingLogging:
         assert _log_contains(caplog, "current state")
         assert _log_contains(caplog, "executing")
 
-    def test_logs_backend_resource_info_none_with_reason(
+    def test_existing_resource_skips_creation_and_marks_done(
         self,
         _mock_course_accounts,
         _mock_service_accounts,
@@ -528,7 +527,7 @@ class TestOrderProcessingLogging:
         mock_resource,
         caplog,
     ):
-        """Log includes create_resource flag when backend_resource_info is None."""
+        """When resource exists on backend, creation is skipped and order completes."""
         # Approval returns 200
         mock_approve.sync_detailed.return_value = mock.Mock(
             status_code=HTTPStatus.OK
@@ -546,7 +545,6 @@ class TestOrderProcessingLogging:
         mock_retrieve.sync.return_value = executing_order
 
         # Resource already has backend_id and exists in backend
-        # -> create_resource=False -> backend_resource_info stays None
         mock_resource.backend_id = "existing-id"
         mock_res_retrieve.sync.return_value = mock_resource
         mock_resource_backend.pull_resource.return_value = BackendResourceInfo(
@@ -555,8 +553,11 @@ class TestOrderProcessingLogging:
 
         processor = _make_processor(mock_resource_backend)
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             processor.process_order(mock_order)
 
-        assert _log_contains(caplog, "backend_resource_info is None")
-        assert _log_contains(caplog, "create_resource=False")
+        # Resource creation should NOT have been called
+        mock_resource_backend.create_resource.assert_not_called()
+        # Order should be marked as done
+        assert _log_contains(caplog, "already created, skipping creation")
+        mock_set_done.sync_detailed.assert_called_once()

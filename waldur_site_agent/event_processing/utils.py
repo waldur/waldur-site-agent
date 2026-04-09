@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import signal
 import sys
 import types
@@ -11,6 +12,7 @@ from contextlib import contextmanager
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_orders import marketplace_orders_list
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
+from waldur_api_client.models.order_state import OrderState
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import agent_identity_management
@@ -409,6 +411,66 @@ def run_periodic_username_reconciliation(
         except Exception:
             logger.exception(
                 "Reconciliation failed for offering %s", offering.name
+            )
+
+
+def run_periodic_order_reconciliation(
+    waldur_offerings: list[common_structures.Offering],
+    user_agent: str = "",
+    stuck_threshold_minutes: int = 30,
+) -> None:
+    """Re-process orders stuck in EXECUTING or PENDING_PROVIDER.
+
+    Only picks up orders whose ``modified`` timestamp is older than
+    ``stuck_threshold_minutes`` (default 30). This avoids interfering
+    with orders that are being actively processed by STOMP handlers.
+
+    Only runs for offerings that have order_processing_backend configured.
+    """
+    cutoff = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(
+        minutes=stuck_threshold_minutes
+    )
+
+    for offering in waldur_offerings:
+        if not offering.order_processing_backend:
+            continue
+        try:
+            waldur_rest_client = get_client(
+                offering.api_url,
+                offering.api_token,
+                user_agent,
+                verify_ssl=offering.verify_ssl,
+            )
+
+            stuck_orders = marketplace_orders_list.sync_all(
+                client=waldur_rest_client,
+                offering_uuid=offering.waldur_offering_uuid,
+                state=[OrderState.PENDING_PROVIDER, OrderState.EXECUTING],
+                modified_before=cutoff,
+            )
+
+            if not stuck_orders:
+                continue
+
+            logger.info(
+                "Order reconciliation: found %d stuck order(s) for %s "
+                "(modified before %s)",
+                len(stuck_orders),
+                offering.name,
+                cutoff.isoformat(),
+            )
+
+            order_processor = common_processors.OfferingOrderProcessor(
+                offering, waldur_rest_client
+            )
+            for order in stuck_orders:
+                try:
+                    order_processor.process_order_with_retries(order)
+                except Exception as e:
+                    order_processor.log_order_processing_error(order, e)
+        except Exception:
+            logger.exception(
+                "Order reconciliation failed for offering %s", offering.name
             )
 
 
