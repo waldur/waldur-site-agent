@@ -38,7 +38,7 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
             if reconciliation_enabled:
                 _run_with_reconciliation(configuration)
             else:
-                _run_health_checks_only(configuration)
+                _run_without_username_reconciliation(configuration)
     except Exception as e:
         logger.exception("Error in main process: %s", e)
         if "stomp_consumers_map" in locals():
@@ -46,9 +46,12 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
         sys.exit(1)
 
 
-def _run_health_checks_only(configuration: common_structures.WaldurAgentConfiguration) -> None:
-    """Tick-based main loop: health checks every 30 minutes."""
+def _run_without_username_reconciliation(
+    configuration: common_structures.WaldurAgentConfiguration,
+) -> None:
+    """Tick-based main loop: health checks and order reconciliation (no username sync)."""
     last_health_check = 0.0
+    last_reconciliation = 0.0
 
     while True:
         now = time.time()
@@ -59,12 +62,18 @@ def _run_health_checks_only(configuration: common_structures.WaldurAgentConfigur
             )
             last_health_check = now
 
+        if now - last_reconciliation >= RECONCILIATION_INTERVAL:
+            utils.run_periodic_order_reconciliation(
+                configuration.waldur_offerings, configuration.waldur_user_agent
+            )
+            last_reconciliation = now
+
         touch_heartbeat()
         time.sleep(TICK_INTERVAL)
 
 
 def _run_with_reconciliation(configuration: common_structures.WaldurAgentConfiguration) -> None:
-    """Tick-based main loop: health checks + periodic username reconciliation."""
+    """Tick-based main loop: health checks + periodic username and order reconciliation."""
     last_health_check = 0.0
     last_reconciliation = 0.0
 
@@ -79,6 +88,9 @@ def _run_with_reconciliation(configuration: common_structures.WaldurAgentConfigu
 
         if now - last_reconciliation >= RECONCILIATION_INTERVAL:
             utils.run_periodic_username_reconciliation(
+                configuration.waldur_offerings, configuration.waldur_user_agent
+            )
+            utils.run_periodic_order_reconciliation(
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
             last_reconciliation = now

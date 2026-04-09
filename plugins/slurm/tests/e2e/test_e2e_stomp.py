@@ -583,11 +583,21 @@ class TestStompEventProcessing:
         )
         assert msg.get("username") == test_username
 
-        # Give the handler a moment to process (it runs in the STOMP listener thread)
-        time.sleep(2)
+        # Poll for the SLURM association instead of sleeping a fixed duration.
+        # The handler runs in the STOMP listener thread and creates associations
+        # sequentially for each resource — with multiple resources this can take
+        # a variable amount of time depending on HTTP latency.
+        assoc = None
+        max_polls = 15
+        for attempt in range(max_polls):
+            assoc = stomp_slurm_backend.client.get_association(test_username, backend_id)
+            if assoc is not None:
+                stomp_report.text(
+                    f"**SLURM association found after {attempt + 1} poll(s)**\n"
+                )
+                break
+            time.sleep(2)
 
-        # Verify the SLURM association was created
-        assoc = stomp_slurm_backend.client.get_association(test_username, backend_id)
         stomp_report.text(
             f"**SLURM association ({test_username} ↔ {backend_id}):** "
             f"`{'EXISTS' if assoc else 'MISSING'}`\n"
@@ -595,7 +605,8 @@ class TestStompEventProcessing:
 
         assert assoc is not None, (
             f"Expected SLURM association for user '{test_username}' "
-            f"on account '{backend_id}' after username_set event"
+            f"on account '{backend_id}' after username_set event "
+            f"(polled {max_polls} times)"
         )
 
         stomp_report.flush_api_log()
