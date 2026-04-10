@@ -410,6 +410,14 @@ class BaseBackend(ABC):
             usage=usage,
         )
 
+    def has_prepaid_components(self) -> bool:
+        """Return True if any backend component is marked as prepaid.
+
+        Override in backends that support prepaid billing to enable
+        duration-aware limit calculation.
+        """
+        return False
+
     def sync_resource_end_date(
         self,
         waldur_resource: WaldurResource,

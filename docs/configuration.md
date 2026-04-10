@@ -239,7 +239,7 @@ backend_components:
   cpu:
     measured_unit: "k-Hours"           # Waldur measured unit
     unit_factor: 60000                 # Conversion factor
-    accounting_type: "usage"           # "usage" or "limit"
+    accounting_type: "usage"           # "usage", "limit", or "one"
     label: "CPU"                       # Display label in Waldur
   mem:
     limit: 10                          # Fixed limit amount
@@ -268,8 +268,11 @@ backend_components:
 #### `accounting_type`
 
 - **Type**: String
-- **Values**: `"usage"` or `"limit"`
-- **Description**: Whether component tracks usage or limits
+- **Values**: `"usage"`, `"limit"`, or `"one"`
+- **Description**: Controls billing type and backend behavior.
+  `"usage"` for usage-based tracking, `"limit"` for fixed
+  allocation caps, `"one"` for prepaid ONE_TIME billing
+  (automatically sets `is_prepaid: true` in Waldur).
 
 #### `label`
 
@@ -335,7 +338,81 @@ backend_components:
 
 - **Type**: Boolean
 - **Optional**: Yes
-- **Description**: Whether the component requires prepaid billing
+- **Description**: Whether the component requires prepaid billing.
+  Automatically set to `true` when `accounting_type: "one"`.
+
+#### `min_prepaid_duration`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Minimum initial prepaid duration in months. Only applies when `accounting_type: "one"`.
+
+#### `max_prepaid_duration`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Maximum initial prepaid duration in months. Only applies when `accounting_type: "one"`.
+
+#### `prepaid_duration_step`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Step size in months for initial duration.
+  If set, only multiples of this value
+  (starting from `min_prepaid_duration`) are valid.
+  For example, `min_prepaid_duration: 3` and
+  `prepaid_duration_step: 3` allows 3, 6, 9, 12 months.
+
+#### `min_renewal_duration`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Minimum renewal duration in months.
+
+#### `max_renewal_duration`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Maximum renewal duration in months.
+
+#### `renewal_duration_step`
+
+- **Type**: Integer
+- **Optional**: Yes
+- **Description**: Step size in months for renewal.
+  Only multiples of this value
+  (starting from `min_renewal_duration`) are valid.
+
+### Prepaid Billing
+
+Prepaid billing allows customers to pay upfront for a fixed
+capacity over a specified duration.
+Prepaid components use `accounting_type: "one"` which maps
+to Waldur's ONE_TIME billing type and automatically sets
+`is_prepaid: true`.
+
+When a component has `accounting_type: "one"`,
+the following flow applies:
+
+1. **Ordering**: Customer orders a resource with limits
+   and an `end_date`. Waldur validates the duration
+   against component constraints.
+2. **Upfront billing**: Waldur creates a single invoice
+   item for the full subscription period
+   (limit × price × months).
+3. **Backend enforcement**: The site agent calculates
+   `GrpTRESMins = limit × duration_months × unit_factor`
+   and sets it on the SLURM account. This gives SLURM
+   a cumulative budget cap for the subscription period.
+4. **Limit changes**: Customer can request more capacity.
+   Waldur creates supplementary invoice items.
+   The agent recalculates GrpTRESMins with the new
+   limits and remaining duration.
+5. **Renewal**: Customer extends the subscription.
+   The agent detects the new `end_date` and
+   recalculates GrpTRESMins with the extended duration.
+6. **Termination**: When `end_date` is reached,
+   Waldur automatically creates a TERMINATE order.
 
 ### Backend-Specific Component Notes
 

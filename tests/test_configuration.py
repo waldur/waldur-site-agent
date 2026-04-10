@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from waldur_site_agent.common.structures import AccountingType, BackendComponent
 from waldur_site_agent.common.utils import load_configuration
 
 
@@ -87,3 +88,67 @@ class TestConfigurationLoading:
         finally:
             # Clean up temp file
             Path(config_file_path).unlink()
+
+
+class TestBackendComponentPrepaidFields:
+    """Test cases for BackendComponent prepaid duration fields."""
+
+    def test_accepts_all_prepaid_duration_fields(self):
+        component = BackendComponent(
+            measured_unit="k-Hours",
+            accounting_type=AccountingType.USAGE,
+            label="CPU",
+            is_prepaid=True,
+            min_prepaid_duration=3,
+            max_prepaid_duration=36,
+            prepaid_duration_step=3,
+            min_renewal_duration=1,
+            max_renewal_duration=12,
+            renewal_duration_step=1,
+        )
+        assert component.is_prepaid is True
+        assert component.min_prepaid_duration == 3
+        assert component.max_prepaid_duration == 36
+        assert component.prepaid_duration_step == 3
+        assert component.min_renewal_duration == 1
+        assert component.max_renewal_duration == 12
+        assert component.renewal_duration_step == 1
+
+    def test_prepaid_fields_default_to_none(self):
+        component = BackendComponent(
+            measured_unit="Hours",
+            accounting_type=AccountingType.USAGE,
+            label="CPU",
+        )
+        assert component.is_prepaid is None
+        assert component.min_prepaid_duration is None
+        assert component.max_prepaid_duration is None
+        assert component.prepaid_duration_step is None
+        assert component.min_renewal_duration is None
+        assert component.max_renewal_duration is None
+        assert component.renewal_duration_step is None
+
+    def test_to_dict_includes_prepaid_fields_when_set(self):
+        component = BackendComponent(
+            measured_unit="k-Hours",
+            accounting_type=AccountingType.USAGE,
+            label="CPU",
+            is_prepaid=True,
+            min_prepaid_duration=1,
+            max_prepaid_duration=12,
+        )
+        d = component.to_dict()
+        assert d["is_prepaid"] is True
+        assert d["min_prepaid_duration"] == 1
+        assert d["max_prepaid_duration"] == 12
+        assert "prepaid_duration_step" not in d  # unset fields excluded
+
+    def test_to_dict_excludes_unset_prepaid_fields(self):
+        component = BackendComponent(
+            measured_unit="Hours",
+            accounting_type=AccountingType.USAGE,
+            label="CPU",
+        )
+        d = component.to_dict()
+        assert "is_prepaid" not in d
+        assert "min_prepaid_duration" not in d

@@ -78,6 +78,36 @@ class TestBuildComponentKwargs:
         result = _build_component_kwargs(component_info)
         assert result == {"min_value": 0, "default_limit": 0}
 
+    def test_extracts_prepaid_duration_fields(self):
+        component_info = {
+            "is_prepaid": True,
+            "min_prepaid_duration": 1,
+            "max_prepaid_duration": 12,
+            "prepaid_duration_step": 1,
+            "min_renewal_duration": 1,
+            "max_renewal_duration": 12,
+            "renewal_duration_step": 1,
+        }
+        result = _build_component_kwargs(component_info)
+        assert result == {
+            "is_prepaid": True,
+            "min_prepaid_duration": 1,
+            "max_prepaid_duration": 12,
+            "prepaid_duration_step": 1,
+            "min_renewal_duration": 1,
+            "max_renewal_duration": 12,
+            "renewal_duration_step": 1,
+        }
+
+    def test_ignores_none_prepaid_duration_fields(self):
+        component_info = {
+            "is_prepaid": True,
+            "min_prepaid_duration": None,
+            "max_prepaid_duration": 12,
+        }
+        result = _build_component_kwargs(component_info)
+        assert result == {"is_prepaid": True, "max_prepaid_duration": 12}
+
 
 def _make_offering_mock(components: list[OfferingComponent]) -> MagicMock:
     """Create a mock Waldur offering with the given components."""
@@ -190,6 +220,47 @@ class TestLoadComponentsToWaldurCreate:
 
         body = mock_create.sync_detailed.call_args.kwargs["body"]
         assert body.limit_period == LimitPeriodEnum.ANNUAL
+
+
+    @patch(
+        "waldur_site_agent.common.utils."
+        "marketplace_provider_offerings_create_offering_component"
+    )
+    @patch(
+        "waldur_site_agent.common.utils."
+        "marketplace_provider_offerings_retrieve"
+    )
+    def test_creates_component_with_prepaid_duration_fields(self, mock_retrieve, mock_create):
+        mock_retrieve.sync.return_value = _make_offering_mock([])
+
+        components = {
+            "cpu": BackendComponent(
+                measured_unit="k-Hours",
+                accounting_type=AccountingType.USAGE,
+                label="CPU",
+                is_prepaid=True,
+                min_prepaid_duration=1,
+                max_prepaid_duration=12,
+                prepaid_duration_step=1,
+                min_renewal_duration=1,
+                max_renewal_duration=12,
+                renewal_duration_step=1,
+            ),
+        }
+
+        load_components_to_waldur(
+            MagicMock(), "offering-uuid", "Test Offering", components
+        )
+
+        body = mock_create.sync_detailed.call_args.kwargs["body"]
+        assert isinstance(body, OfferingComponentRequest)
+        assert body.is_prepaid is True
+        assert body.min_prepaid_duration == 1
+        assert body.max_prepaid_duration == 12
+        assert body.prepaid_duration_step == 1
+        assert body.min_renewal_duration == 1
+        assert body.max_renewal_duration == 12
+        assert body.renewal_duration_step == 1
 
 
 class TestLoadComponentsToWaldurUpdate:
