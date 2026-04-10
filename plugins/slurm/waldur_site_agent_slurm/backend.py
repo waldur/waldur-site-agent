@@ -1,11 +1,14 @@
 """SLURM-specific backend classes and functions."""
 
+import datetime
 import pprint
 from enum import Enum
 from typing import Optional
 
 import requests
+from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import (
     BackendType,
@@ -265,6 +268,27 @@ class SlurmBackend(backends.BaseBackend):
                     umask = self.backend_settings.get("default_homedir_umask", "0700")
                     self.create_user_homedirs(usernames, umask)
 
+    def has_prepaid_components(self) -> bool:
+        """Return True if any backend component uses ONE_TIME (prepaid) billing."""
+        return any(
+            data.get("accounting_type") == "one"
+            for data in self.backend_components.values()
+        )
+
+    @staticmethod
+    def _calculate_duration_months(
+        created: datetime.datetime, end_date: datetime.date
+    ) -> int:
+        """Calculate the number of whole months between created and end_date.
+
+        Uses the same logic as Waldur backend for consistency.
+        """
+        created_date = created.date() if isinstance(created, datetime.datetime) else created
+        months = (end_date.year - created_date.year) * 12 + (end_date.month - created_date.month)
+        if end_date.day > created_date.day:
+            months += 1
+        return max(1, months)
+
     def _collect_resource_limits(
         self, waldur_resource: WaldurResource
     ) -> tuple[dict[str, int], dict[str, int]]:
@@ -283,7 +307,7 @@ class SlurmBackend(backends.BaseBackend):
         limit_based_components = [
             component
             for component, data in self.backend_components.items()
-            if data["accounting_type"] == "limit"
+            if data["accounting_type"] in ("limit", "one")
         ]
         waldur_resource_limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
 
@@ -305,6 +329,37 @@ class SlurmBackend(backends.BaseBackend):
                         waldur_resource_limits[component_key]
                         * self.backend_components[component_key]["unit_factor"]
                     )
+
+        # For prepaid components, multiply allocation limits by subscription duration.
+        # GrpTRESMins is a cumulative budget, so limit * months gives the total budget.
+        prepaid_components = [
+            name for name, data in self.backend_components.items()
+            if data.get("accounting_type") == "one"
+        ]
+        if prepaid_components:
+            resource_created = getattr(waldur_resource, "created", UNSET)
+            resource_end_date = getattr(waldur_resource, "end_date", UNSET)
+            if (
+                not isinstance(resource_created, type(UNSET))
+                and resource_created is not None
+                and not isinstance(resource_end_date, type(UNSET))
+                and resource_end_date is not None
+            ):
+                duration_months = self._calculate_duration_months(
+                    resource_created, resource_end_date
+                )
+                logger.info(
+                    "Prepaid resource: duration=%d months (created=%s, end_date=%s)",
+                    duration_months, resource_created, resource_end_date,
+                )
+                for comp_key in prepaid_components:
+                    if comp_key in allocation_limits:
+                        allocation_limits[comp_key] *= duration_months
+            else:
+                logger.warning(
+                    "Prepaid components configured but resource has no created/end_date, "
+                    "skipping duration multiplication"
+                )
 
         # Add usage-based limits to Waldur limits
         for component_key in usage_based_limits:
@@ -792,7 +847,7 @@ class SlurmBackend(backends.BaseBackend):
             limit_based_components = [
                 component
                 for component, data in self.backend_components.items()
-                if data["accounting_type"] == "limit"
+                if data["accounting_type"] in ("limit", "one")
             ]
             limit_values = {k: v for k, v in limits.items() if k in limit_based_components}
             converted = self._component_mapper.convert_limits_to_target(limit_values)
@@ -800,6 +855,28 @@ class SlurmBackend(backends.BaseBackend):
             self.client.set_resource_limits(resource_backend_id, int_limits)
         else:
             super().set_resource_limits(resource_backend_id, limits)
+
+    def sync_resource_end_date(
+        self,
+        waldur_resource: WaldurResource,
+        waldur_rest_client: AuthenticatedClient,  # noqa: ARG002
+    ) -> None:
+        """Recalculate SLURM limits when end_date changes (e.g., renewal).
+
+        For prepaid resources, GrpTRESMins = limit * duration_months * unit_factor.
+        When end_date is extended via renewal, the total budget must be recalculated.
+        """
+        if not self.has_prepaid_components():
+            return
+        backend_id = waldur_resource.backend_id
+        if not backend_id:
+            return
+        backend_limits, _ = self._collect_resource_limits(waldur_resource)
+        if backend_limits:
+            logger.info(
+                "Syncing prepaid limits for %s: %s", backend_id, backend_limits,
+            )
+            self.client.set_resource_limits(backend_id, backend_limits)
 
     def set_resource_user_limits(
         self, resource_backend_id: str, username: str, limits: dict[str, int]

@@ -1275,10 +1275,39 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 waldur_resource.name,
             )
         elif new_limits == old_limits:
+            if self.resource_backend.has_prepaid_components():
+                # Prepaid: duration may have changed (renewal) even if limits
+                # are the same. Recalculate GrpTRESMins with current end_date.
+                logger.info(
+                    "Limits for %s unchanged but has prepaid components, "
+                    "recalculating with current end_date",
+                    waldur_resource.name,
+                )
+                self.resource_backend._setup_resource_limits(
+                    waldur_resource_backend_id, waldur_resource
+                )
+            else:
+                logger.info(
+                    "Limits for %s are unchanged (%s), skipping backend update",
+                    waldur_resource.name,
+                    new_limits,
+                )
+        elif self.resource_backend.has_prepaid_components():
+            # Prepaid limit change: must go through _setup_resource_limits
+            # which applies duration multiplication (limit * months * unit_factor).
+            # The regular set_resource_limits path only applies unit_factor.
+            # Update waldur_resource.limits in-memory so _collect_resource_limits
+            # picks up the new values (resource not yet updated in Waldur).
             logger.info(
-                "Limits for %s are unchanged (%s), skipping backend update",
+                "Prepaid limits changed for %s from %s to %s, recalculating",
                 waldur_resource.name,
+                old_limits,
                 new_limits,
+            )
+            for key, value in new_limits.items():
+                waldur_resource.limits.additional_properties[key] = value
+            self.resource_backend._setup_resource_limits(
+                waldur_resource_backend_id, waldur_resource
             )
         else:
             self.resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits)

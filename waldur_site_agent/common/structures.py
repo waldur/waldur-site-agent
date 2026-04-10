@@ -24,6 +24,7 @@ class AccountingType(Enum):
 
     USAGE = "usage"
     LIMIT = "limit"
+    ONE_TIME = "one"
 
 
 class BackendComponent(BaseModel):
@@ -66,6 +67,24 @@ class BackendComponent(BaseModel):
     )
     is_prepaid: Optional[bool] = Field(
         default=None, description="Whether the component is prepaid"
+    )
+    min_prepaid_duration: Optional[int] = Field(
+        default=None, description="Minimum prepaid duration in months"
+    )
+    max_prepaid_duration: Optional[int] = Field(
+        default=None, description="Maximum prepaid duration in months"
+    )
+    prepaid_duration_step: Optional[int] = Field(
+        default=None, description="Step size in months for initial prepaid duration"
+    )
+    min_renewal_duration: Optional[int] = Field(
+        default=None, description="Minimum renewal duration in months"
+    )
+    max_renewal_duration: Optional[int] = Field(
+        default=None, description="Maximum renewal duration in months"
+    )
+    renewal_duration_step: Optional[int] = Field(
+        default=None, description="Step size in months for renewal duration"
     )
 
     def to_dict(self) -> dict[str, Any]:

@@ -591,6 +591,12 @@ _OPTIONAL_COMPONENT_FIELDS = (
     "article_code",
     "is_boolean",
     "is_prepaid",
+    "min_prepaid_duration",
+    "max_prepaid_duration",
+    "prepaid_duration_step",
+    "min_renewal_duration",
+    "max_renewal_duration",
+    "renewal_duration_step",
 )
 
 
@@ -610,6 +616,11 @@ def _build_component_kwargs(component_info: dict) -> dict:
             if field == "limit_period":
                 value = LimitPeriodEnum(value)
             kwargs[field] = value
+
+    # ONE_TIME accounting type implies prepaid billing
+    if component_info.get("accounting_type") == "one":
+        kwargs.setdefault("is_prepaid", True)
+
     return kwargs
 
 

@@ -180,6 +180,45 @@ offerings: # Settings for offerings
         unit_factor: 1
         accounting_type: "usage"
         label: "GPU"
+  # Example: Prepaid SLURM Offering
+  # Customers pay upfront for a fixed capacity over a chosen duration.
+  # Waldur handles billing (upfront charges, supplementary billing for
+  # limit changes, renewal). The agent sets GrpTRESMins on the SLURM
+  # account to limit × duration_months × unit_factor, giving SLURM a
+  # cumulative budget cap. Prepaid components use
+  # accounting_type: "one" (ONE_TIME billing).
+  - name: "Prepaid HPC Allocation"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: ""
+    waldur_offering_uuid: ""
+    order_processing_backend: "slurm"
+    membership_sync_backend: "slurm"
+    reporting_backend: "slurm"
+    backend_type: "slurm"
+    backend_settings:
+      default_account: "root"
+      customer_prefix: "hpc_"
+      project_prefix: "hpc_"
+      allocation_prefix: "hpc_"
+    backend_components:
+      cpu:
+        measured_unit: "cores"
+        unit_factor: 1
+        accounting_type: "one"     # ONE_TIME prepaid: GrpTRESMins = limit * months
+        label: "CPU Cores"
+        min_prepaid_duration: 1    # Minimum 1 month subscription
+        max_prepaid_duration: 12   # Maximum 12 months subscription
+        prepaid_duration_step: 1   # Any whole number of months
+        min_renewal_duration: 1    # Minimum 1 month renewal
+        max_renewal_duration: 12   # Maximum 12 months renewal
+        renewal_duration_step: 1
+      gpu:
+        measured_unit: "units"
+        unit_factor: 1
+        accounting_type: "one"     # ONE_TIME prepaid
+        label: "GPUs"
+        min_prepaid_duration: 1
+        max_prepaid_duration: 12
   - name: "Example MOAB Offering"
     waldur_api_url: "http://localhost:8081/api/"
     waldur_api_token: ""
