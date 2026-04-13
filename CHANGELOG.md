@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.2 - 2026-04-13
+
+### Highlights
+
+This release introduces prepaid billing support for SLURM offerings, allowing operators to configure offerings with upfront billing instead of pay-as-you-go. Event processing mode now includes periodic order reconciliation, ensuring orders are not lost if STOMP messages are missed. The Rancher plugin gains fine-grained per-GPU-type limit control, and CI pipelines now include dependency vulnerability scanning.
+
+### What's New
+
+- **SLURM**: Add prepaid billing support for offerings, enabling upfront allocation-based billing as an alternative to usage-based billing.
+- **Core**: Add periodic order reconciliation to event processing mode, automatically catching orders that may have been missed during STOMP event delivery.
+- **Rancher**: Add per-GPU-type limit support, allowing operators to set resource limits for individual GPU types within a project.
+- **CI**: Add osv-scanner dependency vulnerability scanning to the CI pipeline.
+
+### Improvements
+
+- **Core**: Add logging for home directory creation to improve observability during user provisioning.
+
+### Bug Fixes
+
+- **SLURM**: Fix sacctmgr QOS flags being passed as a single subprocess argument instead of separate arguments (WAL-9816).
+
+### Statistics
+
+> 6 commits, 32 files changed (+3089/−254 lines)
+
+---
+
 ## 1.0.1-rc.11 - 2026-04-02
 
 - **MUP**: Add initial backend mappings, usage reporting via new endpoint, and myaccessid username support (WAL-9686, WAL-9800).
