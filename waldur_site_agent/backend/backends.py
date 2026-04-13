@@ -318,6 +318,7 @@ class BaseBackend(ABC):
         logger.info("Creating homedirs for users")
         for username in usernames:
             try:
+                logger.info("Creating homedir for the user %s with umask %s", username, umask)
                 self.client.create_linux_user_homedir(username, umask)
                 logger.info("Homedir for user %s has been created", username)
             except BackendError as err:
