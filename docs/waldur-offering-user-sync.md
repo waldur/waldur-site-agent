@@ -281,6 +281,69 @@ STOMP OFFERING_USER "create" event (username="", attributes={...})
 This path does **not** trigger username generation — that only happens via the
 polling-based membership sync.
 
+## Recovery in `event_process` Mode
+
+In `event_process` mode, the full membership sync (`process_offering()`) only
+runs **once at startup**. After that, user changes are handled by STOMP events.
+Two periodic reconciliation functions cover gaps:
+
+| Function | Condition | What it does |
+|----------|-----------|-------------|
+| `run_periodic_offering_user_reconciliation()` | `membership_sync_backend` set | Retries stuck users |
+| `run_periodic_username_reconciliation()` | `username_reconciliation_enabled` | Syncs usernames B→A |
+
+Both run on the reconciliation timer (default: every 60 minutes).
+
+### Waldur federation: `username_reconciliation_enabled` is required
+
+In the waldur federation plugin, the identity bridge username backend
+**does not generate usernames** — it pushes user profiles to Waldur B and
+returns an empty string. The actual username is assigned by Waldur B's
+service provider and must be **pulled back** via `sync_offering_user_usernames()`.
+
+This means:
+
+- `run_periodic_offering_user_reconciliation()` alone is **insufficient** for
+  the waldur plugin — it pushes profiles to identity bridge (useful) but
+  cannot assign usernames.
+- `run_periodic_username_reconciliation()` is the function that actually
+  pulls usernames from Waldur B and writes them to Waldur A, triggering
+  the auto-transition to OK.
+- **Without `username_reconciliation_enabled: true`**, users that get stuck
+  after startup will not self-heal until the agent is restarted.
+
+```yaml
+# Required for waldur federation deployments
+offerings:
+  - name: "Federated HPC"
+    username_reconciliation_enabled: true  # <-- enables periodic B→A sync
+    membership_sync_backend: "waldur"
+    # ...
+```
+
+### Non-federation plugins (SLURM, MOAB, etc.)
+
+For plugins where the username backend generates usernames locally (e.g.,
+the `base` backend or FreeIPA), `run_periodic_offering_user_reconciliation()`
+is sufficient. It retries `update_offering_users()` which calls
+`get_or_create_username()` on the local backend. No
+`username_reconciliation_enabled` setting is needed.
+
+### Thread safety
+
+STOMP callbacks run in **receiver threads** (separate from the main loop).
+Both the periodic reconciliation and STOMP handlers can call
+`_update_offering_users()` on the same user concurrently. This is safe
+because:
+
+- **No double creation**: OfferingUsers are created by Mastermind, not the
+  agent. The `(offering, user)` unique constraint prevents duplicates.
+- **`begin_creating()` on wrong state**: Returns HTTP 400 (FSM validation).
+  Caught by the exception handler, logged, processing continues.
+- **Double PATCH with same username**: Idempotent (last-write-wins, same value).
+- **PATCH with empty username**: `_update_user_username()` returns `False` when
+  the backend returns `""` — no API call is made.
+
 ## Processing Entry Points
 
 | Entry Point | Trigger | What It Does | Username Generation? |
@@ -291,6 +354,7 @@ polling-based membership sync.
 | `on_offering_user_message_stomp()` | STOMP OFFERING_USER from A | Forward attributes | No |
 | `make_target_offering_user_handler()` | STOMP OFFERING_USER from B | Sync usernames B→A | No |
 | `run_periodic_username_reconciliation()` | Timer (every 60 min) | Sync usernames B→A | No |
+| `run_periodic_offering_user_reconciliation()` | Timer (every 60 min) | Retry stuck users | Yes |
 
 ## State Lifecycle Summary
 
@@ -362,13 +426,17 @@ completion on the next sync cycle and transition to OK.
 
 ### Username not synced from Waldur B
 
-**Cause**: The offering user on Waldur B doesn't have a username yet, or user identity
-matching failed (different `user_username` values on A and B).
+**Cause**: The offering user on Waldur B doesn't have a username yet, user identity
+matching failed, or `username_reconciliation_enabled` is not set.
 
 **Check**:
-1. Does the offering user exist on Waldur B? Check with the target API.
-2. Is the Waldur B offering user in OK state with a username?
-3. Do the `user_username` fields match between A and B?
+1. Is `username_reconciliation_enabled: true` in the offering config?
+   Without it, periodic B→A username sync does not run.
+2. Does the offering user exist on Waldur B? Check with the target API.
+3. Is the Waldur B offering user in OK state with a username?
+4. Do the `user_username` fields match between A and B?
 
-**Resolution**: Ensure consistent identity (CUID/email) across instances. If using
-identity bridge, verify `identity_bridge_source` is configured correctly.
+**Resolution**: Ensure `username_reconciliation_enabled: true` is set for
+waldur federation offerings. Ensure consistent identity (CUID/email) across
+instances. If using identity bridge, verify `identity_bridge_source` is
+configured correctly.
