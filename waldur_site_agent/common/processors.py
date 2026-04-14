@@ -1756,17 +1756,27 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     def _get_waldur_offering_users(self) -> list[OfferingUser]:
         """Fetch all offering users for this offering.
 
-        Uses the per-cycle cache and filters to OK and REQUESTED states.
+        Uses the per-cycle cache and filters to actionable states: OK,
+        REQUESTED, and all intermediate/error states that need username
+        generation or retry (CREATING, ERROR_CREATING, PENDING_*).
 
         Returns:
             List of all non-restricted offering users for this offering
         """
-        logger.info("Fetching Waldur offering users (OK and Requested)")
+        logger.info("Fetching Waldur offering users")
         all_offering_users = self._get_cached_offering_users()
         offering_users = [
             ou
             for ou in all_offering_users
-            if ou.state in (OfferingUserState.OK, OfferingUserState.REQUESTED)
+            if ou.state
+            in (
+                OfferingUserState.OK,
+                OfferingUserState.REQUESTED,
+                OfferingUserState.CREATING,
+                OfferingUserState.ERROR_CREATING,
+                OfferingUserState.PENDING_ACCOUNT_LINKING,
+                OfferingUserState.PENDING_ADDITIONAL_VALIDATION,
+            )
         ]
         logger.info("Fetched %d offering users", len(offering_users))
         return offering_users
