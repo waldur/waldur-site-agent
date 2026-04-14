@@ -49,7 +49,7 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
 def _run_without_username_reconciliation(
     configuration: common_structures.WaldurAgentConfiguration,
 ) -> None:
-    """Tick-based main loop: health checks and order reconciliation (no username sync)."""
+    """Tick-based main loop: health checks, order and offering user reconciliation."""
     last_health_check = 0.0
     last_reconciliation = 0.0
 
@@ -64,6 +64,9 @@ def _run_without_username_reconciliation(
 
         if now - last_reconciliation >= RECONCILIATION_INTERVAL:
             utils.run_periodic_order_reconciliation(
+                configuration.waldur_offerings, configuration.waldur_user_agent
+            )
+            utils.run_periodic_offering_user_reconciliation(
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
             last_reconciliation = now
@@ -91,6 +94,9 @@ def _run_with_reconciliation(configuration: common_structures.WaldurAgentConfigu
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
             utils.run_periodic_order_reconciliation(
+                configuration.waldur_offerings, configuration.waldur_user_agent
+            )
+            utils.run_periodic_offering_user_reconciliation(
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
             last_reconciliation = now

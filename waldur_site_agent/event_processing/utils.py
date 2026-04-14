@@ -10,14 +10,17 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 from waldur_api_client import AuthenticatedClient
+from waldur_api_client.api.marketplace_offering_users import marketplace_offering_users_list
 from waldur_api_client.api.marketplace_orders import marketplace_orders_list
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
+from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.order_state import OrderState
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import agent_identity_management
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
+from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.common.utils import get_backend_for_offering, get_client
 from waldur_site_agent.event_processing.event_subscription_manager import EventSubscriptionManager
 from waldur_site_agent.event_processing.structures import (
@@ -411,6 +414,66 @@ def run_periodic_username_reconciliation(
         except Exception:
             logger.exception(
                 "Reconciliation failed for offering %s", offering.name
+            )
+
+
+def run_periodic_offering_user_reconciliation(
+    waldur_offerings: list[common_structures.Offering], user_agent: str = ""
+) -> None:
+    """Retry username generation for offering users stuck in intermediate states.
+
+    In event_process mode, offering user username generation only runs at
+    startup (run_initial_offering_processing). If generation fails after
+    startup (e.g., triggered by a STOMP event), the user gets stuck in
+    CREATING, ERROR_CREATING, or PENDING_* with no periodic retry.
+
+    This function fetches offering users in those stuck states and runs
+    update_offering_users() to retry username generation.
+    """
+    for offering in waldur_offerings:
+        if not offering.membership_sync_backend:
+            continue
+        try:
+            waldur_rest_client = get_client(
+                offering.api_url,
+                offering.api_token,
+                user_agent,
+                verify_ssl=offering.verify_ssl,
+            )
+
+            stuck_users = marketplace_offering_users_list.sync_all(
+                client=waldur_rest_client,
+                offering_uuid=[offering.uuid],
+                state=[
+                    OfferingUserState.REQUESTED,
+                    OfferingUserState.CREATING,
+                    OfferingUserState.ERROR_CREATING,
+                    OfferingUserState.PENDING_ACCOUNT_LINKING,
+                    OfferingUserState.PENDING_ADDITIONAL_VALIDATION,
+                ],
+                is_restricted=False,
+            )
+
+            if not stuck_users:
+                continue
+
+            logger.info(
+                "Offering user reconciliation: found %d stuck user(s) for %s",
+                len(stuck_users),
+                offering.name,
+            )
+
+            updated = common_utils.update_offering_users(
+                offering, waldur_rest_client, stuck_users
+            )
+            if updated:
+                logger.info(
+                    "Offering user reconciliation: usernames updated for %s",
+                    offering.name,
+                )
+        except Exception:
+            logger.exception(
+                "Offering user reconciliation failed for %s", offering.name
             )
 
 
