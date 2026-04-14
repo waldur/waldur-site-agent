@@ -919,7 +919,7 @@ def create_homedirs_for_offering_users() -> None:
         offering_user_usernames: set[str] = {
             offering_user.username for offering_user in offering_users
         }
-        umask = offering.backend_settings.get("homedir_umask", "0700")
+        umask = offering.backend_settings.get("default_homedir_umask", "0077")
         offering_backend, _ = get_backend_for_offering(offering, "order_processing_backend")
         offering_backend.create_user_homedirs(offering_user_usernames, umask)
 

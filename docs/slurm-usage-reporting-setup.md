@@ -87,7 +87,7 @@ offerings:
 
       # Home directory settings (not used in report mode)
       enable_user_homedir_account_creation: false
-      homedir_umask: "0700"
+      default_homedir_umask: "0077"
 
     # Define components for usage reporting
     backend_components:

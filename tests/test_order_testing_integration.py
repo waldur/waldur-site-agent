@@ -33,7 +33,7 @@ offerings:
       project_prefix: hpc_
       allocation_prefix: hpc_
       check_backend_id_uniqueness: true
-      homedir_umask: "0750"
+      default_homedir_umask: "0750"
     backend_components:
       cpu:
         limit: 10000
