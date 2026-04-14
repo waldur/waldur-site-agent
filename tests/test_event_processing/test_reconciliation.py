@@ -1,7 +1,9 @@
-"""Tests for periodic username/order reconciliation and event processing main loop."""
+"""Tests for periodic username/order/offering-user reconciliation and event processing main loop."""
 
 import unittest
 from unittest import mock
+
+from waldur_api_client.models.offering_user_state import OfferingUserState
 
 from waldur_site_agent.common import structures as common_structures
 from waldur_site_agent.event_processing import utils
@@ -316,6 +318,88 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
         mock_processor.process_order_with_retries.assert_called_once_with(stuck_order)
 
 
+class TestRunPeriodicOfferingUserReconciliation(unittest.TestCase):
+    """Tests for run_periodic_offering_user_reconciliation function."""
+
+    def test_skips_offering_without_membership_sync_backend(self):
+        """Offerings without membership_sync_backend are skipped."""
+        offering = _make_offering(stomp_enabled=True)
+        with mock.patch(
+            "waldur_site_agent.event_processing.utils.get_client"
+        ) as mock_get_client:
+            utils.run_periodic_offering_user_reconciliation([offering], "agent")
+            mock_get_client.assert_not_called()
+
+    @mock.patch("waldur_site_agent.event_processing.utils.common_utils.update_offering_users")
+    @mock.patch(
+        "waldur_site_agent.event_processing.utils.marketplace_offering_users_list"
+    )
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    def test_fetches_stuck_users_and_calls_update(
+        self, mock_get_client, mock_ou_list, mock_update
+    ):
+        """Reconciliation fetches stuck offering users and calls update_offering_users."""
+        offering = _make_offering(membership_sync_backend="slurm")
+        stuck_user = mock.Mock()
+        mock_ou_list.sync_all.return_value = [stuck_user]
+        mock_update.return_value = True
+
+        utils.run_periodic_offering_user_reconciliation([offering], "agent")
+
+        mock_get_client.assert_called_once()
+        mock_ou_list.sync_all.assert_called_once()
+        call_kwargs = mock_ou_list.sync_all.call_args.kwargs
+        self.assertEqual(
+            set(call_kwargs["state"]),
+            {
+                OfferingUserState.REQUESTED,
+                OfferingUserState.CREATING,
+                OfferingUserState.ERROR_CREATING,
+                OfferingUserState.PENDING_ACCOUNT_LINKING,
+                OfferingUserState.PENDING_ADDITIONAL_VALIDATION,
+            },
+        )
+        mock_update.assert_called_once_with(
+            offering, mock_get_client.return_value, [stuck_user]
+        )
+
+    @mock.patch("waldur_site_agent.event_processing.utils.common_utils.update_offering_users")
+    @mock.patch(
+        "waldur_site_agent.event_processing.utils.marketplace_offering_users_list"
+    )
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    def test_skips_when_no_stuck_users(
+        self, mock_get_client, mock_ou_list, mock_update
+    ):
+        """No processing when there are no stuck offering users."""
+        offering = _make_offering(membership_sync_backend="slurm")
+        mock_ou_list.sync_all.return_value = []
+
+        utils.run_periodic_offering_user_reconciliation([offering], "agent")
+
+        mock_update.assert_not_called()
+
+    @mock.patch("waldur_site_agent.event_processing.utils.common_utils.update_offering_users")
+    @mock.patch(
+        "waldur_site_agent.event_processing.utils.marketplace_offering_users_list"
+    )
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    def test_exception_does_not_propagate(
+        self, mock_get_client, mock_ou_list, mock_update
+    ):
+        """Exceptions are logged and don't crash the loop."""
+        offering = _make_offering(membership_sync_backend="slurm")
+        mock_ou_list.sync_all.side_effect = RuntimeError("backend down")
+
+        with mock.patch(
+            "waldur_site_agent.event_processing.utils.logger"
+        ) as mock_logger:
+            utils.run_periodic_offering_user_reconciliation([offering], "agent")
+            mock_logger.exception.assert_called_with(
+                "Offering user reconciliation failed for %s", offering.name
+            )
+
+
 class TestMainLoopTimers(unittest.TestCase):
     """Tests for the event processing main loop timer logic."""
 
@@ -343,6 +427,7 @@ class TestMainLoopTimers(unittest.TestCase):
         mock_utils.send_agent_health_checks.assert_called()
         mock_utils.run_periodic_username_reconciliation.assert_called()
         mock_utils.run_periodic_order_reconciliation.assert_called()
+        mock_utils.run_periodic_offering_user_reconciliation.assert_called()
 
     @mock.patch("waldur_site_agent.event_processing.main.time")
     @mock.patch("waldur_site_agent.event_processing.main.utils")
