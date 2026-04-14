@@ -222,8 +222,11 @@ class TestOfferingUsersCacheFiltering:
     """Test that _get_waldur_offering_users filters cached results by state."""
 
     @mock.patch("waldur_site_agent.common.processors.marketplace_offering_users_list")
-    def test_filters_by_ok_and_requested(self, mock_api):
-        """Only OK and REQUESTED offering users are returned."""
+    def test_filters_to_actionable_states(self, mock_api):
+        """Actionable states (OK, REQUESTED, and intermediate/error) are returned.
+
+        Deletion-flow states (DELETED, DELETING, DELETION_REQUESTED) are excluded.
+        """
         users = [
             _make_offering_user("user-ok", OfferingUserState.OK),
             _make_offering_user("user-requested", OfferingUserState.REQUESTED),
@@ -236,9 +239,9 @@ class TestOfferingUsersCacheFiltering:
 
         result = processor._get_waldur_offering_users()
 
-        assert len(result) == 2
+        assert len(result) == 3
         usernames = {u.username for u in result}
-        assert usernames == {"user-ok", "user-requested"}
+        assert usernames == {"user-ok", "user-requested", "user-creating"}
         # Only one API call despite filtering
         assert mock_api.sync_all.call_count == 1
 
