@@ -247,7 +247,7 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
         default=True, description="Create home directories for users"
     )
     default_homedir_umask: Optional[str] = Field(
-        default="0700", description="Umask for created home directories"
+        default="0077", description="Umask for created home directories"
     )
 
     # Project directory management (optional, for sites with shared project storage)
@@ -277,6 +277,6 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
                 if umask_value < 0 or umask_value > max_umask:
                     _raise_umask_error(v)
             except ValueError as e:
-                msg = f"default_homedir_umask must be valid octal permissions (e.g., '0700'): {e}"
+                msg = f"default_homedir_umask must be valid octal permissions (e.g., '0077'): {e}"
                 raise ValueError(msg) from e
         return v

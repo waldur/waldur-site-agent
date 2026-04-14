@@ -265,7 +265,7 @@ class SlurmBackend(backends.BaseBackend):
                         "Creating home directories during resource creation for users: %s",
                         ", ".join(usernames),
                     )
-                    umask = self.backend_settings.get("default_homedir_umask", "0700")
+                    umask = self.backend_settings.get("default_homedir_umask", "0077")
                     self.create_user_homedirs(usernames, umask)
 
     def has_prepaid_components(self) -> bool:
@@ -431,7 +431,7 @@ class SlurmBackend(backends.BaseBackend):
         added_users = super().add_users_to_resource(waldur_resource, user_ids)
 
         if self.backend_settings.get("enable_user_homedir_account_creation", True):
-            umask: str = str(kwargs.get("homedir_umask", "0700"))
+            umask: str = str(kwargs.get("homedir_umask", "0077"))
             self.create_user_homedirs(added_users, umask=umask)
 
         return added_users
@@ -466,7 +466,7 @@ class SlurmBackend(backends.BaseBackend):
                 "Processing existing users to ensure home directories exist: %s",
                 ", ".join(existing_users),
             )
-            umask = self.backend_settings.get("homedir_umask", "0700")
+            umask = self.backend_settings.get("default_homedir_umask", "0077")
             self.create_user_homedirs(existing_users, umask=umask)
 
     # ===== QOS AND FILESYSTEM MANAGEMENT =====

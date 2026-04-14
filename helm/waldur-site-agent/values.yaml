@@ -101,7 +101,7 @@ secret:
             qos_paused: "paused"
             qos_default: "normal"
             enable_user_homedir_account_creation: true
-            homedir_umask: "0700"
+            default_homedir_umask: "0077"
           backend_components:
             cpu:
               limit: 10

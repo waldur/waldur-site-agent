@@ -25,7 +25,7 @@ offerings: # Settings for offerings
       qos_paused: "paused" # The QoS set to an account after pausing
       qos_default: "normal" # The default QoS for account in the SLURM cluster
       enable_user_homedir_account_creation: true # Whether to create home directories for users associated to accounts.
-      homedir_umask: "0700" # A umask for created homedirs
+      default_homedir_umask: "0077" # A umask for created homedirs
 
       # CSCS-DWDI settings for usage reporting
       cscs_dwdi_api_url: "https://dwdi-api.cscs.ch" # Base URL for the CSCS-DWDI API service

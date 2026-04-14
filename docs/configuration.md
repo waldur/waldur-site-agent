@@ -179,7 +179,7 @@ backend_settings:
   qos_paused: "paused"                                # QoS for paused accounts
   qos_default: "normal"                               # Default QoS
   enable_user_homedir_account_creation: true         # Create home directories
-  homedir_umask: "0700"                              # Umask for home directories
+  default_homedir_umask: "0077"                              # Umask for home directories
 ```
 
 ### MOAB Backend Settings
@@ -471,7 +471,7 @@ offerings:
       allocation_prefix: "hpc_"
       qos_default: "normal"
       enable_user_homedir_account_creation: true
-      homedir_umask: "0700"
+      default_homedir_umask: "0077"
 
     backend_components:
       cpu:
