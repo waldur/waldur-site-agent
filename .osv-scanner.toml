@@ -22,3 +22,8 @@ ignoreUntil = 2026-07-07T00:00:00Z
 id = "GHSA-gc5v-m9x4-r6x2"
 reason = "requests 2.33.0 requires urllib3>=2, which is a breaking change for this project."
 ignoreUntil = 2026-07-07T00:00:00Z
+
+[[IgnoredVulns]]
+id = "GHSA-6w46-j5rx-g56g"
+reason = "pytest is a dev-only dependency. pytest 9.0.3+ requires Python>=3.10, but this project supports Python 3.9. The vuln is a local tmpdir privilege escalation, low risk for CI/dev."
+ignoreUntil = 2026-07-07T00:00:00Z
