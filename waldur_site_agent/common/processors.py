@@ -1123,7 +1123,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         self.resource_backend.add_users_to_resource(
             waldur_resource,
             offering_usernames,
-            homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
+            homedir_umask=self.offering.backend_settings.get("default_homedir_umask", "0077"),
         )
 
     def _process_create_order(self, order: OrderDetails | None) -> bool:
@@ -1961,7 +1961,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         added_usernames = self.resource_backend.add_users_to_resource(
             waldur_resource,
             new_usernames,
-            homedir_umask=self.offering.backend_settings.get("homedir_umask", "0700"),
+            homedir_umask=self.offering.backend_settings.get("default_homedir_umask", "0077"),
             user_roles=user_roles,
             user_emails=user_emails,
             user_cuids=user_cuids,

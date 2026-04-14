@@ -313,7 +313,7 @@ class BaseBackend(ABC):
             for resource in resources
         ]
 
-    def create_user_homedirs(self, usernames: set[str], umask: str = "0700") -> None:
+    def create_user_homedirs(self, usernames: set[str], umask: str = "0077") -> None:
         """Create homedirs for users."""
         logger.info("Creating homedirs for users")
         for username in usernames:
