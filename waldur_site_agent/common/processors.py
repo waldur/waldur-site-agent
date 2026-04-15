@@ -1838,9 +1838,24 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             offering_user.username for offering_user in offering_users if offering_user.username
         }
 
+        use_identity_bridge = (
+            getattr(self.resource_backend, "user_resolve_method", None) == "identity_bridge"
+        )
+
         resource_usernames = {
             user.offering_user_username for user in team if user.offering_user_username
         }
+        # Federation (Waldur↔Waldur) deadlock breaker:
+        # Membership sync mustbe able to add users to Waldur B even if A does not
+        # yet have offering_user_username. When the backend supports identity bridge resolution,
+        # fall back to using the user's CUID (ProjectUser.username) as the identifier.
+        if use_identity_bridge:
+            cuid_only_usernames = {
+                user.username
+                for user in team
+                if user.username and not user.offering_user_username
+            }
+            resource_usernames |= cuid_only_usernames
         logger.info(
             "Resource offering usernames (%s): %s",
             len(resource_usernames),
@@ -1853,6 +1868,14 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             for user in team
             if user.offering_user_username and user.role
         }
+        if use_identity_bridge:
+            user_roles.update(
+                {
+                    user.username: user.role
+                    for user in team
+                    if user.username and not user.offering_user_username and user.role
+                }
+            )
 
         # Build user_emails mapping (username -> email) for backends that need it
         user_emails = {
@@ -1886,6 +1909,16 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             for user in team
             if user.offering_user_username and user.username
         }
+        if use_identity_bridge:
+            # If we used CUID as the resource username key, map it to itself so backend
+            # resolution uses identity bridge with the CUID.
+            user_cuids.update(
+                {
+                    user.username: user.username
+                    for user in team
+                    if user.username and not user.offering_user_username
+                }
+            )
 
         # Build user_attributes mapping (offering_username -> attribute dict)
         # for backends that enrich identity bridge calls with user profile data.

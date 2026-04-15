@@ -2,6 +2,7 @@ import json
 import unittest
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -360,3 +361,223 @@ class MembershipSyncTest(unittest.TestCase):
         self.mock_get_resource_metadata.assert_called_once()
         self.mock_get_resource_limits.assert_called_once()
         assert mock_set_limits.call_count == 1
+
+    def test_group_resource_usernames_includes_cuid_when_offering_username_missing(self) -> None:
+        """
+        Federation flow: users may be present in Waldur A team without offering_user_username,
+        because backend username is assigned on Waldur B and reconciled back to A later.
+
+        When identity bridge resolution is enabled on the backend, membership sync must fall back
+        to using CUID (ProjectUser.username) so users can be added to Waldur B.
+        """
+        processor = object.__new__(OfferingMembershipProcessor)
+        processor._team_cache = {}
+        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
+
+        # Fake backend that supports identity bridge resolution
+        processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
+
+        # Fake resource + backend info
+        waldur_resource = SimpleNamespace(
+            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+        )
+        backend_resource_info = SimpleNamespace(users=[])
+
+        # Team member has CUID but no offering_user_username yet.
+        team = [
+            SimpleNamespace(
+                offering_user_username="",
+                username="cuid:alice",
+                role="PROJECT.MANAGER",
+            )
+        ]
+        processor._get_waldur_resource_team = lambda _resource: team  # type: ignore[assignment]
+
+        (
+            _existing_usernames,
+            _stale_usernames,
+            new_usernames,
+            user_roles,
+            _user_emails,
+            user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[]
+        )
+
+        assert "cuid:alice" in new_usernames
+        assert user_roles["cuid:alice"] == "PROJECT.MANAGER"
+        assert user_cuids["cuid:alice"] == "cuid:alice"
+
+    def test_group_resource_usernames_skips_cuid_without_identity_bridge(self) -> None:
+        """Without identity bridge, CUID-only users must NOT be included."""
+        processor = object.__new__(OfferingMembershipProcessor)
+        processor._team_cache = {}
+        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
+
+        # Backend without identity bridge (e.g. Slurm)
+        processor.resource_backend = SimpleNamespace(user_resolve_method="local")
+
+        waldur_resource = SimpleNamespace(
+            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+        )
+        backend_resource_info = SimpleNamespace(users=[])
+
+        team = [
+            SimpleNamespace(
+                offering_user_username="",
+                username="cuid:alice",
+                role="PROJECT.MANAGER",
+            )
+        ]
+        processor._get_waldur_resource_team = lambda _resource: team  # type: ignore[assignment]
+
+        (
+            _existing_usernames,
+            _stale_usernames,
+            new_usernames,
+            user_roles,
+            _user_emails,
+            user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[]
+        )
+
+        assert "cuid:alice" not in new_usernames
+        assert "cuid:alice" not in user_roles
+        assert "cuid:alice" not in user_cuids
+
+    def test_group_resource_usernames_skips_cuid_when_attr_missing(self) -> None:
+        """Backend with no user_resolve_method attr should not include CUID-only users."""
+        processor = object.__new__(OfferingMembershipProcessor)
+        processor._team_cache = {}
+        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
+
+        # Backend without user_resolve_method attribute at all
+        processor.resource_backend = SimpleNamespace()
+
+        waldur_resource = SimpleNamespace(
+            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+        )
+        backend_resource_info = SimpleNamespace(users=[])
+
+        team = [
+            SimpleNamespace(
+                offering_user_username="",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor._get_waldur_resource_team = lambda _resource: team  # type: ignore[assignment]
+
+        (
+            _existing_usernames,
+            _stale_usernames,
+            new_usernames,
+            user_roles,
+            _user_emails,
+            user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[]
+        )
+
+        assert "cuid:bob" not in new_usernames
+        assert "cuid:bob" not in user_roles
+        assert "cuid:bob" not in user_cuids
+
+    def test_group_resource_usernames_mixed_users_with_identity_bridge(self) -> None:
+        """With identity bridge, users with offering_user_username use that;
+        CUID-only users fall back to CUID. Both appear in results."""
+        processor = object.__new__(OfferingMembershipProcessor)
+        processor._team_cache = {}
+        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
+        processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
+
+        waldur_resource = SimpleNamespace(
+            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+        )
+        backend_resource_info = SimpleNamespace(users=[])
+
+        team = [
+            # User with offering_user_username already assigned
+            SimpleNamespace(
+                offering_user_username="alice-on-b",
+                username="cuid:alice",
+                role="PROJECT.MANAGER",
+            ),
+            # User without offering_user_username (CUID-only)
+            SimpleNamespace(
+                offering_user_username="",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            ),
+        ]
+        processor._get_waldur_resource_team = lambda _resource: team  # type: ignore[assignment]
+
+        (
+            _existing_usernames,
+            _stale_usernames,
+            new_usernames,
+            user_roles,
+            _user_emails,
+            user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[]
+        )
+
+        # Both users should be new
+        assert "alice-on-b" in new_usernames
+        assert "cuid:bob" in new_usernames
+
+        # Roles mapped correctly per key type
+        assert user_roles["alice-on-b"] == "PROJECT.MANAGER"
+        assert user_roles["cuid:bob"] == "PROJECT.MEMBER"
+
+        # CUIDs: alice keyed by offering username, bob keyed by CUID
+        assert user_cuids["alice-on-b"] == "cuid:alice"
+        assert user_cuids["cuid:bob"] == "cuid:bob"
+
+    def test_group_resource_usernames_cuid_user_existing_on_backend(self) -> None:
+        """CUID-only user already on backend should appear in existing, not new."""
+        processor = object.__new__(OfferingMembershipProcessor)
+        processor._team_cache = {}
+        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
+        processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
+
+        waldur_resource = SimpleNamespace(
+            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+        )
+        # Backend already has this CUID user
+        backend_resource_info = SimpleNamespace(users=["cuid:alice"])
+
+        team = [
+            SimpleNamespace(
+                offering_user_username="",
+                username="cuid:alice",
+                role="PROJECT.MANAGER",
+            )
+        ]
+        processor._get_waldur_resource_team = lambda _resource: team  # type: ignore[assignment]
+
+        (
+            existing_usernames,
+            _stale_usernames,
+            new_usernames,
+            _user_roles,
+            _user_emails,
+            _user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[]
+        )
+
+        assert "cuid:alice" in existing_usernames
+        assert "cuid:alice" not in new_usernames
