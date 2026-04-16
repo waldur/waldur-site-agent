@@ -12,7 +12,7 @@ from waldur_api_client.models.order_details import OrderDetails
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_state import ResourceState
 
-from waldur_site_agent.backend import logger, structures, utils
+from waldur_site_agent.backend import logger, quota, structures, utils
 
 if TYPE_CHECKING:
     from waldur_site_agent.common.structures import Offering
@@ -314,8 +314,11 @@ class BaseBackend(ABC):
         ]
 
     def create_user_homedirs(self, usernames: set[str], umask: str = "0077") -> None:
-        """Create homedirs for users."""
+        """Create homedirs for users and optionally apply filesystem quotas."""
         logger.info("Creating homedirs for users")
+        quota_config = self._get_homedir_quota_config()
+        homedir_base_path = self.backend_settings.get("homedir_base_path")
+
         for username in usernames:
             try:
                 logger.info("Creating homedir for the user %s with umask %s", username, umask)
@@ -327,6 +330,30 @@ class BaseBackend(ABC):
                     username,
                     err,
                 )
+                continue
+
+            if quota_config is not None:
+                try:
+                    homedir_path = quota.get_user_homedir(username, homedir_base_path)
+                    quota.apply_homedir_quota(
+                        self.client, username, homedir_path, quota_config
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to apply homedir quota for %s",
+                        username,
+                    )
+
+    def _get_homedir_quota_config(self) -> quota.HomedirQuotaConfig | None:
+        """Parse and return the homedir_quota config, or None if not configured."""
+        raw = self.backend_settings.get("homedir_quota")
+        if not raw:
+            return None
+        try:
+            return quota.HomedirQuotaConfig(**raw)
+        except Exception:
+            logger.exception("Invalid homedir_quota configuration")
+            return None
 
     @abstractmethod
     def _collect_resource_limits(

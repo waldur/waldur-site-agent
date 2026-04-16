@@ -31,6 +31,12 @@ offerings: # Settings for offerings
       enable_user_homedir_account_creation: true # Whether to create home directories
         # for users associated to accounts.
       default_homedir_umask: "0077" # A umask for created homedirs
+      # homedir_base_path: "/cephfs/home" # Override home directory base path
+        # (default: looked up from system passwd database)
+      # homedir_quota: # Optional filesystem quota for user home directories
+      #   provider: "ceph_xattr" # One of: ceph_xattr, xfs, lustre
+      #   max_bytes: "1099511627776" # 1 TiB in bytes
+      #   max_files: 100000
     backend_components: # Computing components on backend with accounting data
       cpu: # Type of the component, for example `cpu`
         limit: 10 # Amount of measured units for Waldur (SLURM measured unit is CPU-minutes)
@@ -78,6 +84,23 @@ offerings: # Settings for offerings
       default_partition: "cn" # Assign users to partition 'cn' by default
       enable_user_homedir_account_creation: true
       default_homedir_umask: "0077"
+      homedir_base_path: "/home" # Override when homedirs are on a separate mount
+      # Lustre user quota example (alternative to CephFS):
+      # homedir_quota:
+      #   provider: "lustre"
+      #   mount_point: "/home"
+      #   block_softlimit: "943718400"   # in kilobytes (~900 GiB)
+      #   block_hardlimit: "1048576000"  # in kilobytes (~1 TiB)
+      #   inode_softlimit: 90000
+      #   inode_hardlimit: 100000
+      # XFS user quota example (alternative to CephFS/Lustre):
+      # homedir_quota:
+      #   provider: "xfs"
+      #   mount_point: "/home"
+      #   block_softlimit: "900g"
+      #   block_hardlimit: "1t"
+      #   inode_softlimit: 90000
+      #   inode_hardlimit: 100000
       # LDAP integration (requires waldur-site-agent-ldap plugin)
       ldap:
         uri: "ldap://ldap.sofiatech.bg"
