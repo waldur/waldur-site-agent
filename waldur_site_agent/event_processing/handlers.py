@@ -1,12 +1,16 @@
 """Handlers for different events and protocols."""
 
 import json
+from typing import Optional
 from uuid import UUID
 
 import stomp
 import stomp.utils
 from stomp.constants import HDR_DESTINATION
 from waldur_api_client import AuthenticatedClient
+from waldur_api_client.api.marketplace_offering_users import (
+    marketplace_offering_users_list,
+)
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_list,
 )
@@ -24,6 +28,7 @@ from waldur_api_client.models.agent_service import AgentService
 from waldur_api_client.models.slurm_command_result_request import (
     SlurmCommandResultRequest,
 )
+from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import agent_identity_management, structures
@@ -454,7 +459,13 @@ def _process_offering_user_message(
                 username,
                 len(resource_backend_ids),
             )
-            _add_user_to_resources(offering, username, resource_backend_ids, waldur_rest_client)
+            user_cuid = _resolve_user_cuid(
+                waldur_rest_client, message.get("user_uuid", ""), offering.uuid,
+            )
+            _add_user_to_resources(
+                offering, username, resource_backend_ids, waldur_rest_client,
+                user_cuid=user_cuid,
+            )
         else:
             logger.warning("Unknown offering user action: %s", action)
     except Exception:
@@ -500,11 +511,42 @@ def _forward_user_attributes_to_backend(
         logger.exception("Failed to forward attributes for user %s", username)
 
 
+def _resolve_user_cuid(
+    waldur_rest_client: AuthenticatedClient,
+    user_uuid: str,
+    offering_uuid: str,
+) -> Optional[str]:
+    """Look up the CUID (user_username) for a user from their offering user record.
+
+    The STOMP ``username_set`` message carries the offering_user_username
+    (the target-side local name) but backends like the identity bridge need
+    the real CUID (``user_username``).  This helper fetches the offering
+    user from the source Waldur and extracts it.
+    """
+    if not user_uuid:
+        return None
+    try:
+        offering_users = marketplace_offering_users_list.sync_all(
+            client=waldur_rest_client,
+            user_uuid=user_uuid,
+            offering_uuid=[offering_uuid],
+            is_restricted=False,
+        )
+        if offering_users:
+            val = offering_users[0].user_username
+            if val and not isinstance(val, type(UNSET)):
+                return val
+    except Exception:
+        logger.exception("Failed to resolve CUID for user %s", user_uuid)
+    return None
+
+
 def _add_user_to_resources(
     offering: structures.Offering,
     username: str,
     resource_backend_ids: list,
     waldur_rest_client: AuthenticatedClient,
+    user_cuid: Optional[str] = None,
 ) -> None:
     """Add a user to backend resources identified by their backend IDs.
 
@@ -549,7 +591,8 @@ def _add_user_to_resources(
                 )
                 continue
             try:
-                backend.add_user(resource, username)
+                add_kwargs = {"user_cuid": user_cuid} if user_cuid else {}
+                backend.add_user(resource, username, **add_kwargs)
             except Exception:
                 logger.exception(
                     "Failed to add user %s to resource %s",

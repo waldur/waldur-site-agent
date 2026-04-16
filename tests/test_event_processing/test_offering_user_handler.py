@@ -231,8 +231,8 @@ class TestAddUserToResources(unittest.TestCase):
         _add_user_to_resources(offering, "testuser", ["account-1", "account-2"], mock.Mock())
 
         self.assertEqual(mock_backend.add_user.call_count, 2)
-        mock_backend.add_user.assert_any_call(r1, "testuser")
-        mock_backend.add_user.assert_any_call(r2, "testuser")
+        mock_backend.add_user.assert_any_call(r1, "testuser", **{})
+        mock_backend.add_user.assert_any_call(r2, "testuser", **{})
 
     @mock.patch(
         "waldur_site_agent.event_processing.handlers.marketplace_provider_resources_list"
@@ -249,7 +249,7 @@ class TestAddUserToResources(unittest.TestCase):
 
         _add_user_to_resources(offering, "testuser", ["account-1", "account-2"], mock.Mock())
 
-        mock_backend.add_user.assert_called_once_with(r2, "testuser")
+        mock_backend.add_user.assert_called_once_with(r2, "testuser", **{})
 
     @mock.patch(
         "waldur_site_agent.event_processing.handlers.marketplace_provider_resources_list"
@@ -266,7 +266,7 @@ class TestAddUserToResources(unittest.TestCase):
 
         _add_user_to_resources(offering, "testuser", ["account-1"], mock.Mock())
 
-        mock_backend.add_user.assert_called_once_with(r1, "testuser")
+        mock_backend.add_user.assert_called_once_with(r1, "testuser", **{})
 
     @mock.patch("waldur_site_agent.event_processing.handlers.common_utils.get_backend_for_offering")
     def test_empty_resource_backend_ids_skips_backend(self, mock_get_backend):
@@ -308,9 +308,13 @@ class TestUsernameSetDispatchesToHelper(unittest.TestCase):
     """Test that username_set action in _process_offering_user_message calls _add_user_to_resources."""
 
     @mock.patch("waldur_site_agent.event_processing.handlers._add_user_to_resources")
+    @mock.patch("waldur_site_agent.event_processing.handlers._resolve_user_cuid")
     @mock.patch("waldur_site_agent.event_processing.handlers.register_event_process_service")
     @mock.patch("waldur_site_agent.event_processing.handlers.common_utils.get_client")
-    def test_username_set_calls_helper(self, mock_get_client, mock_register, mock_add_user):
+    def test_username_set_calls_helper(
+        self, mock_get_client, mock_register, mock_resolve_cuid, mock_add_user
+    ):
+        mock_resolve_cuid.return_value = "cuid@example.org"
         offering = _make_offering()
         message = _make_message(
             action="username_set",
@@ -324,4 +328,5 @@ class TestUsernameSetDispatchesToHelper(unittest.TestCase):
             "testuser",
             ["account-1", "account-2"],
             mock_get_client.return_value,
+            user_cuid="cuid@example.org",
         )
