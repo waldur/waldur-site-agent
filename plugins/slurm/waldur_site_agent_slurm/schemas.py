@@ -11,6 +11,7 @@ from typing import Optional
 
 from pydantic import ConfigDict, Field, field_validator
 
+from waldur_site_agent.backend.quota import HomedirQuotaConfig
 from waldur_site_agent.common.plugin_schemas import (
     PluginBackendSettingsSchema,
     PluginComponentSchema,
@@ -248,6 +249,18 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
     )
     default_homedir_umask: Optional[str] = Field(
         default="0077", description="Umask for created home directories"
+    )
+    homedir_base_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base path for user home directories (e.g. '/cephfs/home'). "
+            "When set, quota is applied to {homedir_base_path}/{username}. "
+            "When unset, the path is looked up from the system passwd database."
+        ),
+    )
+    homedir_quota: Optional[HomedirQuotaConfig] = Field(
+        default=None,
+        description="Filesystem quota settings for user home directories",
     )
 
     # Project directory management (optional, for sites with shared project storage)
