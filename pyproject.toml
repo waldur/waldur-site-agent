@@ -69,7 +69,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.poe.tasks]
-pre.cmd = "pre-commit run --all-files"
+pre.cmd = "uvx prek run --all-files"
 pre.help = "Run pre-commit checks"
 mypy.cmd = "mypy py_maker/**/*.py tests/**/*.py --strict"
 mypy.help = "Run mypy checks"

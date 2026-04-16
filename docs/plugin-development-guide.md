@@ -770,7 +770,7 @@ When implementing a new backend plugin with an LLM, follow these steps in order:
 8. **Register entry points**: Add to `pyproject.toml`.
 9. **Test integration**: Install with `uv sync --all-packages` and run
    `waldur_site_diagnostics`.
-10. **Verify**: Run `uv run pytest` and `pre-commit run --all-files`.
+10. **Verify**: Run `uv run pytest` and `uvx prek run --all-files`.
 
 ### Files to study
 

@@ -604,13 +604,13 @@ tests/test_integration.py (20 integration tests, gated)
 
 ```bash
 # Linting
-pre-commit run ruff --all-files
+uvx prek run ruff --all-files
 
 # Type checking
-pre-commit run mypy --all-files
+uvx prek run mypy --all-files
 
 # All checks
-pre-commit run --all-files
+uvx prek run --all-files
 ```
 
 ## Troubleshooting
