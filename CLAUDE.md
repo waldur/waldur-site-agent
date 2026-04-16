@@ -41,7 +41,7 @@ uv run pytest tests/
 uv run pytest plugins/slurm/
 
 # Lint and format
-pre-commit run --all-files
+uvx prek run --all-files
 
 # Regenerate plugin table in README.md (run after adding/removing plugins)
 uv run python scripts/generate_plugin_table.py

@@ -613,7 +613,7 @@ uv run pytest plugins/rancher/tests/
 ### Code Quality
 
 ```bash
-pre-commit run --all-files
+uvx prek run --all-files
 ```
 
 ## Troubleshooting

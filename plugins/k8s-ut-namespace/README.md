@@ -414,5 +414,5 @@ backend_settings:
 ### Code Quality
 
 ```bash
-pre-commit run --all-files
+uvx prek run --all-files
 ```

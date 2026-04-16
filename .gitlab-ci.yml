@@ -765,7 +765,7 @@ Lint dockerfile:
 #     SBOM_DIR: "source"
 
 Publish python module tagged release with uv:
-  image: ghcr.io/astral-sh/uv:python3.13-alpine
+  image: registry.hpc.ut.ee/mirror/library/python:3.13-bookworm
   stage: release
   interruptible: true
   variables:
@@ -776,6 +776,7 @@ Publish python module tagged release with uv:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
   script:
+    - pip install uv
     - python3 scripts/bump_versions.py "$CI_COMMIT_TAG"
     - uv build --all-packages
     - uv publish
