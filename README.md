@@ -57,7 +57,7 @@ uv sync --all-packages
 uv run pytest
 
 # Format and lint code
-pre-commit run --all-files
+uvx prek run --all-files
 
 # Load components into Waldur
 waldur_site_load_components -c <config-file>
