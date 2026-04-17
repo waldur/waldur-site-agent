@@ -41,13 +41,26 @@ def _make_waldur_resource(
 
 
 def _make_backend(
-    components: dict, settings: Optional[dict] = None,
+    components: dict,
+    settings: Optional[dict] = None,
+    slurm_tres: Optional[dict] = None,
 ) -> SlurmBackend:
-    """Create a SlurmBackend with mocked client."""
+    """Create a SlurmBackend with mocked client.
+
+    ``slurm_tres`` controls which TRES keys the mock client advertises as valid.
+    When omitted the mock's slurm_tres iterates as empty, which causes the
+    unknown-key filter to be skipped (matches behaviour of other test suites).
+    """
     with mock.patch(
         "waldur_site_agent_slurm.backend.SlurmClient", autospec=True
     ):
-        return SlurmBackend(settings or {}, components)
+        backend = SlurmBackend(settings or {}, components)
+
+    # slurm_tres is set in SlurmClient.__init__ but autospec doesn't replicate
+    # instance attributes — set it explicitly only when the test needs it.
+    if slurm_tres is not None:
+        backend.client.slurm_tres = slurm_tres
+    return backend
 
 
 class TestCalculateDurationMonths:
@@ -368,3 +381,113 @@ class TestCollectResourceLimitsNullDates:
 
         expected = 6
         assert allocation_limits["cpu"] == expected
+
+
+class TestCollectResourceLimitsUnknownTres:
+    """Tests that unknown TRES keys are filtered out before reaching sacctmgr."""
+
+    def test_unknown_key_dropped_passthrough(self) -> None:
+        """Non-TRES component keys are excluded from allocation_limits in passthrough mode."""
+        components = {
+            "cpu": {
+                "measured_unit": "cores",
+                "unit_factor": 1,
+                "accounting_type": "limit",
+                "label": "CPU",
+            },
+            "consultancy": {
+                "measured_unit": "hours",
+                "unit_factor": 1,
+                "accounting_type": "limit",
+                "label": "Consultancy",
+            },
+        }
+        backend = _make_backend(components, slurm_tres={"cpu": {}})
+        resource = _make_waldur_resource(limits={"cpu": 900, "consultancy": 3})
+
+        allocation_limits, _ = backend._collect_resource_limits(resource)
+
+        assert "consultancy" not in allocation_limits
+        assert allocation_limits["cpu"] == 900  # noqa: PLR2004
+
+    def test_known_tres_keys_preserved(self) -> None:
+        """All keys present in slurm_tres pass through unaffected."""
+        components = {
+            "cpu": {
+                "measured_unit": "cores",
+                "unit_factor": 1,
+                "accounting_type": "limit",
+                "label": "CPU",
+            },
+            "mem": {
+                "measured_unit": "MB",
+                "unit_factor": 1,
+                "accounting_type": "limit",
+                "label": "Memory",
+            },
+        }
+        backend = _make_backend(components, slurm_tres={"cpu": {}, "mem": {}})
+        resource = _make_waldur_resource(limits={"cpu": 100, "mem": 2048})
+
+        allocation_limits, _ = backend._collect_resource_limits(resource)
+
+        assert allocation_limits == {"cpu": 100, "mem": 2048}
+
+    def test_all_unknown_keys_dropped(self) -> None:
+        """When every limit key is unknown, allocation_limits ends up empty."""
+        components = {
+            "consultancy": {
+                "measured_unit": "hours",
+                "unit_factor": 1,
+                "accounting_type": "limit",
+                "label": "Consultancy",
+            },
+        }
+        backend = _make_backend(components, slurm_tres={"cpu": {}})
+        resource = _make_waldur_resource(limits={"consultancy": 5})
+
+        allocation_limits, _ = backend._collect_resource_limits(resource)
+
+        assert allocation_limits == {}
+
+    def test_unknown_key_dropped_component_mapper_mode(self) -> None:
+        """Unknown TRES keys produced by ComponentMapper are also filtered out."""
+        # "gpu_hours" maps to two targets: "gres/gpu" (valid TRES) and
+        # "consultancy" (Waldur-only billing component, not a SLURM TRES).
+        components = {
+            "gpu_hours": {
+                "measured_unit": "GPU-hours",
+                "accounting_type": "limit",
+                "label": "GPU hours",
+                "target_components": {
+                    "gres/gpu": {"factor": 1},
+                    "consultancy": {"factor": 0.1},
+                },
+            },
+        }
+        backend = _make_backend(components, slurm_tres={"gres/gpu": {}})
+        resource = _make_waldur_resource(limits={"gpu_hours": 100})
+
+        allocation_limits, _ = backend._collect_resource_limits(resource)
+
+        assert "consultancy" not in allocation_limits
+        assert "gres/gpu" in allocation_limits
+
+    def test_filter_skipped_when_slurm_tres_absent(self) -> None:
+        """When slurm_tres is not set on the client, the filter is skipped entirely."""
+        components = {
+            "cpu": {
+                "measured_unit": "cores",
+                "unit_factor": 1,
+                "accounting_type": "limit",
+                "label": "CPU",
+            },
+        }
+        # Do NOT pass slurm_tres — mock client won't have the attribute.
+        backend = _make_backend(components)
+        resource = _make_waldur_resource(limits={"cpu": 500})
+
+        allocation_limits, _ = backend._collect_resource_limits(resource)
+
+        # Without slurm_tres, no filtering happens and the key is preserved.
+        assert allocation_limits == {"cpu": 500}  # noqa: PLR2004

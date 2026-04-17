@@ -365,6 +365,18 @@ class SlurmBackend(backends.BaseBackend):
         for component_key in usage_based_limits:
             waldur_resource_limits[component_key] = self.backend_components[component_key]["limit"]
 
+        # Filter out keys that are not known SLURM TRES types to prevent sacctmgr errors.
+        # Only apply when slurm_tres is populated; skip if absent or empty (e.g. mocked clients).
+        known_tres = set(getattr(self.client, "slurm_tres", {}).keys())
+        if known_tres:
+            unknown_keys = set(allocation_limits) - known_tres
+            if unknown_keys:
+                logger.warning(
+                    "Dropping unknown TRES keys from allocation limits (not in SLURM config): %s",
+                    sorted(unknown_keys),
+                )
+                allocation_limits = {k: v for k, v in allocation_limits.items() if k in known_tres}
+
         # Convert to integers
         allocation_limits = {k: int(v) for k, v in allocation_limits.items()}
         waldur_resource_limits = {k: int(v) for k, v in waldur_resource_limits.items()}
