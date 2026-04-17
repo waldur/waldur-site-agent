@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-slurm"
-version = "1.0.4rc4"
+version = "1.0.4rc5"
 description = "SLURM plugin for Waldur Site Agent"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent>=1.0.4rc4"
+    "waldur-site-agent>=1.0.4rc5"
 ]
 
 [project.optional-dependencies]

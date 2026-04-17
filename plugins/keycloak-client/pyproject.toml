@@ -1,11 +1,11 @@
 [project]
 name = "waldur-site-agent-keycloak-client"
-version = "1.0.4rc4"
+version = "1.0.4rc5"
 description = "Shared Keycloak client for Waldur Site Agent plugins"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent>=1.0.4rc4",
+    "waldur-site-agent>=1.0.4rc5",
     "python-keycloak>=3.0.0,<4.0.0",
 ]
 

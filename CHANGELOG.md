@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.4-rc.5 - 2026-04-17
+
+### Highlights
+
+Release candidate for 1.0.4.
+
+### Changes
+
+- Version bump and lockfile refresh.
+
+---
+
 ## 1.0.2 - 2026-04-13
 
 ### Highlights
