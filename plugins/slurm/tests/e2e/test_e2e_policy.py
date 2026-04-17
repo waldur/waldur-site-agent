@@ -355,10 +355,19 @@ def _create_policy(
     )
     # Use raw httpx client to avoid SlurmPeriodicUsagePolicy.from_dict()
     # crash on nullable date fields (dateutil isoparser TypeError).
+    payload = body.to_dict()
     resp = client.get_httpx_client().post(
         "/api/marketplace-slurm-periodic-usage-policies/",
-        json=body.to_dict(),
+        json=payload,
     )
+    if resp.is_error:
+        logger.error(
+            "[%s] policy create failed: status=%s response=%s payload=%s",
+            cfg.id,
+            resp.status_code,
+            resp.text,
+            payload,
+        )
     resp.raise_for_status()
     return str(resp.json()["uuid"]).replace("-", "")
 

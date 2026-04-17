@@ -491,7 +491,8 @@
       "name": "Node Hours",
       "description": "Node time in hours",
       "billing_type": "limit",
-      "measured_unit": "Hours"
+      "measured_unit": "Hours",
+      "limit_period": "total"
     },
     {
       "uuid": "e2e5000000000000000000000000000b",
@@ -500,7 +501,8 @@
       "name": "Node Hours",
       "description": "Node time in hours",
       "billing_type": "limit",
-      "measured_unit": "Hours"
+      "measured_unit": "Hours",
+      "limit_period": "total"
     }
   ],
 
