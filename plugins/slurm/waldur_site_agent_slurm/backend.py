@@ -366,8 +366,11 @@ class SlurmBackend(backends.BaseBackend):
             waldur_resource_limits[component_key] = self.backend_components[component_key]["limit"]
 
         # Filter out keys that are not known SLURM TRES types to prevent sacctmgr errors.
-        # Only apply when slurm_tres is populated; skip if absent or empty (e.g. mocked clients).
-        known_tres = set(getattr(self.client, "slurm_tres", {}).keys())
+        # Query SLURM directly; skip filter if unreachable or returns empty.
+        try:
+            known_tres = set(self.list_components())
+        except Exception:
+            known_tres = set()
         if known_tres:
             unknown_keys = set(allocation_limits) - known_tres
             if unknown_keys:
