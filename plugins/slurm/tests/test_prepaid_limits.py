@@ -47,19 +47,16 @@ def _make_backend(
 ) -> SlurmBackend:
     """Create a SlurmBackend with mocked client.
 
-    ``slurm_tres`` controls which TRES keys the mock client advertises as valid.
-    When omitted the mock's slurm_tres iterates as empty, which causes the
-    unknown-key filter to be skipped (matches behaviour of other test suites).
+    ``slurm_tres`` controls which TRES keys list_tres() returns as valid.
+    When omitted, list_tres() returns an empty list and the unknown-key filter
+    is skipped (matches behaviour of other test suites).
     """
     with mock.patch(
         "waldur_site_agent_slurm.backend.SlurmClient", autospec=True
     ):
         backend = SlurmBackend(settings or {}, components)
 
-    # slurm_tres is set in SlurmClient.__init__ but autospec doesn't replicate
-    # instance attributes — set it explicitly only when the test needs it.
-    if slurm_tres is not None:
-        backend.client.slurm_tres = slurm_tres
+    backend.client.list_tres.return_value = list(slurm_tres.keys()) if slurm_tres is not None else []
     return backend
 
 
@@ -473,8 +470,8 @@ class TestCollectResourceLimitsUnknownTres:
         assert "consultancy" not in allocation_limits
         assert "gres/gpu" in allocation_limits
 
-    def test_filter_skipped_when_slurm_tres_absent(self) -> None:
-        """When slurm_tres is not set on the client, the filter is skipped entirely."""
+    def test_filter_skipped_when_list_tres_returns_empty(self) -> None:
+        """When list_tres() returns empty list, the filter is skipped entirely."""
         components = {
             "cpu": {
                 "measured_unit": "cores",
@@ -483,11 +480,11 @@ class TestCollectResourceLimitsUnknownTres:
                 "label": "CPU",
             },
         }
-        # Do NOT pass slurm_tres — mock client won't have the attribute.
+        # Do NOT pass slurm_tres — list_tres() returns [] and filter is skipped.
         backend = _make_backend(components)
         resource = _make_waldur_resource(limits={"cpu": 500})
 
         allocation_limits, _ = backend._collect_resource_limits(resource)
 
-        # Without slurm_tres, no filtering happens and the key is preserved.
+        # Without known TRES, no filtering happens and the key is preserved.
         assert allocation_limits == {"cpu": 500}  # noqa: PLR2004

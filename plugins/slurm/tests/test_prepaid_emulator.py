@@ -124,6 +124,8 @@ class TestPrepaidEmulatorScenarios:
         self, components: dict, settings: Optional[dict] = None,
     ) -> SlurmBackend:
         """Create a SlurmBackend with emulator-patched client."""
+        from unittest import mock as _mock  # noqa: PLC0415
+
         default_settings = {
             "default_account": "root",
             "customer_prefix": "",
@@ -132,7 +134,13 @@ class TestPrepaidEmulatorScenarios:
         }
         if settings:
             default_settings.update(settings)
-        return SlurmBackend(default_settings, components)
+        backend = SlurmBackend(default_settings, components)
+        # The emulator doesn't register custom TRES types (e.g. node_hours), so
+        # list_components() would return only built-in SLURM TRES and cause custom
+        # components to be filtered out. Simulate the real-cluster behavior where
+        # all configured component keys are registered TRES types.
+        backend.list_components = _mock.MagicMock(return_value=list(components.keys()))
+        return backend
 
     def _create_account(self, backend: SlurmBackend, name: str) -> None:
         """Create a SLURM account under root."""
