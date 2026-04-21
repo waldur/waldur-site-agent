@@ -1,21 +1,22 @@
 # Basic Rancher Plugin Configuration (without Keycloak)
 # This creates one Rancher project per Waldur project without OIDC group integration
 
-# Waldur API configuration
-waldur:
-  api_url: "https://waldur.example.com/api/"
-  token: "your-waldur-api-token-here"
-
 offerings:
   - name: "rancher-projects"
-    uuid: "12345678-1234-5678-9abc-123456789012"
 
-    # Backend type - must be 'rancher'
+    # Waldur API configuration
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "your-waldur-api-token-here"
+    waldur_offering_uuid: "12345678-1234-5678-9abc-123456789012"
+
+    # Backend type and processing backends
     backend_type: "rancher"
+    order_processing_backend: "rancher"
+    membership_sync_backend: "rancher"
+    reporting_backend: "rancher"
 
     # Backend configuration
-    backend:
-      # Rancher server configuration (matches waldur-mastermind format)
+    backend_settings:
       backend_url: "https://rancher.example.com"
       username: "your-rancher-access-key"
       password: "your-rancher-secret-key"
@@ -29,21 +30,24 @@ offerings:
       keycloak_enabled: false
 
     # Component definitions for resource management
-    components:
+    backend_components:
       cpu:
         type: "cpu"
-        name: "CPU"
+        label: "CPU"
         measured_unit: "cores"
-        billing_type: "limit"
+        unit_factor: 1
+        accounting_type: "limit"
 
       memory:
         type: "ram"
-        name: "RAM"
+        label: "RAM"
         measured_unit: "GB"
-        billing_type: "limit"
+        unit_factor: 1
+        accounting_type: "limit"
 
       storage:
         type: "storage"
-        name: "Storage"
+        label: "Storage"
         measured_unit: "GB"
-        billing_type: "limit"
+        unit_factor: 1
+        accounting_type: "limit"
