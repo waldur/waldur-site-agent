@@ -47,6 +47,9 @@ _MEMBERSHIP_EXTRA_FIELDS = {
     ResourceFieldEnum.RESTRICT_MEMBER_ACCESS,
     ResourceFieldEnum.PAUSED,
     ResourceFieldEnum.DOWNSCALED,
+    # Required by sync_resource_end_date: omitting end_date causes the scheduler
+    # to read it as UNSET (→ None) and overwrite the real value on Waldur B.
+    ResourceFieldEnum.END_DATE,
 }
 
 
@@ -158,6 +161,26 @@ class TestMembershipProcessorFieldSelection:
 
         assert ResourceFieldEnum.PROJECT_SLUG in requested_fields
         assert ResourceFieldEnum.CUSTOMER_SLUG in requested_fields
+
+    @mock.patch("waldur_site_agent.common.processors.marketplace_provider_resources_list")
+    def test_includes_end_date_fields_for_sync(self, mock_api):
+        """end_date and end_date_updated_at are fetched in the scheduled membership sync.
+
+        Without these fields the resource arrives with end_date=UNSET, which
+        sync_resource_end_date converts to None and pushes to Waldur B —
+        silently clearing a real end_date on every sync cycle.
+        """
+        mock_api.sync_all.return_value = []
+
+        processor = _make_membership_processor()
+        processor._get_waldur_resources()
+
+        call_kwargs = mock_api.sync_all.call_args
+        requested_fields = set(call_kwargs.kwargs.get("field", []))
+
+        assert ResourceFieldEnum.END_DATE in requested_fields, (
+            "end_date missing: scheduler will read UNSET and overwrite real end_date on B with None"
+        )
 
 
 class TestReportProcessorFieldSelection:
