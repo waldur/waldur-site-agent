@@ -69,6 +69,7 @@ class WaldurBackend(backends.BaseBackend):
         self.order_poll_interval = int(backend_settings.get("order_poll_interval", 5))
         self.user_not_found_action = backend_settings.get("user_not_found_action", "warn")
         self.role_mapping: dict[str, str] = backend_settings.get("role_mapping", {})
+        self.fetch_consented_users_only: bool = backend_settings.get("fetch_consented_users_only", False)
         self.end_date_sync_direction: str = backend_settings.get(
             "end_date_sync_direction", "bidirectional"
         )

@@ -21,7 +21,7 @@ import time as _time
 import traceback
 from enum import Enum
 from time import sleep
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar, Optional, Union
 from zoneinfo import ZoneInfo
 
 from waldur_api_client.api.backend_resource_requests import (
@@ -132,7 +132,7 @@ from waldur_api_client.models.resource_backend_id_request import ResourceBackend
 from waldur_api_client.models.resource_backend_metadata_request import (
     ResourceBackendMetadataRequest,
 )
-from waldur_api_client.types import UNSET
+from waldur_api_client.types import UNSET, Unset
 
 from waldur_site_agent.backend import BackendType, logger
 from waldur_site_agent.backend import exceptions as backend_exceptions
@@ -1782,14 +1782,16 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         logger.info("Fetched %d offering users", len(offering_users))
         return offering_users
 
-    def _get_waldur_resource_team(self, resource: WaldurResource) -> list[ProjectUser]:
+    def _get_waldur_resource_team(
+        self, resource: WaldurResource, has_consent: Union[bool, Unset] = UNSET
+    ) -> list[ProjectUser]:
         cache_key = resource.project_uuid.hex
         if cache_key in self._team_cache:
             logger.info("Using cached team for project %s", cache_key)
             return self._team_cache[cache_key]
         logger.info("Fetching Waldur resource team")
         team = marketplace_provider_resources_team_list.sync(
-            client=self.waldur_rest_client, uuid=resource.uuid.hex
+            client=self.waldur_rest_client, uuid=resource.uuid.hex, has_consent=has_consent
         )
         self._team_cache[cache_key] = team
         return team
@@ -1830,31 +1832,38 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             ", ".join(local_usernames),
         )
 
+        use_identity_bridge = (
+            getattr(self.resource_backend, "user_resolve_method", None) == "identity_bridge"
+        )
+        fetch_consented_users_only = getattr(
+            self.resource_backend, "fetch_consented_users_only", False
+        )
+
         # Offering users sync
         # The service fetches offering users from Waldur and pushes them to the cluster
         # If an offering user is not in the team anymore, it will be removed from the backend
-        team: list[ProjectUser] = self._get_waldur_resource_team(waldur_resource)
+        team: list[ProjectUser] = self._get_waldur_resource_team(
+            waldur_resource, has_consent=True if fetch_consented_users_only else UNSET
+        )
 
         offering_user_usernames = {
             offering_user.username for offering_user in offering_users if offering_user.username
         }
 
-        use_identity_bridge = (
-            getattr(self.resource_backend, "user_resolve_method", None) == "identity_bridge"
-        )
-
         resource_usernames = {
             user.offering_user_username for user in team if user.offering_user_username
         }
         # Federation (Waldur↔Waldur) deadlock breaker:
-        # Membership sync mustbe able to add users to Waldur B even if A does not
+        # Membership sync must be able to add users to Waldur B even if A does not
         # yet have offering_user_username. When the backend supports identity bridge resolution,
         # fall back to using the user's CUID (ProjectUser.username) as the identifier.
+        # Consent filtering is enforced upstream via has_consent=True on the team API call.
         if use_identity_bridge:
             cuid_only_usernames = {
                 user.username
                 for user in team
-                if user.username and not user.offering_user_username
+                if user.username
+                and not user.offering_user_username
             }
             resource_usernames |= cuid_only_usernames
         logger.info(
@@ -1874,7 +1883,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 {
                     user.username: user.role
                     for user in team
-                    if user.username and not user.offering_user_username and user.role
+                    if user.username
+                    and not user.offering_user_username
+                    and user.role
                 }
             )
 
@@ -1917,7 +1928,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 {
                     user.username: user.username
                     for user in team
-                    if user.username and not user.offering_user_username
+                    if user.username
+                    and not user.offering_user_username
                 }
             )
 
