@@ -367,8 +367,9 @@ class MembershipSyncTest(unittest.TestCase):
         Federation flow: users may be present in Waldur A team without offering_user_username,
         because backend username is assigned on Waldur B and reconciled back to A later.
 
-        When identity bridge resolution is enabled on the backend, membership sync must fall back
-        to using CUID (ProjectUser.username) so users can be added to Waldur B.
+        When identity bridge resolution is enabled on the backend, membership sync falls back
+        to using CUID (ProjectUser.username). Consent filtering is enforced upstream by the
+        team API call (has_consent=True), so all returned team members are included.
         """
         processor = object.__new__(OfferingMembershipProcessor)
         processor._team_cache = {}
@@ -391,7 +392,7 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MANAGER",
             )
         ]
-        processor._get_waldur_resource_team = lambda _resource: team  # type: ignore[assignment]
+        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
 
         (
             _existing_usernames,
@@ -431,7 +432,7 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MANAGER",
             )
         ]
-        processor._get_waldur_resource_team = lambda _resource: team  # type: ignore[assignment]
+        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
 
         (
             _existing_usernames,
@@ -471,7 +472,7 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MEMBER",
             )
         ]
-        processor._get_waldur_resource_team = lambda _resource: team  # type: ignore[assignment]
+        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
 
         (
             _existing_usernames,
@@ -517,7 +518,10 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MEMBER",
             ),
         ]
-        processor._get_waldur_resource_team = lambda _resource: team  # type: ignore[assignment]
+        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
+
+        alice_ou = SimpleNamespace(username="alice-on-b", user_username="cuid:alice", user_email=None, state=None)
+        bob_ou = SimpleNamespace(username=None, user_username="cuid:bob", user_email=None)
 
         (
             _existing_usernames,
@@ -529,7 +533,7 @@ class MembershipSyncTest(unittest.TestCase):
             _user_attributes,
             _offering_user_states,
         ) = processor._group_resource_usernames(
-            waldur_resource, backend_resource_info, offering_users=[]
+            waldur_resource, backend_resource_info, offering_users=[alice_ou, bob_ou]
         )
 
         # Both users should be new
@@ -545,7 +549,7 @@ class MembershipSyncTest(unittest.TestCase):
         assert user_cuids["cuid:bob"] == "cuid:bob"
 
     def test_group_resource_usernames_cuid_user_existing_on_backend(self) -> None:
-        """CUID-only user already on backend should appear in existing, not new."""
+        """CUID-only user (ToS accepted) already on backend should appear in existing, not new."""
         processor = object.__new__(OfferingMembershipProcessor)
         processor._team_cache = {}
         processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
@@ -564,7 +568,9 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MANAGER",
             )
         ]
-        processor._get_waldur_resource_team = lambda _resource: team  # type: ignore[assignment]
+        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
+
+        alice_ou = SimpleNamespace(username=None, user_username="cuid:alice", user_email=None)
 
         (
             existing_usernames,
@@ -576,8 +582,59 @@ class MembershipSyncTest(unittest.TestCase):
             _user_attributes,
             _offering_user_states,
         ) = processor._group_resource_usernames(
-            waldur_resource, backend_resource_info, offering_users=[]
+            waldur_resource, backend_resource_info, offering_users=[alice_ou]
         )
 
         assert "cuid:alice" in existing_usernames
         assert "cuid:alice" not in new_usernames
+
+    def test_group_resource_usernames_includes_all_cuid_only_team_members(self) -> None:
+        """All CUID-only users returned by the team API are synced.
+
+        Consent filtering is enforced upstream via has_consent=True on the API call,
+        so site-agent includes every team member returned regardless of local offering_users.
+        """
+        processor = object.__new__(OfferingMembershipProcessor)
+        processor._team_cache = {}
+        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
+        processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
+
+        waldur_resource = SimpleNamespace(
+            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+        )
+        backend_resource_info = SimpleNamespace(users=[])
+
+        team = [
+            SimpleNamespace(
+                offering_user_username="",
+                username="cuid:alice",
+                role="PROJECT.MANAGER",
+            ),
+            SimpleNamespace(
+                offering_user_username="",
+                username="cuid:ville",
+                role="PROJECT.MEMBER",
+            ),
+        ]
+        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
+
+        (
+            _existing_usernames,
+            _stale_usernames,
+            new_usernames,
+            user_roles,
+            _user_emails,
+            user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[]
+        )
+
+        assert "cuid:alice" in new_usernames
+        assert user_roles["cuid:alice"] == "PROJECT.MANAGER"
+        assert user_cuids["cuid:alice"] == "cuid:alice"
+
+        assert "cuid:ville" in new_usernames
+        assert user_roles["cuid:ville"] == "PROJECT.MEMBER"
+        assert user_cuids["cuid:ville"] == "cuid:ville"
