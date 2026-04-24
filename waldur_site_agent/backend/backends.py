@@ -488,7 +488,13 @@ class BaseBackend(ABC):
         waldur_resource: WaldurResource,
         **kwargs: str,
     ) -> None:
-        """Delete resource from the backend."""
+        """Delete resource from the backend.
+
+        If ``soft_delete`` is enabled in backend_settings, the resource account
+        is preserved but made unusable: jobs are cancelled, users are removed,
+        and limits are zeroed. This allows later restoration with the same
+        backend_id.
+        """
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             logger.warning("Empty backend_id for resource, skipping deletion")
@@ -500,23 +506,34 @@ class BaseBackend(ABC):
             )
             return
 
-        self._pre_delete_resource(waldur_resource)
-        self._delete_resource_safely(resource_backend_id)
+        soft_delete = self.backend_settings.get("soft_delete", False)
 
-        if "project_slug" in kwargs:
-            project_backend_id = self._get_project_backend_id(kwargs["project_slug"])
-            if (
-                len(
-                    [
-                        resource
-                        for resource in self.client.list_resources()
-                        if resource.organization == project_backend_id
-                        and resource.name != project_backend_id
-                    ]
-                )
-                == 0
-            ):
-                self._delete_resource_safely(project_backend_id)
+        self._pre_delete_resource(waldur_resource)
+
+        if soft_delete:
+            logger.info(
+                "Soft-deleting resource %s: zeroing limits instead of removing account",
+                resource_backend_id,
+            )
+            zero_limits = dict.fromkeys(self.backend_components, 0)
+            self.set_resource_limits(resource_backend_id, zero_limits)
+        else:
+            self._delete_resource_safely(resource_backend_id)
+
+            if "project_slug" in kwargs:
+                project_backend_id = self._get_project_backend_id(kwargs["project_slug"])
+                if (
+                    len(
+                        [
+                            resource
+                            for resource in self.client.list_resources()
+                            if resource.organization == project_backend_id
+                            and resource.name != project_backend_id
+                        ]
+                    )
+                    == 0
+                ):
+                    self._delete_resource_safely(project_backend_id)
 
         self.post_delete_resource(waldur_resource)
 

@@ -847,7 +847,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 return
 
             order_is_done = False
-            if order.type_ == RequestTypes.CREATE:
+            if order.type_ in (RequestTypes.CREATE, RequestTypes.RESTORE):
                 order_is_done = self._process_create_order(order)
 
             if order.type_ == RequestTypes.UPDATE:
@@ -1174,7 +1174,8 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         )
 
         create_resource = True
-        if waldur_resource.backend_id != "":
+        reuse_backend_id = False
+        if isinstance(waldur_resource.backend_id, str) and waldur_resource.backend_id != "":
             logger.info(
                 "Waldur resource backend id is not empty %s, checking backend resource data",
                 waldur_resource.backend_id,
@@ -1190,10 +1191,11 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             else:
                 logger.warning(
                     "Resource %s has backend_id %s but pull_resource returned None, "
-                    "will re-create",
+                    "will re-create with the same backend_id",
                     waldur_resource.name,
                     waldur_resource.backend_id,
                 )
+                reuse_backend_id = True
 
         if not create_resource:
             # Resource already exists on backend — complete the order.
@@ -1207,9 +1209,22 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         # Fetch user context for resource creation
         user_context = self._fetch_user_context_for_resource(order.marketplace_resource_uuid.hex)
 
-        backend_resource_info = self._create_resource(
-            waldur_resource, user_context
-        )
+        if reuse_backend_id:
+            # Re-create the resource with the original backend_id (e.g., after
+            # a terminated resource is being restored). This preserves the
+            # original SLURM account name instead of generating a new one.
+            logger.info(
+                "Re-creating resource %s with original backend_id %s",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+            )
+            backend_resource_info = self.resource_backend.create_resource_with_id(
+                waldur_resource, waldur_resource.backend_id, user_context
+            )
+        else:
+            backend_resource_info = self._create_resource(
+                waldur_resource, user_context
+            )
         if backend_resource_info is None:
             msg = f"Unable to create the resource {waldur_resource.name}"
             raise backend_exceptions.BackendError(msg)
@@ -1394,7 +1409,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         return True
 
     def _post_process_order(self, order: OrderDetails) -> bool:
-        if order.type_ == RequestTypes.CREATE:
+        if order.type_ in (RequestTypes.CREATE, RequestTypes.RESTORE):
             logger.info(
                 "Running post process order script for %s (%s)",
                 order.resource_name or "N/A",
