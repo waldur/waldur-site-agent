@@ -138,7 +138,8 @@
       "customer_uuid": "e2ec0000000000000000000000000001",
       "description": "Usage-based SLURM offering for E2E tests. Components: cpu (k-Hours) and ram (gb-Hours), both billed by usage.",
       "plugin_options": {
-        "service_provider_can_create_offering_user": true
+        "service_provider_can_create_offering_user": true,
+        "can_restore_resource": true
       }
     },
     {

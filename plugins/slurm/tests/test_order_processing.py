@@ -518,6 +518,241 @@ class TerminationOrderTest(unittest.TestCase):
         # The method was called twice: for project account and for allocation account
         assert slurm_client.delete_resource.call_count == 2
 
+    def test_soft_delete_zeroes_limits_instead_of_removing(self, slurm_client_class: mock.Mock) -> None:
+        """When soft_delete is enabled, termination should zero limits instead of deleting the account."""
+        setup_common_respx_mocks(
+            self.base_url,
+            self.waldur_user,
+            self.waldur_offering,
+            self.waldur_resource,
+        )
+        respx.post(
+            f"{self.base_url}/api/marketplace-orders/{self.order_uuid}/set_state_done/"
+        ).respond(200, json={})
+
+        respx.get(
+            f"{self.base_url}/api/marketplace-orders/",
+            params={"offering_uuid": OFFERING.uuid, "state": ["pending-provider", "executing"]},
+        ).respond(200, json=[self.waldur_order])
+        respx.get(f"{self.base_url}/api/marketplace-orders/{self.order_uuid}/").respond(
+            200, json=self.waldur_order
+        )
+
+        slurm_client = slurm_client_class.return_value
+        slurm_client.get_resource.return_value = ClientResource(
+            name="test-allocation-01",
+            description="test-allocation-01",
+            organization="hpc_project-1",
+        )
+        slurm_client._execute_command.return_value = ""
+
+        # Enable soft_delete in offering backend_settings
+        soft_delete_settings = dict(OFFERING.backend_settings)
+        soft_delete_settings["soft_delete"] = True
+        offering_with_soft_delete = OFFERING.model_copy(
+            update={"backend_settings": soft_delete_settings},
+        )
+
+        processor = OfferingOrderProcessor(offering_with_soft_delete, self.mock_client)
+        processor.process_offering()
+        # Account should NOT be deleted
+        assert slurm_client.delete_resource.call_count == 0
+        # Limits should be zeroed
+        assert slurm_client.set_resource_limits.call_count == 1
+
+
+@mock.patch(
+    "waldur_site_agent_slurm.backend.SlurmClient",
+    autospec=True,
+)
+class RestoreOrderTest(unittest.TestCase):
+    """Test that RESTORE orders are processed like CREATE orders."""
+
+    BASE_URL = "https://waldur.example.com"
+
+    def setUp(self) -> None:
+        respx.start()
+        self.allocation_uuid = uuid.uuid4().hex
+        self.project_uuid = uuid.uuid4().hex
+        self.order_uuid = uuid.UUID("3c76f6ea-3482-4cb9-a975-ae0235ba4ac8").hex
+        self.resource_uuid = uuid.uuid4().hex
+        self.backend_id = "hpc_sample-resource-1"
+
+        self.waldur_order = models.OrderDetails(
+            uuid=self.order_uuid,
+            type_=RequestTypes.RESTORE,
+            resource_name="test-allocation-01",
+            project_slug="project-1",
+            customer_slug="customer-1",
+        ).to_dict()
+        self.waldur_user = models.User(
+            uuid=uuid.uuid4(),
+            username="test-user",
+            date_joined=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            email="test@example.com",
+            full_name="Test User",
+        ).to_dict()
+        self.waldur_offering = models.Offering(
+            uuid=OFFERING.uuid,
+            name=OFFERING.name,
+            created=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            state=OfferingState.ACTIVE,
+            type_=MARKETPLACE_SLURM_OFFERING_TYPE,
+            plugin_options=MergedPluginOptions(
+                username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
+            ),
+            customer_uuid=uuid.uuid4().hex,
+        ).to_dict()
+        self.waldur_resource = models.Resource(
+            uuid=self.resource_uuid,
+            name="sample-resource-1",
+            offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+            project_slug="project-1",
+            customer_slug="customer-1",
+            customer_name="test-allocation-01",
+            resource_type="Slurm",
+            resource_uuid=self.allocation_uuid,
+            project_uuid=self.project_uuid,
+            slug="sample-resource-1",
+            state=ResourceState.CREATING,
+            backend_id=self.backend_id,
+            offering_plugin_options={
+                "account_name_generation_policy": "resource_name",
+                "account_name_prefix": "hpc_",
+            },
+            limits=ResourceLimits.from_dict(
+                {
+                    "cpu": 10,
+                    "mem": 20,
+                }
+            ),
+        ).to_dict()
+        self.team_member = models.ProjectUser(
+            uuid=uuid.uuid4(),
+            username="test-offering-user-01",
+            url="https://waldur.example.com/api/users/test-offering-user-01/",
+            full_name="Test Offering User 01",
+            role="admin",
+            expiration_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            offering_user_username="test-offering-user-01",
+            offering_user_state=OfferingUserState.OK,
+        ).to_dict()
+        self.waldur_resource_team = [self.team_member]
+        self.waldur_offering_user = models.OfferingUser(
+            username="test-offering-user-01",
+            user_uuid=self.team_member["uuid"],
+            offering_uuid=OFFERING.uuid,
+            created=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            state=OfferingUserState.OK,
+        ).to_dict()
+        self.client_patcher = mock.patch("waldur_site_agent.common.utils.get_client")
+        self.mock_get_client = self.client_patcher.start()
+        self.mock_client = AuthenticatedClient(
+            base_url=self.BASE_URL,
+            token=OFFERING.api_token,
+            headers={},
+        )
+
+    def tearDown(self) -> None:
+        respx.stop()
+        self.client_patcher.stop()
+
+    def test_restore_recreates_account_with_same_backend_id(self, slurm_client_class: mock.Mock) -> None:
+        """RESTORE order when soft_delete is disabled: account was hard-deleted,
+        should recreate with the same backend_id and re-add users."""
+        project_account = "hpc_project-1"
+        self.waldur_order.update(
+            {
+                "uuid": self.order_uuid,
+                "state": "pending-provider",
+                "type": "Restore",
+                "resource_name": "test-allocation-01",
+                "project_slug": "project-1",
+                "customer_slug": "customer-1",
+                "marketplace_resource_uuid": str(self.resource_uuid),
+            }
+        )
+        setup_common_respx_mocks(
+            self.BASE_URL,
+            self.waldur_user,
+            self.waldur_offering,
+            self.waldur_resource,
+            self.waldur_resource_team,
+            self.waldur_offering_user,
+        )
+        request_order_set_as_error = setup_order_respx_mocks(
+            self.BASE_URL, self.order_uuid, self.waldur_order
+        )
+
+        slurm_client = setup_slurm_client_mocks(
+            slurm_client_class,
+            # pull_resource check -> account missing (None), then None for hierarchy checks
+            get_resource_side_effect=[None, None, None, None, None],
+        )
+
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
+        processor.process_offering()
+
+        # Order should NOT be set as erred
+        assert request_order_set_as_error.call_count == 0
+
+        # Allocation should be created with the ORIGINAL backend_id, not a new one
+        slurm_client.create_resource.assert_any_call(
+            name=self.backend_id,
+            description=self.waldur_resource["name"],
+            organization=project_account,
+            parent_name=project_account,
+        )
+
+        # User association should be created (post_process_order runs for RESTORE)
+        slurm_client.create_association.assert_called_with(
+            self.waldur_offering_user["username"], self.backend_id, "root"
+        )
+
+    def test_restore_skips_creation_when_account_still_exists(self, slurm_client_class: mock.Mock) -> None:
+        """RESTORE order when soft_delete was enabled: account still exists,
+        should skip creation and complete immediately."""
+        self.waldur_order.update(
+            {
+                "uuid": self.order_uuid,
+                "state": "pending-provider",
+                "type": "Restore",
+                "resource_name": "test-allocation-01",
+                "project_slug": "project-1",
+                "customer_slug": "customer-1",
+                "marketplace_resource_uuid": str(self.resource_uuid),
+            }
+        )
+        setup_common_respx_mocks(
+            self.BASE_URL,
+            self.waldur_user,
+            self.waldur_offering,
+            self.waldur_resource,
+        )
+        request_order_set_as_error = setup_order_respx_mocks(
+            self.BASE_URL, self.order_uuid, self.waldur_order
+        )
+
+        slurm_client = slurm_client_class.return_value
+        # pull_resource returns the existing account (soft_delete preserved it)
+        slurm_client.get_resource.return_value = ClientResource(
+            name=self.backend_id,
+            description="sample-resource-1",
+            organization="hpc_project-1",
+        )
+        slurm_client.get_resource_limits.return_value = {"cpu": 10, "mem": 20}
+        slurm_client._execute_command.return_value = ""
+
+        processor = OfferingOrderProcessor(OFFERING, self.mock_client)
+        processor.process_offering()
+
+        # Order should NOT be set as erred
+        assert request_order_set_as_error.call_count == 0
+
+        # Account exists, so create_resource should NOT be called
+        slurm_client.create_resource.assert_not_called()
+
 
 @mock.patch(
     "waldur_site_agent_slurm.backend.SlurmClient",
