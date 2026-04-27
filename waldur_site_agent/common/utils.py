@@ -474,7 +474,7 @@ def mark_waldur_resources_as_erred(
     """
     logger.info("Marking Waldur resources as ERRED")
     for resource in resources:
-        logger.info("Marking %s resource as ERRED", resource)
+        logger.info("Marking %s resource as ERRED", resource.name)
         try:
             request_body = ResourceSetStateErredRequest(
                 error_message=error_details.get("error_message", ""),
