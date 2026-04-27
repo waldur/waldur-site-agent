@@ -28,6 +28,7 @@ def _process_offerings(
 
     logger.info("Number of offerings to process: %s", len(waldur_offerings))
     for offering in waldur_offerings:
+        touch_heartbeat()
         try:
             waldur_rest_client = utils.get_client(
                 offering.api_url,

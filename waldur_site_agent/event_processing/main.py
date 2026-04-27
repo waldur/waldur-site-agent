@@ -54,6 +54,7 @@ def _run_without_username_reconciliation(
     last_reconciliation = 0.0
 
     while True:
+        touch_heartbeat()
         now = time.time()
 
         if now - last_health_check >= HEALTH_CHECK_INTERVAL:
@@ -71,7 +72,6 @@ def _run_without_username_reconciliation(
             )
             last_reconciliation = now
 
-        touch_heartbeat()
         time.sleep(TICK_INTERVAL)
 
 
@@ -81,6 +81,7 @@ def _run_with_reconciliation(configuration: common_structures.WaldurAgentConfigu
     last_reconciliation = 0.0
 
     while True:
+        touch_heartbeat()
         now = time.time()
 
         if now - last_health_check >= HEALTH_CHECK_INTERVAL:
@@ -101,5 +102,4 @@ def _run_with_reconciliation(configuration: common_structures.WaldurAgentConfigu
             )
             last_reconciliation = now
 
-        touch_heartbeat()
         time.sleep(TICK_INTERVAL)
