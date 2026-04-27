@@ -21,6 +21,7 @@ from waldur_site_agent.common import agent_identity_management
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
 from waldur_site_agent.common import utils as common_utils
+from waldur_site_agent.common.healthz import touch_heartbeat
 from waldur_site_agent.common.utils import get_backend_for_offering, get_client
 from waldur_site_agent.event_processing.event_subscription_manager import EventSubscriptionManager
 from waldur_site_agent.event_processing.structures import (
@@ -391,6 +392,7 @@ def run_periodic_username_reconciliation(
     Only runs sync_offering_user_usernames — not a full membership sync.
     """
     for offering in waldur_offerings:
+        touch_heartbeat()
         if not offering.username_reconciliation_enabled:
             continue
         try:
@@ -431,6 +433,7 @@ def run_periodic_offering_user_reconciliation(
     update_offering_users() to retry username generation.
     """
     for offering in waldur_offerings:
+        touch_heartbeat()
         if not offering.membership_sync_backend:
             continue
         try:
@@ -495,6 +498,7 @@ def run_periodic_order_reconciliation(
     )
 
     for offering in waldur_offerings:
+        touch_heartbeat()
         if not offering.order_processing_backend:
             continue
         try:
@@ -527,6 +531,7 @@ def run_periodic_order_reconciliation(
                 offering, waldur_rest_client
             )
             for order in stuck_orders:
+                touch_heartbeat()
                 try:
                     order_processor.process_order_with_retries(order)
                 except Exception as e:
