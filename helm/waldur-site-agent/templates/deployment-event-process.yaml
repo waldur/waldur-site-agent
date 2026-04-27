@@ -58,7 +58,7 @@ spec:
                 - --liveness-only
             initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.periodSeconds }}
-            timeoutSeconds: 5
+            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
             failureThreshold: {{ .Values.healthCheck.failureThreshold }}
           readinessProbe:
             exec:
