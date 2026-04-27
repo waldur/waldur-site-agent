@@ -99,6 +99,19 @@ backend_settings:
       blocked: "blocked"
 ```
 
+### Storage Quotas
+
+The SLURM plugin supports two independent filesystem-quota subsystems:
+
+- **Per-user home directory quota** (`homedir_quota` / `homedir_base_path`)
+  with CephFS xattr, XFS, or Lustre user-quota providers.
+- **Per-project directory + Lustre group/project quota**
+  (`project_directory` with optional nested `lustre_quota`).
+
+See [docs/slurm-storage-quotas.md](../../docs/slurm-storage-quotas.md) for
+configuration reference, command flow, prerequisites (Lustre project quotas
+require LDAP integration), and operator troubleshooting tips.
+
 ### Event Processing Configuration
 
 ```yaml
