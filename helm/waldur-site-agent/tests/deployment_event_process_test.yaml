@@ -170,7 +170,7 @@ tests:
           value: 60
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
-          value: 5
+          value: 10
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.failureThreshold
           value: 3
