@@ -21,12 +21,17 @@ map to plugin operations.
 
 ## Architecture overview
 
-A plugin consists of two main classes:
+A resource-management plugin consists of two main classes:
 
 - **Backend** (inherits `BaseBackend`): Orchestrates high-level operations
   (create resource, collect usage, manage users).
 - **Client** (inherits `BaseClient`): Handles low-level communication with
   the external system (CLI commands, API calls).
+
+A separate plugin family covers username management
+(`AbstractUsernameManagementBackend`) — see the dedicated section below.
+A single distribution may register both, but the entry point groups are
+distinct.
 
 ```mermaid
 graph TB
@@ -140,11 +145,20 @@ backend needs custom behavior.
 |---|---|---|
 | `post_create_resource` | No-op | Post-creation setup; set `resource.backend_metadata` to push data to Waldur |
 | `_pre_delete_resource` | No-op | Pre-deletion cleanup (cancel jobs) |
+| `post_delete_resource` | No-op | Post-deletion cleanup (e.g., remove child offerings linked to the resource) |
 | `_pre_delete_user_actions` | No-op | Per-user cleanup before removal |
 | `process_existing_users` | No-op | Process existing users (homedirs) |
 | `check_pending_order` | Returns `True` | Non-blocking order creation (see below) |
 | `evaluate_pending_order` | Returns `ACCEPT` | Custom approval logic for pending orders (see below) |
 | `setup_target_event_subscriptions` | Returns `[]` | STOMP subscriptions to target systems |
+| `get_usage_report_for_period` | Returns `{}` | Historical usage queries for past billing periods |
+| `has_prepaid_components` | Returns `False` | Enable duration-aware limit calculation for prepaid billing |
+| `sync_resource_end_date` | No-op | Synchronise `end_date` between source and target Waldur instances |
+| `sync_resource_effective_id` | No-op | Reflect downstream `backend_id` as `effective_id` on the source resource |
+| `sync_resource_project` | No-op | Push project metadata to backends that manage their own projects |
+| `update_user_attributes` | No-op | Forward `OFFERING_USER` attribute updates to the backend |
+| `sync_offering_user_usernames` | Returns `False` | Pull backend-assigned usernames into Waldur (federation) |
+| `create_user_homedirs` | Provided | Override only to customise homedir quota or path logic |
 
 ### Non-blocking order creation (optional)
 
@@ -152,12 +166,26 @@ Backends that create resources via remote APIs can use non-blocking order
 creation. Instead of blocking until the remote operation completes, the backend
 returns immediately with a `pending_order_id` in `BackendResourceInfo`.
 
-The core processor then:
+To opt in, set the `supports_async_orders` class attribute to `True`. The
+processor only inspects `order.backend_id` for async tracking when this flag
+is enabled, which prevents conflicts with external systems (e.g. SharePoint)
+that may set `order.backend_id` for unrelated purposes.
+
+```python
+class MyAsyncBackend(BaseBackend):
+    supports_async_orders = True
+```
+
+When enabled, the core processor:
 
 1. Sets the source order's `backend_id` to the `pending_order_id`
 2. Keeps the order in `EXECUTING` state
 3. On subsequent polling cycles, calls `check_pending_order(backend_id)` to check completion
 4. When `check_pending_order()` returns `True`, marks the source order as `DONE`
+
+Backends that opt in will typically also override `handled_resource_states`
+to include `ResourceState.CREATING` so that user/limit sync runs while the
+remote order is still in flight.
 
 #### `check_pending_order(order_backend_id: str) -> bool`
 
@@ -258,6 +286,60 @@ class MyBackend(BaseBackend):
         return PendingOrderDecision.ACCEPT
 ```
 
+## Username management backends
+
+Username management is handled by a separate plugin family inheriting
+from `AbstractUsernameManagementBackend` (defined in
+`waldur_site_agent/backend/backends.py`). These backends generate or look
+up local-IDP usernames for `OfferingUser` records and are wired in the
+config via `username_management_backend`.
+
+### Required methods
+
+| Method | Purpose |
+|---|---|
+| `generate_username(offering_user) -> str` | Create a new local username. Return `""` if generation is not supported. |
+| `get_username(offering_user) -> Optional[str]` | Look up the existing local username for the user, or `None`. |
+
+`get_or_create_username` is provided by the base class and calls
+`get_username` first, then `generate_username` only if no username is
+found.
+
+### Optional hook methods
+
+| Method | Default | When to override |
+|---|---|---|
+| `sync_user_profiles(offering_users)` | No-op | Push user profiles to the IDP before membership sync runs |
+| `deactivate_users(usernames)` | No-op | Remove departed users from the external system |
+
+### Error signalling for user-action gates
+
+When username generation requires the user to take an action (e.g. link
+an existing IdP account, complete a validation form), raise one of these
+exceptions from `waldur_site_agent.backend.exceptions`:
+
+- `OfferingUserAccountLinkingRequiredError(comment, comment_url=None)` —
+  user must link an existing account.
+- `OfferingUserAdditionalValidationRequiredError(comment, comment_url=None)` —
+  additional validation is required.
+
+The processor moves the offering user into a `PENDING_ACCOUNT_LINKING` /
+`PENDING_ADDITIONAL_VALIDATION` state and surfaces the comment (and URL)
+to the operator. See `docs/offering-users.md` for the full state machine.
+
+### Entry point group
+
+Register username management plugins under a different entry point group
+than resource backends:
+
+```toml
+[project.entry-points."waldur_site_agent.username_management_backends"]
+mycustom = "waldur_site_agent_mycustom.username_backend:MyCustomUsernameBackend"
+```
+
+The fallback entry point name is `base`, provided by the
+`waldur-site-agent-basic-username-management` plugin.
+
 ## BaseClient method reference
 
 All methods below are abstract and must be implemented.
@@ -275,11 +357,17 @@ All methods below are abstract and must be implemented.
 | `get_association` | `(user, resource_id) -> Association or None` | Check user-resource link |
 | `create_association` | `(username, resource_id, default_account=None) -> str` | Create user-resource link |
 | `delete_association` | `(username, resource_id) -> str` | Remove user-resource link |
-| `get_usage_report` | `(resource_ids) -> list` | Raw usage data from backend |
+| `get_usage_report` | `(resource_ids, timezone=None) -> list` | Raw usage data from backend |
 | `list_resource_users` | `(resource_id) -> list[str]` | List usernames for resource |
 
-**Important**: `BaseClient` also provides `execute_command(command, silent=False)`
-for running CLI commands with error handling. Use it for CLI-based backends.
+**Important**: `BaseClient` also provides:
+
+- `execute_command(command, silent=False)` for running CLI commands with
+  error handling — use it for CLI-based backends.
+- `create_linux_user_homedir(username, umask="")` which shells out to
+  `/sbin/mkhomedir_helper`. Override only if your backend creates home
+  directories some other way; otherwise it works as-is for SLURM-style
+  Linux deployments.
 
 ## Agent mode method matrix
 
@@ -375,26 +463,43 @@ If SLURM reports 120000 cpu-minutes and 122880 MB-minutes for user1:
 
 Calculation: `120000 / 60000 = 2`, `122880 / 61440 = 2`.
 
-## `supports_decreasing_usage` class attribute
+## Capability flags and class attributes
 
-Set this to `True` on your backend class if usage values can decrease between
-reports (e.g., a storage backend reporting current disk usage rather than
-accumulated compute time).
+`BaseBackend` exposes three class-level capability flags that change how
+the core processor treats your backend.
+
+### `supports_decreasing_usage: bool = False`
+
+Set to `True` if usage values can decrease between reports (e.g., a
+storage backend reporting current disk usage rather than accumulated
+compute time).
 
 ```python
 class MyStorageBackend(BaseBackend):
     supports_decreasing_usage = True
 ```
 
-When `False` (default), the reporting processor skips updates where the new
-usage value is lower than the previously reported value, treating it as a
-data anomaly.
+When `False` (default), the reporting processor skips updates where the
+new usage value is lower than the previously reported value, treating it
+as a data anomaly.
 
-## `handled_resource_states` class attribute
+### `supports_async_orders: bool = False`
 
-Controls which resource states the membership processor fetches and processes.
-Defaults to `[ResourceState.OK, ResourceState.ERRED]`. Override this when your
-backend needs to manage users on resources that are still being provisioned.
+Set to `True` for backends that complete order creation asynchronously
+on a remote system and report progress via `pending_order_id`. See the
+"Non-blocking order creation" section above for the full flow.
+
+```python
+class MyAsyncBackend(BaseBackend):
+    supports_async_orders = True
+```
+
+### `handled_resource_states: list = [ResourceState.OK, ResourceState.ERRED]`
+
+Controls which resource states the membership processor fetches and
+processes. Override when your backend needs to manage users on resources
+that are still being provisioned (e.g., async backends that include
+`CREATING`).
 
 ```python
 from waldur_api_client.models.resource_state import ResourceState
@@ -502,6 +607,10 @@ dependencies = ["waldur-site-agent>=0.7.0"]
 [project.entry-points."waldur_site_agent.backends"]
 mycustom = "waldur_site_agent_mycustom.backend:MyCustomBackend"
 
+# Optional: register a username management backend
+[project.entry-points."waldur_site_agent.username_management_backends"]
+mycustom = "waldur_site_agent_mycustom.username_backend:MyCustomUsernameBackend"
+
 # Optional: component schema validation
 [project.entry-points."waldur_site_agent.component_schemas"]
 mycustom = "waldur_site_agent_mycustom.schemas:MyCustomComponentSchema"
@@ -512,7 +621,10 @@ mycustom = "waldur_site_agent_mycustom.schemas:MyCustomBackendSettingsSchema"
 ```
 
 The entry point name (e.g., `mycustom`) is what users put in
-`backend_type` or `order_processing_backend` in the config YAML.
+`backend_type`, `order_processing_backend`, or
+`username_management_backend` in the config YAML. The four entry-point
+groups are independent — a single distribution may register some or all
+of them.
 
 ## Processor-plugin data flow
 
@@ -641,7 +753,12 @@ usage will appear as zero in Waldur.
 Common causes:
 
 - Package not installed (`uv sync --all-packages`)
-- Entry point group name misspelled (must be `"waldur_site_agent.backends"`)
+- Entry point group name misspelled. Resource backends use
+  `"waldur_site_agent.backends"`; username management uses
+  `"waldur_site_agent.username_management_backends"` (note the plural and
+  the suffix). Validation schemas use
+  `"waldur_site_agent.component_schemas"` /
+  `"waldur_site_agent.backend_settings_schemas"`.
 - Entry point value points to wrong class or module
 
 Debug with:
@@ -649,6 +766,7 @@ Debug with:
 ```python
 from importlib.metadata import entry_points
 print(list(entry_points(group="waldur_site_agent.backends")))
+print(list(entry_points(group="waldur_site_agent.username_management_backends")))
 ```
 
 ### 4. Forgetting super().__init__()
@@ -774,15 +892,29 @@ When implementing a new backend plugin with an LLM, follow these steps in order:
 
 ### Files to study
 
-- `waldur_site_agent/backend/backends.py` - Base classes with all abstract methods
-- `waldur_site_agent/backend/clients.py` - Base client class
-- `waldur_site_agent/backend/structures.py` - Data structures (`ClientResource`,
-  `Association`, `BackendResourceInfo` with `pending_order_id` for async orders
-  and `backend_metadata` for returning data to Waldur)
-- `plugins/slurm/waldur_site_agent_slurm/backend.py` - Reference implementation
-  (CLI-based)
-- `plugins/mup/waldur_site_agent_mup/backend.py` - Reference implementation
-  (API-based)
+- `waldur_site_agent/backend/backends.py` — `BaseBackend` (resource
+  backends) and `AbstractUsernameManagementBackend` (username plugins),
+  plus `PendingOrderDecision` enum.
+- `waldur_site_agent/backend/clients.py` — Base client class.
+- `waldur_site_agent/backend/structures.py` — Data structures
+  (`ClientResource`, `Association`, `BackendResourceInfo` with fields
+  `backend_id`, `parent_id`, `effective_id`, `users`, `usage`, `limits`,
+  `pending_order_id`, `backend_metadata`).
+- `waldur_site_agent/backend/exceptions.py` — `BackendError`,
+  `DuplicateResourceError`, and the
+  `OfferingUser*RequiredError` exceptions used by username backends.
+- `waldur_site_agent/common/plugin_schemas.py` — `PluginComponentSchema`
+  and `PluginBackendSettingsSchema` base classes for optional config
+  validation entry points.
+- `plugins/slurm/waldur_site_agent_slurm/backend.py` — Reference
+  implementation (CLI-based).
+- `plugins/mup/waldur_site_agent_mup/backend.py` — Reference
+  implementation (API-based).
+- `plugins/waldur/waldur_site_agent_waldur/backend.py` — Reference for
+  `supports_async_orders`, `handled_resource_states`, and the
+  `sync_resource_*` hooks.
+- `plugins/basic_username_management/` — Minimal reference for
+  `AbstractUsernameManagementBackend`.
 
 ### Common mistakes to avoid
 
