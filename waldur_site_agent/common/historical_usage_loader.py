@@ -369,10 +369,13 @@ def _submit_user_usage(
         offering.name,
     )
 
-    # Get component usages for this resource
+    # Get component usages for this resource, filtered by billing period
+    # to avoid linking user usage to a ComponentUsage from the wrong month.
+    billing_period = usage_date.date().replace(day=1)
     component_usages = marketplace_component_usages_list.sync_all(
         client=waldur_rest_client,
         resource_uuid=resource.uuid.hex,
+        billing_period=billing_period,
         field=[
             ComponentUsageFieldEnum.UUID,
             ComponentUsageFieldEnum.TYPE,
