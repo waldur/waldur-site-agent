@@ -356,18 +356,11 @@ offerings:
       # CR build raises a clear error rather than emitting an
       # invalid CR.
 
-      # Keycloak group naming. Template variables:
-      #   ${cluster_id}    Rancher cluster ID (per-CR via resource.backend_id)
-      #   ${role_name}     Waldur role name (pre-mapping)
-      #   ${rp_uuid}       Waldur ResourceProject UUID (32-char hex)
-      #   ${project_name}  Human-readable project name
-      #
-      # The default below gives each (cluster x project x role) its own
-      # group, which is what Rancher's per-project-PRTB model expects.
-      # Override `group_name_template` only if you have a strong reason;
-      # any template MUST include a per-project discriminator (rp_uuid
-      # or project_name), otherwise multiple projects share one group
-      # and a user added to project A also gains access to B, C, ...
+      # Keycloak group naming -- see note A below for the full variable
+      # list, including ${customer_slug}, ${project_slug}, ${resource_slug},
+      # and ${rp_uuid_short}. The default keeps the names compact and
+      # immutable; override `group_name_template` for human-readable
+      # group names.
       parent_group_name: "c_${cluster_id}"
       group_name_template: "c_${cluster_id}_${rp_uuid}_${role_name}"  # default
 
@@ -379,7 +372,7 @@ offerings:
         create_ns: "create-ns"
 
       # User-identity link to Keycloak. See "User identity matching" below.
-      keycloak_use_user_id: true
+      keycloak_use_user_id: false
 ```
 
 #### 2c. Run
@@ -409,17 +402,25 @@ kubectl logs deploy/rko-rancher-keycloak-operator -n waldur-system --tail=100 -f
 
 ## User identity matching
 
-The plugin can match Waldur users to Keycloak users either by UUID or
-by username. Choose with `backend_settings.keycloak_use_user_id`:
+The plugin can match Waldur users to Keycloak users either by username
+(default) or by UUID. Choose with `backend_settings.keycloak_use_user_id`:
 
-**`true` (default) — match by UUID**
-: Plugin sends `UserRole.user_uuid`. Operator does `GET /admin/realms/<realm>/users/{uuid}` (matches the
-  Keycloak internal `user.id`). Use this in production where Waldur and Keycloak share an OIDC IdP, so
-  `Waldur.user.uuid == Keycloak.user.id` (the OIDC `sub` claim).
+**`false` (default) — match by username**
+: Plugin sends `UserRole.user_username`. Operator does
+  `GET /admin/realms/<realm>/users?username=X&exact=true` and uses
+  the resulting `user.id` for group membership operations. Works in
+  both OIDC and self-hosted Waldur as long as Waldur usernames
+  align with Keycloak usernames — the typical OIDC mapping does this
+  via the `preferred_username` claim.
 
-**`false` — match by username**
-: Plugin sends `UserRole.user_username`. Operator does `GET /admin/realms/<realm>/users?username=X&exact=true`.
-  Use this for self-hosted Waldur with locally-created users whose usernames match Keycloak but UUIDs don't.
+**`true` — match by UUID**
+: Plugin sends `UserRole.user_uuid`. Operator does
+  `GET /admin/realms/<realm>/users/{uuid}` (matches the Keycloak
+  internal `user.id`). Use this only when Waldur was OIDC-provisioned
+  AND its user UUIDs were seeded from the Keycloak `sub` claim, so
+  that `Waldur.user.uuid == Keycloak.user.id`. The username path is
+  preferred because it tolerates UUID divergence and works in more
+  topologies.
 
 **The operator never creates users.** A user that doesn't exist in
 Keycloak under the chosen identifier gets logged as
@@ -443,22 +444,64 @@ user appears in Keycloak (e.g. their first OIDC login).
 | `parent_group_name` | string | no | Top-level KC group; var `${cluster_id}`. Default `c_${cluster_id}`. |
 | `group_name_template` | string | no | Per-role child KC group; vars listed in **note A**. |
 | `role_map` | dict | yes | Waldur role name → Rancher role template ID. Roles outside the map are skipped. |
-| `keycloak_use_user_id` | bool | no | `true` (default) → match by UUID. `false` → match by username. See above. |
+| `keycloak_use_user_id` | bool | no | `false` (default) → match by username. `true` → match by UUID. See above. |
 
 `spec.clusterId` is resolved from each Resource's `backend_id` (1:1
 with a Rancher cluster) — there is no offering-level `cluster_id`
 setting. An empty `backend_id` raises a clear `KeyError` rather than
 silently emitting an invalid CR.
 
-**Note A — `group_name_template` variables.** Available substitutions
-are `${cluster_id}`, `${role_name}`, `${rp_uuid}`, and
-`${project_name}`. Default is `c_${cluster_id}_${rp_uuid}_${role_name}`
-which produces one Keycloak group per (cluster × project × role) —
-matching Rancher's per-project-PRTB access model. Override only if
-you have a strong reason; any custom template MUST include a
-per-project discriminator (`${rp_uuid}` or `${project_name}`),
-otherwise multiple projects share one group and a user added to
-project A also gains access to B, C, … via the shared group's PRTBs.
+**Note A — `group_name_template` variables.** Available substitutions:
+
+| Variable | Source | Notes |
+|---|---|---|
+| `${cluster_id}` | `Resource.backend_id` | Rancher cluster ID, opaque |
+| `${role_name}` | UserRole.role_name | Pre-mapping (before `role_map`) |
+| `${rp_uuid}` | `ResourceProject.uuid` | Full 32-char hex |
+| `${rp_uuid_short}` | first 8 chars of `${rp_uuid}` | ~4B combos, collision-free; same as `cr_name` |
+| `${customer_slug}` | `Resource.customer_slug` | Waldur Customer (organization) slug |
+| `${project_slug}` | `Resource.project_slug` | Waldur Project slug (parent Project; RPs have no slug) |
+| `${resource_slug}` | `Resource.slug` | Waldur Resource slug (1:1 with cluster) |
+| `${project_name}` | `ResourceProject.name` | Human-readable; may contain spaces |
+
+Default is `c_${cluster_id}_${rp_uuid}_${role_name}` — one Keycloak group
+per (cluster × project × role), matching Rancher's per-project-PRTB
+access model. The default uses `${rp_uuid}` (immutable) for stability;
+override only if you have a strong reason.
+
+**Recommended human-readable opt-in template:**
+
+```text
+c_${cluster_id}_${customer_slug}_${project_slug}_${rp_uuid_short}_${role_name}
+```
+
+Renders e.g. `c_c-m-glwxdksp_hpc-demo-org_genomics-2026_8706dd1a_project_member`.
+Stays unique per RP via `${rp_uuid_short}` while the slugs make the
+group name self-explaining in the Keycloak admin UI.
+
+**Custom-template constraints.**
+
+1. MUST include a per-project discriminator (`${rp_uuid}`,
+   `${rp_uuid_short}`, or `${project_name}`); without it, multiple
+   projects share one group and a user added to project A also gains
+   access to B, C, … via the shared group's PRTBs.
+2. Slugs (`customer_slug`, `project_slug`, `resource_slug`,
+   `project_name`) are **mutable** -- renaming the entity in Waldur
+   creates a new Keycloak group on the next reconcile and orphans the
+   old one (the operator adopts groups by name and never renames adopted
+   groups). Memberships in the old group become stale.
+3. **Switching the template after deployment** has the same effect as a
+   bulk rename: every existing CR re-renders, the operator creates fresh
+   groups, the old groups linger with their stale members. Plan a
+   one-time manual migration if you change the template against an
+   existing deployment.
+4. Keycloak's `GROUP.NAME` column is `varchar(255)`. The plugin guards
+   this at render time and raises a `ValueError` (with a hint about
+   `${rp_uuid_short}`) if the rendered name would exceed 255 chars, so
+   the operator never tries to apply a CR that Keycloak would reject
+   with HTTP 500. Stay well under by preferring `${rp_uuid_short}`
+   over `${rp_uuid}` in long templates and keeping Waldur slugs
+   reasonably short (say ≤ 50 chars each).
 
 ---
 
@@ -482,8 +525,9 @@ project A also gains access to B, C, … via the shared group's PRTBs.
   or as a workaround drop the trailing `/api/` from `waldur_api_url`.
 
 **Operator logs `WARNING User X not found in Keycloak` for every user**
-: UUID mismatch — plugin sends Waldur UUIDs that don't exist as Keycloak `user.id`. Either align Waldur users
-  with the OIDC `sub` (production), or set `keycloak_use_user_id: false` and ensure usernames match.
+: Identity mismatch — the chosen identifier (username by default, UUID with `keycloak_use_user_id: true`)
+  isn't resolvable in Keycloak. With the default username path: ensure Waldur usernames map to existing
+  Keycloak usernames. With the UUID path: align Waldur user UUIDs with the Keycloak OIDC `sub`.
 
 **`kubectl delete mrp` succeeds in 0s but the Rancher project remains**
 : `status.rancherProjectId` is stale; operator versions before `0.2.2` treated 404 on delete as success.
