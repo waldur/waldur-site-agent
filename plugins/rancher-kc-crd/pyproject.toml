@@ -1,0 +1,34 @@
+[project]
+name = "waldur-site-agent-rancher-kc-crd"
+version = "1.0.4rc8"
+description = "Rancher + Keycloak CRD-driven plugin for Waldur Site Agent"
+readme = "README.md"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9, <4"
+dependencies = [
+    "waldur-site-agent>=1.0.4rc8",
+    "kubernetes>=29.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+
+# Sits alongside the existing rancher plugin. Offerings opt in by
+# setting backend_type / membership_sync_backend to "rancher-kc-crd"
+# instead of "rancher".
+[project.entry-points."waldur_site_agent.backends"]
+rancher-kc-crd = "waldur_site_agent_rancher_kc_crd.backend:RancherKcCrdBackend"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+]

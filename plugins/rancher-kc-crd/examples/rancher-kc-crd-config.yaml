@@ -1,0 +1,103 @@
+# Example: rancher-kc-crd plugin (membership-sync only, CRD-driven)
+#
+# This plugin writes ManagedRancherProject CRDs to a Kubernetes cluster
+# running rancher-keycloak-operator; the operator does the actual
+# Rancher project + Keycloak group work. Recommended operator: 0.3.1+.
+#
+# Each Waldur Resource is 1:1 with a Rancher downstream cluster -- the
+# plugin reads the cluster ID from `resource.backend_id` at CR-build
+# time. One offering can therefore hold N Resources targeting N
+# different clusters. There is no offering-level cluster_id setting:
+# if a resource's backend_id is empty, CR build raises a clear error
+# rather than silently emitting an invalid CR.
+
+offerings:
+  - name: "rancher-kc-crd-aio"
+
+    # Waldur API
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "your-waldur-api-token"
+    waldur_offering_uuid: "offering-uuid-of-the-rancher-service"
+
+    # Backend wiring — note this plugin is ONLY a membership_sync_backend.
+    # Order processing and reporting still need other backends (or none).
+    backend_type: "rancher-kc-crd"
+    membership_sync_backend: "rancher-kc-crd"
+
+    backend_settings:
+      # ── Required ──────────────────────────────────────────────────
+
+      # Waldur SDK access (used by pull_resource to fetch
+      # ResourceProjects + UserRoles for the resources sold by this
+      # offering). Without these, pull_resource is a no-op and the
+      # backend can only be exercised from external callers
+      # (apply_resource_project) — useful for tests, not production.
+      waldur_api_url: "https://waldur.example.com/api/"
+      waldur_api_token: "${WALDUR_API_TOKEN}"
+      waldur_verify_ssl: true
+
+      # Namespace where ManagedRancherProject CRs are created. The
+      # operator must be watching this same namespace.
+      namespace: "waldur-system"
+
+      # Map Waldur offering role names → Rancher role template IDs.
+      # Roles not listed here are skipped (operator can't bind them).
+      role_map:
+        project_member: "project-member"
+        project_admin: "project-owner"
+        create_ns: "create-ns"
+
+      # ── Optional: Kubernetes connection ──────────────────────────
+
+      # Either point at a kubeconfig file...
+      kubeconfig_path: "~/.kube/config"
+      context: "aio-rancher"
+      # ...or omit kubeconfig_path and rely on in-cluster service-account
+      # credentials when the agent is itself running in the operator's
+      # cluster.
+
+      # ── Optional: Keycloak group naming ──────────────────────────
+
+      # The operator creates a TWO-LEVEL Keycloak group hierarchy per CR:
+      #
+      #   parent_group_name (one per cluster, organisational container)
+      #     └── group_name_template-rendered child group (the one actually
+      #         bound to the Rancher project's PRTB and where users are
+      #         added)
+      #
+      # Concrete example with the defaults below, for cluster "c-m-abc12345"
+      # and ResourceProject UUID "8706dd1a..." with role "project_member":
+      #
+      #   c_c-m-abc12345              <- parent group (cluster container)
+      #     └── c_c-m-abc12345_8706dd1a_project_member  <- child group
+      #
+      # The child group's Keycloak ID is what gets passed to Rancher in
+      # the projectroletemplatebinding (PRTB), which is how OIDC users
+      # actually gain access to the Rancher project. Adding a user to the
+      # child group = granting them that role on that project, and only
+      # that project (because the group is per-project, not shared).
+      #
+      # Template variables understood by BOTH fields:
+      #   ${cluster_id}    Rancher cluster ID (per-CR via resource.backend_id)
+      #   ${role_name}     Waldur role name (pre-mapping)
+      #   ${rp_uuid}       Waldur ResourceProject UUID (32-char hex)
+      #   ${project_name}  Human-readable project name
+      #
+      # Default child template `c_${cluster_id}_${rp_uuid}_${role_name}`
+      # gives each (cluster x project x role) its OWN group -- required
+      # for correct per-project access in Rancher. Any custom template
+      # MUST include a per-project discriminator (${rp_uuid} or
+      # ${project_name}); without it, multiple projects share one
+      # group and a user added to project A also gains access to
+      # B, C, ... via the shared group's PRTBs.
+      parent_group_name: "c_${cluster_id}"
+      group_name_template: "c_${cluster_id}_${rp_uuid}_${role_name}"
+
+      # ── Optional: Keycloak user lookup ───────────────────────────
+
+      # Identifier the operator uses to look up users in Keycloak.
+      # true (default) = pass user UUID (matched against keycloak.user.id);
+      # false           = pass username (matched against keycloak.user.username).
+      # Use false for self-hosted Waldur where users were created locally
+      # and don't share the OIDC `sub` with Keycloak.
+      keycloak_use_user_id: true

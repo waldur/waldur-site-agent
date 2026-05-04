@@ -22,6 +22,7 @@ members = [
     "waldur-site-agent-okd",
     "waldur-site-agent-opennebula",
     "waldur-site-agent-rancher",
+    "waldur-site-agent-rancher-kc-crd",
     "waldur-site-agent-slurm",
     "waldur-site-agent-waldur",
 ]
@@ -2078,16 +2079,16 @@ wheels = [
 
 [[package]]
 name = "waldur-api-client"
-version = "8.0.8.dev205"
+version = "8.0.8.dev235"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "httpx" },
     { name = "python-dateutil" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/99/02/24f97058a8a340a286e181176b32b2ee409fac8a91033f9a7b49bb69b8c8/waldur_api_client-8.0.8.dev205.tar.gz", hash = "sha256:e0af675a950db977660e7f677715d884b485214e5b8bb088d8868be74660e281", size = 2010211, upload-time = "2026-04-21T17:30:01.785Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/ed/f46d2018592b5779c4a1d1227fd014a1a7d2fb60082a579c9728b173cd59/waldur_api_client-8.0.8.dev235.tar.gz", hash = "sha256:47201c063bbbe93431a133d8e62a1e0253d56fb35f1a96d7be3d8649b13acf05", size = 2061766, upload-time = "2026-05-04T05:01:34.397Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/be/cbc5bed09fb057915160b6be8c88aa95c7f214b8421851ff3100a33e4f9d/waldur_api_client-8.0.8.dev205-py3-none-any.whl", hash = "sha256:3554800835e0f89ccd08252ef8b784f9500a36f9955bba620b09adb701168233", size = 6196382, upload-time = "2026-04-21T17:29:59.502Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/fc/ca8f7f5df8583cc22afa68cc7530e63ad1f34fdd07e559a60ac09bd0b241/waldur_api_client-8.0.8.dev235-py3-none-any.whl", hash = "sha256:9313b3b4381c713139898e9007c220f73db6d307fa25cefe77e2485f114ab209", size = 6336184, upload-time = "2026-05-04T05:01:31.908Z" },
 ]
 
 [[package]]
@@ -2133,7 +2134,7 @@ requires-dist = [
     { name = "sentry-sdk", specifier = "==2.8.0" },
     { name = "stomp-py", specifier = ">=8.2.0,<9" },
     { name = "structlog", specifier = ">=25.4.0" },
-    { name = "waldur-api-client", specifier = "==8.0.8.dev205" },
+    { name = "waldur-api-client", specifier = "==8.0.8.dev235" },
 ]
 
 [package.metadata.requires-dev]
@@ -2357,6 +2358,21 @@ requires-dist = [
     { name = "requests", specifier = ">=2.31.0" },
     { name = "waldur-site-agent", editable = "." },
     { name = "waldur-site-agent-keycloak-client", editable = "plugins/keycloak-client" },
+]
+
+[[package]]
+name = "waldur-site-agent-rancher-kc-crd"
+version = "1.0.4rc8"
+source = { editable = "plugins/rancher-kc-crd" }
+dependencies = [
+    { name = "kubernetes" },
+    { name = "waldur-site-agent" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "kubernetes", specifier = ">=29.0.0" },
+    { name = "waldur-site-agent", editable = "." },
 ]
 
 [[package]]
