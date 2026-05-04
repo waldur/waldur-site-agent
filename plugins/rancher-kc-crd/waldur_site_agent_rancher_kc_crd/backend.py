@@ -15,6 +15,9 @@ from waldur_api_client.api.marketplace_provider_resource_projects import (
     marketplace_provider_resource_projects_set_state_erred,
     marketplace_provider_resource_projects_set_state_ok,
 )
+from waldur_api_client.api.marketplace_provider_resources import (
+    marketplace_provider_resources_list_users_list,
+)
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_project import ResourceProject
@@ -191,8 +194,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
         """
         if self.waldur_client is None:
             logger.warning(
-                "rancher-kc-crd: waldur_client not configured; "
-                "pull_resource is a no-op for %s",
+                "rancher-kc-crd: waldur_client not configured; pull_resource is a no-op for %s",
                 waldur_resource.uuid,
             )
             return None
@@ -201,6 +203,24 @@ class RancherKcCrdBackend(backends.BaseBackend):
         rps = self._fetch_resource_projects(waldur_resource.uuid)
         synced_users: set[str] = set()
         expected_cr_names: set[str] = set()
+
+        # Resource-scope user roles are fetched ONCE per cycle (not
+        # per-RP). The same set is forwarded to every CR's spec.cluster
+        # block so the operator can drive cluster-wide CRTBs from any
+        # CR; it de-duplicates on the Rancher side via (clusterId,
+        # principal, role). Skip the call when no cluster_role_map is
+        # configured -- the translator would discard the data anyway.
+        cluster_ur_dicts: Optional[list[dict]] = None
+        if self.backend_settings.get("cluster_role_map"):
+            cluster_user_roles = self._fetch_resource_users(waldur_resource.uuid)
+            cluster_ur_dicts = [self._user_role_to_dict(u) for u in cluster_user_roles]
+            logger.info(
+                "rancher-kc-crd: %d Resource-level user-role(s) for %s "
+                "to fan out across %d ResourceProject CR(s)",
+                len(cluster_ur_dicts),
+                waldur_resource.uuid,
+                len(rps),
+            )
 
         for rp in rps:
             user_roles = self._fetch_resource_project_users(rp.uuid)
@@ -212,6 +232,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
                 resource_project=rp_dict,
                 user_roles=ur_dicts,
                 backend_settings=self.backend_settings,
+                cluster_user_roles=cluster_ur_dicts,
             )
             self.crd.apply(body)
             expected_cr_names.add(body["metadata"]["name"])
@@ -268,6 +289,22 @@ class RancherKcCrdBackend(backends.BaseBackend):
             or []
         )
 
+    def _fetch_resource_users(self, resource_uuid: uuid_lib.UUID) -> list:
+        """UserRoles assigned on the Resource itself (cluster scope).
+
+        Returns the same UserRoleDetails shape as the RP-scoped helper
+        so :meth:`_user_role_to_dict` can convert both. These roles
+        drive cluster-wide bindings (CRTBs) -- see translator.build_cr_spec
+        for the spec.cluster wiring.
+        """
+        return (
+            marketplace_provider_resources_list_users_list.sync(
+                client=self.waldur_client,
+                uuid=resource_uuid,
+            )
+            or []
+        )
+
     # ------------------------------------------------------------------
     # CR phase -> RP state transitions
     # ------------------------------------------------------------------
@@ -298,13 +335,9 @@ class RancherKcCrdBackend(backends.BaseBackend):
                 uuid=rp.uuid,
                 client=self.waldur_client,
             )
-            logger.info(
-                "ResourceProject %s -> OK (cr.status.phase=Ready)", rp.uuid.hex
-            )
+            logger.info("ResourceProject %s -> OK (cr.status.phase=Ready)", rp.uuid.hex)
         except Exception as exc:
-            logger.warning(
-                "Failed to set ResourceProject %s state to OK: %s", rp.uuid.hex, exc
-            )
+            logger.warning("Failed to set ResourceProject %s state to OK: %s", rp.uuid.hex, exc)
 
     def _call_set_rp_state_erred(self, rp: ResourceProject, error_message: str) -> None:
         body = ResourceProjectErrorMessageRequest(error_message=error_message)
@@ -345,15 +378,19 @@ class RancherKcCrdBackend(backends.BaseBackend):
             # offering (each resource = one downstream cluster). The
             # translator uses it as spec.clusterId.
             "backend_id": getattr(r, "backend_id", "") or "",
+            # Slugs surfaced for opt-in human-readable Keycloak group
+            # name templates (see render_group_name in translator.py).
+            # All are Unset-tolerant -- waldur-api-client returns UNSET
+            # rather than "" when the field is absent on a given
+            # endpoint shape, so coerce to "" to keep the translator
+            # arithmetic clean.
+            "customer_slug": getattr(r, "customer_slug", "") or "",
+            "project_slug": getattr(r, "project_slug", "") or "",
         }
 
     @staticmethod
     def _resource_project_to_dict(rp: Any) -> dict:  # noqa: ANN401
-        limits = (
-            rp.limits.to_dict()
-            if hasattr(rp.limits, "to_dict")
-            else (rp.limits or {})
-        )
+        limits = rp.limits.to_dict() if hasattr(rp.limits, "to_dict") else (rp.limits or {})
         return {
             "uuid": rp.uuid.hex,
             "name": rp.name,
@@ -452,8 +489,13 @@ class RancherKcCrdBackend(backends.BaseBackend):
         resource: dict,
         resource_project: dict,
         user_roles: list[dict],
+        cluster_user_roles: Optional[list[dict]] = None,
     ) -> dict[str, Any]:
         """Translate and apply a single ResourceProject CR.
+
+        ``cluster_user_roles`` is the Resource-scope user-role list (see
+        translator.build_cr_spec); ``None`` here keeps the call shape
+        compatible with callers that don't (yet) carry cluster bindings.
 
         Returns the applied object. Surface for unit tests and the v1
         wiring.
@@ -463,6 +505,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
             resource_project=resource_project,
             user_roles=user_roles,
             backend_settings=self.backend_settings,
+            cluster_user_roles=cluster_user_roles,
         )
         return self.crd.apply(body)
 

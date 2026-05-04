@@ -17,6 +17,15 @@ MAX_K8S_NAME_LENGTH = 253
 # We reserve 9 chars for "-" + 8-hex UUID prefix in the truncation path.
 NAME_SUFFIX_RESERVE = 9
 
+# Keycloak's GROUP.NAME column is varchar(255). Names of 256+ chars are
+# rejected at create time with HTTP 500 (unhandled DataException in the
+# server). We raise at render time instead so the operator never even
+# tries to apply such a CR -- the failure mode "your group name template
+# combined with these slugs is too long" is much clearer surfaced as a
+# plugin-side ValueError than as a downstream operator/Keycloak crash.
+# Verified empirically against Keycloak 26 -- 255 OK, 256+ HTTP 500.
+MAX_KEYCLOAK_GROUP_NAME_LENGTH = 255
+
 
 def cr_name(resource_slug: str, resource_project_uuid: str) -> str:
     """Build the metadata.name for a ManagedRancherProject CR.
@@ -44,22 +53,45 @@ def render_group_name(
     cluster_id: str,
     role_name: str,
     rp_uuid: str = "",
+    rp_uuid_short: str = "",
     project_name: str = "",
+    customer_slug: str = "",
+    project_slug: str = "",
+    resource_slug: str = "",
 ) -> str:
     """Render a Keycloak group name template.
 
-    Supports four template variables:
+    Supports the following template variables:
 
-    - ``${cluster_id}`` — the Rancher cluster ID this CR targets
-    - ``${role_name}`` — the Waldur role name (pre-mapping)
-    - ``${rp_uuid}``   — the Waldur ResourceProject UUID (32-char hex)
-    - ``${project_name}`` — the human-readable project name
+    Identifiers (stable, immutable):
+
+    - ``${cluster_id}`` — Rancher cluster ID (e.g. ``c-m-glwxdksp``).
+    - ``${rp_uuid}``   — Waldur ResourceProject UUID, full 32-char hex.
+    - ``${rp_uuid_short}`` — first 8 hex chars of ``rp_uuid``. Same
+      convention as :func:`cr_name`; ~4 billion combinations is more
+      than enough within a ``(cluster, role)`` tuple, where the
+      relevant collision domain is at most a few dozen RPs.
+    - ``${role_name}`` — Waldur role name (pre-mapping).
+
+    Human-readable Waldur-side identifiers (stable but mutable -- can
+    change if an admin renames the customer / project / resource in
+    Waldur, which would orphan the previously-named Keycloak group):
+
+    - ``${customer_slug}`` — Waldur Customer slug (organization).
+    - ``${project_slug}``  — Waldur Project slug (the parent project
+      that owns the Resource, NOT the ResourceProject which has no slug).
+    - ``${resource_slug}`` — Waldur Resource slug (1:1 with the
+      Rancher cluster, so equivalent to ``cluster_id`` semantically
+      but human-readable instead of opaque).
+    - ``${project_name}`` — human-readable project name (may contain
+      spaces; not URL-safe; included for legacy templates).
 
     The default template (set in :func:`build_cr_spec`) includes
     ``${rp_uuid}`` so each (cluster x project x role) triple gets its
-    OWN group. Without ``${rp_uuid}`` (or some equivalent per-project
-    discriminator), N CRs sharing a (cluster, role) pair would all
-    reference the same Keycloak group, and:
+    OWN group. Without ``${rp_uuid}`` (or an equivalent per-project
+    discriminator like ``${rp_uuid_short}``), N CRs sharing a
+    (cluster, role) pair would all reference the same Keycloak group,
+    and:
 
     - the operator's per-CR member-sync would thrash that group as it
       processed each CR in turn, AND
@@ -71,13 +103,37 @@ def render_group_name(
     accepted (the renderer just substitutes whatever variables it
     knows), but the resulting CRs will collide as above. Stick with
     the default unless you have a strong reason.
+
+    A recommended human-readable opt-in template that still keeps
+    per-RP uniqueness:
+
+        c_${cluster_id}_${customer_slug}_${project_slug}_${rp_uuid_short}_${role_name}
+
+    Switching templates after deployment leaves the previously-named
+    Keycloak groups orphaned (the operator adopts groups by name and
+    never renames or deletes adopted groups); plan accordingly.
     """
-    return Template(template).safe_substitute(
+    rendered = Template(template).safe_substitute(
         cluster_id=cluster_id,
         role_name=role_name,
         rp_uuid=rp_uuid,
+        rp_uuid_short=rp_uuid_short,
         project_name=project_name,
+        customer_slug=customer_slug,
+        project_slug=project_slug,
+        resource_slug=resource_slug,
     )
+    if len(rendered) > MAX_KEYCLOAK_GROUP_NAME_LENGTH:
+        msg = (
+            f"Rendered Keycloak group name is {len(rendered)} chars; "
+            f"Keycloak's GROUP.NAME column is varchar({MAX_KEYCLOAK_GROUP_NAME_LENGTH}) "
+            f"and rejects longer names. Template: {template!r}; "
+            f"first 80 chars of result: {rendered[:80]!r}. "
+            f"Switch to ${{rp_uuid_short}} (8 chars) instead of ${{rp_uuid}} "
+            f"(32 chars), or shorten Waldur slugs / role names."
+        )
+        raise ValueError(msg)
+    return rendered
 
 
 def build_role_bindings(
@@ -86,9 +142,13 @@ def build_role_bindings(
     cluster_id: str,
     group_name_template: str,
     role_map: dict[str, str],
-    keycloak_use_user_id: bool = True,
+    keycloak_use_user_id: bool = False,
     rp_uuid: str = "",
+    rp_uuid_short: str = "",
     project_name: str = "",
+    customer_slug: str = "",
+    project_slug: str = "",
+    resource_slug: str = "",
 ) -> list[dict]:
     """Group UserRoles by role name and emit one roleBinding per group.
 
@@ -103,6 +163,15 @@ def build_role_bindings(
     ``rp_uuid`` and ``project_name`` are passed through to the group
     name template so the rendered group name can be unique per RP
     (recommended -- see :func:`render_group_name` docstring).
+
+    Default identifier is the Waldur username, matched against the
+    Keycloak username. The UUID path (``keycloak_use_user_id=True``) is
+    kept as an opt-in for the niche case where Waldur's user UUID was
+    seeded from the Keycloak OIDC ``sub`` claim AND the deployment
+    really wants UUID-keyed group membership; for self-hosted Waldur
+    where users were created locally, the default username path is the
+    only thing that works because the Waldur UUID is unrelated to any
+    Keycloak identity.
     """
     by_role: dict[str, list[dict]] = {}
     for ur in user_roles:
@@ -119,11 +188,7 @@ def build_role_bindings(
                 "lookupByID": keycloak_use_user_id,
             }
             for ur in by_role[role_name]
-            if (
-                ident := (
-                    ur.get("user_uuid") if keycloak_use_user_id else ur.get("user_username")
-                )
-            )
+            if (ident := (ur.get("user_uuid") if keycloak_use_user_id else ur.get("user_username")))
         ]
         if not members:
             continue
@@ -134,7 +199,11 @@ def build_role_bindings(
                     cluster_id=cluster_id,
                     role_name=role_name,
                     rp_uuid=rp_uuid,
+                    rp_uuid_short=rp_uuid_short,
                     project_name=project_name,
+                    customer_slug=customer_slug,
+                    project_slug=project_slug,
+                    resource_slug=resource_slug,
                 ),
                 "rancherRole": role_map[role_name],
                 "members": members,
@@ -149,6 +218,7 @@ def build_cr_spec(
     resource_project: dict,
     user_roles: list[dict],
     backend_settings: dict,
+    cluster_user_roles: Optional[list[dict]] = None,
 ) -> dict[str, Any]:
     """Assemble the full CR body (apiVersion + kind + metadata + spec).
 
@@ -160,6 +230,14 @@ def build_cr_spec(
     ID. A resource with an empty ``backend_id`` is a configuration
     bug (the offering owner forgot to set the cluster); raise
     KeyError rather than silently emitting an invalid CR.
+
+    ``cluster_user_roles`` are the Resource-scope user roles (from
+    ``marketplace_provider_resources_list_users_list``). When provided
+    *and* ``backend_settings["cluster_role_map"]`` is non-empty, the
+    CR carries a ``spec.cluster.keycloak.roleBindings`` block that
+    drives operator-side CRTBs. Without either, the cluster section
+    is omitted -- old operators (pre-0.4.0) reject any unknown spec
+    field, so emitting an empty placeholder block would break them.
     """
     cluster_id = resource.get("backend_id")
     if not cluster_id:
@@ -172,12 +250,27 @@ def build_cr_spec(
         raise KeyError(msg)
 
     rp_uuid = resource_project.get("uuid", "")
+    # Same 8-char convention as cr_name (4B combos, collision-free in
+    # practice within a (cluster, role) tuple). Lets opt-in templates
+    # like c_${cluster_id}_${customer_slug}_${project_slug}_${rp_uuid_short}_${role_name}
+    # stay short while remaining unique per RP.
+    rp_uuid_short = rp_uuid.replace("-", "")[:8]
     project_name = resource_project.get("name", "")
+
+    # Slugs from the Resource (not the ResourceProject -- RPs have no
+    # slug). project_slug here means the Waldur PARENT project that
+    # owns the resource, not the ResourceProject inside it.
+    customer_slug = resource.get("customer_slug", "") or ""
+    project_slug = resource.get("project_slug", "") or ""
+    resource_slug = resource.get("slug", "") or ""
 
     parent_group = render_group_name(
         backend_settings.get("parent_group_name", "c_${cluster_id}"),
         cluster_id=cluster_id,
         role_name="",
+        customer_slug=customer_slug,
+        project_slug=project_slug,
+        resource_slug=resource_slug,
     )
     # Default child template includes ${rp_uuid} so each (cluster x
     # project x role) gets its own Keycloak group -- see
@@ -209,12 +302,52 @@ def build_cr_spec(
                 cluster_id=cluster_id,
                 group_name_template=group_template,
                 role_map=role_map,
-                keycloak_use_user_id=backend_settings.get("keycloak_use_user_id", True),
+                keycloak_use_user_id=backend_settings.get("keycloak_use_user_id", False),
                 rp_uuid=rp_uuid,
+                rp_uuid_short=rp_uuid_short,
                 project_name=project_name,
+                customer_slug=customer_slug,
+                project_slug=project_slug,
+                resource_slug=resource_slug,
             ),
         },
     }
+
+    cluster_role_map = backend_settings.get("cluster_role_map") or {}
+    if cluster_role_map and cluster_user_roles is not None:
+        # Cluster-scope groups have NO per-RP discriminator -- one group
+        # per (cluster, role) is the desired sharing model, since the
+        # operator de-duplicates the underlying CRTB by (clusterId,
+        # principal, role). The literal "cluster" segment guards
+        # against collisions with the project-scope template, which
+        # always contains an rp_uuid hex prefix.
+        cluster_group_template = backend_settings.get(
+            "cluster_group_name_template", "c_${cluster_id}_cluster_${role_name}"
+        )
+        cluster_bindings = build_role_bindings(
+            cluster_user_roles,
+            cluster_id=cluster_id,
+            group_name_template=cluster_group_template,
+            role_map=cluster_role_map,
+            keycloak_use_user_id=backend_settings.get("keycloak_use_user_id", False),
+            rp_uuid="",
+            rp_uuid_short="",
+            project_name="",
+            customer_slug=customer_slug,
+            project_slug=project_slug,
+            resource_slug=resource_slug,
+        )
+        # Always emit the spec.cluster block when cluster_role_map is
+        # configured -- even with an empty roleBindings list. The
+        # operator's _gc_orphan_cluster_bindings reads the desired
+        # set from spec to decide what to delete, so an empty list is
+        # the explicit "no cluster bindings desired" signal it needs.
+        spec["cluster"] = {
+            "keycloak": {
+                "enabled": True,
+                "roleBindings": cluster_bindings,
+            },
+        }
 
     quotas = _build_resource_quotas(resource_project.get("limits") or {})
     if quotas:

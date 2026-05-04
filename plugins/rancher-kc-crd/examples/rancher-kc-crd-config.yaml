@@ -78,26 +78,100 @@ offerings:
       # that project (because the group is per-project, not shared).
       #
       # Template variables understood by BOTH fields:
-      #   ${cluster_id}    Rancher cluster ID (per-CR via resource.backend_id)
-      #   ${role_name}     Waldur role name (pre-mapping)
-      #   ${rp_uuid}       Waldur ResourceProject UUID (32-char hex)
-      #   ${project_name}  Human-readable project name
+      #
+      #   Stable identifiers (immutable):
+      #     ${cluster_id}      Rancher cluster ID (resource.backend_id)
+      #     ${role_name}       Waldur role name (pre-mapping)
+      #     ${rp_uuid}         ResourceProject UUID, full 32-char hex
+      #     ${rp_uuid_short}   First 8 hex chars of ${rp_uuid} -- ~4B
+      #                        combos, collision-free in practice within
+      #                        a (cluster, role) tuple. Use this for
+      #                        readable templates that still need a per-RP
+      #                        discriminator.
+      #
+      #   Human-readable (mutable -- renaming the entity in Waldur creates
+      #   a new Keycloak group and orphans the old one):
+      #     ${customer_slug}   Waldur Customer (organization) slug
+      #     ${project_slug}    Waldur Project slug (the parent project that
+      #                        owns the Resource, NOT the ResourceProject)
+      #     ${resource_slug}   Waldur Resource slug (1:1 with cluster)
+      #     ${project_name}    Human-readable project name (may have spaces)
       #
       # Default child template `c_${cluster_id}_${rp_uuid}_${role_name}`
       # gives each (cluster x project x role) its OWN group -- required
       # for correct per-project access in Rancher. Any custom template
-      # MUST include a per-project discriminator (${rp_uuid} or
-      # ${project_name}); without it, multiple projects share one
-      # group and a user added to project A also gains access to
-      # B, C, ... via the shared group's PRTBs.
+      # MUST include a per-project discriminator (${rp_uuid},
+      # ${rp_uuid_short}, or ${project_name}); without it, multiple
+      # projects share one group and a user added to project A also
+      # gains access to B, C, ... via the shared group's PRTBs.
+      #
+      # Recommended human-readable opt-in template:
+      #   c_${cluster_id}_${customer_slug}_${project_slug}_${rp_uuid_short}_${role_name}
+      # Renders e.g. "c_c-m-glwxdksp_hpc-demo-org_genomics-2026_8706dd1a_project_member"
+      #
+      # WARNING: changing the template after deployment leaves
+      # previously-named Keycloak groups orphaned (the operator adopts
+      # groups by name and never renames adopted groups). Memberships in
+      # the old groups become stale; plan a one-time manual migration if
+      # you switch templates against an existing deployment.
       parent_group_name: "c_${cluster_id}"
       group_name_template: "c_${cluster_id}_${rp_uuid}_${role_name}"
 
       # ── Optional: Keycloak user lookup ───────────────────────────
 
       # Identifier the operator uses to look up users in Keycloak.
-      # true (default) = pass user UUID (matched against keycloak.user.id);
-      # false           = pass username (matched against keycloak.user.username).
-      # Use false for self-hosted Waldur where users were created locally
-      # and don't share the OIDC `sub` with Keycloak.
-      keycloak_use_user_id: true
+      # false (default) = pass Waldur username, matched against
+      #                   keycloak.user.username. Works in both OIDC
+      #                   and self-hosted Waldur as long as Waldur
+      #                   usernames align with Keycloak ones (the
+      #                   typical OIDC mapping does this via the
+      #                   `preferred_username` claim).
+      # true            = pass Waldur UUID, matched against
+      #                   keycloak.user.id. Only correct when Waldur
+      #                   was OIDC-provisioned and its user UUIDs
+      #                   were seeded from the Keycloak `sub` claim.
+      # The default is False because it works in both topologies and
+      # tolerates UUID divergence; True is opt-in only.
+      keycloak_use_user_id: false
+
+      # ── Optional: cluster-scope role mapping (operator 0.4.0+) ───
+      #
+      # Maps Waldur Resource-level role names → Rancher CLUSTER role
+      # template IDs. When set, every CR for this offering carries a
+      # `spec.cluster.keycloak.roleBindings` block built from the
+      # Resource's user-roles (one set, fanned out across the per-RP
+      # CRs the agent emits). The operator de-duplicates the underlying
+      # CRTBs by (clusterId, principal, role).
+      #
+      # Cluster groups are intentionally shared across all RPs within
+      # a Resource -- the `cluster_group_name_template` default below
+      # has NO ${rp_uuid} discriminator, since the binding IS cluster-
+      # wide. The literal "cluster" segment guards against collisions
+      # with the project-scope template (which always carries an
+      # ${rp_uuid} hex prefix).
+      #
+      # Without this section the cluster bindings are not emitted, and
+      # the operator behaves as in 0.3.x. Requires operator 0.4.0+ --
+      # earlier operators reject `spec.cluster` via CRD validation.
+      cluster_role_map:
+        resource_member: "cluster-member"
+        resource_admin: "cluster-owner"
+
+      # Override the default cluster-scope group name. Available variables
+      # (same set as group_name_template, plus the Resource-side slugs;
+      # ${rp_uuid} / ${rp_uuid_short} / ${project_name} are NOT useful
+      # at cluster scope -- the binding spans all RPs of the Resource):
+      #   ${cluster_id}      Rancher cluster ID
+      #   ${role_name}       Waldur Resource-level role name (pre-mapping)
+      #   ${customer_slug}   Waldur Customer (organization) slug
+      #   ${resource_slug}   Waldur Resource slug (1:1 with cluster)
+      #   ${project_slug}    Waldur Project slug (parent of the Resource)
+      #
+      # Default below is the safe minimum; the literal "cluster" segment
+      # guards against name collisions with the project-scope template
+      # (which always carries an rp_uuid hex prefix).
+      #
+      # Recommended human-readable opt-in:
+      #   c_${cluster_id}_${customer_slug}_${resource_slug}_cluster_${role_name}
+      # Renders e.g. "c_c-m-glwxdksp_hpc-demo-org_adamas-cluster_cluster_resource_member"
+      cluster_group_name_template: "c_${cluster_id}_cluster_${role_name}"

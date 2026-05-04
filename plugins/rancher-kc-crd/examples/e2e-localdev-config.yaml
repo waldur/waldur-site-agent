@@ -1,0 +1,91 @@
+# rancher-kc-crd plugin -- end-to-end test config against local dev stack
+#
+# Pre-requisites:
+#   1. Local mastermind dev stack running on http://localhost:10780
+#      (./scripts/start-dev-stack.sh in the workspace root)
+#   2. docker-desktop k8s cluster with rancher-keycloak-operator 0.4.0+
+#      deployed in waldur-system namespace
+#   3. The operator has been configured to talk to a real Rancher
+#      management server + Keycloak realm (the operator's own helm
+#      values, NOT this file)
+#   4. Demo data loaded: offering "Adamas HPC Cluster" with backend_id
+#      pointing at a real Rancher cluster, ResourceProjects created,
+#      role assignments seeded by examples/e2e-localdev-setup.sh
+#
+# Run:
+#   cd waldur-site-agent
+#   uv sync --all-packages
+#   uv run waldur_site_agent --mode membership_sync \
+#       --config-file plugins/rancher-kc-crd/examples/e2e-localdev-config.yaml
+#
+# After one cycle, verify:
+#   kubectl get mrp -n waldur-system
+#   kubectl get mrp -n waldur-system <cr-name> -o jsonpath='{.status.clusterKeycloakRoleBindings}'
+#   curl -sk -H "Authorization: Bearer <rancher-token>" \
+#     "https://<rancher-host>/v3/clusterroletemplatebindings?clusterId=<cluster>" \
+#     | jq '.data[] | {id,clusterId,roleTemplateId,groupPrincipalId}'
+
+offerings:
+  - name: "Adamas HPC Cluster (e2e localdev)"
+
+    # Local mastermind dev stack
+    waldur_api_url: "http://localhost:10780/api/"
+    # Token for user 'staff' from the dev stack. Rotates if you
+    # restart the dev stack with a fresh DB; re-fetch with:
+    #   curl -X POST http://localhost:10780/api-auth/password/ \
+    #     -H 'Content-Type: application/json' \
+    #     -d '{"username":"staff","password":"demo"}'
+    waldur_api_token: "a9024d33461434432bd4c5a4b762c0738fc35664"
+    waldur_offering_uuid: "feeb119a7df24e67b413f171e8968fa5"
+    waldur_verify_ssl: false
+
+    # CRD-driven plugin -- membership-sync only. Order processing and
+    # reporting come from other backends (or none, in this offering).
+    backend_type: "rancher-kc-crd"
+    membership_sync_backend: "rancher-kc-crd"
+
+    backend_settings:
+      # Same fields as production, just pointing at the local dev stack.
+      waldur_api_url: "http://localhost:10780/api/"
+      waldur_api_token: "a9024d33461434432bd4c5a4b762c0738fc35664"
+      waldur_verify_ssl: false
+
+      namespace: "waldur-system"
+
+      # Use the local docker-desktop kubeconfig context so the plugin
+      # writes CRs to the same cluster where the operator is running.
+      # Adjust if your context name differs.
+      kubeconfig_path: "~/.kube/config"
+      context: "docker-desktop"
+
+      # Project-scope role mapping. Waldur role names (left) → Rancher
+      # project role-template IDs (right). Roles outside this map are
+      # silently skipped by the plugin.
+      role_map:
+        ingress_manage: "ingress-manage"
+        configmaps_manage: "configmaps-manage"
+        # Pre-existing roles also mapped so existing CRs continue to
+        # bind their members. Adjust to your offering's actual roles.
+        "something else": "project-member"
+
+      # Cluster-scope role mapping (operator 0.4.0+). Waldur role names
+      # at the Resource level → Rancher cluster role-template IDs.
+      # Omit / leave empty to disable cluster-scope binding entirely.
+      cluster_role_map:
+        cluster_owner: "cluster-owner"
+        clustercatalogs_view: "clustercatalogs-view"
+
+      # Default user identifier path: Waldur username matched against
+      # Keycloak username. The dev-stack users 'test-rancher-00' and
+      # 'test-rancher-01' have identical usernames in the riigipilv
+      # Keycloak realm, so the operator's add_user_to_group resolves
+      # them via username lookup and the membership lands.
+      keycloak_use_user_id: false
+
+      # Keep default Keycloak group naming for back-compat. Switch to
+      # the recommended human-readable opt-in template when migrating
+      # a fresh deployment (changing it after the fact orphans the
+      # old groups -- see plugins/rancher-kc-crd/README.md note A).
+      parent_group_name: "c_${cluster_id}"
+      group_name_template: "c_${cluster_id}_${rp_uuid}_${role_name}"
+      cluster_group_name_template: "c_${cluster_id}_cluster_${role_name}"
