@@ -116,6 +116,7 @@ class MUPBackend(backends.BaseBackend):
         self._research_fields_cache: Optional[list[dict]] = None
         self._user_cache: dict[str, int] = {}
         self._project_cache: dict[str, dict] = {}
+        self._allocation_identifier_cache: dict[str, tuple[int, int]] = {}
 
     def ping(self, raise_exception: bool = False) -> bool:
         """Check if MUP backend is available and accessible."""
@@ -253,6 +254,23 @@ class MUPBackend(backends.BaseBackend):
             except ValueError:
                 pass
         return int(backend_id), None
+
+    def _resolve_backend_id(self, backend_id: str) -> tuple[int, int]:
+        """Resolve Waldur backend_id to MUP project and allocation IDs."""
+        if backend_id in self._allocation_identifier_cache:
+            return self._allocation_identifier_cache[backend_id]
+
+        allocation = self.client.get_allocation_by_identifier(backend_id)
+        project_id = allocation.get("project")
+        allocation_id = allocation.get("id")
+        if not project_id or not allocation_id:
+            raise BackendError(
+                f"Allocation lookup for '{backend_id}' did not return project/id. Returned: {allocation}"
+            )
+
+        resolved = (int(project_id), int(allocation_id))
+        self._allocation_identifier_cache[backend_id] = resolved
+        return resolved
 
     @staticmethod
     def _to_waldur_units(raw: Any, unit_factor: int) -> int:
@@ -930,7 +948,9 @@ class MUPBackend(backends.BaseBackend):
                         "id": result["id"],
                         "component": component_key,
                         "type": allocation_type,
-                        "identifier": allocation_data["identifier"],
+                        "identifier": result.get(
+                            "identifier", allocation_data["identifier"]
+                        ),
                     }
                 )
 
@@ -961,16 +981,21 @@ class MUPBackend(backends.BaseBackend):
                 f"Check logs above for individual component errors."
             )
 
-        # Update backend_id to combined "project_id_allocation_id" format.
         primary_alloc_id = created_allocations[0]["id"]
+        primary_identifier = created_allocations[0]["identifier"]
         combined_id = f"{mup_project['id']}_{primary_alloc_id}"
-        backend_resource_info.backend_id = combined_id
+        backend_resource_info.backend_id = primary_identifier
         logger.info(
             "Set backend_id to '%s' for resource %s (project %s, allocation %s)",
-            combined_id,
+            primary_identifier,
             waldur_resource.uuid.hex,
             mup_project["id"],
             primary_alloc_id,
+        )
+        logger.info(
+            "MUP internal resource id is '%s' for resource %s",
+            combined_id,
+            waldur_resource.uuid.hex,
         )
 
     def _setup_resource_limits(
@@ -1131,29 +1156,38 @@ class MUPBackend(backends.BaseBackend):
         }
 
         try:
-            project_id, alloc_id = self._parse_backend_id(resource_backend_id)
-            if alloc_id is None:
-                raise BackendError(
-                    f"backend_id '{resource_backend_id}' has no allocation ID – "
-                    "cannot update limits."
-                )
+            project_id, alloc_id = self._resolve_backend_id(resource_backend_id)
 
             # Fetch the specific allocation directly – no full list scan needed
             allocation = self.client.get_allocation(project_id, alloc_id)
 
-            # Determine which component this allocation belongs to from its identifier
-            alloc_identifier = allocation.get("identifier", "")
-            component_key = None
-            parts = alloc_identifier.split("_")
-            if len(parts) >= 3:
-                component_key = parts[-1]
+            # Determine which component this allocation belongs to from its MUP type.
+            allocation_type = allocation.get("type")
+            component_key = next(
+                (
+                    key
+                    for key, config in self.backend_components.items()
+                    if config.get("mup_allocation_type") == allocation_type
+                ),
+                None,
+            )
+            logger.info(
+                "Resolved MUP allocation %s (identifier: %s, type: %s) to "
+                "component %s. Available limits: %s",
+                alloc_id,
+                allocation.get("identifier", ""),
+                allocation_type,
+                component_key,
+                list(converted_limits.keys()),
+            )
 
             if not component_key or component_key not in converted_limits:
                 logger.warning(
                     "No matching limit found for allocation %s (identifier: %s, "
-                    "component: %s). Available limits: %s",
+                    "type: %s, component: %s). Available limits: %s",
                     alloc_id,
-                    alloc_identifier,
+                    allocation.get("identifier", ""),
+                    allocation_type,
                     component_key,
                     list(converted_limits.keys()),
                 )
@@ -1188,7 +1222,7 @@ class MUPBackend(backends.BaseBackend):
     def get_resource_metadata(self, resource_backend_id: str) -> dict:
         """Get backend-specific resource metadata."""
         try:
-            project_id, allocation_id = self._parse_backend_id(resource_backend_id)
+            project_id, allocation_id = self._resolve_backend_id(resource_backend_id)
             project = self.client.get_project(project_id)
             if not project:
                 return {}
@@ -1231,17 +1265,10 @@ class MUPBackend(backends.BaseBackend):
 
         for backend_id in resource_backend_ids:
             try:
-                project_id, allocation_id = self._parse_backend_id(backend_id)
-            except ValueError:
+                project_id, allocation_id = self._resolve_backend_id(backend_id)
+            except (BackendError, MUPError):
                 logger.warning(
                     "Cannot parse backend_id '%s', skipping usage report",
-                    backend_id,
-                )
-                continue
-
-            if allocation_id is None:
-                logger.warning(
-                    "backend_id '%s' has no allocation id, skipping usage report",
                     backend_id,
                 )
                 continue
@@ -1332,10 +1359,10 @@ class MUPBackend(backends.BaseBackend):
 
         """
         try:
-            project_id, _ = self._parse_backend_id(resource_backend_id)
+            project_id, _ = self._resolve_backend_id(resource_backend_id)
             project = self.client.get_project(project_id)
             return project or None
-        except (ValueError, Exception):
+        except Exception:
             logger.exception(
                 "Failed to find project for resource %s", resource_backend_id
             )

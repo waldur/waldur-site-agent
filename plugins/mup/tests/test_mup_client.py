@@ -286,6 +286,22 @@ class MUPClientTest(unittest.TestCase):
                 "GET", f"/api/projects/{project_id}/allocations/view/{allocation_id}"
             )
 
+    def test_get_allocation_by_identifier(self):
+        """Test getting allocation by Slurm account identifier."""
+        identifier = "NNOHPC-DEC-2026E02-991G"
+
+        with patch.object(self.client, "_make_request") as mock_request:
+            mock_response = Mock()
+            mock_response.json.return_value = self.sample_allocation
+            mock_request.return_value = mock_response
+
+            result = self.client.get_allocation_by_identifier(identifier)
+
+            self.assertEqual(result, self.sample_allocation)
+            mock_request.assert_called_once_with(
+                "GET", f"/api/projects/allocations/{identifier}"
+            )
+
     def test_get_project_members(self):
         """Test getting project members"""
         project_id = 1

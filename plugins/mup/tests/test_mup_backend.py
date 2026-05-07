@@ -403,8 +403,7 @@ class MUPBackendTest(unittest.TestCase):
         )
 
         assert isinstance(result, BackendResourceInfo)
-        # backend_id is set to "project_id_allocation_id" by post_create_resource
-        assert result.backend_id == "1_1"
+        assert result.backend_id == f"alloc_{self.resource_uuid.hex}"
         assert result.limits["cpu"] == 10
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
@@ -526,9 +525,26 @@ class MUPBackendTest(unittest.TestCase):
         assert metadata == expected_metadata
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_get_resource_metadata_resolves_identifier(self, mock_client_class) -> None:
+        """Metadata lookup resolves Slurm account identifiers."""
+        mock_client = mock_client_class.return_value
+        account_id = f"alloc_{self.resource_uuid.hex}"
+        mock_client.get_allocation_by_identifier.return_value = self.sample_mup_allocation
+        mock_client.get_project.return_value = self.sample_mup_project
+        mock_client.get_project_allocations.return_value = [self.sample_mup_allocation]
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+        metadata = backend.get_resource_metadata(account_id)
+
+        assert metadata["mup_project_id"] == 1
+        assert metadata["mup_allocation_id"] == 1
+        mock_client.get_allocation_by_identifier.assert_called_once_with(account_id)
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_get_usage_report(self, mock_client_class) -> None:
         """Test usage report generation."""
         mock_client = mock_client_class.return_value
+        mock_client.get_allocation_by_identifier.return_value = self.sample_mup_allocation
         mock_client.get_allocation_usage.return_value = {
             "total": 5,
             "users": {"user1": 5},
@@ -537,16 +553,42 @@ class MUPBackendTest(unittest.TestCase):
 
         backend = MUPBackend(self.mup_settings, self.mup_components)
 
-        accounts = ["1_1"]
+        account_key = f"alloc_{self.resource_uuid.hex}"
+        accounts = [account_key]
         report = backend._get_usage_report(accounts)
 
-        account_key = "1_1"
         assert account_key in report
         assert "TOTAL_ACCOUNT_USAGE" in report[account_key]
         assert report[account_key]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 5
         assert "user1" in report[account_key]
         assert report[account_key]["user1"]["cpu"] == 5
+        mock_client.get_allocation_by_identifier.assert_called_once_with(account_key)
         mock_client.get_allocation_usage.assert_called_once_with(1, 1)
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_set_resource_limits_resolves_identifier(self, mock_client_class) -> None:
+        """Limit updates resolve Slurm account identifiers before calling MUP."""
+        mock_client = mock_client_class.return_value
+        slurm_identifier = "NNOHPC-DEC-2026E02-991G"
+        allocation = {
+            **self.sample_mup_allocation,
+            "identifier": slurm_identifier,
+            "type": "Deucalion x86_64",
+        }
+        mock_client.get_allocation_by_identifier.return_value = allocation
+        mock_client.get_allocation.return_value = allocation
+        mock_client.update_allocation.return_value = allocation
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+        backend.set_resource_limits(slurm_identifier, {"cpu": 25})
+
+        mock_client.get_allocation_by_identifier.assert_called_once_with(slurm_identifier)
+        mock_client.get_allocation.assert_called_once_with(1, 1)
+        mock_client.update_allocation.assert_called_once()
+        update_args = mock_client.update_allocation.call_args[0]
+        assert update_args[0] == 1
+        assert update_args[1] == 1
+        assert update_args[2]["size"] == 25
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_add_users_to_resource(self, mock_client_class) -> None:
@@ -709,11 +751,25 @@ class MUPBackendTest(unittest.TestCase):
         assert result.backend_id == "1_1"
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
-    def test_pull_backend_resource_legacy_id_returns_none(self, mock_client_class) -> None:
-        """Legacy alloc_* backend IDs cannot be parsed — should return None gracefully."""
+    def test_pull_backend_resource_resolves_identifier(self, mock_client_class) -> None:
+        """Allocation identifiers are resolved to MUP project/allocation IDs."""
+        mock_client = mock_client_class.return_value
+        mock_client.get_allocation_by_identifier.return_value = self.sample_mup_allocation
+        mock_client.get_project.return_value = self.sample_mup_project
+        mock_client.get_project_members.return_value = []
+        mock_client.get_allocation_usage.return_value = {
+            "total": 0,
+            "users": {},
+            "unit": "node.hour",
+        }
+
         backend = MUPBackend(self.mup_settings, self.mup_components)
-        result = backend._pull_backend_resource("alloc_ju-revie-1-18")
-        assert result is None
+        account_id = f"alloc_{self.resource_uuid.hex}"
+        result = backend._pull_backend_resource(account_id)
+
+        assert result is not None
+        assert result.backend_id == account_id
+        mock_client.get_allocation_by_identifier.assert_called_once_with(account_id)
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_remove_users_from_account(self, mock_client_class) -> None:
