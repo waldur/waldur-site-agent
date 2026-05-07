@@ -19,9 +19,9 @@ in either are logged but do not abort agent operation.
 ## Subsystem A — Per-user home directory quota
 
 This lives in the **core** module
-[`waldur_site_agent/backend/quota.py`](../waldur_site_agent/backend/quota.py)
-and is invoked from
-[`BaseBackend.create_user_homedirs`](../waldur_site_agent/backend/backends.py)
+`waldur_site_agent/backend/quota.py`
+and is invoked from `BaseBackend.create_user_homedirs`
+(`waldur_site_agent/backend/backends.py`)
 whenever the agent creates a new user homedir. It is wired into the SLURM
 backend through the standard
 `enable_user_homedir_account_creation` /
@@ -145,10 +145,10 @@ given. For each one:
 
 SLURM-plugin specific. Schemas: `ProjectDirectoryConfig` and
 `LustreQuotaConfig` in
-[`plugins/slurm/waldur_site_agent_slurm/schemas.py`](../plugins/slurm/waldur_site_agent_slurm/schemas.py).
+`plugins/slurm/waldur_site_agent_slurm/schemas.py`.
 Implementation: `_setup_project_directory` /
 `_set_lustre_quota` in
-[`plugins/slurm/waldur_site_agent_slurm/backend.py`](../plugins/slurm/waldur_site_agent_slurm/backend.py).
+`plugins/slurm/waldur_site_agent_slurm/backend.py`.
 
 ### Project directory configuration
 
