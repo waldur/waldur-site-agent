@@ -8,7 +8,7 @@ interface for managing projects, allocations, and users.
 import base64
 import logging
 from typing import Any, Optional, cast
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import requests
 
@@ -248,6 +248,14 @@ class MUPClient(BaseClient):
         """Get specific allocation."""
         response = self._make_request(
             "GET", f"/api/projects/{project_id}/allocations/view/{allocation_id}"
+        )
+        return cast("dict", self._parse_json_response(response))
+
+    def get_allocation_by_identifier(self, identifier: str) -> dict:
+        """Get an allocation by its Slurm account identifier."""
+        escaped_identifier = quote(identifier, safe="")
+        response = self._make_request(
+            "GET", f"/api/projects/allocations/{escaped_identifier}"
         )
         return cast("dict", self._parse_json_response(response))
 
