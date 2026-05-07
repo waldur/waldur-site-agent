@@ -78,6 +78,7 @@ def _process_offerings(
                 waldur_rest_client,
                 resource_backend=resource_backend,
                 resource_backend_version=resource_backend_version,
+                expose_backend_error_details=configuration.expose_backend_error_details,
             )
             processor.register(agent_service)
 

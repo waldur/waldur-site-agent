@@ -412,6 +412,7 @@ class TestMainLoopTimers(unittest.TestCase):
         config = mock.Mock(spec=common_structures.WaldurAgentConfiguration)
         config.waldur_offerings = [mock.Mock()]
         config.waldur_user_agent = "test-agent"
+        config.expose_backend_error_details = True
 
         # time.time() must exceed both HEALTH_CHECK_INTERVAL (1800) and
         # RECONCILIATION_INTERVAL (3600) since last_* starts at 0.0
@@ -438,6 +439,7 @@ class TestMainLoopTimers(unittest.TestCase):
         config = mock.Mock(spec=common_structures.WaldurAgentConfiguration)
         config.waldur_offerings = [mock.Mock()]
         config.waldur_user_agent = "test-agent"
+        config.expose_backend_error_details = True
 
         first_tick = 5000.0  # Exceeds both intervals, triggers on first tick
         second_tick = first_tick + 60  # 1 minute later — well within 30-min interval
@@ -462,6 +464,7 @@ class TestMainLoopTimers(unittest.TestCase):
         config = mock.Mock(spec=common_structures.WaldurAgentConfiguration)
         config.waldur_offerings = [mock.Mock()]
         config.waldur_user_agent = "test-agent"
+        config.expose_backend_error_details = True
 
         # Make start_stomp_consumers raise to exit early
         mock_utils.run_initial_offering_processing.return_value = None
@@ -471,7 +474,9 @@ class TestMainLoopTimers(unittest.TestCase):
             main.start(config)
 
         mock_utils.run_initial_offering_processing.assert_called_once_with(
-            config.waldur_offerings, config.waldur_user_agent
+            config.waldur_offerings,
+            config.waldur_user_agent,
+            expose_backend_error_details=True,
         )
 
     @mock.patch("waldur_site_agent.event_processing.main.time")
@@ -483,6 +488,7 @@ class TestMainLoopTimers(unittest.TestCase):
         config = mock.Mock(spec=common_structures.WaldurAgentConfiguration)
         config.waldur_offerings = [mock.Mock()]
         config.waldur_user_agent = "test-agent"
+        config.expose_backend_error_details = True
 
         stomp_map = {"key": "value"}
         mock_utils.start_stomp_consumers.return_value = stomp_map

@@ -128,6 +128,7 @@ def _setup_single_stomp_subscription(
     waldur_user_agent: str,
     object_type: ObservableObjectTypeEnum,
     global_proxy: str = "",
+    expose_backend_error_details: bool = True,
 ) -> StompConsumer | None:
     """Setup a single STOMP subscription for the given object type.
 
@@ -138,6 +139,7 @@ def _setup_single_stomp_subscription(
         waldur_user_agent: User agent string
         object_type: Type of observable object to subscribe to
         global_proxy: Optional proxy configuration
+        expose_backend_error_details: Whether to forward raw exception details to Waldur
 
     Returns:
         Tuple of (connection, event_subscription, offering) if successful, None if failed
@@ -159,7 +161,13 @@ def _setup_single_stomp_subscription(
             return None
 
         event_subscription_manager = EventSubscriptionManager(
-            offering, None, None, waldur_user_agent, object_type, global_proxy
+            offering,
+            None,
+            None,
+            waldur_user_agent,
+            object_type,
+            global_proxy,
+            expose_backend_error_details=expose_backend_error_details,
         )
         connection = event_subscription_manager.setup_stomp_connection(
             event_subscription,
@@ -191,7 +199,10 @@ def _setup_single_stomp_subscription(
 
 
 def setup_stomp_offering_subscriptions(
-    waldur_offering: common_structures.Offering, waldur_user_agent: str, global_proxy: str = ""
+    waldur_offering: common_structures.Offering,
+    waldur_user_agent: str,
+    global_proxy: str = "",
+    expose_backend_error_details: bool = True,
 ) -> list[StompConsumer]:
     """Set up STOMP subscriptions for the specified offering."""
     stomp_connections: list[StompConsumer] = []
@@ -223,6 +234,7 @@ def setup_stomp_offering_subscriptions(
             waldur_user_agent,
             object_type,
             global_proxy,
+            expose_backend_error_details=expose_backend_error_details,
         )
         if consumer is not None:
             stomp_connections.append(consumer)
@@ -253,6 +265,7 @@ def start_stomp_consumers(
     waldur_offerings: list[common_structures.Offering],
     waldur_user_agent: str,
     global_proxy: str = "",
+    expose_backend_error_details: bool = True,
 ) -> StompConsumersMap:
     """Start multiple STOMP consumers."""
     stomp_consumers_map: StompConsumersMap = {}
@@ -263,7 +276,10 @@ def start_stomp_consumers(
 
         logger.info("Starting STOMP consumers for offering %s", waldur_offering.name)
         stomp_connections = setup_stomp_offering_subscriptions(
-            waldur_offering, waldur_user_agent, global_proxy
+            waldur_offering,
+            waldur_user_agent,
+            global_proxy,
+            expose_backend_error_details=expose_backend_error_details,
         )
         if stomp_connections:
             stomp_consumers_map[(waldur_offering.name, waldur_offering.uuid)] = stomp_connections
@@ -334,19 +350,27 @@ def signal_handling(
 
 
 def run_initial_offering_processing(
-    waldur_offerings: list[common_structures.Offering], user_agent: str = ""
+    waldur_offerings: list[common_structures.Offering],
+    user_agent: str = "",
+    expose_backend_error_details: bool = True,
 ) -> None:
     """Runs processing of offerings with event-based processing enabled."""
     logger.info("Processing offerings with STOMP feature enabled")
     for offering in waldur_offerings:
         try:
             if offering.stomp_enabled:
-                process_offering(offering, user_agent)
+                process_offering(
+                    offering, user_agent, expose_backend_error_details=expose_backend_error_details
+                )
         except Exception as e:
             logger.exception("Error occurred during initial offering process: %s", e)
 
 
-def process_offering(offering: common_structures.Offering, user_agent: str = "") -> None:
+def process_offering(
+    offering: common_structures.Offering,
+    user_agent: str = "",
+    expose_backend_error_details: bool = True,
+) -> None:
     """Processes the specified offering."""
     logger.info("Processing offering %s (%s)", offering.name, offering.uuid)
 
@@ -364,7 +388,11 @@ def process_offering(offering: common_structures.Offering, user_agent: str = "")
     )
 
     if offering.order_processing_backend:
-        order_processor = common_processors.OfferingOrderProcessor(offering, waldur_rest_client)
+        order_processor = common_processors.OfferingOrderProcessor(
+            offering,
+            waldur_rest_client,
+            expose_backend_error_details=expose_backend_error_details,
+        )
         order_processor.register(agent_service)
         logger.info("Running offering order process")
         order_processor.process_offering()
@@ -373,7 +401,9 @@ def process_offering(offering: common_structures.Offering, user_agent: str = "")
 
     if offering.membership_sync_backend:
         membership_processor = common_processors.OfferingMembershipProcessor(
-            offering, waldur_rest_client
+            offering,
+            waldur_rest_client,
+            expose_backend_error_details=expose_backend_error_details,
         )
         membership_processor.register(agent_service)
         logger.info("Running offering membership process")

@@ -18,7 +18,6 @@ from __future__ import annotations
 import abc
 import datetime
 import time as _time
-import traceback
 from enum import Enum
 from time import sleep
 from typing import Any, ClassVar, Optional, Union
@@ -213,6 +212,7 @@ class OfferingBaseProcessor(abc.ABC):
         timezone: str = "",
         resource_backend: Optional[BaseBackend] = None,
         resource_backend_version: Optional[str] = None,
+        expose_backend_error_details: bool = True,
     ) -> None:
         """Initialize the offering processor.
 
@@ -224,7 +224,8 @@ class OfferingBaseProcessor(abc.ABC):
                 (optional, will be created if not provided)
             resource_backend_version: Version of the resource backend
                 (optional, will be determined if not provided)
-            to compare usage data with previous usage data
+            expose_backend_error_details: Whether to forward raw exception
+                details to Waldur when marking objects as ERRED
 
         Raises:
             BackendError: If unable to create a backend for the offering
@@ -232,6 +233,7 @@ class OfferingBaseProcessor(abc.ABC):
         self.offering: structures.Offering = offering
         self.timezone: str = timezone
         self.waldur_rest_client = waldur_rest_client
+        self.expose_backend_error_details = expose_backend_error_details
         # Use dependency injection if backend is provided, otherwise create it
         if resource_backend is not None:
             self.resource_backend = resource_backend
@@ -920,9 +922,12 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 e,
             )
             if order.state != OrderState.DONE:
+                error_message, error_traceback = utils.format_waldur_error_details(
+                    e, self.expose_backend_error_details
+                )
                 order_error_details_request = OrderErrorDetailsRequest(
-                    error_message=str(e),
-                    error_traceback=traceback.format_exc(),
+                    error_message=error_message,
+                    error_traceback=error_traceback,
                 )
                 try:
                     marketplace_orders_set_state_erred.sync_detailed(
@@ -1463,6 +1468,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         timezone: str = "",
         resource_backend: Optional[BaseBackend] = None,
         resource_backend_version: Optional[str] = None,
+        expose_backend_error_details: bool = True,
     ) -> None:
         """Initialize the membership processor with per-cycle caches."""
         super().__init__(
@@ -1471,6 +1477,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             timezone,
             resource_backend=resource_backend,
             resource_backend_version=resource_backend_version,
+            expose_backend_error_details=expose_backend_error_details,
         )
         # Per-cycle caches to avoid redundant API calls per project
         self._team_cache: dict[str, list[ProjectUser]] = {}
@@ -2286,12 +2293,14 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     waldur_resource.backend_id,
                     e,
                 )
-                error_traceback = traceback.format_exc()
+                error_message, error_traceback = utils.format_waldur_error_details(
+                    e, self.expose_backend_error_details
+                )
                 utils.mark_waldur_resources_as_erred(
                     self.waldur_rest_client,
                     [waldur_resource],
                     error_details={
-                        "error_message": str(e),
+                        "error_message": error_message,
                         "error_traceback": error_traceback,
                     },
                 )
@@ -2383,6 +2392,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         resource_backend: Optional[BaseBackend] = None,
         resource_backend_version: Optional[str] = None,
         reporting_periods: int = 1,
+        expose_backend_error_details: bool = True,
     ) -> None:
         """Initialize the report processor.
 
@@ -2394,6 +2404,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             resource_backend_version: Version of the resource backend.
             reporting_periods: Number of billing periods to report
                 (1 = current month only, 2 = current + previous).
+            expose_backend_error_details: Whether to forward raw exception
+                details to Waldur when marking objects as ERRED.
         """
         super().__init__(
             offering,
@@ -2401,6 +2413,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             timezone,
             resource_backend=resource_backend,
             resource_backend_version=resource_backend_version,
+            expose_backend_error_details=expose_backend_error_details,
         )
         self.reporting_periods = reporting_periods
 
@@ -3048,9 +3061,12 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
             )
         except Exception as e:
             logger.info("Unable to process importable resources reason: %s", e)
+            error_message, error_traceback = utils.format_waldur_error_details(
+                e, self.expose_backend_error_details
+            )
             payload = BackendResourceRequestSetErredRequest(
-                error_message=str(e),
-                error_traceback=traceback.format_exc(),
+                error_message=error_message,
+                error_traceback=error_traceback,
             )
             backend_resource_requests_set_erred.sync(
                 uuid=request_uuid,

@@ -68,6 +68,7 @@ def _process_offerings(
                 resource_backend=resource_backend,
                 resource_backend_version=resource_backend_version,
                 reporting_periods=configuration.reporting_periods,
+                expose_backend_error_details=configuration.expose_backend_error_details,
             )
             processor.register(agent_service)
 

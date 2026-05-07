@@ -71,6 +71,7 @@ def test_approve_passes_body(
     processor.offering = mock.Mock()
     processor.offering.uuid = "offering-uuid"
     processor.resource_backend = mock_resource_backend
+    processor.expose_backend_error_details = True
 
     # Mock resource retrieval and backend operations to avoid deeper calls
     with mock.patch(
@@ -140,6 +141,7 @@ def test_pending_order_rejected(
     processor.offering = mock.Mock()
     processor.offering.uuid = "offering-uuid"
     processor.resource_backend = mock_resource_backend
+    processor.expose_backend_error_details = True
 
     processor.process_order(mock_order)
 
@@ -171,6 +173,7 @@ def test_pending_order_stays_pending(
     processor.offering = mock.Mock()
     processor.offering.uuid = "offering-uuid"
     processor.resource_backend = mock_resource_backend
+    processor.expose_backend_error_details = True
 
     processor.process_order(mock_order)
 

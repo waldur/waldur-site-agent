@@ -124,7 +124,7 @@ class MessageCapture:
         ``(frame, offering, user_agent) -> None``
         """
 
-        def handler(frame, offering, user_agent):
+        def handler(frame, offering, user_agent, expose_backend_error_details=True):  # noqa: ARG001
             message = json.loads(frame.body)
             with self._lock:
                 self._messages.append(message)

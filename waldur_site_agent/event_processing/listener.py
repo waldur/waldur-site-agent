@@ -152,6 +152,7 @@ class WaldurListener(stomp.ConnectionListener):
         on_message_callback: Callable,
         offering: structures.Offering,
         user_agent: str,
+        expose_backend_error_details: bool = True,
     ) -> None:
         """Constructor method."""
         self.queue = queue
@@ -161,6 +162,7 @@ class WaldurListener(stomp.ConnectionListener):
         self.on_message_callback = on_message_callback
         self.offering = offering
         self.user_agent = user_agent
+        self.expose_backend_error_details = expose_backend_error_details
         self._reconnect_lock = threading.Lock()
 
     def on_error(self, frame: stomp.utils.Frame) -> None:
@@ -171,7 +173,9 @@ class WaldurListener(stomp.ConnectionListener):
         """Message handler method."""
         logger.info("Received a message %s on queue %s", json.loads(frame.body), self.queue)
         try:
-            self.on_message_callback(frame, self.offering, self.user_agent)
+            self.on_message_callback(
+                frame, self.offering, self.user_agent, self.expose_backend_error_details
+            )
         except Exception as e:
             logger.exception(
                 "Error processing message %s on queue %s: %s", frame.body, self.queue, e

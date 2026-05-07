@@ -2,6 +2,7 @@ sentry_dsn: "" # Data Source Name for Sentry (more info https://docs.sentry.io/p
 elastic_apm_server_url: "" # Elastic APM server URL. When set, enables APM monitoring.
 timezone: "UTC" # Timezone for billing period calculations (e.g. "UTC", "Europe/Tallinn"). Defaults to system timezone if not specified.
 reporting_periods: 2 # Number of billing periods to report in report mode (1 = current month only, 2 = current + previous month). Default: 2.
+expose_backend_error_details: true # If true (default), forward exception message + traceback to Waldur error details. Set to false to only expose BackendError messages.
 offerings: # Settings for offerings
   - name: "Example SLURM Offering" # offering name
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
