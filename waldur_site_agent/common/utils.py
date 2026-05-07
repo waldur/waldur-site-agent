@@ -15,6 +15,7 @@ automatically detected and loaded via Python entry points.
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 from typing import Optional, Union, cast
 from uuid import UUID
@@ -234,6 +235,19 @@ def is_uuid(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def format_waldur_error_details(
+    exc: Exception, expose_backend_error_details: bool
+) -> tuple[str, str]:
+    """Return (error_message, error_traceback) to send to Waldur."""
+    if expose_backend_error_details:
+        return str(exc), traceback.format_exc()
+
+    if isinstance(exc, BackendError):
+        return str(exc), ""
+
+    return "Internal backend error. Please contact the service provider.", ""
 
 
 def _add_apm_logging_handler() -> None:

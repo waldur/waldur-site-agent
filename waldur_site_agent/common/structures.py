@@ -265,6 +265,15 @@ class WaldurAgentConfiguration(BaseModel):
         le=12,
         description="Number of billing periods to report (1=current, 2=current+previous)",
     )
+    expose_backend_error_details: bool = Field(
+        default=True,
+        description=(
+            "If True (default), the agent forwards exception messages and tracebacks "
+            "to Waldur error details when marking objects as ERRED. "
+            "If False, only the custom BackendError messages are exposed and tracebacks are kept "
+            "in site-agent logs."
+        ),
+    )
 
     # Runtime fields (set programmatically, not validated)
     waldur_site_agent_mode: str = ""
@@ -342,6 +351,15 @@ class RootConfiguration(BaseModel):
         ge=1,
         le=12,
         description="Number of billing periods to report (1=current, 2=current+previous)",
+    )
+    expose_backend_error_details: bool = Field(
+        default=True,
+        description=(
+            "If True (default), the agent forwards exception messages and tracebacks "
+            "to Waldur error details when marking objects as ERRED (current behaviour). "
+            "If False, only BackendError messages are exposed and tracebacks are kept "
+            "in site-agent logs."
+        ),
     )
 
     @field_validator("sentry_dsn")
@@ -422,6 +440,7 @@ class RootConfiguration(BaseModel):
             global_proxy=self.global_proxy,
             log_level=self.log_level,
             reporting_periods=self.reporting_periods,
+            expose_backend_error_details=self.expose_backend_error_details,
         )
 
 

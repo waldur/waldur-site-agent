@@ -91,6 +91,7 @@ def _make_processor(mock_resource_backend):
     processor.offering.backend_settings = {}
     processor.resource_backend = mock_resource_backend
     processor.service_provider = None
+    processor.expose_backend_error_details = True
     return processor
 
 

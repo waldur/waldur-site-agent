@@ -21,7 +21,7 @@ from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.listener import WaldurListener, connect_to_stomp_server
 
 WALDUR_LISTENER_NAME = "waldur-listener"
-OBJECT_TYPE_TO_HANDLER_STOMP = {
+OBJECT_TYPE_TO_HANDLER_STOMP: dict[ObservableObjectTypeEnum, Callable] = {
     ObservableObjectTypeEnum.ORDER: handlers.on_order_message_stomp,
     ObservableObjectTypeEnum.USER_ROLE: handlers.on_user_role_message_stomp,
     ObservableObjectTypeEnum.RESOURCE: handlers.on_resource_message_stomp,
@@ -47,6 +47,7 @@ class EventSubscriptionManager:
         user_agent: str = "",
         observable_object_type: str = "",
         global_proxy: str = "",
+        expose_backend_error_details: bool = True,
     ) -> None:
         """Constructor."""
         self.waldur_rest_client = utils.get_client(
@@ -57,6 +58,7 @@ class EventSubscriptionManager:
         self.on_connect_callback = on_connect_callback
         self.on_message_callback = on_message_callback
         self.observable_object_type = observable_object_type
+        self.expose_backend_error_details = expose_backend_error_details
 
     def _read_pid_file(self) -> dict:
         content = {}
@@ -167,6 +169,7 @@ class EventSubscriptionManager:
                 callback_function,
                 self.offering,
                 self.user_agent,
+                expose_backend_error_details=self.expose_backend_error_details,
             ),
         )
 

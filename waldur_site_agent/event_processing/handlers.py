@@ -79,6 +79,7 @@ def process_account_message(
     account_type: structures.AccountType,
     observable_object: ObservableObjectTypeEnum,
     user_agent: str = "",
+    expose_backend_error_details: bool = True,
 ) -> None:
     """Process generic account message."""
     account_username = message["account_username"]
@@ -94,7 +95,11 @@ def process_account_message(
             offering, waldur_rest_client, observable_object
         )
 
-        processor = common_processors.OfferingMembershipProcessor(offering, waldur_rest_client)
+        processor = common_processors.OfferingMembershipProcessor(
+            offering,
+            waldur_rest_client,
+            expose_backend_error_details=expose_backend_error_details,
+        )
         processor.register(agent_service)
         if action == "create":
             processor.process_account_creation(account_username, account_type)
@@ -113,7 +118,10 @@ def process_account_message(
 
 
 def on_order_message_stomp(
-    frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,
 ) -> None:
     """Order-processing handler for STOMP message event."""
     message: OrderMessage = json.loads(frame.body)
@@ -148,6 +156,7 @@ def on_order_message_stomp(
             waldur_rest_client,
             resource_backend=resource_backend,
             resource_backend_version=resource_backend_version,
+            expose_backend_error_details=expose_backend_error_details,
         )
         processor.register(agent_service)
 
@@ -169,7 +178,10 @@ def on_order_message_stomp(
 
 
 def on_user_role_message_stomp(
-    frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,
 ) -> None:
     """Membership sync handler for STOMP message event."""
     message: UserRoleMessage = json.loads(frame.body)
@@ -196,6 +208,7 @@ def on_user_role_message_stomp(
             waldur_rest_client,
             resource_backend=resource_backend,
             resource_backend_version=resource_backend_version,
+            expose_backend_error_details=expose_backend_error_details,
         )
         processor.register(agent_service)
         if user_uuid:
@@ -238,7 +251,10 @@ def on_user_role_message_stomp(
 
 
 def on_resource_message_stomp(
-    frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,
 ) -> None:
     """Resource update handler for STOMP message event."""
     message: ResourceMessage = json.loads(frame.body)
@@ -252,7 +268,11 @@ def on_resource_message_stomp(
         agent_service = register_event_process_service(
             offering, waldur_rest_client, ObservableObjectTypeEnum.RESOURCE
         )
-        processor = common_processors.OfferingMembershipProcessor(offering, waldur_rest_client)
+        processor = common_processors.OfferingMembershipProcessor(
+            offering,
+            waldur_rest_client,
+            expose_backend_error_details=expose_backend_error_details,
+        )
         processor.register(agent_service)
 
         processor.process_resource_by_uuid(resource_uuid)
@@ -261,7 +281,10 @@ def on_resource_message_stomp(
 
 
 def on_importable_resources_message_stomp(
-    frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,
 ) -> None:
     """Handler for importable resource list request for STOMP message event."""
     message: BackendResourceRequestMessage = json.loads(frame.body)
@@ -285,6 +308,7 @@ def on_importable_resources_message_stomp(
             waldur_rest_client,
             resource_backend=resource_backend,
             resource_backend_version=resource_backend_version,
+            expose_backend_error_details=expose_backend_error_details,
         )
         processor.register(agent_service)
 
@@ -294,7 +318,10 @@ def on_importable_resources_message_stomp(
 
 
 def on_account_message_stomp(
-    frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,
 ) -> None:
     """Service account handler for STOMP."""
     message: AccountMessage = json.loads(frame.body)
@@ -306,7 +333,14 @@ def on_account_message_stomp(
     if account_type_raw == structures.AccountType.COURSE_ACCOUNT.value:
         account_type = structures.AccountType.COURSE_ACCOUNT
         observable_object = ObservableObjectTypeEnum.COURSE_ACCOUNT
-    process_account_message(message, offering, account_type, observable_object, user_agent)
+    process_account_message(
+        message,
+        offering,
+        account_type,
+        observable_object,
+        user_agent,
+        expose_backend_error_details=expose_backend_error_details,
+    )
 
 
 def _report_command_result_to_waldur(
@@ -359,6 +393,7 @@ def on_resource_periodic_limits_update_stomp(
     frame: stomp.utils.Frame,
     offering: structures.Offering,
     user_agent: str,  # noqa: ARG001
+    expose_backend_error_details: bool = True,  # noqa: ARG001
 ) -> None:
     """Periodic limits update handler for STOMP message event."""
     try:
@@ -407,7 +442,10 @@ def on_resource_periodic_limits_update_stomp(
 
 
 def on_offering_user_message_stomp(
-    frame: stomp.utils.Frame, offering: structures.Offering, user_agent: str
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,  # noqa: ARG001
 ) -> None:
     """Offering user event handler for STOMP."""
     message: OfferingUserMessage = json.loads(frame.body)

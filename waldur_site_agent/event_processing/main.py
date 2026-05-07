@@ -22,12 +22,15 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
     """Starts the main loop for event-based offering processing."""
     try:
         utils.run_initial_offering_processing(
-            configuration.waldur_offerings, configuration.waldur_user_agent
+            configuration.waldur_offerings,
+            configuration.waldur_user_agent,
+            expose_backend_error_details=configuration.expose_backend_error_details,
         )
 
         stomp_consumers_map = utils.start_stomp_consumers(
             configuration.waldur_offerings,
             configuration.waldur_user_agent,
+            expose_backend_error_details=configuration.expose_backend_error_details,
         )
 
         reconciliation_enabled = any(
