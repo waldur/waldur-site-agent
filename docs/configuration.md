@@ -111,6 +111,12 @@ username_management_backend: "base"  # Backend for username management
 - `"mup"`: MUP portal integration
 - `"waldur"`: Waldur-to-Waldur federation
 - `"base"`: Basic username management
+- `"rancher"`: Direct Rancher REST API integration (single offering = one cluster)
+- `"rancher-kc-crd"`: CRD-driven Rancher + Keycloak management via the
+  [`rancher-keycloak-operator`](https://github.com/waldur/rancher-keycloak-operator).
+  Membership-sync only; targets multiple clusters per offering by reading
+  `cluster_id` from each Resource's `backend_id`. See
+  [`plugins/rancher-kc-crd/README.md`](../plugins/rancher-kc-crd/README.md).
 - Custom backends via plugins
 
 **Note**: If a backend setting is omitted, that process won't start for the offering.

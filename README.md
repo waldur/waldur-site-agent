@@ -103,6 +103,7 @@ you push.
 | [okd](plugins/okd/README.md) | OKD/OpenShift plugin |
 | [opennebula](plugins/opennebula/README.md) | OpenNebula VDC plugin |
 | [rancher](plugins/rancher/README.md) | Rancher plugin |
+| [rancher-kc-crd](plugins/rancher-kc-crd/README.md) | Rancher + Keycloak CRD-driven plugin |
 | [slurm](plugins/slurm/README.md) | SLURM plugin |
 | [waldur](plugins/waldur/README.md) | Waldur-to-Waldur federation plugin |
 <!-- END PLUGIN TABLE -->

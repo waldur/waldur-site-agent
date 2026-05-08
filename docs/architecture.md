@@ -293,6 +293,41 @@ plugins/{backend_name}/
 - **Implementation**: Minimal placeholder implementation
 - **Extensibility**: Template for custom username generation backends
 
+### Rancher plugin (`waldur-site-agent-rancher`)
+
+- **Communication**: HTTP REST API (Rancher v3, direct)
+- **Components**: Project resourceQuota cap (CPU / memory / storage)
+- **Features**:
+  - Direct project create / update / delete on a single Rancher cluster
+  - Per-namespace resource quotas + namespace creation
+  - Keycloak group membership sync via `keycloak-client` shared package
+  - Membership sync + order processing modes both supported
+- **Client**: `RancherClient` (httpx-based) talking to one cluster per
+  offering (cluster_id is offering-level config)
+
+### Rancher CRD-driven plugin (`waldur-site-agent-rancher-kc-crd`)
+
+- **Communication**: Kubernetes API — writes `ManagedRancherProject`
+  CRs that the [`rancher-keycloak-operator`](https://github.com/waldur/rancher-keycloak-operator)
+  reconciles
+- **Scope**: Membership sync only — no order processing, no usage
+  reporting (the operator owns Rancher + Keycloak mutations)
+- **Multi-cluster**: One offering can hold N Resources, each with its
+  own `backend_id` = Rancher cluster ID. The plugin reads cluster_id
+  per-Resource at CR-build time
+- **Features**:
+  - One CR per Waldur ResourceProject; operator translates to Rancher
+    project + project-level resourceQuota.limit + Keycloak groups +
+    PRTBs
+  - Drives RP FSM (`Creating → OK` on operator phase=Ready,
+    `→ Erred` on phase=Error) so the homeport UI reflects the
+    downstream reconcile state
+  - Per-RP Keycloak group naming so member-sync doesn't thrash a
+    shared cluster-level group
+- **Client**: thin `kubernetes` Python wrapper for `apply` / `get` /
+  `list` / `delete` of CRs in one namespace
+- **Pairs with**: operator `0.3.1`+ (recommended)
+
 ## Creating custom plugins
 
 For comprehensive plugin development instructions, including:
