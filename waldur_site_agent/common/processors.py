@@ -389,6 +389,40 @@ class OfferingBaseProcessor(abc.ABC):
         cached = _ATTRIBUTE_CONFIG_CACHE.get(offering_uuid)
         return cached[1] if cached else list(self._DEFAULT_EXPOSED_FIELDS)
 
+    def _build_user_attributes_mapping(
+        self, offering_users: list[OfferingUser]
+    ) -> dict[str, dict]:
+        """Build a mapping of offering_username -> exposed user profile attributes.
+
+        Driven by the offering's OfferingUserAttributeConfig: only fields
+        the operator has chosen to expose are included. Backends with
+        identity-bridge resolution use these to enrich user-creation calls
+        so newly-resolved users have proper first_name / last_name / email
+        instead of being created as bare username-only records.
+        """
+        offering_user_by_username = {
+            ou.username: ou for ou in offering_users if ou.username
+        }
+        exposed_fields = self._get_exposed_fields()
+        user_attributes: dict[str, dict] = {}
+        for ou_username, ou in offering_user_by_username.items():
+            attrs: dict = {}
+            for field_name in exposed_fields:
+                if field_name == "username":
+                    continue  # handled separately via user_cuids
+                # "full_name" exposes first_name and last_name as well
+                if field_name == "full_name":
+                    ou_attr_names = ["full_name", "first_name", "last_name"]
+                else:
+                    ou_attr_names = [field_name]
+                for attr_name in ou_attr_names:
+                    val = getattr(ou, f"user_{attr_name}", None)
+                    if val is not None and not isinstance(val, type(UNSET)):
+                        attrs[attr_name] = _serialize_attr_value(val)
+            if attrs:
+                user_attributes[ou_username] = attrs
+        return user_attributes
+
     def _get_cached_offering_users(self) -> list[OfferingUser]:
         """Return cached offering users, fetching from API on first call.
 
@@ -1094,6 +1128,16 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         Updates offering user usernames if needed and adds all users
         with valid usernames to the backend resource.
 
+        Builds the same ``user_cuids`` / ``user_roles`` / ``user_attributes``
+        mappings that ``OfferingMembershipProcessor._sync_resource_users``
+        threads through, so backends with identity-bridge resolution
+        (e.g. Waldur federation) can resolve users by their real CUID and
+        apply their actual project role. Without these mappings the Waldur
+        backend would fall back to using the offering username as the
+        identity-bridge username (creating phantom users on the target
+        instance) and to ``DEFAULT_PROJECT_ROLE_NAME = PROJECT.ADMIN`` for
+        every added user.
+
         Args:
             waldur_resource: The Waldur resource to add users to
             user_context: User context containing offering users and mappings
@@ -1107,17 +1151,20 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             user_context_new = self._fetch_user_context_for_resource(waldur_resource.uuid.hex)
             user_context.update(user_context_new)
 
+        offering_users = user_context["offering_users"]
+        team = user_context.get("team", [])
+
         logger.info(
             "Using %s (%s) offering users, user count: %s",
             self.offering.name,
             self.offering.uuid,
-            len(user_context["offering_users"]),
+            len(offering_users),
         )
 
         # Filter only team members with usernames set and in OK state
         offering_usernames = {
             offering_user.username
-            for offering_user in user_context["offering_users"]
+            for offering_user in offering_users
             if offering_user.state == OfferingUserState.OK
         }
 
@@ -1125,10 +1172,29 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             logger.info("No users to add to resource")
             return
 
+        user_cuids = {
+            ou.username: ou.user_username
+            for ou in offering_users
+            if ou.username
+            and ou.user_username
+            and not isinstance(ou.user_username, type(UNSET))
+        }
+
+        user_roles = {
+            member.offering_user_username: member.role
+            for member in team
+            if member.offering_user_username and member.role
+        }
+
+        user_attributes = self._build_user_attributes_mapping(offering_users)
+
         self.resource_backend.add_users_to_resource(
             waldur_resource,
             offering_usernames,
             homedir_umask=self.offering.backend_settings.get("default_homedir_umask", "0077"),
+            user_cuids=user_cuids,
+            user_roles=user_roles,
+            user_attributes=user_attributes,
         )
 
     def _process_create_order(self, order: OrderDetails | None) -> bool:
@@ -1955,32 +2021,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 }
             )
 
-        # Build user_attributes mapping (offering_username -> attribute dict)
-        # for backends that enrich identity bridge calls with user profile data.
-        # Attributes are driven by OfferingUserAttributeConfig exposed fields.
-        offering_user_by_username = {
-            ou.username: ou
-            for ou in offering_users
-            if ou.username
-        }
-        exposed_fields = self._get_exposed_fields()
-        user_attributes: dict[str, dict] = {}
-        for ou_username, ou in offering_user_by_username.items():
-            attrs: dict = {}
-            for field_name in exposed_fields:
-                if field_name == "username":
-                    continue  # handled separately via user_cuids
-                # "full_name" exposes first_name and last_name as well
-                if field_name == "full_name":
-                    ou_attr_names = ["full_name", "first_name", "last_name"]
-                else:
-                    ou_attr_names = [field_name]
-                for attr_name in ou_attr_names:
-                    val = getattr(ou, f"user_{attr_name}", None)
-                    if val is not None and not isinstance(val, type(UNSET)):
-                        attrs[attr_name] = _serialize_attr_value(val)
-            if attrs:
-                user_attributes[ou_username] = attrs
+        user_attributes = self._build_user_attributes_mapping(offering_users)
 
         offering_user_states: dict[str, OfferingUserState] = {
             ou.username: ou.state
