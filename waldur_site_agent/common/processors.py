@@ -258,6 +258,7 @@ class OfferingBaseProcessor(abc.ABC):
             field=[
                 ProviderOfferingDetailsFieldEnum.COMPONENTS,
                 ProviderOfferingDetailsFieldEnum.CUSTOMER_UUID,
+                ProviderOfferingDetailsFieldEnum.PARTITIONS,
             ],
         )
         utils.extend_backend_components(self.offering, self.waldur_offering.components)
@@ -270,6 +271,11 @@ class OfferingBaseProcessor(abc.ABC):
 
         self.service_provider = service_providers[0]
         self.resource_backend.service_provider_uuid = self.service_provider.uuid.hex
+        self.resource_backend.offering_partitions = sorted(
+            p.partition_name
+            for p in (self.waldur_offering.partitions or [])
+            if p.partition_name
+        )
 
         # Per-cycle cache for offering users (avoids redundant API calls)
         self._offering_users_cache: list[OfferingUser] | None = None

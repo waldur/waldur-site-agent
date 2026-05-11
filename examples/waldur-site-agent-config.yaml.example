@@ -82,7 +82,13 @@ offerings: # Settings for offerings
       project_prefix: ""
       allocation_prefix: ""
       parent_account: "eurohpc" # Flat hierarchy under a single parent
-      default_partition: "cn" # Assign users to partition 'cn' by default
+      default_partition: "cn" # Fallback partition used when an offering has no OfferingPartition records
+      # Opt-in: when `enforce_offering_partitions` is true AND the offering carries OfferingPartition
+      # entries, the agent emits `Partitions=p1,p2` on the user association so jobs are restricted
+      # to those partitions. Default is false — OfferingPartition records are treated as
+      # informational only (consumed by tools like Open OnDemand) and never threaded into sacctmgr.
+      # Set to true to enforce per-offering partition restrictions (e.g. for per-partition pricing).
+      # enforce_offering_partitions: false
       enable_user_homedir_account_creation: true
       default_homedir_umask: "0077"
       homedir_base_path: "/home" # Override when homedirs are on a separate mount

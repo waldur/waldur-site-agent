@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import datetime
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -16,6 +17,8 @@ from waldur_site_agent.backend.exceptions import (
 )
 from waldur_site_agent.backend.structures import Association, ClientResource
 from waldur_site_agent_slurm.parser import SlurmAssociationLine, SlurmReportLine
+
+_PARTITION_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class SlurmClient(clients.BaseClient):
@@ -567,6 +570,41 @@ class SlurmClient(clients.BaseClient):
                 f"Partition={partition}",
             ]
         )
+
+    def create_association_with_partitions(
+        self,
+        username: str,
+        resource_id: str,
+        partitions: Sequence[str],
+        default_account: Optional[str] = "",
+    ) -> str:
+        """Create a user→account association restricted to the given partitions.
+
+        Emits ``sacctmgr add user … Partitions=p1,p2 Share=parent``.
+        Partition names are sorted alphabetically so the argument is
+        deterministic. ``DefaultPartition=`` is not emitted: real
+        sacctmgr does not accept it on ``add user`` (no parser in
+        ``user_functions.c`` or ``sacctmgr_set_assoc_rec``) and would
+        reject the call with ``Unknown option``.
+        """
+        if not partitions:
+            msg = "partitions must be non-empty"
+            raise BackendError(msg)
+        for name in partitions:
+            if not _PARTITION_NAME_RE.match(name):
+                msg = f"Invalid SLURM partition name: {name!r}"
+                raise BackendError(msg)
+        sorted_parts = sorted(partitions)
+        args = [
+            "add",
+            "user",
+            username,
+            f"account={resource_id}",
+            f"DefaultAccount={default_account}",
+            f"Partitions={','.join(sorted_parts)}",
+            "Share=parent",
+        ]
+        return self._execute_command(args)
 
     # ===== PERIODIC LIMITS EXTENSION =====
 

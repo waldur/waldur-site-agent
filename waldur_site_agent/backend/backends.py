@@ -56,6 +56,9 @@ class BaseBackend(ABC):
         self.client: BaseClient = UnknownClient()
         self.service_provider_uuid: str | None = None
         self.timezone: str = ""
+        # Partition names from the offering; populated by the processor when
+        # the offering carries OfferingPartition records (SLURM-specific use).
+        self.offering_partitions: list[str] = []
 
     @abstractmethod
     def ping(self, raise_exception: bool = False) -> bool:
