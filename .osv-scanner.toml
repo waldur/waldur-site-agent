@@ -19,6 +19,11 @@ reason = "urllib3 v1→v2 is a breaking change. Requires migration effort. reque
 ignoreUntil = 2026-07-07T00:00:00Z
 
 [[IgnoredVulns]]
+id = "GHSA-qccp-gfcp-xxvc"
+reason = "Affects urllib3 1.26.20 (Python 3.9 path only); fix is in 2.7.0. urllib3 v1→v2 is a breaking change and requests 2.32.x pins urllib3<2 on Python <3.10. The Python ≥3.10 path is already on 2.7.0."
+ignoreUntil = 2026-07-07T00:00:00Z
+
+[[IgnoredVulns]]
 id = "GHSA-gc5v-m9x4-r6x2"
 reason = "requests 2.33.0 requires urllib3>=2, which is a breaking change for this project."
 ignoreUntil = 2026-07-07T00:00:00Z

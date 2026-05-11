@@ -73,8 +73,17 @@ class SlurmBackend(backends.BaseBackend):
         # Optional project directory management
         self._project_dir_config = self.backend_settings.get("project_directory", {})
 
-        # Optional partition assignment
+        # Optional partition assignment (agent-wide fallback when offering has no partitions)
         self._default_partition = self.backend_settings.get("default_partition")
+
+        # Opt-in: when False (default), OfferingPartition records on the offering
+        # are treated as informational only and never threaded into sacctmgr.
+        # Sites that want partition-scoped associations must set this to True
+        # explicitly — this preserves back-compat for deployments that populated
+        # partitions for tools like Open OnDemand.
+        self._enforce_offering_partitions = bool(
+            self.backend_settings.get("enforce_offering_partitions", False)
+        )
 
         # Optional component mapping (Waldur components → SLURM TRES)
         self._component_mapper = ComponentMapper(slurm_tres)
@@ -455,7 +464,14 @@ class SlurmBackend(backends.BaseBackend):
             logger.info("Creating association between %s and %s", username, resource_backend_id)
             try:
                 default_account = self.backend_settings.get("default_account", "root")
-                if self._default_partition:
+                if self.offering_partitions and self._enforce_offering_partitions:
+                    self.client.create_association_with_partitions(
+                        username,
+                        resource_backend_id,
+                        self.offering_partitions,
+                        default_account,
+                    )
+                elif self._default_partition:
                     self.client.create_association_with_partition(
                         username,
                         resource_backend_id,
