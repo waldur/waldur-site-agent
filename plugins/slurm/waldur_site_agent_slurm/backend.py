@@ -146,6 +146,55 @@ class SlurmBackend(backends.BaseBackend):
         if self._qos_config.get("enabled"):
             self._setup_account_qos(resource_backend_id)
 
+    def sync_resource_project(self, waldur_resource: WaldurResource) -> None:
+        """Reparent the SLURM project account when a Waldur project moves to a new customer.
+
+        In the default (3-tier) hierarchy the project account's parent must match the
+        customer account derived from waldur_resource.customer_slug.  When a project is
+        moved between organizations in Waldur the API already reflects the new customer,
+        but the SLURM parent is stale.  This method detects that mismatch and corrects it.
+
+        Skipped when flat hierarchy is configured (parent_account setting), because in
+        that mode no customer tier exists in SLURM.
+        """
+        if self.backend_settings.get("parent_account"):
+            return
+
+        if not waldur_resource.customer_slug or not waldur_resource.project_slug:
+            return
+
+        project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
+        expected_customer_backend_id = self._get_customer_backend_id(
+            waldur_resource.customer_slug
+        )
+
+        current_parent = self.client.get_account_parent(project_backend_id)
+        if current_parent is None or current_parent == expected_customer_backend_id:
+            return
+
+        logger.info(
+            "Project account %s has parent %s but Waldur expects %s — reparenting",
+            project_backend_id,
+            current_parent,
+            expected_customer_backend_id,
+        )
+
+        # Ensure the target customer account exists before reparenting
+        self._create_backend_resource(
+            expected_customer_backend_id,
+            waldur_resource.customer_name,
+            expected_customer_backend_id,
+            self.backend_settings.get("default_account"),
+        )
+
+        self.client.set_account_parent(project_backend_id, expected_customer_backend_id)
+        logger.info(
+            "Reparented SLURM project account %s: %s → %s",
+            project_backend_id,
+            current_parent,
+            expected_customer_backend_id,
+        )
+
     def diagnostics(self) -> bool:
         """Runs diagnostics for SLURM cluster."""
         default_account_name = self.backend_settings["default_account"]

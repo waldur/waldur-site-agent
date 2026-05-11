@@ -281,6 +281,9 @@ class MembershipSyncTest(unittest.TestCase):
         self.mock_downscale_resource = mock.patch.object(
             backend.SlurmBackend, "downscale_resource"
         ).start()
+        mock.patch.object(
+            backend.SlurmBackend, "sync_resource_project"
+        ).start()
 
     def test_association_create(
         self,

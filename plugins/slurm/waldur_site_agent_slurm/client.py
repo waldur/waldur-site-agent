@@ -132,6 +132,24 @@ class SlurmClient(clients.BaseClient):
             parts.append(f'parent="{parent_name}"')
         return self._execute_command(parts)
 
+    def get_account_parent(self, account: str) -> Optional[str]:
+        """Return the current parent account name for the given account, or None if not found."""
+        output = self._execute_command(
+            ["show", "account", account, "format=Account,ParentName", "-n", "-P"]
+        )
+        account_col, parent_col = 0, 1
+        for line in output.splitlines():
+            parts = line.strip().split("|")
+            if len(parts) > parent_col and parts[account_col].strip() == account:
+                return parts[parent_col].strip() or None
+        return None
+
+    def set_account_parent(self, account: str, new_parent: str) -> str:
+        """Reparent a SLURM account under new_parent."""
+        return self._execute_command(
+            ["modify", "account", "where", f"name={account}", "set", f"parent={new_parent}"]
+        )
+
     def delete_all_users_from_account(self, name: str) -> str:
         """Drop all the users from the account based on the account name."""
         return self._execute_command(["remove", "user", "where", f"account={name}"])
