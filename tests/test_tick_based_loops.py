@@ -14,12 +14,15 @@ from waldur_site_agent.common import structures as common_structures
 def _make_config(**overrides):
     """Create a mock WaldurAgentConfiguration."""
     config = mock.Mock(spec=common_structures.WaldurAgentConfiguration)
-    config.waldur_offerings = overrides.get("offerings", [mock.Mock()])
+    _default_offering = mock.Mock()
+    config.waldur_offerings = overrides.get("offerings", [_default_offering])
     config.waldur_user_agent = "test-agent"
     config.waldur_site_agent_mode = "report"
     config.timezone = "UTC"
     config.reporting_periods = 1
     config.global_proxy = None
+    config.log_shipping = mock.Mock(spec=common_structures.LogShippingConfig)
+    config.log_shipping.enabled = False
     return config
 
 

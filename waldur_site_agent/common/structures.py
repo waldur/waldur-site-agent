@@ -27,6 +27,27 @@ class AccountingType(Enum):
     ONE_TIME = "one"
 
 
+class LogShippingConfig(BaseModel):
+    """Configuration for shipping agent logs to Waldur Mastermind.
+
+    When enabled, the agent periodically POSTs batches of its own log entries
+    to the Waldur API so operators can inspect them without SSH access.
+    All fields are optional — the feature is off by default.
+    """
+
+    enabled: bool = Field(default=False, description="Enable log shipping to Waldur")
+    ship_interval_seconds: int = Field(
+        default=60, ge=10, description="Interval between shipments in seconds"
+    )
+    buffer_size_mb: int = Field(
+        default=1, ge=1, description="Maximum in-memory buffer size in megabytes"
+    )
+    log_level: str = Field(
+        default="WARNING",
+        description="Minimum log level to ship (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
+
+
 class BackendComponent(BaseModel):
     """Configuration for a single backend component (e.g., CPU, memory, storage).
 
@@ -274,6 +295,10 @@ class WaldurAgentConfiguration(BaseModel):
             "in site-agent logs."
         ),
     )
+    log_shipping: LogShippingConfig = Field(
+        default_factory=LogShippingConfig,
+        description="Configuration for shipping agent logs to Waldur",
+    )
 
     # Runtime fields (set programmatically, not validated)
     waldur_site_agent_mode: str = ""
@@ -361,6 +386,10 @@ class RootConfiguration(BaseModel):
             "in site-agent logs."
         ),
     )
+    log_shipping: LogShippingConfig = Field(
+        default_factory=LogShippingConfig,
+        description="Configuration for shipping agent logs to Waldur",
+    )
 
     @field_validator("sentry_dsn")
     @classmethod
@@ -441,6 +470,7 @@ class RootConfiguration(BaseModel):
             log_level=self.log_level,
             reporting_periods=self.reporting_periods,
             expose_backend_error_details=self.expose_backend_error_details,
+            log_shipping=self.log_shipping,
         )
 
 

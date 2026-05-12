@@ -1,11 +1,13 @@
 """Tests for configuration loading functions."""
 
 import tempfile
+import unittest
 from pathlib import Path
 
+import pytest
 import yaml
 
-from waldur_site_agent.common.structures import AccountingType, BackendComponent
+from waldur_site_agent.common.structures import AccountingType, BackendComponent, LogShippingConfig, Offering
 from waldur_site_agent.common.utils import load_configuration
 
 
@@ -152,3 +154,86 @@ class TestBackendComponentPrepaidFields:
         d = component.to_dict()
         assert "is_prepaid" not in d
         assert "min_prepaid_duration" not in d
+
+
+# ---------------------------------------------------------------------------
+# LogShippingConfig — unit tests (no file I/O required)
+# ---------------------------------------------------------------------------
+
+class TestLogShippingConfig(unittest.TestCase):
+    """Tests for the LogShippingConfig Pydantic model."""
+
+    def test_defaults_disabled(self):
+        """LogShippingConfig is disabled by default."""
+        cfg = LogShippingConfig()
+        assert cfg.enabled is False
+        assert cfg.ship_interval_seconds == 60
+        assert cfg.buffer_size_mb == 1
+
+    def test_enabled_flag_can_be_set(self):
+        """enabled=True is accepted."""
+        cfg = LogShippingConfig(enabled=True)
+        assert cfg.enabled is True
+
+    def test_custom_interval_and_buffer(self):
+        """Custom values are stored correctly."""
+        cfg = LogShippingConfig(enabled=True, ship_interval_seconds=30, buffer_size_mb=5)
+        assert cfg.ship_interval_seconds == 30
+        assert cfg.buffer_size_mb == 5
+
+    def test_ship_interval_minimum_is_10(self):
+        """ship_interval_seconds < 10 must raise ValidationError."""
+        with pytest.raises(Exception):
+            LogShippingConfig(ship_interval_seconds=5)
+
+    def test_buffer_size_minimum_is_1(self):
+        """buffer_size_mb < 1 must raise ValidationError."""
+        with pytest.raises(Exception):
+            LogShippingConfig(buffer_size_mb=0)
+
+
+class TestGlobalLogShippingConfig(unittest.TestCase):
+    """Tests for the global log_shipping configuration."""
+
+    _BASE_OFFERING = dict(
+        name="test",
+        waldur_api_url="https://waldur.example.com/api/",
+        waldur_api_token="tok",
+        waldur_offering_uuid="11111111-1111-1111-1111-111111111111",
+        backend_type="slurm",
+    )
+
+    def test_default_log_shipping_disabled(self):
+        """Global log_shipping is disabled by default."""
+        ls = LogShippingConfig()
+        assert ls.enabled is False
+
+    def test_log_shipping_parses_dict(self):
+        """LogShippingConfig parses a dict with custom values."""
+        ls = LogShippingConfig(enabled=True, ship_interval_seconds=45)
+        assert ls.enabled is True
+        assert ls.ship_interval_seconds == 45
+
+    def test_log_shipping_loaded_from_yaml_config(self):
+        """Full round-trip: YAML → load_configuration → global log_shipping field."""
+        config_data = {
+            "log_shipping": {
+                "enabled": True,
+                "ship_interval_seconds": 120,
+                "buffer_size_mb": 2,
+            },
+            "offerings": [self._BASE_OFFERING],
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_file_path = f.name
+
+        try:
+            configuration = load_configuration(config_file_path)
+            ls = configuration.log_shipping
+            assert ls.enabled is True
+            assert ls.ship_interval_seconds == 120
+            assert ls.buffer_size_mb == 2
+        finally:
+            Path(config_file_path).unlink()

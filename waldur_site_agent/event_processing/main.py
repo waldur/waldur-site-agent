@@ -10,6 +10,7 @@ from waldur_site_agent.common import (
 from waldur_site_agent.common import (
     structures as common_structures,
 )
+from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.common.healthz import touch_heartbeat
 from waldur_site_agent.event_processing import utils
 
@@ -20,6 +21,7 @@ TICK_INTERVAL = 60  # Wake up every minute to check timers
 
 def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
     """Starts the main loop for event-based offering processing."""
+    common_utils.setup_log_shippers(configuration)
     try:
         utils.run_initial_offering_processing(
             configuration.waldur_offerings,
@@ -47,6 +49,8 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
         if "stomp_consumers_map" in locals():
             utils.stop_stomp_consumers(stomp_consumers_map)
         sys.exit(1)
+    finally:
+        common_utils.teardown_log_shippers()
 
 
 def _run_without_username_reconciliation(

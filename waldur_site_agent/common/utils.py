@@ -76,7 +76,10 @@ from waldur_api_client.types import UNSET
 from waldur_site_agent.backend import (
     BackendType,
     configure_logger,
+    get_log_buffer_manager,
+    get_log_shipping_manager,
     logger,
+    setup_log_buffering,
 )
 from waldur_site_agent.backend import exceptions as backend_exceptions
 from waldur_site_agent.backend.backends import (
@@ -87,6 +90,7 @@ from waldur_site_agent.backend.backends import (
 )
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common import WALDUR_SITE_AGENT_VERSION, structures
+from waldur_site_agent.common.log_shipper import LogShipper
 
 # Handle different Python versions
 if sys.version_info >= (3, 10):
@@ -1412,6 +1416,83 @@ def sync_resource_limits() -> None:
                 logger.error(
                     "Failed to sync resource limits for %s, reason: %s", waldur_resource.name, e
                 )
+
+
+def setup_log_shippers(
+    configuration: structures.WaldurAgentConfiguration,
+) -> None:
+    """Set up log buffering using the global log_shipping configuration.
+
+    Only initialises the buffer — shippers are created later via ensure_log_shipper()
+    after AgentIdentity is registered in Waldur and agent_identity_uuid is known.
+
+    Args:
+        configuration: Loaded agent configuration
+    """
+    ls_cfg = configuration.log_shipping
+    if not ls_cfg.enabled:
+        return
+
+    setup_log_buffering(
+        max_size_bytes=ls_cfg.buffer_size_mb * 1024 * 1024,
+        log_level=ls_cfg.log_level,
+    )
+    logger.info(
+        "Log buffering enabled (buffer=%d MB, level=%s)", ls_cfg.buffer_size_mb, ls_cfg.log_level
+    )
+
+
+def ensure_log_shipper(
+    offering: structures.Offering,
+    agent_identity_uuid: str,
+    log_shipping_config: structures.LogShippingConfig,
+) -> None:
+    """Idempotently create and start a LogShipper for the given agent identity.
+
+    Call this after AgentIdentity is registered in Waldur so agent_identity_uuid is known.
+    Subsequent calls with the same agent_identity_uuid are no-ops.
+
+    Args:
+        offering: offering configuration (provides api_url and api_token)
+        agent_identity_uuid: UUID of the registered AgentIdentity
+        log_shipping_config: global log shipping configuration
+    """
+    ls_cfg = log_shipping_config
+    if not ls_cfg.enabled:
+        return
+
+    manager = get_log_shipping_manager()
+    if agent_identity_uuid in manager.shippers:
+        return  # shipper already running for this agent
+
+    buffer = get_log_buffer_manager().get_buffer()
+    if buffer is None:
+        logger.warning("Log buffer not available for agent %s, skipping", agent_identity_uuid)
+        return
+
+    shipper = LogShipper(
+        buffer=buffer,
+        api_url=offering.api_url,
+        api_token=offering.api_token,
+        agent_identity_uuid=agent_identity_uuid,
+        ship_interval=ls_cfg.ship_interval_seconds,
+    )
+    shipper.start()
+    manager.add_shipper(agent_identity_uuid, shipper)
+    logger.info(
+        "Log shipper started for agent %s (interval=%ds)",
+        agent_identity_uuid,
+        ls_cfg.ship_interval_seconds,
+    )
+
+
+def teardown_log_shippers() -> None:
+    """Stop all log shippers and flush remaining buffered entries."""
+    manager = get_log_shipping_manager()
+    count = len(manager.shippers)
+    manager.stop_all()
+    if count:
+        logger.info("Log shippers stopped: %d shipper(s) shut down", count)
 
 
 def get_all_paginated(api_function, client, **kwargs) -> list:  # noqa: ANN001, ANN003

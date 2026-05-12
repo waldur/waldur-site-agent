@@ -3,6 +3,11 @@ elastic_apm_server_url: "" # Elastic APM server URL. When set, enables APM monit
 timezone: "UTC" # Timezone for billing period calculations (e.g. "UTC", "Europe/Tallinn"). Defaults to system timezone if not specified.
 reporting_periods: 2 # Number of billing periods to report in report mode (1 = current month only, 2 = current + previous month). Default: 2.
 expose_backend_error_details: true # If true (default), forward exception message + traceback to Waldur error details. Set to false to only expose BackendError messages.
+log_shipping: # Global log shipping configuration (applies to all offerings)
+  enabled: false # Enable shipping agent logs to Waldur Mastermind. Default: false.
+  ship_interval_seconds: 60 # Interval between log shipments in seconds. Default: 60.
+  buffer_size_mb: 1 # Maximum in-memory log buffer size in megabytes. Default: 1.
+  log_level: WARNING # Minimum log level to ship (DEBUG, INFO, WARNING, ERROR, CRITICAL). Default: WARNING.
 offerings: # Settings for offerings
   - name: "Example SLURM Offering" # offering name
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
