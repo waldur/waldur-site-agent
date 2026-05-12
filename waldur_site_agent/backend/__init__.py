@@ -94,6 +94,68 @@ def configure_logger(log_level: str = "INFO") -> None:
     handler.setLevel(level)
 
     root_logger = logging.getLogger()
+    # Imported here to avoid a circular import: backend/__init__.py is loaded before
+    # common/log_handler.py is fully initialised at module level.
+    from waldur_site_agent.common.log_handler import BufferedLogHandler  # noqa: PLC0415
+
+    buffered_handlers = [h for h in root_logger.handlers if isinstance(h, BufferedLogHandler)]
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
+    for bh in buffered_handlers:
+        root_logger.addHandler(bh)
     root_logger.setLevel(level)
+
+
+# ---------------------------------------------------------------------------
+# Log buffering — used by LogShipper to capture agent logs for shipping
+# ---------------------------------------------------------------------------
+
+from waldur_site_agent.common.log_handler import LogBufferManager  # noqa: E402
+
+_log_buffer_manager = LogBufferManager()
+
+
+def setup_log_buffering(
+    max_size_bytes: int = 1024 * 1024,
+    log_level: str = "INFO",
+) -> None:
+    """Set up in-memory log buffering for shipping to Waldur Mastermind.
+
+    Idempotent — safe to call multiple times; only the first call has effect.
+
+    Args:
+        max_size_bytes: Maximum buffer size in bytes (default: 1 MB)
+        log_level: Minimum log level to capture (default: INFO)
+    """
+    _log_buffer_manager.setup(max_size_bytes=max_size_bytes, log_level=log_level)
+
+    root_logger = logging.getLogger()
+    if _log_buffer_manager.handler and _log_buffer_manager.handler not in root_logger.handlers:
+        root_logger.addHandler(_log_buffer_manager.handler)
+
+
+def get_log_buffer_manager() -> LogBufferManager:
+    """Return the global LogBufferManager instance."""
+    return _log_buffer_manager
+
+
+def teardown_log_buffering() -> None:
+    """Remove the buffered handler from the root logger and clean up."""
+    root_logger = logging.getLogger()
+    if _log_buffer_manager.handler and _log_buffer_manager.handler in root_logger.handlers:
+        root_logger.removeHandler(_log_buffer_manager.handler)
+    _log_buffer_manager.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Log shipping — singleton manager for all LogShipper instances
+# ---------------------------------------------------------------------------
+
+from waldur_site_agent.common.log_shipper import LogShippingManager  # noqa: E402
+
+_log_shipping_manager = LogShippingManager()
+
+
+def get_log_shipping_manager() -> LogShippingManager:
+    """Return the global LogShippingManager instance."""
+    return _log_shipping_manager

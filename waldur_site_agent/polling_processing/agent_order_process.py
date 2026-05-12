@@ -62,6 +62,8 @@ def _process_offerings(
                 # If no identities found locally, registering one
                 agent_identity = agent_identity_manager.register_identity(identity_name)
 
+            utils.ensure_log_shipper(offering, agent_identity.uuid.hex, configuration.log_shipping)
+
             agent_service = agent_identity_manager.register_service(
                 agent_identity,
                 configuration.waldur_site_agent_mode,
@@ -91,13 +93,16 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
     """Starts the tick-based main loop for offering processing."""
     last_process = 0.0
     agent_identities: dict[str, AgentIdentity] = {}
+    utils.setup_log_shippers(configuration)
+    try:
+        while True:
+            now = time.time()
 
-    while True:
-        now = time.time()
+            if now - last_process >= ORDER_PROCESS_INTERVAL:
+                _process_offerings(configuration, agent_identities)
+                last_process = time.time()
 
-        if now - last_process >= ORDER_PROCESS_INTERVAL:
-            _process_offerings(configuration, agent_identities)
-            last_process = time.time()
-
-        touch_heartbeat()
-        time.sleep(TICK_INTERVAL)
+            touch_heartbeat()
+            time.sleep(TICK_INTERVAL)
+    finally:
+        utils.teardown_log_shippers()

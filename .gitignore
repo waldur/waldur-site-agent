@@ -10,3 +10,4 @@ poetry.toml
 poetry.lock
 .ruff_cache
 ci/db-cache/
+waldur-site-agent-config.yaml

@@ -405,7 +405,10 @@ class TestMainLoopTimers(unittest.TestCase):
 
     @mock.patch("waldur_site_agent.event_processing.main.time")
     @mock.patch("waldur_site_agent.event_processing.main.utils")
-    def test_health_check_and_reconciliation_run_on_first_tick(self, mock_utils, mock_time):
+    @mock.patch("waldur_site_agent.event_processing.main.common_utils")
+    def test_health_check_and_reconciliation_run_on_first_tick(
+        self, mock_common_utils, mock_utils, mock_time
+    ):
         """Both health check and reconciliation run immediately on first iteration."""
         from waldur_site_agent.event_processing import main
 
@@ -432,7 +435,10 @@ class TestMainLoopTimers(unittest.TestCase):
 
     @mock.patch("waldur_site_agent.event_processing.main.time")
     @mock.patch("waldur_site_agent.event_processing.main.utils")
-    def test_health_check_not_repeated_within_interval(self, mock_utils, mock_time):
+    @mock.patch("waldur_site_agent.event_processing.main.common_utils")
+    def test_health_check_not_repeated_within_interval(
+        self, mock_common_utils, mock_utils, mock_time
+    ):
         """Health check does not repeat when interval hasn't elapsed."""
         from waldur_site_agent.event_processing import main
 
@@ -457,7 +463,10 @@ class TestMainLoopTimers(unittest.TestCase):
 
     @mock.patch("waldur_site_agent.event_processing.main.time")
     @mock.patch("waldur_site_agent.event_processing.main.utils")
-    def test_initial_processing_runs_before_loop(self, mock_utils, mock_time):
+    @mock.patch("waldur_site_agent.event_processing.main.common_utils")
+    def test_initial_processing_runs_before_loop(
+        self, mock_common_utils, mock_utils, mock_time
+    ):
         """run_initial_offering_processing is called before the main loop."""
         from waldur_site_agent.event_processing import main
 
@@ -481,7 +490,10 @@ class TestMainLoopTimers(unittest.TestCase):
 
     @mock.patch("waldur_site_agent.event_processing.main.time")
     @mock.patch("waldur_site_agent.event_processing.main.utils")
-    def test_exception_stops_consumers_and_exits(self, mock_utils, mock_time):
+    @mock.patch("waldur_site_agent.event_processing.main.common_utils")
+    def test_exception_stops_consumers_and_exits(
+        self, mock_common_utils, mock_utils, mock_time
+    ):
         """Fatal exception in the loop stops STOMP consumers and calls sys.exit(1)."""
         from waldur_site_agent.event_processing import main
 
