@@ -171,12 +171,12 @@ sequenceDiagram
     participant R as Rancher
     participant KC as Keycloak
 
-    Note over SA: pull_resource() loop completes;<br/>2 CRs applied for RP1, RP2
+    Note over SA: pull_resource loop completes — 2 CRs applied for RP1, RP2
     SA->>W: GET resource-projects?resource_uuid=…
     W-->>SA: [RP1] (RP2 was deleted in Waldur)
     SA->>K: list mrp -l waldur.io/resource-uuid=…
     K-->>SA: [CR_RP1, CR_RP2]
-    Note over SA: expected={CR_RP1}<br/>found={CR_RP1, CR_RP2}<br/>orphans={CR_RP2}
+    Note over SA: expected={CR_RP1}<br>found={CR_RP1, CR_RP2}<br>orphans={CR_RP2}
     SA->>K: kube delete CR_RP2
     K-->>OP: watch event (delete + finalizer hold)
     OP->>R: delete PRTBs for RP2's project
@@ -216,18 +216,18 @@ sequenceDiagram
     participant OP as Operator
     participant R as Rancher
 
-    Note over U: status.rancherProjectId = p-OLD<br/>(actual Rancher project: p-NEW, same name)
+    Note over U: status.rancherProjectId = p-OLD<br>(actual Rancher project: p-NEW, same name)
     U->>K: kubectl delete mrp <name>
     K-->>OP: on_delete handler fires
     OP->>R: DELETE /v3/projects/p-OLD
     R-->>OP: 404 Not Found
-    Note over OP: delete_project returned False<br/>-> stored ID is stale
+    Note over OP: delete_project returned False<br>-> stored ID is stale
     OP->>R: GET /v3/projects?clusterId=…&name=<projectName>
     R-->>OP: [{id: p-NEW, …}]
-    OP->>OP: log WARNING "Stored projectId p-OLD was stale;<br/>deleting current p-NEW found by name"
+    OP->>OP: log WARNING — stored projectId p-OLD was stale, deleting current p-NEW found by name
     OP->>R: DELETE /v3/projects/p-NEW
     R-->>OP: 200 OK
-    OP->>K: cleanup complete; release finalizer
+    OP->>K: cleanup complete — release finalizer
 ```
 
 This was the failure mode that left orphan Rancher projects after
