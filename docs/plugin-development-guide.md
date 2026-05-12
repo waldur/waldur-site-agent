@@ -36,7 +36,7 @@ distinct.
 ```mermaid
 graph TB
     WM[Waldur Mastermind<br/>REST API] <-->|Orders, Resources,<br/>Usage, Keys| SA[Site Agent Core<br/>Processor]
-    SA -->|user_context<br/>(ssh_keys, plan_quotas)| BE[YourBackend<br/>BaseBackend]
+    SA -->|"user_context<br/>(ssh_keys, plan_quotas)"| BE[YourBackend<br/>BaseBackend]
     BE --> CL[YourClient<br/>BaseClient]
     CL --> EXT[External System<br/>CLI / API]
     BE -.->|backend_metadata| SA

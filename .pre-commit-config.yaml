@@ -34,3 +34,14 @@ repos:
         additional_dependencies:
           - "types-requests"
           - "types-PyYaml"
+
+  - repo: local
+    hooks:
+      - id: mermaid-validate
+        name: validate mermaid diagrams
+        entry: node scripts/validate_mermaid.mjs
+        language: node
+        files: \.md$
+        additional_dependencies:
+          - "mermaid@^11"
+          - "jsdom@^25"
