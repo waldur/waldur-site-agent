@@ -27,7 +27,7 @@ from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import backends
-from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.exceptions import BackendError, BackendNotReadyError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
 from waldur_site_agent_waldur.client import DEFAULT_PROJECT_ROLE_NAME, WaldurClient
@@ -311,7 +311,15 @@ class WaldurBackend(backends.BaseBackend):
         Raises:
             BackendError: If the target order failed or was cancelled.
         """
-        target_order = self.client.get_order(UUID(order_backend_id))
+        try:
+            target_order = self.client.get_order(UUID(order_backend_id))
+        except UnexpectedStatus as e:
+            if e.status_code >= 500:
+                raise BackendNotReadyError(
+                    f"Waldur B temporarily unavailable (HTTP {e.status_code}) "
+                    f"while checking order {order_backend_id}, will retry"
+                ) from e
+            raise
 
         if target_order.state == OrderState.DONE:
             logger.info("Target order %s completed successfully", order_backend_id)
