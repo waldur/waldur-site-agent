@@ -1,29 +1,29 @@
 # Changelog
 
-## 1.0.4-rc.12 - 2026-05-08
+## 1.0.4-rc.13 - 2026-05-13
 
-- **What's New**: Added `rancher-kc-crd` plugin for CRD-driven Rancher + Keycloak sync, with Resource-level role bindings emitted to `spec.cluster`.
-- **SLURM**: Support resource recovery from terminated state (RESTORE order type).
-- **SLURM**: Add optional filesystem quota support for user home directories.
-- **Core**: Add periodic offering user reconciliation for `event_process` mode.
-- **Core**: Add configurable option to preserve or limit error message/traceback reporting in order processing ([WAL-9910]).
-- **MUP**: Allow `backend_id` to store SLURM account identifier ([WAL-9909]).
-- **Federation**: Fix empty user creation in Waldur federation sync ([WAL-9918]).
-- **Federation**: Fix CUID-only users being synced to backend before ToS acceptance.
-- **Federation**: Fix `username_set` event sending local name instead of CUID to identity bridge.
-- **Core**: Fix offering users stuck in CREATING/PENDING states during membership sync.
-- **Core**: Fix agent skipping users in identity bridge sync.
-- **Core**: Fix resource end date sync not working.
-- **Core**: Filter component usages by `billing_period` in historical usage loader.
-- **SLURM**: Fix unknown TRES keys being passed to `sacctmgr` causing `BackendError`; use `list_components()` to filter TRES keys.
-- **SLURM**: Fix `default_homedir_umask` variable name across configs and helm values.
-- **Helm**: Fix hardcoded liveness probe timeout across all deployments (membership-sync, order-process, report, event-process).
-- **Core**: Fix liveness probe failures caused by stale heartbeat during long reconciliation cycles.
+- **Waldur Federation**: Handle 503 errors gracefully during federation sync (WAL-9932).
+- **Core**: Implement collection of diagnostics from the site agent with log buffering, handler, and shipper components (WAL-9263).
+- **Core**: Add configurable option to preserve or limit error message/traceback reporting (WAL-9910).
+- **Waldur Federation**: Fix empty user creation during federation sync (WAL-9918).
+- **MUP**: Allow `backend_id` to store the SLURM account identifier (WAL-9909).
+- **SLURM**: Apply offering partitions to user associations (WAL-9925).
+- **SLURM**: Fix account parent not updated when project moves between organizations (HPCMP-487).
+- **SLURM**: Support resource recovery from terminated state.
+- **SLURM**: Add optional filesystem quota support for user home directories, and fix `default_homedir_umask` variable name.
+- **SLURM**: Fix unknown TRES keys being passed to `sacctmgr` and switch to `list_components()` for filtering TRES keys.
+- **SLURM**: Fix CUID-only users being synced to backend before ToS acceptance.
+- **SLURM**: Fix agent skipping users during identity bridge sync, and fix `username_set` event sending local name instead of CUID.
+- **Rancher KC CRD**: Add new CRD-driven Rancher + Keycloak sync plugin, with `spec.cluster` bindings emitted from Resource-level roles.
 - **Rancher**: Fix example configs to match core config format.
-- **Docs**: Refresh plugin development guide; add SLURM storage-quota documentation.
-- **Chore**: Migrate from pre-commit to prek; upgrade `waldur-api-client` to 8.0.8.dev188.
+- **Core**: Add periodic offering user reconciliation for `event_process` mode, and fix users stuck in CREATING/PENDING states during membership sync.
+- **Core**: Fix resource end date sync not working.
+- **Core**: Filter component usages by `billing_period` in the historical usage loader.
+- **Helm**: Fix hardcoded liveness probe timeouts across all deployments and fix probe failures caused by stale heartbeat during long reconciliation cycles.
+- **Docs**: Add SLURM storage-quota documentation, refresh the plugin development guide, and add a pre-commit hook to validate Mermaid diagrams.
+- **Tooling**: Migrate from pre-commit to prek; upgrade `waldur-api-client` to 8.0.8.dev188; add `scripts/uv-lock-safe.sh` to handle empty plugin directories during locking.
 
-> 36 commits, 98 files changed (+8520/-445 lines)
+> 43 commits, 117 files changed (+11370/-502 lines)
 
 ---
 
