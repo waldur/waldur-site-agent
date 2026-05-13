@@ -11,7 +11,7 @@ from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.types import UNSET
 
-from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.exceptions import BackendError, BackendNotReadyError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
 from waldur_site_agent_waldur.backend import WaldurBackend
@@ -218,6 +218,28 @@ class TestCheckPendingOrder:
 
         result = backend.check_pending_order(str(ORDER_UUID))
         assert result is False
+
+    def test_check_pending_order_503_raises_not_ready(self, backend, mock_client):
+        """A 5xx from Waldur B raises BackendNotReadyError so the order retries next cycle."""
+        mock_client.get_order.side_effect = UnexpectedStatus(
+            status_code=503,
+            content=b"Service Unavailable",
+            url=URL(f"https://waldur-b.example.com/api/marketplace-orders/{ORDER_UUID}/"),
+        )
+
+        with pytest.raises(BackendNotReadyError, match="503"):
+            backend.check_pending_order(str(ORDER_UUID))
+
+    def test_check_pending_order_4xx_still_raises_unexpected_status(self, backend, mock_client):
+        """A 4xx from Waldur B is a real error and must not be swallowed."""
+        mock_client.get_order.side_effect = UnexpectedStatus(
+            status_code=404,
+            content=b"Not Found",
+            url=URL(f"https://waldur-b.example.com/api/marketplace-orders/{ORDER_UUID}/"),
+        )
+
+        with pytest.raises(UnexpectedStatus):
+            backend.check_pending_order(str(ORDER_UUID))
 
 
 class TestResourceDeletion:
