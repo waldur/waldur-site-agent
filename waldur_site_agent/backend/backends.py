@@ -17,7 +17,11 @@ from waldur_site_agent.backend import logger, quota, structures, utils
 if TYPE_CHECKING:
     from waldur_site_agent.common.structures import Offering
 from waldur_site_agent.backend.clients import BaseClient, UnknownClient
-from waldur_site_agent.backend.exceptions import BackendError, DuplicateResourceError
+from waldur_site_agent.backend.exceptions import (
+    BackendError,
+    BackendNotReadyError,
+    DuplicateResourceError,
+)
 
 UNKNOWN_BACKEND_TYPE = "unknown"
 
@@ -42,6 +46,11 @@ class BaseBackend(ABC):
     # When enabled, the processor checks order.backend_id on EXECUTING orders
     # and calls check_pending_order() to track remote order completion.
     supports_async_orders: bool = False
+
+    # Capability flag: Set to True for backends that depend on a remote API during
+    # order processing. The processor calls run_preflight() once per offering
+    # cycle before handling orders.
+    supports_cycle_preflight: bool = False
 
     # Resource states the membership processor should fetch and handle.
     # Override in subclasses that need to process resources in additional
@@ -77,6 +86,21 @@ class BaseBackend(ABC):
         No-op guidance:
             Return False if your backend has no health check mechanism.
         """
+
+    def run_preflight(self) -> None:
+        """Verify the backend is reachable before a processing cycle.
+
+        Called by the order processor when supports_cycle_preflight is True.
+        Override to probe specific API endpoints.
+
+        Raises:
+            BackendNotReadyError: If ping() returns False.
+        """
+        if self.ping():
+            return
+        msg = f"Backend {self.backend_type} not reachable (ping failed)"
+        logger.warning(msg)
+        raise BackendNotReadyError(msg)
 
     @abstractmethod
     def diagnostics(self) -> bool:

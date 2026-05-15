@@ -739,6 +739,17 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             self.offering.name,
             self.offering.uuid,
         )
+        if self.resource_backend.supports_cycle_preflight:
+            try:
+                self.resource_backend.run_preflight()
+            except backend_exceptions.BackendNotReadyError as exc:
+                logger.warning(
+                    "Skipping order processing for offering %s: %s",
+                    self.offering.name,
+                    exc,
+                )
+                return
+
         orders = marketplace_orders_list.sync_all(
             client=self.waldur_rest_client,
             offering_uuid=self.offering.uuid,

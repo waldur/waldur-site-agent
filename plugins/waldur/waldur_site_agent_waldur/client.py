@@ -10,9 +10,10 @@ from __future__ import annotations
 import datetime
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
+from waldur_api_client.api.marketplace_orders import marketplace_orders_list
 from waldur_api_client.api.marketplace_resources import (
     marketplace_resources_list,
     marketplace_resources_retrieve,
@@ -222,6 +223,26 @@ class WaldurClient(BaseClient):
         return marketplace_orders_retrieve.sync(
             uuid=order_uuid,
             client=self._api_client,
+        )
+
+    def list_marketplace_orders(
+        self,
+        offering_uuid: Optional[UUID] = None,
+        page_size: Optional[int] = None,
+        state: Optional[list[OrderState]] = None,
+    ) -> list[OrderDetails]:
+        """List marketplace orders on Waldur B, optionally filtered by offering."""
+        kwargs: dict[str, Any] = {}
+        if offering_uuid is not None:
+            kwargs["offering_uuid"] = offering_uuid
+        if page_size is not None:
+            kwargs["page_size"] = page_size
+        if state is not None:
+            kwargs["state"] = state
+
+        return marketplace_orders_list.sync(
+            client=self._api_client,
+            **kwargs,
         )
 
     def poll_order_completion(
@@ -825,10 +846,14 @@ class WaldurClient(BaseClient):
 
     def ping(self) -> bool:
         """Test connectivity to Waldur B."""
+        offering_uuid = UUID(self.offering_uuid)
         try:
-            self.list_marketplace_resources(offering_uuid=UUID(self.offering_uuid))
+            self.list_marketplace_resources(offering_uuid=offering_uuid)
+            self.list_marketplace_orders(offering_uuid=offering_uuid, page_size=1)
         except Exception:
-            logger.exception("Waldur B API not reachable")
+            logger.exception(
+                "Waldur B API not reachable at %s (resources or orders check failed)",
+                self.api_url,
+            )
             return False
-        else:
-            return True
+        return True
