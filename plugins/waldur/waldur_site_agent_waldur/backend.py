@@ -46,6 +46,7 @@ class WaldurBackend(backends.BaseBackend):
     """
 
     supports_async_orders = True
+    supports_cycle_preflight = True
     handled_resource_states = [ResourceState.OK, ResourceState.ERRED, ResourceState.CREATING]
 
     def __init__(
@@ -96,6 +97,17 @@ class WaldurBackend(backends.BaseBackend):
                 raise BackendError(f"Waldur B not reachable: {e}") from e
             logger.exception("Waldur B not reachable")
             return False
+
+    def run_preflight(self) -> None:
+        """Verify Waldur B resources and orders APIs respond before processing."""
+        if self.ping():
+            return
+        msg = (
+            f"Waldur B not reachable at {self.client.api_url} "
+            "(marketplace resources or orders API check failed)"
+        )
+        logger.warning(msg)
+        raise BackendNotReadyError(msg)
 
     def diagnostics(self) -> bool:
         """Log diagnostic information about the Waldur B connection."""

@@ -367,15 +367,45 @@ class TestBaseClientMethods:
             result = client.list_resource_users(str(RESOURCE_UUID))
             assert result == ["user1"]
 
+    def test_list_marketplace_orders(self, client):
+        with patch(
+            "waldur_site_agent_waldur.client.marketplace_orders_list.sync",
+            return_value=[],
+        ) as mock_list:
+            result = client.list_marketplace_orders(
+                offering_uuid=ORDER_UUID,
+                page_size=1,
+            )
+            assert result == []
+            mock_list.assert_called_once_with(
+                client=client._api_client,
+                offering_uuid=ORDER_UUID,
+                page_size=1,
+            )
+
     def test_ping_success(self, client):
-        with patch.object(client, "list_marketplace_resources", return_value=[]):
+        with (
+            patch.object(client, "list_marketplace_resources", return_value=[]),
+            patch.object(client, "list_marketplace_orders", return_value=[]),
+        ):
             assert client.ping() is True
 
-    def test_ping_failure(self, client):
+    def test_ping_failure_on_resources(self, client):
         with patch.object(
             client,
             "list_marketplace_resources",
             side_effect=Exception("Connection refused"),
+        ):
+            assert client.ping() is False
+
+    def test_ping_failure_on_orders(self, client):
+        with (
+            patch.object(client, "list_marketplace_resources", return_value=[]),
+            patch.object(
+                client,
+                "list_marketplace_orders",
+                side_effect=Exception("Connection refused"),
+            ),
         ):
             assert client.ping() is False
 

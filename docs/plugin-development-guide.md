@@ -483,6 +483,16 @@ When `False` (default), the reporting processor skips updates where the
 new usage value is lower than the previously reported value, treating it
 as a data anomaly.
 
+### `supports_cycle_preflight: bool = False`
+
+Set to `True` for backends that call a remote API during order processing.
+The order processor runs `run_preflight()` once per offering per cycle
+before listing orders. The default implementation calls `ping()` and raises
+`BackendNotReadyError` on failure so orders stay pending instead of ERRED.
+
+Override `run_preflight()` to probe specific endpoints. Opt in from plugins
+such as Waldur federation and other HTTP backends can enable it when needed.
+
 ### `supports_async_orders: bool = False`
 
 Set to `True` for backends that complete order creation asynchronously

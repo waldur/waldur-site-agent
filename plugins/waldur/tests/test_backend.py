@@ -85,6 +85,18 @@ class TestPingAndDiagnostics:
         mock_client.ping.return_value = True
         assert backend.diagnostics() is True
 
+    def test_supports_cycle_preflight_enabled(self, backend):
+        assert backend.supports_cycle_preflight is True
+
+    def test_run_preflight_success(self, backend, mock_client):
+        mock_client.ping.return_value = True
+        backend.run_preflight()
+
+    def test_run_preflight_raises_not_ready(self, backend, mock_client):
+        mock_client.ping.return_value = False
+        with pytest.raises(BackendNotReadyError, match="not reachable"):
+            backend.run_preflight()
+
     def test_list_components(self, backend):
         components = backend.list_components()
         assert set(components) == {"cpu", "mem"}
