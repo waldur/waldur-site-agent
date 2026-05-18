@@ -1,29 +1,35 @@
 # Changelog
 
-## 1.0.4-rc.13 - 2026-05-13
+## 1.0.4-rc.14 - 2026-05-18
 
-- **Waldur Federation**: Handle 503 errors gracefully during federation sync (WAL-9932).
-- **Core**: Implement collection of diagnostics from the site agent with log buffering, handler, and shipper components (WAL-9263).
-- **Core**: Add configurable option to preserve or limit error message/traceback reporting (WAL-9910).
-- **Waldur Federation**: Fix empty user creation during federation sync (WAL-9918).
-- **MUP**: Allow `backend_id` to store the SLURM account identifier (WAL-9909).
-- **SLURM**: Apply offering partitions to user associations (WAL-9925).
-- **SLURM**: Fix account parent not updated when project moves between organizations (HPCMP-487).
+### Changes
+
+- **rancher-kc-crd**: Add new CRD-driven Rancher + Keycloak sync plugin, including emitting `spec.cluster` bindings from Resource-level roles.
 - **SLURM**: Support resource recovery from terminated state.
-- **SLURM**: Add optional filesystem quota support for user home directories, and fix `default_homedir_umask` variable name.
-- **SLURM**: Fix unknown TRES keys being passed to `sacctmgr` and switch to `list_components()` for filtering TRES keys.
-- **SLURM**: Fix CUID-only users being synced to backend before ToS acceptance.
-- **SLURM**: Fix agent skipping users during identity bridge sync, and fix `username_set` event sending local name instead of CUID.
-- **Rancher KC CRD**: Add new CRD-driven Rancher + Keycloak sync plugin, with `spec.cluster` bindings emitted from Resource-level roles.
-- **Rancher**: Fix example configs to match core config format.
-- **Core**: Add periodic offering user reconciliation for `event_process` mode, and fix users stuck in CREATING/PENDING states during membership sync.
-- **Core**: Fix resource end date sync not working.
+- **SLURM**: Apply offering partitions to user associations (WAL-9925).
+- **SLURM**: Add optional filesystem quota support for user home directories.
+- **Federation**: Handle 503 errors during Waldur federation sync (WAL-9932).
+- **Federation**: Fix empty user creation in federation sync (WAL-9918).
+- **MUP**: Extend CUID sync to account for already-existing backend accounts, and allow `backend_id` to store the SLURM account identifier (WAL-9909).
+- **Core**: Add optional pre-flight check for order processing.
+- **Core**: Implement collection of diagnostics from the site agent, including log buffering/shipping (WAL-9263).
+- **Core**: Add configurable option to preserve or limit error message/traceback reporting (WAL-9910).
+- **Core**: Add periodic offering user reconciliation for `event_process` mode.
 - **Core**: Filter component usages by `billing_period` in the historical usage loader.
-- **Helm**: Fix hardcoded liveness probe timeouts across all deployments and fix probe failures caused by stale heartbeat during long reconciliation cycles.
-- **Docs**: Add SLURM storage-quota documentation, refresh the plugin development guide, and add a pre-commit hook to validate Mermaid diagrams.
-- **Tooling**: Migrate from pre-commit to prek; upgrade `waldur-api-client` to 8.0.8.dev188; add `scripts/uv-lock-safe.sh` to handle empty plugin directories during locking.
+- **SLURM**: Fix account parent not updated when a project moves organization (HPCMP-487).
+- **SLURM**: Fix unknown TRES keys passed to `sacctmgr` causing `BackendError`; filter TRES keys via `list_components()`.
+- **SLURM**: Fix CUID-only users synced to backend before ToS acceptance, and agent skipping users in identity bridge sync.
+- **Core**: Fix resource end date sync not working.
+- **Core**: Fix offering users stuck in CREATING/PENDING states during membership sync.
+- **Core**: Fix `username_set` event sending local name instead of CUID to the identity bridge.
+- **Core**: Fix `default_homedir_umask` variable name.
+- **Helm**: Fix hardcoded liveness probe timeouts across all deployments and stale-heartbeat liveness failures during long reconciliation cycles.
+- **Rancher**: Fix example configs to match core config format.
+- Upgrade `waldur-api-client` to 8.0.8.dev188; migrate from pre-commit to prek; add mermaid diagram validation hook; refresh plugin development and SLURM storage-quota docs.
 
-> 43 commits, 117 files changed (+11370/-502 lines)
+### Statistics
+
+> 46 commits, 120 files changed (+11734/-524 lines)
 
 ---
 
