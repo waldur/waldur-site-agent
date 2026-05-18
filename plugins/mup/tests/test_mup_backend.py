@@ -277,6 +277,91 @@ class MUPBackendTest(unittest.TestCase):
         assert user_id == 1
         mock_client.get_user_by_email.assert_called_once_with("pi@example.com")
         mock_client.create_user_request.assert_not_called()
+        mock_client.set_user_myaccessid.assert_not_called()
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_get_or_create_user_existing_ensures_myaccessid(self, mock_client_class) -> None:
+        """Existing MUP users get myaccessid ensured when CUID is provided."""
+        mock_client = mock_client_class.return_value
+        mock_client.get_user_by_email.return_value = {
+            "id": 1,
+            "email": "pi@example.com",
+            "username": "pi_user",
+            "user_ssh_keys": [],
+        }
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+        waldur_user = {
+            "email": "pi@example.com",
+            "username": "pi_user",
+            "cuid": "abc@acc.myaccessid.org",
+        }
+
+        user_id = backend._get_or_create_user(waldur_user)
+
+        assert user_id == 1
+        mock_client.set_user_myaccessid.assert_called_once_with(1, "abc@acc.myaccessid.org")
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_ensure_myaccessid_skips_when_key_present(self, mock_client_class) -> None:
+        """Do not POST myaccessid when user_ssh_keys already contains the CUID."""
+        mock_client = mock_client_class.return_value
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+        cuid = "abc@acc.myaccessid.org"
+        user_record = {
+            "id": 5,
+            "user_ssh_keys": [{"label": "myaccessid", "key": cuid, "user": 5}],
+        }
+
+        backend._ensure_myaccessid_on_user(5, cuid, user_record=user_record)
+
+        mock_client.set_user_myaccessid.assert_not_called()
+        mock_client.get_user.assert_not_called()
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_ensure_myaccessid_fetches_user_when_keys_missing(self, mock_client_class) -> None:
+        """Load full user via GET /api/user/view/{id} when ssh keys are absent."""
+        mock_client = mock_client_class.return_value
+        cuid = "abc@acc.myaccessid.org"
+        mock_client.get_user.return_value = {
+            "id": 5,
+            "user_ssh_keys": [{"label": "other", "key": "ssh-rsa AAAA", "user": 5}],
+        }
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+        backend._ensure_myaccessid_on_user(5, cuid, user_record={"id": 5})
+
+        mock_client.get_user.assert_called_once_with(5)
+        mock_client.set_user_myaccessid.assert_called_once_with(5, cuid)
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_add_users_existing_mup_user_ensures_myaccessid(self, mock_client_class) -> None:
+        """Reused MUP account gets myaccessid before project membership."""
+        mock_client = mock_client_class.return_value
+        mock_client.get_project.return_value = self.sample_mup_project
+        mock_client.get_project_members.return_value = []
+        cuid = "legacy@acc.myaccessid.org"
+        mock_client.get_user_by_username.return_value = {
+            "id": 42,
+            "username": "legacy.mup",
+            "email": "legacy@example.com",
+            "user_ssh_keys": [],
+        }
+        mock_client.add_project_member.return_value = {"status": "success"}
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+        self.sample_waldur_resource.backend_id = "1_1"
+
+        added_users = backend.add_users_to_resource(
+            self.sample_waldur_resource,
+            {"legacy.mup"},
+            user_cuids={"legacy.mup": cuid},
+        )
+
+        assert added_users == {"legacy.mup"}
+        mock_client.set_user_myaccessid.assert_called_once_with(42, cuid)
+        mock_client.create_user_request.assert_not_called()
+        mock_client.add_project_member.assert_called_once()
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_get_or_create_user_create_new(self, mock_client_class) -> None:
@@ -693,10 +778,12 @@ class MUPBackendTest(unittest.TestCase):
         backend = MUPBackend(self.mup_settings, self.mup_components)
         self.sample_waldur_resource.backend_id = "1_1"
 
+        cuid = "newbie@acc.myaccessid.org"
         added_users = backend.add_users_to_resource(
             self.sample_waldur_resource,
             {"new.mup.user"},
             user_emails={"new.mup.user": "newbie@example.com"},
+            user_cuids={"new.mup.user": cuid},
             offering_user_states={"new.mup.user": OfferingUserState.OK},
             user_attributes={
                 "new.mup.user": {"full_name": "New User", "email": "newbie@example.com"},
@@ -705,6 +792,7 @@ class MUPBackendTest(unittest.TestCase):
 
         assert added_users == {"new.mup.user"}
         mock_client.create_user_request.assert_called_once()
+        mock_client.set_user_myaccessid.assert_called_with(10, cuid)
         mock_client.add_project_member.assert_called_once()
 
     @patch("waldur_site_agent_mup.backend.MUPClient")

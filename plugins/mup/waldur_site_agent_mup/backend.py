@@ -199,7 +199,11 @@ class MUPBackend(backends.BaseBackend):
         return None
 
     def _build_waldur_user_dict_from_attributes(
-        self, username: str, attrs: dict[str, Any], email: str
+        self,
+        username: str,
+        attrs: dict[str, Any],
+        email: str,
+        cuid: Optional[str] = None,
     ) -> dict[str, Any]:
         """Build the waldur_user dict for _get_or_create_user from membership kwargs.
 
@@ -232,7 +236,7 @@ class MUPBackend(backends.BaseBackend):
         affil_raw = attrs.get("organization")
         affil_str = str(affil_raw) if isinstance(affil_raw, str) else ""
 
-        return {
+        user_dict: dict[str, Any] = {
             "username": username,
             "email": email,
             "first_name": first_name,
@@ -244,6 +248,80 @@ class MUPBackend(backends.BaseBackend):
             "type_of_institution": inst_out,
             "affiliated_institution": affil_str,
         }
+        if cuid:
+            user_dict["cuid"] = cuid
+        return user_dict
+
+    def _get_user_ssh_keys(self, user_record: dict, mup_user_id: int) -> list[dict]:
+        """Return user_ssh_keys from a user payload, fetching full user if needed."""
+        keys = user_record.get("user_ssh_keys")
+        if isinstance(keys, list):
+            return cast("list[dict]", keys)
+
+        try:
+            full_user = self.client.get_user(mup_user_id)
+        except MUPError as e:
+            logger.warning(
+                "Failed to load MUP user %s for myaccessid check: %s", mup_user_id, e
+            )
+            return []
+
+        keys = full_user.get("user_ssh_keys")
+        if isinstance(keys, list):
+            return cast("list[dict]", keys)
+        return []
+
+    def _mup_user_has_myaccessid(
+        self, user_record: dict, mup_user_id: int, myaccessid: str
+    ) -> bool:
+        """True if the MyAccess CUID is present in the user's SSH keys."""
+        expected = myaccessid.strip()
+        if not expected:
+            return False
+
+        for entry in self._get_user_ssh_keys(user_record, mup_user_id):
+            if isinstance(entry, dict) and entry.get("key") == expected:
+                return True
+        return False
+
+    def _ensure_myaccessid_on_user(
+        self,
+        mup_user_id: int,
+        myaccessid: Optional[str],
+        user_record: Optional[dict] = None,
+    ) -> None:
+        if not myaccessid or not str(myaccessid).strip():
+            logger.debug(
+                "No CUID/myaccessid for MUP user %s, skipping myaccessid ensure",
+                mup_user_id,
+            )
+            return
+
+        myaccessid_str = str(myaccessid).strip()
+        record = user_record if user_record is not None else {}
+
+        try:
+            if self._mup_user_has_myaccessid(record, mup_user_id, myaccessid_str):
+                logger.debug(
+                    "MUP user %s already has myaccessid %s",
+                    mup_user_id,
+                    myaccessid_str,
+                )
+                return
+
+            logger.info(
+                "Setting myaccessid for MUP user %s: %s",
+                mup_user_id,
+                myaccessid_str,
+            )
+            self.client.set_user_myaccessid(mup_user_id, myaccessid_str)
+        except Exception as e:
+            logger.warning(
+                "Failed to ensure myaccessid for MUP user %s (%s): %s",
+                mup_user_id,
+                myaccessid_str,
+                e,
+            )
 
     def _parse_backend_id(self, backend_id: str) -> tuple[int, Optional[int]]:
         """Parse a backend_id string into (project_id, allocation_id)."""
@@ -316,7 +394,7 @@ class MUPBackend(backends.BaseBackend):
         username = waldur_user.get(
             "username", email.split("@")[0] if email else "unknown"
         )
-        cuid = waldur_user.get("cuid") or username
+        cuid = waldur_user.get("cuid")
 
         if not email:
             logger.error("User %s has no email address", username)
@@ -334,6 +412,8 @@ class MUPBackend(backends.BaseBackend):
                 user_id = user["id"]
                 self._user_cache[email] = user_id
                 logger.info("Found existing MUP user %s for %s", user_id, email)
+                if cuid:
+                    self._ensure_myaccessid_on_user(user_id, str(cuid), user_record=user)
                 return user_id
         except MUPError as e:
             logger.warning("Failed to search for existing user %s: %s", email, e)
@@ -397,16 +477,8 @@ class MUPBackend(backends.BaseBackend):
                 user_id = self._find_user_request_by_email(email)
 
             if user_id:
-                try:
-                    logger.info("Setting cuid for MUP user %s (%s): %s", user_id, email, cuid)
-                    self.client.set_user_myaccessid(user_id, str(cuid))
-                except Exception as e:
-                    logger.warning(
-                        "Failed to set myaccessid for MUP user %s (%s): %s",
-                        user_id,
-                        email,
-                        e,
-                    )
+                if cuid:
+                    self._ensure_myaccessid_on_user(user_id, str(cuid))
                 self._user_cache[email] = user_id
                 logger.info("Created MUP user request %s for %s", user_id, email)
                 return user_id
@@ -1391,6 +1463,10 @@ class MUPBackend(backends.BaseBackend):
             return added_users
 
         user_emails: dict[str, str] = kwargs.get("user_emails", {})
+        user_cuids_raw: Any = kwargs.get("user_cuids", {})
+        user_cuids: dict[str, str] = (
+            user_cuids_raw if isinstance(user_cuids_raw, dict) else {}
+        )
         user_attributes: dict[str, dict] = kwargs.get("user_attributes") or {}
         offering_user_states_raw: Any = kwargs.get("offering_user_states", {})
         offering_user_states: dict[str, OfferingUserState] = (
@@ -1444,7 +1520,10 @@ class MUPBackend(backends.BaseBackend):
                         )
                         continue
                     waldur_user = self._build_waldur_user_dict_from_attributes(
-                        user_id, attrs, email
+                        user_id,
+                        attrs,
+                        email,
+                        cuid=user_cuids.get(user_id),
                     )
                     mup_user_id = self._get_or_create_user(waldur_user)
                     if mup_user_id:
@@ -1464,6 +1543,12 @@ class MUPBackend(backends.BaseBackend):
                         user_id,
                     )
                     continue
+
+                cuid = user_cuids.get(user_id)
+                if cuid:
+                    self._ensure_myaccessid_on_user(
+                        mup_user["id"], cuid, user_record=mup_user
+                    )
 
                 member_data = {
                     "user_id": mup_user["id"],
