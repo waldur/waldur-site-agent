@@ -47,6 +47,7 @@ from waldur_api_client.api.users import users_me_retrieve
 from waldur_api_client.api.version import version_retrieve
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
+    BlankEnum,
     OfferingUserFieldEnum,
     OrderDetailsFieldEnum,
     OrderState,
@@ -71,7 +72,7 @@ from waldur_api_client.models.update_offering_component_request import (
 )
 from waldur_api_client.models.user import User
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
-from waldur_api_client.types import UNSET
+from waldur_api_client.types import UNSET, Unset
 
 from waldur_site_agent.backend import (
     BackendType,
@@ -642,6 +643,20 @@ def _build_component_kwargs(component_info: dict) -> dict:
     return kwargs
 
 
+def _get_limit_period_enum(value: Union[
+    BlankEnum,
+    LimitPeriodEnum,
+    None,
+    Unset]
+) -> Optional[LimitPeriodEnum]:
+    """Convert API/client limit period values to LimitPeriodEnum when set."""
+    if value is UNSET or value is None:
+        return None
+    if isinstance(value, LimitPeriodEnum):
+        return value
+    return LimitPeriodEnum(value)
+
+
 def load_components_to_waldur(
     waldur_rest_client: AuthenticatedClient,
     offering_uuid: str,
@@ -682,6 +697,12 @@ def load_components_to_waldur(
 
             if component_type in waldur_offering_components:
                 existing_component = waldur_offering_components[component_type]
+                if "limit_period" not in extra_kwargs:
+                    existing_limit_period = _get_limit_period_enum(
+                        existing_component.limit_period
+                    )
+                    if existing_limit_period is not None:
+                        extra_kwargs["limit_period"] = existing_limit_period
                 logger.info(
                     "Offering component %s already exists, updating limit from %s to %s %s.",
                     component_type,

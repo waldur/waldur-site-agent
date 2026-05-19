@@ -10,6 +10,7 @@ from waldur_api_client.models.offering_component_request import OfferingComponen
 from waldur_api_client.models.update_offering_component_request import (
     UpdateOfferingComponentRequest,
 )
+from waldur_api_client.types import UNSET
 
 from waldur_site_agent.common.structures import AccountingType, BackendComponent
 from waldur_site_agent.common.utils import _build_component_kwargs, load_components_to_waldur
@@ -122,6 +123,7 @@ def _make_existing_component(type_: str, uuid_hex: str = "aabbccdd11223344aabbcc
     comp.type_ = type_
     comp.uuid = UUID(uuid_hex)
     comp.limit_amount = 500
+    comp.limit_period = UNSET
     return comp
 
 
@@ -334,3 +336,97 @@ class TestLoadComponentsToWaldurUpdate:
         assert body.billing_type == BillingTypeEnum("limit")
         assert body.limit_amount == 1024
         assert body.max_value == 512
+
+    @patch(
+        "waldur_site_agent.common.utils."
+        "marketplace_provider_offerings_update_offering_component"
+    )
+    @patch(
+        "waldur_site_agent.common.utils."
+        "marketplace_provider_offerings_retrieve"
+    )
+    def test_preserves_existing_limit_period_when_config_omits_it(
+        self, mock_retrieve, mock_update
+    ):
+        existing = _make_existing_component("node")
+        existing.limit_period = LimitPeriodEnum.QUARTERLY
+        mock_retrieve.sync.return_value = _make_offering_mock([existing])
+
+        components = {
+            "node": BackendComponent(
+                measured_unit="node hours",
+                unit_factor_reporting=1,
+                unit_factor=60,
+                accounting_type=AccountingType.LIMIT,
+                label="Compute",
+            ),
+        }
+
+        load_components_to_waldur(
+            MagicMock(), "offering-uuid", "Test Offering", components
+        )
+
+        body = mock_update.sync_detailed.call_args.kwargs["body"]
+        assert isinstance(body, UpdateOfferingComponentRequest)
+        assert body.limit_period == LimitPeriodEnum.QUARTERLY
+
+    @patch(
+        "waldur_site_agent.common.utils."
+        "marketplace_provider_offerings_update_offering_component"
+    )
+    @patch(
+        "waldur_site_agent.common.utils."
+        "marketplace_provider_offerings_retrieve"
+    )
+    def test_configured_limit_period_overrides_existing_limit_period(
+        self, mock_retrieve, mock_update
+    ):
+        existing = _make_existing_component("node")
+        existing.limit_period = LimitPeriodEnum.QUARTERLY
+        mock_retrieve.sync.return_value = _make_offering_mock([existing])
+
+        components = {
+            "node": BackendComponent(
+                measured_unit="node hours",
+                accounting_type=AccountingType.LIMIT,
+                label="Compute",
+                limit_period="month",
+            ),
+        }
+
+        load_components_to_waldur(
+            MagicMock(), "offering-uuid", "Test Offering", components
+        )
+
+        body = mock_update.sync_detailed.call_args.kwargs["body"]
+        assert isinstance(body, UpdateOfferingComponentRequest)
+        assert body.limit_period == LimitPeriodEnum.MONTH
+
+    @patch(
+        "waldur_site_agent.common.utils."
+        "marketplace_provider_offerings_create_offering_component"
+    )
+    @patch(
+        "waldur_site_agent.common.utils."
+        "marketplace_provider_offerings_retrieve"
+    )
+    def test_new_component_without_limit_period_omits_limit_period(
+        self, mock_retrieve, mock_create
+    ):
+        mock_retrieve.sync.return_value = _make_offering_mock([])
+
+        components = {
+            "node": BackendComponent(
+                measured_unit="node hours",
+                accounting_type=AccountingType.LIMIT,
+                label="Compute",
+            ),
+        }
+
+        load_components_to_waldur(
+            MagicMock(), "offering-uuid", "Test Offering", components
+        )
+
+        body = mock_create.sync_detailed.call_args.kwargs["body"]
+        assert isinstance(body, OfferingComponentRequest)
+        assert body.limit_period is UNSET
