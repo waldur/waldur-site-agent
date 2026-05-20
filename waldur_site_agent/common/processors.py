@@ -1676,6 +1676,31 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         self._process_resources(resource_report)
 
+    def sync_all_resource_projects(self) -> None:
+        """Check and correct the backend account hierarchy for all resources.
+
+        Calls sync_resource_project for every active resource in the offering.
+        Used as a periodic catch-up for STOMP deployments: Waldur does not emit
+        a RESOURCE event when a project moves to a different customer, so the
+        backend account parent can become stale until this runs.
+        """
+        logger.info(
+            "Running project hierarchy sync for offering %s (%s)",
+            self.offering.name,
+            self.offering.uuid,
+        )
+        waldur_resources = self._get_waldur_resources()
+        resource_report = self.resource_backend.pull_resources(waldur_resources)
+        for waldur_resource, _ in resource_report.values():
+            try:
+                self.resource_backend.sync_resource_project(waldur_resource)
+            except Exception as e:
+                logger.exception(
+                    "Error syncing project hierarchy for resource %s: %s",
+                    waldur_resource.backend_id,
+                    e,
+                )
+
     def _get_user_offering_users(
         self, user_uuid: str, offering_uuid: str | None = None
     ) -> list[OfferingUser]:

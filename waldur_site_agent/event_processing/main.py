@@ -77,6 +77,9 @@ def _run_without_username_reconciliation(
             utils.run_periodic_offering_user_reconciliation(
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
+            utils.run_periodic_project_hierarchy_sync(
+                configuration.waldur_offerings, configuration.waldur_user_agent
+            )
             last_reconciliation = now
 
         time.sleep(TICK_INTERVAL)
@@ -105,6 +108,9 @@ def _run_with_reconciliation(configuration: common_structures.WaldurAgentConfigu
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
             utils.run_periodic_offering_user_reconciliation(
+                configuration.waldur_offerings, configuration.waldur_user_agent
+            )
+            utils.run_periodic_project_hierarchy_sync(
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
             last_reconciliation = now
