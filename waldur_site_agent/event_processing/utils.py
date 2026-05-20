@@ -572,6 +572,46 @@ def run_periodic_order_reconciliation(
             )
 
 
+def run_periodic_project_hierarchy_sync(
+    waldur_offerings: list[common_structures.Offering], user_agent: str = ""
+) -> None:
+    """Check and correct backend account hierarchy for resources in STOMP offerings.
+
+    In event_process mode the periodic membership sync is skipped, so
+    sync_resource_project only runs at startup and on incoming RESOURCE events.
+    Waldur does not emit a RESOURCE event when a project moves to a different
+    customer, meaning the backend account parent stays stale indefinitely.
+    This function provides the periodic catch-up.
+
+    Only runs for offerings with membership_sync_backend configured.
+    """
+    for offering in waldur_offerings:
+        touch_heartbeat()
+        if not offering.membership_sync_backend:
+            continue
+        try:
+            waldur_rest_client = get_client(
+                offering.api_url,
+                offering.api_token,
+                user_agent,
+                verify_ssl=offering.verify_ssl,
+            )
+            resource_backend, resource_backend_version = get_backend_for_offering(
+                offering, "membership_sync_backend"
+            )
+            processor = common_processors.OfferingMembershipProcessor(
+                offering,
+                waldur_rest_client,
+                resource_backend=resource_backend,
+                resource_backend_version=resource_backend_version,
+            )
+            processor.sync_all_resource_projects()
+        except Exception:
+            logger.exception(
+                "Project hierarchy sync failed for offering %s", offering.name
+            )
+
+
 def send_agent_health_checks(offerings: list[common_structures.Offering], user_agent: str) -> None:
     """Sends agent health checks for the specified offerings."""
     for offering in offerings:

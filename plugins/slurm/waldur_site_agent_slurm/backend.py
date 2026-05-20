@@ -167,9 +167,20 @@ class SlurmBackend(backends.BaseBackend):
         that mode no customer tier exists in SLURM.
         """
         if self.backend_settings.get("parent_account"):
+            logger.debug(
+                "sync_resource_project: skipping %s — flat hierarchy (parent_account is set)",
+                waldur_resource.backend_id,
+            )
             return
 
         if not waldur_resource.customer_slug or not waldur_resource.project_slug:
+            logger.warning(
+                "sync_resource_project: skipping %s — missing slug "
+                "(customer_slug=%r, project_slug=%r)",
+                waldur_resource.backend_id,
+                waldur_resource.customer_slug,
+                waldur_resource.project_slug,
+            )
             return
 
         project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
@@ -178,7 +189,19 @@ class SlurmBackend(backends.BaseBackend):
         )
 
         current_parent = self.client.get_account_parent(project_backend_id)
-        if current_parent is None or current_parent == expected_customer_backend_id:
+        if current_parent is None:
+            logger.warning(
+                "sync_resource_project: skipping %s — project account %s not found in SLURM",
+                waldur_resource.backend_id,
+                project_backend_id,
+            )
+            return
+        if current_parent == expected_customer_backend_id:
+            logger.debug(
+                "sync_resource_project: %s parent already correct (%s)",
+                project_backend_id,
+                current_parent,
+            )
             return
 
         logger.info(
