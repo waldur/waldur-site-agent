@@ -350,7 +350,6 @@ class TestEmulatorBuiltInScenarios:
         calculated_settings = {
             "fairshare": int(total_allocation // 3),
             "grp_tres_mins": {"billing": int(total_allocation * 60)},
-            "qos_threshold": {"billing": int(total_allocation * 60)},
         }
 
         print(f"Calculated Q2 allocation: {total_allocation:.1f}Nh")

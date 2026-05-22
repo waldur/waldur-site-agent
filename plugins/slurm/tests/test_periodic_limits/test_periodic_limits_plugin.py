@@ -58,8 +58,6 @@ class MockMastermindSignals:
         settings = {
             "fairshare": int(total_allocation // 3),  # Simple fairshare calculation
             "grp_tres_mins": {"billing": int(total_allocation * 60)},
-            "qos_threshold": {"billing": int(total_allocation * 60)},
-            "grace_limit": {"billing": int(total_allocation * 1.2 * 60)},
             "limit_type": "GrpTRESMins",
             "reset_raw_usage": True,
             "carryover_details": {
@@ -69,26 +67,6 @@ class MockMastermindSignals:
                 "unused_allocation": unused_allocation,
                 "total_allocation": total_allocation,
             },
-        }
-
-        return MockMastermindSignals.create_periodic_limits_update_signal(
-            resource_uuid, backend_id, "test-offering-uuid", settings
-        )
-
-    @staticmethod
-    def create_threshold_exceeded_signal(
-        resource_uuid: str,
-        backend_id: str,
-        current_allocation: float = 1000.0,
-        current_usage: float = 1100.0,
-    ) -> MockSTOMPFrame:
-        """Create a signal for when usage exceeds threshold (QoS change needed)."""
-        settings = {
-            "qos_threshold": {"billing": int(current_allocation * 60)},
-            "grace_limit": {"billing": int(current_allocation * 1.2 * 60)},
-            "current_usage": {"billing": int(current_usage * 60)},
-            "recommended_qos": "slowdown" if current_usage > current_allocation else "normal",
-            "limit_type": "GrpTRESMins",
         }
 
         return MockMastermindSignals.create_periodic_limits_update_signal(
@@ -109,7 +87,6 @@ class TestPeriodicLimitsPlugin:
                 "emulator_base_url": "http://localhost:8080",
                 "limit_type": "GrpTRESMins",
                 "tres_billing_enabled": True,
-                "qos_levels": {"default": "normal", "slowdown": "slowdown", "blocked": "blocked"},
             }
         }
         return SlurmBackend(backend_settings, {})
@@ -124,7 +101,6 @@ class TestPeriodicLimitsPlugin:
                 "limit_type": "GrpTRESMins",
                 "tres_billing_enabled": True,
                 "fairshare_decay_half_life": 15,
-                "qos_levels": {"default": "normal", "slowdown": "slowdown"},
             }
         }
         backend = SlurmBackend(backend_settings, {})
@@ -175,41 +151,6 @@ class TestPeriodicLimitsPlugin:
 
         print("✅ Quarterly transition with carryover working correctly")
 
-    def test_threshold_exceeded_qos_management(self, slurm_backend_production):
-        """Test QoS management when usage exceeds threshold."""
-        # Create signal for threshold exceeded scenario
-        signal = MockMastermindSignals.create_threshold_exceeded_signal(
-            "test-resource-uuid",
-            "test-over-allocation-account",
-            current_allocation=1000.0,
-            current_usage=1150.0,  # 15% over allocation
-        )
-
-        # Mock current usage check
-        slurm_backend_production.client.get_current_usage.return_value = {
-            "billing": 69000  # 1150Nh * 60min = 69,000 billing minutes
-        }
-
-        slurm_backend_production.client.get_current_account_qos.return_value = "normal"
-
-        message = json.loads(signal.body)
-        settings = message["settings"]
-
-        print("=== QoS Threshold Management Test ===")
-        print(f"Current usage: {settings['current_usage']['billing']} billing minutes")
-        print(f"QoS threshold: {settings['qos_threshold']['billing']} billing minutes")
-        print(f"Recommended QoS: {settings['recommended_qos']}")
-
-        # Apply settings
-        result = slurm_backend_production.apply_periodic_settings(message["backend_id"], settings)
-
-        assert result["success"] is True
-
-        # Should trigger QoS change
-        slurm_backend_production.client.set_account_qos.assert_called()
-
-        print("✅ QoS threshold management working correctly")
-
     def test_emulator_integration_with_signals(self, slurm_backend_emulator):
         """Test emulator integration with mocked mastermind signals."""
         # Mock requests for emulator communication
@@ -229,7 +170,6 @@ class TestPeriodicLimitsPlugin:
                 {
                     "fairshare": 400,
                     "grp_tres_mins": {"billing": 72000},
-                    "qos_threshold": {"billing": 60000},
                 },
             )
 
@@ -296,24 +236,6 @@ class TestPeriodicLimitsPlugin:
             call_args = mock_backend.apply_periodic_settings.call_args
             assert call_args[0][0] == "quarterly-account-1"  # backend_id
             assert "carryover_details" in call_args[0][1]  # settings include carryover
-
-            # Test 2: Threshold exceeded scenario
-            mock_backend.reset_mock()
-
-            threshold_signal = MockMastermindSignals.create_threshold_exceeded_signal(
-                "resource-uuid-2",
-                "threshold-account-2",
-                current_allocation=1000.0,
-                current_usage=1200.0,  # 20% over
-            )
-
-            on_resource_periodic_limits_update_stomp(threshold_signal, mock_offering, "test-agent")
-
-            # Verify QoS-related settings were applied
-            call_args = mock_backend.apply_periodic_settings.call_args
-            settings = call_args[0][1]
-            assert "recommended_qos" in settings
-            assert settings["recommended_qos"] == "slowdown"
 
             print("✅ STOMP handler processes all mastermind signal types correctly")
 
@@ -408,15 +330,6 @@ class TestPeriodicLimitsPlugin:
             mock_execute.assert_called_with(
                 ["modify", "account", "test-account", "set", "RawUsage=0"]
             )
-
-            # Test current usage retrieval
-            mock_execute.reset_mock()
-            mock_execute.return_value = "test-account|cpu=32000,mem=256000,gres/gpu=2000\n"
-
-            usage = client.get_current_usage("test-account")
-            assert isinstance(usage, dict)
-            # Basic validation that parsing worked
-            assert "billing" in usage or "cpu" in usage
 
             print("✅ SLURM client methods working correctly")
 
@@ -513,21 +426,6 @@ class TestPeriodicLimitsPlugin:
         print(
             f"Scenario 2: Heavy usage (1800/1000Nh) → {carryover_2['total_allocation']:.0f}Nh allocation"
         )
-
-        # Scenario 3: Threshold management
-        scenario_3 = MockMastermindSignals.create_threshold_exceeded_signal(
-            "scenario-3-uuid",
-            "scenario-3-account",
-            current_allocation=1500.0,
-            current_usage=1600.0,  # Just over threshold
-        )
-
-        message_3 = json.loads(scenario_3.body)
-        qos_settings = message_3["settings"]
-
-        assert qos_settings["recommended_qos"] == "slowdown"
-        assert qos_settings["qos_threshold"]["billing"] == 90000  # 1500 * 60
-        print(f"Scenario 3: Over threshold (1600/1500Nh) → QoS: {qos_settings['recommended_qos']}")
 
         print("✅ All mastermind signal scenarios validated")
 
@@ -687,14 +585,10 @@ class TestPeriodicLimitsMockMastermind:
                 # Calculate settings
                 fairshare = max(1, int(total_allocation // 3))
                 billing_minutes = int(total_allocation * 60)
-                qos_threshold = int(total_allocation * 60)
-                grace_limit = int(total_allocation * (1 + self.grace_ratio) * 60)
 
                 return {
                     "fairshare": fairshare,
                     "grp_tres_mins": {"billing": billing_minutes},
-                    "qos_threshold": {"billing": qos_threshold},
-                    "grace_limit": {"billing": grace_limit},
                     "limit_type": self.limit_type,
                     "carryover_details": {
                         "total_allocation": total_allocation,
@@ -777,12 +671,6 @@ class TestPeriodicLimitsMockMastermind:
                 "resource_count": 1,
                 "timing_pattern": "immediate",  # Single update
             },
-            {
-                "name": "Usage Threshold Alerts",
-                "description": "Multiple resources hitting thresholds",
-                "resource_count": 5,
-                "timing_pattern": "staggered",  # Spread over time
-            },
         ]
 
         for scenario in scenarios:
@@ -791,20 +679,12 @@ class TestPeriodicLimitsMockMastermind:
 
             signals = []
             for i in range(scenario["resource_count"]):
-                if scenario["name"] == "Usage Threshold Alerts":
-                    signal = MockMastermindSignals.create_threshold_exceeded_signal(
-                        f"threshold-resource-{i}",
-                        f"threshold-account-{i}",
-                        current_allocation=1000.0,
-                        current_usage=1050.0 + i * 50,  # Varying degrees of overage
-                    )
-                else:
-                    signal = MockMastermindSignals.create_quarterly_transition_signal(
-                        f"{scenario['name'].lower()}-resource-{i}",
-                        f"{scenario['name'].lower()}-account-{i}",
-                        base_allocation=1000.0,
-                        previous_usage=400.0 + i * 100,  # Varying usage patterns
-                    )
+                signal = MockMastermindSignals.create_quarterly_transition_signal(
+                    f"{scenario['name'].lower()}-resource-{i}",
+                    f"{scenario['name'].lower()}-account-{i}",
+                    base_allocation=1000.0,
+                    previous_usage=400.0 + i * 100,  # Varying usage patterns
+                )
 
                 signals.append(signal)
 

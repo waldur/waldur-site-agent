@@ -25,7 +25,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-
 from waldur_api_client.api.marketplace_orders import (
     marketplace_orders_create,
     marketplace_orders_retrieve,
@@ -41,10 +40,10 @@ from waldur_api_client.models.order_create_request_limits import (
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.types import UNSET
+from waldur_site_agent_slurm.backend import SlurmBackend
 
 from waldur_site_agent.common.processors import OfferingOrderProcessor
 from waldur_site_agent.common.utils import get_client, load_configuration
-from waldur_site_agent_slurm.backend import SlurmBackend
 
 logger = logging.getLogger(__name__)
 
@@ -353,6 +352,97 @@ def run_processor_until_order_terminal(
 
 
 # ---------------------------------------------------------------------------
+# QoS / resource-state helpers (used by test_e2e_qos_*.py)
+# ---------------------------------------------------------------------------
+
+
+def get_account_qos(
+    slurm_bin_path: str,  # noqa: ARG001
+    account: str,
+    cluster_name: str | None = None,  # noqa: ARG001
+) -> str:
+    """Return the QoS currently set on a SLURM account in the emulator.
+
+    Reads directly from the emulator's persisted state file
+    (``/tmp/slurm_emulator_db.json``). This is more reliable than going
+    through ``sacctmgr list associations``: the emulator's ``list
+    associations`` only returns rows for accounts that have at least
+    one ``Association`` record, but freshly-created accounts in our
+    e2e setup don't yet have a user (and therefore no association),
+    even though their ``account.qos`` field is correctly updated by
+    ``sacctmgr modify account set qos=X``.
+
+    The ``slurm_bin_path`` and ``cluster_name`` arguments are kept for
+    signature compatibility with potential future implementations that
+    do shell out to ``sacctmgr``.
+
+    Returns the QoS string, or empty string if the account doesn't
+    exist in the state file.
+    """
+    state_file = Path("/tmp/slurm_emulator_db.json")  # noqa: S108
+    if not state_file.exists():
+        logger.warning("Emulator state file %s not found", state_file)
+        return ""
+    try:
+        state = json.loads(state_file.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to read emulator state file: %s", exc)
+        return ""
+    account_data = (state.get("accounts") or {}).get(account)
+    if not account_data:
+        return ""
+    return str(account_data.get("qos", ""))
+
+
+def set_resource_paused(client, resource_uuid: str, paused: bool) -> None:
+    """Flip ``paused`` on a Waldur resource via the provider-resources API.
+
+    Uses the raw httpx client because the generated typed wrapper enforces
+    additional fields we don't need for a single-flag PATCH.
+    """
+    resp = client.get_httpx_client().patch(
+        f"/api/marketplace-provider-resources/{resource_uuid}/",
+        json={"paused": bool(paused)},
+    )
+    resp.raise_for_status()
+
+
+def set_resource_downscaled(client, resource_uuid: str, downscaled: bool) -> None:
+    """Flip ``downscaled`` on a Waldur resource via the provider-resources API."""
+    resp = client.get_httpx_client().patch(
+        f"/api/marketplace-provider-resources/{resource_uuid}/",
+        json={"downscaled": bool(downscaled)},
+    )
+    resp.raise_for_status()
+
+
+def make_periodic_limits_frame(
+    resource_uuid: str,
+    backend_id: str,
+    offering_uuid: str,
+    settings: dict,
+    policy_uuid: str = "00000000000000000000000000000000",
+):
+    """Build a synthetic STOMP frame for the periodic-limits handler.
+
+    Returns a stomp.utils.Frame-like object suitable for passing directly to
+    ``on_resource_periodic_limits_update_stomp`` without going through a broker.
+    """
+    import stomp  # noqa: PLC0415
+
+    body = {
+        "resource_uuid": resource_uuid,
+        "backend_id": backend_id,
+        "offering_uuid": offering_uuid,
+        "policy_uuid": policy_uuid,
+        "action": "apply_periodic_settings",
+        "settings": settings,
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+    }
+    return stomp.utils.Frame(cmd="MESSAGE", headers={}, body=json.dumps(body))
+
+
+# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -381,7 +471,7 @@ def report(request, offering):
     rw.text(f"**Date:** {datetime.now(tz=timezone.utc).isoformat()}")
     rw.text(f"**Config:** `{E2E_CONFIG_PATH}`")
     rw.text(f"**Waldur:** {offering.waldur_api_url}")
-    rw.text(f"**Backend:** SLURM emulator")
+    rw.text("**Backend:** SLURM emulator")
     rw.text(f"**Offering:** {offering.waldur_offering_uuid}")
     components_str = ", ".join(
         f"{k} (factor={getattr(v, 'unit_factor', 1)})"

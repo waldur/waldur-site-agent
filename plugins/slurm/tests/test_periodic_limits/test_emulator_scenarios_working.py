@@ -269,8 +269,6 @@ class TestEmulatorScenariosWorking:
             site_agent_settings = {
                 "fairshare": q2_settings["fairshare"],
                 "grp_tres_mins": {"billing": q2_settings["billing_minutes"]},
-                "qos_threshold": {"billing": q2_settings["billing_minutes"]},  # 100% threshold
-                "grace_limit": {"billing": int(q2_settings["billing_minutes"] * 1.2)},  # 120% grace
             }
 
             print(f"\\nApplying via site agent:")
@@ -431,8 +429,6 @@ except Exception as e:
         settings = {
             "fairshare": scenario_results["q2_fairshare"],
             "grp_tres_mins": {"billing": scenario_results["q2_billing_minutes"]},
-            "qos_threshold": {"billing": scenario_results["q2_billing_minutes"]},
-            "grace_limit": {"billing": int(scenario_results["q2_billing_minutes"] * 1.2)},
         }
 
         print(f"\\nApplying scenario-derived settings to emulator...")

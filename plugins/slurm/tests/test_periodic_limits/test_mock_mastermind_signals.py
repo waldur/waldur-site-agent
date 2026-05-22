@@ -31,7 +31,6 @@ class MockWaldurMastermindPolicy:
             "carryover_enabled": True,
             "tres_billing_enabled": True,
             "limit_type": "GrpTRESMins",
-            "qos_strategy": "threshold",
         }
 
         # Mock historical usage data
@@ -74,21 +73,8 @@ class MockWaldurMastermindPolicy:
             limit_key = "grp_tres_mins" if "Grp" in self.config["limit_type"] else "max_tres_mins"
             limits = {limit_key: {"node": node_minutes}}
 
-        # Calculate QoS thresholds
-        qos_threshold_value = total_allocation
-        grace_limit_value = total_allocation * (1 + self.config["grace_ratio"])
-
-        if self.config["tres_billing_enabled"]:
-            qos_threshold = {"billing": int(qos_threshold_value * 60)}
-            grace_limit = {"billing": int(grace_limit_value * 60)}
-        else:
-            qos_threshold = {"node": int(qos_threshold_value * 60)}
-            grace_limit = {"node": int(grace_limit_value * 60)}
-
         settings = {
             "fairshare": fairshare,
-            "qos_threshold": qos_threshold,
-            "grace_limit": grace_limit,
             "limit_type": self.config["limit_type"],
             "reset_raw_usage": current_period != previous_period,  # Reset on period change
             "carryover_details": carryover_details,
@@ -111,27 +97,6 @@ class MockWaldurMastermindPolicy:
         # In real implementation, this would call publish_stomp_messages()
         # For testing, we return the message that would be sent
         return message_data
-
-    def check_usage_thresholds(self, resource: MockResource) -> dict:
-        """Check if resource usage exceeds thresholds."""
-        current_settings = self.calculate_periodic_settings(resource)
-
-        current_usage_value = resource.current_usage * 60  # Convert to minutes
-        qos_threshold_value = list(current_settings["qos_threshold"].values())[0]
-        grace_limit_value = list(current_settings["grace_limit"].values())[0]
-
-        status = {
-            "threshold_exceeded": current_usage_value >= qos_threshold_value,
-            "grace_exceeded": current_usage_value >= grace_limit_value,
-            "recommended_qos": "normal",
-        }
-
-        if status["grace_exceeded"]:
-            status["recommended_qos"] = "blocked"
-        elif status["threshold_exceeded"]:
-            status["recommended_qos"] = "slowdown"
-
-        return status
 
     def _calculate_carryover(
         self, base_allocation: float, previous_usage: float
@@ -250,47 +215,6 @@ class TestMockMastermindIntegration:
 
         print("\n✅ All quarterly transition scenarios working")
 
-    def test_threshold_management_scenarios(self, mock_mastermind, test_resources):
-        """Test usage threshold management scenarios."""
-        resource = test_resources[0]  # 1000Nh allocation
-
-        # Set current usage on resource
-        usage_scenarios = [
-            {"usage": 800.0, "expected_qos": "normal", "description": "Normal usage (80%)"},
-            {"usage": 1050.0, "expected_qos": "slowdown", "description": "Over threshold (105%)"},
-            {"usage": 1250.0, "expected_qos": "blocked", "description": "Over grace limit (125%)"},
-        ]
-
-        for scenario in usage_scenarios:
-            print(f"\n--- {scenario['description']} ---")
-
-            resource.current_usage = scenario["usage"]
-
-            # Check threshold status
-            threshold_status = mock_mastermind.check_usage_thresholds(resource)
-
-            print(f"Usage: {scenario['usage']}Nh / {resource.plan_allocation}Nh")
-            print(f"Threshold exceeded: {threshold_status['threshold_exceeded']}")
-            print(f"Grace exceeded: {threshold_status['grace_exceeded']}")
-            print(f"Recommended QoS: {threshold_status['recommended_qos']}")
-
-            assert threshold_status["recommended_qos"] == scenario["expected_qos"]
-
-            # If QoS change needed, generate appropriate signal
-            if threshold_status["recommended_qos"] != "normal":
-                settings = mock_mastermind.calculate_periodic_settings(resource)
-                settings["current_usage"] = {"billing": int(scenario["usage"] * 60)}
-                settings["recommended_qos"] = threshold_status["recommended_qos"]
-
-                stomp_message = mock_mastermind.publish_stomp_message(resource, settings)
-
-                assert stomp_message["settings"]["recommended_qos"] == scenario["expected_qos"]
-                print(f"✓ Generated QoS change signal for {scenario['expected_qos']}")
-
-            print(f"✓ {scenario['description']} handled correctly")
-
-        print("\n✅ Threshold management scenarios working")
-
     def test_dynamic_allocation_adjustment(self, mock_mastermind):
         """Test dynamic allocation adjustment during period."""
         # Resource starts with 1000Nh allocation
@@ -301,10 +225,6 @@ class TestMockMastermindIntegration:
         print(f"Initial allocation: {resource.plan_allocation}Nh")
         print(f"Current usage: {resource.current_usage}Nh")
 
-        # Check initial threshold status
-        initial_status = mock_mastermind.check_usage_thresholds(resource)
-        print(f"Initial QoS recommendation: {initial_status['recommended_qos']}")
-
         # Partnership provides additional allocation (+500Nh)
         resource.plan_allocation = 1500.0
 
@@ -312,15 +232,8 @@ class TestMockMastermindIntegration:
 
         # Recalculate settings with new allocation
         updated_settings = mock_mastermind.calculate_periodic_settings(resource)
-        updated_status = mock_mastermind.check_usage_thresholds(resource)
 
         print(f"Updated fairshare: {updated_settings['fairshare']}")
-        print(f"Updated QoS recommendation: {updated_status['recommended_qos']}")
-
-        # Should restore to normal QoS with increased allocation
-        assert updated_status["recommended_qos"] == "normal", (
-            "Dynamic allocation increase should restore normal QoS"
-        )
 
         # Generate signal for the change
         stomp_message = mock_mastermind.publish_stomp_message(resource, updated_settings)

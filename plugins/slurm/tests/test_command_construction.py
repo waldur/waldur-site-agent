@@ -275,14 +275,6 @@ class TestCommandPrefixByMethod:
         assert cmd.startswith("sacct --parsable2 --noheader")
         assert "--immediate" not in cmd
 
-    def test_get_current_usage(self, client):
-        """get_current_usage uses sacct with NO --immediate."""
-        c, _ = client
-        c.get_current_usage("acct1")
-        cmd = self._get_command(c)
-        assert cmd.startswith("sacct")
-        assert "--immediate" not in cmd
-
     # --- scancel commands (NO --parsable2, NO --noheader, NO --immediate) ---
 
     def test_cancel_active_user_jobs(self, client):

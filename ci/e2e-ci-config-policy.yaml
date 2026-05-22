@@ -19,6 +19,12 @@ _backend_settings: &backend_settings
   qos_default: "normal"
   enable_user_homedir_account_creation: false
   check_backend_id_uniqueness: true
+  # Enable the periodic-limits write path so apply_periodic_settings
+  # can run (fairshare + GrpTRESMins + reset). QoS is intentionally
+  # NOT touched here — that's owned by the RESOURCE flag-flow.
+  periodic_limits:
+    enabled: true
+    limit_type: "GrpTRESMins"
 
 _backend_components: &backend_components
   node:

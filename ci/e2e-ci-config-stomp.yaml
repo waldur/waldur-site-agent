@@ -47,3 +47,45 @@ offerings:
         unit_factor: 61440
         accounting_type: "limit"
         label: "RAM"
+
+  # Policy-attached offering used by test_e2e_qos_stomp.py to exercise
+  # the RESOURCE STOMP event → _sync_resource_status → QoS application
+  # path. Shares the same waldur backend, just with policy semantics.
+  - name: "E2E SLURM STOMP Policy"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000101"
+
+    stomp_enabled: true
+    stomp_ws_host: "docker"
+    stomp_ws_port: 15674
+    stomp_ws_path: "/ws"
+    websocket_use_tls: false
+
+    backend_type: "slurm"
+    order_processing_backend: "slurm"
+    reporting_backend: "slurm"
+    membership_sync_backend: "slurm"
+
+    backend_settings:
+      slurm_bin_path: ".venv/bin"
+      default_account: "root"
+      customer_prefix: "e2e_qos_"
+      project_prefix: "e2e_qos_"
+      allocation_prefix: "e2e_qos_"
+      qos_downscaled: "limited"
+      qos_paused: "paused"
+      qos_default: "normal"
+      enable_user_homedir_account_creation: false
+      check_backend_id_uniqueness: true
+      periodic_limits:
+        enabled: true
+        limit_type: "GrpTRESMins"
+
+    backend_components:
+      node:
+        limit: 1000
+        measured_unit: "Hours"
+        unit_factor: 1
+        accounting_type: "limit"
+        label: "Node Hours"

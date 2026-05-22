@@ -649,7 +649,11 @@ E2E integration tests:
       WALDUR_E2E_BENCH_RESOURCES=5 \
       pytest plugins/slurm/tests/e2e/ -v --junitxml=e2e-report-rest.xml \
         --ignore=plugins/slurm/tests/e2e/test_e2e_stomp.py \
-        --ignore=plugins/slurm/tests/e2e/test_e2e_policy.py
+        --ignore=plugins/slurm/tests/e2e/test_e2e_policy.py \
+        --ignore=plugins/slurm/tests/e2e/test_e2e_qos_polling.py \
+        --ignore=plugins/slurm/tests/e2e/test_e2e_qos_stomp.py \
+        --ignore=plugins/slurm/tests/e2e/test_e2e_qos_matrix.py \
+        --ignore=plugins/slurm/tests/e2e/test_e2e_qos_backcompat.py
     # Run STOMP E2E tests (stomp_enabled=true)
     - |
       source .venv/bin/activate
@@ -691,6 +695,38 @@ E2E integration tests:
       WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
       pytest plugins/slurm/tests/e2e/test_e2e_policy.py -v \
         --junitxml=e2e-report-policy.xml
+    # Run QoS-flow polling-path test (one policy offering, focused phases)
+    - |
+      source .venv/bin/activate
+      WALDUR_E2E_TESTS=true \
+      WALDUR_E2E_POLICY_CONFIG=ci/e2e-ci-config-policy.yaml \
+      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
+      pytest plugins/slurm/tests/e2e/test_e2e_qos_polling.py -v \
+        --junitxml=e2e-report-qos-polling.xml
+    # Run QoS-flow STOMP-path test (RESOURCE event → agent → emulator)
+    - |
+      source .venv/bin/activate
+      WALDUR_E2E_TESTS=true \
+      WALDUR_E2E_STOMP_CONFIG=ci/e2e-ci-config-stomp.yaml \
+      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
+      pytest plugins/slurm/tests/e2e/test_e2e_qos_stomp.py -v \
+        --junitxml=e2e-report-qos-stomp.xml
+    # Run QoS matrix across all 11 policy configs (defense-in-depth)
+    - |
+      source .venv/bin/activate
+      WALDUR_E2E_TESTS=true \
+      WALDUR_E2E_POLICY_CONFIG=ci/e2e-ci-config-policy.yaml \
+      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
+      pytest plugins/slurm/tests/e2e/test_e2e_qos_matrix.py -v \
+        --junitxml=e2e-report-qos-matrix.xml
+    # Run QoS backwards-compatibility test (legacy periodic-limits payload)
+    - |
+      source .venv/bin/activate
+      WALDUR_E2E_TESTS=true \
+      WALDUR_E2E_CONFIG=ci/e2e-ci-config.yaml \
+      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
+      pytest plugins/slurm/tests/e2e/test_e2e_qos_backcompat.py -v \
+        --junitxml=e2e-report-qos-backcompat.xml
   after_script:
     - docker compose -f ci/docker-compose.e2e.yml logs > waldur-stack-logs.txt 2>&1 || true
     - docker compose -f ci/docker-compose.e2e.yml down || true
@@ -702,6 +738,10 @@ E2E integration tests:
         - e2e-report-stomp.xml
         - e2e-report-ldap.xml
         - e2e-report-policy.xml
+        - e2e-report-qos-polling.xml
+        - e2e-report-qos-stomp.xml
+        - e2e-report-qos-matrix.xml
+        - e2e-report-qos-backcompat.xml
     paths:
       - waldur-stack-logs.txt
       - plugins/slurm/tests/e2e/*-report.md

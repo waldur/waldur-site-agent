@@ -1,7 +1,6 @@
 """Real SLURM emulator integration tests for periodic limits."""
 
 import time
-from unittest.mock import patch
 
 import pytest
 import requests
@@ -244,7 +243,6 @@ class TestRealEmulatorIntegration:
         settings = {
             "fairshare": 400,
             "grp_tres_mins": {"billing": 72000},  # 1200Nh
-            "qos_threshold": {"billing": 60000},  # 1000Nh
         }
 
         result = backend.apply_periodic_settings("backend-test", settings)
@@ -335,48 +333,6 @@ class TestRealEmulatorIntegration:
             print(f"❌ Q2 settings application failed: {result}")
 
         print("✅ Complete quarterly scenario tested with real emulator")
-
-    def test_emulator_qos_threshold_workflow(self, emulator_client):
-        """Test QoS threshold workflow with real emulator."""
-        # Create account with 1000Nh allocation
-        emulator_client.account_create("qos-test", "QoS Test", 1000)
-
-        # Test normal usage (800Nh)
-        emulator_client.usage_inject("user1", 800, "qos-test")
-
-        # Apply settings with threshold
-        backend = SlurmBackend(
-            {
-                "periodic_limits": {
-                    "enabled": True,
-                    "emulator_mode": True,
-                    "emulator_base_url": EMULATOR_URL,
-                    "qos_levels": {"default": "normal", "slowdown": "slowdown"},
-                }
-            },
-            {},
-        )
-
-        # Settings with 1000Nh threshold
-        settings_normal = {
-            "qos_threshold": {"billing": 60000},  # 1000Nh * 60min
-            "grace_limit": {"billing": 72000},  # 1200Nh * 60min
-        }
-
-        result = backend.apply_periodic_settings("qos-test", settings_normal)
-        print(f"Normal usage QoS result: {result.get('success')}")
-
-        # Exceed threshold (1100Nh total)
-        emulator_client.usage_inject("user1", 300, "qos-test")  # Total: 1100Nh
-
-        # Apply settings again (should trigger QoS check)
-        with patch.object(
-            backend, "_get_current_usage_emulator", return_value=66000
-        ):  # 1100Nh in minutes
-            result = backend.apply_periodic_settings("qos-test", settings_normal)
-            print(f"Threshold exceeded QoS result: {result.get('success')}")
-
-        print("✅ QoS threshold workflow tested with emulator")
 
     def test_emulator_command_interception(self, emulator_client):
         """Test that emulator properly intercepts SLURM commands."""
