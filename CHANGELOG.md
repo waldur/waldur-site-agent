@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.4 - 2026-05-22
+
+### Highlights
+
+This release simplifies SLURM resource gating by removing the agent-side QoS-threshold check and relying on the `paused`/`downscaled` flags from Waldur Mastermind as the single source of truth, making pause and downscale behavior more predictable. Event-processing (STOMP) mode now keeps backend account hierarchies in sync periodically, so project structure changes propagate reliably without restarting the agent. A security alert was also cleared by bumping a transitive dependency.
+
+### What's New
+
+- **Federation/SLURM**: Periodically sync the backend account hierarchy while running in event-process mode, keeping project structure aligned without manual intervention ([HPCMP-487]).
+
+### Improvements
+
+- **SLURM**: Remove the agent-side QoS-threshold gate and rely on the `paused`/`downscaled` flags for pause and downscale decisions, simplifying configuration and making behavior consistent across polling and STOMP modes.
+- **Security**: Bump `idna` to 3.15 to clear an osv-scanner alert.
+
+### Bug Fixes
+
+- **Core**: Preserve the offering component limit period when loading components.
+
+### Statistics
+
+> 5 commits, 29 files changed (+2818/-782 lines)
+
+---
+
 ## 1.0.4-rc.14 - 2026-05-18
 
 ### Changes
