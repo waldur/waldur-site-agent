@@ -157,6 +157,11 @@ keep-runtime-typing = true
 
 [tool.pytest.ini_options]
 addopts = "--cov=waldur_site_agent/"
+markers = [
+    "incremental: skip subsequent tests in a class once one fails (used by ordered e2e suites)",
+    "integration: tests that exercise external systems / emulator (slower than unit tests)",
+    "emulator: tests that require the SLURM emulator binaries to be installed",
+]
 
 [tool.uv.workspace]
 members = [

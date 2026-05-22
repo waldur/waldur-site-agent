@@ -21,7 +21,6 @@ class TestSlurmBackendPeriodicLimits:
                 "limit_type": "GrpTRESMins",
                 "tres_billing_enabled": True,
                 "fairshare_decay_half_life": 15,
-                "qos_levels": {"default": "normal", "slowdown": "slowdown", "blocked": "blocked"},
             }
         }
 
@@ -36,7 +35,6 @@ class TestSlurmBackendPeriodicLimits:
                 "tres_billing_enabled": True,
                 "fairshare_decay_half_life": 15,
                 "raw_usage_reset": True,
-                "qos_levels": {"default": "normal", "slowdown": "slowdown"},
             }
         }
 
@@ -62,15 +60,9 @@ class TestSlurmBackendPeriodicLimits:
         settings = {
             "fairshare": 666,
             "grp_tres_mins": {"billing": 119400},  # 1990Nh * 60min
-            "qos_threshold": {"billing": 119400},
-            "grace_limit": {"billing": 143280},  # 1990Nh * 1.2 * 60min
             "limit_type": "GrpTRESMins",
             "reset_raw_usage": True,
         }
-
-        # Mock current usage below threshold
-        backend.client.get_current_usage.return_value = {"billing": 100000}  # Under threshold
-        backend.client.get_current_account_qos.return_value = "normal"
 
         result = backend.apply_periodic_settings("test-project-123", settings)
 
@@ -94,7 +86,6 @@ class TestSlurmBackendPeriodicLimits:
         settings = {
             "fairshare": 333,
             "grp_tres_mins": {"billing": 72000},
-            "qos_threshold": {"billing": 60000},
         }
 
         with patch("requests.post") as mock_post, patch("requests.get") as mock_get:
@@ -133,66 +124,6 @@ class TestSlurmBackendPeriodicLimits:
             assert actual_calls == expected_calls
 
         print("✅ Emulator mode apply_periodic_settings working")
-
-    def test_qos_threshold_checking_logic(self, backend_config_production):
-        """Test QoS threshold checking and application logic."""
-        backend = SlurmBackend(backend_config_production, {})
-        backend.client = MagicMock()
-
-        # Mock current QoS and usage
-        backend.client.get_current_account_qos.return_value = "normal"
-
-        test_cases = [
-            {
-                "name": "Normal Usage",
-                "current_usage": {"billing": 50000},  # 833Nh
-                "qos_threshold": {"billing": 60000},  # 1000Nh
-                "grace_limit": {"billing": 72000},  # 1200Nh
-                "expected_qos": "normal",
-            },
-            {
-                "name": "Threshold Exceeded",
-                "current_usage": {"billing": 65000},  # 1083Nh
-                "qos_threshold": {"billing": 60000},  # 1000Nh
-                "grace_limit": {"billing": 72000},  # 1200Nh
-                "expected_qos": "slowdown",
-            },
-            {
-                "name": "Grace Limit Exceeded",
-                "current_usage": {"billing": 75000},  # 1250Nh
-                "qos_threshold": {"billing": 60000},  # 1000Nh
-                "grace_limit": {"billing": 72000},  # 1200Nh
-                "expected_qos": "blocked",
-            },
-        ]
-
-        for case in test_cases:
-            print(f"\n--- Testing: {case['name']} ---")
-
-            backend.client.reset_mock()
-            backend.client.get_current_usage.return_value = case["current_usage"]
-            backend.client.get_current_account_qos.return_value = "normal"
-
-            settings = {"qos_threshold": case["qos_threshold"], "grace_limit": case["grace_limit"]}
-
-            # Apply settings (should trigger QoS check)
-            result = backend.apply_periodic_settings("test-qos-account", settings)
-
-            assert result["success"] is True
-
-            # Check if QoS change was applied
-            if case["expected_qos"] != "normal":
-                backend.client.set_account_qos.assert_called()
-                call_args = backend.client.set_account_qos.call_args
-                applied_qos = call_args[0][1]  # Second argument is the QoS value
-                print(f"Applied QoS: {applied_qos} (expected: {case['expected_qos']})")
-            else:
-                # Normal case - might not call set_account_qos if already normal
-                print("QoS remains normal")
-
-            print(f"✓ {case['name']} handled correctly")
-
-        print("\n✅ QoS threshold checking working correctly")
 
     def test_configuration_precedence(self):
         """Test configuration precedence: runtime > policy > site agent > defaults."""
@@ -329,21 +260,6 @@ class TestSlurmClientPeriodicLimits:
         )
 
         print("✅ MaxTRESMins limits working")
-
-    def test_get_current_usage(self, mock_client):
-        """Test getting current usage."""
-        client, mock_execute = mock_client
-
-        # Mock sacct output with TRES usage
-        mock_execute.return_value = "test-account|cpu=32000,mem=256000,gres/gpu=2000|\n"
-
-        usage = client.get_current_usage("test-account")
-
-        assert isinstance(usage, dict)
-        # Verify parsing worked (exact format depends on implementation)
-        assert "billing" in usage or len(usage) > 0
-
-        print("✅ get_current_usage working")
 
     def test_reset_raw_usage(self, mock_client):
         """Test resetting raw usage."""

@@ -16,7 +16,6 @@
       "Policy raw usage reset across period types (month, quarter, total)"
     ]
   },
-
   "users": [
     {
       "uuid": "e2ea0000000000000000000000000001",
@@ -74,7 +73,6 @@
       "password": "e2e-user-password"
     }
   ],
-
   "auth_tokens": [
     {
       "key": "e2e0000000000000000000000000token001",
@@ -82,7 +80,6 @@
       "user_username": "e2e-staff"
     }
   ],
-
   "customers": [
     {
       "uuid": "e2ec0000000000000000000000000001",
@@ -91,7 +88,6 @@
       "contact_details": "Site agent E2E test organization"
     }
   ],
-
   "projects": [
     {
       "uuid": "e2eb0000000000000000000000000001",
@@ -100,7 +96,6 @@
       "description": "Project for site-agent E2E test orders"
     }
   ],
-
   "category_groups": [
     {
       "uuid": "e2ed0000000000000000000000000001",
@@ -108,7 +103,6 @@
       "description": "High-Performance Computing"
     }
   ],
-
   "categories": [
     {
       "uuid": "e2ed0000000000000000000000000002",
@@ -117,7 +111,6 @@
       "group_uuid": "e2ed0000000000000000000000000001"
     }
   ],
-
   "service_providers": [
     {
       "uuid": "e2ee0000000000000000000000000001",
@@ -125,7 +118,6 @@
       "description": "E2E test service provider"
     }
   ],
-
   "offerings": [
     {
       "uuid": "e2ef0000000000000000000000000001",
@@ -185,7 +177,6 @@
         "username_generation_policy": "service_provider"
       }
     },
-
     {
       "uuid": "e2ef0000000000000000000000000101",
       "name": "E2E Policy: month g0 reset",
@@ -195,7 +186,12 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: monthly, grace=0%, no carryover, raw_reset=true (like mng0r)"
+      "description": "Policy E2E: monthly, grace=0%, no carryover, raw_reset=true (like mng0r)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     },
     {
       "uuid": "e2ef0000000000000000000000000102",
@@ -206,7 +202,12 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: monthly, grace=0%, no carryover, raw_reset=false (like alps-dora-mR)"
+      "description": "Policy E2E: monthly, grace=0%, no carryover, raw_reset=false (like alps-dora-mR)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     },
     {
       "uuid": "e2ef0000000000000000000000000103",
@@ -217,7 +218,12 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: monthly, grace=15%, no carryover, raw_reset=false (like mng15)"
+      "description": "Policy E2E: monthly, grace=15%, no carryover, raw_reset=false (like mng15)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     },
     {
       "uuid": "e2ef0000000000000000000000000104",
@@ -228,7 +234,12 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: monthly, grace=15%, no carryover, raw_reset=true (like mng15r)"
+      "description": "Policy E2E: monthly, grace=15%, no carryover, raw_reset=true (like mng15r)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     },
     {
       "uuid": "e2ef0000000000000000000000000105",
@@ -239,7 +250,12 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: monthly, grace=15%, carryover=15%, raw_reset=true (like mnc15g15r)"
+      "description": "Policy E2E: monthly, grace=15%, carryover=15%, raw_reset=true (like mnc15g15r)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     },
     {
       "uuid": "e2ef0000000000000000000000000106",
@@ -250,7 +266,12 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: quarterly, grace=0%, no carryover, raw_reset=true (like alps-dora-q)"
+      "description": "Policy E2E: quarterly, grace=0%, no carryover, raw_reset=true (like alps-dora-q)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     },
     {
       "uuid": "e2ef0000000000000000000000000107",
@@ -261,7 +282,12 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: quarterly, grace=15%, no carryover, raw_reset=false (like qng15)"
+      "description": "Policy E2E: quarterly, grace=15%, no carryover, raw_reset=false (like qng15)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     },
     {
       "uuid": "e2ef0000000000000000000000000108",
@@ -272,7 +298,12 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: quarterly, grace=15%, no carryover, raw_reset=true (like qng15r)"
+      "description": "Policy E2E: quarterly, grace=15%, no carryover, raw_reset=true (like qng15r)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     },
     {
       "uuid": "e2ef0000000000000000000000000109",
@@ -283,7 +314,12 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: quarterly, grace=30%, no carryover, raw_reset=true (like alps-dora-q-30)"
+      "description": "Policy E2E: quarterly, grace=30%, no carryover, raw_reset=true (like alps-dora-q-30)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     },
     {
       "uuid": "e2ef000000000000000000000000010a",
@@ -294,7 +330,12 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: total, grace=0%, no carryover, raw_reset=true (like alps-errigal-s)"
+      "description": "Policy E2E: total, grace=0%, no carryover, raw_reset=true (like alps-errigal-s)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     },
     {
       "uuid": "e2ef000000000000000000000000010b",
@@ -305,10 +346,14 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Policy E2E: total, grace=15%, carryover=15%, raw_reset=false (like tnc15g15)"
+      "description": "Policy E2E: total, grace=15%, carryover=15%, raw_reset=false (like tnc15g15)",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "supports_pausing": true,
+        "supports_downscaling": true
+      }
     }
   ],
-
   "offering_components": [
     {
       "uuid": "e2e10000000000000000000000000001",
@@ -328,7 +373,6 @@
       "billing_type": "limit",
       "measured_unit": "gb-Hours"
     },
-
     {
       "uuid": "e2e20000000000000000000000000001",
       "offering_uuid": "e2ef0000000000000000000000000002",
@@ -356,7 +400,6 @@
       "billing_type": "limit",
       "measured_unit": "GPUs"
     },
-
     {
       "uuid": "e2e30000000000000000000000000001",
       "offering_uuid": "e2ef0000000000000000000000000003",
@@ -384,7 +427,6 @@
       "billing_type": "limit",
       "measured_unit": "TB"
     },
-
     {
       "uuid": "e2e40000000000000000000000000001",
       "offering_uuid": "e2ef0000000000000000000000000004",
@@ -394,7 +436,6 @@
       "billing_type": "limit",
       "measured_unit": "Hours"
     },
-
     {
       "uuid": "e2e50000000000000000000000000001",
       "offering_uuid": "e2ef0000000000000000000000000101",
@@ -506,7 +547,6 @@
       "limit_period": "total"
     }
   ],
-
   "plans": [
     {
       "uuid": "e2e00000000000000000000000000011",
@@ -536,7 +576,6 @@
       "unit": "month",
       "description": "Standard plan for LDAP-integrated SLURM offering"
     },
-
     {
       "uuid": "e2e00000000000000000000000000101",
       "name": "E2E Policy m-g0-r",
@@ -604,7 +643,6 @@
       "unit": "month"
     }
   ],
-
   "plan_components": [
     {
       "plan_uuid": "e2e00000000000000000000000000011",
@@ -620,7 +658,6 @@
       "price": "0.00",
       "amount": 0
     },
-
     {
       "plan_uuid": "e2e00000000000000000000000000012",
       "component_uuid": "e2e20000000000000000000000000001",
@@ -642,7 +679,6 @@
       "price": "0.00",
       "amount": 0
     },
-
     {
       "plan_uuid": "e2e00000000000000000000000000013",
       "component_uuid": "e2e30000000000000000000000000001",
@@ -664,7 +700,6 @@
       "price": "0.00",
       "amount": 0
     },
-
     {
       "plan_uuid": "e2e00000000000000000000000000014",
       "component_uuid": "e2e40000000000000000000000000001",
@@ -672,7 +707,6 @@
       "price": "0.00",
       "amount": 0
     },
-
     {
       "plan_uuid": "e2e00000000000000000000000000101",
       "component_uuid": "e2e50000000000000000000000000001",
@@ -751,7 +785,6 @@
       "amount": 0
     }
   ],
-
   "user_roles": [
     {
       "uuid": "e2e00000000000000000000000000021",
@@ -808,7 +841,6 @@
       "is_active": true
     }
   ],
-
   "offering_users": [
     {
       "uuid": "e2e00000000000000000000000000031",
@@ -840,7 +872,6 @@
       "user_uuid": "e2ea0000000000000000000000000006",
       "username": "e2euser5"
     },
-
     {
       "uuid": "e2e00000000000000000000000000041",
       "offering_uuid": "e2ef0000000000000000000000000004",

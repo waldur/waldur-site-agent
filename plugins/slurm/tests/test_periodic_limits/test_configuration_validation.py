@@ -75,14 +75,6 @@ class TestPeriodicLimitsConfiguration:
                 ):
                     errors.append("grace_ratio must be between 0.0 and 1.0")
 
-                # Validate QoS levels
-                qos_levels = periodic_config.get("qos_levels", {})
-                if qos_levels:
-                    required_qos = ["default", "slowdown"]
-                    for qos in required_qos:
-                        if qos not in qos_levels or not qos_levels[qos].strip():
-                            errors.append(f"Missing or empty QoS level: {qos}")
-
             return len(errors) == 0, errors
 
         # Test valid complete configuration
@@ -103,11 +95,6 @@ class TestPeriodicLimitsConfiguration:
                             },
                             "fairshare_decay_half_life": 15,
                             "default_grace_ratio": 0.2,
-                            "qos_levels": {
-                                "default": "normal",
-                                "slowdown": "slowdown",
-                                "blocked": "blocked",
-                            },
                         }
                     },
                 }
@@ -194,7 +181,6 @@ class TestPeriodicLimitsConfiguration:
                             },
                             "fairshare_decay_half_life": 15,
                             "default_grace_ratio": 0.2,
-                            "qos_levels": {"default": "normal", "slowdown": "slowdown"},
                         },
                     },
                     "backend_components": {
@@ -401,65 +387,6 @@ class TestAdvancedConfigurationScenarios:
 
         print("\n✅ Custom TRES billing weights validated")
 
-    def test_qos_strategy_configurations(self):
-        """Test different QoS strategy configurations."""
-        qos_strategies = [
-            {
-                "name": "Threshold Strategy",
-                "config": {
-                    "qos_strategy": "threshold",
-                    "qos_levels": {"default": "normal", "slowdown": "slowdown"},
-                },
-                "thresholds": [100],  # Single threshold at 100%
-            },
-            {
-                "name": "Progressive Strategy",
-                "config": {
-                    "qos_strategy": "progressive",
-                    "qos_levels": {
-                        "default": "normal",
-                        "slowdown": "slowdown",
-                        "blocked": "blocked",
-                    },
-                },
-                "thresholds": [75, 90, 100],  # Multiple thresholds
-            },
-            {
-                "name": "Custom QoS Names",
-                "config": {
-                    "qos_strategy": "threshold",
-                    "qos_levels": {
-                        "default": "priority_normal",
-                        "slowdown": "priority_low",
-                        "blocked": "priority_blocked",
-                    },
-                },
-                "thresholds": [100],
-            },
-        ]
-
-        for strategy in qos_strategies:
-            print(f"\n--- {strategy['name']} ---")
-
-            config = strategy["config"]
-            qos_levels = config["qos_levels"]
-
-            # Validate QoS configuration
-            assert "default" in qos_levels, "Missing default QoS level"
-            assert "slowdown" in qos_levels, "Missing slowdown QoS level"
-
-            # Validate QoS names are non-empty strings
-            for qos_type, qos_name in qos_levels.items():
-                assert isinstance(qos_name, str) and qos_name.strip(), (
-                    f"QoS {qos_type} must be non-empty string"
-                )
-
-            print(f"QoS Levels: {qos_levels}")
-            print(f"Strategy: {config['qos_strategy']}")
-            print(f"✓ {strategy['name']} configuration valid")
-
-        print("\n✅ QoS strategy configurations validated")
-
     def test_emulator_vs_production_config_differences(self):
         """Test configuration differences between emulator and production."""
         base_config = {
@@ -540,11 +467,6 @@ class TestAdvancedConfigurationScenarios:
                 "tres_billing_enabled": True,
                 "fairshare_decay_half_life": 15,
                 "default_grace_ratio": 0.2,
-                "qos_levels": {
-                    "default": legacy_offering["backend_settings"]["qos_default"],
-                    "slowdown": legacy_offering["backend_settings"]["qos_downscaled"],
-                    "blocked": legacy_offering["backend_settings"].get("qos_paused", "blocked"),
-                },
             }
 
             return migrated
@@ -559,12 +481,9 @@ class TestAdvancedConfigurationScenarios:
         # Verify periodic limits were added
         periodic_config = migrated_config["backend_settings"]["periodic_limits"]
         assert periodic_config["enabled"] is True
-        assert periodic_config["qos_levels"]["default"] == "normal"  # Mapped from legacy
-        assert periodic_config["qos_levels"]["slowdown"] == "limited"  # Mapped from legacy
 
         print("✓ Legacy configuration preserved")
         print("✓ Periodic limits configuration added")
-        print("✓ QoS mappings preserved from legacy")
         print("✅ Configuration migration working correctly")
 
     def test_validation_with_real_world_scenarios(self):
@@ -607,7 +526,6 @@ class TestAdvancedConfigurationScenarios:
                         "enabled": True,
                         "limit_type": "GrpTRES",  # Concurrent limits for auto-scaling
                         "tres_billing_enabled": True,
-                        "qos_strategy": "progressive",  # Multiple QoS levels
                         "fairshare_decay_half_life": 3,  # Very fast decay for dynamic workloads
                         "default_grace_ratio": 0.5,  # Large burst capacity
                     }

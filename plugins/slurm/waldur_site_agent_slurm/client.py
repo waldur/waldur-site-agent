@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import contextlib
-import datetime
 import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 from waldur_site_agent.backend import clients
 from waldur_site_agent.backend import utils as backend_utils
@@ -349,11 +346,19 @@ class SlurmClient(clients.BaseClient):
             f"account={account}",
         ]
         output = self._execute_command(args)
-        qos_options = [
-            line.split("|")[1] for line in output.splitlines() if "|" in line and line[-1] != "|"
-        ]
-
-        return qos_options[0] if len(qos_options) > 0 else ""
+        # ``--parsable2`` rows are "account|qos" without a trailing separator
+        # on real sacctmgr, but the SLURM emulator appends one anyway. Tolerate
+        # both: split on "|" and take the second column when the first
+        # matches the account name.
+        min_columns_for_qos = 2
+        for line in output.splitlines():
+            if "|" not in line:
+                continue
+            parts = line.split("|")
+            if len(parts) < min_columns_for_qos or parts[0].strip() != account:
+                continue
+            return parts[1].strip()
+        return ""
 
     def cancel_active_user_jobs(self, account: str, user: Optional[str] = None) -> None:
         """Cancel jobs for the account and user.
@@ -627,61 +632,6 @@ class SlurmClient(clients.BaseClient):
             raise BackendError(
                 f"Failed to set {limit_type} limits for account {account}: {e}"
             ) from e
-
-    def get_current_usage(
-        self, account: str, start_date: Optional[str] = None, end_date: Optional[str] = None
-    ) -> dict:
-        """Get current period usage for threshold checking (returns billing units)."""
-        try:
-            # Default to current quarter if dates not specified
-            if not start_date or not end_date:
-                now = datetime.datetime.now(tz=ZoneInfo("UTC")).date()
-                # Calculate quarter start
-                quarter_months = 3
-                fourth_quarter = 4
-                quarter = (now.month - 1) // quarter_months + 1
-                start_date = f"{now.year}-{(quarter - 1) * quarter_months + 1:02d}-01"
-                # Calculate quarter end
-                if quarter == fourth_quarter:
-                    end_date = f"{now.year}-12-31"
-                else:
-                    next_quarter_start = datetime.date(now.year, quarter * quarter_months + 1, 1)
-                    end_date = (next_quarter_start - datetime.timedelta(days=1)).strftime(
-                        "%Y-%m-%d"
-                    )
-
-            # Get usage data from sacct
-            command = [
-                "show",
-                "account",
-                account,
-                "where",
-                f"account={account}",
-                "format=account,grptresraw",
-            ]
-            output = self._execute_command(command, command_name="sacct", immediate=False)
-
-            # Parse TRES usage - this is a simplified implementation
-            # In production, you'd parse the actual TRES usage format
-            usage_data = {"billing": 0, "node": 0, "cpu": 0, "mem": 0, "gpu": 0}
-
-            # Basic parsing (would need to be enhanced for production)
-            for line in output.splitlines():
-                if "|" in line and account in line:
-                    # Parse TRES usage format: cpu=1000,mem=2000,gres/gpu=100
-                    parts = line.split("|")
-                    if len(parts) > 1 and parts[1]:
-                        tres_data = parts[1]
-                        for tres_item in tres_data.split(","):
-                            if "=" in tres_item:
-                                tres_name, tres_value = tres_item.split("=", 1)
-                                with contextlib.suppress(ValueError, KeyError):
-                                    usage_data[tres_name.lower()] = int(tres_value)
-
-            return usage_data
-
-        except BackendError as e:
-            raise BackendError(f"Failed to get current usage for account {account}: {e}") from e
 
     def reset_raw_usage(self, account: str) -> bool:
         """Reset raw usage for clean period start (manual reset mode)."""

@@ -18,14 +18,6 @@ from waldur_site_agent.common.plugin_schemas import (
 )
 
 
-class PeriodType(Enum):
-    """Enumeration of period types for SLURM periodic limits."""
-
-    MONTHLY = "monthly"
-    QUARTERLY = "quarterly"
-    ANNUAL = "annual"
-
-
 class SlurmLimitType(Enum):
     """Enumeration of SLURM limit types for periodic limits."""
 
@@ -34,108 +26,58 @@ class SlurmLimitType(Enum):
     GRP_TRES = "GrpTRES"
 
 
-class QoSLevels(PluginBackendSettingsSchema):
-    """QoS levels configuration for SLURM periodic limits.
-
-    Based on actual usage in backend.py lines 611, 621, 631.
-    """
-
-    default: str = Field(..., description="Default QoS level for normal operation")
-    slowdown: str = Field(..., description="QoS level when threshold is exceeded")
-    blocked: Optional[str] = Field(default=None, description="QoS level for hard limit exceeded")
-
-
 class SlurmComponentSchema(PluginComponentSchema):
     """SLURM-specific component field validation.
 
-    Based on actual SLURM plugin usage, this validates fields used by:
-    - Periodic limits functionality (period_type, carryover_enabled, grace_ratio)
-    - Component-level configuration for SLURM accounting
+    The SLURM plugin does not require any component-specific fields beyond
+    those defined by ``PluginComponentSchema``. Periodic-limits parameters
+    (``period_type``, ``carryover_enabled``, ``grace_ratio`` …) used to live
+    here, but the agent never read them — they're authored on the Mastermind
+    side as fields of ``SlurmPeriodicUsagePolicy`` and consumed by the
+    policy engine. The diagnostic CLI fetches them from Mastermind's REST
+    API for display.
+
+    ``extra="allow"`` is kept so per-deployment custom keys don't error.
     """
 
-    model_config = ConfigDict(extra="allow")  # Allow core fields to pass through
-
-    # Periodic limits component configuration (actual SLURM usage)
-    period_type: Optional[PeriodType] = Field(
-        default=None, description="Period type for periodic limits"
-    )
-    carryover_enabled: Optional[bool] = Field(
-        default=None, description="Enable carryover for unused allocation to next period"
-    )
-    grace_ratio: Optional[float] = Field(
-        default=None, description="Grace period ratio (0.0-1.0) for overconsumption allowance"
-    )
-
-    @field_validator("grace_ratio")
-    @classmethod
-    def validate_grace_ratio(cls, v: Optional[float]) -> Optional[float]:
-        """Validate grace_ratio is between 0.0 and 1.0."""
-        if v is not None and (v < 0.0 or v > 1.0):
-            msg = "grace_ratio must be between 0.0 and 1.0"
-            raise ValueError(msg)
-        return v
+    model_config = ConfigDict(extra="allow")
 
 
 class PeriodicLimitsConfig(PluginBackendSettingsSchema):
-    """Periodic limits configuration schema (nested within backend_settings)."""
+    """Periodic-limits enablement settings (nested within ``backend_settings``).
 
-    # Core periodic limits settings
+    Only fields the agent actually reads at runtime live here:
+
+    * ``enabled`` gates whether the agent subscribes to the
+      ``RESOURCE_PERIODIC_LIMITS`` STOMP topic and runs
+      ``apply_periodic_settings``.
+    * ``emulator_mode`` / ``emulator_base_url`` switch ``apply_periodic_settings``
+      between sacctmgr writes and the SLURM emulator's REST API.
+    * ``limit_type`` is a fallback used when an inbound STOMP payload
+      omits the explicit ``limit_type`` key.
+
+    Policy parameters (grace ratio, carryover factor, billing weights, raw
+    usage reset cadence, …) are authored on Mastermind's
+    ``SlurmPeriodicUsagePolicy`` and arrive in the STOMP payload; the agent
+    applies what it receives, it does not configure those locally.
+
+    ``extra="allow"`` lets deployments that still carry the legacy fields in
+    their YAML load without warning until they're cleaned up.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
     enabled: bool = Field(default=False, description="Enable periodic limits functionality")
 
-    # Emulator integration
     emulator_mode: Optional[bool] = Field(
         default=False, description="Use SLURM emulator for testing"
     )
     emulator_base_url: Optional[str] = Field(default=None, description="SLURM emulator API URL")
 
-    # SLURM-specific settings
     limit_type: Optional[SlurmLimitType] = Field(
-        default=SlurmLimitType.GRP_TRES_MINS, description="SLURM limit type for periodic limits"
+        default=SlurmLimitType.GRP_TRES_MINS,
+        description="Fallback SLURM limit type when the STOMP payload omits it",
     )
-    tres_billing_enabled: Optional[bool] = Field(
-        default=False, description="Use TRES billing units vs raw TRES"
-    )
-    tres_billing_weights: Optional[dict[str, float]] = Field(
-        default=None, description="Billing weights for resource types (e.g., CPU: 0.015625)"
-    )
-
-    # Carryover configuration
-    carryover_factor: Optional[int] = Field(
-        default=50, description="Maximum percentage of base allocation that can carry over (0-100)"
-    )
-    raw_usage_reset: Optional[bool] = Field(
-        default=True, description="Reset raw usage at period transitions"
-    )
-
-    # QoS levels for periodic limits
-    qos_levels: Optional[QoSLevels] = Field(
-        default=None, description="QoS levels for different states"
-    )
-
-    # Policy defaults
-    default_grace_ratio: Optional[float] = Field(
-        default=0.2, description="Default grace ratio for overconsumption (0.0-1.0)"
-    )
-    default_carryover_enabled: Optional[bool] = Field(
-        default=True, description="Enable carryover by default"
-    )
-
-    # Command customization
-    commands: Optional[dict[str, str]] = Field(
-        default=None, description="Custom SLURM commands for operations"
-    )
-    api_endpoints: Optional[dict[str, str]] = Field(
-        default=None, description="API endpoints for Waldur integration"
-    )
-
-    @field_validator("default_grace_ratio")
-    @classmethod
-    def validate_default_grace_ratio(cls, v: Optional[float]) -> Optional[float]:
-        """Validate default_grace_ratio is between 0.0 and 1.0."""
-        if v is not None and (v < 0.0 or v > 1.0):
-            msg = "default_grace_ratio must be between 0.0 and 1.0"
-            raise ValueError(msg)
-        return v
 
 
 class QosManagementConfig(PluginBackendSettingsSchema):

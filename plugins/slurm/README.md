@@ -76,28 +76,27 @@ offerings:
 
 ```yaml
 backend_settings:
-  # Periodic limits system
+  # Periodic limits system. Gates the RESOURCE_PERIODIC_LIMITS STOMP
+  # subscription and the apply_periodic_settings handler. Policy
+  # parameters (grace ratio, carryover factor, billing weights, raw
+  # usage reset cadence, ...) are NOT configured here — they live on
+  # Mastermind's SlurmPeriodicUsagePolicy and arrive in the STOMP
+  # payload; the agent applies what it receives.
   periodic_limits:
     enabled: true
     emulator_mode: false              # true for development
     emulator_base_url: "http://localhost:8080"
 
-    # Limit type: GrpTRESMins, MaxTRESMins, or GrpTRES
+    # Fallback SLURM limit type used when the inbound STOMP payload
+    # omits the limit_type key. Real periodic settings carry their
+    # own limit_type from Mastermind.
     limit_type: "GrpTRESMins"
-
-    # TRES billing configuration
-    tres_billing_enabled: true
-    tres_billing_weights:
-      cpu: 1.0                        # 1 CPU-hour = 1 billing unit
-      mem: 0.1                        # 10 GB-hours = 1 billing unit
-      gpu: 10.0                       # 1 GPU-hour = 10 billing units
-
-    # QoS management
-    qos_levels:
-      default: "normal"
-      slowdown: "slowdown"
-      blocked: "blocked"
 ```
+
+QoS state (normal / downscaled / paused) is driven by the resource flags
+`paused` / `downscaled` set by Waldur Mastermind and applied by the agent
+through the top-level `qos_default` / `qos_downscaled` / `qos_paused`
+backend settings — the same path used by manual pause/downscale.
 
 ### Storage Quotas
 
@@ -621,17 +620,6 @@ offerings:
         enabled: true
         emulator_mode: false
         limit_type: "GrpTRESMins"
-        tres_billing_enabled: true
-
-        tres_billing_weights:
-          cpu: 1.0
-          mem: 0.1
-          gpu: 10.0
-
-        qos_levels:
-          default: "normal"
-          slowdown: "slowdown"
-          blocked: "blocked"
 
 # Event processing
 event_processing:
@@ -656,8 +644,8 @@ offerings:
       project_prefix: "cpu_"
       allocation_prefix: "cpu_"
       periodic_limits:
+        enabled: true
         limit_type: "MaxTRESMins"
-        tres_billing_enabled: false
 
   # Cluster 2: GPU-focused
   - name: "GPU Cluster"
@@ -668,11 +656,8 @@ offerings:
       project_prefix: "gpu_"
       allocation_prefix: "gpu_"
       periodic_limits:
+        enabled: true
         limit_type: "GrpTRESMins"
-        tres_billing_enabled: true
-        tres_billing_weights:
-          cpu: 0.5
-          gpu: 20.0
 ```
 
 ### Development/Testing Setup

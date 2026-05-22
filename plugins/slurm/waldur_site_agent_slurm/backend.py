@@ -748,19 +748,23 @@ class SlurmBackend(backends.BaseBackend):
         return True
 
     def restore_resource(self, resource_backend_id: str) -> bool:
-        """Restore resource QoS to the default one."""
-        current_qos = self.client.get_current_account_qos(resource_backend_id)
+        """Restore resource QoS to the default one.
 
+        Writes ``qos_default`` to the account unless we can confirm the
+        account is already on it. An unknown current QoS (empty read) used
+        to skip the reset, but that left accounts stuck in pause whenever
+        the QoS query failed to return a row — for example, against
+        clusters where ``list associations format=qos`` doesn't surface
+        account-level QoS until a user is added. ``sacctmgr modify
+        account set qos=`` is idempotent, so the extra write when the
+        account happens to already be on default is harmless.
+        """
+        current_qos = self.client.get_current_account_qos(resource_backend_id)
         default_qos = self.backend_settings.get("qos_default", "normal")
 
-        if current_qos in [None, ""]:
-            logger.info("The account does not have an active QoS set, skipping reset")
-            self._last_qos = current_qos
-            return False
+        logger.info("The current QoS is %s", current_qos or "(unknown)")
 
-        logger.info("The current QoS is %s", current_qos)
-
-        if current_qos == default_qos:
+        if current_qos and current_qos == default_qos:
             logger.info("The account already has the default QoS (%s)", default_qos)
             self._last_qos = current_qos
             return False
@@ -1045,24 +1049,6 @@ class SlurmBackend(backends.BaseBackend):
                 )
                 response.raise_for_status()
 
-            # Check and apply QoS if needed
-            if settings.get("qos_threshold"):
-                current_usage = self._get_current_usage_emulator(resource_id, emulator_url)
-                threshold = next(iter(settings["qos_threshold"].values()))
-
-                if current_usage >= threshold:
-                    logger.info(
-                        "Usage %s exceeds threshold %s, applying slowdown QoS",
-                        current_usage,
-                        threshold,
-                    )
-                    response = requests.post(
-                        f"{emulator_url}/api/downscale-resource",
-                        json={"resource_id": resource_id},
-                        timeout=10,
-                    )
-                    response.raise_for_status()
-
             # Reset raw usage if requested
             if settings.get("reset_raw_usage"):
                 logger.debug("Resetting raw usage for account %s", resource_id)
@@ -1108,11 +1094,6 @@ class SlurmBackend(backends.BaseBackend):
                 logger.debug("Resetting raw usage for account %s", resource_id)
                 self.client.reset_raw_usage(resource_id)
 
-            # Check QoS thresholds
-            if settings.get("qos_threshold"):
-                current_usage = self.client.get_current_usage(resource_id)
-                self._check_and_apply_qos(resource_id, current_usage, settings, config)
-
             logger.info("Successfully applied settings to production SLURM")
             return {
                 "success": True,
@@ -1128,89 +1109,3 @@ class SlurmBackend(backends.BaseBackend):
                 "mode": PeriodicSettingsMode.PRODUCTION.value,
                 "commands_executed": list(self.client.executed_commands),
             }
-
-    def _get_current_usage_emulator(self, resource_id: str, emulator_url: str) -> float:
-        """Get current usage from emulator."""
-        try:
-            response = requests.get(
-                f"{emulator_url}/api/status",
-                params={"account": resource_id},
-                timeout=10,
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data.get("current_usage", 0.0)
-        except requests.exceptions.RequestException as e:
-            logger.error("Failed to get current usage from emulator: %s", e)
-            return 0.0
-
-    def _check_and_apply_qos(
-        self, resource_id: str, current_usage: dict, settings: dict, config: dict
-    ) -> None:
-        """Check usage thresholds and apply QoS if needed."""
-        if not settings.get("qos_threshold"):
-            return
-
-        qos_levels = config.get("qos_levels", {})
-        threshold_data = settings["qos_threshold"]
-
-        # Convert current usage to comparable format (billing units)
-        if config.get("tres_billing_enabled", True):
-            # Use billing units
-            usage_value = current_usage.get("billing", 0) if isinstance(current_usage, dict) else 0
-            threshold_value = (
-                threshold_data.get("billing", 0) if isinstance(threshold_data, dict) else 0
-            )
-        else:
-            # Use node-hours
-            usage_value = current_usage.get("node", 0) if isinstance(current_usage, dict) else 0
-            threshold_value = (
-                threshold_data.get("node", 0) if isinstance(threshold_data, dict) else 0
-            )
-
-        grace_limit = settings.get("grace_limit", {})
-        if config.get("tres_billing_enabled", True):
-            grace_value = (
-                grace_limit.get("billing", float("inf"))
-                if isinstance(grace_limit, dict)
-                else float("inf")
-            )
-        else:
-            grace_value = (
-                grace_limit.get("node", float("inf"))
-                if isinstance(grace_limit, dict)
-                else float("inf")
-            )
-
-        current_qos = self.client.get_current_account_qos(resource_id)
-        new_qos = None
-
-        if usage_value >= grace_value:
-            # Hard limit exceeded - block jobs
-            new_qos = qos_levels.get("blocked", "blocked")
-            logger.warning(
-                "Account %s exceeded grace limit (%s >= %s), setting QoS to %s",
-                resource_id,
-                usage_value,
-                grace_value,
-                new_qos,
-            )
-        elif usage_value >= threshold_value:
-            # Soft limit exceeded - apply slowdown
-            new_qos = qos_levels.get("slowdown", "slowdown")
-            logger.info(
-                "Account %s exceeded threshold (%s >= %s), setting QoS to %s",
-                resource_id,
-                usage_value,
-                threshold_value,
-                new_qos,
-            )
-        else:
-            # Usage under threshold - restore normal QoS
-            new_qos = qos_levels.get("default", "normal")
-
-        if current_qos != new_qos:
-            logger.info("Changing QoS for account %s: %s -> %s", resource_id, current_qos, new_qos)
-            self.client.set_account_qos(resource_id, new_qos)
-        else:
-            logger.debug("QoS for account %s unchanged: %s", resource_id, current_qos)
