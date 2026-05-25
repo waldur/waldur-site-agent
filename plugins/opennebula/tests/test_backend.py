@@ -1198,9 +1198,8 @@ class TestOpenNebulaClientVMOperations:
         client._get_vm_by_name = MagicMock(return_value=mock_vm)
 
         mock_info = MagicMock()
-        mock_nic = MagicMock()
-        mock_nic.IP = "10.0.1.5"
-        mock_info.TEMPLATE.NIC = [mock_nic]
+        # pyone returns the nested template as an OrderedDict mapping.
+        mock_info.TEMPLATE = {"NIC": [{"IP": "10.0.1.5"}]}
         client._get_vm_info = MagicMock(return_value=mock_info)
 
         ip = client.get_vm_ip_address("test_vm")
@@ -1321,6 +1320,9 @@ class TestOpenNebulaBackendVMCreation:
             disk_mb=10240,
             cluster_ids=None,
             sched_requirements="",
+            model_image_id=None,
+            engine_image_id=None,
+            vllm_context=None,
         )
 
     def test_create_vm_stores_metadata(self, vm_backend):
@@ -2632,10 +2634,24 @@ class TestVMCreationEdgeCases:
         backend.client = MagicMock(spec=OpenNebulaClient)
         return backend
 
-    def test_template_id_zero_treated_as_missing(self, vm_backend):
-        """template_id=0 → BackendError 'requires template_id'."""
+    def test_template_id_zero_is_valid(self, vm_backend):
+        """template_id=0 is a valid OpenNebula ID (IDs are 0-based)."""
         resource = MagicMock(spec=WaldurResource)
         resource.attributes = {"template_id": "0", "parent_backend_id": "vdc"}
+        resource.offering_plugin_options = {}
+
+        user_context = {
+            "plan_quotas": _DEFAULT_PLAN_QUOTAS,
+            "ssh_keys": {},
+        }
+
+        vm_backend._pre_create_resource(resource, user_context=user_context)
+        assert vm_backend._pending_vm_config["template_id"] == 0
+
+    def test_template_id_missing_raises(self, vm_backend):
+        """template_id absent everywhere → BackendError 'requires template_id'."""
+        resource = MagicMock(spec=WaldurResource)
+        resource.attributes = {"parent_backend_id": "vdc"}
         resource.offering_plugin_options = {}
 
         user_context = {
@@ -3064,11 +3080,7 @@ class TestVMMetadataEdgeCases:
             )
 
         mock_info = MagicMock()
-        nic1 = MagicMock()
-        nic1.IP = "10.0.1.5"
-        nic2 = MagicMock()
-        nic2.IP = "192.168.1.5"
-        mock_info.TEMPLATE.NIC = [nic1, nic2]
+        mock_info.TEMPLATE = {"NIC": [{"IP": "10.0.1.5"}, {"IP": "192.168.1.5"}]}
         client._get_vm_info = MagicMock(return_value=mock_info)
 
         ip = client.get_vm_ip_address(100)
@@ -3736,3 +3748,318 @@ class TestOpenNebulaBackendVMResize:
         backend.client.set_resource_limits.assert_called_once_with(
             "my_vdc", {"cpu": 4, "ram": 2048}
         )
+
+
+class TestOpenNebulaInference:
+    """vLLM inference mode: model-as-disk + ONEAPP_VLLM_* context + endpoint."""
+
+    @pytest.fixture()
+    def client(self):
+        with patch("waldur_site_agent_opennebula.client.pyone") as mock_pyone:
+            mock_one = MagicMock()
+            mock_pyone.OneServer.return_value = mock_one
+            c = OpenNebulaClient(
+                api_url="http://localhost:2633/RPC2",
+                credentials="oneadmin:testpass",
+            )
+            c.one = mock_one
+            return c
+
+    @pytest.fixture()
+    def vm_backend(self, vm_backend_settings, vm_backend_components):
+        with patch("waldur_site_agent_opennebula.client.pyone"):
+            backend = OpenNebulaBackend(vm_backend_settings, vm_backend_components)
+            backend.client = MagicMock(spec=OpenNebulaClient)
+            return backend
+
+    @staticmethod
+    def _wire_running_vm(client):
+        mock_vnet = MagicMock(ID=42)
+        client._get_vnet_by_name = MagicMock(return_value=mock_vnet)
+        client._get_secgroup_by_name = MagicMock(return_value=MagicMock(ID=10))
+        client._get_group_by_name = MagicMock(return_value=MagicMock(ID=5))
+        client.one.template.instantiate.return_value = 100
+        client.one.vm.chown.return_value = True
+        vm_info = MagicMock()
+        vm_info.STATE = pyone.VM_STATE.ACTIVE
+        vm_info.LCM_STATE = pyone.LCM_STATE.RUNNING
+        client.one.vm.info.return_value = vm_info
+
+    # ── client.create_vm ────────────────────────────────────────────
+
+    def test_create_vm_attaches_both_disks_with_engine_id(self, client):
+        """Explicit engine_image_id → both engine and model disks specified."""
+        self._wire_running_vm(client)
+        client.one.image.info.return_value = MagicMock(STATE=1)  # READY
+
+        client.create_vm(
+            template_id=101,
+            vm_name="vllm1",
+            parent_vdc_name="vdc1",
+            model_image_id=7,
+            engine_image_id=3,
+            vllm_context={"ONEAPP_VLLM_API_PORT": "8000"},
+        )
+
+        tpl = client.one.template.instantiate.call_args[0][3]
+        assert 'DISK=[IMAGE_ID="3"]' in tpl
+        assert 'DISK=[IMAGE_ID="7"]' in tpl
+        assert 'ONEAPP_VLLM_API_PORT="8000"' in tpl
+        # engine disk must precede the model disk
+        assert tpl.index('IMAGE_ID="3"') < tpl.index('IMAGE_ID="7"')
+        # readiness guard ran against the model image
+        client.one.image.info.assert_called_once_with(7)
+
+    def test_create_vm_reads_template_disks_when_no_engine_id(self, client):
+        """No engine_image_id → template base disks are read and preserved."""
+        self._wire_running_vm(client)
+        client.one.image.info.return_value = MagicMock(STATE=2)  # USED
+        # pyone returns the nested template as an OrderedDict mapping.
+        tmpl = MagicMock()
+        tmpl.TEMPLATE = {"DISK": [{"IMAGE_ID": "0"}]}
+        client.one.template.info.return_value = tmpl
+
+        client.create_vm(
+            template_id=101,
+            vm_name="vllm1",
+            parent_vdc_name="vdc1",
+            model_image_id=7,
+        )
+
+        tpl = client.one.template.instantiate.call_args[0][3]
+        assert 'DISK=[IMAGE_ID="0"]' in tpl  # engine from template
+        assert 'DISK=[IMAGE_ID="7"]' in tpl  # model
+        client.one.template.info.assert_called_once_with(101)
+
+    def test_create_vm_no_model_omits_disk_and_context(self, client):
+        """Backward compatibility: no model → no extra DISK, no vLLM context."""
+        self._wire_running_vm(client)
+
+        client.create_vm(template_id=101, vm_name="plain", parent_vdc_name="vdc1")
+
+        tpl = client.one.template.instantiate.call_args[0][3]
+        assert "DISK=" not in tpl
+        assert "ONEAPP_VLLM" not in tpl
+        client.one.image.info.assert_not_called()
+
+    def test_create_vm_rejects_unusable_model_image(self, client):
+        """Model image in ERROR state → BackendError before instantiate."""
+        self._wire_running_vm(client)
+        client.one.image.info.return_value = MagicMock(STATE=5)  # ERROR
+
+        with pytest.raises(BackendError, match="not usable"):
+            client.create_vm(
+                template_id=101,
+                vm_name="vllm1",
+                parent_vdc_name="vdc1",
+                model_image_id=7,
+                engine_image_id=3,
+            )
+        client.one.template.instantiate.assert_not_called()
+
+    def test_create_vm_missing_model_image_raises(self, client):
+        self._wire_running_vm(client)
+        client.one.image.info.side_effect = pyone.OneNoExistsException("nope")
+
+        with pytest.raises(BackendError, match="not found"):
+            client.create_vm(
+                template_id=101,
+                vm_name="vllm1",
+                parent_vdc_name="vdc1",
+                model_image_id=99,
+                engine_image_id=3,
+            )
+
+    # ── backend._build_vllm_context ─────────────────────────────────
+
+    def test_build_vllm_context_collects_present_keys(self):
+        attrs = {
+            "ONEAPP_VLLM_API_PORT": 8000,
+            "ONEAPP_VLLM_API_WEB": "YES",
+            "ONEAPP_VLLM_MODEL_MAX_LENGTH": "",  # empty skipped
+            "unrelated": "x",
+        }
+        ctx = OpenNebulaBackend._build_vllm_context(attrs)
+        assert ctx == {
+            "ONEAPP_VLLM_API_PORT": "8000",
+            "ONEAPP_VLLM_API_WEB": "YES",
+        }
+
+    def test_build_vllm_context_rejects_bad_quantization(self):
+        with pytest.raises(BackendError, match="QUANTIZATION"):
+            OpenNebulaBackend._build_vllm_context(
+                {"ONEAPP_VLLM_MODEL_QUANTIZATION": "3"}
+            )
+
+    def test_build_vllm_context_rejects_bad_gpu_util(self):
+        with pytest.raises(BackendError, match="GPU_MEMORY_UTILIZATION"):
+            OpenNebulaBackend._build_vllm_context(
+                {"ONEAPP_VLLM_GPU_MEMORY_UTILIZATION": "1.5"}
+            )
+
+    def test_build_vllm_context_accepts_valid_gpu_util(self):
+        ctx = OpenNebulaBackend._build_vllm_context(
+            {"ONEAPP_VLLM_GPU_MEMORY_UTILIZATION": "0.9"}
+        )
+        assert ctx["ONEAPP_VLLM_GPU_MEMORY_UTILIZATION"] == "0.9"
+
+    # ── backend._build_vm_config ────────────────────────────────────
+
+    def test_build_vm_config_extracts_inference_fields(self, vm_backend):
+        resource = MagicMock(spec=WaldurResource)
+        resource.attributes = {
+            "template_id": "101",
+            "parent_backend_id": "vdc",
+            "model_image_id": "7",
+            "ONEAPP_VLLM_API_PORT": "8000",
+        }
+        resource.offering_plugin_options = {"engine_image_id": "3"}
+
+        config = vm_backend._build_vm_config(
+            resource, {"plan_quotas": _DEFAULT_PLAN_QUOTAS}
+        )
+
+        assert config["model_image_id"] == 7
+        assert config["engine_image_id"] == 3
+        assert config["vllm_context"] == {"ONEAPP_VLLM_API_PORT": "8000"}
+
+    def test_build_vm_config_without_model_has_no_inference_keys(self, vm_backend):
+        resource = MagicMock(spec=WaldurResource)
+        resource.attributes = {"template_id": "101", "parent_backend_id": "vdc"}
+        resource.offering_plugin_options = {}
+
+        config = vm_backend._build_vm_config(
+            resource, {"plan_quotas": _DEFAULT_PLAN_QUOTAS}
+        )
+
+        assert "model_image_id" not in config
+        assert "vllm_context" not in config
+
+    # ── backend endpoint metadata ───────────────────────────────────
+
+    def test_endpoint_metadata_includes_url_and_web_ui(self):
+        meta = OpenNebulaBackend._build_inference_endpoint_metadata(
+            "192.168.0.12",
+            {
+                "model_image_id": 7,
+                "vllm_context": {
+                    "ONEAPP_VLLM_API_PORT": "8000",
+                    "ONEAPP_VLLM_API_WEB": "YES",
+                },
+            },
+        )
+        assert meta["endpoint"] == "http://192.168.0.12:8000"
+        assert meta["web_ui"] == "http://192.168.0.12:8000"
+        assert meta["model_image_id"] == 7
+
+    def test_endpoint_metadata_no_web_ui_when_disabled(self):
+        meta = OpenNebulaBackend._build_inference_endpoint_metadata(
+            "192.168.0.12",
+            {"vllm_context": {"ONEAPP_VLLM_API_WEB": "NO"}},
+        )
+        assert meta["endpoint"] == "http://192.168.0.12:8000"
+        assert "web_ui" not in meta
+
+    def test_endpoint_metadata_empty_for_plain_vm(self):
+        assert (
+            OpenNebulaBackend._build_inference_endpoint_metadata("10.0.0.1", {}) == {}
+        )
+
+    def test_create_vm_resource_stores_endpoint_metadata(self, vm_backend):
+        vm_backend._pending_vm_config = {
+            "template_id": 101,
+            "parent_backend_id": "vdc",
+            "model_image_id": 7,
+            "engine_image_id": 3,
+            "vllm_context": {"ONEAPP_VLLM_API_PORT": "8000", "ONEAPP_VLLM_API_WEB": "YES"},
+        }
+        vm_backend.client.create_vm.return_value = 55
+        vm_backend.client.get_vm_ip_address.return_value = "192.168.0.12"
+
+        vm_backend._create_vm_resource("vllm1")
+
+        meta = vm_backend._resource_network_metadata["55"]
+        assert meta["endpoint"] == "http://192.168.0.12:8000"
+        assert meta["web_ui"] == "http://192.168.0.12:8000"
+        _, kwargs = vm_backend.client.create_vm.call_args
+        assert kwargs["model_image_id"] == 7
+        assert kwargs["engine_image_id"] == 3
+
+
+class TestOpenNebulaInferenceMetadataPush:
+    """post_create_resource surfaces endpoint metadata for VM resources."""
+
+    @pytest.fixture()
+    def vm_backend(self, vm_backend_settings, vm_backend_components):
+        with patch("waldur_site_agent_opennebula.client.pyone"):
+            backend = OpenNebulaBackend(vm_backend_settings, vm_backend_components)
+            backend.client = MagicMock(spec=OpenNebulaClient)
+            return backend
+
+    def test_post_create_pushes_endpoint_metadata_for_vm(self, vm_backend):
+        from waldur_site_agent.backend.structures import BackendResourceInfo
+
+        vm_backend._resource_network_metadata["7"] = {
+            "vm_id": 7,
+            "ip_address": "192.168.0.150",
+            "endpoint": "http://192.168.0.150:8000",
+            "web_ui": "http://192.168.0.150:8000",
+            "model_image_id": 1,
+        }
+        info = BackendResourceInfo(backend_id="7", limits={})
+        resource = MagicMock(spec=WaldurResource)
+
+        vm_backend.post_create_resource(info, resource)
+
+        assert info.backend_metadata["endpoint"] == "http://192.168.0.150:8000"
+        assert info.backend_metadata["web_ui"] == "http://192.168.0.150:8000"
+        assert info.backend_metadata["model_image_id"] == 1
+        # Access endpoints surfaced for the "Access resource" dropdown.
+        assert info.endpoints == [
+            {
+                "name": "vLLM API (OpenAI-compatible)",
+                "url": "http://192.168.0.150:8000/v1",
+            },
+            {"name": "Chat playground", "url": "http://192.168.0.150:8000"},
+        ]
+
+    def test_no_endpoints_when_web_ui_absent(self, vm_backend):
+        from waldur_site_agent.backend.structures import BackendResourceInfo
+
+        vm_backend._resource_network_metadata["7"] = {
+            "vm_id": 7,
+            "endpoint": "http://10.0.0.9:8000",
+        }
+        info = BackendResourceInfo(backend_id="7", limits={})
+        vm_backend.post_create_resource(info, MagicMock(spec=WaldurResource))
+
+        assert info.endpoints == [
+            {"name": "vLLM API (OpenAI-compatible)", "url": "http://10.0.0.9:8000/v1"}
+        ]
+
+
+class TestOpenNebulaVmIpParsing:
+    """get_vm_ip_address must read pyone OrderedDict templates."""
+
+    @pytest.fixture()
+    def client(self):
+        with patch("waldur_site_agent_opennebula.client.pyone") as mock_pyone:
+            mock_one = MagicMock()
+            mock_pyone.OneServer.return_value = mock_one
+            c = OpenNebulaClient(
+                api_url="http://localhost:2633/RPC2", credentials="oneadmin:testpass"
+            )
+            c.one = mock_one
+            return c
+
+    def test_get_vm_ip_address_from_ordereddict_template(self, client):
+        info = MagicMock()
+        info.TEMPLATE = {"NIC": {"IP": "192.168.0.150", "NETWORK": "labvdc_internal"}}
+        client._get_vm_info = MagicMock(return_value=info)
+        assert client.get_vm_ip_address(8) == "192.168.0.150"
+
+    def test_get_vm_ip_address_multiple_nics(self, client):
+        info = MagicMock()
+        info.TEMPLATE = {"NIC": [{"NETWORK": "x"}, {"IP": "10.0.0.5"}]}
+        client._get_vm_info = MagicMock(return_value=info)
+        assert client.get_vm_ip_address(8) == "10.0.0.5"

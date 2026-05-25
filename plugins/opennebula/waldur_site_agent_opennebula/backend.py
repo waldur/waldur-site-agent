@@ -412,7 +412,7 @@ class OpenNebulaBackend(BaseBackend):
             "sched_requirements": plugin_options.get("sched_requirements", ""),
         }
 
-        if not config["template_id"]:
+        if config["template_id"] is None:
             raise BackendError(
                 "VM creation requires 'template_id' in resource attributes"
             )
@@ -422,7 +422,71 @@ class OpenNebulaBackend(BaseBackend):
                 "or 'parent_vdc_backend_id' in offering plugin_options"
             )
 
+        # Inference mode: a model image turns this into a vLLM VM that boots the
+        # engine template with the chosen model attached as an extra disk.
+        model_image_id_raw = attributes.get(
+            "model_image_id", plugin_options.get("model_image_id")
+        )
+        if model_image_id_raw is not None and str(model_image_id_raw) != "":
+            config["model_image_id"] = int(model_image_id_raw)
+            engine_image_id_raw = plugin_options.get(
+                "engine_image_id", bs.get("engine_image_id")
+            )
+            config["engine_image_id"] = (
+                int(engine_image_id_raw) if engine_image_id_raw is not None else None
+            )
+            config["vllm_context"] = self._build_vllm_context(attributes)
+
         return config
+
+    # vLLM serving parameters surfaced as order attributes, mapped 1:1 to the
+    # engine template's USER_INPUTS / CONTEXT variables.
+    _VLLM_CONTEXT_KEYS = (
+        "ONEAPP_VLLM_API_PORT",
+        "ONEAPP_VLLM_API_WEB",
+        "ONEAPP_VLLM_MODEL_QUANTIZATION",
+        "ONEAPP_VLLM_MODEL_MAX_LENGTH",
+        "ONEAPP_VLLM_ENFORCE_EAGER",
+        "ONEAPP_VLLM_SLEEP_MODE",
+        "ONEAPP_VLLM_GPU_MEMORY_UTILIZATION",
+    )
+
+    @classmethod
+    def _build_vllm_context(cls, attributes: dict[str, Any]) -> dict[str, str]:
+        """Collect and validate ``ONEAPP_VLLM_*`` parameters from attributes.
+
+        Only keys present in attributes are forwarded; missing keys fall back to
+        the engine template's USER_INPUTS defaults at instantiation time.
+        """
+        context: dict[str, str] = {}
+        for key in cls._VLLM_CONTEXT_KEYS:
+            value = attributes.get(key)
+            if value not in (None, ""):
+                context[key] = str(value)
+
+        quantization = context.get("ONEAPP_VLLM_MODEL_QUANTIZATION")
+        if quantization is not None and quantization not in ("0", "4"):
+            raise BackendError(
+                "ONEAPP_VLLM_MODEL_QUANTIZATION must be 0 or 4, "
+                f"got '{quantization}'"
+            )
+
+        gpu_util = context.get("ONEAPP_VLLM_GPU_MEMORY_UTILIZATION")
+        if gpu_util is not None:
+            try:
+                gpu_value = float(gpu_util)
+            except ValueError as e:
+                raise BackendError(
+                    "ONEAPP_VLLM_GPU_MEMORY_UTILIZATION must be a number in "
+                    f"(0, 1], got '{gpu_util}'"
+                ) from e
+            if not 0 < gpu_value <= 1:
+                raise BackendError(
+                    "ONEAPP_VLLM_GPU_MEMORY_UTILIZATION must be in (0, 1], "
+                    f"got '{gpu_util}'"
+                )
+
+        return context
 
     def _create_backend_resource(
         self,
@@ -527,16 +591,65 @@ class OpenNebulaBackend(BaseBackend):
             disk_mb=self._pending_vm_config.get("vm_disk", 10240),
             cluster_ids=self._pending_vm_config.get("cluster_ids"),
             sched_requirements=self._pending_vm_config.get("sched_requirements", ""),
+            model_image_id=self._pending_vm_config.get("model_image_id"),
+            engine_image_id=self._pending_vm_config.get("engine_image_id"),
+            vllm_context=self._pending_vm_config.get("vllm_context"),
         )
 
         # Store VM metadata keyed by numeric ID
         vm_backend_id = str(vm_id)
         ip_address = self.client.get_vm_ip_address(vm_id)
-        self._resource_network_metadata[vm_backend_id] = {
+        metadata: dict[str, Any] = {
             "vm_id": vm_id,
             "ip_address": ip_address or "",
         }
+        metadata.update(
+            self._build_inference_endpoint_metadata(
+                ip_address, self._pending_vm_config
+            )
+        )
+        self._resource_network_metadata[vm_backend_id] = metadata
         return vm_id
+
+    @staticmethod
+    def _build_inference_endpoint_metadata(
+        ip_address: Optional[str], vm_config: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Build OpenAI-compatible endpoint metadata for an inference VM.
+
+        Returns an empty dict for non-inference VMs or when no IP is known.
+        The vLLM API is unauthenticated (the engine appliance exposes no API
+        key), so only a base URL / web UI are surfaced.
+        """
+        vllm_context = vm_config.get("vllm_context")
+        if vllm_context is None or not ip_address:
+            return {}
+        api_port = str(vllm_context.get("ONEAPP_VLLM_API_PORT", "8000"))
+        metadata: dict[str, Any] = {"endpoint": f"http://{ip_address}:{api_port}"}
+        if str(vllm_context.get("ONEAPP_VLLM_API_WEB", "YES")).upper() == "YES":
+            metadata["web_ui"] = f"http://{ip_address}:{api_port}"
+        model_image_id = vm_config.get("model_image_id")
+        if model_image_id is not None:
+            metadata["model_image_id"] = model_image_id
+        return metadata
+
+    @staticmethod
+    def _build_inference_endpoints(metadata: dict[str, Any]) -> list[dict[str, str]]:
+        """Build named access endpoints from cached inference metadata.
+
+        Surfaced in Waldur's "Access resource" dropdown (copy / open). Empty for
+        non-inference VMs or when no endpoint was resolved.
+        """
+        endpoints: list[dict[str, str]] = []
+        endpoint = metadata.get("endpoint")
+        if endpoint:
+            endpoints.append(
+                {"name": "vLLM API (OpenAI-compatible)", "url": f"{endpoint}/v1"}
+            )
+        web_ui = metadata.get("web_ui")
+        if web_ui:
+            endpoints.append({"name": "Chat playground", "url": web_ui})
+        return endpoints
 
     def create_resource_with_id(
         self,
@@ -583,9 +696,17 @@ class OpenNebulaBackend(BaseBackend):
         user in the VDC's group and sets backend_metadata on the resource info
         so the processor can push it to Waldur.
 
-        For VM: no additional actions needed.
+        For VM: surface the cached endpoint metadata (endpoint, web_ui, model)
+        so the processor pushes it to Waldur as backend_metadata.
         """
         del user_context, waldur_resource
+
+        if self.resource_type == "vm":
+            cached = self._resource_network_metadata.get(resource.backend_id)
+            if cached:
+                resource.backend_metadata = cached.copy()
+                resource.endpoints = self._build_inference_endpoints(cached)
+            return
 
         if self.resource_type != "vdc":
             return
