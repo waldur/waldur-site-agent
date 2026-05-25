@@ -32,3 +32,8 @@ ignoreUntil = 2026-07-07T00:00:00Z
 id = "GHSA-6w46-j5rx-g56g"
 reason = "pytest is a dev-only dependency. pytest 9.0.3+ requires Python>=3.10, but this project supports Python 3.9. The vuln is a local tmpdir privilege escalation, low risk for CI/dev."
 ignoreUntil = 2026-07-07T00:00:00Z
+
+[[IgnoredVulns]]
+id = "PYSEC-2026-161"
+reason = "starlette is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi 0.128.7, which pins starlette<1.0. The fix is in starlette 1.0.1, a major upgrade unreachable without bumping fastapi. starlette is never used in production code; the Host-header path-validation flaw has no exposure here."
+ignoreUntil = 2026-07-07T00:00:00Z
