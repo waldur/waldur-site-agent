@@ -1320,7 +1320,7 @@ class TestOpenNebulaBackendVMCreation:
             disk_mb=10240,
             cluster_ids=None,
             sched_requirements="",
-            model_image_id=None,
+            model_image=None,
             engine_image_id=None,
             vllm_context=None,
         )
@@ -3796,7 +3796,7 @@ class TestOpenNebulaInference:
             template_id=101,
             vm_name="vllm1",
             parent_vdc_name="vdc1",
-            model_image_id=7,
+            model_image=7,
             engine_image_id=3,
             vllm_context={"ONEAPP_VLLM_API_PORT": "8000"},
         )
@@ -3823,7 +3823,7 @@ class TestOpenNebulaInference:
             template_id=101,
             vm_name="vllm1",
             parent_vdc_name="vdc1",
-            model_image_id=7,
+            model_image=7,
         )
 
         tpl = client.one.template.instantiate.call_args[0][3]
@@ -3852,7 +3852,7 @@ class TestOpenNebulaInference:
                 template_id=101,
                 vm_name="vllm1",
                 parent_vdc_name="vdc1",
-                model_image_id=7,
+                model_image=7,
                 engine_image_id=3,
             )
         client.one.template.instantiate.assert_not_called()
@@ -3866,9 +3866,43 @@ class TestOpenNebulaInference:
                 template_id=101,
                 vm_name="vllm1",
                 parent_vdc_name="vdc1",
-                model_image_id=99,
+                model_image=99,
                 engine_image_id=3,
             )
+
+    def test_create_vm_resolves_model_by_name(self, client):
+        """A non-numeric model ref is resolved to an image ID by name."""
+        self._wire_running_vm(client)
+        img = MagicMock(ID=7)
+        img.NAME = "Qwen3-0.6B"
+        client.one.imagepool.info.return_value = MagicMock(IMAGE=[img])
+        client.one.image.info.return_value = MagicMock(STATE=1)  # READY
+
+        client.create_vm(
+            template_id=101,
+            vm_name="vllm1",
+            parent_vdc_name="vdc1",
+            model_image="Qwen3-0.6B",
+            engine_image_id=3,
+        )
+
+        tpl = client.one.template.instantiate.call_args[0][3]
+        assert 'DISK=[IMAGE_ID="7"]' in tpl
+        client.one.image.info.assert_called_once_with(7)
+
+    def test_create_vm_unknown_model_name_raises(self, client):
+        self._wire_running_vm(client)
+        client.one.imagepool.info.return_value = MagicMock(IMAGE=[])
+
+        with pytest.raises(BackendError, match="not found"):
+            client.create_vm(
+                template_id=101,
+                vm_name="vllm1",
+                parent_vdc_name="vdc1",
+                model_image="Nonexistent",
+                engine_image_id=3,
+            )
+        client.one.template.instantiate.assert_not_called()
 
     # ── backend._build_vllm_context ─────────────────────────────────
 
@@ -3910,7 +3944,7 @@ class TestOpenNebulaInference:
         resource.attributes = {
             "template_id": "101",
             "parent_backend_id": "vdc",
-            "model_image_id": "7",
+            "model": "Qwen3-0.6B",
             "ONEAPP_VLLM_API_PORT": "8000",
         }
         resource.offering_plugin_options = {"engine_image_id": "3"}
@@ -3919,7 +3953,7 @@ class TestOpenNebulaInference:
             resource, {"plan_quotas": _DEFAULT_PLAN_QUOTAS}
         )
 
-        assert config["model_image_id"] == 7
+        assert config["model_image"] == "Qwen3-0.6B"
         assert config["engine_image_id"] == 3
         assert config["vllm_context"] == {"ONEAPP_VLLM_API_PORT": "8000"}
 
@@ -3932,7 +3966,7 @@ class TestOpenNebulaInference:
             resource, {"plan_quotas": _DEFAULT_PLAN_QUOTAS}
         )
 
-        assert "model_image_id" not in config
+        assert "model_image" not in config
         assert "vllm_context" not in config
 
     # ── backend endpoint metadata ───────────────────────────────────
@@ -3941,7 +3975,7 @@ class TestOpenNebulaInference:
         meta = OpenNebulaBackend._build_inference_endpoint_metadata(
             "192.168.0.12",
             {
-                "model_image_id": 7,
+                "model_image": "Qwen3-0.6B",
                 "vllm_context": {
                     "ONEAPP_VLLM_API_PORT": "8000",
                     "ONEAPP_VLLM_API_WEB": "YES",
@@ -3950,7 +3984,7 @@ class TestOpenNebulaInference:
         )
         assert meta["endpoint"] == "http://192.168.0.12:8000"
         assert meta["web_ui"] == "http://192.168.0.12:8000"
-        assert meta["model_image_id"] == 7
+        assert meta["model"] == "Qwen3-0.6B"
 
     def test_endpoint_metadata_no_web_ui_when_disabled(self):
         meta = OpenNebulaBackend._build_inference_endpoint_metadata(
@@ -3969,7 +4003,7 @@ class TestOpenNebulaInference:
         vm_backend._pending_vm_config = {
             "template_id": 101,
             "parent_backend_id": "vdc",
-            "model_image_id": 7,
+            "model_image": "Qwen3-0.6B",
             "engine_image_id": 3,
             "vllm_context": {"ONEAPP_VLLM_API_PORT": "8000", "ONEAPP_VLLM_API_WEB": "YES"},
         }
@@ -3982,7 +4016,7 @@ class TestOpenNebulaInference:
         assert meta["endpoint"] == "http://192.168.0.12:8000"
         assert meta["web_ui"] == "http://192.168.0.12:8000"
         _, kwargs = vm_backend.client.create_vm.call_args
-        assert kwargs["model_image_id"] == 7
+        assert kwargs["model_image"] == "Qwen3-0.6B"
         assert kwargs["engine_image_id"] == 3
 
 
@@ -4004,7 +4038,7 @@ class TestOpenNebulaInferenceMetadataPush:
             "ip_address": "192.168.0.150",
             "endpoint": "http://192.168.0.150:8000",
             "web_ui": "http://192.168.0.150:8000",
-            "model_image_id": 1,
+            "model": "Qwen3-0.6B",
         }
         info = BackendResourceInfo(backend_id="7", limits={})
         resource = MagicMock(spec=WaldurResource)
@@ -4013,7 +4047,7 @@ class TestOpenNebulaInferenceMetadataPush:
 
         assert info.backend_metadata["endpoint"] == "http://192.168.0.150:8000"
         assert info.backend_metadata["web_ui"] == "http://192.168.0.150:8000"
-        assert info.backend_metadata["model_image_id"] == 1
+        assert info.backend_metadata["model"] == "Qwen3-0.6B"
         # Access endpoints surfaced for the "Access resource" dropdown.
         assert info.endpoints == [
             {
