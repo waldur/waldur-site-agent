@@ -116,8 +116,12 @@ FIXED billing components:
 | Component | Description | Example values |
 |---|---|---|
 | `vcpu` | Virtual CPUs | Small: 1, Medium: 2, Large: 4 |
-| `vm_ram` | Memory in MB | Small: 512, Medium: 2048, Large: 8192 |
-| `vm_disk` | Disk in MB | Small: 5120, Medium: 10240, Large: 51200 |
+| `vm_ram` | Memory (GB) | Small: 1, Medium: 2, Large: 8 |
+| `vm_disk` | Disk (GB) | Small: 5, Medium: 10, Large: 50 |
+
+Memory and disk are expressed in the component's `measured_unit` (e.g. GB)
+and converted to the backend's native MB via `unit_factor` (1024). The
+agent multiplies each plan amount by `unit_factor` before sizing the VM.
 
 ### Inference (vLLM) Offerings
 
@@ -260,8 +264,9 @@ components:
 #### VM Offering Components
 
 VM offerings use FIXED billing components. The component keys define
-which values the agent reads from plan quotas. No `unit_factor` is
-needed (default 1).
+which values the agent reads from plan quotas. Expose memory and disk
+in GB and set `unit_factor: 1024` so the agent scales the plan amount
+to the backend's native MB.
 
 ```yaml
 components:
@@ -269,10 +274,12 @@ components:
     measured_unit: "cores"
     accounting_type: "fixed"
   vm_ram:
-    measured_unit: "MB"
+    measured_unit: "GB"
+    unit_factor: 1024
     accounting_type: "fixed"
   vm_disk:
-    measured_unit: "MB"
+    measured_unit: "GB"
+    unit_factor: 1024
     accounting_type: "fixed"
 ```
 

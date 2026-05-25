@@ -330,6 +330,14 @@ class OpenNebulaBackend(BaseBackend):
         logger.warning("SSH key UUID '%s' not found in pre-resolved keys", key_uuid)
         return ""
 
+    def _unit_factor(self, component_type: str) -> int:
+        """Return a component's unit_factor (measured unit -> backend), default 1."""
+        component = self.backend_components.get(component_type) or {}
+        try:
+            return int(component.get("unit_factor", 1) or 1)
+        except (TypeError, ValueError):
+            return 1
+
     def _build_vm_config(
         self,
         waldur_resource: WaldurResource,
@@ -401,13 +409,19 @@ class OpenNebulaBackend(BaseBackend):
                 "(vcpu, vm_ram, vm_disk). No plan quotas found on resource."
             )
 
+        # Plan quotas are expressed in the component's measured unit (e.g. GB for
+        # vm_ram/vm_disk); multiply by the component unit_factor to get the
+        # backend's native units (OpenNebula sizes CPU/RAM/disk in MB). Factor
+        # defaults to 1, so components measured directly in native units are
+        # unaffected.
         config: dict[str, Any] = {
             "template_id": template_id,
             "parent_backend_id": parent_backend_id,
             "ssh_public_key": resolved_ssh_key,
-            "vcpu": int(plan_quotas.get("vcpu", 1)),
-            "vm_ram": int(plan_quotas.get("vm_ram", 512)),
-            "vm_disk": int(plan_quotas.get("vm_disk", 10240)),
+            "vcpu": int(plan_quotas.get("vcpu", 1)) * self._unit_factor("vcpu"),
+            "vm_ram": int(plan_quotas.get("vm_ram", 512)) * self._unit_factor("vm_ram"),
+            "vm_disk": int(plan_quotas.get("vm_disk", 10240))
+            * self._unit_factor("vm_disk"),
             "cluster_ids": plugin_options.get("cluster_ids", []),
             "sched_requirements": plugin_options.get("sched_requirements", ""),
         }

@@ -120,6 +120,9 @@ plugin_options:
   expose_inference_playground: true
 
 # VM size comes from these FIXED components' plan amounts.
+# RAM and disk use GB as the measured unit; unit_factor converts to the
+# backend's native MB (the agent multiplies plan amounts by it). Plan amounts
+# and prices are therefore expressed per GB.
 components:
   - type: vcpu
     name: vCPU
@@ -128,15 +131,18 @@ components:
   - type: vm_ram
     name: RAM
     billing_type: fixed
-    measured_unit: MB
+    measured_unit: GB
+    unit_factor: 1024
   - type: vm_disk
     name: Disk
     billing_type: fixed
-    measured_unit: MB
+    measured_unit: GB
+    unit_factor: 1024
 
 # Switching plan triggers a VM resize: the agent powers the VM off, applies the
 # new vCPU/RAM and grows the disk, then powers it back on (brief downtime; disk
-# can only grow, not shrink).
+# can only grow, not shrink). Plan cost per month = sum(price x amount) over the
+# fixed components.
 plans:
   - name: vllm-small
     description: "4 vCPU / 8 GB RAM / 20 GB disk"
@@ -144,23 +150,23 @@ plans:
     components:
       - component_type: vcpu
         amount: 4
-        price: 0
+        price: 5
       - component_type: vm_ram
-        amount: 8192
-        price: 0
+        amount: 8
+        price: 2
       - component_type: vm_disk
-        amount: 20480
-        price: 0
+        amount: 20
+        price: 0.1
   - name: vllm-large
     description: "8 vCPU / 32 GB RAM / 80 GB disk"
     unit: month
     components:
       - component_type: vcpu
         amount: 8
-        price: 0
+        price: 5
       - component_type: vm_ram
-        amount: 32768
-        price: 0
+        amount: 32
+        price: 2
       - component_type: vm_disk
-        amount: 81920
-        price: 0
+        amount: 80
+        price: 0.1

@@ -3969,6 +3969,31 @@ class TestOpenNebulaInference:
         assert "model_image" not in config
         assert "vllm_context" not in config
 
+    def test_build_vm_config_applies_unit_factor(self, vm_backend_settings):
+        """Plan quotas in measured units (GB) are scaled to backend MB."""
+        with patch("waldur_site_agent_opennebula.client.pyone"):
+            backend = OpenNebulaBackend(
+                vm_backend_settings,
+                {
+                    "vcpu": {"unit_factor": 1, "accounting_type": "limit"},
+                    "vm_ram": {"unit_factor": 1024, "accounting_type": "limit"},
+                    "vm_disk": {"unit_factor": 1024, "accounting_type": "limit"},
+                },
+            )
+            backend.client = MagicMock(spec=OpenNebulaClient)
+
+        resource = MagicMock(spec=WaldurResource)
+        resource.attributes = {"template_id": "0", "parent_backend_id": "vdc"}
+        resource.offering_plugin_options = {}
+
+        config = backend._build_vm_config(
+            resource, {"plan_quotas": {"vcpu": 4, "vm_ram": 8, "vm_disk": 20}}
+        )
+
+        assert config["vcpu"] == 4  # cores, factor 1
+        assert config["vm_ram"] == 8 * 1024  # 8 GB -> MB
+        assert config["vm_disk"] == 20 * 1024  # 20 GB -> MB
+
     # ── backend endpoint metadata ───────────────────────────────────
 
     def test_endpoint_metadata_includes_url_and_web_ui(self):
