@@ -34,3 +34,6 @@ class BackendResourceInfo:
     limits: dict = field(default_factory=dict)
     pending_order_id: str = ""
     backend_metadata: dict = field(default_factory=dict)
+    # Access endpoints to surface in Waldur, e.g.
+    # [{"name": "API", "url": "https://host:port/v1"}].
+    endpoints: list = field(default_factory=list)

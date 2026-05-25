@@ -1030,6 +1030,84 @@ class OpenNebulaClient(BaseClient):
         except pyone.OneException as e:
             raise BackendError(f"Failed to get VM info {vm_id}: {e}") from e
 
+    @staticmethod
+    def _one_get(obj: object, key: str) -> object:
+        """Read a field from a pyone result, which may be a mapping or object.
+
+        pyone returns free-form sub-templates (e.g. ``TEMPLATE``, ``DISK``) as
+        ``OrderedDict`` mappings but exposes top-level fields as attributes, so
+        nested access must tolerate both.
+        """
+        if obj is None:
+            return None
+        if hasattr(obj, "get") and not isinstance(obj, str):
+            try:
+                value = obj.get(key)
+            except (TypeError, AttributeError):
+                value = None
+            if value is not None:
+                return value
+        return getattr(obj, key, None)
+
+    def _get_template_base_disks(self, template_id: int) -> list[int]:
+        """Return the IMAGE_IDs of disks defined in a VM template.
+
+        Preserves a template's base disk(s) — e.g. an OS or inference engine
+        image — when instantiating with an extra model disk, because disks
+        supplied in the instantiation extra-template REPLACE the template's
+        disk set instead of appending to it.
+        """
+        try:
+            info = self.one.template.info(template_id)
+        except pyone.OneException as e:
+            raise BackendError(f"Failed to read template {template_id}: {e}") from e
+        template = getattr(info, "TEMPLATE", None)
+        disks = self._one_get(template, "DISK")
+        if disks is None:
+            disks = []
+        elif not isinstance(disks, list):
+            disks = [disks]
+        image_ids: list[int] = []
+        try:
+            for disk in disks:
+                image_id = self._one_get(disk, "IMAGE_ID")
+                if image_id is not None:
+                    image_ids.append(int(str(image_id)))
+        except (TypeError, ValueError) as e:
+            raise BackendError(
+                f"Failed to parse disks of template {template_id}: {e}"
+            ) from e
+        return image_ids
+
+    # OpenNebula image states in which a disk image can be attached to a VM:
+    # READY (1), USED (2), USED_PERS (8).
+    _USABLE_IMAGE_STATES = frozenset({1, 2, 8})
+
+    def _ensure_image_usable(self, image_id: int) -> None:
+        """Validate that an image exists and is in a usable state.
+
+        Raises BackendError if the image is missing or not READY/USED so a
+        misconfigured model image fails the order cleanly instead of producing
+        a broken VM.
+        """
+        try:
+            info = self.one.image.info(image_id)
+        except pyone.OneNoExistsException as e:
+            raise BackendError(f"Model image {image_id} not found") from e
+        except pyone.OneException as e:
+            raise BackendError(f"Failed to read model image {image_id}: {e}") from e
+        try:
+            state = int(info.STATE)
+        except (AttributeError, TypeError, ValueError) as e:
+            raise BackendError(
+                f"Could not determine state of model image {image_id}"
+            ) from e
+        if state not in self._USABLE_IMAGE_STATES:
+            raise BackendError(
+                f"Model image {image_id} is not usable (state {state}); "
+                "expected READY or USED."
+            )
+
     def create_vm(
         self,
         template_id: int,
@@ -1041,6 +1119,9 @@ class OpenNebulaClient(BaseClient):
         disk_mb: int = 10240,
         cluster_ids: Optional[list[int]] = None,
         sched_requirements: str = "",
+        model_image_id: Optional[int] = None,
+        engine_image_id: Optional[int] = None,
+        vllm_context: Optional[dict[str, str]] = None,
     ) -> int:
         """Instantiate a VM from a template within a VDC.
 
@@ -1059,6 +1140,14 @@ class OpenNebulaClient(BaseClient):
             vcpu: Number of virtual CPUs.
             ram_mb: Memory in MB.
             disk_mb: Disk size in MB.
+            model_image_id: Optional LLM model image to attach as an extra disk
+                (inference mode). When set, the VM boots with the template's
+                base disk(s) plus this model image.
+            engine_image_id: Optional base/engine image ID to re-specify
+                alongside the model disk. If omitted, the template's existing
+                disk(s) are read and preserved.
+            vllm_context: Optional ``ONEAPP_VLLM_*`` serving parameters to inject
+                into the VM CONTEXT.
 
         Returns:
             Numeric VM ID.
@@ -1089,11 +1178,29 @@ class OpenNebulaClient(BaseClient):
             f'MEMORY="{ram_mb}"',
         ]
 
+        # Inference mode: attach an LLM model as an extra disk. Disks supplied
+        # in the instantiation extra-template REPLACE the template's disk set
+        # rather than appending to it, so the template's base disk(s) (the
+        # engine/OS image) must be re-specified explicitly alongside the model.
+        if model_image_id is not None:
+            self._ensure_image_usable(model_image_id)
+            if engine_image_id is not None:
+                base_image_ids = [engine_image_id]
+            else:
+                base_image_ids = self._get_template_base_disks(template_id)
+            for image_id in base_image_ids:
+                extra_parts.append(f'DISK=[IMAGE_ID="{image_id}"]')
+            extra_parts.append(f'DISK=[IMAGE_ID="{model_image_id}"]')
+
         context_parts = ['NETWORK="YES"']
         if ssh_key:
             # Escape double quotes in SSH key
             safe_key = ssh_key.replace('"', '\\"')
             context_parts.append(f'SSH_PUBLIC_KEY="{safe_key}"')
+        if vllm_context:
+            for key, value in vllm_context.items():
+                safe_value = str(value).replace('"', '\\"')
+                context_parts.append(f'{key}="{safe_value}"')
         extra_parts.append("CONTEXT=[" + ", ".join(context_parts) + "]")
 
         sched_req = self._build_sched_requirements(
@@ -1366,17 +1473,18 @@ class OpenNebulaClient(BaseClient):
             vm_info = self._get_vm_info(vm_id)
         except BackendError:
             return None
-        try:
-            template = vm_info.TEMPLATE
-            if hasattr(template, "NIC"):
-                nics = template.NIC
-                if not isinstance(nics, list):
-                    nics = [nics]
-                for nic in nics:
-                    if hasattr(nic, "IP"):
-                        return str(nic.IP)
-        except (AttributeError, TypeError):
-            pass
+        # pyone returns the nested TEMPLATE as an OrderedDict, so NIC/IP must be
+        # read via the mapping/attribute-tolerant accessor.
+        template = getattr(vm_info, "TEMPLATE", None)
+        nics = self._one_get(template, "NIC")
+        if nics is None:
+            return None
+        if not isinstance(nics, list):
+            nics = [nics]
+        for nic in nics:
+            ip = self._one_get(nic, "IP")
+            if ip:
+                return str(ip)
         return None
 
     def _chown_vm_to_group(self, vm_id: int, group_name: str) -> None:

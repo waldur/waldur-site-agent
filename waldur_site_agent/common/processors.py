@@ -66,6 +66,7 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_as_ok,
     marketplace_provider_resources_set_backend_id,
     marketplace_provider_resources_set_backend_metadata,
+    marketplace_provider_resources_set_endpoints,
     marketplace_provider_resources_set_limits,
     marketplace_provider_resources_team_list,
 )
@@ -130,6 +131,10 @@ from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_backend_id_request import ResourceBackendIDRequest
 from waldur_api_client.models.resource_backend_metadata_request import (
     ResourceBackendMetadataRequest,
+)
+from waldur_api_client.models.resource_endpoint_request import ResourceEndpointRequest
+from waldur_api_client.models.resource_endpoints_request import (
+    ResourceEndpointsRequest,
 )
 from waldur_api_client.types import UNSET, Unset
 
@@ -1066,6 +1071,28 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 logger.info("Pushed backend metadata to Waldur resource")
             except Exception as e:
                 logger.warning("Failed to push backend metadata to Waldur: %s", e)
+
+        # Push access endpoints if the backend provided any.
+        if backend_resource_info.endpoints:
+            try:
+                marketplace_provider_resources_set_endpoints.sync(
+                    uuid=waldur_resource.uuid.hex,
+                    client=self.waldur_rest_client,
+                    body=ResourceEndpointsRequest(
+                        endpoints=[
+                            ResourceEndpointRequest(
+                                name=endpoint["name"], url=endpoint["url"]
+                            )
+                            for endpoint in backend_resource_info.endpoints
+                        ]
+                    ),
+                )
+                logger.info(
+                    "Pushed %d access endpoint(s) to Waldur resource",
+                    len(backend_resource_info.endpoints),
+                )
+            except Exception as e:
+                logger.warning("Failed to push access endpoints to Waldur: %s", e)
 
         return backend_resource_info
 
