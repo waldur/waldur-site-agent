@@ -194,10 +194,10 @@ following substitution variables are available: `{resource_name}`,
 Your inference service **{resource_name}** serves model image
 {backend_metadata_model} over an OpenAI-compatible API.
 
-**API base URL:** {backend_metadata_endpoint}
+**API base URL:** {backend_metadata_endpoint}/v1
 
 ```bash
-curl {backend_metadata_endpoint}/models
+curl {backend_metadata_endpoint}/v1/models
 ```
 
 **Chat playground:** {backend_metadata_web_ui}
