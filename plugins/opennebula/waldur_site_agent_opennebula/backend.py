@@ -422,13 +422,19 @@ class OpenNebulaBackend(BaseBackend):
                 "or 'parent_vdc_backend_id' in offering plugin_options"
             )
 
-        # Inference mode: a model image turns this into a vLLM VM that boots the
-        # engine template with the chosen model attached as an extra disk.
-        model_image_id_raw = attributes.get(
-            "model_image_id", plugin_options.get("model_image_id")
+        # Inference mode: a model turns this into a vLLM VM that boots the engine
+        # template with the chosen model attached as an extra disk. The model may
+        # be given as a human-readable image name (resolved by the client) or a
+        # numeric image ID; `model` is preferred, `model_image_id` is accepted for
+        # backward compatibility.
+        model_ref = (
+            attributes.get("model")
+            or attributes.get("model_image_id")
+            or plugin_options.get("model")
+            or plugin_options.get("model_image_id")
         )
-        if model_image_id_raw is not None and str(model_image_id_raw) != "":
-            config["model_image_id"] = int(model_image_id_raw)
+        if model_ref is not None and str(model_ref) != "":
+            config["model_image"] = str(model_ref)
             engine_image_id_raw = plugin_options.get(
                 "engine_image_id", bs.get("engine_image_id")
             )
@@ -591,7 +597,7 @@ class OpenNebulaBackend(BaseBackend):
             disk_mb=self._pending_vm_config.get("vm_disk", 10240),
             cluster_ids=self._pending_vm_config.get("cluster_ids"),
             sched_requirements=self._pending_vm_config.get("sched_requirements", ""),
-            model_image_id=self._pending_vm_config.get("model_image_id"),
+            model_image=self._pending_vm_config.get("model_image"),
             engine_image_id=self._pending_vm_config.get("engine_image_id"),
             vllm_context=self._pending_vm_config.get("vllm_context"),
         )
@@ -628,9 +634,9 @@ class OpenNebulaBackend(BaseBackend):
         metadata: dict[str, Any] = {"endpoint": f"http://{ip_address}:{api_port}"}
         if str(vllm_context.get("ONEAPP_VLLM_API_WEB", "YES")).upper() == "YES":
             metadata["web_ui"] = f"http://{ip_address}:{api_port}"
-        model_image_id = vm_config.get("model_image_id")
-        if model_image_id is not None:
-            metadata["model_image_id"] = model_image_id
+        model = vm_config.get("model_image")
+        if model is not None:
+            metadata["model"] = model
         return metadata
 
     @staticmethod

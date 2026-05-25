@@ -1,0 +1,166 @@
+# Sample vLLM inference offering for the OpenNebula site-agent backend.
+#
+# Import it via the marketplace `import_offering` endpoint, passing this file's
+# contents as `offering_data`, e.g.:
+#
+#   curl -X POST \
+#     -H "Authorization: token <TOKEN>" \
+#     -H "Content-Type: application/json" \
+#     "<WALDUR_API_URL>/api/marketplace-provider-offerings/import_offering/" \
+#     -d "$(python3 - <<'PY'
+#   import json, yaml
+#   print(json.dumps({
+#       "offering_data": open("vllm-inference-offering.yaml").read(),
+#       "customer": "<CUSTOMER_UUID>",
+#       "category": "AI / Inference",
+#       "overwrite_existing": True,
+#   }))
+#   PY
+#   )"
+#
+# Imported offerings are always created in DRAFT state — activate the offering
+# afterwards. Adjust `plugin_options` (template/engine/VDC IDs) and the
+# `model_image_id` choices to match your OpenNebula deployment, then point the
+# site agent at this offering (resource_type: vm).
+
+offering:
+  name: "vLLM Inference"
+  description: >-
+    Deploy a large language model as an inference service. A VM boots the vLLM
+    engine with your selected model attached as a disk and serves it over an
+    OpenAI-compatible API endpoint.
+  type: "Marketplace.Slurm"
+  shared: true
+  billable: true
+  category_name: "AI / Inference"
+  getting_started: |
+    Your inference service **{resource_name}** serves model image
+    {backend_metadata_model} over an OpenAI-compatible API.
+
+    **API base URL:** {backend_metadata_endpoint}
+
+    ```bash
+    curl {backend_metadata_endpoint}/models
+    ```
+
+    Point any OpenAI-compatible client at the base URL above (no API key is
+    required on the internal network).
+
+    **Chat playground:** {backend_metadata_web_ui}
+  options:
+    order:
+      - model
+      - ONEAPP_VLLM_API_PORT
+      - ONEAPP_VLLM_API_WEB
+      - ONEAPP_VLLM_MODEL_QUANTIZATION
+      - ONEAPP_VLLM_MODEL_MAX_LENGTH
+      - ONEAPP_VLLM_ENFORCE_EAGER
+      - ONEAPP_VLLM_SLEEP_MODE
+      - ONEAPP_VLLM_GPU_MEMORY_UTILIZATION
+    options:
+      model:
+        type: select_string
+        label: Model
+        help_text: "Model to serve. The agent resolves the name to its OpenNebula image."
+        required: true
+        choices:
+          - "Qwen_Qwen3-0.6B"
+          - "deepseek-ai_DeepSeek-V3.2"
+          - "utter-project_EuroLLM-9B-Instruct-2512"
+        default: "Qwen_Qwen3-0.6B"
+      ONEAPP_VLLM_API_PORT:
+        type: integer
+        label: API port
+        default: "8000"
+      ONEAPP_VLLM_API_WEB:
+        type: select_string
+        label: Deploy chat web interface
+        choices:
+          - "YES"
+          - "NO"
+        default: "YES"
+      ONEAPP_VLLM_MODEL_QUANTIZATION:
+        type: select_string
+        label: Quantization (bits)
+        choices:
+          - "0"
+          - "4"
+        default: "0"
+      ONEAPP_VLLM_MODEL_MAX_LENGTH:
+        type: integer
+        label: Model context length
+        default: "1024"
+      ONEAPP_VLLM_ENFORCE_EAGER:
+        type: select_string
+        label: Enforce eager mode
+        choices:
+          - "YES"
+          - "NO"
+        default: "NO"
+      ONEAPP_VLLM_SLEEP_MODE:
+        type: select_string
+        label: Enable sleep mode
+        choices:
+          - "YES"
+          - "NO"
+        default: "NO"
+      ONEAPP_VLLM_GPU_MEMORY_UTILIZATION:
+        type: string
+        label: GPU memory utilisation (0, 1]
+        default: "0.9"
+
+# Inference-specific backend configuration (resolved by the site agent via
+# offering_plugin_options). Adjust the IDs to your deployment.
+plugin_options:
+  template_id: 0
+  engine_image_id: 0
+  parent_vdc_backend_id: "labvdc"
+  # Show the in-browser inference Playground action on resources of this
+  # offering (HomePort; requires the endpoint to be reachable from the browser).
+  expose_inference_playground: true
+
+# VM size comes from these FIXED components' plan amounts.
+components:
+  - type: vcpu
+    name: vCPU
+    billing_type: fixed
+    measured_unit: cores
+  - type: vm_ram
+    name: RAM
+    billing_type: fixed
+    measured_unit: MB
+  - type: vm_disk
+    name: Disk
+    billing_type: fixed
+    measured_unit: MB
+
+# Switching plan triggers a VM resize: the agent powers the VM off, applies the
+# new vCPU/RAM and grows the disk, then powers it back on (brief downtime; disk
+# can only grow, not shrink).
+plans:
+  - name: vllm-small
+    description: "4 vCPU / 8 GB RAM / 20 GB disk"
+    unit: month
+    components:
+      - component_type: vcpu
+        amount: 4
+        price: 0
+      - component_type: vm_ram
+        amount: 8192
+        price: 0
+      - component_type: vm_disk
+        amount: 20480
+        price: 0
+  - name: vllm-large
+    description: "8 vCPU / 32 GB RAM / 80 GB disk"
+    unit: month
+    components:
+      - component_type: vcpu
+        amount: 8
+        price: 0
+      - component_type: vm_ram
+        amount: 32768
+        price: 0
+      - component_type: vm_disk
+        amount: 81920
+        price: 0

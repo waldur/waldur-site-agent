@@ -1108,6 +1108,35 @@ class OpenNebulaClient(BaseClient):
                 "expected READY or USED."
             )
 
+    def _get_image_by_name(self, name: str) -> Optional[int]:
+        """Return the ID of an image matching ``name``, or None if not found."""
+        try:
+            pool = self.one.imagepool.info(-2, -1, -1)
+        except pyone.OneException as e:
+            raise BackendError(f"Failed to list images: {e}") from e
+        images = getattr(pool, "IMAGE", None) or []
+        if not isinstance(images, list):
+            images = [images]
+        for image in images:
+            if getattr(image, "NAME", None) == name:
+                return int(image.ID)
+        return None
+
+    def resolve_image_id(self, model: object) -> int:
+        """Resolve a model reference (image name or numeric ID) to an image ID.
+
+        Lets offerings present human-readable model **names** in the order form
+        while the backend attaches the matching image. A digit string / int is
+        used as-is; anything else is looked up by image name.
+        """
+        ref = str(model).strip()
+        if ref.isdigit():
+            return int(ref)
+        image_id = self._get_image_by_name(ref)
+        if image_id is None:
+            raise BackendError(f"Model image named '{ref}' not found")
+        return image_id
+
     def create_vm(
         self,
         template_id: int,
@@ -1119,7 +1148,7 @@ class OpenNebulaClient(BaseClient):
         disk_mb: int = 10240,
         cluster_ids: Optional[list[int]] = None,
         sched_requirements: str = "",
-        model_image_id: Optional[int] = None,
+        model_image: Optional[object] = None,
         engine_image_id: Optional[int] = None,
         vllm_context: Optional[dict[str, str]] = None,
     ) -> int:
@@ -1140,9 +1169,9 @@ class OpenNebulaClient(BaseClient):
             vcpu: Number of virtual CPUs.
             ram_mb: Memory in MB.
             disk_mb: Disk size in MB.
-            model_image_id: Optional LLM model image to attach as an extra disk
-                (inference mode). When set, the VM boots with the template's
-                base disk(s) plus this model image.
+            model_image: Optional LLM model to attach as an extra disk
+                (inference mode) — an image **name** or numeric ID. When set,
+                the VM boots with the template's base disk(s) plus this model.
             engine_image_id: Optional base/engine image ID to re-specify
                 alongside the model disk. If omitted, the template's existing
                 disk(s) are read and preserved.
@@ -1182,7 +1211,8 @@ class OpenNebulaClient(BaseClient):
         # in the instantiation extra-template REPLACE the template's disk set
         # rather than appending to it, so the template's base disk(s) (the
         # engine/OS image) must be re-specified explicitly alongside the model.
-        if model_image_id is not None:
+        if model_image is not None:
+            model_image_id = self.resolve_image_id(model_image)
             self._ensure_image_usable(model_image_id)
             if engine_image_id is not None:
                 base_image_ids = [engine_image_id]

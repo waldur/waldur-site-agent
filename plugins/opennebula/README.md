@@ -119,6 +119,94 @@ FIXED billing components:
 | `vm_ram` | Memory in MB | Small: 512, Medium: 2048, Large: 8192 |
 | `vm_disk` | Disk in MB | Small: 5120, Medium: 10240, Large: 51200 |
 
+### Inference (vLLM) Offerings
+
+An inference offering is a VM offering (`resource_type: vm`) whose template is a
+vLLM engine appliance. When the order carries a `model`, the backend
+instantiates the engine template **with the model image attached as an extra
+disk** and injects the `ONEAPP_VLLM_*` serving parameters into the VM context.
+The served OpenAI-compatible endpoint is reported back to Waldur as resource
+**access endpoints** (shown in the *Access resource* dropdown) and
+`backend_metadata`.
+
+A ready-to-import sample offering is provided in
+[`examples/vllm-inference-offering.yaml`](examples/vllm-inference-offering.yaml)
+— import it via the marketplace `import_offering` endpoint (the file documents
+the call) and adjust the IDs to your deployment.
+
+Agent config is the same as any VM offering:
+
+```yaml
+offerings:
+  - name: "vLLM Inference (OpenNebula)"
+    backend_type: "opennebula"
+    backend_settings:
+      api_url: "http://opennebula-host:2633/RPC2"
+      credentials: "oneadmin:password"
+      resource_type: "vm"
+    backend_components: {}
+```
+
+Everything inference-specific is configured on the **Waldur offering**:
+
+| Where | Key | Purpose |
+|---|---|---|
+| `plugin_options` | `template_id` | The vLLM engine VM template ID (may be `0`). |
+| `plugin_options` | `engine_image_id` | Engine disk image ID. Optional; falls back to the template's own disk(s). |
+| `plugin_options` | `parent_vdc_backend_id` | Parent VDC for the VM (its `_internal` net + `_default` SG must exist). |
+| order attributes | `model` | Model image **name** (agent resolves to an ID) or numeric ID; expose as an enum. |
+| order attributes | `ONEAPP_VLLM_API_PORT` | API port (default `8000`). |
+| order attributes | `ONEAPP_VLLM_API_WEB` | Deploy the chat web UI (`YES`/`NO`). |
+| order attributes | `ONEAPP_VLLM_MODEL_QUANTIZATION` | `0` or `4`. |
+| order attributes | `ONEAPP_VLLM_MODEL_MAX_LENGTH` | Context length. |
+| order attributes | `ONEAPP_VLLM_ENFORCE_EAGER` | `YES`/`NO`. |
+| order attributes | `ONEAPP_VLLM_SLEEP_MODE` | `YES`/`NO`. |
+| order attributes | `ONEAPP_VLLM_GPU_MEMORY_UTILIZATION` | Fraction in `(0, 1]`. |
+
+VM size (vCPU / RAM / disk) comes from the plan's FIXED components, as for any
+VM offering. Switching plan triggers a **VM resize**: the agent powers the VM
+off, applies the new vCPU/RAM and grows the disk, then powers it back on — so a
+plan switch causes brief downtime, and the disk can only grow, not shrink.
+
+**Models must be pre-registered as images** in the OpenNebula datastore (e.g.
+exported from an `hfhub` marketplace). The backend validates the model image is
+in a usable state (`READY`/`USED`) before instantiation and fails the order
+cleanly otherwise.
+
+**In-browser playground.** Set `plugin_options.expose_inference_playground:
+true` to show a **Playground** action in HomePort that chats with the model
+directly from the browser. It calls the endpoint client-side, so the endpoint
+must be reachable from the user's browser.
+
+**Surfacing the endpoint to users.** The agent reports two access endpoints —
+`vLLM API (OpenAI-compatible)` (`<endpoint>/v1`) and `Chat playground`
+(`<endpoint>`) — rendered by HomePort's *Access resource* dropdown. To also show
+a copy-paste snippet, set the offering's **Getting started** text; the
+following substitution variables are available: `{resource_name}`,
+`{backend_metadata_endpoint}`, `{backend_metadata_web_ui}`,
+`{backend_metadata_model}`. Example:
+
+````text
+Your inference service **{resource_name}** serves model image
+{backend_metadata_model} over an OpenAI-compatible API.
+
+**API base URL:** {backend_metadata_endpoint}
+
+```bash
+curl {backend_metadata_endpoint}/models
+```
+
+**Chat playground:** {backend_metadata_web_ui}
+````
+
+> The Getting started text is rendered with single-brace `{var}` substitution,
+> so avoid literal `{` / `}` (e.g. JSON request bodies) — they are treated as
+> unknown variables.
+>
+> **No API key.** The stock vLLM engine appliance serves an **unauthenticated**
+> API; access is gated only by reachability of the VDC network. Do not expose
+> the endpoint on a public/floating IP without adding authentication.
+
 ### Backend Settings Reference
 
 | Key | Required | Default | Description |
