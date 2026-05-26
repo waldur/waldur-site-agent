@@ -294,11 +294,10 @@ sudo chown root:root /etc/waldur/waldur-site-agent-config.yaml
 
 ### Debug Mode
 
-Enable debug logging by modifying service files:
+Enable debug logging by setting `log_level` in the agent configuration file:
 
-```ini
-[Service]
-Environment=WALDUR_SITE_AGENT_LOG_LEVEL=DEBUG
+```yaml
+log_level: DEBUG
 ```
 
 ## Performance Tuning

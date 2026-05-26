@@ -113,20 +113,30 @@ require LDAP integration), and operator troubleshooting tips.
 
 ### Event Processing Configuration
 
-```yaml
-# Event processing for real-time periodic limits
-event_processing:
-  enabled: true
-  stomp_settings:
-    host: "mastermind.example.com"
-    port: 61613
-    username: "site_agent"
-    password: "${STOMP_PASSWORD}"
+STOMP event processing is configured with top-level keys **on the offering**
+(not in a separate `event_processing` block):
 
-# Subscribe to periodic limits updates
-observable_object_types:
-  - "RESOURCE_PERIODIC_LIMITS_UPDATE"
+```yaml
+offerings:
+  - name: "My SLURM Cluster"
+    backend_type: "slurm"
+    # STOMP event processing for real-time periodic limits
+    stomp_enabled: true
+    stomp_ws_host: "mastermind.example.com"
+    stomp_ws_port: 443
+    stomp_ws_path: "/ws"          # optional WebSocket path
+    websocket_use_tls: true       # default true
+    backend_settings:
+      periodic_limits:
+        enabled: true
 ```
+
+The set of STOMP topics the agent subscribes to is **derived automatically**
+from the offering configuration — there is no user-settable
+`observable_object_types` key. When `backend_settings.periodic_limits.enabled`
+is `true`, the agent subscribes to the `RESOURCE_PERIODIC_LIMITS` topic
+(see `_determine_observable_object_types` in
+`waldur_site_agent/event_processing/utils.py`).
 
 ## Usage
 
@@ -159,7 +169,11 @@ uv run waldur_site_load_historical_usage \
 ```
 
 **Requirements for historical loading:**
-- **Staff user token** (regular offering tokens cannot submit historical data)
+- **Staff user token** (regular offering tokens cannot submit historical data).
+  Use `--no-staff-check` to bypass staff validation when submitting with a
+  service-provider token.
+- Optional flags: `--skip-user-usage` (submit resource-level totals only),
+  `--no-staff-check` (skip staff validation)
 - Resources must already exist in Waldur
 - SLURM accounting database must contain historical data for requested periods
 
@@ -503,39 +517,74 @@ sacctmgr modify account waldur_project123 set QoS=slowdown
 
 ```text
 plugins/slurm/tests/
-├── test_periodic_limits/          # Periodic limits functionality
+├── test_periodic_limits/                # Periodic limits functionality
 │   ├── test_periodic_limits_plugin.py
 │   ├── test_backend_integration.py
 │   ├── test_configuration_validation.py
 │   ├── test_mock_mastermind_signals.py
-│   ├── test_emulator_scenarios_*.py
-│   └── README.md
-├── test_historical_usage/         # SLURM-specific historical usage tests
+│   ├── test_emulator_integration.py
+│   ├── test_emulator_scenarios_direct.py
+│   ├── test_emulator_scenarios_working.py
+│   ├── test_real_emulator_scenarios.py
+│   ├── README.md
+│   ├── EMULATOR_USAGE.md
+│   └── TEST_SCENARIO_MAPPING.md
+├── test_historical_usage/               # SLURM-specific historical usage tests
 │   ├── test_integration.py
 │   ├── test_slurm_client_historical.py
 │   ├── test_slurm_backend_historical.py
 │   └── README.md
 │   # Note: Loader and backend utils tests moved to core tests/
-├── test_diagnostics.py            # Account diagnostics CLI
-├── test_order_processing.py       # Core functionality
-├── test_reporing.py               # Usage reporting
-└── test_membership_sync.py        # User management
+├── e2e/                                 # End-to-end tests (gated by WALDUR_E2E_TESTS)
+│   ├── test_e2e_api_optimizations.py
+│   ├── test_e2e_benchmark.py
+│   ├── test_e2e_ldap.py
+│   ├── test_e2e_order_reconciliation.py
+│   ├── test_e2e_partition_associations.py
+│   ├── test_e2e_policy.py
+│   ├── test_e2e_prepaid.py
+│   ├── test_e2e_qos_backcompat.py
+│   ├── test_e2e_qos_matrix.py
+│   ├── test_e2e_qos_polling.py
+│   ├── test_e2e_qos_stomp.py
+│   ├── test_e2e_restore.py
+│   └── test_e2e_stomp.py
+├── test_diagnostics.py                  # Account diagnostics CLI
+├── test_order_processing.py             # Order processing / resource lifecycle
+├── test_reporing.py                     # Usage reporting
+├── test_membership_sync.py              # User management
+├── test_parser.py                       # sacct/sacctmgr output parsing
+├── test_command_construction.py         # sacctmgr command construction
+├── test_prepaid_limits.py               # Prepaid (duration-based) limits
+├── test_prepaid_emulator.py             # Prepaid limits via emulator
+├── test_limit_echo_loop.py              # Limit echo-loop guard
+├── test_partition_associations.py       # Partition-scoped user associations
+├── test_project_reparenting.py          # Account reparenting
+├── test_username_set_race_condition.py  # Username set race condition
+├── test_timezone.py                     # Timezone handling in usage windows
+└── test_slurm_bin_path.py               # Configurable SLURM binary path
 ```
 
 ### Running Tests
 
+Run plugin tests from **inside the plugin directory** — the SLURM backend
+entry point only resolves when pytest runs from `plugins/slurm/` (running
+from the workspace root fails with `Unsupported backend type: slurm`).
+
 ```bash
+cd plugins/slurm
+
 # All tests
-uv run pytest plugins/slurm/tests/ -v
+uv run pytest tests/ -v
 
 # Periodic limits tests only
-uv run pytest plugins/slurm/tests/test_periodic_limits/ -v
+uv run pytest tests/test_periodic_limits/ -v
 
 # Historical usage tests only
-uv run pytest plugins/slurm/tests/test_historical_usage/ -v
+uv run pytest tests/test_historical_usage/ -v
 
 # With coverage
-uv run pytest plugins/slurm/tests/ --cov=waldur_site_agent_slurm --cov-report=html
+uv run pytest tests/ --cov=waldur_site_agent_slurm --cov-report=html
 ```
 
 ### Test Features
@@ -571,8 +620,8 @@ uv add --dev slurm-emulator
 # Install plugin in development mode
 uv sync --all-packages
 
-# Run tests
-uv run pytest plugins/slurm/tests/ -v
+# Run tests (from inside the plugin dir)
+cd plugins/slurm && uv run pytest tests/ -v
 ```
 
 ### Adding New Features
@@ -586,11 +635,11 @@ uv run pytest plugins/slurm/tests/ -v
 ### Debugging
 
 ```bash
-# Enable debug logging
-export WALDUR_SITE_AGENT_LOG_LEVEL=DEBUG
-
-# Run with verbose output
-uv run waldur_site_agent -m order_process -c config.yaml --verbose
+# Enable debug logging by setting log_level in the YAML config:
+#   log_level: DEBUG
+# (the agent reads log_level from the configuration file; there is no
+#  --verbose flag and no LOG_LEVEL environment variable for the main agent)
+uv run waldur_site_agent -m order_process -c config.yaml
 
 # Test specific functionality
 python -c "
@@ -609,6 +658,11 @@ print(client.list_accounts())
 offerings:
   - name: "HPC Cluster"
     backend_type: "slurm"
+    # STOMP event processing (top-level offering keys)
+    stomp_enabled: true
+    stomp_ws_host: "mastermind.example.com"
+    stomp_ws_port: 443
+    websocket_use_tls: true
     backend_settings:
       default_account: "root"
       customer_prefix: "waldur_"
@@ -620,15 +674,6 @@ offerings:
         enabled: true
         emulator_mode: false
         limit_type: "GrpTRESMins"
-
-# Event processing
-event_processing:
-  enabled: true
-  stomp_settings:
-    host: "mastermind.example.com"
-    port: 61613
-    username: "site_agent"
-    password: "${STOMP_PASSWORD}"
 ```
 
 ### Multi-Cluster Setup
@@ -667,15 +712,13 @@ offerings:
 offerings:
   - name: "Development Cluster"
     backend_type: "slurm"
+    # No STOMP needed for development
+    stomp_enabled: false
     backend_settings:
       periodic_limits:
         enabled: true
         emulator_mode: true
         emulator_base_url: "http://localhost:8080"
-
-# No event processing needed for development
-event_processing:
-  enabled: false
 ```
 
 ## Troubleshooting
