@@ -81,6 +81,7 @@ you push.
 - [Installation Guide](docs/installation.md)
 - [Configuration Reference](docs/configuration.md)
 - [Deployment Guide](docs/deployment.md)
+- [Upgrading Guide](docs/upgrading.md)
 - [Username Management](docs/offering-users.md)
 - [SLURM Usage Reporting Setup](docs/slurm-usage-reporting-setup.md)
 - [Releasing Guide](docs/releasing.md)
