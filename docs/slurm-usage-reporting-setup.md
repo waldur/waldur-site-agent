@@ -246,10 +246,10 @@ uv run waldur_site_agent -m report -c /etc/waldur/waldur-site-agent-config.yaml 
 
 ### Debugging
 
-Enable debug logging by setting environment variable:
+Enable debug logging by setting `log_level` in the agent configuration file:
 
-```bash
-export WALDUR_SITE_AGENT_LOG_LEVEL=DEBUG
+```yaml
+log_level: DEBUG
 ```
 
 ## Data Flow
