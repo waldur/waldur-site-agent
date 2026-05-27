@@ -188,14 +188,17 @@ class SlurmBackend(backends.BaseBackend):
             waldur_resource.customer_slug
         )
 
-        current_parent = self.client.get_account_parent(project_backend_id)
-        if current_parent is None:
+        # Guard: identical IDs (same prefix + colliding slugs) would cause self-parenting.
+        if project_backend_id == expected_customer_backend_id:
             logger.warning(
-                "sync_resource_project: skipping %s — project account %s not found in SLURM",
+                "sync_resource_project: skipping %s — project and customer backend IDs "
+                "are identical (%s); check customer_prefix/project_prefix settings",
                 waldur_resource.backend_id,
                 project_backend_id,
             )
             return
+
+        current_parent = self.client.get_account_parent(project_backend_id)
         if current_parent == expected_customer_backend_id:
             logger.debug(
                 "sync_resource_project: %s parent already correct (%s)",
@@ -204,28 +207,82 @@ class SlurmBackend(backends.BaseBackend):
             )
             return
 
-        logger.info(
-            "Project account %s has parent %s but Waldur expects %s — reparenting",
-            project_backend_id,
-            current_parent,
-            expected_customer_backend_id,
+        if current_parent is None:
+            logger.warning(
+                "sync_resource_project: project account %s not found in SLURM — creating "
+                "customer and project accounts",
+                project_backend_id,
+            )
+        else:
+            logger.info(
+                "sync_resource_project: project account %s has parent %r but Waldur "
+                "expects %s — reparenting",
+                project_backend_id,
+                current_parent,
+                expected_customer_backend_id,
+            )
+
+        # Resolve names: fall back to backend ID when the API field is absent (Unset).
+        customer_name = (
+            waldur_resource.customer_name
+            if not isinstance(waldur_resource.customer_name, type(UNSET))
+            else expected_customer_backend_id
+        )
+        project_name = (
+            waldur_resource.project_name
+            if not isinstance(waldur_resource.project_name, type(UNSET))
+            else project_backend_id
         )
 
-        # Ensure the target customer account exists before reparenting
-        self._create_backend_resource(
-            expected_customer_backend_id,
-            waldur_resource.customer_name,
-            expected_customer_backend_id,
-            self.backend_settings.get("default_account"),
-        )
+        # Wrap in try/except so a transient SLURM error does not propagate and mark
+        # the resource ERRED — sync will retry on the next cycle.
+        try:
+            self._create_backend_resource(
+                expected_customer_backend_id,
+                customer_name,
+                expected_customer_backend_id,
+                self.backend_settings.get("default_account"),
+            )
+            self._create_backend_resource(
+                project_backend_id,
+                project_name,
+                project_backend_id,
+                expected_customer_backend_id,
+            )
+            self.client.set_account_parent(project_backend_id, expected_customer_backend_id)
+        except BackendError:
+            logger.exception(
+                "sync_resource_project: failed to create/reparent project account %s "
+                "under %s",
+                project_backend_id,
+                expected_customer_backend_id,
+            )
+            return
 
-        self.client.set_account_parent(project_backend_id, expected_customer_backend_id)
-        logger.info(
-            "Reparented SLURM project account %s: %s → %s",
-            project_backend_id,
-            current_parent,
-            expected_customer_backend_id,
-        )
+        # Verify the reparent actually took effect (set_account_parent silently
+        # returns '' when sacctmgr reports "Nothing modified").
+        try:
+            actual_parent = self.client.get_account_parent(project_backend_id)
+        except BackendError:
+            logger.warning(
+                "sync_resource_project: could not verify parent of %s after reparent attempt",
+                project_backend_id,
+            )
+            return
+        if actual_parent != expected_customer_backend_id:
+            logger.warning(
+                "sync_resource_project: parent of %s is %r after reparent attempt "
+                "(expected %s) — reparent may have silently failed",
+                project_backend_id,
+                actual_parent,
+                expected_customer_backend_id,
+            )
+        else:
+            logger.info(
+                "sync_resource_project: set parent of %s to %s",
+                project_backend_id,
+                expected_customer_backend_id,
+            )
 
     def diagnostics(self) -> bool:
         """Runs diagnostics for SLURM cluster."""

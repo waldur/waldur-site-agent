@@ -400,6 +400,7 @@ class TestQosStomp:
             waldur_rest_client=qos_stomp_client,
             resource_backend=qos_stomp_backend,
         )
+        state = None
         for _ in range(10):
             processor.process_offering()
             order = marketplace_orders_retrieve.sync(client=qos_stomp_client, uuid=order_uuid)
@@ -407,6 +408,11 @@ class TestQosStomp:
             if state in (OrderState.DONE, OrderState.ERRED):
                 break
             time.sleep(1)
+
+        assert state == OrderState.DONE, (
+            f"Order {order_uuid} ended in {state!r} state — resource was not created "
+            "successfully and subsequent tests would fail"
+        )
 
         resource_uuid = _get_resource_uuid_from_order(qos_stomp_client, order_uuid)
         backend_id = _get_backend_id(qos_stomp_client, resource_uuid)

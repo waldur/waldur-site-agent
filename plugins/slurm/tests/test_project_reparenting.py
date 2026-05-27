@@ -10,6 +10,8 @@ import pytest
 from waldur_api_client.models import ResourceState
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_limits import ResourceLimits
+from waldur_api_client.types import UNSET
+from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_slurm.backend import SlurmBackend
 from waldur_site_agent_slurm.client import SlurmClient
 
@@ -37,6 +39,7 @@ def _make_waldur_resource(
     project_slug: str = "project-alpha",
     customer_slug: str = "org-b",
     customer_name: str = "Org B",
+    project_name: str = "Project Alpha",
 ) -> WaldurResource:
     return WaldurResource(
         uuid=uuid.uuid4(),
@@ -52,7 +55,7 @@ def _make_waldur_resource(
         restrict_member_access=False,
         limits=ResourceLimits.from_dict({"cpu": 50}),
         project_uuid=uuid.uuid4(),
-        project_name="Project Alpha",
+        project_name=project_name,
         project_slug=project_slug,
         customer_uuid=uuid.uuid4(),
         customer_name=customer_name,
@@ -123,7 +126,8 @@ class TestSyncResourceProject:
 
     def test_reparents_when_parent_is_stale(self):
         backend = _make_backend()
-        backend.client.get_account_parent.return_value = "hpc_org-a"
+        # First call: pre-check returns stale parent; second call: post-verify returns correct.
+        backend.client.get_account_parent.side_effect = ["hpc_org-a", "hpc_org-b"]
 
         waldur_resource = _make_waldur_resource(
             project_slug="project-alpha",
@@ -134,8 +138,9 @@ class TestSyncResourceProject:
         with patch.object(backend, "_create_backend_resource") as mock_create:
             backend.sync_resource_project(waldur_resource)
 
-        backend.client.get_account_parent.assert_called_once_with("hpc_project-alpha")
-        mock_create.assert_called_once_with("hpc_org-b", "Org B", "hpc_org-b", "root")
+        assert mock_create.call_count == 2
+        mock_create.assert_any_call("hpc_org-b", "Org B", "hpc_org-b", "root")
+        mock_create.assert_any_call("hpc_project-alpha", "Project Alpha", "hpc_project-alpha", "hpc_org-b")
         backend.client.set_account_parent.assert_called_once_with("hpc_project-alpha", "hpc_org-b")
 
     def test_no_reparent_when_parent_already_correct(self):
@@ -151,18 +156,24 @@ class TestSyncResourceProject:
 
         backend.client.set_account_parent.assert_not_called()
 
-    def test_no_reparent_when_account_not_found_in_slurm(self):
+    def test_creates_accounts_and_sets_parent_when_project_account_missing(self):
         backend = _make_backend()
-        backend.client.get_account_parent.return_value = None
+        # First call: account missing; second call: post-verify confirms correct parent.
+        backend.client.get_account_parent.side_effect = [None, "hpc_org-b"]
 
         waldur_resource = _make_waldur_resource(
             project_slug="project-alpha",
             customer_slug="org-b",
+            customer_name="Org B",
         )
 
-        backend.sync_resource_project(waldur_resource)
+        with patch.object(backend, "_create_backend_resource") as mock_create:
+            backend.sync_resource_project(waldur_resource)
 
-        backend.client.set_account_parent.assert_not_called()
+        assert mock_create.call_count == 2
+        mock_create.assert_any_call("hpc_org-b", "Org B", "hpc_org-b", "root")
+        mock_create.assert_any_call("hpc_project-alpha", "Project Alpha", "hpc_project-alpha", "hpc_org-b")
+        backend.client.set_account_parent.assert_called_once_with("hpc_project-alpha", "hpc_org-b")
 
     def test_skipped_for_flat_hierarchy(self):
         backend = _make_backend(extra_settings={"parent_account": "flat-parent"})
@@ -194,3 +205,68 @@ class TestSyncResourceProject:
 
         backend.client.get_account_parent.assert_not_called()
         backend.client.set_account_parent.assert_not_called()
+
+    def test_skipped_when_project_and_customer_backend_ids_are_identical(self):
+        # customer_prefix == project_prefix AND same slug → identical IDs → self-parenting guard.
+        backend = _make_backend()
+        waldur_resource = _make_waldur_resource(
+            project_slug="acme",
+            customer_slug="acme",
+        )
+
+        backend.sync_resource_project(waldur_resource)
+
+        backend.client.get_account_parent.assert_not_called()
+        backend.client.set_account_parent.assert_not_called()
+
+    def test_backend_error_is_caught_not_propagated(self):
+        backend = _make_backend()
+        backend.client.get_account_parent.return_value = "hpc_org-a"
+
+        waldur_resource = _make_waldur_resource(
+            project_slug="project-alpha",
+            customer_slug="org-b",
+        )
+
+        with patch.object(
+            backend, "_create_backend_resource", side_effect=BackendError("sacctmgr failed")
+        ):
+            # Must not raise — BackendError is caught internally.
+            backend.sync_resource_project(waldur_resource)
+
+        backend.client.set_account_parent.assert_not_called()
+
+    def test_warns_when_parent_mismatch_after_reparent(self):
+        backend = _make_backend()
+        # Pre-check: stale parent. Post-verify: still wrong (set_account_parent silently no-oped).
+        backend.client.get_account_parent.side_effect = ["hpc_org-a", "hpc_org-a"]
+
+        waldur_resource = _make_waldur_resource(
+            project_slug="project-alpha",
+            customer_slug="org-b",
+        )
+
+        with patch.object(backend, "_create_backend_resource"):
+            with patch.object(backend, "_get_logger_name", create=True):
+                backend.sync_resource_project(waldur_resource)
+
+        # set_account_parent was still attempted even though it didn't take effect.
+        backend.client.set_account_parent.assert_called_once_with("hpc_project-alpha", "hpc_org-b")
+
+    def test_uses_backend_id_as_fallback_when_names_are_unset(self):
+        backend = _make_backend()
+        backend.client.get_account_parent.side_effect = [None, "hpc_org-b"]
+
+        waldur_resource = _make_waldur_resource(
+            project_slug="project-alpha",
+            customer_slug="org-b",
+            customer_name=UNSET,
+            project_name=UNSET,
+        )
+
+        with patch.object(backend, "_create_backend_resource") as mock_create:
+            backend.sync_resource_project(waldur_resource)
+
+        # When names are Unset, backend IDs are used as the description fallback.
+        mock_create.assert_any_call("hpc_org-b", "hpc_org-b", "hpc_org-b", "root")
+        mock_create.assert_any_call("hpc_project-alpha", "hpc_project-alpha", "hpc_project-alpha", "hpc_org-b")
