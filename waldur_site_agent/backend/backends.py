@@ -514,24 +514,28 @@ class BaseBackend(ABC):
         self,
         waldur_resource: WaldurResource,
         **kwargs: str,
-    ) -> None:
+    ) -> Optional[str]:
         """Delete resource from the backend.
 
         If ``soft_delete`` is enabled in backend_settings, the resource account
         is preserved but made unusable: jobs are cancelled, users are removed,
         and limits are zeroed. This allows later restoration with the same
         backend_id.
+
+        Returns:
+            Target order UUID when an async backend submits a remote order.
+            None when deletion completed synchronously or was skipped.
         """
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
             logger.warning("Empty backend_id for resource, skipping deletion")
-            return
+            return None
 
         if self.client.get_resource(resource_backend_id) is None:
             logger.warning(
                 "No resource with ID %s is in %s", resource_backend_id, self.backend_type
             )
-            return
+            return None
 
         soft_delete = self.backend_settings.get("soft_delete", False)
 
@@ -563,6 +567,7 @@ class BaseBackend(ABC):
                     self._delete_resource_safely(project_backend_id)
 
         self.post_delete_resource(waldur_resource)
+        return None
 
     def post_delete_resource(
         self,
@@ -933,17 +938,24 @@ class BaseBackend(ABC):
         """
         del existing_users
 
-    def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
+    def set_resource_limits(
+        self, resource_backend_id: str, limits: dict[str, int]
+    ) -> Optional[str]:
         """Set limits for the resource on the backend.
 
         Converts Waldur-unit limits to backend-native units using each
         component's ``unit_factor`` before delegating to the client.
+
+        Returns:
+            Target order UUID when an async backend submits a remote order.
+            None when limits were applied synchronously.
         """
         converted_limits = {
             key: int(value * self.backend_components.get(key, {}).get("unit_factor", 1))
             for key, value in limits.items()
         }
         self.client.set_resource_limits(resource_backend_id, converted_limits)
+        return None
 
     def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
         """Get limits for the resource on the backend."""
@@ -1010,9 +1022,10 @@ class UnknownBackend(BaseBackend):
         self,
         waldur_resource: WaldurResource,
         **kwargs: str,
-    ) -> None:
+    ) -> Optional[str]:
         """Placeholder."""
         del kwargs, waldur_resource
+        return None
 
     def create_resource(
         self,
@@ -1049,9 +1062,10 @@ class UnknownBackend(BaseBackend):
         del kwargs, waldur_resource
         return user_ids
 
-    def set_resource_limits(self, _: str, limits: dict[str, int]) -> None:
+    def set_resource_limits(self, _: str, limits: dict[str, int]) -> Optional[str]:
         """Placeholder."""
         del limits
+        return None
 
     def _collect_resource_limits(self, _: WaldurResource) -> tuple[dict[str, int], dict[str, int]]:
         return {"": 0}, {"": 0}

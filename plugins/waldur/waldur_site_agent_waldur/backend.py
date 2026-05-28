@@ -350,40 +350,44 @@ class WaldurBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         **kwargs: str,
-    ) -> None:
-        """Terminate resource on Waldur B via a marketplace order."""
+    ) -> Optional[str]:
+        """Terminate resource on Waldur B via a marketplace order (non-blocking).
+
+        Returns:
+            Target order UUID when a termination order was submitted on Waldur B.
+            None when deletion was skipped (empty backend_id or resource missing).
+        """
         del kwargs
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id or not resource_backend_id.strip():
             logger.warning("Empty backend_id for resource, skipping deletion")
-            return
+            return None
 
         # Check if resource exists on Waldur B
         if self.client.get_resource(resource_backend_id) is None:
             logger.warning("Resource %s not found on Waldur B, skipping", resource_backend_id)
-            return
+            return None
 
         try:
             order_uuid = self.client.create_terminate_order(UUID(resource_backend_id))
             logger.info(
-                "Termination order %s created for resource %s on Waldur B",
+                "Termination order %s submitted for resource %s on Waldur B (non-blocking)",
                 order_uuid,
                 resource_backend_id,
             )
-            self.client.poll_order_completion(
-                order_uuid=order_uuid,
-                timeout=self.order_poll_timeout,
-                interval=self.order_poll_interval,
-            )
-            logger.info("Resource %s terminated on Waldur B", resource_backend_id)
+            return str(order_uuid)
         except BackendError:
             logger.exception("Failed to terminate resource %s on Waldur B", resource_backend_id)
             raise
 
     def set_resource_limits(
         self, resource_backend_id: str, limits: dict[str, int]
-    ) -> None:
-        """Update resource limits on Waldur B via an update order."""
+    ) -> Optional[str]:
+        """Update resource limits on Waldur B via an update order (non-blocking).
+
+        Returns:
+            Target order UUID when an update order was submitted on Waldur B.
+        """
         target_limits = self.component_mapper.convert_limits_to_target(limits)
         try:
             order_uuid = self.client.create_update_order(
@@ -391,15 +395,11 @@ class WaldurBackend(backends.BaseBackend):
                 limits=target_limits,
             )
             logger.info(
-                "Update limits order %s created for resource %s",
+                "Update limits order %s submitted for resource %s (non-blocking)",
                 order_uuid,
                 resource_backend_id,
             )
-            self.client.poll_order_completion(
-                order_uuid=order_uuid,
-                timeout=self.order_poll_timeout,
-                interval=self.order_poll_interval,
-            )
+            return str(order_uuid)
         except BackendError:
             logger.exception(
                 "Failed to update limits for resource %s on Waldur B", resource_backend_id

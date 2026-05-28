@@ -898,11 +898,30 @@ class WaldurTestSetup:
 class AutoApproveWaldurClient(WaldurClient):
     """WaldurClient subclass for integration tests.
 
-    Overrides poll_order_completion to auto-approve pending-provider orders
-    on the test Waldur instance. In production, orders on Waldur B are
-    approved by Waldur B's own service provider workflow. In tests, there
-    is no such workflow running, so we approve them ourselves.
+    Auto-approves pending-provider orders on the test Waldur instance.
+    In production, orders on Waldur B are approved by Waldur B's own service
+    provider workflow. In tests, there is no such workflow running, so we
+    approve them ourselves.
+
+    For direct backend calls (set_resource_limits, delete_resource), order
+    submission methods wait for completion so integration tests can assert
+    on the final state immediately. Processor-driven flows use
+    check_pending_order() across cycles instead.
     """
+
+    def create_update_order(
+        self,
+        resource_uuid: UUID,
+        limits: dict[str, int],
+    ) -> UUID:
+        order_uuid = super().create_update_order(resource_uuid, limits)
+        self.poll_order_completion(order_uuid)
+        return order_uuid
+
+    def create_terminate_order(self, resource_uuid: UUID) -> UUID:
+        order_uuid = super().create_terminate_order(resource_uuid)
+        self.poll_order_completion(order_uuid)
+        return order_uuid
 
     def poll_order_completion(
         self,

@@ -1241,6 +1241,45 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             user_attributes=user_attributes,
         )
 
+    def _get_order_backend_id(self, order: OrderDetails) -> str:
+        return order.backend_id or ""
+
+    def _poll_async_target_order(self, order: OrderDetails) -> Optional[bool]:
+        """Poll target order on an async backend when order.backend_id is set.
+
+        Returns:
+            True when the target order completed successfully.
+            False when the target order is still in progress.
+            None when this order is not in async polling mode.
+        """
+        if not self.resource_backend.supports_async_orders:
+            return None
+
+        order_backend_id = self._get_order_backend_id(order)
+        if not order_backend_id:
+            return None
+
+        if self.resource_backend.check_pending_order(order_backend_id):
+            logger.info("Target order %s completed successfully", order_backend_id)
+            return True
+
+        logger.info("Target order %s still pending", order_backend_id)
+        return False
+
+    def _submit_async_target_order(self, order: OrderDetails, pending_order_id: str) -> bool:
+        """Record target order UUID on the source order and keep it EXECUTING."""
+        logger.info(
+            "Async order created: setting order %s backend_id to %s",
+            order.uuid,
+            pending_order_id,
+        )
+        marketplace_orders_set_backend_id.sync(
+            client=self.waldur_rest_client,
+            uuid=order.uuid,
+            body=OrderBackendIDRequest(backend_id=pending_order_id),
+        )
+        return False
+
     def _process_create_order(self, order: OrderDetails | None) -> bool:
         """Process a CREATE order to establish a new resource.
 
@@ -1263,26 +1302,17 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         # (e.g., Waldur-to-Waldur federation). External systems may also set
         # order.backend_id for their own purposes, so this check must be skipped
         # for backends that don't use async order tracking.
-        if self.resource_backend.supports_async_orders:
-            order_backend_id = (
-                ""
-                if isinstance(order.backend_id, type(UNSET))
-                else (order.backend_id or "")
-            )
-            if order_backend_id:
-                is_done = self.resource_backend.check_pending_order(order_backend_id)
-                if is_done:
-                    logger.info("Target order %s completed successfully", order_backend_id)
-                    waldur_resource = marketplace_provider_resources_retrieve.sync(
-                        uuid=order.marketplace_resource_uuid.hex,
-                        client=self.waldur_rest_client,
-                    )
-                    self.resource_backend.sync_resource_effective_id(
-                        waldur_resource, self.waldur_rest_client
-                    )
-                    return True
-                logger.info("Target order %s still pending", order_backend_id)
-                return False
+        async_status = self._poll_async_target_order(order)
+        if async_status is not None:
+            if async_status:
+                waldur_resource = marketplace_provider_resources_retrieve.sync(
+                    uuid=order.marketplace_resource_uuid.hex,
+                    client=self.waldur_rest_client,
+                )
+                self.resource_backend.sync_resource_effective_id(
+                    waldur_resource, self.waldur_rest_client
+                )
+            return async_status
 
         waldur_resource = marketplace_provider_resources_retrieve.sync(
             uuid=order.marketplace_resource_uuid.hex, client=self.waldur_rest_client
@@ -1350,19 +1380,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             backend_resource_info.pending_order_id
             and self.resource_backend.supports_async_orders
         ):
-            logger.info(
-                "Async order created: setting order %s backend_id to %s",
-                order.uuid,
-                backend_resource_info.pending_order_id,
+            return self._submit_async_target_order(
+                order, backend_resource_info.pending_order_id
             )
-            marketplace_orders_set_backend_id.sync(
-                client=self.waldur_rest_client,
-                uuid=order.uuid,
-                body=OrderBackendIDRequest(
-                    backend_id=backend_resource_info.pending_order_id
-                ),
-            )
-            return False  # Order stays EXECUTING
 
         waldur_resource.backend_id = backend_resource_info.backend_id
 
@@ -1380,6 +1400,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         Raises:
             ObjectNotFoundError: If the target resource is not found
         """
+        async_status = self._poll_async_target_order(order)
+        if async_status is not None:
+            return async_status
+
         logger.info("Updating limits for %s", order.resource_name)
         resource_uuid = order.marketplace_resource_uuid
         waldur_resource = marketplace_provider_resources_retrieve.sync(
@@ -1440,7 +1464,11 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 waldur_resource_backend_id, waldur_resource
             )
         else:
-            self.resource_backend.set_resource_limits(waldur_resource_backend_id, new_limits)
+            pending_order_id = self.resource_backend.set_resource_limits(
+                waldur_resource_backend_id, new_limits
+            )
+            if pending_order_id and self.resource_backend.supports_async_orders:
+                return self._submit_async_target_order(order, pending_order_id)
 
             logger.info(
                 "The limits for %s were updated successfully from %s to %s",
@@ -1508,6 +1536,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         Raises:
             ObjectNotFoundError: If the target resource is not found
         """
+        async_status = self._poll_async_target_order(order)
+        if async_status is not None:
+            return async_status
+
         logger.info("Terminating resource %s", order.resource_name)
         resource_uuid = order.marketplace_resource_uuid
         waldur_resource = marketplace_provider_resources_retrieve.sync(
@@ -1515,10 +1547,12 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         )
         project_slug = order.project_slug
 
-        self.resource_backend.delete_resource(
+        pending_order_id = self.resource_backend.delete_resource(
             waldur_resource,
             project_slug=project_slug,
         )
+        if pending_order_id and self.resource_backend.supports_async_orders:
+            return self._submit_async_target_order(order, pending_order_id)
 
         logger.info("Allocation has been terminated successfully")
         return True

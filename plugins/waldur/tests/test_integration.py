@@ -494,10 +494,11 @@ class TestOrderStates:
             backend.create_resource(waldur_resource)
 
     def test_create_with_short_timeout(self, passthrough_env, waldur_setup):
-        """Backend with very short timeout — non-blocking create always returns.
+        """Backend with very short timeout — all order types are non-blocking.
 
-        With non-blocking create, the timeout only affects delete/update orders.
-        create_resource() returns immediately with pending_order_id.
+        create_resource(), set_resource_limits(), and delete_resource() return
+        immediately with a target order UUID. Completion is tracked via
+        check_pending_order() on subsequent processor cycles.
         """
         settings = {
             **passthrough_env.backend_settings,

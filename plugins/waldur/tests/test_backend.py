@@ -258,15 +258,14 @@ class TestResourceDeletion:
     def test_delete_resource(self, backend, mock_client):
         mock_client.get_resource.return_value = MagicMock()
         mock_client.create_terminate_order.return_value = ORDER_UUID
-        mock_completed = MagicMock()
-        mock_completed.state = OrderState.DONE
-        mock_client.poll_order_completion.return_value = mock_completed
 
         waldur_resource = MagicMock()
         waldur_resource.backend_id = str(RESOURCE_UUID)
 
-        backend.delete_resource(waldur_resource)
+        pending_order_id = backend.delete_resource(waldur_resource)
         mock_client.create_terminate_order.assert_called_once()
+        mock_client.poll_order_completion.assert_not_called()
+        assert pending_order_id == str(ORDER_UUID)
 
     def test_delete_resource_not_found(self, backend, mock_client):
         mock_client.get_resource.return_value = None
@@ -289,21 +288,20 @@ class TestResourceDeletion:
 class TestSetLimits:
     def test_set_resource_limits(self, backend, mock_client):
         mock_client.create_update_order.return_value = ORDER_UUID
-        mock_completed = MagicMock()
-        mock_completed.state = OrderState.DONE
-        mock_client.poll_order_completion.return_value = mock_completed
 
-        backend.set_resource_limits(str(RESOURCE_UUID), {"cpu": 200})
+        pending_order_id = backend.set_resource_limits(str(RESOURCE_UUID), {"cpu": 200})
         mock_client.create_update_order.assert_called_once()
+        mock_client.poll_order_completion.assert_not_called()
+        assert pending_order_id == str(ORDER_UUID)
 
     def test_set_resource_limits_with_conversion(self, backend_with_conversion, mock_client):
         mock_client.create_update_order.return_value = ORDER_UUID
-        mock_completed = MagicMock()
-        mock_client.poll_order_completion.return_value = mock_completed
 
-        backend_with_conversion.set_resource_limits(
+        pending_order_id = backend_with_conversion.set_resource_limits(
             str(RESOURCE_UUID), {"node_hours": 100}
         )
+        mock_client.poll_order_completion.assert_not_called()
+        assert pending_order_id == str(ORDER_UUID)
 
         # Verify the limits were converted
         call_args = mock_client.create_update_order.call_args
