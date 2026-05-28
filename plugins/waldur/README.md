@@ -162,6 +162,11 @@ sequenceDiagram
 (Waldur B). Only the source resource (Waldur A) gets `backend_id` = B's resource
 UUID. Waldur B's `backend_id` is managed by B's own service provider.
 
+UPDATE and TERMINATE orders use the same non-blocking pattern: the agent submits
+the order on Waldur B, sets `order.backend_id` on Waldur A to the target order
+UUID, and tracks completion via `check_pending_order()` on subsequent cycles (or
+instantly via target STOMP when enabled).
+
 ### Target STOMP Event Subscriptions (Optional)
 
 When `target_stomp_enabled` is `true`, the agent subscribes to ORDER events on
@@ -504,8 +509,8 @@ These settings are on the offering itself (not inside `backend_settings`):
 | `target_offering_uuid` | Yes | -- | Offering UUID on Waldur B |
 | `target_customer_uuid` | Yes | -- | Customer/organization UUID on Waldur B |
 | `user_match_field` | No | `cuid` | User matching strategy: `cuid`, `email`, or `username` |
-| `order_poll_timeout` | No | `300` | Max seconds to wait for synchronous order completion (update/terminate) |
-| `order_poll_interval` | No | `5` | Seconds between synchronous order state polls |
+| `order_poll_timeout` | No | `300` | Unused legacy setting for `poll_order_completion()` |
+| `order_poll_interval` | No | `5` | Unused legacy setting for `poll_order_completion()` |
 | `user_not_found_action` | No | `warn` | When user not found: `warn` or `fail` |
 | `target_stomp_enabled` | No | `false` | STOMP on B for instant order completion (requires Slurm offering) |
 | `identity_bridge_source` | No | `""` | ISD source identifier for identity bridge (e.g. `isd:efp`) |

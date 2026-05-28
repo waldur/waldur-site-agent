@@ -49,12 +49,12 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
     order_poll_timeout: int = Field(
         default=300,
         gt=0,
-        description="Maximum seconds to wait for order completion on Waldur B",
+        description="Legacy setting for poll_order_completion(); unused by federation order forwarding",
     )
     order_poll_interval: int = Field(
         default=5,
         gt=0,
-        description="Seconds between order state poll attempts",
+        description="Legacy setting for poll_order_completion(); unused by federation order forwarding",
     )
     user_resolve_method: Literal["remote_eduteams", "identity_bridge", "user_field"] = (
         Field(
