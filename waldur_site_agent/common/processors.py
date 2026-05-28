@@ -2176,7 +2176,10 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             )
 
             self.resource_backend.remove_users_from_resource(
-                waldur_resource, existing_usernames, user_cuids=user_cuids,
+                waldur_resource,
+                existing_usernames,
+                user_cuids=user_cuids,
+                user_roles=user_roles,
             )
             return set()
 
@@ -2195,9 +2198,17 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             waldur_resource,
             stale_usernames,
             user_cuids=user_cuids,
+            user_roles=user_roles,
         )
 
         self.resource_backend.process_existing_users(existing_usernames)
+
+        self.resource_backend.reconcile_existing_user_roles(
+            waldur_resource,
+            existing_usernames,
+            user_roles,
+            user_cuids,
+        )
 
         return existing_usernames | added_usernames
 
