@@ -938,6 +938,26 @@ class BaseBackend(ABC):
         """
         del existing_users
 
+    def reconcile_existing_user_roles(
+        self,
+        waldur_resource: WaldurResource,
+        existing_users: set[str],
+        user_roles: dict,
+        user_cuids: dict,
+    ) -> None:
+        """Reconcile target-side role grants for users present on both A and B.
+
+        Override in backends where the target system has its own project-scope
+        role model (e.g. Waldur federation). Default: no-op.
+
+        Args:
+            waldur_resource: The Waldur A resource being processed.
+            existing_users: Set of usernames already on both A and B.
+            user_roles: Mapping of username -> Waldur role name (from Waldur A).
+            user_cuids: Mapping of username -> CUID, for identity resolution.
+        """
+        del waldur_resource, existing_users, user_roles, user_cuids
+
     def set_resource_limits(
         self, resource_backend_id: str, limits: dict[str, int]
     ) -> Optional[str]:

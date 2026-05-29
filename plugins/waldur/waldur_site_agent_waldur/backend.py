@@ -913,8 +913,11 @@ class WaldurBackend(backends.BaseBackend):
             )
             return []
 
-        # Extract CUID mapping for identity resolution
+        # Extract CUID and role mappings for identity resolution and role-aware delete
         user_cuids: dict = kwargs.get("user_cuids", {})
+        user_roles: dict = kwargs.get("user_roles", {})
+
+        b_roles_by_uuid: dict[str, str] = self._fetch_b_side_roles(project_uuid)
 
         removed_users: list[str] = []
         for username in usernames:
@@ -922,19 +925,125 @@ class WaldurBackend(backends.BaseBackend):
                 # Use CUID for identity bridge resolution when available
                 identity = user_cuids.get(username, username)
                 remote_user_uuid = self._resolve_remote_user(identity)
-                if remote_user_uuid:
-                    self.client.remove_user_from_project(
-                        project_uuid=project_uuid,
-                        user_uuid=remote_user_uuid,
+                if not remote_user_uuid:
+                    continue
+
+                source_role = user_roles.get(username)
+                target_role: Optional[str]
+                if source_role:
+                    target_role = self._map_role(source_role)
+                else:
+                    target_role = b_roles_by_uuid.get(str(remote_user_uuid))
+
+                if not target_role:
+                    logger.warning(
+                        "Cannot determine role for user %s on Waldur B project %s; "
+                        "skipping remove",
+                        username, project_uuid,
                     )
-                    removed_users.append(username)
-                    logger.info(
-                        "Removed user %s from Waldur B project %s", username, project_uuid
-                    )
+                    continue
+
+                self.client.remove_user_from_project(
+                    project_uuid=project_uuid,
+                    user_uuid=remote_user_uuid,
+                    role_name=target_role,
+                )
+                removed_users.append(username)
+                logger.info(
+                    "Removed user %s from Waldur B project %s (role %s)",
+                    username, project_uuid, target_role,
+                )
             except Exception:
                 logger.exception("Failed to remove user %s from Waldur B", username)
 
         return removed_users
+
+    def _fetch_b_side_roles(self, project_uuid: UUID) -> dict[str, str]:
+        """Return a mapping of remote-user-UUID → current role on Waldur B."""
+        try:
+            project_users = self.client.list_project_users(project_uuid)
+        except Exception:
+            logger.exception(
+                "Failed to list users for Waldur B project %s", project_uuid,
+            )
+            return {}
+        roles: dict[str, str] = {}
+        for project_user in project_users:
+            user_uuid = getattr(project_user, "user_uuid", None)
+            role_name = getattr(project_user, "role_name", None)
+            if (
+                user_uuid
+                and role_name
+                and not isinstance(user_uuid, type(UNSET))
+                and not isinstance(role_name, type(UNSET))
+            ):
+                roles[str(user_uuid)] = role_name
+        return roles
+
+    def reconcile_existing_user_roles(
+        self,
+        waldur_resource: WaldurResource,
+        existing_users: set[str],
+        user_roles: dict,
+        user_cuids: dict,
+    ) -> None:
+        """Reconcile B-side project roles for users present on both A and B.
+
+        When a user already exists on B but their A-side role has changed,
+        update B's role grant to match.
+        """
+        if not user_roles:
+            return
+
+        project_uuid = self._get_resource_project_uuid(waldur_resource.backend_id)
+        if not project_uuid:
+            return
+
+        b_roles_by_uuid = self._fetch_b_side_roles(project_uuid)
+
+        for username in existing_users:
+            source_role = user_roles.get(username)
+            if not source_role:
+                continue
+            expected_role = self._map_role(source_role)
+
+            identity = user_cuids.get(username, username)
+            remote_user_uuid = self._resolve_remote_user(identity)
+            if not remote_user_uuid:
+                continue
+
+            current_role = b_roles_by_uuid.get(str(remote_user_uuid))
+            if current_role is None or current_role == expected_role:
+                continue
+
+            logger.info(
+                "Updating role for user %s on Waldur B project %s: %s -> %s",
+                username, project_uuid, current_role, expected_role,
+            )
+            try:
+                self.client.remove_user_from_project(
+                    project_uuid=project_uuid,
+                    user_uuid=remote_user_uuid,
+                    role_name=current_role,
+                )
+            except BackendError:
+                logger.exception(
+                    "Failed to revoke old role %s for user %s on Waldur B project %s",
+                    current_role, username, project_uuid,
+                )
+                continue
+            try:
+                self.client.add_user_to_project(
+                    project_uuid=project_uuid,
+                    user_uuid=remote_user_uuid,
+                    role_name=expected_role,
+                )
+            except BackendError:
+                logger.error(
+                    "Half-applied role update for user %s on Waldur B project %s: "
+                    "old role %s revoked but new role %s could not be granted",
+                    username, project_uuid, current_role, expected_role,
+                )
 
     def _get_resource_project_uuid(self, resource_backend_id: str) -> Optional[UUID]:
         """Get the project UUID for a resource on Waldur B."""
