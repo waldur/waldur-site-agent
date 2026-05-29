@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.5-rc.1 - 2026-05-29
+
+- **Waldur**: Add project role reconciliation in polling mode so role changes are synced even without event notifications.
+- **Federation**: Fix terminate/update orders timing out while waiting for B-side approval ([WAL-9967]).
+- **OpenNebula**: Add vLLM inference VM support, including model-by-name selection, a sample offering, and `/v1` base-path getting-started instructions.
+- **OpenNebula**: Apply component `unit_factor` when sizing VMs.
+- **SLURM**: Create missing customer/project accounts in `sync_resource_project`.
+- **SLURM**: Add upgrade guide with SLURM-specific steps ([WAL-8090]).
+- **SLURM**: Fix outdated information in plugin README and docs.
+
+> 10 commits, 26 files changed (+2035/-213 lines)
+
+---
+
 ## 1.0.4 - 2026-05-22
 
 ### Highlights
