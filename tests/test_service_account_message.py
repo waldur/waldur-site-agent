@@ -12,6 +12,7 @@ from waldur_api_client.models import (
 )
 import stomp.utils
 
+from tests.fixtures import user_me_api_response
 from waldur_site_agent.common.processors import OfferingMembershipProcessor
 from waldur_site_agent.common.structures import AccountType
 from waldur_site_agent.event_processing import handlers
@@ -71,12 +72,7 @@ class ServiceAccountMessageTest(TestCase):
     def _setup_common_mocks(self):
         respx.get(f"{self.BASE_URL}/api/users/me/").respond(
             200,
-            json={
-                "username": "test",
-                "email": "test@example.com",
-                "full_name": "Test User",
-                "is_staff": False,
-            },
+            json=user_me_api_response(base_url=self.BASE_URL),
         )
         customer_uuid = uuid.uuid4().hex
         respx.get(

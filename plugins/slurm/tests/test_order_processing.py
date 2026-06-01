@@ -16,7 +16,7 @@ from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
 
-from tests.fixtures import OFFERING
+from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent.backend.structures import ClientResource
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingOrderProcessor
@@ -150,13 +150,9 @@ class CreationOrderTest(unittest.TestCase):
             project_slug="project-1",
             customer_slug="customer-1",
         ).to_dict()
-        self.waldur_user = models.User(
-            uuid=uuid.uuid4(),
-            username="test-user",
-            date_joined=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            email="test@example.com",
-            full_name="Test User",
-        ).to_dict()
+        self.waldur_user = user_me_api_response(
+            base_url=self.BASE_URL, username="test-user"
+        )
 
         self.waldur_offering = models.Offering(
             uuid=OFFERING.uuid,
@@ -444,14 +440,9 @@ class TerminationOrderTest(unittest.TestCase):
         ).to_dict()
 
         # Create user data
-        self.waldur_user = models.User(
-            uuid=uuid.uuid4(),
-            username="test-user",
-            date_joined=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            email="test@example.com",
-            full_name="Test User",
-            is_staff=False,
-        ).to_dict()
+        self.waldur_user = user_me_api_response(
+            base_url=self.base_url, username="test-user"
+        )
 
         # Create offering data
         self.waldur_offering = models.Offering(
@@ -585,13 +576,9 @@ class RestoreOrderTest(unittest.TestCase):
             project_slug="project-1",
             customer_slug="customer-1",
         ).to_dict()
-        self.waldur_user = models.User(
-            uuid=uuid.uuid4(),
-            username="test-user",
-            date_joined=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            email="test@example.com",
-            full_name="Test User",
-        ).to_dict()
+        self.waldur_user = user_me_api_response(
+            base_url=self.BASE_URL, username="test-user"
+        )
         self.waldur_offering = models.Offering(
             uuid=OFFERING.uuid,
             name=OFFERING.name,
@@ -812,14 +799,9 @@ class UpdateOrderTest(unittest.TestCase):
         ).to_dict()
 
         # Create user data
-        self.waldur_user = models.User(
-            uuid=uuid.uuid4(),
-            username="test-user",
-            date_joined=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            email="test@example.com",
-            full_name="Test User",
-            is_staff=False,
-        ).to_dict()
+        self.waldur_user = user_me_api_response(
+            base_url=self.base_url, username="test-user"
+        )
 
         # Create offering data
         self.waldur_offering = models.Offering(
@@ -911,13 +893,9 @@ class DuplicateResourceCreationTest(unittest.TestCase):
         self.project_uuid = uuid.uuid4().hex
         self.order_uuid = uuid.UUID("2c76f6ea-3482-4cb9-a975-ae0235ba4ac7").hex
 
-        self.waldur_user = models.User(
-            uuid=uuid.uuid4(),
-            username="test-user",
-            date_joined=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            email="test@example.com",
-            full_name="Test User",
-        ).to_dict()
+        self.waldur_user = user_me_api_response(
+            base_url=self.BASE_URL, username="test-user"
+        )
 
         self.waldur_offering = models.Offering(
             uuid=OFFERING.uuid,
