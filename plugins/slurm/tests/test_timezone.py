@@ -10,6 +10,7 @@ from waldur_api_client import AuthenticatedClient
 from waldur_api_client.models import ServiceProvider
 from waldur_site_agent_slurm import backend
 
+from tests.fixtures import user_me_api_response
 from waldur_site_agent.backend.utils import format_current_month, get_current_time_in_timezone
 from waldur_site_agent.common.processors import OfferingReportProcessor
 from waldur_site_agent.common.structures import Offering
@@ -76,12 +77,7 @@ class ProcessorTimezoneTest(unittest.TestCase):
     def setUp(self) -> None:
         respx.start()
         self.offering_uuid = uuid.uuid4()
-        self.waldur_user = {
-            "username": "test",
-            "email": "test@example.com",
-            "full_name": "Test User",
-            "is_staff": False,
-        }
+        self.waldur_user = user_me_api_response(base_url=BASE_URL)
         self.waldur_offering = Offering(
             name="test",
             waldur_api_url=f"{BASE_URL}/api/",
@@ -187,12 +183,7 @@ class MonthBoundaryCrossingTest(unittest.TestCase):
             "customer_uuid": uuid.uuid4().hex,
             "components": [{"type": "cpu"}, {"type": "mem"}],
         }
-        self.waldur_user = {
-            "username": "test",
-            "email": "test@example.com",
-            "full_name": "Test User",
-            "is_staff": False,
-        }
+        self.waldur_user = user_me_api_response(base_url=BASE_URL)
         self.mock_client = AuthenticatedClient(
             base_url=BASE_URL,
             token=self.waldur_offering.api_token,
@@ -290,12 +281,7 @@ class TimezoneIntegrationTest(unittest.TestCase):
             "description": "test",
             "customer_uuid": uuid.uuid4().hex,
         }
-        self.waldur_user = {
-            "username": "test",
-            "email": "test@example.com",
-            "full_name": "Test User",
-            "is_staff": False,
-        }
+        self.waldur_user = user_me_api_response(base_url=BASE_URL)
 
         self.mock_client = AuthenticatedClient(
             base_url=BASE_URL,

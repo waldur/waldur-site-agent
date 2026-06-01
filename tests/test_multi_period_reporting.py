@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models import ServiceProvider
 
-from tests.fixtures import OFFERING
+from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent.backend.backends import BaseBackend
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common.processors import OfferingReportProcessor
@@ -203,7 +203,7 @@ class TestMultiPeriodProcessorFlow(unittest.TestCase):
 
     def _setup_common_mocks(self) -> None:
         respx.get(f"{self.BASE_URL}/api/users/me/").respond(
-            200, json={"username": "test-user"}
+            200, json=user_me_api_response(base_url=self.BASE_URL, username="test-user")
         )
         respx.get(
             f"{self.BASE_URL}/api/marketplace-provider-offerings/{OFFERING.uuid}/"

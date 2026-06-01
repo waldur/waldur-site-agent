@@ -8,7 +8,7 @@ from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models import ServiceProvider
 from waldur_site_agent_slurm import backend
 
-from tests.fixtures import OFFERING
+from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingReportProcessor
@@ -96,7 +96,7 @@ class ReportingTest(unittest.TestCase):
 
         # Set up respx mocks
         respx.get("https://waldur.example.com/api/users/me/").respond(
-            200, json={"username": "test-user"}
+            200, json=user_me_api_response(username="test-user")
         )
         respx.get(f"{self.BASE_URL}/api/marketplace-provider-offerings/{OFFERING.uuid}/").respond(
             200, json=self.waldur_offering
@@ -166,7 +166,7 @@ class ReportingTest(unittest.TestCase):
         mock_pull_backend_resource.return_value = self.allocation_slurm
 
         respx.get("https://waldur.example.com/api/users/me/").respond(
-            200, json={"username": "test-user"}
+            200, json=user_me_api_response(username="test-user")
         )
         respx.get(f"{self.BASE_URL}/api/marketplace-provider-offerings/{OFFERING.uuid}/").respond(
             200, json=self.waldur_offering

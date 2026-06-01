@@ -1,4 +1,5 @@
 from unittest import mock, TestCase
+from tests.fixtures import user_me_api_response
 from waldur_site_agent.common import structures
 from waldur_site_agent.backend import structures as backend_structures
 from waldur_site_agent.common.processors import OfferingImportableResourcesProcessor
@@ -63,12 +64,7 @@ class BackendResourceRequestTest(TestCase):
     def mock_waldur_client(self):
         respx.get(f"{self.BASE_URL}/api/users/me/").respond(
             200,
-            json={
-                "username": "test",
-                "email": "test@example.com",
-                "full_name": "Test User",
-                "is_staff": False,
-            },
+            json=user_me_api_response(base_url=self.BASE_URL),
         )
         customer_uuid = uuid.uuid4()
         offering_details = ProviderOfferingDetails(
@@ -90,12 +86,13 @@ class BackendResourceRequestTest(TestCase):
         respx.get(f"{self.BASE_URL}/api/backend-resource-requests/{self.request_uuid}/").respond(
             200, json=self.backend_resource_request.to_dict()
         )
+        status_response = {"status": "ok"}
         respx.post(
             f"{self.BASE_URL}/api/backend-resource-requests/{self.request_uuid}/start_processing/"
-        ).respond(200, json={})
+        ).respond(200, json=status_response)
         respx.post(
             f"{self.BASE_URL}/api/backend-resource-requests/{self.request_uuid}/set_done/"
-        ).respond(200, json={})
+        ).respond(200, json=status_response)
         respx.get(f"{self.BASE_URL}/api/marketplace-provider-resources/").respond(
             200, json=resources
         )

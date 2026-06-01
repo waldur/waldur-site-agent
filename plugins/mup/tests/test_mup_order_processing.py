@@ -8,7 +8,7 @@ import httpx
 import respx
 from waldur_api_client.client import AuthenticatedClient
 
-from tests.fixtures import OFFERING
+from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent_mup.client import MUPError
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingOrderProcessor
@@ -68,12 +68,7 @@ class BaseMUPOrderTest(unittest.TestCase):
         self.mock_get_client = self.client_patcher.start()
         self.mock_get_client.return_value = self.mock_client
 
-        self.waldur_user = {
-            "username": "test",
-            "email": "test@example.com",
-            "full_name": "Test User",
-            "is_staff": False,
-        }
+        self.waldur_user = user_me_api_response(base_url=BASE_URL)
         self.waldur_offering_response = {
             "uuid": MUP_OFFERING.uuid,
             "name": MUP_OFFERING.name,

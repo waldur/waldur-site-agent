@@ -24,7 +24,7 @@ from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_api_client.models.storage_mode_enum import StorageModeEnum
 from waldur_site_agent_slurm import backend
 
-from tests.fixtures import OFFERING
+from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingMembershipProcessor
@@ -112,14 +112,10 @@ class MembershipSyncTest(unittest.TestCase):
         )
         self.client_patcher = mock.patch("waldur_site_agent.common.utils.get_client")
         self.mock_get_client = self.client_patcher.start()
-        self.waldur_user = models.User(
-            uuid=uuid.uuid4(),
+        self.waldur_user = user_me_api_response(
+            base_url=self.BASE_URL.rstrip("/"),
             username="test-user",
-            date_joined=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            email="test@example.com",
-            full_name="Test User",
-            is_staff=False,
-        ).to_dict()
+        )
         self.team_member = models.ProjectUser(
             uuid=uuid.uuid4(),
             url="https://waldur.example.com/api/users/test-user-02/",
