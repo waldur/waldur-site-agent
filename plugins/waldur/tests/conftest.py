@@ -21,6 +21,22 @@ def backend_components_with_conversion():
 
 
 @pytest.fixture()
+def backend_components_gpu_conversion():
+    """Conversion with a non-round factor."""
+    return {
+        "node_hours": {
+            "measured_unit": "Hours",
+            "unit_factor": 1,
+            "accounting_type": "usage",
+            "label": "Node Hours",
+            "target_components": {
+                "cpu_k_hours": {"factor": 4.0},
+            },
+        },
+    }
+
+
+@pytest.fixture()
 def backend_components_passthrough():
     """Backend components in passthrough mode (no target_components)."""
     return {
