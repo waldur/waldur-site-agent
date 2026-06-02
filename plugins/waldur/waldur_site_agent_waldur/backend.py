@@ -677,7 +677,12 @@ class WaldurBackend(backends.BaseBackend):
             source_usage = self.component_mapper.convert_usage_from_target(target_usage)
             resource_report[username] = source_usage
 
-        return resource_report
+        # Round to 2 decimals
+        rounded_resource_report = {
+            key: {comp: round(value, 2) for comp, value in usage.items()}
+            for key, usage in resource_report.items()
+        }
+        return rounded_resource_report
 
     def get_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int,

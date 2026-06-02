@@ -405,6 +405,48 @@ class TestUsageReporting:
         assert total["cpu"] == 0.0
         assert total["mem"] == 0.0
 
+    def test_get_usage_report_rounds_converted_usage(
+        self, backend_settings, backend_components_gpu_conversion, mock_client
+    ):
+        # Reverse conversion can yield more than 2 decimals: 48.58 / 4 = 12.145
+        backend = WaldurBackend(backend_settings, backend_components_gpu_conversion)
+        backend.client = mock_client
+
+        mock_usage = MagicMock()
+        mock_usage.type_ = "cpu_k_hours"
+        mock_usage.usage = 48.58
+
+        mock_client.get_component_usages.return_value = [mock_usage]
+        mock_client.get_component_user_usages.return_value = []
+
+        report = backend._get_usage_report([str(RESOURCE_UUID)])
+
+        total = report[str(RESOURCE_UUID)]["TOTAL_ACCOUNT_USAGE"]
+        assert total["node_hours"] == 12.14
+
+    def test_get_usage_report_rounds_per_user_usage(
+        self, backend_settings, backend_components_gpu_conversion, mock_client
+    ):
+        backend = WaldurBackend(backend_settings, backend_components_gpu_conversion)
+        backend.client = mock_client
+
+        mock_total = MagicMock()
+        mock_total.type_ = "cpu_k_hours"
+        mock_total.usage = 1.39
+        mock_client.get_component_usages.return_value = [mock_total]
+
+        mock_user_usage = MagicMock()
+        mock_user_usage.username = "user1"
+        mock_user_usage.component_type = "cpu_k_hours"
+        mock_user_usage.usage = 1.39
+        mock_client.get_component_user_usages.return_value = [mock_user_usage]
+
+        report = backend._get_usage_report([str(RESOURCE_UUID)])
+
+        # 1.39 / 4 = 0.3475 -> rounded to 0.35 for both total and per-user
+        assert report[str(RESOURCE_UUID)]["TOTAL_ACCOUNT_USAGE"]["node_hours"] == 0.35
+        assert report[str(RESOURCE_UUID)]["user1"]["node_hours"] == 0.35
+
 
 class TestUserSync:
     def test_add_users_to_resource(self, backend, mock_client):
