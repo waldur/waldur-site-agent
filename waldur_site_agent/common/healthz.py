@@ -57,8 +57,8 @@ def check_readiness(config_file: str) -> bool:
             )
             users_me_retrieve.sync(client=client, field=[UserMeFieldEnum.UUID])
             return True
-        except Exception:
-            logger.debug("Readiness check failed for %s", offering.api_url)
+        except Exception as exc:
+            logger.debug("Readiness check failed for %s, details: %s", offering.api_url, exc)
     return False
 
 
