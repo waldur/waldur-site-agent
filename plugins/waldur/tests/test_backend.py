@@ -16,7 +16,10 @@ from waldur_api_client.types import UNSET
 from waldur_site_agent.backend.exceptions import BackendError, BackendNotReadyError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
+from pydantic import ValidationError
+
 from waldur_site_agent_waldur.backend import WaldurBackend
+from waldur_site_agent_waldur.schemas import WaldurBackendSettingsSchema
 
 # Valid test UUIDs
 ORDER_UUID = UUID("12345678-1234-1234-1234-123456789abc")
@@ -67,6 +70,55 @@ class TestInitialization:
 
     def test_conversion_detection(self, backend_with_conversion):
         assert backend_with_conversion.component_mapper.is_passthrough is False
+
+
+class TestSchemaValidation:
+    """Regression tests for WaldurBackendSettingsSchema field coverage.
+
+    These guard against fields that are consumed by the backend but missing
+    from the Pydantic schema — which causes 'Extra inputs are not permitted'
+    validation errors on startup when extra="forbid" is in effect.
+    """
+
+    BASE_SETTINGS = {
+        "target_api_url": "https://waldur-b.example.com/api/",
+        "target_api_token": "token",
+        "target_offering_uuid": "offering-uuid",
+        "target_customer_uuid": "customer-uuid",
+    }
+
+    def test_efp_fields_accepted(self):
+        """end_date_sync_direction, passthrough_attributes, fetch_consented_users_only
+        must not raise ValidationError (regression: all three were missing from schema)."""
+        schema = WaldurBackendSettingsSchema(
+            **self.BASE_SETTINGS,
+            end_date_sync_direction="a_to_b",
+            passthrough_attributes=["researchFields", "storageRequest"],
+            fetch_consented_users_only=True,
+        )
+        assert schema.end_date_sync_direction == "a_to_b"
+        assert schema.passthrough_attributes == ["researchFields", "storageRequest"]
+        assert schema.fetch_consented_users_only is True
+
+    def test_end_date_sync_direction_invalid_value_rejected(self):
+        with pytest.raises(ValidationError):
+            WaldurBackendSettingsSchema(
+                **self.BASE_SETTINGS,
+                end_date_sync_direction="invalid_value",
+            )
+
+    def test_unknown_field_rejected(self):
+        with pytest.raises(ValidationError):
+            WaldurBackendSettingsSchema(
+                **self.BASE_SETTINGS,
+                totally_unknown_field="oops",
+            )
+
+    def test_defaults(self):
+        schema = WaldurBackendSettingsSchema(**self.BASE_SETTINGS)
+        assert schema.end_date_sync_direction == "bidirectional"
+        assert schema.passthrough_attributes == []
+        assert schema.fetch_consented_users_only is False
 
 
 class TestPingAndDiagnostics:

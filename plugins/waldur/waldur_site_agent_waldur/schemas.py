@@ -86,3 +86,17 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
         "(e.g. PROJECT.ADMIN: PROJECT.MANAGER). "
         "Empty = passthrough (roles forwarded unchanged).",
     )
+    end_date_sync_direction: Literal["a_to_b", "b_to_a", "bidirectional", "disabled"] = Field(
+        default="bidirectional",
+        description="Direction for end-date synchronisation between Waldur A and B. "
+        "'a_to_b': push A end-date to B. 'b_to_a': pull B end-date into A. "
+        "'bidirectional': sync whichever side changes. 'disabled': no sync.",
+    )
+    passthrough_attributes: list[str] = Field(
+        default_factory=list,
+        description="Offering attribute keys forwarded verbatim from the A order to B.",
+    )
+    fetch_consented_users_only: bool = Field(
+        default=False,
+        description="If True, only sync users who have given data-sharing consent on Waldur A.",
+    )

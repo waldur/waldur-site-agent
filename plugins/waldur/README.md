@@ -408,6 +408,9 @@ offerings:
         PROJECT.ADMIN: PROJECT.ADMIN
         PROJECT.MANAGER: PROJECT.MANAGER
         PROJECT.MEMBER: PROJECT.MEMBER
+      end_date_sync_direction: "bidirectional"  # a_to_b | b_to_a | bidirectional | disabled
+      passthrough_attributes: []         # Attribute keys forwarded verbatim to B
+      fetch_consented_users_only: false  # Only sync users with data-sharing consent
     backend_components:
       node_hours:
         measured_unit: "Hours"
@@ -454,6 +457,9 @@ offerings:
       role_mapping:
         PROJECT.ADMIN: PROJECT.ADMIN
         PROJECT.MANAGER: PROJECT.MANAGER
+      end_date_sync_direction: "a_to_b"  # Push A end-dates to B
+      passthrough_attributes: []
+      fetch_consented_users_only: false
       # Target STOMP: subscribe to ORDER events on Waldur B
       target_stomp_enabled: true
 
@@ -516,6 +522,9 @@ These settings are on the offering itself (not inside `backend_settings`):
 | `identity_bridge_source` | No | `""` | ISD source identifier for identity bridge (e.g. `isd:efp`) |
 | `user_resolve_method` | No | `identity_bridge` | User lookup: `identity_bridge`, `remote_eduteams`, `user_field` |
 | `role_mapping` | No | `{}` | Map source role names to target (e.g. `PROJECT.ADMIN: PROJECT.MANAGER`) |
+| `end_date_sync_direction` | No | `bidirectional` | End-date sync: `a_to_b`, `b_to_a`, `bidirectional`, or `disabled` |
+| `passthrough_attributes` | No | `[]` | Offering attribute keys forwarded verbatim from the A order to B |
+| `fetch_consented_users_only` | No | `false` | If `true`, only sync users with data-sharing consent on Waldur A |
 
 ### Required User Permissions
 
