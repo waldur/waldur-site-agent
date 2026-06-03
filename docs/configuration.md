@@ -231,6 +231,9 @@ backend_settings:
   role_mapping:                              # Optional: translate role names A -> B
     PROJECT.ADMIN: PROJECT.ADMIN
     PROJECT.MANAGER: PROJECT.MANAGER
+  end_date_sync_direction: "bidirectional"   # a_to_b | b_to_a | bidirectional | disabled
+  passthrough_attributes: []                 # Offering attribute keys forwarded verbatim to B
+  fetch_consented_users_only: false          # Only sync users with data-sharing consent
   # Optional: target STOMP for instant async order completion
   # Requires target_offering_uuid to be a Marketplace.Slurm offering
   target_stomp_enabled: false
