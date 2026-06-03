@@ -9,6 +9,8 @@ from httpx import URL
 
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.order_state import OrderState
+from waldur_api_client.models.request_types import RequestTypes
+from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend.exceptions import BackendError, BackendNotReadyError
@@ -255,8 +257,14 @@ class TestCheckPendingOrder:
 
 
 class TestResourceDeletion:
+    @staticmethod
+    def _b_resource(state: ResourceState) -> MagicMock:
+        resource = MagicMock()
+        resource.state = state
+        return resource
+
     def test_delete_resource(self, backend, mock_client):
-        mock_client.get_resource.return_value = MagicMock()
+        mock_client.get_marketplace_resource.return_value = self._b_resource(ResourceState.OK)
         mock_client.create_terminate_order.return_value = ORDER_UUID
 
         waldur_resource = MagicMock()
@@ -267,14 +275,77 @@ class TestResourceDeletion:
         mock_client.poll_order_completion.assert_not_called()
         assert pending_order_id == str(ORDER_UUID)
 
-    def test_delete_resource_not_found(self, backend, mock_client):
-        mock_client.get_resource.return_value = None
+    def test_delete_resource_erred_on_b(self, backend, mock_client):
+        mock_client.get_marketplace_resource.return_value = self._b_resource(ResourceState.ERRED)
+        mock_client.create_terminate_order.return_value = ORDER_UUID
 
         waldur_resource = MagicMock()
-        waldur_resource.backend_id = "nonexistent-uuid"
+        waldur_resource.backend_id = str(RESOURCE_UUID)
 
-        # Should not raise, just skip
-        backend.delete_resource(waldur_resource)
+        pending_order_id = backend.delete_resource(waldur_resource)
+        mock_client.create_terminate_order.assert_called_once()
+        assert pending_order_id == str(ORDER_UUID)
+
+    def test_delete_resource_terminating_adopts_order(self, backend, mock_client):
+        mock_client.get_marketplace_resource.return_value = self._b_resource(
+            ResourceState.TERMINATING
+        )
+        in_flight_order = MagicMock()
+        in_flight_order.uuid = ORDER_UUID
+        mock_client.get_in_flight_order.return_value = in_flight_order
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        pending_order_id = backend.delete_resource(waldur_resource)
+        mock_client.create_terminate_order.assert_not_called()
+        mock_client.get_in_flight_order.assert_called_once_with(
+            RESOURCE_UUID, RequestTypes.TERMINATE
+        )
+        assert pending_order_id == str(ORDER_UUID)
+
+    def test_delete_resource_terminating_without_order_raises(self, backend, mock_client):
+        mock_client.get_marketplace_resource.return_value = self._b_resource(
+            ResourceState.TERMINATING
+        )
+        mock_client.get_in_flight_order.return_value = None
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        with pytest.raises(BackendError, match="no in-flight TERMINATE order"):
+            backend.delete_resource(waldur_resource)
+
+    def test_delete_resource_terminated_on_b(self, backend, mock_client):
+        mock_client.get_marketplace_resource.return_value = self._b_resource(
+            ResourceState.TERMINATED
+        )
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        pending_order_id = backend.delete_resource(waldur_resource)
+        assert pending_order_id is None
+        mock_client.create_terminate_order.assert_not_called()
+
+    def test_delete_resource_creating_raises_not_ready(self, backend, mock_client):
+        mock_client.get_marketplace_resource.return_value = self._b_resource(
+            ResourceState.CREATING
+        )
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        with pytest.raises(BackendNotReadyError, match="cannot terminate yet"):
+            backend.delete_resource(waldur_resource)
+
+    def test_delete_resource_not_found(self, backend, mock_client):
+        mock_client.get_marketplace_resource.side_effect = Exception("not found")
+
+        waldur_resource = MagicMock()
+        waldur_resource.backend_id = str(RESOURCE_UUID)
+
+        assert backend.delete_resource(waldur_resource) is None
         mock_client.create_terminate_order.assert_not_called()
 
     def test_delete_resource_empty_backend_id(self, backend, mock_client):

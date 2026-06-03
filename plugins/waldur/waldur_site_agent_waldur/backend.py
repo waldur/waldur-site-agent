@@ -23,6 +23,7 @@ from waldur_api_client.models.observable_object_type_enum import ObservableObjec
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_end_date_request import ResourceEndDateRequest
+from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET
 
@@ -353,9 +354,14 @@ class WaldurBackend(backends.BaseBackend):
     ) -> Optional[str]:
         """Terminate resource on Waldur B via a marketplace order (non-blocking).
 
+        When the resource is already ``Terminating`` on Waldur B, adopts an
+        in-flight ( existing ) TERMINATE order instead of submitting a duplicate request.
+
         Returns:
-            Target order UUID when a termination order was submitted on Waldur B.
-            None when deletion was skipped (empty backend_id or resource missing).
+            Target order UUID when a termination order was submitted on Waldur B,
+            or when an existing in-flight terminate order was adopted.
+            None when deletion was skipped (empty backend_id, resource missing,
+            or resource already terminated on Waldur B).
         """
         del kwargs
         resource_backend_id = waldur_resource.backend_id
@@ -363,22 +369,60 @@ class WaldurBackend(backends.BaseBackend):
             logger.warning("Empty backend_id for resource, skipping deletion")
             return None
 
-        # Check if resource exists on Waldur B
-        if self.client.get_resource(resource_backend_id) is None:
+        resource_uuid = UUID(resource_backend_id)
+        try:
+            b_resource = self.client.get_marketplace_resource(resource_uuid)
+        except Exception:
             logger.warning("Resource %s not found on Waldur B, skipping", resource_backend_id)
             return None
 
-        try:
-            order_uuid = self.client.create_terminate_order(UUID(resource_backend_id))
-            logger.info(
-                "Termination order %s submitted for resource %s on Waldur B (non-blocking)",
-                order_uuid,
-                resource_backend_id,
+        state = b_resource.state
+        if isinstance(state, type(UNSET)):
+            msg = f"Resource {resource_backend_id} on Waldur B has no state"
+            raise BackendError(msg)
+
+        if state == ResourceState.TERMINATED:
+            logger.info("Resource %s already terminated on Waldur B", resource_backend_id)
+            return None
+
+        if state == ResourceState.TERMINATING:
+            return self._adopt_in_flight_terminate_order(resource_uuid, resource_backend_id)
+
+        if state in (ResourceState.CREATING, ResourceState.UPDATING):
+            raise BackendNotReadyError(
+                f"Resource {resource_backend_id} on Waldur B is in state {state}, "
+                "cannot terminate yet"
             )
-            return str(order_uuid)
-        except BackendError:
-            logger.exception("Failed to terminate resource %s on Waldur B", resource_backend_id)
-            raise
+
+        if state not in (ResourceState.OK, ResourceState.ERRED):
+            msg = f"Resource {resource_backend_id} on Waldur B is in unexpected state {state}"
+            raise BackendError(msg)
+
+        order_uuid = self.client.create_terminate_order(resource_uuid)
+        logger.info(
+            "Termination order %s submitted for resource %s on Waldur B (non-blocking)",
+            order_uuid,
+            resource_backend_id,
+        )
+        return str(order_uuid)
+
+    def _adopt_in_flight_terminate_order(
+        self, resource_uuid: UUID, resource_backend_id: str
+    ) -> str:
+        """Link to an existing in-flight TERMINATE order on Waldur B."""
+        order = self.client.get_in_flight_order(resource_uuid, RequestTypes.TERMINATE)
+        if order is None:
+            msg = (
+                f"Resource {resource_backend_id} is Terminating on Waldur B "
+                "but no in-flight TERMINATE order was found"
+            )
+            raise BackendError(msg)
+        logger.info(
+            "Resource %s already terminating on Waldur B, adopting order %s",
+            resource_backend_id,
+            order.uuid,
+        )
+        return str(order.uuid)
 
     def set_resource_limits(
         self, resource_backend_id: str, limits: dict[str, int]
