@@ -1,21 +1,21 @@
 # Changelog
 
-## 1.0.5-rc.4 - 2026-06-03
+## 1.0.5-rc.5 - 2026-06-03
 
-- **OpenNebula**: Add support for vLLM inference VMs, including sample offering, model-by-name selection, and `/v1` base path in getting-started instructions.
-- **OpenNebula**: Apply component `unit_factor` when sizing VMs.
-- **Federation**: Add project role reconciliation in polling mode to sync role changes.
-- **Federation**: Fix terminate/update orders timing out while waiting for B approval (WAL-9967).
-- **Federation**: Adopt in-flight B terminate order when resource is already Terminating.
-- **Federation**: Round Waldur usage to 2 decimals before reporting.
-- **Federation**: Add missing fields to `WaldurBackendSettingsSchema` with documentation updates.
-- **Core**: Skip `set_usage` when the reported usage matches what Waldur already has.
-- **SLURM**: Create missing customer/project SLURM accounts in `sync_resource_project`.
-- **SLURM**: Refresh outdated information in plugin README and docs.
-- **Docs**: Add upgrade guide with SLURM-specific steps (WAL-8090).
-- **Dependencies**: Bump `waldur-api-client` (includes affiliation field fix) and ignore PYSEC-2026-161 (starlette) in dependency scan.
+- **OpenNebula**: Add support for vLLM inference VMs, including model-by-name selection, component `unit_factor` application when sizing VMs, and sample offering configuration.
+- **Federation**: Add project role reconciliation in polling mode to sync role changes from the remote Waldur instance.
+- **Federation**: Fix terminate/update orders timing out while waiting for provider-B approval. [WAL-9967]
+- **Federation**: Fix adoption of in-flight provider-B terminate order when resource is already in Terminating state.
+- **Federation**: Round reported usage values to 2 decimal places before submitting to Waldur.
+- **Federation**: Add missing fields to `WaldurBackendSettingsSchema`.
+- **SLURM**: Fix missing customer/project SLURM accounts not being created during `sync_resource_project`.
+- **Core**: Skip `set_usage` API call when reported usage already matches what Waldur has, reducing unnecessary API traffic.
+- **Core**: Output exception details in the readiness probe for easier failure diagnosis.
+- **Core**: Bump `waldur-api-client` to include affiliation field fix.
+- **Docs**: Add upgrade guide with SLURM-specific steps. [WAL-8090]
+- **Docs**: Fix outdated information in SLURM plugin README and deployment docs.
 
-> 19 commits, 57 files changed (+2823/-387 lines)
+> 22 commits, 58 files changed (+2828/-391 lines)
 
 ---
 
