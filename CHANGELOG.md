@@ -1,25 +1,22 @@
 # Changelog
 
-This is a direct changelog-generation request — no skill needed beyond producing the output. Here is the entry:
+## 1.0.5-rc.3 - 2026-06-03
 
-## 1.0.5-rc.2 - 2026-06-02
-
-### Changes
-
-- **OpenNebula**: Add support for vLLM inference VMs, including model-by-name selection, a sample inference offering, and getting-started docs using the `/v1` base path.
+- **OpenNebula**: Add support for vLLM inference VMs, including a sample offering, model-by-name selection, and `/v1` base path getting-started instructions.
 - **OpenNebula**: Apply component `unit_factor` when sizing VMs.
-- **Waldur**: Add non-blocking project role reconciliation in polling mode to sync role changes.
+- **Waldur**: Add project role reconciliation in polling mode to sync role changes.
 - **Waldur**: Round usage to 2 decimals before reporting.
 - **Federation**: Fix terminate/update orders timing out while waiting for B-side approval ([WAL-9967]).
+- **Federation**: Adopt in-flight B terminate order when the resource is already Terminating.
 - **SLURM**: Create missing customer/project accounts in `sync_resource_project`.
-- **Core**: Bump Waldur SDK to pick up the affiliation field fix.
-- **Docs**: Add an upgrade guide with SLURM-specific steps ([WAL-8090]) and refresh outdated SLURM plugin README/docs.
+- **Core**: Bump api-client/SDK to pick up the affiliation field fix.
+- **Docs**: Add an upgrade guide with SLURM-specific steps ([WAL-8090]), and correct outdated info in the SLURM README and deployment docs.
 
-### Statistics
-
-> 11 commits (excluding release/CI), 54 files changed (+2260/-363)
+> 16 commits, 55 files changed (+2425/-377 lines)
 
 ---
+
+This is a direct changelog-generation request — no skill needed beyond producing the output. Here is the entry:
 
 ## 1.0.4 - 2026-05-22
 
