@@ -1,22 +1,23 @@
 # Changelog
 
-## 1.0.5-rc.3 - 2026-06-03
+## 1.0.5-rc.4 - 2026-06-03
 
-- **OpenNebula**: Add support for vLLM inference VMs, including a sample offering, model-by-name selection, and `/v1` base path getting-started instructions.
+- **OpenNebula**: Add support for vLLM inference VMs, including sample offering, model-by-name selection, and `/v1` base path in getting-started instructions.
 - **OpenNebula**: Apply component `unit_factor` when sizing VMs.
-- **Waldur**: Add project role reconciliation in polling mode to sync role changes.
-- **Waldur**: Round usage to 2 decimals before reporting.
-- **Federation**: Fix terminate/update orders timing out while waiting for B-side approval ([WAL-9967]).
-- **Federation**: Adopt in-flight B terminate order when the resource is already Terminating.
-- **SLURM**: Create missing customer/project accounts in `sync_resource_project`.
-- **Core**: Bump api-client/SDK to pick up the affiliation field fix.
-- **Docs**: Add an upgrade guide with SLURM-specific steps ([WAL-8090]), and correct outdated info in the SLURM README and deployment docs.
+- **Federation**: Add project role reconciliation in polling mode to sync role changes.
+- **Federation**: Fix terminate/update orders timing out while waiting for B approval (WAL-9967).
+- **Federation**: Adopt in-flight B terminate order when resource is already Terminating.
+- **Federation**: Round Waldur usage to 2 decimals before reporting.
+- **Federation**: Add missing fields to `WaldurBackendSettingsSchema` with documentation updates.
+- **Core**: Skip `set_usage` when the reported usage matches what Waldur already has.
+- **SLURM**: Create missing customer/project SLURM accounts in `sync_resource_project`.
+- **SLURM**: Refresh outdated information in plugin README and docs.
+- **Docs**: Add upgrade guide with SLURM-specific steps (WAL-8090).
+- **Dependencies**: Bump `waldur-api-client` (includes affiliation field fix) and ignore PYSEC-2026-161 (starlette) in dependency scan.
 
-> 16 commits, 55 files changed (+2425/-377 lines)
+> 19 commits, 57 files changed (+2823/-387 lines)
 
 ---
-
-This is a direct changelog-generation request — no skill needed beyond producing the output. Here is the entry:
 
 ## 1.0.4 - 2026-05-22
 
