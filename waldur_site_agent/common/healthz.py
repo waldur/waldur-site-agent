@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from waldur_api_client.api.users import users_me_retrieve
-from waldur_api_client.models.user_field_enum import UserFieldEnum
+from waldur_api_client.models.user_me_field_enum import UserMeFieldEnum
 
 from waldur_site_agent.common.utils import get_client, init_configuration_from_file
 
@@ -55,7 +55,7 @@ def check_readiness(config_file: str) -> bool:
                 configuration.waldur_user_agent,
                 offering.verify_ssl,
             )
-            users_me_retrieve.sync(client=client, field=[UserFieldEnum.UUID])
+            users_me_retrieve.sync(client=client, field=[UserMeFieldEnum.UUID])
             return True
         except Exception:
             logger.debug("Readiness check failed for %s", offering.api_url)
