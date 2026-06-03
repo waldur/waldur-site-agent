@@ -62,6 +62,14 @@ TERMINAL_ORDER_STATES = {
     OrderState.REJECTED,
 }
 
+IN_FLIGHT_ORDER_STATES = [
+    OrderState.PENDING_CONSUMER,
+    OrderState.PENDING_PROJECT,
+    OrderState.PENDING_PROVIDER,
+    OrderState.PENDING_START_DATE,
+    OrderState.EXECUTING,
+]
+
 # Default role name for project members (used to look up role UUID)
 DEFAULT_PROJECT_ROLE_NAME = "PROJECT.ADMIN"
 
@@ -213,6 +221,27 @@ class WaldurClient(BaseClient):
             body=body,
         )
         return result.order_uuid
+
+    def get_in_flight_order(
+        self, resource_uuid: UUID, type_: RequestTypes
+    ) -> Optional[OrderDetails]:
+        """Return a non-terminal order of the given type for a resource on Waldur B."""
+        orders = marketplace_orders_list.sync_all(
+            client=self._api_client,
+            resource_uuid=resource_uuid,
+            type_=[type_],
+            state=IN_FLIGHT_ORDER_STATES,
+        )
+        if not orders:
+            return None
+        if len(orders) > 1:
+            logger.warning(
+                "Multiple in-flight %s orders for resource %s on Waldur B, using %s",
+                type_,
+                resource_uuid,
+                orders[0].uuid,
+            )
+        return orders[0]
 
     def get_order(self, order_uuid: UUID) -> OrderDetails:
         """Retrieve order details from Waldur B."""
