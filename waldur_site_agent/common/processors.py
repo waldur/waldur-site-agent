@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import abc
 import datetime
+import math
 import time as _time
 from enum import Enum
 from time import sleep
@@ -2787,18 +2788,37 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         if billing_period_start is None:
             billing_period_start = backend_utils.month_start(report_date).date()
 
-        if not self.resource_backend.supports_decreasing_usage:
-            existing_usages = marketplace_component_usages_list.sync_all(
-                client=self.waldur_rest_client,
-                resource_uuid=resource_uuid,
-                billing_period=billing_period_start,
-                field=[
-                    ComponentUsageFieldEnum.UUID,
-                    ComponentUsageFieldEnum.TYPE,
-                    ComponentUsageFieldEnum.USAGE,
-                ],
-            )
+        # Always fetch existing ComponentUsage records for this billing period.
+        # Used for two purposes:
+        #   1) idempotency check below (skip set_usage when nothing changed)
+        #   2) anomaly detection on non-decreasing-usage backends
+        existing_usages = marketplace_component_usages_list.sync_all(
+            client=self.waldur_rest_client,
+            resource_uuid=resource_uuid,
+            billing_period=billing_period_start,
+            field=[
+                ComponentUsageFieldEnum.UUID,
+                ComponentUsageFieldEnum.TYPE,
+                ComponentUsageFieldEnum.USAGE,
+            ],
+        )
 
+        # Idempotency: skip set_usage when the reported usage matches every
+        # existing record. Avoids fanning out the marketplace post_save
+        # signal chain (and downstream broker traffic) on cycles where the
+        # backend reports no change. Particularly impactful for backends
+        # that report on every cycle regardless of activity (e.g.
+        # CSCS-DWDI reports zero usage for accounts with no jobs).
+        if self._usage_matches_existing(total_usage, existing_usages, component_types):
+            logger.info(
+                "Usage unchanged for resource %s in billing period %s; "
+                "skipping set_usage submission.",
+                waldur_resource.backend_id,
+                billing_period_start,
+            )
+            return
+
+        if not self.resource_backend.supports_decreasing_usage:
             # Filter out component usages that have per-user breakdowns;
             # only aggregate records should participate in anomaly detection.
             user_usages = marketplace_component_user_usages_list.sync_all(
@@ -2841,6 +2861,56 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         )
         marketplace_component_usages_set_usage.sync_detailed(
             client=self.waldur_rest_client, body=request_body
+        )
+
+    @staticmethod
+    def _usage_matches_existing(
+        total_usage: dict[str, float],
+        existing_usages: list[ComponentUsage],
+        component_types: list[str],
+    ) -> bool:
+        """Return True when the reported usage matches what Waldur already has.
+
+        Compares the set of components and the per-component amount. If anything
+        differs — new component appears, a component disappears, an amount
+        changes — returns False so the caller proceeds with set_usage.
+        """
+        # Only components that exist in Waldur participate in the comparison;
+        # the others are dropped at submission time anyway and logged above.
+        new_pairs = {
+            c: amount for c, amount in total_usage.items() if c in component_types
+        }
+
+        existing_by_type: dict[str, float] = {}
+        for u in existing_usages:
+            # SDK declares type_ and usage as Union[Unset, ...]; skip records
+            # missing either field rather than treating them as a match.
+            if isinstance(u.type_, type(UNSET)) or isinstance(u.usage, type(UNSET)):
+                continue
+            if u.type_ in existing_by_type:
+                # Duplicate record for the same type — unexpected; bail out
+                # and let set_usage reconcile.
+                return False
+            try:
+                existing_by_type[u.type_] = float(u.usage)
+            except (TypeError, ValueError):
+                return False
+
+        if set(new_pairs) != set(existing_by_type):
+            return False
+
+        # math.isclose with both rel_tol and abs_tol handles the
+        # float / Decimal round-trip through the API (Waldur returns
+        # amounts as Decimal-as-string) without false mismatches near
+        # zero or for large magnitudes.
+        return all(
+            math.isclose(
+                float(amount),
+                existing_by_type[ctype],
+                rel_tol=1e-9,
+                abs_tol=1e-6,
+            )
+            for ctype, amount in new_pairs.items()
         )
 
     def _submit_bulk_user_usages_for_resource(
