@@ -19,6 +19,7 @@ from waldur_site_agent.backend.structures import BackendResourceInfo
 from pydantic import ValidationError
 
 from waldur_site_agent_waldur.backend import WaldurBackend
+from waldur_site_agent_waldur.enums import EndDateSyncDirection
 from waldur_site_agent_waldur.schemas import WaldurBackendSettingsSchema
 
 # Valid test UUIDs
@@ -96,7 +97,7 @@ class TestSchemaValidation:
             passthrough_attributes=["researchFields", "storageRequest"],
             fetch_consented_users_only=True,
         )
-        assert schema.end_date_sync_direction == "a_to_b"
+        assert schema.end_date_sync_direction == EndDateSyncDirection.A_TO_B
         assert schema.passthrough_attributes == ["researchFields", "storageRequest"]
         assert schema.fetch_consented_users_only is True
 
@@ -116,7 +117,7 @@ class TestSchemaValidation:
 
     def test_defaults(self):
         schema = WaldurBackendSettingsSchema(**self.BASE_SETTINGS)
-        assert schema.end_date_sync_direction == "bidirectional"
+        assert schema.end_date_sync_direction == EndDateSyncDirection.BIDIRECTIONAL
         assert schema.passthrough_attributes == []
         assert schema.fetch_consented_users_only is False
 
@@ -1959,3 +1960,206 @@ class TestSyncResourceProject:
         backend.sync_resource_project(resource)
 
         mock_client.update_project.assert_not_called()
+
+
+class TestProjectEndDateSync:
+    """Tests for sync_project_end_date (mirrors resource end_date sync)."""
+
+    B_PROJECT_UUID = UUID("bbbbbbbb-1234-1234-1234-123456789abc")
+
+    def _make_resource(
+        self, project_end_date, project_uuid=PROJECT_UUID, customer_uuid="cust-uuid-a"
+    ):
+        resource = MagicMock()
+        resource.backend_id = "rb-1"
+        resource.project_uuid = project_uuid
+        resource.customer_uuid = customer_uuid
+        resource.project_end_date = project_end_date
+        return resource
+
+    def _make_b_project(self, end_date, updated_at=None):
+        project = MagicMock()
+        project.uuid = self.B_PROJECT_UUID
+        project.end_date = end_date
+        project.end_date_updated_at = updated_at
+        return project
+
+    def test_a_to_b_pushes_to_b(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.A_TO_B
+        a_date = datetime.date(2025, 6, 1)
+        mock_client.get_project_by_backend_id.return_value = self._make_b_project(
+            datetime.date(2025, 5, 1)
+        )
+
+        backend.sync_project_end_date(self._make_resource(a_date), MagicMock())
+
+        mock_client.set_project_end_date.assert_called_once_with(self.B_PROJECT_UUID, a_date)
+
+    def test_b_to_a_pushes_to_a(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.B_TO_A
+        b_date = datetime.date(2025, 5, 1)
+        mock_client.get_project_by_backend_id.return_value = self._make_b_project(b_date)
+
+        with patch(
+            "waldur_api_client.api.projects.projects_partial_update.sync_detailed"
+        ) as mock_patch:
+            backend.sync_project_end_date(
+                self._make_resource(datetime.date(2025, 6, 1)), MagicMock()
+            )
+            mock_patch.assert_called_once()
+            assert mock_patch.call_args.kwargs["uuid"] == PROJECT_UUID
+            assert mock_patch.call_args.kwargs["body"].end_date == b_date
+        mock_client.set_project_end_date.assert_not_called()
+
+    def test_b_to_a_permission_denied_is_logged_not_raised(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.B_TO_A
+        mock_client.get_project_by_backend_id.return_value = self._make_b_project(
+            datetime.date(2025, 5, 1)
+        )
+
+        with patch(
+            "waldur_api_client.api.projects.projects_partial_update.sync_detailed",
+            side_effect=UnexpectedStatus(403, b"forbidden", "https://a/api/projects/x/"),
+        ) as mock_patch:
+            backend.sync_project_end_date(
+                self._make_resource(datetime.date(2025, 6, 1)), MagicMock()
+            )
+            mock_patch.assert_called_once()
+
+    def test_bidirectional_a_newer_pushes_to_b(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.BIDIRECTIONAL
+        a_date = datetime.date(2025, 6, 1)
+        mock_client.get_project_by_backend_id.return_value = self._make_b_project(
+            datetime.date(2025, 5, 1), datetime.datetime(2025, 1, 5, 12, 0, 0)
+        )
+        a_project = MagicMock()
+        a_project.end_date_updated_at = datetime.datetime(2025, 1, 10, 12, 0, 0)
+
+        with patch(
+            "waldur_api_client.api.projects.projects_retrieve.sync",
+            return_value=a_project,
+        ):
+            backend.sync_project_end_date(self._make_resource(a_date), MagicMock())
+
+        mock_client.set_project_end_date.assert_called_once_with(self.B_PROJECT_UUID, a_date)
+
+    def test_bidirectional_b_newer_pushes_to_a(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.BIDIRECTIONAL
+        b_date = datetime.date(2025, 6, 1)
+        mock_client.get_project_by_backend_id.return_value = self._make_b_project(
+            b_date, datetime.datetime(2025, 1, 10, 12, 0, 0)
+        )
+        a_project = MagicMock()
+        a_project.end_date_updated_at = datetime.datetime(2025, 1, 5, 12, 0, 0)
+
+        with (
+            patch(
+                "waldur_api_client.api.projects.projects_retrieve.sync",
+                return_value=a_project,
+            ),
+            patch(
+                "waldur_api_client.api.projects.projects_partial_update.sync_detailed"
+            ) as mock_patch,
+        ):
+            backend.sync_project_end_date(
+                self._make_resource(datetime.date(2025, 5, 1)), MagicMock()
+            )
+            mock_patch.assert_called_once()
+            assert mock_patch.call_args.kwargs["body"].end_date == b_date
+        mock_client.set_project_end_date.assert_not_called()
+
+    def test_bidirectional_both_null_timestamp_noop(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.BIDIRECTIONAL
+        mock_client.get_project_by_backend_id.return_value = self._make_b_project(
+            datetime.date(2025, 5, 1), None
+        )
+        a_project = MagicMock()
+        a_project.end_date_updated_at = None
+
+        with patch(
+            "waldur_api_client.api.projects.projects_retrieve.sync",
+            return_value=a_project,
+        ):
+            backend.sync_project_end_date(
+                self._make_resource(datetime.date(2025, 6, 1)), MagicMock()
+            )
+
+        mock_client.set_project_end_date.assert_not_called()
+
+    def test_disabled_is_noop(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.DISABLED
+
+        backend.sync_project_end_date(
+            self._make_resource(datetime.date(2025, 6, 1)), MagicMock()
+        )
+
+        mock_client.get_project_by_backend_id.assert_not_called()
+        mock_client.set_project_end_date.assert_not_called()
+
+    def test_equal_dates_short_circuit(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.A_TO_B
+        same = datetime.date(2025, 6, 1)
+        mock_client.get_project_by_backend_id.return_value = self._make_b_project(same)
+
+        backend.sync_project_end_date(self._make_resource(same), MagicMock())
+
+        mock_client.set_project_end_date.assert_not_called()
+
+    def test_missing_project_uuid_noop(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.A_TO_B
+
+        backend.sync_project_end_date(
+            self._make_resource(datetime.date(2025, 6, 1), project_uuid=None), MagicMock()
+        )
+
+        mock_client.get_project_by_backend_id.assert_not_called()
+
+    def test_b_project_not_found_noop(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.A_TO_B
+        mock_client.get_project_by_backend_id.return_value = None
+
+        backend.sync_project_end_date(
+            self._make_resource(datetime.date(2025, 6, 1)), MagicMock()
+        )
+
+        mock_client.set_project_end_date.assert_not_called()
+
+    def test_unexpected_status_is_caught(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.A_TO_B
+        mock_client.get_project_by_backend_id.side_effect = UnexpectedStatus(
+            500, b"err", "https://b/api/projects/"
+        )
+
+        # SDK errors during the sync are caught and logged, not propagated.
+        backend.sync_project_end_date(
+            self._make_resource(datetime.date(2025, 6, 1)), MagicMock()
+        )
+
+    def test_pre_create_passes_project_end_date(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.A_TO_B
+        end_date = datetime.date(2025, 9, 1)
+        resource = MagicMock()
+        resource.project_uuid = PROJECT_UUID
+        resource.customer_uuid = "cust-uuid-a"
+        resource.project_name = "Test Project"
+        resource.project_description = "desc"
+        resource.project_end_date = end_date
+        mock_client.find_or_create_project.return_value = {"uuid": "proj-b-uuid"}
+
+        backend._pre_create_resource(resource)
+
+        assert mock_client.find_or_create_project.call_args.kwargs["end_date"] == end_date
+
+    def test_pre_create_disabled_passes_none(self, backend, mock_client):
+        backend.end_date_sync_direction = EndDateSyncDirection.DISABLED
+        resource = MagicMock()
+        resource.project_uuid = PROJECT_UUID
+        resource.customer_uuid = "cust-uuid-a"
+        resource.project_name = "Test Project"
+        resource.project_description = "desc"
+        resource.project_end_date = datetime.date(2025, 9, 1)
+        mock_client.find_or_create_project.return_value = {"uuid": "proj-b-uuid"}
+
+        backend._pre_create_resource(resource)
+
+        assert mock_client.find_or_create_project.call_args.kwargs["end_date"] is None
