@@ -1661,6 +1661,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 ResourceFieldEnum.PROJECT_DESCRIPTION,
                 ResourceFieldEnum.CUSTOMER_UUID,
                 ResourceFieldEnum.END_DATE,
+                ResourceFieldEnum.PROJECT_END_DATE,
             ],
         }
 
@@ -2408,6 +2409,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         for waldur_resource, backend_resource_info in resource_report.values():
             try:
                 self.resource_backend.sync_resource_project(waldur_resource)
+                self.resource_backend.sync_project_end_date(
+                    waldur_resource, self.waldur_rest_client
+                )
                 resource_usernames = self._sync_resource_users(
                     waldur_resource, backend_resource_info, offering_users
                 )

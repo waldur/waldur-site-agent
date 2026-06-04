@@ -22,7 +22,7 @@ from waldur_api_client.api.marketplace_resources import (
     marketplace_resources_terminate,
     marketplace_resources_update_limits,
 )
-from waldur_api_client.api.projects import projects_partial_update
+from waldur_api_client.api.projects import projects_list, projects_partial_update
 from waldur_api_client.api.roles import roles_list
 from waldur_api_client.api.version import version_retrieve
 from waldur_api_client.client import AuthenticatedClient
@@ -34,6 +34,8 @@ from waldur_api_client.models.order_create_request_limits import OrderCreateRequ
 from waldur_api_client.models.order_details import OrderDetails
 from waldur_api_client.models.patched_project_request import PatchedProjectRequest
 from waldur_api_client.models.order_state import OrderState
+from waldur_api_client.models.project import Project
+from waldur_api_client.models.project_field_enum import ProjectFieldEnum
 from waldur_api_client.models.project_request import ProjectRequest
 from waldur_api_client.models.remote_eduteams_request_request import RemoteEduteamsRequestRequest
 from waldur_api_client.models.request_types import RequestTypes
@@ -402,6 +404,7 @@ class WaldurClient(BaseClient):
         name: str,
         backend_id: str,
         description: str = "",
+        end_date: Optional[datetime.date] = None,
     ) -> dict:
         """Create a project on Waldur B.
 
@@ -415,6 +418,7 @@ class WaldurClient(BaseClient):
             customer=customer_url,
             backend_id=backend_id,
             description=description,
+            end_date=end_date if end_date is not None else UNSET,
         )
 
         project = projects_create.sync(
@@ -459,10 +463,13 @@ class WaldurClient(BaseClient):
         name: str,
         backend_id: str,
         description: str = "",
+        end_date: Optional[datetime.date] = None,
     ) -> dict:
         """Find a project by backend_id, or create one if not found.
 
         If the project exists but the description differs, updates it.
+        ``end_date`` is applied only when creating a new project; for existing
+        projects the end_date is reconciled separately by project end_date sync.
 
         Returns:
             Dict with uuid and url of the project.
@@ -480,7 +487,37 @@ class WaldurClient(BaseClient):
             return existing
 
         logger.info("Creating new project %s with backend_id=%s", name, backend_id)
-        return self.create_project(customer_url, name, backend_id, description)
+        return self.create_project(customer_url, name, backend_id, description, end_date)
+
+    def get_project_by_backend_id(self, backend_id: str) -> Optional[Project]:
+        """Find a project on Waldur B by backend_id, including end_date fields.
+
+        Returns the typed ``Project`` (with ``end_date`` and
+        ``end_date_updated_at``) or None if not found.
+        """
+        projects = projects_list.sync(
+            client=self._api_client,
+            backend_id=backend_id,
+            field=[
+                ProjectFieldEnum.UUID,
+                ProjectFieldEnum.END_DATE,
+                ProjectFieldEnum.END_DATE_UPDATED_AT,
+            ],
+        )
+        if projects:
+            return projects[0]
+        return None
+
+    def set_project_end_date(
+        self, project_uuid: UUID, end_date: Optional[datetime.date]
+    ) -> None:
+        """Set end_date on a project on Waldur B via partial update.
+        """
+        projects_partial_update.sync(
+            uuid=project_uuid,
+            client=self._api_client,
+            body=PatchedProjectRequest(end_date=end_date),
+        )
 
     # --- User Operations ---
 

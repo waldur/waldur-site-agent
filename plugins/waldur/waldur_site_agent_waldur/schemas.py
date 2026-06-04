@@ -11,6 +11,7 @@ from waldur_site_agent.common.plugin_schemas import (
     PluginComponentSchema,
     TargetComponentConfig,
 )
+from waldur_site_agent_waldur.enums import EndDateSyncDirection
 
 
 class WaldurComponentSchema(PluginComponentSchema):
@@ -86,8 +87,8 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
         "(e.g. PROJECT.ADMIN: PROJECT.MANAGER). "
         "Empty = passthrough (roles forwarded unchanged).",
     )
-    end_date_sync_direction: Literal["a_to_b", "b_to_a", "bidirectional", "disabled"] = Field(
-        default="bidirectional",
+    end_date_sync_direction: EndDateSyncDirection = Field(
+        default=EndDateSyncDirection.BIDIRECTIONAL,
         description="Direction for end-date synchronisation between Waldur A and B. "
         "'a_to_b': push A end-date to B. 'b_to_a': pull B end-date into A. "
         "'bidirectional': sync whichever side changes. 'disabled': no sync.",

@@ -485,6 +485,18 @@ class BaseBackend(ABC):
         """
         del waldur_resource, waldur_rest_client
 
+    def sync_project_end_date(
+        self,
+        waldur_resource: WaldurResource,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> None:
+        """Sync the project's end_date between source and target systems.
+
+        No-op by default. Override in backends that manage project end_date
+        synchronization (e.g., Waldur-to-Waldur federation).
+        """
+        del waldur_resource, waldur_rest_client
+
     def sync_resource_effective_id(
         self,
         waldur_resource: WaldurResource,

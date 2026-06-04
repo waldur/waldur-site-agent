@@ -15,6 +15,9 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_effective_id,
     marketplace_provider_resources_set_end_date,
 )
+from waldur_api_client.api.projects import projects_partial_update, projects_retrieve
+from waldur_api_client.models.patched_project_request import PatchedProjectRequest
+from waldur_api_client.models.project_field_enum import ProjectFieldEnum
 from waldur_api_client.models.resource_effective_id_request import ResourceEffectiveIDRequest
 from waldur_api_client.models.resource_field_enum import ResourceFieldEnum
 from waldur_api_client.client import AuthenticatedClient
@@ -33,6 +36,7 @@ from waldur_site_agent.backend.structures import BackendResourceInfo
 
 from waldur_site_agent_waldur.client import DEFAULT_PROJECT_ROLE_NAME, WaldurClient
 from waldur_site_agent_waldur.component_mapping import ComponentMapper
+from waldur_site_agent_waldur.enums import EndDateSyncDirection
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +76,10 @@ class WaldurBackend(backends.BaseBackend):
         self.user_not_found_action = backend_settings.get("user_not_found_action", "warn")
         self.role_mapping: dict[str, str] = backend_settings.get("role_mapping", {})
         self.fetch_consented_users_only: bool = backend_settings.get("fetch_consented_users_only", False)
-        self.end_date_sync_direction: str = backend_settings.get(
-            "end_date_sync_direction", "bidirectional"
+        self.end_date_sync_direction = EndDateSyncDirection(
+            backend_settings.get(
+                "end_date_sync_direction", EndDateSyncDirection.BIDIRECTIONAL
+            )
         )
 
         self.client: WaldurClient = WaldurClient(
@@ -172,6 +178,10 @@ class WaldurBackend(backends.BaseBackend):
             msg = "No project UUID in Waldur resource"
             raise BackendError(msg)
 
+        project_end_date = None
+        if self.end_date_sync_direction != EndDateSyncDirection.DISABLED:
+            project_end_date = waldur_resource.project_end_date or None
+
         backend_id = f"{customer_uuid}_{project_uuid}"
         customer_url = self.client.get_customer_url(self.target_customer_uuid)
 
@@ -180,6 +190,7 @@ class WaldurBackend(backends.BaseBackend):
             name=project_name,
             backend_id=backend_id,
             description=project_description,
+            end_date=project_end_date,
         )
 
         if not project or not project.get("uuid"):
@@ -1223,6 +1234,52 @@ class WaldurBackend(backends.BaseBackend):
 
     # --- End Date Sync ---
 
+    def _decide_end_date_sync_direction(
+        self,
+        a_end_date: Optional[datetime.date],
+        b_end_date: Optional[datetime.date],
+        a_updated_at: Optional[datetime.datetime],
+        b_updated_at: Optional[datetime.datetime],
+    ) -> Optional[bool]:
+        """Decide which side wins an end_date sync per ``end_date_sync_direction``.
+
+        Shared by resource and project end_date sync so both honour the same
+        ``disabled`` / ``a_to_b`` / ``b_to_a`` / ``bidirectional`` semantics.
+
+        Returns:
+            ``True`` if Waldur A wins (push A->B), ``False`` if Waldur B wins
+            (push B->A), or ``None`` if there is nothing to do (disabled, equal
+            end_dates, or bidirectional without enough timestamp information).
+        """
+        if self.end_date_sync_direction == EndDateSyncDirection.DISABLED:
+            return None
+
+        # Short-circuit: same end_date on both sides -> nothing to do
+        if a_end_date == b_end_date:
+            return None
+
+        if self.end_date_sync_direction == EndDateSyncDirection.A_TO_B:
+            return True
+        if self.end_date_sync_direction == EndDateSyncDirection.B_TO_A:
+            return False
+
+        # bidirectional -- last-update-wins via timestamps.
+        if a_updated_at is not None and b_updated_at is not None:
+            if a_updated_at > b_updated_at:
+                return True
+            if b_updated_at > a_updated_at:
+                return False
+            # Equal timestamps, different dates -- no-op.
+            return None
+        if a_updated_at is not None:
+            # Only A has a timestamp -> A wins.
+            return True
+        if b_updated_at is not None:
+            # Only B has a timestamp -> B wins.
+            return False
+        # Neither side has a timestamp -> no information to decide direction.
+        return None
+
     def sync_resource_end_date(
         self,
         waldur_resource: WaldurResource,
@@ -1244,7 +1301,7 @@ class WaldurBackend(backends.BaseBackend):
             waldur_rest_client: Authenticated client for Waldur A API.
         """
         try:
-            if self.end_date_sync_direction == "disabled":
+            if self.end_date_sync_direction == EndDateSyncDirection.DISABLED:
                 return
 
             backend_id = waldur_resource.backend_id
@@ -1268,35 +1325,11 @@ class WaldurBackend(backends.BaseBackend):
             if isinstance(b_updated_at, type(UNSET)):
                 b_updated_at = None
 
-            # Short-circuit: same end_date on both sides → nothing to do
-            if a_end_date == b_end_date:
+            a_wins = self._decide_end_date_sync_direction(
+                a_end_date, b_end_date, a_updated_at, b_updated_at
+            )
+            if a_wins is None:
                 return
-
-            # Determine which side wins based on sync direction
-            if self.end_date_sync_direction == "a_to_b":
-                a_wins = True
-            elif self.end_date_sync_direction == "b_to_a":
-                a_wins = False
-            else:
-                # bidirectional — use timestamp comparison
-                # Both timestamps null → no information to decide direction
-                if a_updated_at is None and b_updated_at is None:
-                    return
-
-                if a_updated_at is not None and b_updated_at is None:
-                    a_wins = True
-                elif a_updated_at is None and b_updated_at is not None:
-                    a_wins = False
-                elif a_updated_at is not None and b_updated_at is not None:
-                    if a_updated_at > b_updated_at:
-                        a_wins = True
-                    elif b_updated_at > a_updated_at:
-                        a_wins = False
-                    else:
-                        # Equal timestamps, different dates — no-op
-                        return
-                else:
-                    return
 
             # Extract user who requested the end_date change
             a_requested_by = getattr(waldur_resource, "end_date_requested_by", None)
@@ -1330,6 +1363,84 @@ class WaldurBackend(backends.BaseBackend):
             logger.exception(
                 "Failed to sync end_date for resource %s",
                 getattr(waldur_resource, "backend_id", "unknown"),
+            )
+
+    def sync_project_end_date(
+        self,
+        waldur_resource: WaldurResource,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> None:
+        """Sync the project's end_date between Waldur A and Waldur B.
+
+        Uses the same ``end_date_sync_direction`` semantics as
+        ``sync_resource_end_date`` (via ``_decide_end_date_sync_direction``).
+
+        Args:
+            waldur_resource: Resource from Waldur A carrying ``project_end_date``.
+            waldur_rest_client: Authenticated client for the Waldur A API.
+        """
+        try:
+            if self.end_date_sync_direction == EndDateSyncDirection.DISABLED:
+                return
+
+            project_uuid = waldur_resource.project_uuid
+            customer_uuid = waldur_resource.customer_uuid
+            if not project_uuid or not customer_uuid:
+                return
+
+            a_end_date = waldur_resource.project_end_date or None
+            backend_id = f"{customer_uuid}_{project_uuid}"
+            b_project = self.client.get_project_by_backend_id(backend_id)
+            if not b_project:
+                return
+            b_end_date = b_project.end_date or None
+            b_updated_at = b_project.end_date_updated_at or None
+
+            # The resource does not carry the project end_date timestamp, so for
+            # bidirectional last-update-wins we read it from the Waldur A project.
+            a_updated_at = None
+            if self.end_date_sync_direction == EndDateSyncDirection.BIDIRECTIONAL:
+                a_project = projects_retrieve.sync(
+                    uuid=UUID(str(project_uuid)),
+                    client=waldur_rest_client,
+                    field=[
+                        ProjectFieldEnum.END_DATE,
+                        ProjectFieldEnum.END_DATE_UPDATED_AT,
+                    ],
+                )
+                if a_project:
+                    a_updated_at = a_project.end_date_updated_at or None
+
+            a_wins = self._decide_end_date_sync_direction(
+                a_end_date, b_end_date, a_updated_at, b_updated_at
+            )
+            if a_wins is None:
+                return
+
+            if a_wins:
+                logger.info(
+                    "Syncing project end_date from Waldur A to B for project %s: %s",
+                    backend_id,
+                    a_end_date,
+                )
+                self.client.set_project_end_date(UUID(str(b_project.uuid)), a_end_date)
+            else:
+                logger.info(
+                    "Syncing project end_date from Waldur B to A for project %s: %s",
+                    project_uuid,
+                    b_end_date,
+                )
+                projects_partial_update.sync_detailed(
+                    uuid=UUID(str(project_uuid)),
+                    client=waldur_rest_client,
+                    body=PatchedProjectRequest(end_date=b_end_date),
+                )
+        except UnexpectedStatus as e:
+            logger.warning(
+                "Could not sync project end_date for resource %s (status %s): %s",
+                getattr(waldur_resource, "backend_id", "unknown"),
+                e.status_code,
+                e,
             )
 
     # --- Target Event Subscriptions ---

@@ -184,6 +184,7 @@ class TestProjectOperations:
                 "New Project",
                 "test_backend_id",
                 "A test project",
+                None,
             )
 
     def test_find_or_create_project_updates_description(self, client):
@@ -237,6 +238,63 @@ class TestProjectOperations:
             )
             assert result["uuid"] == "proj-uuid"
             mock_update.assert_not_called()
+
+
+class TestProjectEndDate:
+    def test_get_project_by_backend_id_found(self, client):
+        mock_project = MagicMock()
+        with patch(
+            "waldur_api_client.api.projects.projects_list.sync",
+            return_value=[mock_project],
+        ) as mock_list:
+            result = client.get_project_by_backend_id("customer_project")
+            assert result is mock_project
+            assert mock_list.call_args.kwargs["backend_id"] == "customer_project"
+
+    def test_get_project_by_backend_id_not_found(self, client):
+        with patch(
+            "waldur_api_client.api.projects.projects_list.sync",
+            return_value=[],
+        ):
+            assert client.get_project_by_backend_id("nonexistent") is None
+
+    def test_set_project_end_date(self, client):
+        import datetime
+
+        with patch(
+            "waldur_api_client.api.projects.projects_partial_update.sync"
+        ) as mock_update:
+            client.set_project_end_date(PROJECT_UUID, datetime.date(2025, 6, 1))
+            mock_update.assert_called_once()
+            call_kwargs = mock_update.call_args.kwargs
+            assert call_kwargs["uuid"] == PROJECT_UUID
+            assert call_kwargs["body"].end_date == datetime.date(2025, 6, 1)
+
+    def test_create_project_with_end_date(self, client):
+        import datetime
+
+        with patch("waldur_api_client.api.projects.projects_create.sync") as mock_create:
+            client.create_project(
+                customer_url="/api/customers/cust-uuid/",
+                name="P",
+                backend_id="cust_proj",
+                end_date=datetime.date(2025, 12, 31),
+            )
+            assert (
+                mock_create.call_args.kwargs["body"].end_date
+                == datetime.date(2025, 12, 31)
+            )
+
+    def test_create_project_without_end_date_is_unset(self, client):
+        from waldur_api_client.types import UNSET
+
+        with patch("waldur_api_client.api.projects.projects_create.sync") as mock_create:
+            client.create_project(
+                customer_url="/api/customers/cust-uuid/",
+                name="P",
+                backend_id="cust_proj",
+            )
+            assert mock_create.call_args.kwargs["body"].end_date is UNSET
 
 
 class TestUserResolution:
