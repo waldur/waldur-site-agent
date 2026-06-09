@@ -1,21 +1,25 @@
 # Changelog
 
-## 1.0.5-rc.5 - 2026-06-03
+## 1.0.5-rc.6 - 2026-06-09
 
-- **OpenNebula**: Add support for vLLM inference VMs, including model-by-name selection, component `unit_factor` application when sizing VMs, and sample offering configuration.
-- **Federation**: Add project role reconciliation in polling mode to sync role changes from the remote Waldur instance.
-- **Federation**: Fix terminate/update orders timing out while waiting for provider-B approval. [WAL-9967]
-- **Federation**: Fix adoption of in-flight provider-B terminate order when resource is already in Terminating state.
-- **Federation**: Round reported usage values to 2 decimal places before submitting to Waldur.
-- **Federation**: Add missing fields to `WaldurBackendSettingsSchema`.
-- **SLURM**: Fix missing customer/project SLURM accounts not being created during `sync_resource_project`.
-- **Core**: Skip `set_usage` API call when reported usage already matches what Waldur has, reducing unnecessary API traffic.
-- **Core**: Output exception details in the readiness probe for easier failure diagnosis.
-- **Core**: Bump `waldur-api-client` to include affiliation field fix.
-- **Docs**: Add upgrade guide with SLURM-specific steps. [WAL-8090]
-- **Docs**: Fix outdated information in SLURM plugin README and deployment docs.
+- **SLURM**: Accept bare-name output from `sacctmgr list cluster` (gh-12).
+- **Federation**: Add project `end_date` sync to the Waldur backend [WAL-9999].
+- **Federation**: Adopt in-flight B terminate order when resource is already Terminating.
+- **Federation**: Fix terminate/update orders timing out while waiting for B approval [WAL-9967].
+- **Federation**: Add project role reconciliation in polling mode to sync role changes.
+- **Federation**: Add missing fields to `WaldurBackendSettingsSchema` with updated docs.
+- **Federation**: Round Waldur usage to 2 decimals before reporting.
+- **Core**: Skip `set_usage` when reported usage matches what Waldur already has.
+- **Core**: Output details of the readiness probe exception for easier diagnosis.
+- **SLURM**: Create missing customer/project SLURM accounts in `sync_resource_project`.
+- **SLURM**: Refresh outdated SLURM plugin README and docs.
+- **OpenNebula**: Support vLLM inference VMs, with sample offering, docs, and model-by-name selection.
+- **OpenNebula**: Apply component `unit_factor` when sizing VMs, and use `/v1` base path in vLLM getting-started instructions.
+- **Docs**: Add upgrade guide with SLURM-specific steps [WAL-8090].
+- **SDK**: Bump `waldur-api-client` (includes affiliation field fix, dev318).
+- **Security**: Ignore PYSEC-2026-161 (starlette) in dependency scan.
 
-> 22 commits, 58 files changed (+2828/-391 lines)
+> 25 commits, 62 files changed (+3324/-436 lines)
 
 ---
 
