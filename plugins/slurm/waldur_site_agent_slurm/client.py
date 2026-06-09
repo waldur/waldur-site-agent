@@ -90,11 +90,10 @@ class SlurmClient(clients.BaseClient):
     def list_clusters(self) -> list[str]:
         """Returns a list of cluster names known to SLURM."""
         output = self._execute_command(["list", "cluster", "format=cluster"])
-        return [
-            line.split("|")[0].strip()
-            for line in output.splitlines()
-            if line.strip() and "|" in line
-        ]
+        # Real ``sacctmgr --parsable2 --noheader format=cluster`` emits one
+        # bare cluster name per line — the single requested field is also the
+        # last, so SLURM's PARSABLE_NO_ENDING path prints no trailing ``|``.
+        return [line.split("|")[0].strip() for line in output.splitlines() if line.strip()]
 
     def get_resource(self, resource_id: str) -> ClientResource | None:
         """Returns Account object from cluster based on the account name."""
