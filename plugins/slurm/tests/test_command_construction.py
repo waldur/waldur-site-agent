@@ -532,8 +532,21 @@ class TestClusterFilteringWithEmulator:
         client = SlurmClient({"cpu": "CPU"}, slurm_bin_path="", cluster_name="prod")
         with patch.object(client, "execute_command", side_effect=route):
             clusters = client.list_clusters()
-        assert "default" in clusters
-        assert "prod" in clusters
+        # Exact set: catches both the regression from gh-12 (filter discards
+        # every line → []) and a future bug where a header like "Cluster"
+        # sneaks back into the parsed result. Depends on
+        # slurm-emulator>=0.5.1, which honors format=cluster.
+        assert set(clusters) == {"default", "prod"}
+
+    def test_list_clusters_parses_bare_sacctmgr_output(self):
+        # Regression for https://github.com/waldur/waldur-site-agent/issues/12:
+        # real `sacctmgr --parsable2 --noheader format=cluster` emits one bare
+        # cluster name per line — no `|`. The previous filter
+        # `if line.strip() and "|" in line` discarded every line and made
+        # diagnostics report "Configured cluster_name not found in SLURM".
+        client = SlurmClient({"cpu": "CPU"}, slurm_bin_path="")
+        with patch.object(client, "_execute_command", return_value="anansi\nhydra\n"):
+            assert client.list_clusters() == ["anansi", "hydra"]
 
     def test_create_account_on_cluster(self, emulator_env):
         """Creating an account with cluster_name routes to the correct cluster."""
