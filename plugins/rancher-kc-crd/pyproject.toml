@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-rancher-kc-crd"
-version = "1.0.5rc6"
+version = "1.0.5rc7"
 description = "Rancher + Keycloak CRD-driven plugin for Waldur Site Agent"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent>=1.0.5rc6",
+    "waldur-site-agent>=1.0.5rc7",
     "kubernetes>=29.0.0",
 ]
 

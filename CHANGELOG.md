@@ -1,25 +1,23 @@
 # Changelog
 
-## 1.0.5-rc.6 - 2026-06-09
+## 1.0.5-rc.7 - 2026-06-10
 
+- **SLURM**: Read account parent from the association instead of the show account output.
 - **SLURM**: Accept bare-name output from `sacctmgr list cluster` (gh-12).
-- **Federation**: Add project `end_date` sync to the Waldur backend [WAL-9999].
-- **Federation**: Adopt in-flight B terminate order when resource is already Terminating.
-- **Federation**: Fix terminate/update orders timing out while waiting for B approval [WAL-9967].
-- **Federation**: Add project role reconciliation in polling mode to sync role changes.
-- **Federation**: Add missing fields to `WaldurBackendSettingsSchema` with updated docs.
-- **Federation**: Round Waldur usage to 2 decimals before reporting.
-- **Core**: Skip `set_usage` when reported usage matches what Waldur already has.
-- **Core**: Output details of the readiness probe exception for easier diagnosis.
-- **SLURM**: Create missing customer/project SLURM accounts in `sync_resource_project`.
-- **SLURM**: Refresh outdated SLURM plugin README and docs.
-- **OpenNebula**: Support vLLM inference VMs, with sample offering, docs, and model-by-name selection.
-- **OpenNebula**: Apply component `unit_factor` when sizing VMs, and use `/v1` base path in vLLM getting-started instructions.
-- **Docs**: Add upgrade guide with SLURM-specific steps [WAL-8090].
-- **SDK**: Bump `waldur-api-client` (includes affiliation field fix, dev318).
-- **Security**: Ignore PYSEC-2026-161 (starlette) in dependency scan.
+- **SLURM**: Create missing customer and project accounts in `sync_resource_project`.
+- **Waldur**: Add project end date synchronization to the Waldur backend (WAL-9999).
+- **Waldur**: Add project role reconciliation in polling mode to sync role changes.
+- **Waldur**: Add missing fields to the backend settings schema and document them.
+- **Waldur**: Round usage to 2 decimals before reporting.
+- **Federation**: Fix terminate/update orders timing out while waiting for provider approval (WAL-9967).
+- **Federation**: Adopt an in-flight terminate order when the resource is already Terminating.
+- **OpenNebula**: Support vLLM inference VMs, including model-by-name selection, a sample offering, and documentation.
+- **OpenNebula**: Apply component unit factor when sizing VMs.
+- **Core**: Skip usage reporting when the reported value matches what Waldur already has.
+- **Core**: Include exception details in readiness probe output.
+- **Docs**: Add an upgrade guide with SLURM-specific steps and fix outdated SLURM plugin documentation (WAL-8090).
 
-> 25 commits, 62 files changed (+3324/-436 lines)
+> 27 commits, 63 files changed (+3474/-446 lines)
 
 ---
 
