@@ -81,13 +81,16 @@ class TestGetAccountParent:
         with patch.object(c, "execute_command", return_value=""):
             yield c
 
-    def test_returns_parent_when_account_found(self, client):
-        client.execute_command.return_value = "hpc_project-alpha|hpc_org-a\n"
+    def test_returns_parent_from_account_level_association(self, client):
+        # Account-level row (empty User) carries the parent; per-user rows do not.
+        client.execute_command.return_value = (
+            "hpc_project-alpha|hpc_org-a|\nhpc_project-alpha|hpc_org-a|alice\n"
+        )
         result = client.get_account_parent("hpc_project-alpha")
         assert result == "hpc_org-a"
 
     def test_returns_none_when_account_not_in_output(self, client):
-        client.execute_command.return_value = "other-account|hpc_org-a\n"
+        client.execute_command.return_value = "other-account|hpc_org-a|\n"
         result = client.get_account_parent("hpc_project-alpha")
         assert result is None
 
@@ -96,12 +99,19 @@ class TestGetAccountParent:
         result = client.get_account_parent("hpc_project-alpha")
         assert result is None
 
-    def test_command_references_account_and_format(self, client):
+    def test_ignores_user_rows_when_account_row_has_parent(self, client):
+        # A bare per-user row must not be mistaken for the account's parent.
+        client.execute_command.return_value = "hpc_project-alpha|hpc_org-a|bob\n"
+        result = client.get_account_parent("hpc_project-alpha")
+        assert result is None
+
+    def test_command_queries_association_with_parent_format(self, client):
         client.execute_command.return_value = ""
         client.get_account_parent("hpc_project-alpha")
         cmd = client.executed_commands[-1]
-        assert "hpc_project-alpha" in cmd
-        assert "format=Account,ParentName" in cmd
+        assert "assoc" in cmd
+        assert "account=hpc_project-alpha" in cmd
+        assert "format=Account,ParentName,User" in cmd
 
 
 class TestSetAccountParent:

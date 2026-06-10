@@ -132,14 +132,24 @@ class SlurmClient(clients.BaseClient):
         return self._execute_command(parts)
 
     def get_account_parent(self, account: str) -> Optional[str]:
-        """Return the current parent account name for the given account, or None if not found."""
+        """Return the current parent account name for the given account, or None if not found.
+
+        ParentName is an association-level field — ``sacctmgr show account`` always
+        leaves it blank — so the parent must be read from the association.  Each
+        account has one account-level association (empty User) plus one per member
+        user; only the account-level row carries the parent we want.
+        """
         output = self._execute_command(
-            ["show", "account", account, "format=Account,ParentName", "-n", "-P"]
+            ["show", "assoc", f"account={account}", "format=Account,ParentName,User", "-n", "-P"]
         )
-        account_col, parent_col = 0, 1
+        account_col, parent_col, user_col = 0, 1, 2
         for line in output.splitlines():
             parts = line.strip().split("|")
-            if len(parts) > parent_col and parts[account_col].strip() == account:
+            if (
+                len(parts) > user_col
+                and parts[account_col].strip() == account
+                and parts[user_col].strip() == ""
+            ):
                 return parts[parent_col].strip() or None
         return None
 
