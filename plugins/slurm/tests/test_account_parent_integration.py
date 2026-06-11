@@ -24,11 +24,11 @@ from waldur_site_agent_slurm.client import SlurmClient
 from waldur_site_agent.backend.exceptions import BackendError
 
 # slurm-emulator is a dev dependency of this plugin (see pyproject.toml); the
-# parity behaviour these tests rely on requires >= 0.5.3. Pull the modules from
+# parity behaviour these tests rely on requires >= 0.6.0. Pull the modules from
 # importorskip's return value so the file collects cleanly when it is absent.
 SacctmgrEmulator = pytest.importorskip(
     "emulator.commands.sacctmgr",
-    reason="slurm-emulator (>=0.5.3) not installed",
+    reason="slurm-emulator (>=0.6.0) not installed",
 ).SacctmgrEmulator
 SlurmDatabase = pytest.importorskip("emulator.core.database").SlurmDatabase
 TimeEngine = pytest.importorskip("emulator.core.time_engine").TimeEngine
@@ -91,10 +91,12 @@ class TestSetAccountParent:
         client.set_account_parent("p-proj", "c-new")
         assert client.get_account_parent("p-proj") == "c-new"
 
-    def test_reparent_to_same_parent_is_swallowed(self, client):
-        # Real sacctmgr exits 1 with "Nothing modified" for a no-op reparent;
-        # _execute_command treats that as success (returns "").
-        assert client.set_account_parent("p-proj", "c-org") == ""
+    def test_reparent_to_same_parent_is_a_noop(self, client):
+        # Real sacctmgr prints "  Nothing modified" to stdout and exits 0 for
+        # a no-op reparent (SLURM account_functions.c sets only a local rc;
+        # emulator >= 0.6.0 matches this). No BackendError must be raised.
+        assert "Nothing modified" in client.set_account_parent("p-proj", "c-org")
+        assert client.get_account_parent("p-proj") == "c-org"
 
     def test_reparent_to_missing_parent_raises(self, client):
         with pytest.raises(BackendError):
