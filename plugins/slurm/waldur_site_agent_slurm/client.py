@@ -490,9 +490,9 @@ class SlurmClient(clients.BaseClient):
             return self.execute_command(account_command, silent=silent)
         except BackendError as e:
             if command and command[0] == "modify" and "Nothing modified" in str(e):
-                # sacctmgr returns exit-code 1 with "Nothing modified" when the
-                # requested values already match the current state.  This is not
-                # a real error — the desired state is already reached.
+                # Real sacctmgr prints "Nothing modified" with exit 0 for a
+                # no-op modify, but keep this guard for versions/paths that
+                # exit non-zero — the desired state is already reached.
                 return ""
             raise
 

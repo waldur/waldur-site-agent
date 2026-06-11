@@ -637,9 +637,12 @@ class TestReportingOptimizations:
                 actual_by_user[username] = usage_val
 
         for username, node_hours in injected.items():
-            cpu_raw = int(node_hours * 64)  # emulator: 64 CPUs per node
-            elapsed_min = node_hours * 60   # elapsed in minutes
-            expected = (cpu_raw * elapsed_min) / cpu_unit_factor
+            # emulator >= 0.6.0 reports real SLURM semantics: ReqTRES carries
+            # the per-node allocation (cpu=64), and the agent multiplies it by
+            # elapsed. N node-hours on a 64-CPU node = N*64 CPU-hours.
+            cpu_alloc = 64  # emulator: 64 CPUs per node
+            elapsed_min = node_hours * 60  # elapsed in minutes
+            expected = (cpu_alloc * elapsed_min) / cpu_unit_factor
             actual = actual_by_user.get(username)
             assert actual is not None, (
                 f"No per-user cpu usage found for {username}"

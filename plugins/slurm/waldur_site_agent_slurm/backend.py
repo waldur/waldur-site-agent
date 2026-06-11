@@ -259,8 +259,8 @@ class SlurmBackend(backends.BaseBackend):
             )
             return
 
-        # Verify the reparent actually took effect (set_account_parent silently
-        # returns '' when sacctmgr reports "Nothing modified").
+        # Verify the reparent actually took effect (a no-op reparent only
+        # prints "Nothing modified", so success can't be read from the output).
         try:
             actual_parent = self.client.get_account_parent(project_backend_id)
         except BackendError:

@@ -510,12 +510,10 @@ class TestClusterFilteringWithEmulator:
             """Route a full command list (with binary prefix) to the emulator."""
             # Determine which emulator to use from the binary name
             binary = command_parts[0].rsplit("/", 1)[-1]
-            # Strip --parsable2, --noheader, --immediate flags
-            args = [
-                a
-                for a in command_parts[1:]
-                if a not in ("--parsable2", "--noheader", "--immediate")
-            ]
+            # Pass flags through: emulator >= 0.6.0 understands
+            # --parsable2/--noheader/--immediate and, like real SLURM,
+            # emits table output when --parsable2 is absent.
+            args = command_parts[1:]
             if binary == "sacctmgr":
                 return sacctmgr.handle_command(args)
             if binary == "sacct":

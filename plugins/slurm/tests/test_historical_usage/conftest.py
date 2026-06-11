@@ -210,6 +210,11 @@ def patched_slurm_client(sacct_emulator, sacctmgr_emulator):
         args, command_name="sacctmgr", immediate=True, parsable=True, silent=False
     ):
         """Mock execute command that routes to emulator."""
+        # Mirror SlurmClient._execute_command, which prepends these flags
+        # to the real binary invocation; emulator >= 0.6.0 emits table
+        # output (like real sacct) unless --parsable2 is passed.
+        if parsable:
+            args = ["--parsable2", "--noheader", *args]
         if command_name == "sacct":
             return sacct_emulator.handle_command(args)
         if command_name == "sacctmgr":
@@ -296,6 +301,9 @@ def patched_slurm_client_with_cluster(clustered_usage_data, time_engine):
     def mock_execute_command(
         args, command_name="sacctmgr", immediate=True, parsable=True, silent=False
     ):
+        # Mirror SlurmClient._execute_command (see patched_slurm_client above).
+        if parsable:
+            args = ["--parsable2", "--noheader", *args]
         if command_name == "sacct":
             return sacct.handle_command(args)
         if command_name == "sacctmgr":
