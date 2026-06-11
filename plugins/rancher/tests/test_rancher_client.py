@@ -1,7 +1,7 @@
 """Tests for Rancher client implementation."""
 
 import pytest
-import requests
+import httpx
 from unittest.mock import MagicMock, patch
 
 from waldur_site_agent_rancher.rancher_client import RancherClient
@@ -24,7 +24,7 @@ def rancher_settings():
 class TestRancherClient:
     """Test cases for RancherClient."""
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_initialization(self, mock_session, rancher_settings):
         """Test client initialization."""
         client = RancherClient(rancher_settings)
@@ -38,7 +38,7 @@ class TestRancherClient:
 
         mock_session.assert_called_once()
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_ping_success(self, mock_session, rancher_settings):
         """Test successful ping operation."""
         mock_response = MagicMock()
@@ -53,11 +53,11 @@ class TestRancherClient:
         assert client.ping() is True
         mock_session_instance.get.assert_called()
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_ping_failure(self, mock_session, rancher_settings):
         """Test ping failure."""
         mock_session_instance = MagicMock()
-        mock_session_instance.get.side_effect = requests.exceptions.ConnectionError(
+        mock_session_instance.get.side_effect = httpx.ConnectError(
             "Connection failed"
         )
         mock_session.return_value = mock_session_instance
@@ -66,7 +66,7 @@ class TestRancherClient:
 
         assert client.ping() is False
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_list_projects(self, mock_session, rancher_settings):
         """Test project listing."""
         mock_response = MagicMock()
@@ -100,7 +100,7 @@ class TestRancherClient:
         assert projects[0].backend_id == "project-123"
         assert projects[0].organization == "test-org"
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_get_project(self, mock_session, rancher_settings):
         """Test getting a specific project."""
         mock_response = MagicMock()
@@ -123,7 +123,7 @@ class TestRancherClient:
         assert project.backend_id == "project-123"
         assert project.organization == "test-org"
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_create_project(self, mock_session, rancher_settings):
         """Test project creation."""
         mock_response = MagicMock()
@@ -151,7 +151,7 @@ class TestRancherClient:
         assert posted_data["annotations"]["waldur/organization"] == "test-org"
         assert posted_data["annotations"]["waldur/managed"] == "true"
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_delete_project(self, mock_session, rancher_settings):
         """Test project deletion."""
         mock_response = MagicMock()
@@ -165,7 +165,7 @@ class TestRancherClient:
 
         mock_session_instance.delete.assert_called()
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_get_project_quotas(self, mock_session, rancher_settings):
         """Test getting project quotas from project object."""
         mock_response = MagicMock()
@@ -186,7 +186,7 @@ class TestRancherClient:
         assert quotas["cpu"] == 4.0
         assert quotas["memory"] == 8.0
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_set_namespace_custom_resource_quotas(self, mock_session, rancher_settings):
         """Test setting namespace custom resource quotas via YAML import."""
         mock_post_response = MagicMock()
@@ -232,7 +232,7 @@ class TestRancherClient:
         assert "8192Mi" in yaml_content  # Memory in Mi
         assert "102400Mi" in yaml_content  # Storage in Mi
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_get_namespace_quota_usage(self, mock_session, rancher_settings):
         """Test getting usage from ResourceQuota status.used across multiple quotas."""
 
@@ -278,7 +278,7 @@ class TestRancherClient:
         assert usage["storage"] == 10.0
         assert usage["gpu"] == 2.0
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_list_project_users(self, mock_session, rancher_settings):
         """Test listing project users."""
         mock_response = MagicMock()
@@ -300,7 +300,7 @@ class TestRancherClient:
         assert "user2" in users
         assert len(users) == 2
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_remove_project_user(self, mock_session, rancher_settings):
         """Test removing user from project."""
         # First call (get bindings) returns user binding
@@ -324,11 +324,11 @@ class TestRancherClient:
 
         mock_session_instance.delete.assert_called()
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_request_failure_handling(self, mock_session, rancher_settings):
         """Test handling of request failures."""
         mock_session_instance = MagicMock()
-        mock_session_instance.get.side_effect = requests.exceptions.HTTPError("404 Not Found")
+        mock_session_instance.get.side_effect = httpx.HTTPError("404 Not Found")
         mock_session.return_value = mock_session_instance
 
         client = RancherClient(rancher_settings)
@@ -337,7 +337,7 @@ class TestRancherClient:
         result = client.get_project("nonexistent-project")
         assert result is None
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_ssl_verification_disabled(self, mock_session, rancher_settings):
         """Test SSL verification is properly disabled."""
         rancher_settings["verify_cert"] = False
@@ -346,12 +346,12 @@ class TestRancherClient:
         mock_session_instance.post.return_value = MagicMock()  # For login
         mock_session.return_value = mock_session_instance
 
-        client = RancherClient(rancher_settings)
+        RancherClient(rancher_settings)
 
-        # Check that session.verify is set to False
-        assert client.session.verify is False
+        # Check that the HTTP client was created with verification disabled
+        assert mock_session.call_args.kwargs["verify"] is False
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_login_method(self, mock_session, rancher_settings):
         """Test login method authentication."""
         mock_login_response = MagicMock()
@@ -369,11 +369,11 @@ class TestRancherClient:
         # Verify auth is set on session
         assert client.session.auth == (client.access_key, client.secret_key)
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_login_failure_handling(self, mock_session, rancher_settings):
         """Test login failure handling."""
         mock_session_instance = MagicMock()
-        mock_session_instance.post.side_effect = requests.exceptions.HTTPError("401 Unauthorized")
+        mock_session_instance.post.side_effect = httpx.HTTPError("401 Unauthorized")
         mock_session.return_value = mock_session_instance
 
         # Should not raise exception, just log warning
@@ -382,7 +382,7 @@ class TestRancherClient:
         # Client should still be created
         assert client.access_key == rancher_settings["username"]
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_create_namespace(self, mock_session, rancher_settings):
         """Test namespace creation without quotas."""
         mock_response = MagicMock()
@@ -407,7 +407,7 @@ class TestRancherClient:
         assert posted_data["labels"]["pod-security.kubernetes.io/enforce-version"] == "latest"
         assert "resourceQuota" not in posted_data
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_create_namespace_with_extra_labels(self, mock_session, rancher_settings):
         """Test namespace creation with extra labels (e.g. gpu-pool)."""
         mock_response = MagicMock()
@@ -430,11 +430,11 @@ class TestRancherClient:
         # Extra label added
         assert posted_data["labels"]["gpu-pool"] == "h100-2x"
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_create_namespace_failure(self, mock_session, rancher_settings):
         """Test namespace creation failure handling."""
         mock_session_instance = MagicMock()
-        mock_session_instance.post.side_effect = requests.exceptions.HTTPError("400 Bad Request")
+        mock_session_instance.post.side_effect = httpx.HTTPError("400 Bad Request")
         mock_session.return_value = mock_session_instance
 
         client = RancherClient(rancher_settings)
@@ -442,7 +442,7 @@ class TestRancherClient:
         with pytest.raises(BackendError):
             client.create_namespace("c-m-test:p-test", "test-namespace")
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_set_namespace_custom_resource_quotas_multi_gpu(self, mock_session, rancher_settings):
         """Test setting namespace quotas with multiple GPU types via component_k8s_mapping."""
         mock_post_response = MagicMock()
@@ -483,7 +483,7 @@ class TestRancherClient:
         assert "'2'" in yaml_content or ": '2'" in yaml_content or "\"2\"" in yaml_content
         assert "'4'" in yaml_content or ": '4'" in yaml_content or "\"4\"" in yaml_content
 
-    @patch("waldur_site_agent_rancher.rancher_client.requests.Session")
+    @patch("waldur_site_agent_rancher.rancher_client.httpx.Client")
     def test_get_namespace_quota_usage_multi_gpu(self, mock_session, rancher_settings):
         """Test getting usage with multiple GPU types via reverse_k8s_mapping."""
         mock_quota_response = MagicMock()

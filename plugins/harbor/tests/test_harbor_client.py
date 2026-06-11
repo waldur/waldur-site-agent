@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-import requests
+import httpx
 
 from waldur_site_agent_harbor.client import HarborClient
 from waldur_site_agent_harbor.exceptions import (
@@ -27,7 +27,7 @@ def harbor_client():
 @pytest.fixture
 def mock_response():
     """Create a mock response object."""
-    response = Mock(spec=requests.Response)
+    response = Mock(spec=httpx.Response)
     response.status_code = 200
     response.headers = {}
     response.content = b'{"test": "data"}'
@@ -215,11 +215,17 @@ class TestHarborClient:
 
     def test_authentication_error(self, harbor_client):
         """Test authentication error handling."""
-        mock_response = Mock(spec=requests.Response)
+        mock_response = Mock(spec=httpx.Response)
         mock_response.status_code = 401
-        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError()
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "401 Unauthorized",
+            request=httpx.Request("GET", "https://registry.example.com/test"),
+            response=httpx.Response(
+                401, request=httpx.Request("GET", "https://registry.example.com/test")
+            ),
+        )
 
-        with patch("requests.request", return_value=mock_response):
+        with patch("httpx.request", return_value=mock_response):
             with pytest.raises(HarborAuthenticationError):
                 harbor_client._make_request("GET", "/test")
 

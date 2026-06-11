@@ -7,7 +7,7 @@ authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
     "waldur-site-agent>=1.0.5rc8",
-    "requests>=2.31.0",
+    "httpx>=0.25.0",
     "kubernetes>=25.0.0"
 ]
 

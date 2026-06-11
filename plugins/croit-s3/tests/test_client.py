@@ -2,7 +2,7 @@
 
 import json
 import pytest
-import requests
+import httpx
 from unittest.mock import Mock, patch
 
 from waldur_site_agent_croit_s3.client import CroitS3Client
@@ -54,7 +54,7 @@ class TestCroitS3Client:
         assert client.verify_ssl is True
         assert client.timeout == 60
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_ping_success(self, mock_request, client, mock_response):
         """Test successful ping."""
         mock_response.status_code = 200
@@ -66,28 +66,24 @@ class TestCroitS3Client:
         assert result is True
         mock_request.assert_called_once()
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_ping_failure(self, mock_request, client):
         """Test ping failure."""
-        mock_request.side_effect = requests.exceptions.ConnectionError(
-            "Connection failed"
-        )
+        mock_request.side_effect = httpx.ConnectError("Connection failed")
 
         result = client.ping()
 
         assert result is False
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_ping_with_exception(self, mock_request, client):
         """Test ping raises exception when requested."""
-        mock_request.side_effect = requests.exceptions.ConnectionError(
-            "Connection failed"
-        )
+        mock_request.side_effect = httpx.ConnectError("Connection failed")
 
         with pytest.raises(Exception):
             client.ping(raise_exception=True)
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_create_user_success(self, mock_request, client, mock_response):
         """Test successful user creation."""
         mock_response.status_code = 201
@@ -105,10 +101,9 @@ class TestCroitS3Client:
             url="https://test.example.com/api/s3/users",
             json={"uid": "test_user", "name": "Test User", "email": "test@example.com"},
             params=None,
-            timeout=30,
         )
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_create_user_exists(self, mock_request, client):
         """Test user creation when user already exists."""
         mock_response = Mock()
@@ -119,7 +114,7 @@ class TestCroitS3Client:
         with pytest.raises(CroitS3UserExistsError):
             client.create_user(uid="existing_user", name="Existing User")
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_delete_user_success(self, mock_request, client, mock_response):
         """Test successful user deletion."""
         mock_response.status_code = 204
@@ -133,10 +128,9 @@ class TestCroitS3Client:
             url="https://test.example.com/api/s3/users/test_user",
             json=None,
             params=None,
-            timeout=30,
         )
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_delete_user_not_found(self, mock_request, client):
         """Test user deletion when user not found."""
         mock_response = Mock()
@@ -147,7 +141,7 @@ class TestCroitS3Client:
         with pytest.raises(CroitS3UserNotFoundError):
             client.delete_user("nonexistent_user")
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_get_user_info_success(self, mock_request, client, mock_response):
         """Test successful user info retrieval."""
         mock_response.json.return_value = [
@@ -167,7 +161,7 @@ class TestCroitS3Client:
         assert result["email"] == "test@example.com"
         assert result["suspended"] is False
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_get_user_info_not_found(self, mock_request, client, mock_response):
         """Test user info retrieval when user not found."""
         mock_response.json.return_value = {"data": []}
@@ -176,7 +170,7 @@ class TestCroitS3Client:
         with pytest.raises(CroitS3UserNotFoundError):
             client.get_user_info("nonexistent_user")
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_get_user_keys(self, mock_request, client, mock_response):
         """Test user keys retrieval."""
         mock_response.json.return_value = {
@@ -191,7 +185,7 @@ class TestCroitS3Client:
         assert result["access_key"] == "AKIAIOSFODNN7EXAMPLE"
         assert result["secret_key"] == "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_get_user_buckets(self, mock_request, client, mock_response):
         """Test user buckets retrieval."""
         mock_response.json.return_value = [
@@ -216,7 +210,7 @@ class TestCroitS3Client:
         assert result[1]["bucket"] == "test-bucket-2"
         assert result[1]["usageSum"]["numObjects"] == 20
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_set_user_bucket_quota(self, mock_request, client, mock_response):
         """Test setting user bucket quota."""
         mock_response.status_code = 204
@@ -230,10 +224,9 @@ class TestCroitS3Client:
             url="https://test.example.com/api/s3/users/test_user/bucket-quota",
             json=quota,
             params=None,
-            timeout=30,
         )
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_authentication_error(self, mock_request, client):
         """Test authentication error handling."""
         mock_response = Mock()
@@ -244,8 +237,9 @@ class TestCroitS3Client:
         with pytest.raises(CroitS3AuthenticationError):
             client.list_users()
 
-    @patch("requests.Session.request")
-    def test_api_error(self, mock_request, client):
+    @patch("waldur_site_agent_croit_s3.client.time.sleep")
+    @patch("httpx.Client.request")
+    def test_api_error(self, mock_request, mock_sleep, client):
         """Test general API error handling."""
         mock_response = Mock()
         mock_response.status_code = 500
@@ -255,20 +249,39 @@ class TestCroitS3Client:
         with pytest.raises(CroitS3APIError):
             client.list_users()
 
-    @patch("requests.Session.request")
+        # 500 is retried before giving up: 1 initial attempt + 3 retries
+        assert mock_request.call_count == 4
+
+    @patch("waldur_site_agent_croit_s3.client.time.sleep")
+    @patch("httpx.Client.request")
+    def test_transient_server_error_retried(
+        self, mock_request, mock_sleep, client, mock_response
+    ):
+        """Test that transient 5xx responses are retried until success."""
+        error_response = Mock()
+        error_response.status_code = 503
+        error_response.text = "Service Unavailable"
+        mock_response.json.return_value = {"data": []}
+        mock_request.side_effect = [error_response, mock_response]
+
+        result = client.ping()
+
+        assert result is True
+        assert mock_request.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("httpx.Client.request")
     def test_timeout_error(self, mock_request, client):
         """Test timeout error handling."""
-        mock_request.side_effect = requests.exceptions.Timeout()
+        mock_request.side_effect = httpx.TimeoutException("Request timed out")
 
         with pytest.raises(CroitS3APIError, match="Request timeout"):
             client.list_users()
 
-    @patch("requests.Session.request")
+    @patch("httpx.Client.request")
     def test_connection_error(self, mock_request, client):
         """Test connection error handling."""
-        mock_request.side_effect = requests.exceptions.ConnectionError(
-            "Connection failed"
-        )
+        mock_request.side_effect = httpx.ConnectError("Connection failed")
 
         with pytest.raises(CroitS3APIError, match="Connection error"):
             client.list_users()

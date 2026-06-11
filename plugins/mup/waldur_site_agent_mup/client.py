@@ -10,7 +10,7 @@ import logging
 from typing import Any, Optional, cast
 from urllib.parse import quote, urljoin
 
-import requests
+import httpx
 
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.structures import Association, ClientResource
@@ -31,28 +31,27 @@ class MUPClient(BaseClient):
         self.api_url = api_url.rstrip("/")
         self.username = username
         self.password = password
-        self.session = requests.Session()
-
         # Setup basic authentication
         credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
-        self.session.headers.update(
-            {
+        self.session = httpx.Client(
+            headers={
                 "Authorization": f"Basic {credentials}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-            }
+            },
+            timeout=30.0,
         )
 
     def _make_request(
         self, method: str, endpoint: str, **kwargs: Any
-    ) -> requests.Response:  # noqa: ANN401
+    ) -> httpx.Response:  # noqa: ANN401
         """Make HTTP request to MUP API with error handling."""
         url = urljoin(self.api_url, endpoint)
 
         try:
             response = self.session.request(method, url, **kwargs)
             response.raise_for_status()
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             try:
                 headers = dict(self.session.headers)
                 if "Authorization" in headers:
@@ -64,7 +63,7 @@ class MUPClient(BaseClient):
 
             # Get response details if available
             response_details = ""
-            if hasattr(e, "response") and e.response is not None:
+            if isinstance(e, httpx.HTTPStatusError):
                 try:
                     response_details = (
                         f" | Response Status: {e.response.status_code} "
@@ -88,7 +87,7 @@ class MUPClient(BaseClient):
         else:
             return response
 
-    def _parse_json_response(self, response: requests.Response) -> Any:  # noqa: ANN401
+    def _parse_json_response(self, response: httpx.Response) -> Any:  # noqa: ANN401
         """Safely parse JSON response with proper error handling."""
         # Handle mocked responses in tests
         if hasattr(response, "_mock_name"):

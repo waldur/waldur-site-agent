@@ -3,7 +3,7 @@
 import time
 
 import pytest
-import requests
+import httpx
 from waldur_site_agent_slurm.backend import SlurmBackend
 
 # Configuration for emulator integration
@@ -25,7 +25,7 @@ class SlurmEmulatorClient:
     def is_available(self) -> bool:
         """Check if emulator is available."""
         try:
-            response = requests.get(f"{self.base_url}/api/status", timeout=2)
+            response = httpx.get(f"{self.base_url}/api/status", timeout=2)
             return response.status_code == 200
         except:
             return False
@@ -33,7 +33,7 @@ class SlurmEmulatorClient:
     def cleanup_all(self) -> bool:
         """Reset emulator to clean state."""
         try:
-            response = requests.post(f"{self.base_url}/api/cleanup-all", timeout=10)
+            response = httpx.post(f"{self.base_url}/api/cleanup-all", timeout=10)
             response.raise_for_status()
             return True
         except:
@@ -42,7 +42,7 @@ class SlurmEmulatorClient:
     def time_set(self, date_str: str) -> bool:
         """Set emulator time."""
         try:
-            response = requests.post(
+            response = httpx.post(
                 f"{self.base_url}/api/time/set", json={"date": date_str}, timeout=10
             )
             response.raise_for_status()
@@ -53,7 +53,7 @@ class SlurmEmulatorClient:
     def time_advance(self, amount: int, unit: str) -> bool:
         """Advance emulator time."""
         try:
-            response = requests.post(
+            response = httpx.post(
                 f"{self.base_url}/api/time/advance", params={unit: amount}, timeout=10
             )
             response.raise_for_status()
@@ -65,7 +65,7 @@ class SlurmEmulatorClient:
         """Create account in emulator (or use existing account)."""
         try:
             # First check if account already exists
-            response = requests.get(f"{self.base_url}/api/status", timeout=10)
+            response = httpx.get(f"{self.base_url}/api/status", timeout=10)
             if response.status_code == 200:
                 status = response.json()
                 accounts = status.get("accounts", {})
@@ -74,7 +74,7 @@ class SlurmEmulatorClient:
 
             # Try to create account via API (endpoint might not exist)
             try:
-                response = requests.post(
+                response = httpx.post(
                     f"{self.base_url}/api/account/create",
                     json={"name": name, "description": description, "allocation": allocation},
                     timeout=10,
@@ -92,7 +92,7 @@ class SlurmEmulatorClient:
     def usage_inject(self, user: str, usage: float, account: str) -> bool:
         """Inject usage into emulator."""
         try:
-            response = requests.post(
+            response = httpx.post(
                 f"{self.base_url}/api/usage/inject",
                 json={"user": user, "usage": usage, "account": account},
                 timeout=10,
@@ -105,7 +105,7 @@ class SlurmEmulatorClient:
     def limits_calculate(self, account: str) -> dict:
         """Calculate periodic limits for account."""
         try:
-            response = requests.post(
+            response = httpx.post(
                 f"{self.base_url}/api/limits/calculate", json={"account": account}, timeout=10
             )
             response.raise_for_status()
@@ -116,7 +116,7 @@ class SlurmEmulatorClient:
     def account_show(self, account: str) -> dict:
         """Show account details."""
         try:
-            response = requests.get(f"{self.base_url}/api/account/{account}", timeout=10)
+            response = httpx.get(f"{self.base_url}/api/account/{account}", timeout=10)
             response.raise_for_status()
             return response.json()
         except:
@@ -125,7 +125,7 @@ class SlurmEmulatorClient:
     def apply_periodic_settings(self, resource_id: str, settings: dict) -> dict:
         """Apply settings via emulator API."""
         try:
-            response = requests.post(
+            response = httpx.post(
                 f"{self.base_url}/api/apply-periodic-settings",
                 json={"resource_id": resource_id, **settings},
                 timeout=10,

@@ -33,7 +33,7 @@ class MyCustomClient(BaseClient):
         """
         # TODO: Implement
         # Example for CLI: output = self.execute_command(["my-tool", "list"])
-        # Example for API: response = requests.get(f"{self.api_url}/resources")
+        # Example for API: response = httpx.get(f"{self.api_url}/resources")
         return []
 
     def get_resource(self, resource_id: str) -> Optional[ClientResource]:
