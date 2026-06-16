@@ -12,8 +12,13 @@ from waldur_api_client.models.merged_plugin_options import MergedPluginOptions
 from waldur_api_client.models.offering_state import OfferingState
 from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.order_state import OrderState
+from waldur_api_client.models.order_details_attributes import OrderDetailsAttributes
+from waldur_api_client.models.order_details_limits import OrderDetailsLimits
 from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.models.resource_limits import ResourceLimits
+from waldur_api_client.models.resource_offering_plugin_options import (
+    ResourceOfferingPluginOptions,
+)
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
 
 from tests.fixtures import OFFERING, user_me_api_response
@@ -178,10 +183,12 @@ class CreationOrderTest(unittest.TestCase):
             project_uuid=self.project_uuid,
             slug="sample-resource-1",
             state=ResourceState.CREATING,
-            offering_plugin_options={
-                "account_name_generation_policy": "resource_name",
-                "account_name_prefix": "hpc_",
-            },
+            offering_plugin_options=ResourceOfferingPluginOptions.from_dict(
+                {
+                    "account_name_generation_policy": "resource_name",
+                    "account_name_prefix": "hpc_",
+                }
+            ),
             limits=ResourceLimits.from_dict(
                 {
                     "cpu": 10,
@@ -219,6 +226,7 @@ class CreationOrderTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         respx.stop()
+        self.client_patcher.stop()
 
     def test_allocation_creation(self, slurm_client_class: mock.Mock) -> None:
         allocation_account = "hpc_sample-resource-1"
@@ -603,10 +611,12 @@ class RestoreOrderTest(unittest.TestCase):
             slug="sample-resource-1",
             state=ResourceState.CREATING,
             backend_id=self.backend_id,
-            offering_plugin_options={
-                "account_name_generation_policy": "resource_name",
-                "account_name_prefix": "hpc_",
-            },
+            offering_plugin_options=ResourceOfferingPluginOptions.from_dict(
+                {
+                    "account_name_generation_policy": "resource_name",
+                    "account_name_prefix": "hpc_",
+                }
+            ),
             limits=ResourceLimits.from_dict(
                 {
                     "cpu": 10,
@@ -762,19 +772,21 @@ class UpdateOrderTest(unittest.TestCase):
             marketplace_resource_uuid=self.marketplace_resource_uuid,
             resource_name="test-allocation-01",
             type_=RequestTypes.UPDATE,
-            limits=ResourceLimits.from_dict(
+            limits=OrderDetailsLimits.from_dict(
                 {
                     "cpu": 101,
                     "mem": 301,
                 }
             ),
-            attributes={
-                "old_limits": {
-                    "cpu": 100,
-                    "mem": 300,
-                },
-                "name": "test-allocation-01",
-            },
+            attributes=OrderDetailsAttributes.from_dict(
+                {
+                    "old_limits": {
+                        "cpu": 100,
+                        "mem": 300,
+                    },
+                    "name": "test-allocation-01",
+                }
+            ),
             state=OrderState.EXECUTING,
             offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -955,7 +967,9 @@ class DuplicateResourceCreationTest(unittest.TestCase):
             project_uuid=self.project_uuid,
             slug="sample-resource-1",
             state=ResourceState.CREATING,
-            offering_plugin_options=offering_plugin_options,
+            offering_plugin_options=ResourceOfferingPluginOptions.from_dict(
+                offering_plugin_options
+            ),
             limits=ResourceLimits.from_dict({"cpu": 10, "mem": 20}),
         ).to_dict()
 

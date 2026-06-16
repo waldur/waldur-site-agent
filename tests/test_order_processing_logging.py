@@ -13,6 +13,9 @@ from uuid import UUID
 import pytest
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.request_types import RequestTypes
+from waldur_api_client.models.resource_offering_plugin_options import (
+    ResourceOfferingPluginOptions,
+)
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend.backends import PendingOrderDecision
@@ -75,7 +78,7 @@ def mock_resource():
     resource.limits.additional_properties = {}
     resource.limits.to_dict.return_value = {}
     resource.attributes = UNSET
-    resource.offering_plugin_options = {}
+    resource.offering_plugin_options = ResourceOfferingPluginOptions.from_dict({})
     resource.plan_uuid = None
     return resource
 
@@ -92,6 +95,7 @@ def _make_processor(mock_resource_backend):
     processor.resource_backend = mock_resource_backend
     processor.service_provider = None
     processor.expose_backend_error_details = True
+    processor._offering_users_cache = None
     return processor
 
 

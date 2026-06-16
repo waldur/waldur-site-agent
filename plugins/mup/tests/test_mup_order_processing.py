@@ -7,6 +7,7 @@ from unittest import mock
 import httpx
 import respx
 from waldur_api_client.client import AuthenticatedClient
+from waldur_api_client.models.offering_user_state import OfferingUserState
 
 from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent_mup.client import MUPError
@@ -198,6 +199,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
                 "url": f"{BASE_URL}/api/users/{uuid.uuid4().hex}/",
                 "expiration_time": None,
                 "offering_user_username": self.waldur_offering_user["username"],
+                "offering_user_state": OfferingUserState.OK.value,
             }
         ]
         self.waldur_order = {
