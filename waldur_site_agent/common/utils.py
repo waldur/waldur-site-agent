@@ -67,6 +67,9 @@ from waldur_api_client.models.offering_user_state_transition_request import (
 )
 from waldur_api_client.models.patched_offering_user_request import PatchedOfferingUserRequest
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.models.resource_set_limits_request_limits import (
+    ResourceSetLimitsRequestLimits,
+)
 from waldur_api_client.models.update_offering_component_request import (
     UpdateOfferingComponentRequest,
 )
@@ -1400,7 +1403,9 @@ def sync_waldur_resource_limits(
     marketplace_provider_resources_set_limits.sync(
         uuid=waldur_resource.uuid.hex,
         client=waldur_rest_client,
-        body=ResourceSetLimitsRequest(limits=backend_limits),
+        body=ResourceSetLimitsRequest(
+            limits=ResourceSetLimitsRequestLimits.from_dict(backend_limits),
+        ),
     )
 
 

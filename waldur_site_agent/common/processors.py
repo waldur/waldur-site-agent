@@ -99,6 +99,9 @@ from waldur_api_client.models import (
 from waldur_api_client.models.agent_processor import AgentProcessor
 from waldur_api_client.models.agent_service import AgentService
 from waldur_api_client.models.backend_resource_request import BackendResourceRequest
+from waldur_api_client.models.backend_resource_request_backend_metadata import (
+    BackendResourceRequestBackendMetadata,
+)
 from waldur_api_client.models.backend_resource_request_set_erred_request import (
     BackendResourceRequestSetErredRequest,
 )
@@ -133,9 +136,15 @@ from waldur_api_client.models.resource_backend_id_request import ResourceBackend
 from waldur_api_client.models.resource_backend_metadata_request import (
     ResourceBackendMetadataRequest,
 )
+from waldur_api_client.models.resource_backend_metadata_request_backend_metadata import (
+    ResourceBackendMetadataRequestBackendMetadata,
+)
 from waldur_api_client.models.resource_endpoint_request import ResourceEndpointRequest
 from waldur_api_client.models.resource_endpoints_request import (
     ResourceEndpointsRequest,
+)
+from waldur_api_client.models.resource_set_limits_request_limits import (
+    ResourceSetLimitsRequestLimits,
 )
 from waldur_api_client.types import UNSET, Unset
 
@@ -524,7 +533,9 @@ class OfferingBaseProcessor(abc.ABC):
         """
         # Determine resource name generation strategy
         use_project_slug = (
-            waldur_resource.offering_plugin_options.get("account_name_generation_policy")
+            waldur_resource.offering_plugin_options.additional_properties.get(
+                "account_name_generation_policy"
+            )
             == "project_slug"
         )
 
@@ -1054,7 +1065,11 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         if backend_resource_info.limits:
             marketplace_provider_resources_set_limits.sync(
                 uuid=waldur_resource.uuid.hex,
-                body=ResourceSetLimitsRequest(limits=backend_resource_info.limits),
+                body=ResourceSetLimitsRequest(
+                    limits=ResourceSetLimitsRequestLimits.from_dict(
+                        backend_resource_info.limits
+                    )
+                ),
                 client=self.waldur_rest_client,
             )
             logger.info("Resource limits are set to %s", backend_resource_info.limits)
@@ -1066,7 +1081,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     uuid=waldur_resource.uuid.hex,
                     client=self.waldur_rest_client,
                     body=ResourceBackendMetadataRequest(
-                        backend_metadata=backend_resource_info.backend_metadata
+                        backend_metadata=ResourceBackendMetadataRequestBackendMetadata.from_dict(
+                            backend_resource_info.backend_metadata
+                        )
                     ),
                 )
                 logger.info("Pushed backend metadata to Waldur resource")
@@ -2249,7 +2266,11 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         marketplace_provider_resources_set_backend_metadata.sync(
             uuid=waldur_resource.uuid.hex,
             client=self.waldur_rest_client,
-            body=ResourceBackendMetadataRequest(backend_metadata=resource_metadata),
+            body=ResourceBackendMetadataRequest(
+                backend_metadata=ResourceBackendMetadataRequestBackendMetadata.from_dict(
+                    resource_metadata
+                )
+            ),
         )
 
     def _sync_resource_limits(self, waldur_resource: WaldurResource) -> None:
@@ -3209,7 +3230,7 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
             project=waldur_project.uuid,
             offering=self.offering.uuid,
             backend_id=local_resource_info.backend_id,
-            backend_metadata=backend_metadata,
+            backend_metadata=BackendResourceRequestBackendMetadata.from_dict(backend_metadata),
         )
         backend_resources_create.sync(
             body=payload,

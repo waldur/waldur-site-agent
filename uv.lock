@@ -2079,16 +2079,16 @@ wheels = [
 
 [[package]]
 name = "waldur-api-client"
-version = "8.0.9.dev318"
+version = "8.0.9.dev344"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "httpx" },
     { name = "python-dateutil" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/32/96ba73f8f6e1f5b99be7320340ff62b92fa942b596167d70bfa9d36a66e5/waldur_api_client-8.0.9.dev318.tar.gz", hash = "sha256:6c80de5998df015a35e31777f2a95bdc978160c8a3dfaaf452d615b36e8a539f", size = 2151926, upload-time = "2026-06-03T09:56:21.778Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/08/4dd6a9bb0e8c1eecffce61a7f1518cebeca361155fe0fbc37f2508d8eefc/waldur_api_client-8.0.9.dev344.tar.gz", hash = "sha256:513bf62adbc3d47751d401e398196a5bb3b6080b26c306f689cf95e8bc2c4d67", size = 2248096, upload-time = "2026-06-15T23:37:32.422Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/d7/bfc4ab351d1379d5a2408ad7d9f15b8471ab6b0d769e0529c0e2a9c732b5/waldur_api_client-8.0.9.dev318-py3-none-any.whl", hash = "sha256:c8c6b33a6c80441b42969eea706f3542f613ff299d29269fe039863985f9d88f", size = 6546643, upload-time = "2026-06-03T09:56:19.506Z" },
+    { url = "https://files.pythonhosted.org/packages/30/b8/17c61cd28698f81a7b5f1248af1c10fb9e3aa40aae2c29b4e43b41362d05/waldur_api_client-8.0.9.dev344-py3-none-any.whl", hash = "sha256:fc33283e857bf8875465b52518f539ecd51c0ce9c3669a658d6ff05b93e1dd51", size = 6900483, upload-time = "2026-06-15T23:37:30.086Z" },
 ]
 
 [[package]]
@@ -2134,7 +2134,7 @@ requires-dist = [
     { name = "sentry-sdk", specifier = "==2.8.0" },
     { name = "stomp-py", specifier = ">=8.2.0,<9" },
     { name = "structlog", specifier = ">=25.4.0" },
-    { name = "waldur-api-client", specifier = "==8.0.9.dev318" },
+    { name = "waldur-api-client", specifier = "==8.0.9.dev344" },
 ]
 
 [package.metadata.requires-dev]
