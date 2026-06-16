@@ -271,6 +271,30 @@ def _wait_for_qos(
     return last
 
 
+def _wait_for_resource_flags(
+    client,
+    resource_uuid: str,
+    expected_paused: bool,
+    expected_downscaled: bool,
+    timeout: float = STOMP_WAIT_TIMEOUT,
+) -> tuple[bool, bool]:
+    """Poll the resource until paused/downscaled settle to the expected values.
+
+    The agent re-fetches live resource state when it processes a RESOURCE
+    event, so the QoS it writes reflects whatever Mastermind reports at that
+    instant. Asserting QoS while the flags are still flipping is racy — wait
+    for Mastermind to settle the resource first, then assert on the QoS.
+    """
+    deadline = time.time() + timeout
+    flags = _resource_flags(client, resource_uuid)
+    while time.time() < deadline:
+        flags = _resource_flags(client, resource_uuid)
+        if flags == (expected_paused, expected_downscaled):
+            return flags
+        time.sleep(1)
+    return flags
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -371,8 +395,6 @@ class TestQosStomp:
     def test_01_setup(
         self,
         qos_stomp_client,
-        qos_stomp_offering,
-        qos_stomp_backend,
         qos_stomp_project_uuid,
         qos_slurm_bin_path,
     ):
@@ -390,24 +412,12 @@ class TestQosStomp:
             limits={"node": RESOURCE_NODE_LIMIT},
             name="qos-stomp-target",
         )
-        # The STOMP order handler may not be hooked here (we only hooked
-        # RESOURCE). Fall back to the synchronous processor to bring the
-        # order to DONE.
-        from waldur_site_agent.common.processors import OfferingOrderProcessor
-
-        processor = OfferingOrderProcessor(
-            offering=qos_stomp_offering,
-            waldur_rest_client=qos_stomp_client,
-            resource_backend=qos_stomp_backend,
-        )
-        state = None
-        for _ in range(10):
-            processor.process_offering()
-            order = marketplace_orders_retrieve.sync(client=qos_stomp_client, uuid=order_uuid)
-            state = order.state if not isinstance(order.state, type(UNSET)) else None
-            if state in (OrderState.DONE, OrderState.ERRED):
-                break
-            time.sleep(1)
+        # The qos_stomp_consumers fixture subscribes to ORDER events with the
+        # real on_order_message_stomp handler, so the order is already being
+        # processed in the background. Poll for the terminal state only —
+        # running a second processor here would race the STOMP consumer on
+        # set_state_done and trip a 409 Conflict, erroring the order.
+        state = _wait_for_order_done(qos_stomp_client, order_uuid, timeout=60)
 
         assert state == OrderState.DONE, (
             f"Order {order_uuid} ended in {state!r} state — resource was not created "
@@ -496,6 +506,19 @@ class TestQosStomp:
             f"Expected paused=False in restore message, got {new_msg!r}"
         )
 
+        # Wait for Mastermind to actually settle the resource to unpaused +
+        # un-downscaled before asserting QoS. If it does not settle, the
+        # failure is a Mastermind re-pause, not an agent QoS-write bug — the
+        # message distinguishes the two.
+        paused, downscaled = _wait_for_resource_flags(
+            qos_stomp_client, s["resource_uuid"], False, False
+        )
+        assert (paused, downscaled) == (False, False), (
+            f"Resource did not settle to the restored state "
+            f"(paused={paused}, downscaled={downscaled}); Mastermind appears to "
+            "be re-pausing/re-downscaling rather than the agent failing to write QoS"
+        )
+
         qos = _wait_for_qos(qos_slurm_bin_path, s["backend_id"], "normal")
         assert qos == "normal", (
             f"Expected emulator QoS='normal' after restore, got {qos!r}"
@@ -554,7 +577,7 @@ class TestQosStomp:
             f"Expected at most one set qos=normal, got {normal_writes}"
         )
 
-    def test_05_cleanup(self, qos_stomp_client, qos_stomp_offering, qos_stomp_backend):
+    def test_05_cleanup(self, qos_stomp_client):
         s = TestQosStomp._state
         if not s:
             pytest.skip("setup did not run")
@@ -584,23 +607,8 @@ class TestQosStomp:
                 body.additional_properties["resource"] = resource_url
             order = marketplace_orders_create.sync(client=qos_stomp_client, body=body)
             order_uuid = order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
-            from waldur_site_agent.common.processors import OfferingOrderProcessor
-
-            processor = OfferingOrderProcessor(
-                offering=qos_stomp_offering,
-                waldur_rest_client=qos_stomp_client,
-                resource_backend=qos_stomp_backend,
-            )
-            for _ in range(10):
-                processor.process_offering()
-                order = marketplace_orders_retrieve.sync(
-                    client=qos_stomp_client, uuid=order_uuid
-                )
-                state = (
-                    order.state if not isinstance(order.state, type(UNSET)) else None
-                )
-                if state in (OrderState.DONE, OrderState.ERRED):
-                    break
-                time.sleep(1)
+            # The STOMP ORDER consumer processes the terminate order; poll only
+            # (a manual processor would race it on set_state_done — 409).
+            _wait_for_order_done(qos_stomp_client, order_uuid, timeout=60)
         except Exception as exc:
             logger.warning("Resource terminate failed: %s", exc)
