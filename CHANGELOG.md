@@ -1,23 +1,28 @@
 # Changelog
 
-## 1.0.5-rc.7 - 2026-06-10
+## 1.0.5-rc.8 - 2026-06-16
 
-- **SLURM**: Read account parent from the association instead of the show account output.
-- **SLURM**: Accept bare-name output from `sacctmgr list cluster` (gh-12).
-- **SLURM**: Create missing customer and project accounts in `sync_resource_project`.
-- **Waldur**: Add project end date synchronization to the Waldur backend (WAL-9999).
-- **Waldur**: Add project role reconciliation in polling mode to sync role changes.
-- **Waldur**: Add missing fields to the backend settings schema and document them.
-- **Waldur**: Round usage to 2 decimals before reporting.
-- **Federation**: Fix terminate/update orders timing out while waiting for provider approval (WAL-9967).
-- **Federation**: Adopt an in-flight terminate order when the resource is already Terminating.
-- **OpenNebula**: Support vLLM inference VMs, including model-by-name selection, a sample offering, and documentation.
-- **OpenNebula**: Apply component unit factor when sizing VMs.
-- **Core**: Skip usage reporting when the reported value matches what Waldur already has.
-- **Core**: Include exception details in readiness probe output.
-- **Docs**: Add an upgrade guide with SLURM-specific steps and fix outdated SLURM plugin documentation (WAL-8090).
+### Changes
 
-> 27 commits, 63 files changed (+3474/-446 lines)
+- **OpenNebula**: Add support for vLLM inference VMs, including model-by-name selection, a sample offering, and getting-started docs using the `/v1` base path.
+- **OpenNebula**: Apply component `unit_factor` when sizing VMs.
+- **Waldur (Federation)**: Add project `end_date` sync to the Waldur backend ([WAL-9999]).
+- **Waldur (Federation)**: Add project role reconciliation in polling mode to sync role changes.
+- **Waldur (Federation)**: Fix terminate/update orders timing out while waiting for B approval ([WAL-9967]).
+- **Waldur (Federation)**: Adopt in-flight B terminate order when the resource is already Terminating.
+- **Waldur**: Round usage to 2 decimals before reporting, and add missing fields to `WaldurBackendSettingsSchema`.
+- **Core**: Skip `set_usage` when reported usage matches what Waldur already has.
+- **Core**: Output details of the readiness probe exception for easier diagnosis.
+- **SLURM**: Create missing customer/project accounts in `sync_resource_project`.
+- **SLURM**: Read account parent from the association rather than `show account`.
+- **SLURM**: Accept bare-name output from `sacctmgr list cluster` ([gh-12]).
+- **SLURM**: Bump slurm-emulator to 0.6.0 and adapt tests to real-SLURM parity.
+- **Docs**: Add an upgrade guide with SLURM-specific steps ([WAL-8090]) and fix outdated info in the SLURM README and docs.
+- Bump waldur-api-client (includes affiliation field fix) and ignore PYSEC-2026-161 (starlette) in dependency scans.
+
+### Statistics
+
+> 31 commits, 67 files changed (+3610/-519 lines)
 
 ---
 
