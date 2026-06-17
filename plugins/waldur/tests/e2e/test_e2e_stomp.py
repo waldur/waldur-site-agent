@@ -143,7 +143,7 @@ class TestE2EStompFederation:
                 f"Source STOMP connection for {off.name} is not connected"
             )
             observable = (
-                sub.observable_objects[0]["object_type"]
+                sub.observable_objects[0].object_type
                 if sub.observable_objects
                 else "N/A"
             )
@@ -172,7 +172,7 @@ class TestE2EStompFederation:
                 f"Target STOMP connection for {off.name} is not connected"
             )
             observable = (
-                sub.observable_objects[0]["object_type"]
+                sub.observable_objects[0].object_type
                 if sub.observable_objects
                 else "N/A"
             )

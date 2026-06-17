@@ -362,7 +362,7 @@ def qos_stomp_consumers(request, qos_stomp_offering, resource_capture):
     for conn, event_subscription, _offering in consumers:
         observable_objects = getattr(event_subscription, "observable_objects", [])
         for obj in observable_objects:
-            if obj.get("object_type") == ObservableObjectTypeEnum.RESOURCE.value:
+            if obj.object_type == ObservableObjectTypeEnum.RESOURCE.value:
                 listener = conn.get_listener(WALDUR_LISTENER_NAME)
                 if listener:
                     listener.on_message_callback = resource_handler
