@@ -71,6 +71,13 @@ class BackendResourceRequestMessage(TypedDict):
     backend_resource_request_uuid: str
 
 
+class OfferingResourcesSyncMessage(TypedDict):
+    """Represents a request for forced synchronization of all offering resources."""
+
+    offering_uuid: str
+    requested_by_user_uuid: str
+
+
 class AccountMessage(TypedDict):
     """Represents a message for service account processing."""
 

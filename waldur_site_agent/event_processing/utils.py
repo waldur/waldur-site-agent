@@ -59,6 +59,7 @@ def _determine_observable_object_types(
                 ObservableObjectTypeEnum.SERVICE_ACCOUNT,
                 ObservableObjectTypeEnum.COURSE_ACCOUNT,
                 ObservableObjectTypeEnum.OFFERING_USER,
+                ObservableObjectTypeEnum.OFFERING_RESOURCES_SYNC,
             ]
         )
     else:

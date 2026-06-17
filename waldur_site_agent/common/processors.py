@@ -1680,6 +1680,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 ResourceFieldEnum.PROJECT_NAME,
                 ResourceFieldEnum.PROJECT_DESCRIPTION,
                 ResourceFieldEnum.CUSTOMER_UUID,
+                # customer_name is required by _pre_create_resource when the
+                # forced reconciliation recreates a missing backend resource
+                ResourceFieldEnum.CUSTOMER_NAME,
                 ResourceFieldEnum.END_DATE,
                 ResourceFieldEnum.PROJECT_END_DATE,
             ],
@@ -1741,12 +1744,19 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             return
         self._process_resources(resource_report)
 
-    def process_offering(self) -> None:
+    def process_offering(self, recreate_missing_resources: bool = False) -> None:
         """Process all resources in this offering for membership synchronization.
 
         Fetches all resources for the offering and processes each one to
         synchronize user memberships, resource status, and metadata between
         Waldur and the backend system.
+
+        Args:
+            recreate_missing_resources: If True, backend resources that exist
+                in Waldur but are missing on the backend are recreated before
+                the synchronization (forced reconciliation, e.g. after the
+                backend has lost state). By default missing resources are
+                silently skipped by pull_resources.
         """
         logger.info(
             "Processing offering %s (%s)",
@@ -1755,9 +1765,50 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         )
 
         waldur_resources_info = self._get_waldur_resources()
+        if recreate_missing_resources:
+            # Recreation runs before pull_resources. A resource whose recreation
+            # fails is marked ERRED here, but ERRED is a handled state, so the
+            # pull below still queries the backend for it. If the backend returns
+            # a stale or partially-created account at that ID, _process_resources
+            # could overwrite the erred state with that stale view. This is an
+            # accepted edge case: the next forced sync re-attempts recreation.
+            self._recreate_missing_resources(waldur_resources_info)
         resource_report = self.resource_backend.pull_resources(waldur_resources_info)
 
         self._process_resources(resource_report)
+
+    def _recreate_missing_resources(self, waldur_resources: list[WaldurResource]) -> None:
+        """Recreate backend resources that exist in Waldur but are absent on the backend.
+
+        Failures are reported per resource by marking it as erred in Waldur,
+        so the service provider can see exactly which resources could not be
+        restored.
+        """
+        for waldur_resource in waldur_resources:
+            try:
+                if self.resource_backend.recreate_missing_resource(waldur_resource):
+                    logger.info(
+                        "Recreated missing backend resource %s (%s)",
+                        waldur_resource.name,
+                        waldur_resource.backend_id,
+                    )
+            except Exception as e:
+                logger.exception(
+                    "Error while recreating missing backend resource %s: %s",
+                    waldur_resource.backend_id,
+                    e,
+                )
+                error_message, error_traceback = utils.format_waldur_error_details(
+                    e, self.expose_backend_error_details
+                )
+                utils.mark_waldur_resources_as_erred(
+                    self.waldur_rest_client,
+                    [waldur_resource],
+                    error_details={
+                        "error_message": error_message,
+                        "error_traceback": error_traceback,
+                    },
+                )
 
     def sync_all_resource_projects(self) -> None:
         """Check and correct the backend account hierarchy for all resources.

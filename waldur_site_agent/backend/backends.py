@@ -445,6 +445,36 @@ class BaseBackend(ABC):
         else:
             return backend_resource_info
 
+    def recreate_missing_resource(self, waldur_resource: WaldurResource) -> bool:
+        """Recreate the backend resource if it is missing, keeping its backend ID.
+
+        Used for forced reconciliation when the backend has lost state
+        (e.g. a wiped SLURM database) and accounts known to Waldur need
+        to be restored on the backend.
+
+        Returns:
+            True if the resource was recreated, False if it already exists
+            or has no backend ID to recreate.
+
+        Raises:
+            BackendError: If the existence check or the creation fails.
+        """
+        resource_backend_id = waldur_resource.backend_id
+        if not resource_backend_id:
+            logger.warning(
+                "Skipping resource %s: no backend_id, nothing to recreate",
+                waldur_resource.uuid,
+            )
+            return False
+        if self.client.get_resource(resource_backend_id) is not None:
+            return False
+        logger.info(
+            "Backend resource %s is missing, recreating it",
+            resource_backend_id,
+        )
+        self.create_resource_with_id(waldur_resource, resource_backend_id)
+        return True
+
     def _pull_backend_resource(
         self, resource_backend_id: str
     ) -> Optional[structures.BackendResourceInfo]:

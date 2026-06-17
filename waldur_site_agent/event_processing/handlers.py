@@ -37,6 +37,7 @@ from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.event_processing.structures import (
     AccountMessage,
     BackendResourceRequestMessage,
+    OfferingResourcesSyncMessage,
     OfferingUserMessage,
     OrderMessage,
     PeriodicLimitsMessage,
@@ -278,6 +279,92 @@ def on_resource_message_stomp(
         processor.process_resource_by_uuid(resource_uuid)
     except Exception as e:
         logger.error("Failed to process resource %s: %s", resource_uuid, e)
+
+
+def on_offering_resources_sync_message_stomp(
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,
+) -> None:
+    """Forced reconciliation of all offering resources.
+
+    Triggered by a service provider via the Waldur API (offering action
+    ``sync_resources``), e.g. to restore backend accounts after the backend
+    has lost state (wiped SLURM database). Recreates missing backend
+    resources, runs a full membership sync (users, limits, QoS, statuses)
+    and re-processes unfinished orders without the stuck-order age threshold.
+    """
+    message: OfferingResourcesSyncMessage = json.loads(frame.body)
+    logger.info(
+        "Processing offering resources sync request for offering %s, requested by user %s",
+        offering.name,
+        message.get("requested_by_user_uuid"),
+    )
+    try:
+        waldur_rest_client = common_utils.get_client(
+            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
+        )
+    except Exception as e:
+        logger.exception(
+            "Failed to create Waldur client for offering resources sync of %s: %s",
+            offering.name,
+            e,
+        )
+        return
+
+    # Membership sync (account recreation + user/limit/QoS reconciliation) and
+    # order re-processing are independent goals of a forced sync, so each runs in
+    # its own try block: a failure in one must not skip the other.
+    if offering.membership_sync_backend:
+        try:
+            agent_service = register_event_process_service(
+                offering, waldur_rest_client, ObservableObjectTypeEnum.OFFERING_RESOURCES_SYNC
+            )
+            resource_backend, resource_backend_version = common_utils.get_backend_for_offering(
+                offering, "membership_sync_backend"
+            )
+            membership_processor = common_processors.OfferingMembershipProcessor(
+                offering,
+                waldur_rest_client,
+                resource_backend=resource_backend,
+                resource_backend_version=resource_backend_version,
+                expose_backend_error_details=expose_backend_error_details,
+            )
+            membership_processor.register(agent_service)
+            membership_processor.process_offering(recreate_missing_resources=True)
+        except Exception as e:
+            logger.exception(
+                "Failed to run membership sync for offering resources sync of %s: %s",
+                offering.name,
+                e,
+            )
+    else:
+        logger.info(
+            "Membership sync is disabled for offering %s, "
+            "skipping resource recreation and membership sync",
+            offering.name,
+        )
+
+    if offering.order_processing_backend:
+        try:
+            # Delegates to OfferingOrderProcessor.process_offering, which fetches
+            # PENDING_PROVIDER/EXECUTING orders, runs the backend preflight check,
+            # and processes each with retries.
+            order_processor = common_processors.OfferingOrderProcessor(
+                offering,
+                waldur_rest_client,
+                expose_backend_error_details=expose_backend_error_details,
+            )
+            order_processor.process_offering()
+        except Exception as e:
+            logger.exception(
+                "Failed to re-process orders for offering resources sync of %s: %s",
+                offering.name,
+                e,
+            )
+
+    logger.info("Finished processing offering resources sync request for %s", offering.name)
 
 
 def on_importable_resources_message_stomp(
