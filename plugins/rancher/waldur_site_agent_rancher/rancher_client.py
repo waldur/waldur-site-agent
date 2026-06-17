@@ -1,11 +1,9 @@
 """Rancher client for managing projects and resources."""
 
-import ssl
-from typing import Any, Optional
+from typing import Optional
 
-import requests
+import httpx
 import yaml
-from requests.adapters import HTTPAdapter
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.clients import BaseClient
@@ -20,24 +18,6 @@ DEFAULT_K8S_RESOURCE_MAP = {
     "storage": "requests.storage",
     "gpu": "requests.nvidia.com/gpu",
 }
-
-
-class SSLAdapter(HTTPAdapter):
-    """HTTPAdapter with custom SSL configuration."""
-
-    def __init__(self, verify_cert: bool = True, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
-        """Initialize SSL adapter."""
-        self.verify_cert = verify_cert
-        super().__init__(*args, **kwargs)
-
-    def init_poolmanager(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-        """Initialize pool manager with SSL context."""
-        ctx = ssl.create_default_context()
-        if not self.verify_cert:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-        kwargs["ssl_context"] = ctx
-        return super().init_poolmanager(*args, **kwargs)
 
 
 class RancherClient(BaseClient):
@@ -62,13 +42,11 @@ class RancherClient(BaseClient):
         self.cluster_id = rancher_settings.get("cluster_id", "")
         self.project_prefix = rancher_settings.get("project_prefix", "waldur-")
 
-        # Initialize session with custom SSL adapter
-        self.session = requests.Session()
-        adapter = SSLAdapter(verify_cert=self.verify_cert)
-        self.session.mount("https://", adapter)
-        self.session.verify = self.verify_cert
-        self.session.headers.update(
-            {"Content-Type": "application/json", "Accept": "application/json"}
+        # Initialize HTTP client with certificate verification setting
+        self.session = httpx.Client(
+            verify=self.verify_cert,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            timeout=30.0,
         )
 
         # Perform login similar to waldur-mastermind
@@ -95,9 +73,9 @@ class RancherClient(BaseClient):
             self.session.auth = (access_key, secret_key)
             logger.debug(f"Successfully logged in as {access_key}")
 
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             logger.error(f"Login failed: {e}")
-            if hasattr(e, "response") and e.response is not None:
+            if isinstance(e, httpx.HTTPStatusError):
                 logger.error(f"Response content: {e.response.text}")
             raise BackendError(f"Rancher login failed: {e}") from e
 
@@ -125,9 +103,9 @@ class RancherClient(BaseClient):
                 return response.json()
             return {}
 
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             logger.error(f"Request to {url} failed: {e}")
-            if hasattr(e, "response") and e.response is not None:
+            if isinstance(e, httpx.HTTPStatusError):
                 logger.error(f"Response content: {e.response.text}")
             raise BackendError(f"Rancher API request failed: {e}") from e
 
@@ -359,7 +337,7 @@ class RancherClient(BaseClient):
             response = self.session.get(url)
             response.raise_for_status()
             data = response.json()
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             logger.warning("Failed to get ResourceQuotas for namespace %s: %s", namespace, e)
             return {}
 

@@ -154,7 +154,7 @@ class TestPeriodicLimitsPlugin:
     def test_emulator_integration_with_signals(self, slurm_backend_emulator):
         """Test emulator integration with mocked mastermind signals."""
         # Mock requests for emulator communication
-        with patch("requests.post") as mock_post, patch("requests.get") as mock_get:
+        with patch("httpx.post") as mock_post, patch("httpx.get") as mock_get:
             # Mock successful responses
             mock_response = MagicMock()
             mock_response.raise_for_status.return_value = None
@@ -441,7 +441,7 @@ class TestPeriodicLimitsPlugin:
 
         backend = SlurmBackend(backend_settings, {})
 
-        with patch("requests.post") as mock_post:
+        with patch("httpx.post") as mock_post:
             mock_response = MagicMock()
             mock_response.raise_for_status.return_value = None
             mock_post.return_value = mock_response

@@ -9,7 +9,7 @@ import logging
 from typing import Any, Optional
 from urllib.parse import quote
 
-import requests
+import httpx
 
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.structures import Association, ClientResource
@@ -44,7 +44,7 @@ class HarborClient(BaseClient):
 
     def _make_request(
         self, method: str, endpoint: str, **kwargs: Any
-    ) -> requests.Response:
+    ) -> httpx.Response:
         """Make HTTP request to Harbor API with error handling."""
         # For absolute paths, use them directly; otherwise prepend api_base
         if endpoint.startswith("/api/"):
@@ -62,9 +62,10 @@ class HarborClient(BaseClient):
             kwargs["headers"] = merged_headers
 
         kwargs["auth"] = self.auth
+        kwargs.setdefault("timeout", 30.0)
 
         try:
-            response = requests.request(method, url, **kwargs)
+            response = httpx.request(method, url, **kwargs)
 
             # Check for authentication errors specifically
             if response.status_code == 401:
@@ -72,15 +73,15 @@ class HarborClient(BaseClient):
 
             response.raise_for_status()
 
-        except requests.exceptions.RequestException as e:
-            if isinstance(e, requests.exceptions.ConnectionError):
+        except httpx.HTTPError as e:
+            if isinstance(e, httpx.ConnectError):
                 raise HarborAPIError(
                     f"Cannot connect to Harbor at {self.harbor_url}"
                 ) from e
 
             # Get response details if available
             response_details = ""
-            if hasattr(e, "response") and e.response is not None:
+            if isinstance(e, httpx.HTTPStatusError):
                 try:
                     response_details = f" | Status: {e.response.status_code} | Body: {e.response.text[:500]}"
                 except Exception:
@@ -96,7 +97,7 @@ class HarborClient(BaseClient):
 
         return response
 
-    def _parse_json_response(self, response: requests.Response) -> Any:
+    def _parse_json_response(self, response: httpx.Response) -> Any:
         """Safely parse JSON response with proper error handling."""
         if response.status_code == 204:  # No content
             return {}

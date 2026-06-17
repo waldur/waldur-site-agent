@@ -88,7 +88,7 @@ class TestSlurmBackendPeriodicLimits:
             "grp_tres_mins": {"billing": 72000},
         }
 
-        with patch("requests.post") as mock_post, patch("requests.get") as mock_get:
+        with patch("httpx.post") as mock_post, patch("httpx.get") as mock_get:
             # Mock successful emulator responses
             mock_response = MagicMock()
             mock_response.raise_for_status.return_value = None
@@ -555,7 +555,7 @@ class TestErrorHandlingAndEdgeCases:
 
         backend = SlurmBackend(backend_settings, {})
 
-        with patch("requests.post") as mock_post:
+        with patch("httpx.post") as mock_post:
             # Mock connection failure
             mock_post.side_effect = ConnectionError("Connection refused")
 

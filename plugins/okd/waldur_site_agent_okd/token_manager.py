@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from waldur_site_agent.backend.exceptions import BackendError
 
 if TYPE_CHECKING:
-    import requests
+    import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ class TokenRefreshMixin:
     """Mixin to add automatic token refresh to HTTP requests."""
 
     # Type hints for attributes expected from the mixed-in class
-    session: "requests.Session"
+    session: "httpx.Client"
     okd_settings: dict
     token: str
 

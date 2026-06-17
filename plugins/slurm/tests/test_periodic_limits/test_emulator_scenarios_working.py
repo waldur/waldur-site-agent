@@ -3,7 +3,6 @@
 import json
 import os
 import pytest
-import requests
 import subprocess
 import sys
 import time
@@ -441,9 +440,9 @@ except Exception as e:
 
             # Verify in running emulator if available
             try:
-                import requests
+                import httpx
 
-                status = requests.get("http://localhost:8080/api/status").json()
+                status = httpx.get("http://localhost:8080/api/status").json()
                 accounts = status.get("accounts", {})
 
                 if scenario_results["account"] in accounts:

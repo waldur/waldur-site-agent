@@ -1,35 +1,15 @@
 """OKD/OpenShift client for interacting with the cluster API."""
 
-import ssl
 from typing import Any, Optional
 
-import requests
+import httpx
 from kubernetes import client as k8s_client
-from requests.adapters import HTTPAdapter
 from waldur_site_agent_okd.token_manager import TokenRefreshMixin
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import Association, ClientResource
-
-
-class SSLAdapter(HTTPAdapter):
-    """HTTPAdapter with custom SSL configuration."""
-
-    def __init__(self, verify_cert: bool = True, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
-        """Initialize SSL adapter."""
-        self.verify_cert = verify_cert
-        super().__init__(*args, **kwargs)
-
-    def init_poolmanager(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-        """Initialize pool manager with SSL context."""
-        ctx = ssl.create_default_context()
-        if not self.verify_cert:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-        kwargs["ssl_context"] = ctx
-        return super().init_poolmanager(*args, **kwargs)
 
 
 class OkdClient(TokenRefreshMixin, BaseClient):
@@ -49,13 +29,13 @@ class OkdClient(TokenRefreshMixin, BaseClient):
         # Initialize TokenRefreshMixin
         super().__init__()
 
-        # Initialize session with custom SSL adapter
-        self.session = requests.Session()
-        adapter = SSLAdapter(verify_cert=self.verify_cert)
-        self.session.mount("https://", adapter)
-        self.session.verify = self.verify_cert  # Also set verify directly on session
-        # Initialize with basic headers - auth headers will be managed by TokenRefreshMixin
-        self.session.headers.update({"Content-Type": "application/json"})
+        # Initialize HTTP client with certificate verification setting
+        # Basic headers only - auth headers will be managed by TokenRefreshMixin
+        self.session = httpx.Client(
+            verify=self.verify_cert,
+            headers={"Content-Type": "application/json"},
+            timeout=30.0,
+        )
 
         # Set up authentication headers using token manager
         if hasattr(self, "_get_auth_headers"):
@@ -109,9 +89,9 @@ class OkdClient(TokenRefreshMixin, BaseClient):
                 return response.json()
             return {}
 
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             logger.error(f"Request to {url} failed: {e}")
-            if hasattr(e, "response") and e.response is not None:
+            if isinstance(e, httpx.HTTPStatusError):
                 logger.error(f"Response content: {e.response.text}")
             raise BackendError(f"OKD API request failed: {e}") from e
 

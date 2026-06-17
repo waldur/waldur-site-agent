@@ -5,7 +5,7 @@ import pprint
 from enum import Enum
 from typing import Optional
 
-import requests
+import httpx
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.types import UNSET
@@ -1087,7 +1087,7 @@ class SlurmBackend(backends.BaseBackend):
                 logger.debug(
                     "Setting fairshare=%s for account %s", settings["fairshare"], resource_id
                 )
-                response = requests.post(
+                response = httpx.post(
                     f"{emulator_url}/api/apply-periodic-settings",
                     json={"resource_id": resource_id, "fairshare": settings["fairshare"]},
                     timeout=10,
@@ -1099,7 +1099,7 @@ class SlurmBackend(backends.BaseBackend):
                 logger.debug(
                     "Setting GrpTRESMins=%s for account %s", settings["grp_tres_mins"], resource_id
                 )
-                response = requests.post(
+                response = httpx.post(
                     f"{emulator_url}/api/apply-periodic-settings",
                     json={"resource_id": resource_id, "grp_tres_mins": settings["grp_tres_mins"]},
                     timeout=10,
@@ -1109,7 +1109,7 @@ class SlurmBackend(backends.BaseBackend):
             # Reset raw usage if requested
             if settings.get("reset_raw_usage"):
                 logger.debug("Resetting raw usage for account %s", resource_id)
-                response = requests.post(
+                response = httpx.post(
                     f"{emulator_url}/api/apply-periodic-settings",
                     json={"resource_id": resource_id, "reset_raw_usage": True},
                     timeout=10,
@@ -1119,7 +1119,7 @@ class SlurmBackend(backends.BaseBackend):
             logger.info("Successfully applied settings to emulator")
             return {"success": True, "mode": PeriodicSettingsMode.EMULATOR.value}
 
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             logger.error("Failed to apply settings to emulator: %s", e)
             return {"success": False, "error": str(e), "mode": PeriodicSettingsMode.EMULATOR.value}
         except Exception as e:

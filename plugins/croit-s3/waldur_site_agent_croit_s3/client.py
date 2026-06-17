@@ -1,13 +1,10 @@
 """Croit S3 API client for managing S3 users and buckets."""
 
 import logging
+import time
 from typing import Optional
 
-import requests
-import urllib3
-from requests.adapters import HTTPAdapter
-from requests.auth import HTTPBasicAuth
-from urllib3.util.retry import Retry
+import httpx
 
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.exceptions import BackendError
@@ -21,6 +18,12 @@ from .exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Retry transient server errors, mirroring the previous
+# urllib3 Retry(total=3, status_forcelist=[500, 502, 503, 504], backoff_factor=1)
+RETRYABLE_STATUS_CODES = frozenset({500, 502, 503, 504})
+MAX_STATUS_RETRIES = 3
+RETRY_BACKOFF_FACTOR = 1.0
 
 
 class CroitS3Client(BaseClient):
@@ -53,39 +56,43 @@ class CroitS3Client(BaseClient):
         self.verify_ssl = verify_ssl
         self.timeout = timeout
 
-        # Disable SSL warnings if verification is disabled
-        if not verify_ssl:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-        # Configure session with retry strategy
-        self.session = requests.Session()
-        self.session.verify = verify_ssl
-
         # Set authentication
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        auth = None
         if token:
-            self.session.headers.update({"Authorization": f"Bearer {token}"})
+            headers["Authorization"] = f"Bearer {token}"
         elif username and password:
-            self.session.auth = HTTPBasicAuth(username, password)
+            auth = httpx.BasicAuth(username, password)
         else:
             raise ValueError("Either token or username/password must be provided")
 
-        # Add retry strategy for resilience
-        retry_strategy = Retry(
-            total=3,
-            status_forcelist=[500, 502, 503, 504],
-            backoff_factor=1,
+        # Transport-level retries cover connection errors;
+        # 5xx responses are retried in _request
+        self.session = httpx.Client(
+            auth=auth,
+            headers=headers,
+            timeout=timeout,
+            transport=httpx.HTTPTransport(verify=verify_ssl, retries=3),
         )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        self.session.mount("http://", adapter)
-        self.session.mount("https://", adapter)
 
-        # Set default headers
-        self.session.headers.update(
-            {
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
-        )
+    def _send_with_status_retries(
+        self,
+        method: str,
+        url: str,
+        json_data: Optional[dict] = None,
+        params: Optional[dict] = None,
+    ) -> httpx.Response:
+        """Send request, retrying transient 5xx responses with exponential backoff."""
+        response = self.session.request(method=method, url=url, json=json_data, params=params)
+        for attempt in range(MAX_STATUS_RETRIES):
+            if response.status_code not in RETRYABLE_STATUS_CODES:
+                break
+            time.sleep(RETRY_BACKOFF_FACTOR * (2**attempt))
+            response = self.session.request(method=method, url=url, json=json_data, params=params)
+        return response
 
     def _request(
         self,
@@ -93,7 +100,7 @@ class CroitS3Client(BaseClient):
         endpoint: str,
         json_data: Optional[dict] = None,
         params: Optional[dict] = None,
-    ) -> requests.Response:
+    ) -> httpx.Response:
         """Make authenticated request to Croit API.
 
         Args:
@@ -112,12 +119,11 @@ class CroitS3Client(BaseClient):
         url = f"{self.api_url}{endpoint}"
 
         try:
-            response = self.session.request(
-                method=method,
-                url=url,
-                json=json_data,
+            response = self._send_with_status_retries(
+                method,
+                url,
+                json_data=json_data,
                 params=params,
-                timeout=self.timeout,
             )
 
             # Handle authentication errors
@@ -138,11 +144,11 @@ class CroitS3Client(BaseClient):
 
             return response
 
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             raise CroitS3APIError(f"Request timeout after {self.timeout}s")
-        except requests.exceptions.ConnectionError as e:
+        except httpx.TransportError as e:
             raise CroitS3APIError(f"Connection error: {e}")
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise CroitS3APIError(f"Request failed: {e}")
 
     def ping(self, raise_exception: bool = False) -> bool:

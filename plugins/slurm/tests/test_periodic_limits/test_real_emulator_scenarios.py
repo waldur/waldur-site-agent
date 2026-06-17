@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 import pytest
-import requests
+import httpx
 from waldur_site_agent_slurm.backend import SlurmBackend
 
 # Emulator configuration - pip-installed package
@@ -363,7 +363,7 @@ class TestEmulatorBuiltInScenarios:
 
             # Verify via emulator status
             try:
-                status = requests.get(f"{EMULATOR_URL}/api/status").json()
+                status = httpx.get(f"{EMULATOR_URL}/api/status").json()
                 account_info = status.get("accounts", {}).get("site_agent_test", {})
 
                 if account_info:
@@ -433,7 +433,7 @@ class TestEmulatorBuiltInScenarios:
 
             # Get current emulator state
             try:
-                status = requests.get(f"{EMULATOR_URL}/api/status").json()
+                status = httpx.get(f"{EMULATOR_URL}/api/status").json()
                 accounts = status.get("accounts", {})
                 test_account = accounts.get("slurm_account_123", {})
 
@@ -451,7 +451,7 @@ class TestEmulatorBuiltInScenarios:
                     print("✅ Site agent successfully applied settings to emulator")
 
                     # Verify settings applied
-                    new_status = requests.get(f"{EMULATOR_URL}/api/status").json()
+                    new_status = httpx.get(f"{EMULATOR_URL}/api/status").json()
                     updated_account = new_status.get("accounts", {}).get("slurm_account_123", {})
 
                     if updated_account.get("fairshare") == 700:
@@ -605,7 +605,7 @@ def test_emulator_scenarios_availability():
 
     # Check emulator connectivity
     try:
-        response = requests.get(f"{EMULATOR_URL}/api/status", timeout=2)
+        response = httpx.get(f"{EMULATOR_URL}/api/status", timeout=2)
         if response.status_code == 200:
             print("✅ Emulator is running and accessible")
         else:

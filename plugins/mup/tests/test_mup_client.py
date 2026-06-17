@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import Mock, patch
-import requests
+import httpx
 import base64
 
 from waldur_site_agent_mup.client import MUPClient, MUPError
@@ -17,7 +17,7 @@ class MUPClientTest(unittest.TestCase):
         self.password = "test_password"
 
         # Create client instance
-        with patch("requests.Session"):
+        with patch("httpx.Client"):
             self.client = MUPClient(self.api_url, self.username, self.password)
 
         # Sample data
@@ -51,25 +51,20 @@ class MUPClientTest(unittest.TestCase):
 
     def test_init_sets_authentication_headers(self):
         """Test that initialization sets up correct authentication headers"""
-        with patch("requests.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_session_class.return_value = mock_session
-
+        with patch("httpx.Client") as mock_client_class:
             client = MUPClient(self.api_url, self.username, self.password)
-
-            # Check that session was configured
-            mock_session_class.assert_called_once()
 
             # Verify headers were set
             expected_auth = base64.b64encode(
                 f"{self.username}:{self.password}".encode()
             ).decode()
-            mock_session.headers.update.assert_called_once_with(
-                {
+            mock_client_class.assert_called_once_with(
+                headers={
                     "Authorization": f"Basic {expected_auth}",
                     "Content-Type": "application/json",
                     "Accept": "application/json",
-                }
+                },
+                timeout=30.0,
             )
 
     def test_make_request_success(self):
@@ -91,8 +86,12 @@ class MUPClientTest(unittest.TestCase):
     def test_make_request_http_error(self):
         """Test HTTP request with error response"""
         self.client.session = Mock()
-        self.client.session.request.side_effect = requests.exceptions.HTTPError(
-            "404 Not Found"
+        self.client.session.request.side_effect = httpx.HTTPStatusError(
+            "404 Not Found",
+            request=httpx.Request("GET", "https://mup-api.example.com/api/nonexistent"),
+            response=httpx.Response(
+                404, request=httpx.Request("GET", "https://mup-api.example.com/api/nonexistent")
+            ),
         )
 
         with self.assertRaises(MUPError) as context:
@@ -103,7 +102,7 @@ class MUPClientTest(unittest.TestCase):
     def test_make_request_connection_error(self):
         """Test HTTP request with connection error"""
         self.client.session = Mock()
-        self.client.session.request.side_effect = requests.exceptions.ConnectionError(
+        self.client.session.request.side_effect = httpx.ConnectError(
             "Connection failed"
         )
 
