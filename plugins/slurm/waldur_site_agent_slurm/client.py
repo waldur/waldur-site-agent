@@ -341,9 +341,21 @@ class SlurmClient(clients.BaseClient):
             f"account={resource_id}",
         ]
         output = self._execute_command(args)
-        return [
-            line.split("|")[1] for line in output.splitlines() if "|" in line and line[-1] != "|"
-        ]
+        # sacctmgr returns one row per association: the account-level
+        # association (empty user column, rendered "account|") plus one row
+        # per user ("account|user"). --parsable2 emits no trailing separator.
+        # Keep only rows whose account column matches and whose user column is
+        # non-empty, which skips the account-level rows.
+        users = []
+        for line in output.splitlines():
+            if "|" not in line:
+                continue
+            account, _, user_field = line.partition("|")
+            username = user_field.split("|")[0].strip()
+            if account.strip() != resource_id or not username:
+                continue
+            users.append(username)
+        return users
 
     def get_current_account_qos(self, account: str) -> str:
         """Returns a name of the current QoS of the account."""
@@ -355,10 +367,9 @@ class SlurmClient(clients.BaseClient):
             f"account={account}",
         ]
         output = self._execute_command(args)
-        # ``--parsable2`` rows are "account|qos" without a trailing separator
-        # on real sacctmgr, but the SLURM emulator appends one anyway. Tolerate
-        # both: split on "|" and take the second column when the first
-        # matches the account name.
+        # sacctmgr returns one row per association ("account|qos"); --parsable2
+        # emits no trailing separator. Match on the account column and take the
+        # qos column.
         min_columns_for_qos = 2
         for line in output.splitlines():
             if "|" not in line:
