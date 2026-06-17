@@ -28,6 +28,9 @@ def _process_offerings(
 
     logger.info("Number of offerings to process: %s", len(waldur_offerings))
     for offering in waldur_offerings:
+        # Touch the heartbeat at the start of every offering so liveness stays
+        # fresh (and the heartbeat file is created on the first iteration,
+        touch_heartbeat()
         try:
             if offering.stomp_enabled:
                 logger.info(
