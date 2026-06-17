@@ -28,6 +28,7 @@ from waldur_api_client.models import (
     EventSubscriptionQueueCreateRequest,
     ObservableObjectTypeEnum,
 )
+from waldur_api_client.models.agent_dependency_request import AgentDependencyRequest
 from waldur_api_client.models.agent_event_subscription_create_request import (
     AgentEventSubscriptionCreateRequest,
 )
@@ -93,6 +94,10 @@ class AgentIdentityManager:
         )
 
         last_restarted = datetime.datetime.now()
+        dependencies = [
+            AgentDependencyRequest(package=dependency["package"], version=dependency["version"])
+            for dependency in utils.DEPENDENCIES
+        ]
 
         existing_identities = marketplace_site_agent_identities_list.sync(
             client=self.waldur_rest_client, name=name
@@ -106,7 +111,7 @@ class AgentIdentityManager:
                     offering=self.offering.uuid,
                     name=name,
                     last_restarted=last_restarted,
-                    dependencies=utils.DEPENDENCIES,
+                    dependencies=dependencies,
                     version=WALDUR_SITE_AGENT_VERSION,
                     config_file_path="",
                     config_file_content="",
@@ -121,7 +126,7 @@ class AgentIdentityManager:
             name=name,
             version=WALDUR_SITE_AGENT_VERSION,
             last_restarted=last_restarted,
-            dependencies=utils.DEPENDENCIES,
+            dependencies=dependencies,
             config_file_path="",
             config_file_content="",
         )

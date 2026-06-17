@@ -80,7 +80,7 @@ def stomp_consumers_with_capture(stomp_available, offering, offering_user_captur
     # Find and replace OFFERING_USER handler with capture
     for conn, sub, off in consumers:
         observable = (
-            sub.observable_objects[0]["object_type"]
+            sub.observable_objects[0].object_type
             if sub.observable_objects
             else ""
         )
@@ -124,7 +124,7 @@ class TestOfferingUserStompSubscription:
         found = False
         for conn, sub, off in stomp_consumers_with_capture:
             observable = (
-                sub.observable_objects[0]["object_type"]
+                sub.observable_objects[0].object_type
                 if sub.observable_objects
                 else ""
             )

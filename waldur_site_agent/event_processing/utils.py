@@ -306,7 +306,7 @@ def stop_stomp_consumers(
                     "Stopping STOMP connection for %s (%s), observable object type: %s",
                     offering_name,
                     offering_uuid,
-                    event_subscription.observable_objects[0]["object_type"]
+                    event_subscription.observable_objects[0].object_type
                     if event_subscription.observable_objects
                     else "N/A",
                 )

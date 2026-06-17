@@ -36,6 +36,7 @@ from waldur_api_client.api.marketplace_orders import (
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_retrieve,
 )
+from waldur_api_client.models import EventSubscriptionObservableObject
 from waldur_api_client.models.generic_order_attributes import GenericOrderAttributes
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 from waldur_api_client.models.order_create_request import OrderCreateRequest
@@ -316,9 +317,9 @@ def stomp_consumers(request, stomp_offering, order_capture, offering_user_captur
     }
 
     for conn, event_subscription, offering in consumers:
-        observable_objects = getattr(event_subscription, "observable_objects", [])
+        observable_objects : list[EventSubscriptionObservableObject] = event_subscription.observable_objects
         for obj in observable_objects:
-            obj_type = obj.get("object_type")
+            obj_type = obj.object_type
             if obj_type in handler_map:
                 listener = conn.get_listener(WALDUR_LISTENER_NAME)
                 if listener:
@@ -369,7 +370,7 @@ class TestStompEventProcessing:
             observable_type = "N/A"
             observable_objects = getattr(event_subscription, "observable_objects", [])
             if observable_objects:
-                observable_type = observable_objects[0].get("object_type", "N/A")
+                observable_type = observable_objects[0].object_type
 
             stomp_report.status_snapshot(
                 f"Consumer: {observable_type}",
