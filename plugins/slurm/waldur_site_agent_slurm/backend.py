@@ -84,6 +84,9 @@ class SlurmBackend(backends.BaseBackend):
         self._enforce_offering_partitions = bool(
             self.backend_settings.get("enforce_offering_partitions", False)
         )
+        # Expose enforcement state to the processor so it can warn loudly when
+        # partitions are configured but the offering cannot produce usernames.
+        self.partition_enforcement_enabled = self._enforce_offering_partitions
 
         # Optional component mapping (Waldur components → SLURM TRES)
         self._component_mapper = ComponentMapper(slurm_tres)
