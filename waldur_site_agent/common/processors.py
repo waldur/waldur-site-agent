@@ -146,6 +146,9 @@ from waldur_api_client.models.resource_endpoints_request import (
 from waldur_api_client.models.resource_set_limits_request_limits import (
     ResourceSetLimitsRequestLimits,
 )
+from waldur_api_client.models.username_generation_policy_enum import (
+    UsernameGenerationPolicyEnum,
+)
 from waldur_api_client.types import UNSET, Unset
 
 from waldur_site_agent.backend import BackendType, logger
@@ -1874,10 +1877,17 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 )
 
     def _validate_offering_user_configuration(self) -> bool:
-        """Validate that the offering is configured to support OfferingUser.
+        """Validate that the offering can produce usernames for membership sync.
+
+        Only the ``service_provider`` username generation policy requires the
+        agent to mint OfferingUser records itself (gated by
+        ``service_provider_can_create_offering_user``). Under every other policy
+        (``waldur_username``, ``anonymized``, ``freeipa``, ``identity_claim``,
+        ``full_name``) usernames are assigned by Waldur Mastermind, so that flag
+        is irrelevant and must not block membership sync.
 
         Returns:
-            True if the offering supports OfferingUser, False otherwise.
+            True if membership sync can proceed, False otherwise.
         """
         offering_details = marketplace_provider_offerings_retrieve.sync(
             client=self.waldur_rest_client,
@@ -1885,15 +1895,36 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             field=[ProviderOfferingDetailsFieldEnum.PLUGIN_OPTIONS],
         )
         plugin_options = offering_details.plugin_options
-        service_provider_can_create = plugin_options.service_provider_can_create_offering_user
 
+        # Non-service-provider policies are handled by Mastermind; never block.
+        if (
+            plugin_options.username_generation_policy
+            != UsernameGenerationPolicyEnum.SERVICE_PROVIDER
+        ):
+            return True
+
+        service_provider_can_create = plugin_options.service_provider_can_create_offering_user
         if isinstance(service_provider_can_create, type(UNSET)) or not service_provider_can_create:
             logger.error(
-                "Offering %s (%s) does not have 'service_provider_can_create_offering_user' "
-                "set to True in plugin_options. Membership sync requires OfferingUser support.",
+                "Offering %s (%s) uses the 'service_provider' username generation policy but "
+                "'service_provider_can_create_offering_user' is not set to True in plugin_options. "
+                "The agent cannot generate usernames, so no SLURM associations will be created "
+                "and membership sync is skipped. Enable the flag in the offering's plugin options.",
                 self.offering.name,
                 self.offering.uuid,
             )
+            if (
+                self.resource_backend.partition_enforcement_enabled
+                and self.resource_backend.offering_partitions
+            ):
+                logger.warning(
+                    "Offering %s (%s) has 'enforce_offering_partitions' enabled and partitions "
+                    "%s configured, but partitions cannot be applied while membership sync is "
+                    "blocked by the missing 'service_provider_can_create_offering_user' flag.",
+                    self.offering.name,
+                    self.offering.uuid,
+                    self.resource_backend.offering_partitions,
+                )
             return False
         return True
 

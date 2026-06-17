@@ -1106,20 +1106,29 @@ def _can_generate_usernames(
     )
     plugin_options = offering_details.plugin_options
 
+    # The agent only generates usernames under the service_provider policy.
+    # Other policies are handled by Waldur Mastermind, so the
+    # service_provider_can_create_offering_user flag is irrelevant there.
+    if (
+        plugin_options.username_generation_policy
+        != UsernameGenerationPolicyEnum.SERVICE_PROVIDER
+    ):
+        return False
+
     # Check if service provider is allowed to create offering users
     service_provider_can_create = plugin_options.service_provider_can_create_offering_user
     if isinstance(service_provider_can_create, type(UNSET)) or not service_provider_can_create:
         logger.error(
-            "Offering %s (%s) does not have 'service_provider_can_create_offering_user' "
-            "set to True in plugin_options. OfferingUser creation is disabled.",
+            "Offering %s (%s) uses the 'service_provider' username generation policy but "
+            "'service_provider_can_create_offering_user' is not set to True in plugin_options. "
+            "OfferingUser creation is disabled, so no usernames will be generated. "
+            "Enable the flag in the offering's plugin options.",
             offering.name,
             offering.uuid,
         )
         return False
 
-    return (
-        plugin_options.username_generation_policy == UsernameGenerationPolicyEnum.SERVICE_PROVIDER
-    )
+    return True
 
 
 def _group_users_by_state(

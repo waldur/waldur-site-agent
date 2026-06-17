@@ -144,6 +144,17 @@ class TestAddUserPartitionResolution:
         backend.client.create_association_with_partitions.assert_not_called()
         backend.client.create_association_with_partition.assert_not_called()
 
+    def test_enforcement_flag_exposed_to_processor(self):
+        """The processor reads partition_enforcement_enabled to warn loudly when
+        partitions are configured but usernames cannot be generated."""
+        enforced = self._make_backend(offering_partitions=["zen3"])
+        assert enforced.partition_enforcement_enabled is True
+
+        opt_out = self._make_backend(
+            offering_partitions=["zen3"], enforce_offering_partitions=False
+        )
+        assert opt_out.partition_enforcement_enabled is False
+
     def test_existing_association_skipped(self):
         backend = self._make_backend(offering_partitions=["zen3"])
         backend.client.get_association.return_value = object()  # truthy

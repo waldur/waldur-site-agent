@@ -68,6 +68,11 @@ class BaseBackend(ABC):
         # Partition names from the offering; populated by the processor when
         # the offering carries OfferingPartition records (SLURM-specific use).
         self.offering_partitions: list[str] = []
+        # Whether the backend threads offering partitions into associations
+        # (SLURM ``enforce_offering_partitions``). Used by the processor to emit
+        # a pointed warning when partition enforcement cannot take effect because
+        # the offering is not configured to produce usernames.
+        self.partition_enforcement_enabled: bool = False
 
     @abstractmethod
     def ping(self, raise_exception: bool = False) -> bool:

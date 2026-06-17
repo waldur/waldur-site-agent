@@ -332,8 +332,12 @@ class TestOfferingUserUpdate(unittest.TestCase):
         self, marketplace_provider_offerings_retrieve_mock, get_username_management_backend_mock
     ):
         """Test that missing service_provider_can_create_offering_user returns False."""
+        # service_provider policy with the flag unset: the agent is asked to mint
+        # usernames but is not allowed to, so processing must be skipped.
         offering_details_without_permission = ProviderOfferingDetails(
-            plugin_options=MergedPluginOptions()
+            plugin_options=MergedPluginOptions(
+                username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
+            )
         )
         marketplace_provider_offerings_retrieve_mock.return_value = (
             offering_details_without_permission
@@ -351,6 +355,33 @@ class TestOfferingUserUpdate(unittest.TestCase):
         self.assertEqual(self.offering_users[2].username, "")
 
         # Verify that get_username_management_backend was never called due to early exit
+        get_username_management_backend_mock.assert_not_called()
+
+    @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
+    @mock.patch(
+        "waldur_api_client.api.marketplace_provider_offerings.marketplace_provider_offerings_retrieve.sync"
+    )
+    def test_non_service_provider_policy_skips_flag_check(
+        self, marketplace_provider_offerings_retrieve_mock, get_username_management_backend_mock
+    ):
+        """Non-service-provider policies don't require the agent to mint usernames.
+
+        Username generation returns False (Mastermind owns the usernames) without
+        consulting service_provider_can_create_offering_user.
+        """
+        offering_details = ProviderOfferingDetails(
+            plugin_options=MergedPluginOptions(
+                service_provider_can_create_offering_user=False,
+                username_generation_policy=UsernameGenerationPolicyEnum.WALDUR_USERNAME,
+            )
+        )
+        marketplace_provider_offerings_retrieve_mock.return_value = offering_details
+
+        result = utils.update_offering_users(self.offering, self.waldur_client, self.offering_users)
+
+        # The agent does not generate usernames under this policy.
+        self.assertFalse(result)
+        # Backend lookup is short-circuited before username management is consulted.
         get_username_management_backend_mock.assert_not_called()
 
     @mock.patch("waldur_site_agent.common.utils.get_username_management_backend")
