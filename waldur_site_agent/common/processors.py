@@ -178,6 +178,11 @@ def _serialize_attr_value(val: object) -> object:
         return val.isoformat()
     if isinstance(val, Enum):
         return val.value
+    # Some fields (affiliations, nationalities, eduperson_assurance) are
+    # wrapped SDK attrs models, not plain values; unwrap them to a
+    # JSON-serializable dict.
+    if hasattr(val, "to_dict"):
+        return val.to_dict()
     return val
 
 
