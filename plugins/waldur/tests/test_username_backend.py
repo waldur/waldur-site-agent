@@ -16,10 +16,6 @@ from waldur_site_agent_waldur.username_backend import (
     _extract_attributes,
     _get_waldur_username,
 )
-from waldur_api_client.models.offering_user_user_affiliations import (
-    OfferingUserUserAffiliations,
-)
-import json
 
 MODULE = "waldur_site_agent_waldur.username_backend"
 
@@ -201,21 +197,6 @@ class TestExtractAttributes:
         attrs = _extract_attributes(ou)
         assert "first_name" not in attrs
         assert "last_name" not in attrs
-
-    def test_unwraps_wrapped_attrs_model(self):
-        """SDK models (e.g. affiliations) must be unwrapped to JSON-serializable dicts."""
-
-        affiliations = OfferingUserUserAffiliations.from_dict({"role": "student"})
-        ou = _make_offering_user(user_affiliations=affiliations)
-        attrs = _extract_attributes(ou)
-        assert attrs["affiliations"] == {"role": "student"}
-        json.dumps(attrs)
-
-    def test_skips_empty_wrapped_attrs_model(self):
-
-        ou = _make_offering_user(user_affiliations=OfferingUserUserAffiliations())
-        attrs = _extract_attributes(ou)
-        assert "affiliations" not in attrs
 
 
 class TestGetUsername:

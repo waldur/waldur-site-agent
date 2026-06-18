@@ -63,14 +63,7 @@ def _extract_attributes(offering_user: OfferingUser) -> dict:
     }
     for ou_field, ib_field in field_map.items():
         val = getattr(offering_user, ou_field, UNSET)
-        if not val:
-            continue
-        # Some fields (affiliations, nationalities, eduperson_assurance) are
-        # wrapped SDK attrs models, not plain values; unwrap them to a
-        # JSON-serializable dict before adding to the payload.
-        if hasattr(val, "to_dict"):
-            val = val.to_dict()
-        if val:
+        if val and not isinstance(val, type(UNSET)):
             attrs[ib_field] = val
 
     # Gender needs special handling (GenderEnum -> int)
