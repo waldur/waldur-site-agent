@@ -1,25 +1,22 @@
 # Changelog
 
-## 1.0.5-rc.9 - 2026-06-17
+## 1.0.5-rc.10 - 2026-06-18
 
-- **Federation**: Add project `end_date` synchronization to the Waldur backend ([WAL-9999]).
-- **Federation**: Fix terminate/update orders timing out while waiting for downstream (B) approval ([WAL-9967]).
-- **Federation**: Adopt in-flight downstream terminate orders when the resource is already in a Terminating state.
-- **Federation**: Add project role reconciliation in polling mode so role changes are synced.
-- **Federation**: Round reported usage to 2 decimals, and expose previously missing fields in `WaldurBackendSettingsSchema`.
+- **OpenNebula**: Add support for vLLM inference VMs, including model-by-name selection, a sample offering, and application of the component `unit_factor` when sizing VMs.
+- **Federation**: Add project role reconciliation in polling mode to sync role changes, project `end_date` sync to the Waldur backend ([WAL-9999]), and additional fields on `WaldurBackendSettingsSchema`.
+- **Core**: Touch the heartbeat file at the start of offering processing so the liveness probe reflects active work.
+- **Core**: Handle forced offering resources synchronization requests ([WAL-10023]).
 - **SLURM**: Stop `service_provider_can_create_offering_user` from blocking partition sync ([WAL-9925]).
-- **SLURM**: Create missing customer/project accounts during `sync_resource_project`.
-- **SLURM**: Read account parent from the association rather than `show account`.
-- **SLURM**: Accept bare-name output from `sacctmgr list cluster` ([gh-12]).
-- **OpenNebula**: Add vLLM inference VM support with sample offering, model-by-name selection, and component `unit_factor` applied to VM sizing.
-- **Core**: Skip `set_usage` when reported usage already matches what Waldur has, avoiding redundant updates.
-- **Core**: Include exception details in readiness probe output.
-- **Core**: Fix agent identity-management request to follow the new SDK pattern, and bump the Waldur API client.
-- **Plugins**: Migrate agent HTTP clients (croit-s3, harbor, mup, okd, rancher, slurm) from `requests` to `httpx` ([WAL-8954]).
-- **Docs**: Add an upgrade guide with SLURM-specific steps ([WAL-8090]); refresh SLURM README and deployment docs.
-- **CI**: Resolve OSV dependency scan failures and ignore PYSEC-2026-161 (starlette).
+- **SLURM**: Read account parent from the association rather than `show account`, and accept bare-name output from `sacctmgr list cluster` ([gh-12]).
+- **Federation**: Fix terminate/update orders timing out while waiting for B approval ([WAL-9967]), and adopt an in-flight B terminate order when the resource is already terminating.
+- **Federation**: Round Waldur usage to 2 decimals before reporting, and skip `set_usage` when reported usage matches what Waldur already has.
+- **SLURM**: Create missing customer/project accounts in `sync_resource_project`.
+- **Core**: Migrate agent HTTP clients from `requests` to `httpx` ([WAL-8954]).
+- **Core**: Fix the agent identity management request to follow the new SDK pattern and bump the API client.
+- **Core**: Output details of the readiness probe exception on failure.
+- **Docs**: Add an upgrade guide with SLURM-specific steps ([WAL-8090]) and correct outdated SLURM plugin README/docs.
 
-> 37 commits, 92 files changed (+4337/-863)
+> 40 commits, 101 files changed (+5129/-871)
 
 ---
 
