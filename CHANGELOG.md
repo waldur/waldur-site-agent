@@ -1,22 +1,24 @@
 # Changelog
 
-## 1.0.5-rc.10 - 2026-06-18
+## 1.0.5-rc.11 - 2026-06-18
 
-- **OpenNebula**: Add support for vLLM inference VMs, including model-by-name selection, a sample offering, and application of the component `unit_factor` when sizing VMs.
-- **Federation**: Add project role reconciliation in polling mode to sync role changes, project `end_date` sync to the Waldur backend ([WAL-9999]), and additional fields on `WaldurBackendSettingsSchema`.
-- **Core**: Touch the heartbeat file at the start of offering processing so the liveness probe reflects active work.
-- **Core**: Handle forced offering resources synchronization requests ([WAL-10023]).
+- **Core**: Handle forced offering resources synchronization requests, including recreation of missing resources ([WAL-10023]).
+- **Core**: Touch the heartbeat file at the start of offering processing so liveness probes stay healthy during long runs.
+- **Core**: Skip `set_usage` when reported usage already matches what Waldur has, avoiding redundant updates.
+- **Core**: Add project role reconciliation in polling mode to sync role changes.
 - **SLURM**: Stop `service_provider_can_create_offering_user` from blocking partition sync ([WAL-9925]).
-- **SLURM**: Read account parent from the association rather than `show account`, and accept bare-name output from `sacctmgr list cluster` ([gh-12]).
-- **Federation**: Fix terminate/update orders timing out while waiting for B approval ([WAL-9967]), and adopt an in-flight B terminate order when the resource is already terminating.
-- **Federation**: Round Waldur usage to 2 decimals before reporting, and skip `set_usage` when reported usage matches what Waldur already has.
 - **SLURM**: Create missing customer/project accounts in `sync_resource_project`.
-- **Core**: Migrate agent HTTP clients from `requests` to `httpx` ([WAL-8954]).
-- **Core**: Fix the agent identity management request to follow the new SDK pattern and bump the API client.
-- **Core**: Output details of the readiness probe exception on failure.
-- **Docs**: Add an upgrade guide with SLURM-specific steps ([WAL-8090]) and correct outdated SLURM plugin README/docs.
+- **SLURM**: Read account parent from the association rather than `show account`, and accept bare-name output from `sacctmgr list cluster` ([gh-12]).
+- **SLURM**: Bump slurm-emulator to 0.6.0 for real-SLURM parity.
+- **Waldur/Federation**: Fix terminate/update orders timing out while waiting for B-side approval ([WAL-9967]) and adopt in-flight terminate orders when a resource is already terminating.
+- **Waldur**: Add project `end_date` sync ([WAL-9999]), round reported usage to 2 decimals, and add missing fields to `WaldurBackendSettingsSchema`.
+- **OpenNebula**: Support vLLM inference VMs with model-by-name selection, sample offering, and `unit_factor`-aware VM sizing.
+- **Core**: Migrate agent HTTP clients from `requests` to `httpx` ([WAL-8954]) and follow the new SDK pattern for identity-management requests.
+- **Core**: Output details of the readiness probe exception for easier diagnosis.
+- **Docs**: Add an upgrade guide with SLURM-specific steps ([WAL-8090]) and refresh outdated SLURM README/docs.
+- **CI**: Resolve OSV dependency-scan failures and ignore PYSEC-2026-161 (starlette).
 
-> 40 commits, 101 files changed (+5129/-871)
+> 41 commits, 101 files changed (+5126/-871 lines)
 
 ---
 
