@@ -11,7 +11,11 @@ log_shipping: # Global log shipping configuration (applies to all offerings)
 offerings: # Settings for offerings
   - name: "Example SLURM Offering" # offering name
     waldur_api_url: "http://localhost:8081/api/" # URL of Waldur API (e.g. http://localhost:8081/api/).
-    waldur_api_token: "" # Token to access the Waldur API.
+    waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
+    # OIDC authentication (used when waldur_api_token is blank):
+    # oidc_token_url: "" # OIDC token endpoint URL (e.g. https://keycloak.example.com/realms/myrealm/protocol/openid-connect/token)
+    # oidc_client_id: "" # OIDC client ID
+    # oidc_client_secret: "" # OIDC client secret
     waldur_offering_uuid: "" # UUID of the offering in Waldur.
     username_management_backend: "base" # Name of the backend from entrypoints to use for username management
     order_processing_backend: "slurm" # Name of the backend from entrypoints to use for order processing
@@ -74,7 +78,7 @@ offerings: # Settings for offerings
   # Example: EFP Discoverer CPU cluster with LDAP user management
   - name: "Discoverer CPU"
     waldur_api_url: "https://waldur.example.com/api/"
-    waldur_api_token: ""
+    waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
     waldur_offering_uuid: ""
     username_management_backend: "ldap"
     order_processing_backend: "slurm"
@@ -165,7 +169,7 @@ offerings: # Settings for offerings
   # Example: EFP Discoverer+ GPU cluster with LDAP and billing
   - name: "Discoverer+ GPU"
     waldur_api_url: "https://waldur.example.com/api/"
-    waldur_api_token: ""
+    waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
     waldur_offering_uuid: ""
     username_management_backend: "ldap"
     order_processing_backend: "slurm"
@@ -256,7 +260,7 @@ offerings: # Settings for offerings
         max_prepaid_duration: 12
   - name: "Example MOAB Offering"
     waldur_api_url: "http://localhost:8081/api/"
-    waldur_api_token: ""
+    waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
     waldur_offering_uuid: ""
     backend_type: "moab"
     backend_settings:

@@ -18,7 +18,7 @@ from pathlib import Path
 from waldur_api_client.api.users import users_me_retrieve
 from waldur_api_client.models.user_me_field_enum import UserMeFieldEnum
 
-from waldur_site_agent.common.utils import get_client, init_configuration_from_file
+from waldur_site_agent.common.utils import get_client_for_offering, init_configuration_from_file
 
 HEARTBEAT_PATH = "/tmp/waldur-site-agent-heartbeat"  # noqa: S108
 DEFAULT_MAX_AGE = 300  # seconds
@@ -49,12 +49,7 @@ def check_readiness(config_file: str) -> bool:
 
     for offering in configuration.waldur_offerings:
         try:
-            client = get_client(
-                offering.api_url,
-                offering.api_token,
-                configuration.waldur_user_agent,
-                offering.verify_ssl,
-            )
+            client = get_client_for_offering(offering, configuration.waldur_user_agent)
             users_me_retrieve.sync(client=client, field=[UserMeFieldEnum.UUID])
             return True
         except Exception as exc:

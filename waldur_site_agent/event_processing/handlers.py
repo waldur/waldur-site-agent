@@ -88,9 +88,7 @@ def process_account_message(
     project_uuid = message["project_uuid"]
     action = message.get("action", "create")
     try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
 
         agent_service = register_event_process_service(
             offering, waldur_rest_client, observable_object
@@ -140,9 +138,7 @@ def on_order_message_stomp(
         return
 
     try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
         agent_service = register_event_process_service(
             offering, waldur_rest_client, ObservableObjectTypeEnum.ORDER
         )
@@ -192,9 +188,7 @@ def on_user_role_message_stomp(
     project_uuid = message["project_uuid"]
 
     try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
         agent_service = register_event_process_service(
             offering, waldur_rest_client, ObservableObjectTypeEnum.USER_ROLE
         )
@@ -262,9 +256,7 @@ def on_resource_message_stomp(
     resource_uuid = message["resource_uuid"]
 
     try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
 
         agent_service = register_event_process_service(
             offering, waldur_rest_client, ObservableObjectTypeEnum.RESOURCE
@@ -377,9 +369,7 @@ def on_importable_resources_message_stomp(
     message: BackendResourceRequestMessage = json.loads(frame.body)
     request_uuid = message["backend_resource_request_uuid"]
     try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
 
         agent_service = register_event_process_service(
             offering, waldur_rest_client, ObservableObjectTypeEnum.IMPORTABLE_RESOURCES
@@ -437,9 +427,7 @@ def _report_command_result_to_waldur(
 ) -> None:
     """Report command execution result back to Waldur's report-command-result endpoint."""
     try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, "site-agent", offering.verify_ssl
-        )
+        waldur_rest_client = common_utils.get_client_for_offering(offering, "site-agent")
 
         resource_uuid_str = message.get("resource_uuid", "")
         policy_uuid_str = message.get("policy_uuid", "")
@@ -551,9 +539,7 @@ def _process_offering_user_message(
     username = message.get("username", "")
 
     try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
         register_event_process_service(
             offering, waldur_rest_client, ObservableObjectTypeEnum.OFFERING_USER
         )

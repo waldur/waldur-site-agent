@@ -15,11 +15,14 @@ automatically detected and loaded via Python entry points.
 
 import argparse
 import sys
+import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Optional, Union, cast
 from uuid import UUID
 
+import httpx
 import yaml
 from httpx import TimeoutException
 from waldur_api_client import AuthenticatedClient
@@ -154,11 +157,9 @@ def log_versions(configuration: structures.WaldurAgentConfiguration) -> None:
 
     for offering in configuration.waldur_offerings:
         try:
-            client = get_client(
-                offering.api_url,
-                offering.api_token,
+            client = get_client_for_offering(
+                offering,
                 configuration.waldur_user_agent,
-                offering.verify_ssl,
                 configuration.global_proxy,
             )
             version_info = version_retrieve.sync(client=client)
@@ -198,6 +199,7 @@ def get_client(
     agent_header: Optional[str] = None,
     verify_ssl: bool = True,
     proxy: Optional[str] = None,
+    token_prefix: str = "Token",  # noqa: S107
 ) -> AuthenticatedClient:
     """Create an authenticated Waldur API client.
 
@@ -207,6 +209,7 @@ def get_client(
         agent_header: Optional User-Agent string for HTTP requests
         verify_ssl: Whether or not to verify SSL certificates
         proxy: Optional proxy URL (e.g., 'socks5://localhost:12345')
+        token_prefix: Authorization header prefix ('Token' for static tokens, 'Bearer' for JWTs)
 
     Returns:
         Configured AuthenticatedClient instance ready for API calls
@@ -222,10 +225,124 @@ def get_client(
     return AuthenticatedClient(
         base_url=url,
         token=access_token,
+        prefix=token_prefix,
         timeout=600,
         headers=headers,
         verify_ssl=verify_ssl,
         httpx_args=httpx_args,
+    )
+
+
+class OIDCAuthError(Exception):
+    """Raised when a JWT access token cannot be obtained from the OIDC provider."""
+
+
+# Cache of OIDC access tokens keyed by (token_url, client_id). Each entry is
+# (access_token, expiry_monotonic). Avoids hitting the provider on every client
+# construction (handlers/reconciliation build a client per message/iteration).
+_OIDC_TOKEN_CACHE: dict[tuple[str, str], tuple[str, float]] = {}
+_OIDC_TOKEN_CACHE_LOCK = threading.Lock()
+# Refresh a cached token this many seconds before it actually expires, so a
+# token handed out near the boundary does not expire mid-request.
+_OIDC_TOKEN_EXPIRY_MARGIN = 30
+# Fallback lifetime when the provider response omits expires_in.
+_OIDC_TOKEN_FALLBACK_TTL = 300
+
+
+def fetch_oidc_token(
+    oidc_token_url: str,
+    client_id: str,
+    client_secret: str,
+    verify_ssl: bool = True,
+    proxy: Optional[str] = None,
+) -> str:
+    """Fetch (and cache) a JWT access token via the OIDC client_credentials grant.
+
+    Tokens are cached per (token_url, client_id) until shortly before they
+    expire (using the response's ``expires_in``), so repeated client
+    construction does not request a fresh token on every call.
+
+    Args:
+        oidc_token_url: Full URL of the OIDC token endpoint
+        client_id: OIDC client ID
+        client_secret: OIDC client secret
+        verify_ssl: Whether to verify the provider's TLS certificate
+        proxy: Optional proxy URL used to reach the provider
+
+    Returns:
+        Access token string from the OIDC provider response
+
+    Raises:
+        OIDCAuthError: if the provider response does not contain an access token
+    """
+    cache_key = (oidc_token_url, client_id)
+    with _OIDC_TOKEN_CACHE_LOCK:
+        cached = _OIDC_TOKEN_CACHE.get(cache_key)
+        if cached is not None:
+            token, expiry = cached
+            if time.monotonic() < expiry - _OIDC_TOKEN_EXPIRY_MARGIN:
+                return token
+
+    # Fetch outside the lock to avoid blocking other offerings during network I/O.
+    with httpx.Client(verify=verify_ssl, proxy=proxy, timeout=30) as client:
+        response = client.post(
+            oidc_token_url,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+        )
+    response.raise_for_status()
+    payload = response.json()
+    token = payload.get("access_token")
+    if not token:
+        msg = f"OIDC provider at {oidc_token_url} did not return an access_token"
+        raise OIDCAuthError(msg)
+
+    expires_in = payload.get("expires_in")
+    try:
+        ttl = float(expires_in) if expires_in is not None else _OIDC_TOKEN_FALLBACK_TTL
+    except (TypeError, ValueError):
+        ttl = _OIDC_TOKEN_FALLBACK_TTL
+    with _OIDC_TOKEN_CACHE_LOCK:
+        _OIDC_TOKEN_CACHE[cache_key] = (token, time.monotonic() + ttl)
+    return token
+
+
+def get_client_for_offering(
+    offering: structures.Offering,
+    agent_header: Optional[str] = None,
+    proxy: Optional[str] = None,
+) -> AuthenticatedClient:
+    """Create an authenticated Waldur API client from an Offering configuration.
+
+    If waldur_api_token is set, uses it directly as a static token (``Token``
+    prefix). Otherwise obtains a JWT from the configured OIDC provider (``Bearer``
+    prefix), reusing a cached token until it nears expiry.
+
+    Args:
+        offering: Offering configuration containing API URL and auth settings
+        agent_header: Optional User-Agent string for HTTP requests
+        proxy: Optional proxy URL (e.g., 'socks5://localhost:12345')
+
+    Returns:
+        Configured AuthenticatedClient instance ready for API calls
+    """
+    if offering.waldur_api_token:
+        token = offering.waldur_api_token
+        token_prefix = "Token"  # noqa: S105
+    else:
+        token = fetch_oidc_token(
+            offering.oidc_token_url,  # type: ignore[arg-type]
+            offering.oidc_client_id,  # type: ignore[arg-type]
+            offering.oidc_client_secret,  # type: ignore[arg-type]
+            offering.verify_ssl,
+            proxy,
+        )
+        token_prefix = "Bearer"  # noqa: S105
+    return get_client(
+        offering.waldur_api_url, token, agent_header, offering.verify_ssl, proxy, token_prefix
     )
 
 

@@ -16,7 +16,15 @@ from enum import Enum
 # Import after to avoid circular imports
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 
 class AccountingType(Enum):
@@ -139,8 +147,17 @@ class Offering(BaseModel):
 
     name: str = Field(..., description="Human-readable name for the offering")
     waldur_api_url: str = Field(..., description="Base URL for the Waldur API endpoint")
-    waldur_api_token: str = Field(..., description="Authentication token for Waldur API")
+    waldur_api_token: str = Field(default="", description="Authentication token for Waldur API")
     waldur_offering_uuid: str = Field(..., description="UUID of the offering in Waldur")
+
+    # OIDC authentication (used when waldur_api_token is blank)
+    oidc_token_url: Optional[str] = Field(default=None, description="OIDC token endpoint URL")
+    oidc_client_id: Optional[str] = Field(
+        default=None, description="OIDC client ID for token requests"
+    )
+    oidc_client_secret: Optional[str] = Field(
+        default=None, description="OIDC client secret for obtaining access tokens"
+    )
 
     # Backend configuration
     backend_type: str = Field(..., description="Backend type identifier")
@@ -177,6 +194,19 @@ class Offering(BaseModel):
     )
     verify_ssl: bool = Field(default=True, description="Verify SSL certificates")
 
+    @model_validator(mode="after")
+    def validate_auth_config(self) -> Offering:
+        """Validate that either a static token or full OIDC config is provided."""
+        has_token = bool(self.waldur_api_token)
+        has_oidc = all([self.oidc_token_url, self.oidc_client_id, self.oidc_client_secret])
+        if not has_token and not has_oidc:
+            msg = (
+                "Either waldur_api_token or all of oidc_token_url, "
+                "oidc_client_id, oidc_client_secret must be set"
+            )
+            raise ValueError(msg)
+        return self
+
     @field_validator("waldur_api_url")
     @classmethod
     def validate_api_url(cls, v: str) -> str:
@@ -186,6 +216,15 @@ class Offering(BaseModel):
             raise ValueError(msg)
         if not v.endswith("/"):
             v = v + "/"
+        return v
+
+    @field_validator("oidc_token_url")
+    @classmethod
+    def validate_oidc_token_url(cls, v: Optional[str]) -> Optional[str]:
+        """Validate that oidc_token_url is a valid HTTP/HTTPS URL when set."""
+        if v is not None and not v.startswith(("http://", "https://")):
+            msg = "oidc_token_url must start with http:// or https://"
+            raise ValueError(msg)
         return v
 
     @field_validator("backend_type")

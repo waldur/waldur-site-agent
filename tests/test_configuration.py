@@ -3,9 +3,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from waldur_site_agent.common.structures import AccountingType, BackendComponent, LogShippingConfig, Offering
 from waldur_site_agent.common.utils import load_configuration
@@ -54,6 +56,39 @@ class TestConfigurationLoading:
             # Clean up temp file
             Path(config_file_path).unlink()
 
+    def test_load_configuration_with_oidc(self):
+        """Test that load_configuration accepts OIDC fields when waldur_api_token is blank."""
+        config_data = {
+            "offerings": [
+                {
+                    "name": "OIDC Offering",
+                    "waldur_api_url": "http://localhost:8081/api/",
+                    "waldur_api_token": "",
+                    "oidc_token_url": "https://keycloak.example.com/realms/myrealm/protocol/openid-connect/token",
+                    "oidc_client_id": "waldur-agent",
+                    "oidc_client_secret": "supersecret",
+                    "waldur_offering_uuid": "12345678-1234-1234-1234-123456789abc",
+                    "backend_type": "test-backend",
+                    "backend_settings": {},
+                    "backend_components": {},
+                }
+            ]
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_file_path = f.name
+
+        try:
+            configuration = load_configuration(config_file_path, user_agent_suffix="sync")
+            offering = configuration.waldur_offerings[0]
+            assert offering.waldur_api_token == ""
+            assert offering.oidc_token_url == "https://keycloak.example.com/realms/myrealm/protocol/openid-connect/token"  # noqa: S105
+            assert offering.oidc_client_id == "waldur-agent"
+            assert offering.oidc_client_secret == "supersecret"  # noqa: S105
+        finally:
+            Path(config_file_path).unlink()
+
     def test_load_configuration_with_sentry(self):
         """Test that load_configuration handles Sentry DSN correctly."""
         # Create a temporary config file with Sentry DSN
@@ -90,6 +125,61 @@ class TestConfigurationLoading:
         finally:
             # Clean up temp file
             Path(config_file_path).unlink()
+
+
+class TestOfferingAuthValidation:
+    """Test Offering model validation for authentication config."""
+
+    BASE_FIELDS: ClassVar[dict] = {
+        "name": "Test",
+        "waldur_api_url": "http://localhost:8081/api/",
+        "waldur_offering_uuid": "12345678-1234-1234-1234-123456789abc",
+        "backend_type": "test-backend",
+    }
+
+    def test_offering_requires_token_or_oidc(self):
+        """Offering with no token and no OIDC config should raise a validation error."""
+        with pytest.raises(ValidationError, match="oidc_token_url"):
+            Offering(**self.BASE_FIELDS, waldur_api_token="")
+
+    def test_offering_accepts_static_token(self):
+        """Offering with a static token should be valid."""
+        offering = Offering(**self.BASE_FIELDS, waldur_api_token="mytoken")  # noqa: S106
+        assert offering.waldur_api_token == "mytoken"  # noqa: S105
+
+    def test_offering_accepts_oidc_config(self):
+        """Offering with OIDC fields and no static token should be valid."""
+        offering = Offering(
+            **self.BASE_FIELDS,
+            waldur_api_token="",
+            oidc_token_url="https://idp.example.com/token",  # noqa: S106
+            oidc_client_id="my-client",
+            oidc_client_secret="my-secret",  # noqa: S106
+        )
+        assert offering.oidc_token_url == "https://idp.example.com/token"  # noqa: S105
+        assert offering.oidc_client_id == "my-client"
+        assert offering.oidc_client_secret == "my-secret"  # noqa: S105
+
+    def test_offering_rejects_partial_oidc_config(self):
+        """Offering with only some OIDC fields set should raise a validation error."""
+        with pytest.raises(ValidationError):
+            Offering(
+                **self.BASE_FIELDS,
+                waldur_api_token="",
+                oidc_token_url="https://idp.example.com/token",  # noqa: S106
+                # missing oidc_client_id and oidc_client_secret
+            )
+
+    def test_offering_rejects_non_http_oidc_token_url(self):
+        """oidc_token_url must be an http(s) URL when set."""
+        with pytest.raises(ValidationError, match="oidc_token_url"):
+            Offering(
+                **self.BASE_FIELDS,
+                waldur_api_token="",
+                oidc_token_url="ftp://idp.example.com/token",  # noqa: S106
+                oidc_client_id="my-client",
+                oidc_client_secret="my-secret",  # noqa: S106
+            )
 
 
 class TestBackendComponentPrepaidFields:

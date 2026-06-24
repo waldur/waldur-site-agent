@@ -22,7 +22,10 @@ from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
 from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.common.healthz import touch_heartbeat
-from waldur_site_agent.common.utils import get_backend_for_offering, get_client
+from waldur_site_agent.common.utils import (
+    get_backend_for_offering,
+    get_client_for_offering,
+)
 from waldur_site_agent.event_processing.event_subscription_manager import EventSubscriptionManager
 from waldur_site_agent.event_processing.structures import (
     StompConsumer,
@@ -211,13 +214,7 @@ def setup_stomp_offering_subscriptions(
     # Determine which object types to subscribe to
     object_types = _determine_observable_object_types(waldur_offering)
 
-    waldur_rest_client = get_client(
-        waldur_offering.api_url,
-        waldur_offering.api_token,
-        waldur_user_agent,
-        verify_ssl=waldur_offering.verify_ssl,
-        proxy=global_proxy,
-    )
+    waldur_rest_client = get_client_for_offering(waldur_offering, waldur_user_agent, global_proxy)
 
     # Register agent identity
     result = _register_agent_identity(waldur_offering, waldur_rest_client)
@@ -375,9 +372,7 @@ def process_offering(
     """Processes the specified offering."""
     logger.info("Processing offering %s (%s)", offering.name, offering.uuid)
 
-    waldur_rest_client = get_client(
-        offering.api_url, offering.api_token, user_agent, verify_ssl=offering.verify_ssl
-    )
+    waldur_rest_client = get_client_for_offering(offering, user_agent)
     agent_identity_manager = agent_identity_management.AgentIdentityManager(
         offering, waldur_rest_client
     )
@@ -427,12 +422,7 @@ def run_periodic_username_reconciliation(
         if not offering.username_reconciliation_enabled:
             continue
         try:
-            waldur_rest_client = get_client(
-                offering.api_url,
-                offering.api_token,
-                user_agent,
-                verify_ssl=offering.verify_ssl,
-            )
+            waldur_rest_client = get_client_for_offering(offering, user_agent)
             resource_backend, _ = get_backend_for_offering(
                 offering, "membership_sync_backend"
             )
@@ -468,12 +458,7 @@ def run_periodic_offering_user_reconciliation(
         if not offering.membership_sync_backend:
             continue
         try:
-            waldur_rest_client = get_client(
-                offering.api_url,
-                offering.api_token,
-                user_agent,
-                verify_ssl=offering.verify_ssl,
-            )
+            waldur_rest_client = get_client_for_offering(offering, user_agent)
 
             stuck_users = marketplace_offering_users_list.sync_all(
                 client=waldur_rest_client,
@@ -533,12 +518,7 @@ def run_periodic_order_reconciliation(
         if not offering.order_processing_backend:
             continue
         try:
-            waldur_rest_client = get_client(
-                offering.api_url,
-                offering.api_token,
-                user_agent,
-                verify_ssl=offering.verify_ssl,
-            )
+            waldur_rest_client = get_client_for_offering(offering, user_agent)
 
             stuck_orders = marketplace_orders_list.sync_all(
                 client=waldur_rest_client,
@@ -591,12 +571,7 @@ def run_periodic_project_hierarchy_sync(
         if not offering.membership_sync_backend:
             continue
         try:
-            waldur_rest_client = get_client(
-                offering.api_url,
-                offering.api_token,
-                user_agent,
-                verify_ssl=offering.verify_ssl,
-            )
+            waldur_rest_client = get_client_for_offering(offering, user_agent)
             resource_backend, resource_backend_version = get_backend_for_offering(
                 offering, "membership_sync_backend"
             )
@@ -617,9 +592,7 @@ def send_agent_health_checks(offerings: list[common_structures.Offering], user_a
     """Sends agent health checks for the specified offerings."""
     for offering in offerings:
         try:
-            waldur_rest_client = get_client(
-                offering.api_url, offering.api_token, user_agent, verify_ssl=offering.verify_ssl
-            )
+            waldur_rest_client = get_client_for_offering(offering, user_agent)
             processor = common_processors.OfferingOrderProcessor(offering, waldur_rest_client)
             marketplace_orders_list.sync(
                 client=processor.waldur_rest_client, offering_uuid=offering.uuid
