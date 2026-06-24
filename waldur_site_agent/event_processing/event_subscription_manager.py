@@ -53,9 +53,7 @@ class EventSubscriptionManager:
         expose_backend_error_details: bool = True,
     ) -> None:
         """Constructor."""
-        self.waldur_rest_client = utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl, global_proxy
-        )
+        self.waldur_rest_client = utils.get_client_for_offering(offering, user_agent, global_proxy)
         self.offering = offering
         self.user_agent = user_agent
         self.on_connect_callback = on_connect_callback

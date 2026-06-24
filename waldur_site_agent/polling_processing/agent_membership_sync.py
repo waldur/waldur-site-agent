@@ -40,11 +40,9 @@ def _process_offerings(
                 )
                 continue
 
-            waldur_rest_client = common_utils.get_client(
-                offering.api_url,
-                offering.api_token,
+            waldur_rest_client = common_utils.get_client_for_offering(
+                offering,
                 user_agent,
-                offering.verify_ssl,
                 configuration.global_proxy,
             )
 

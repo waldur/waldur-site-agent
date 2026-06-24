@@ -391,7 +391,7 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
     @mock.patch("waldur_site_agent.event_processing.utils._setup_single_stomp_subscription")
     @mock.patch("waldur_site_agent.event_processing.utils._register_agent_identity")
     @mock.patch("waldur_site_agent.event_processing.utils._determine_observable_object_types")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_successful_setup_all_features(
         self,
         mock_get_client,
@@ -429,7 +429,7 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
 
     @mock.patch("waldur_site_agent.event_processing.utils._register_agent_identity")
     @mock.patch("waldur_site_agent.event_processing.utils._determine_observable_object_types")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_identity_registration_fails_returns_empty(
         self, mock_get_client, mock_determine_types, mock_register_identity
     ):
@@ -450,7 +450,7 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
     @mock.patch("waldur_site_agent.event_processing.utils._setup_single_stomp_subscription")
     @mock.patch("waldur_site_agent.event_processing.utils._register_agent_identity")
     @mock.patch("waldur_site_agent.event_processing.utils._determine_observable_object_types")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_partial_subscription_failures(
         self,
         mock_get_client,
@@ -486,7 +486,7 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
 
     @mock.patch("waldur_site_agent.event_processing.utils._register_agent_identity")
     @mock.patch("waldur_site_agent.event_processing.utils._determine_observable_object_types")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_no_object_types_returns_empty(
         self, mock_get_client, mock_determine_types, mock_register_identity
     ):
@@ -506,7 +506,7 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
     @mock.patch("waldur_site_agent.event_processing.utils._setup_single_stomp_subscription")
     @mock.patch("waldur_site_agent.event_processing.utils._register_agent_identity")
     @mock.patch("waldur_site_agent.event_processing.utils._determine_observable_object_types")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_all_subscriptions_fail(
         self,
         mock_get_client,

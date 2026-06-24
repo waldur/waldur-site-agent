@@ -15,7 +15,7 @@ from waldur_site_agent.event_processing import handlers
 @mock.patch(
     "waldur_site_agent.common.agent_identity_management.marketplace_site_agent_identities_create"
 )
-@mock.patch("waldur_site_agent.event_processing.handlers.common_utils.get_client")
+@mock.patch("waldur_site_agent.event_processing.handlers.common_utils.get_client_for_offering")
 @mock.patch("waldur_site_agent.event_processing.handlers.common_processors.OfferingOrderProcessor")
 class TestOrderStateFiltering(unittest.TestCase):
     """Test order state filtering in message handlers."""
@@ -88,12 +88,7 @@ class TestOrderStateFiltering(unittest.TestCase):
         handlers.on_order_message_stomp(mock_frame, self.offering, self.user_agent)
 
         # Verify Waldur client was created
-        mock_get_client.assert_called_once_with(
-            self.offering.api_url,
-            self.offering.api_token,
-            self.user_agent,
-            self.offering.verify_ssl,
-        )
+        mock_get_client.assert_called_once_with(self.offering, self.user_agent)
 
         # Verify agent identity registration flow
         mock_identity_list.sync.assert_called_once()

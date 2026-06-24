@@ -33,7 +33,7 @@ class TestRunPeriodicUsernameReconciliation(unittest.TestCase):
             membership_sync_backend="slurm",
         )
         with mock.patch(
-            "waldur_site_agent.event_processing.utils.get_client"
+            "waldur_site_agent.event_processing.utils.get_client_for_offering"
         ) as mock_get_client:
             utils.run_periodic_username_reconciliation([offering], "agent")
             mock_get_client.assert_not_called()
@@ -45,13 +45,13 @@ class TestRunPeriodicUsernameReconciliation(unittest.TestCase):
             membership_sync_backend="waldur",
         )
         with mock.patch(
-            "waldur_site_agent.event_processing.utils.get_client"
+            "waldur_site_agent.event_processing.utils.get_client_for_offering"
         ) as mock_get_client:
             utils.run_periodic_username_reconciliation([offering], "agent")
             mock_get_client.assert_not_called()
 
     @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_calls_sync_for_qualifying_offering(self, mock_get_client, mock_get_backend):
         """Reconciliation calls sync_offering_user_usernames for enabled offerings."""
         offering = _make_offering(
@@ -67,11 +67,11 @@ class TestRunPeriodicUsernameReconciliation(unittest.TestCase):
         mock_get_client.assert_called_once()
         mock_get_backend.assert_called_once_with(offering, "membership_sync_backend")
         mock_backend.sync_offering_user_usernames.assert_called_once_with(
-            offering.uuid, mock_get_client.return_value
+            offering.uuid, mock_get_client.return_value  # mock_get_client is now get_client_for_offering
         )
 
     @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_logs_when_usernames_updated(self, mock_get_client, mock_get_backend):
         """When sync returns True, an info log is emitted."""
         offering = _make_offering(
@@ -90,7 +90,7 @@ class TestRunPeriodicUsernameReconciliation(unittest.TestCase):
             )
 
     @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_exception_is_logged_and_does_not_propagate(self, mock_get_client, mock_get_backend):
         """Backend exceptions are logged and don't crash the loop."""
         offering = _make_offering(
@@ -109,7 +109,7 @@ class TestRunPeriodicUsernameReconciliation(unittest.TestCase):
             )
 
     @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_processes_multiple_offerings_independently(self, mock_get_client, mock_get_backend):
         """Each qualifying offering is processed even if one fails."""
         offering_a = _make_offering(
@@ -142,7 +142,7 @@ class TestRunPeriodicUsernameReconciliation(unittest.TestCase):
         mock_backend_b.sync_offering_user_usernames.assert_called_once()
 
     @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_mixed_offerings_only_processes_qualifying(self, mock_get_client, mock_get_backend):
         """Only offerings with username_reconciliation_enabled are processed."""
         enabled = _make_offering(
@@ -183,7 +183,7 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
             stomp_enabled=True,
         )
         with mock.patch(
-            "waldur_site_agent.event_processing.utils.get_client"
+            "waldur_site_agent.event_processing.utils.get_client_for_offering"
         ) as mock_get_client:
             utils.run_periodic_order_reconciliation([offering], "agent")
             mock_get_client.assert_not_called()
@@ -192,7 +192,7 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
         "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
     )
     @mock.patch("waldur_site_agent.event_processing.utils.marketplace_orders_list")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_processes_stuck_orders(
         self, mock_get_client, mock_orders_list, mock_processor_cls
     ):
@@ -218,7 +218,7 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
         "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
     )
     @mock.patch("waldur_site_agent.event_processing.utils.marketplace_orders_list")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_skips_when_no_stuck_orders(
         self, mock_get_client, mock_orders_list, mock_processor_cls
     ):
@@ -236,7 +236,7 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
         "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
     )
     @mock.patch("waldur_site_agent.event_processing.utils.marketplace_orders_list")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_exception_is_logged_and_does_not_propagate(
         self, mock_get_client, mock_orders_list, mock_processor_cls
     ):
@@ -258,7 +258,7 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
         "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
     )
     @mock.patch("waldur_site_agent.event_processing.utils.marketplace_orders_list")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_processes_multiple_offerings_independently(
         self, mock_get_client, mock_orders_list, mock_processor_cls
     ):
@@ -292,7 +292,7 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
         "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
     )
     @mock.patch("waldur_site_agent.event_processing.utils.marketplace_orders_list")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_mixed_offerings_only_processes_qualifying(
         self, mock_get_client, mock_orders_list, mock_processor_cls
     ):
@@ -325,7 +325,7 @@ class TestRunPeriodicOfferingUserReconciliation(unittest.TestCase):
         """Offerings without membership_sync_backend are skipped."""
         offering = _make_offering(stomp_enabled=True)
         with mock.patch(
-            "waldur_site_agent.event_processing.utils.get_client"
+            "waldur_site_agent.event_processing.utils.get_client_for_offering"
         ) as mock_get_client:
             utils.run_periodic_offering_user_reconciliation([offering], "agent")
             mock_get_client.assert_not_called()
@@ -334,7 +334,7 @@ class TestRunPeriodicOfferingUserReconciliation(unittest.TestCase):
     @mock.patch(
         "waldur_site_agent.event_processing.utils.marketplace_offering_users_list"
     )
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_fetches_stuck_users_and_calls_update(
         self, mock_get_client, mock_ou_list, mock_update
     ):
@@ -367,7 +367,7 @@ class TestRunPeriodicOfferingUserReconciliation(unittest.TestCase):
     @mock.patch(
         "waldur_site_agent.event_processing.utils.marketplace_offering_users_list"
     )
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_skips_when_no_stuck_users(
         self, mock_get_client, mock_ou_list, mock_update
     ):
@@ -383,7 +383,7 @@ class TestRunPeriodicOfferingUserReconciliation(unittest.TestCase):
     @mock.patch(
         "waldur_site_agent.event_processing.utils.marketplace_offering_users_list"
     )
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     def test_exception_does_not_propagate(
         self, mock_get_client, mock_ou_list, mock_update
     ):
