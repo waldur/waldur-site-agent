@@ -92,10 +92,12 @@ class TestSetAccountParent:
         assert client.get_account_parent("p-proj") == "c-new"
 
     def test_reparent_to_same_parent_is_a_noop(self, client):
-        # Real sacctmgr prints "  Nothing modified" to stdout and exits 0 for
-        # a no-op reparent (SLURM account_functions.c sets only a local rc;
-        # emulator >= 0.6.0 matches this). No BackendError must be raised.
-        assert "Nothing modified" in client.set_account_parent("p-proj", "c-org")
+        # Real sacctmgr prints "  Nothing modified" to stdout but exits 1 for a
+        # no-op reparent: account_functions.c:726-729 returns SLURM_ERROR, and
+        # sacctmgr.c:982-984 maps a non-SUCCESS error_code to exit_code=1.
+        # _execute_command swallows exactly this case and returns "" — no
+        # BackendError, because the desired parent is already in place.
+        assert client.set_account_parent("p-proj", "c-org") == ""
         assert client.get_account_parent("p-proj") == "c-org"
 
     def test_reparent_to_missing_parent_raises(self, client):
