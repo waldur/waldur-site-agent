@@ -88,8 +88,11 @@ They serve **different** purposes and are easy to confuse:
   `default_account`, then to `"root"`.
 
 In the default 3-tier hierarchy the agent creates
-`root_account → customer → project → allocation`, and every user
-association gets `DefaultAccount=default_account`.
+`root_account → customer → project → allocation`. Under the default
+`default_account_policy: common`, every user association gets
+`DefaultAccount=default_account`. The `individual` and `none` policies
+change which account (if any) is used — see
+[Upgrading](docs/upgrading.md#default_account_policy) for the trade-offs.
 
 Historically a single `default_account` setting was used for **both** roles.
 That is correct only when both values are the same (e.g. both `"root"`, as in

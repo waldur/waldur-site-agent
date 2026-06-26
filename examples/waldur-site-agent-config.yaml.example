@@ -30,6 +30,12 @@ offerings: # Settings for offerings
       default_account: "root" # DefaultAccount= for user associations (where users'
         # jobs charge when no -A is given). Set to a restricted account to keep users
         # off the root account by default.
+      # default_account_policy: common  # common (default) | individual | none
+        # common:     pass DefaultAccount=<default_account> on every 'sacctmgr add user' call.
+        # individual: pass DefaultAccount=<resource_id>; avoids implicit associations with
+        #             the org-level root account when the user has no prior association there.
+        # none:       omit DefaultAccount= entirely; sacctmgr auto-assigns it for new
+        #             users and leaves existing users' default unchanged.
       # root_account: "root" # Parent under which the top-tier customer account is
         # created (root of the account tree). Optional; defaults to default_account,
         # then "root". Set independently from default_account to avoid parenting the
@@ -93,6 +99,7 @@ offerings: # Settings for offerings
     backend_type: "slurm"
     backend_settings:
       default_account: "normal"
+      # default_account_policy: common  # common (default) | individual | none
       customer_prefix: ""
       project_prefix: ""
       allocation_prefix: ""
@@ -184,6 +191,7 @@ offerings: # Settings for offerings
     backend_type: "slurm"
     backend_settings:
       default_account: "normal"
+      # default_account_policy: common  # common (default) | individual | none
       customer_prefix: ""
       project_prefix: ""
       allocation_prefix: ""
@@ -242,6 +250,7 @@ offerings: # Settings for offerings
     backend_type: "slurm"
     backend_settings:
       default_account: "root"
+      # default_account_policy: common  # common (default) | individual | none
       customer_prefix: "hpc_"
       project_prefix: "hpc_"
       allocation_prefix: "hpc_"

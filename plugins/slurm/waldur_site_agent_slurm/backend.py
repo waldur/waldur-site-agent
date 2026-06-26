@@ -22,6 +22,12 @@ from waldur_site_agent.common.component_mapping import ComponentMapper
 from waldur_site_agent_slurm import utils
 from waldur_site_agent_slurm.client import SlurmClient
 
+# Accepted values for the ``default_account_policy`` backend setting. An
+# unrecognized value (e.g. a typo) must fail loudly at construction rather than
+# silently resolving to the "common" branch and charging users to the default
+# account.
+_VALID_DEFAULT_ACCOUNT_POLICIES = frozenset({"common", "individual", "none"})
+
 
 def _get_ldap_client(ldap_settings: dict):  # type: ignore[no-untyped-def]  # noqa: ANN202
     """Lazily import and instantiate the LDAP client if configured.
@@ -97,6 +103,15 @@ class SlurmBackend(backends.BaseBackend):
         # Expose enforcement state to the processor so it can warn loudly when
         # partitions are configured but the offering cannot produce usernames.
         self.partition_enforcement_enabled = self._enforce_offering_partitions
+        self._default_account_policy: str = self.backend_settings.get(
+            "default_account_policy", "common"
+        )
+        if self._default_account_policy not in _VALID_DEFAULT_ACCOUNT_POLICIES:
+            msg = (
+                f"Invalid default_account_policy {self._default_account_policy!r}; "
+                f"expected one of {sorted(_VALID_DEFAULT_ACCOUNT_POLICIES)}."
+            )
+            raise BackendError(msg)
 
         # Optional component mapping (Waldur components → SLURM TRES)
         self._component_mapper = ComponentMapper(slurm_tres)
@@ -563,7 +578,13 @@ class SlurmBackend(backends.BaseBackend):
         if not self.client.get_association(username, resource_backend_id):
             logger.info("Creating association between %s and %s", username, resource_backend_id)
             try:
-                default_account = self.backend_settings.get("default_account", "root")
+                policy = self._default_account_policy
+                if policy == "individual":
+                    default_account: Optional[str] = resource_backend_id
+                elif policy == "none":
+                    default_account = None
+                else:  # "common"
+                    default_account = self.backend_settings.get("default_account", "root")
                 if self.offering_partitions and self._enforce_offering_partitions:
                     self.client.create_association_with_partitions(
                         username,

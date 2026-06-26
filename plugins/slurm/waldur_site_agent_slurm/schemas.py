@@ -7,7 +7,7 @@ based on actual SLURM plugin usage patterns and the periodic limits functionalit
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import ConfigDict, Field, field_validator
 
@@ -155,6 +155,17 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
 
     # Core SLURM account management (required by backend.py)
     default_account: str = Field(..., description="Default parent account in SLURM cluster")
+    default_account_policy: Literal["common", "individual", "none"] = Field(
+        default="common",
+        description=(
+            "Controls the DefaultAccount= argument passed to 'sacctmgr add user'.\n"
+            "  common     — use the configured default_account (current behaviour).\n"
+            "  individual — use the resource account itself; avoids implicit\n"
+            "               associations with the org-level root account.\n"
+            "  none       — omit DefaultAccount= entirely; sacctmgr auto-assigns\n"
+            "               it for new users, existing users' default is unchanged."
+        ),
+    )
     customer_prefix: str = Field(..., description="Prefix for customer account names")
     project_prefix: str = Field(..., description="Prefix for project account names")
     allocation_prefix: str = Field(..., description="Prefix for allocation account names")

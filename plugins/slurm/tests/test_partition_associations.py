@@ -188,6 +188,68 @@ class TestAddUserPartitionResolution:
         backend.client.create_association_with_partitions.assert_not_called()
 
 
+class TestDefaultAccountPolicy:
+    """SlurmBackend.add_user emits the right DefaultAccount= per policy."""
+
+    def _make_backend(self, policy: str, offering_partitions=None):
+        settings = {"default_account": "root", "default_account_policy": policy}
+        backend = SlurmBackend(settings, {"cpu": {"unit": "minutes"}})
+        backend.offering_partitions = list(offering_partitions or ["zen3"])
+        backend._enforce_offering_partitions = True
+        backend.client = MagicMock()
+        backend.client.get_association.return_value = None
+        return backend
+
+    def _resource(self, backend_id="acct1"):
+        r = MagicMock()
+        r.backend_id = backend_id
+        return r
+
+    def test_policy_common_uses_default_account(self):
+        backend = self._make_backend("common")
+        backend.add_user(self._resource("acct1"), "alice")
+        backend.client.create_association_with_partitions.assert_called_once_with(
+            "alice", "acct1", ["zen3"], "root"
+        )
+
+    def test_policy_individual_uses_resource_id(self):
+        backend = self._make_backend("individual")
+        backend.add_user(self._resource("acct1"), "alice")
+        backend.client.create_association_with_partitions.assert_called_once_with(
+            "alice", "acct1", ["zen3"], "acct1"
+        )
+
+    def test_policy_none_passes_none(self):
+        backend = self._make_backend("none")
+        backend.add_user(self._resource("acct1"), "alice")
+        backend.client.create_association_with_partitions.assert_called_once_with(
+            "alice", "acct1", ["zen3"], None
+        )
+
+    def test_policy_none_omits_default_account_from_command(self):
+        """When policy=none, the sacctmgr command must not contain DefaultAccount=."""
+        c = SlurmClient({}, slurm_bin_path="")
+        with patch.object(c, "execute_command", return_value=""):
+            c.create_association_with_partitions("alice", "acct1", ["zen3"], default_account=None)
+        cmd = c.executed_commands[-1]
+        assert "DefaultAccount" not in cmd
+        assert "Partitions=zen3" in cmd
+
+    def test_partitions_omitted_default_account_emits_no_token(self):
+        """Omitting default_account must omit the token, not emit DefaultAccount= (empty)."""
+        c = SlurmClient({}, slurm_bin_path="")
+        with patch.object(c, "execute_command", return_value=""):
+            c.create_association_with_partitions("alice", "acct1", ["zen3"])
+        cmd = c.executed_commands[-1]
+        assert "DefaultAccount" not in cmd
+
+    def test_invalid_policy_raises(self):
+        """A typo'd/unknown policy must fail loudly at construction, not fall back to common."""
+        settings = {"default_account": "root", "default_account_policy": "indivdual"}
+        with pytest.raises(BackendError, match="Invalid default_account_policy"):
+            SlurmBackend(settings, {"cpu": {"unit": "minutes"}})
+
+
 class TestPartitionReconciliationRegression:
     """The plugin must never run ``sacctmgr modify … partitions=``.
 

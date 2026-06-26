@@ -210,19 +210,14 @@ class SlurmClient(clients.BaseClient):
         return self._parse_association(lines[0])
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = ""
+        self, username: str, resource_id: str, default_account: Optional[str] = None
     ) -> str:
         """Creates association between the account and the user in SLURM cluster."""
-        return self._execute_command(
-            [
-                "add",
-                "user",
-                username,
-                f"account={resource_id}",
-                f"DefaultAccount={default_account}",
-                "Share=parent",  # Inherits fairshare value from the parent account
-            ]
-        )
+        args = ["add", "user", username, f"account={resource_id}"]
+        if default_account is not None:
+            args.append(f"DefaultAccount={default_account}")
+        args.append("Share=parent")  # Inherits fairshare value from the parent account
+        return self._execute_command(args)
 
     def delete_association(self, username: str, resource_id: str) -> str:
         """Deletes association between the account and the user in SLURM cluster."""
@@ -583,26 +578,21 @@ class SlurmClient(clients.BaseClient):
         username: str,
         resource_id: str,
         partition: str,
-        default_account: Optional[str] = "",
+        default_account: Optional[str] = None,
     ) -> str:
         """Create an association between a user and account with a specific partition."""
-        return self._execute_command(
-            [
-                "add",
-                "user",
-                username,
-                f"account={resource_id}",
-                f"DefaultAccount={default_account}",
-                f"Partition={partition}",
-            ]
-        )
+        args = ["add", "user", username, f"account={resource_id}"]
+        if default_account is not None:
+            args.append(f"DefaultAccount={default_account}")
+        args.append(f"Partition={partition}")
+        return self._execute_command(args)
 
     def create_association_with_partitions(
         self,
         username: str,
         resource_id: str,
         partitions: Sequence[str],
-        default_account: Optional[str] = "",
+        default_account: Optional[str] = None,
     ) -> str:
         """Create a user→account association restricted to the given partitions.
 
@@ -621,15 +611,10 @@ class SlurmClient(clients.BaseClient):
                 msg = f"Invalid SLURM partition name: {name!r}"
                 raise BackendError(msg)
         sorted_parts = sorted(partitions)
-        args = [
-            "add",
-            "user",
-            username,
-            f"account={resource_id}",
-            f"DefaultAccount={default_account}",
-            f"Partitions={','.join(sorted_parts)}",
-            "Share=parent",
-        ]
+        args = ["add", "user", username, f"account={resource_id}"]
+        if default_account is not None:
+            args.append(f"DefaultAccount={default_account}")
+        args.extend([f"Partitions={','.join(sorted_parts)}", "Share=parent"])
         return self._execute_command(args)
 
     # ===== PERIODIC LIMITS EXTENSION =====
