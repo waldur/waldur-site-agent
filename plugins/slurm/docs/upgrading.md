@@ -11,6 +11,7 @@ Required keys must be present or the agent will fail to start.
 | Key | Required | Notes |
 |---|---|---|
 | `default_account` | **Yes** | `DefaultAccount=` set on user associations; must exist in the cluster |
+| `default_account_policy` | No | `common` (default), `individual`, or `none` — see below |
 | `root_account` | No | Parent of the top-tier customer account. Defaults to `default_account`, then `root` |
 | `customer_prefix` | **Yes** | Prefix for customer-level SLURM accounts |
 | `project_prefix` | **Yes** | Prefix for project-level SLURM accounts |
@@ -24,6 +25,30 @@ Required keys must be present or the agent will fail to start.
 | `default_homedir_umask` | No | Default `0077` |
 
 Check the [CHANGELOG](../../../CHANGELOG.md) for any new required keys before upgrading.
+
+## `default_account_policy`
+
+Controls which account is passed as `DefaultAccount=` when the agent creates a
+user→account association (`sacctmgr add user …`). The default account is where a
+user's jobs charge when they submit without an explicit `-A`/`--account`.
+
+- **`common`** (default) — `DefaultAccount=<default_account>` on every
+  association. Stable: always references the configured, backend-verified
+  account.
+- **`individual`** — `DefaultAccount=<resource_id>` (the per-resource account).
+  Keeps users off the org-wide root by default, **but** when that resource is
+  terminated and its account deleted, the user's `DefaultAccount` dangles and
+  SLURM rejects their job submissions until an operator repairs it.
+- **`none`** — `DefaultAccount=` omitted entirely; sacctmgr auto-assigns for new
+  users. Relies on the deployment's sacctmgr auto-assignment for brand-new users;
+  for an existing user whose prior default account was deleted, the stale default
+  is left unchanged (they may be unable to submit until repaired).
+
+`common` is the safe default and is what most deployments should use. Only switch
+to `individual` or `none` if you understand the dangling-`DefaultAccount` failure
+modes above and have an operational process to handle them. An invalid value
+(e.g. a typo) raises an error at agent startup rather than silently falling back
+to `common`.
 
 ## QoS configuration
 

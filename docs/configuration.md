@@ -177,7 +177,9 @@ These settings can be used in `backend_settings` for any backend type.
 
 ```yaml
 backend_settings:
-  default_account: "root"                              # Default parent account
+  default_account: "root"                              # DefaultAccount= on user associations
+  # root_account: "root"                               # Parent of top-tier customer account
+  # default_account_policy: "common"                   # common (default) | individual | none
   customer_prefix: "hpc_"                              # Prefix for customer accounts
   project_prefix: "hpc_"                               # Prefix for project accounts
   allocation_prefix: "hpc_"                            # Prefix for allocation accounts

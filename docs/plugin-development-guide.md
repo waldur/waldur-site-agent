@@ -560,7 +560,7 @@ offerings:
 
     # Backend-specific settings (passed to __init__ as backend_settings)
     backend_settings:
-      default_account: "root"            # Default parent account
+      default_account: "root"            # DefaultAccount= on user associations
       customer_prefix: "cust_"           # Prefix for customer-level accounts
       project_prefix: "proj_"            # Prefix for project-level accounts
       allocation_prefix: "alloc_"        # Prefix for allocation-level accounts
