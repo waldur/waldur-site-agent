@@ -10,7 +10,8 @@ Required keys must be present or the agent will fail to start.
 
 | Key | Required | Notes |
 |---|---|---|
-| `default_account` | **Yes** | Root SLURM account; must exist in the cluster |
+| `default_account` | **Yes** | `DefaultAccount=` set on user associations; must exist in the cluster |
+| `root_account` | No | Parent of the top-tier customer account. Defaults to `default_account`, then `root` |
 | `customer_prefix` | **Yes** | Prefix for customer-level SLURM accounts |
 | `project_prefix` | **Yes** | Prefix for project-level SLURM accounts |
 | `allocation_prefix` | **Yes** | Prefix for allocation accounts |

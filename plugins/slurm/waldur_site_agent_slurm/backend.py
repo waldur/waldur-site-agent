@@ -73,6 +73,16 @@ class SlurmBackend(backends.BaseBackend):
         # Optional project directory management
         self._project_dir_config = self.backend_settings.get("project_directory", {})
 
+        # Account under which the top-tier account of the default hierarchy is created.
+        # This is the real root of the SLURM account tree and is distinct from
+        # ``default_account``, which is only the user's ``DefaultAccount=`` on associations.
+        # Falls back to ``default_account`` for backward compatibility, then to "root".
+        self._root_account = (
+            self.backend_settings.get("root_account")
+            or self.backend_settings.get("default_account")
+            or "root"
+        )
+
         # Optional partition assignment (agent-wide fallback when offering has no partitions)
         self._default_partition = self.backend_settings.get("default_partition")
 
@@ -134,7 +144,7 @@ class SlurmBackend(backends.BaseBackend):
                 customer_backend_id,
                 waldur_resource.customer_name,
                 customer_backend_id,
-                self.backend_settings.get("default_account"),
+                self._root_account,
             )
             self._create_backend_resource(
                 project_backend_id,
@@ -244,7 +254,7 @@ class SlurmBackend(backends.BaseBackend):
                 expected_customer_backend_id,
                 customer_name,
                 expected_customer_backend_id,
-                self.backend_settings.get("default_account"),
+                self._root_account,
             )
             self._create_backend_resource(
                 project_backend_id,
@@ -304,6 +314,7 @@ class SlurmBackend(backends.BaseBackend):
             )
         )
         logger.info(format_string.format("SLURM default account", default_account_name))
+        logger.info(format_string.format("SLURM root account", self._root_account))
         logger.info("")
 
         logger.info("SLURM tres components:\n%s\n", pprint.pformat(self.backend_components))
@@ -357,11 +368,17 @@ class SlurmBackend(backends.BaseBackend):
         tres = self.list_components()
         logger.info("Available tres in the cluster: %s", ",".join(tres))
 
-        default_account = self.client.get_resource(default_account_name)
-        if default_account is None:
-            logger.error("There is no account %s in the cluster", default_account)
+        if self.client.get_resource(default_account_name) is None:
+            logger.error("There is no account %s in the cluster", default_account_name)
             return False
-        logger.info('Default parent account "%s" is in place', default_account_name)
+        logger.info('Default user account "%s" is in place', default_account_name)
+
+        if self.client.get_resource(self._root_account) is None:
+            logger.error(
+                "Root parent account %s does not exist in the cluster", self._root_account
+            )
+            return False
+        logger.info('Root parent account "%s" is in place', self._root_account)
         logger.info("")
 
         return True

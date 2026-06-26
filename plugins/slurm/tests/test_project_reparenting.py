@@ -72,6 +72,56 @@ def _make_backend(extra_settings: Optional[dict] = None) -> SlurmBackend:
     return backend
 
 
+class TestRootAccountDecoupling:
+    """The account-tree root (root_account) is independent of the user DefaultAccount.
+
+    ``default_account`` is the ``DefaultAccount=`` placed on user associations, while
+    ``root_account`` is the parent of the top-tier customer account. They used to be a
+    single setting; these tests pin the decoupled behaviour.
+    """
+
+    def test_root_account_defaults_to_default_account(self):
+        # No root_account configured: the customer account is parented under default_account.
+        backend = _make_backend(extra_settings={"default_account": "restricted_access"})
+        assert backend._root_account == "restricted_access"
+
+        waldur_resource = _make_waldur_resource(customer_slug="org-b", customer_name="Org B")
+        with patch.object(backend, "_create_backend_resource") as mock_create:
+            backend._pre_create_resource(waldur_resource)
+
+        mock_create.assert_any_call("hpc_org-b", "Org B", "hpc_org-b", "restricted_access")
+
+    def test_root_account_overrides_parent_without_touching_user_default(self):
+        backend = _make_backend(
+            extra_settings={"default_account": "restricted_access", "root_account": "root"}
+        )
+        assert backend._root_account == "root"
+
+        waldur_resource = _make_waldur_resource(customer_slug="org-b", customer_name="Org B")
+        with patch.object(backend, "_create_backend_resource") as mock_create:
+            backend._pre_create_resource(waldur_resource)
+
+        # Customer account is rooted at "root", not under the restricted user account.
+        mock_create.assert_any_call("hpc_org-b", "Org B", "hpc_org-b", "root")
+        mock_create.assert_any_call(
+            "hpc_project-alpha", "Project Alpha", "hpc_project-alpha", "hpc_org-b"
+        )
+
+    def test_user_association_uses_default_account_not_root_account(self):
+        backend = _make_backend(
+            extra_settings={"default_account": "restricted_access", "root_account": "root"}
+        )
+        backend.client.get_association.return_value = None
+
+        waldur_resource = _make_waldur_resource()
+        backend.add_user(waldur_resource, "alice")
+
+        # DefaultAccount stays the restricted account regardless of root_account.
+        backend.client.create_association.assert_called_once_with(
+            "alice", waldur_resource.backend_id, "restricted_access"
+        )
+
+
 class TestGetAccountParent:
     """Unit tests for SlurmClient.get_account_parent()."""
 

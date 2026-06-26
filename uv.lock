@@ -1925,7 +1925,7 @@ wheels = [
 
 [[package]]
 name = "slurm-emulator"
-version = "0.6.0"
+version = "0.7.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1937,9 +1937,9 @@ dependencies = [
     { name = "uvicorn", version = "0.39.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "uvicorn", version = "0.40.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f8/3f/affac357fda354e7dd2e152821b5d555c8a8f4417aaedb32ab873271efbf/slurm_emulator-0.6.0.tar.gz", hash = "sha256:0250c30b46e965fb0307db558e2e1da8fbf2d6834ea90045541a5d7366375ad6", size = 89742, upload-time = "2026-06-11T06:02:00.659Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/80/8766b3e91aaaca9f5847de64f79ccbe27781ee37a6726ab3c7892019f58b/slurm_emulator-0.7.2.tar.gz", hash = "sha256:fdf4f5e5c031ce8d9621dee4c486c6173288d7aa941986e055238b872c120a5f", size = 109092, upload-time = "2026-06-25T07:34:49.271Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/3a/e4cb5988d1d9ce2824b2d257a4d75314aeeabac4304861ed08391035c14f/slurm_emulator-0.6.0-py3-none-any.whl", hash = "sha256:64352ce85c92731ae014223071591cc45b02121a91aa18a6f5137b6d622f92d5", size = 101816, upload-time = "2026-06-11T06:01:59.089Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/af/a4a318e8032c4a7f7a8278d0fffea9f4e7f4153dedfda2a797a819f2779f/slurm_emulator-0.7.2-py3-none-any.whl", hash = "sha256:974c4e7cfb3fb6437d7b5131c243a6b9f56838eb66184e3df019d5ac207cf849", size = 125241, upload-time = "2026-06-25T07:34:47.858Z" },
 ]
 
 [[package]]
@@ -2476,7 +2476,7 @@ provides-extras = ["ldap"]
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=7.1.0" },
-    { name = "slurm-emulator", specifier = ">=0.6.0" },
+    { name = "slurm-emulator", specifier = ">=0.7.2" },
 ]
 
 [[package]]

@@ -56,6 +56,7 @@ offerings:
     backend_settings:
       # Core SLURM account management
       default_account: "root"
+      # root_account: "root"   # optional, see "Account settings" below
       customer_prefix: "waldur_"
       project_prefix: "waldur_"
       allocation_prefix: "waldur_"
@@ -71,6 +72,40 @@ offerings:
         unit: "GPU-Hours"
         unit_factor: 60
 ```
+
+### Account settings: users vs. accounts
+
+Two settings control how the agent places objects in the SLURM account tree.
+They serve **different** purposes and are easy to confuse:
+
+- **`default_account`** applies to **users**. It is the `DefaultAccount=` set
+  on every user association — the account a user's jobs charge against when they
+  don't pass `-A`. Set it to a restricted account (e.g. `restricted_access`) to
+  stop users from submitting under the root account by default.
+- **`root_account`** applies to **accounts**. It is the parent under which the
+  top-tier (customer) account of the default hierarchy is created — i.e. the
+  real root of the account tree. Optional; defaults to the value of
+  `default_account`, then to `"root"`.
+
+In the default 3-tier hierarchy the agent creates
+`root_account → customer → project → allocation`, and every user
+association gets `DefaultAccount=default_account`.
+
+Historically a single `default_account` setting was used for **both** roles.
+That is correct only when both values are the same (e.g. both `"root"`, as in
+the examples above). If you want users to default to a restricted account
+**without** parenting the whole account tree under it, set the two
+independently:
+
+```yaml
+backend_settings:
+  default_account: "restricted_access"  # users land here by default
+  root_account: "root"                  # account tree is rooted at root
+```
+
+> A flat hierarchy (project account created directly under a fixed parent,
+> with no customer tier) is configured separately via the `parent_account`
+> setting; when `parent_account` is set, `root_account` is not used.
 
 ### Periodic Limits Configuration
 
