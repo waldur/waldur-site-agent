@@ -1747,12 +1747,14 @@ class TestEndDateSync:
         mock_client.set_resource_end_date.assert_not_called()
 
     def test_sync_end_date_api_error(self, backend, mock_client):
-        """API error → logs warning, doesn't crash."""
+        """SDK error (UnexpectedStatus) → logs warning, doesn't crash."""
         a_date = datetime.date(2025, 6, 1)
         a_ts = datetime.datetime(2025, 1, 10, 12, 0, 0)
 
         waldur_resource = self._make_waldur_resource(a_date, a_ts)
-        mock_client.get_marketplace_resource.side_effect = Exception("API error")
+        mock_client.get_marketplace_resource.side_effect = UnexpectedStatus(
+            500, b"err", "https://b/api/marketplace-resources/"
+        )
 
         waldur_rest_client = MagicMock()
         # Should not raise

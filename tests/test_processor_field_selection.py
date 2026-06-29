@@ -181,6 +181,9 @@ class TestMembershipProcessorFieldSelection:
         assert ResourceFieldEnum.END_DATE in requested_fields, (
             "end_date missing: scheduler will read UNSET and overwrite real end_date on B with None"
         )
+        assert ResourceFieldEnum.END_DATE_UPDATED_AT in requested_fields, (
+            "end_date_updated_at missing: bidirectional last-update-wins has no timestamp to compare"
+        )
 
 
 class TestReportProcessorFieldSelection:

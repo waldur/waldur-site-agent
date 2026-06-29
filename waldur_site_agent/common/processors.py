@@ -1678,6 +1678,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 ResourceFieldEnum.PROJECT_DESCRIPTION,
                 ResourceFieldEnum.CUSTOMER_UUID,
                 ResourceFieldEnum.END_DATE,
+                ResourceFieldEnum.END_DATE_UPDATED_AT,
                 ResourceFieldEnum.PROJECT_END_DATE,
             ],
         }

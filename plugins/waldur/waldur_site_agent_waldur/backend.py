@@ -1305,25 +1305,17 @@ class WaldurBackend(backends.BaseBackend):
                 return
 
             backend_id = waldur_resource.backend_id
-            if isinstance(backend_id, type(UNSET)) or not backend_id:
+            if not backend_id:
                 return
 
             # Extract A's end_date and timestamp
-            a_end_date = waldur_resource.end_date
-            if isinstance(a_end_date, type(UNSET)):
-                a_end_date = None
-            a_updated_at = getattr(waldur_resource, "end_date_updated_at", None)
-            if isinstance(a_updated_at, type(UNSET)):
-                a_updated_at = None
+            a_end_date = waldur_resource.end_date or None
+            a_updated_at = waldur_resource.end_date_updated_at or None
 
             # Fetch B resource
             b_resource = self.client.get_marketplace_resource(UUID(backend_id))
-            b_end_date = b_resource.end_date
-            if isinstance(b_end_date, type(UNSET)):
-                b_end_date = None
-            b_updated_at = getattr(b_resource, "end_date_updated_at", None)
-            if isinstance(b_updated_at, type(UNSET)):
-                b_updated_at = None
+            b_end_date = b_resource.end_date or None
+            b_updated_at = b_resource.end_date_updated_at or None
 
             a_wins = self._decide_end_date_sync_direction(
                 a_end_date, b_end_date, a_updated_at, b_updated_at
@@ -1332,12 +1324,8 @@ class WaldurBackend(backends.BaseBackend):
                 return
 
             # Extract user who requested the end_date change
-            a_requested_by = getattr(waldur_resource, "end_date_requested_by", None)
-            if isinstance(a_requested_by, type(UNSET)):
-                a_requested_by = None
-            b_requested_by = getattr(b_resource, "end_date_requested_by", None)
-            if isinstance(b_requested_by, type(UNSET)):
-                b_requested_by = None
+            a_requested_by = waldur_resource.end_date_requested_by or None
+            b_requested_by = b_resource.end_date_requested_by or None
 
             if a_wins:
                 logger.info(
@@ -1359,10 +1347,12 @@ class WaldurBackend(backends.BaseBackend):
                     client=waldur_rest_client,
                     body=ResourceEndDateRequest(end_date=b_end_date),
                 )
-        except Exception:
-            logger.exception(
-                "Failed to sync end_date for resource %s",
+        except UnexpectedStatus as e:
+            logger.warning(
+                "Could not sync end_date for resource %s (status %s): %s",
                 getattr(waldur_resource, "backend_id", "unknown"),
+                e.status_code,
+                e,
             )
 
     def sync_project_end_date(
