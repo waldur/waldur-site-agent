@@ -1684,6 +1684,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 # forced reconciliation recreates a missing backend resource
                 ResourceFieldEnum.CUSTOMER_NAME,
                 ResourceFieldEnum.END_DATE,
+                ResourceFieldEnum.END_DATE_UPDATED_AT,
                 ResourceFieldEnum.PROJECT_END_DATE,
             ],
         }
