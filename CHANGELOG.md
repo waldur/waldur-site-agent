@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.5 - 2026-06-29
+
+### Highlights
+
+This release strengthens SLURM account management and broadens authentication options for the site agent. Operators gain finer control over how default accounts are assigned to users and can now decouple the SLURM root account from per-user default accounts. The agent can also authenticate against Waldur Mastermind using Bearer tokens, simplifying deployment in environments that don't use OIDC.
+
+### What's New
+
+- **SLURM**: Add a `default_account_policy` setting to control how default accounts are assigned to users.
+- **Core**: Add support for Bearer token authentication against Waldur Mastermind, alongside the existing OIDC flow.
+
+### Improvements
+
+- **SLURM**: Decouple the SLURM root account from the user default account, allowing independent configuration of each ([ONS-1240]).
+
+### Statistics
+
+> 3 commits, 29 files changed (+1087/-175 lines)
+
+---
+
 ## 1.0.5-rc.13 - 2026-06-18
 
 - **OpenNebula**: Add support for vLLM inference VMs, including a sample offering, model-by-name selection, and component `unit_factor` applied when sizing VMs.
