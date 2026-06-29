@@ -75,7 +75,7 @@ offerings:
 
     backend_type: "slurm"
     backend_settings:
-      default_account: "root"           # Root account in SLURM
+      default_account: "root"           # DefaultAccount= on user associations
       customer_prefix: "hpc_"           # Prefix for customer accounts
       project_prefix: "hpc_"            # Prefix for project accounts
       allocation_prefix: "hpc_"         # Prefix for allocation accounts
@@ -116,7 +116,7 @@ offerings:
 
 #### Backend Settings
 
-- `default_account`: Root account in SLURM cluster
+- `default_account`: `DefaultAccount=` set on user associations in the SLURM cluster
 - Prefixes: Used to identify accounts created by the agent (for filtering)
 
 #### Backend Components
