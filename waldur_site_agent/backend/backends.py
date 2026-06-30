@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import TYPE_CHECKING, ClassVar, Optional
@@ -352,6 +354,12 @@ class BaseBackend(ABC):
         homedir_base_path = self.backend_settings.get("homedir_base_path")
 
         for username in usernames:
+            if homedir_base_path:
+                user_homedir = os.path.join(homedir_base_path, username)
+                if os.path.isdir(user_homedir):
+                    logger.info("Homedir of user %s already exists: %s", username, user_homedir)
+                    continue
+
             try:
                 logger.info("Creating homedir for the user %s with umask %s", username, umask)
                 self.client.create_linux_user_homedir(username, umask)
