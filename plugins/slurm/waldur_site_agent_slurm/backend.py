@@ -278,6 +278,10 @@ class SlurmBackend(backends.BaseBackend):
                 expected_customer_backend_id,
             )
             self.client.set_account_parent(project_backend_id, expected_customer_backend_id)
+            # sacctmgr modify account set parent= moves the project account but does
+            # NOT carry its child accounts with it — the allocation account ends up
+            # orphaned at root.  Re-attach it explicitly under the project account.
+            self.client.set_account_parent(waldur_resource.backend_id, project_backend_id)
         except BackendError:
             logger.exception(
                 "sync_resource_project: failed to create/reparent project account %s "
@@ -310,6 +314,30 @@ class SlurmBackend(backends.BaseBackend):
                 "sync_resource_project: set parent of %s to %s",
                 project_backend_id,
                 expected_customer_backend_id,
+            )
+
+        try:
+            actual_resource_parent = self.client.get_account_parent(waldur_resource.backend_id)
+        except BackendError:
+            logger.warning(
+                "sync_resource_project: could not verify parent of resource account %s "
+                "after reparent attempt",
+                waldur_resource.backend_id,
+            )
+            actual_resource_parent = None
+        if actual_resource_parent != project_backend_id:
+            logger.warning(
+                "sync_resource_project: parent of resource account %s is %r after reparent "
+                "attempt (expected %s) — reparent may have silently failed",
+                waldur_resource.backend_id,
+                actual_resource_parent,
+                project_backend_id,
+            )
+        else:
+            logger.info(
+                "sync_resource_project: set parent of resource account %s to %s",
+                waldur_resource.backend_id,
+                project_backend_id,
             )
 
     def diagnostics(self) -> bool:
