@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Optional
 
 from waldur_api_client.client import AuthenticatedClient
@@ -352,17 +353,28 @@ class BaseBackend(ABC):
         homedir_base_path = self.backend_settings.get("homedir_base_path")
 
         for username in usernames:
-            try:
-                logger.info("Creating homedir for the user %s with umask %s", username, umask)
-                self.client.create_linux_user_homedir(username, umask)
-                logger.info("Homedir for user %s has been created", username)
-            except BackendError as err:
-                logger.exception(
-                    "Unable to create user homedir for %s, reason: %s",
-                    username,
-                    err,
-                )
-                continue
+            # Skip the (recurrent) homedir creation call when the directory is
+            # already present. Only possible when the base path is configured;
+            # otherwise the path can only be resolved via the password database,
+            # which is not yet populated for a freshly provisioned user.
+            homedir_exists = False
+            if homedir_base_path:
+                homedir_exists = (Path(homedir_base_path) / username).is_dir()
+
+            if homedir_exists:
+                logger.info("Homedir for user %s already exists, skipping creation", username)
+            else:
+                try:
+                    logger.info("Creating homedir for the user %s with umask %s", username, umask)
+                    self.client.create_linux_user_homedir(username, umask)
+                    logger.info("Homedir for user %s has been created", username)
+                except BackendError as err:
+                    logger.exception(
+                        "Unable to create user homedir for %s, reason: %s",
+                        username,
+                        err,
+                    )
+                    continue
 
             if quota_config is not None:
                 try:
