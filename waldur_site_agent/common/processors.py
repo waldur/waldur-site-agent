@@ -2960,7 +2960,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     )
 
         usage_objects = [
-            ComponentUsageItemRequest(type_=component, amount=str(amount))
+            ComponentUsageItemRequest(type_=component, amount=f"{amount:.2f}")
             for component, amount in total_usage.items()
             if component in component_types
         ]
@@ -3058,7 +3058,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     continue
                 body = ComponentUserUsageCreateRequest(
                     username=username,
-                    usage=usage,
+                    usage=f"{usage:.2f}",
                     date=report_date,
                 )
                 user_url = offering_user_urls.get(username)
