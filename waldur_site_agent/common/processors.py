@@ -2107,9 +2107,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         Returns:
             An 8-tuple of:
-            - existing_usernames: users present in both Waldur and backend
-            - stale_usernames: users in Waldur team but not in resource permissions
-            - new_usernames: users in resource permissions but not on backend
+            - existing_usernames: users present in both the Waldur team and the backend
+            - stale_usernames: users on the backend but no longer in the Waldur team
+            - new_usernames: users in the Waldur team but not yet on the backend
             - user_roles: mapping of username to role name
             - user_emails: mapping of username to email address
             - user_cuids: mapping of offering username to CUID (user_username)
@@ -2202,7 +2202,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         new_usernames: set[str] = resource_usernames - local_usernames
         logger.info("Resource new usernames (%s): %s", len(new_usernames), ", ".join(new_usernames))
 
-        stale_usernames: set[str] = (offering_user_usernames & local_usernames) - resource_usernames
+        # Any backend user no longer present in the resource team is stale and must be
+        # removed. Intersecting with offering_user_usernames here would leak users who
+        # left all their projects: their offering user drops out of the (state-filtered,
+        # offering-wide) offering_users list, so they would never be flagged for removal
+        # even though the backend still reports them.
+        stale_usernames: set[str] = local_usernames - resource_usernames
         logger.info(
             "Resource stale usernames (%s): %s", len(stale_usernames), ", ".join(stale_usernames)
         )

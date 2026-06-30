@@ -388,3 +388,55 @@ class TestPartialAssociationLoss:
             f"User associations not restored: {restored_users} != {baseline_users}"
         )
         report.text(f"Associations restored: {restored_users}\n")
+
+
+class TestStaleUserRemoval:
+    """A backend user no longer in the Waldur team must be removed by membership sync.
+
+    Reproduces the leak where a user removed from their last project keeps their
+    backend association. Such a user is absent from the (state-filtered,
+    offering-wide) offering users list, so the sync must derive stale users from
+    the backend user list minus the current team — not by intersecting with the
+    offering users — or the association leaks and is never cleaned up.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _baseline(self, slurm_backend, provisioned_resources):
+        _require_baseline_accounts(slurm_backend, provisioned_resources)
+
+    def test_membership_sync_removes_departed_user(
+        self, offering, waldur_client, slurm_backend, provisioned_resources, report
+    ):
+        report.heading(2, "Test: departed team member is removed by membership sync")
+
+        target = provisioned_resources[0]
+        backend_id = target["backend_id"]
+        baseline_users = sorted(slurm_backend.client.list_resource_users(backend_id))
+
+        # Inject a user the backend reports but the Waldur team does not contain and
+        # which is not an offering user — a member who has left all of their projects.
+        departed_user = f"departed-{uuid.uuid4().hex[:8]}"
+        slurm_backend.client.create_association(departed_user, backend_id)
+        with_departed = sorted(slurm_backend.client.list_resource_users(backend_id))
+        assert departed_user in with_departed, (
+            "Precondition: injected association should be present before the sync"
+        )
+        report.text(f"Injected stale association `{departed_user}` on `{backend_id}`\n")
+
+        # Regular membership sync (no forced recreation): stale users must be removed.
+        processor = OfferingMembershipProcessor(
+            offering,
+            waldur_client,
+            resource_backend=slurm_backend,
+        )
+        processor.process_offering()
+
+        remaining_users = sorted(slurm_backend.client.list_resource_users(backend_id))
+        assert departed_user not in remaining_users, (
+            f"Departed user `{departed_user}` was not removed: {remaining_users}"
+        )
+        # Legitimate team members must be left intact.
+        assert remaining_users == baseline_users, (
+            f"Membership sync changed legitimate users: {remaining_users} != {baseline_users}"
+        )
+        report.text(f"Stale association removed; users now {remaining_users}\n")

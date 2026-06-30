@@ -43,9 +43,24 @@ slurm_backend_mock = mock.Mock()
 OFFERING_UUID = "d629d5e45567425da9cdbdc1af67b32c"
 allocation_slurm = BackendResourceInfo(
     backend_id="test-allocation-01",
-    users=["user-01", "user-03"],
+    users=[],
     usage={
-        "user-01": {
+        "TOTAL_ACCOUNT_USAGE": {
+            "cpu": 10,
+            "mem": 30,
+        },
+    },
+    limits={
+        "cpu": 100,
+        "mem": 300,
+    },
+)
+# Backend that still reports a user who has since left all of their projects.
+allocation_slurm_with_stale_user = BackendResourceInfo(
+    backend_id="test-allocation-01",
+    users=["user-03"],
+    usage={
+        "user-03": {
             "cpu": 10,
             "mem": 30,
         },
@@ -245,9 +260,11 @@ class MembershipSyncTest(unittest.TestCase):
             f"{self.BASE_URL}/api/marketplace-provider-offerings/{offering_user_data['offering_uuid']}/"
         ).respond(200, content=_serialize_datetime_aware(self.waldur_offering.to_dict()))
 
-    def _setup_slurm_mock(self) -> None:
+    def _setup_slurm_mock(self, backend_resource=None) -> None:
+        if backend_resource is None:
+            backend_resource = allocation_slurm
         self.mock_pull_backend_resource = mock.patch.object(
-            backend.SlurmBackend, "_pull_backend_resource", return_value=allocation_slurm
+            backend.SlurmBackend, "_pull_backend_resource", return_value=backend_resource
         ).start()
         self.mock_restore_resource = mock.patch.object(
             backend.SlurmBackend, "restore_resource", return_value=None
@@ -306,14 +323,14 @@ class MembershipSyncTest(unittest.TestCase):
         self,
         slurm_client_class,
     ) -> None:
-        stale_offering_user_data = self.waldur_offering_user.copy()
-        stale_offering_user_data["username"] = "user-03"
-
+        # The backend still reports user-03, but that user left all of their projects, so the
+        # team is empty and no actionable offering user is returned for them. The user must
+        # still be flagged stale and removed; intersecting with the offering users list would
+        # have leaked them.
         self._setup_common_mocks()
         self._setup_team_mock(team_data=[])
-        self._setup_offering_users_mock(offering_users_data=[stale_offering_user_data])
-        self._setup_offering_details_mock(offering_user_data=stale_offering_user_data)
-        self._setup_slurm_mock()
+        self._setup_offering_users_mock(offering_users_data=[])
+        self._setup_slurm_mock(backend_resource=allocation_slurm_with_stale_user)
 
         slurm_client = slurm_client_class.return_value
         slurm_client.get_association.return_value = "exists"
@@ -324,7 +341,7 @@ class MembershipSyncTest(unittest.TestCase):
 
         self.mock_list_active_user_jobs.assert_called_once()
         self.mock_cancel_active_jobs_for_account_user.assert_called_once_with(
-            allocation_slurm.backend_id, "user-03"
+            allocation_slurm_with_stale_user.backend_id, "user-03"
         )
         self.mock_get_resource_metadata.assert_called_once()
 
@@ -637,3 +654,54 @@ class MembershipSyncTest(unittest.TestCase):
         assert "cuid:ville" in new_usernames
         assert user_roles["cuid:ville"] == "PROJECT.MEMBER"
         assert user_cuids["cuid:ville"] == "cuid:ville"
+
+    def test_group_resource_usernames_stale_when_offering_user_absent(self) -> None:
+        """User who left all projects must be flagged stale even if absent from offering_users.
+
+        Regression for a leak where a user removed from their last project kept their backend
+        association: their offering user drops out of the (state-filtered, offering-wide)
+        offering_users list, so intersecting stale candidates with it never flagged them.
+        Stale must be derived from the backend user list minus the current team.
+        """
+        processor = object.__new__(OfferingMembershipProcessor)
+        processor._team_cache = {}
+        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
+        processor.resource_backend = SimpleNamespace(user_resolve_method=None)
+
+        waldur_resource = SimpleNamespace(
+            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+        )
+        # Backend still reports the departed user alongside a current member.
+        backend_resource_info = SimpleNamespace(users=["departed-user-01", "remaining-user-01"])
+
+        # Team only contains the remaining member.
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
+
+        # offering_users no longer lists the departed user (filtered out upstream).
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+
+        (
+            existing_usernames,
+            stale_usernames,
+            new_usernames,
+            _user_roles,
+            _user_emails,
+            _user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[remaining_ou]
+        )
+
+        assert stale_usernames == {"departed-user-01"}
+        assert existing_usernames == {"remaining-user-01"}
+        assert new_usernames == set()
