@@ -171,6 +171,28 @@ These settings can be used in `backend_settings` for any backend type.
   `project_slug` account name generation policy is used. Set to a lower value
   if collisions are rare or a higher value for large deployments.
 
+### Account name generation vs. resource slug templates
+
+The offering's `account_name_generation_policy` plugin option (set in Waldur,
+not in the agent config) controls how the agent derives a resource's backend ID
+(e.g. the SLURM account name):
+
+- **Unset (default)** — the agent uses the resource's slug verbatim:
+  `{allocation_prefix}{resource_slug}`. If the offering also defines a
+  `resource_slug_template` (e.g. `{project_slug}-{counter}`), the slug is already
+  unique and is used as-is, with **no extra suffix**.
+- **`project_slug`** — the agent **ignores the resource slug** and instead
+  derives the backend ID from the *project* slug, appending an incrementing
+  `-{counter}` on each collision to disambiguate multiple resources in the same
+  project.
+
+> **Warning:** `account_name_generation_policy: project_slug` and
+> `resource_slug_template` are two mutually exclusive ways to make backend IDs
+> unique. If you set both, the `project_slug` policy wins and appends its own
+> counter on top of (and ignoring) your template — producing IDs like
+> `prefix-test-prj-01-2-31`. If you use a `resource_slug_template`, leave
+> `account_name_generation_policy` **unset** so the unique slug is used directly.
+
 ## Backend-Specific Settings
 
 ### SLURM Backend Settings
