@@ -35,8 +35,6 @@ TimeEngine = pytest.importorskip("emulator.core.time_engine").TimeEngine
 
 pytestmark = pytest.mark.integration
 
-_CONTROL_FLAGS = frozenset({"--parsable2", "--noheader", "--immediate"})
-
 
 @pytest.fixture
 def client(tmp_path):
@@ -56,8 +54,9 @@ def client(tmp_path):
 
     def _route(argv, silent=False):
         assert Path(argv[0]).name == "sacctmgr"
-        filtered = [a for a in argv[1:] if a not in _CONTROL_FLAGS]
-        output = sacctmgr.handle_command(filtered)
+        # Strip the binary prefix; the emulator follows --parsable2/--noheader
+        # like real SLURM, so flags are passed through.
+        output = sacctmgr.handle_command(list(argv[1:]))
         if sacctmgr.exit_code != 0:
             raise BackendError(output)
         return output

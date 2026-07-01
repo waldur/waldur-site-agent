@@ -7,18 +7,18 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
 
-from waldur_site_agent.backend import clients
 from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import (
     BackendError,
 )
 from waldur_site_agent.backend.structures import Association, ClientResource
+from waldur_site_agent_slurm.interface import SlurmClientInterface
 from waldur_site_agent_slurm.parser import SlurmAssociationLine, SlurmReportLine
 
 _PARTITION_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-class SlurmClient(clients.BaseClient):
+class SlurmClient(SlurmClientInterface):
     """This class implements Python client for SLURM.
 
     See also: https://slurm.schedmd.com/sacctmgr.html
@@ -46,9 +46,11 @@ class SlurmClient(clients.BaseClient):
         self.cluster_name = cluster_name
         self.executed_commands: list[str] = []
 
-    def clear_executed_commands(self) -> None:
-        """Clear the list of tracked executed commands."""
-        self.executed_commands = []
+    def get_version(self) -> str:
+        """Return the SLURM version string as reported by ``sinfo -V``."""
+        return self._execute_command(
+            ["-V"], command_name="sinfo", immediate=False, parsable=False
+        ).strip()
 
     def validate_slurm_binary(self) -> bool:
         """Validate that sacctmgr is a real SLURM binary, not an emulator.
@@ -581,6 +583,9 @@ class SlurmClient(clients.BaseClient):
         default_account: Optional[str] = None,
     ) -> str:
         """Create an association between a user and account with a specific partition."""
+        if not _PARTITION_NAME_RE.match(partition):
+            msg = f"Invalid SLURM partition name: {partition!r}"
+            raise BackendError(msg)
         args = ["add", "user", username, f"account={resource_id}"]
         if default_account is not None:
             args.append(f"DefaultAccount={default_account}")
