@@ -149,7 +149,7 @@ class SlurmClient(SlurmClientInterface):
             parts = line.strip().split("|")
             if (
                 len(parts) > user_col
-                and parts[account_col].strip() == account
+                and parts[account_col].strip().lower() == account.lower()
                 and parts[user_col].strip() == ""
             ):
                 return parts[parent_col].strip() or None
