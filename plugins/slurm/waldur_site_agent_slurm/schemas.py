@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from waldur_site_agent.backend.quota import HomedirQuotaConfig
 from waldur_site_agent.common.plugin_schemas import (
@@ -24,6 +24,18 @@ class SlurmLimitType(Enum):
     GRP_TRES_MINS = "GrpTRESMins"
     MAX_TRES_MINS = "MaxTRESMins"
     GRP_TRES = "GrpTRES"
+
+
+class ExecutionMode(str, Enum):
+    """How the SLURM backend talks to the cluster.
+
+    Inherits from ``str`` so the members compare equal to the raw YAML values
+    ("cli"/"rest") and serialize transparently, while still giving callers a
+    typed, exhaustive set of choices.
+    """
+
+    CLI = "cli"
+    REST = "rest"
 
 
 class SlurmComponentSchema(PluginComponentSchema):
@@ -145,6 +157,53 @@ class ProjectDirectoryConfig(PluginBackendSettingsSchema):
     )
 
 
+class SlurmRestApiConfig(PluginBackendSettingsSchema):
+    """slurmrestd connection settings (used when ``execution_mode`` is ``rest``)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    url: str = Field(
+        ...,
+        description=(
+            "slurmrestd endpoint: 'http(s)://host:port' or 'unix:///path/to/socket'. "
+            "slurmrestd speaks plain HTTP — use https only via a TLS-terminating proxy."
+        ),
+    )
+    api_version: str = Field(
+        default="v0.0.43",
+        description="Pinned slurmrestd data_parser API version (e.g. 'v0.0.43')",
+    )
+    username: str = Field(
+        ...,
+        description="User the agent authenticates as (sent in X-SLURM-USER-NAME)",
+    )
+    token_file: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to a file with the JWT token. Re-read on HTTP 401, so an "
+            "external rotator (e.g. cron running 'scontrol token') keeps the "
+            "agent working without restarts."
+        ),
+    )
+    token_env: Optional[str] = Field(
+        default=None,
+        description="Name of an environment variable holding the JWT token",
+    )
+    verify_ssl: bool = Field(
+        default=True,
+        description="Verify TLS certificates (for https endpoints behind a proxy)",
+    )
+    timeout: int = Field(default=30, description="HTTP request timeout in seconds")
+
+    @model_validator(mode="after")
+    def validate_token_source(self) -> SlurmRestApiConfig:
+        """Require at least one token source."""
+        if not self.token_file and not self.token_env:
+            msg = "rest_api requires either token_file or token_env to be set"
+            raise ValueError(msg)
+        return self
+
+
 class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
     """SLURM-specific backend settings validation.
 
@@ -178,6 +237,29 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
             "When set, accounts are created directly under this parent "
             "instead of the customer/project hierarchy."
         ),
+    )
+
+    # Optional: scope sacctmgr/sacct commands and REST payloads to one cluster
+    cluster_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "SLURM cluster name to scope operations to. "
+            "Optional in CLI mode, required when execution_mode is 'rest'."
+        ),
+    )
+
+    # Execution mode: shell out to SLURM CLI tools (default) or talk to slurmrestd
+    execution_mode: ExecutionMode = Field(
+        default=ExecutionMode.CLI,
+        description=(
+            "How to talk to SLURM: 'cli' (sacctmgr/sacct binaries, default) or "
+            "'rest' (slurmrestd REST API; usage reporting still uses sacct — "
+            "see docs/slurm-rest-api-design.md)"
+        ),
+    )
+    rest_api: Optional[SlurmRestApiConfig] = Field(
+        default=None,
+        description="slurmrestd connection settings, required when execution_mode is 'rest'",
     )
 
     # Optional: default partition for user associations
@@ -225,6 +307,21 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
     periodic_limits: Optional[PeriodicLimitsConfig] = Field(
         default=None, description="Periodic limits configuration"
     )
+
+    @model_validator(mode="after")
+    def validate_rest_mode(self) -> SlurmBackendSettingsSchema:
+        """REST execution mode needs connection settings and an explicit cluster."""
+        if self.execution_mode is ExecutionMode.REST:
+            if self.rest_api is None:
+                msg = "execution_mode is 'rest' but rest_api settings are missing"
+                raise ValueError(msg)
+            if not self.cluster_name:
+                msg = (
+                    "execution_mode is 'rest' but cluster_name is not set — REST "
+                    "association payloads require an explicit cluster"
+                )
+                raise ValueError(msg)
+        return self
 
     @field_validator("default_homedir_umask")
     @classmethod

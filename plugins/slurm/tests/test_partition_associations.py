@@ -80,6 +80,14 @@ class TestCreateAssociationWithPartitions:
         cmd = _last_command(client)
         assert "Partitions=cpu_only,gpu-a100" in cmd
 
+    def test_singular_invalid_partition_name_rejected(self, client):
+        # The singular variant must validate the name before any sacctmgr
+        # call, matching the plural variant.
+        with pytest.raises(BackendError, match="Invalid SLURM partition name"):
+            client.create_association_with_partition(
+                "alice", "acct1", "bad name", default_account="root"
+            )
+
 
 class TestAddUserPartitionResolution:
     """Backend-level resolution: offering > global default > none."""

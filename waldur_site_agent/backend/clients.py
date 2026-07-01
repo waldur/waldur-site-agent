@@ -26,6 +26,14 @@ class BaseClient:
             lines = stdout.splitlines()
             stdout = "\n".join(lines)
             raise BackendError(stdout) from e
+        except FileNotFoundError as e:
+            # The binary itself is missing (e.g. SLURM CLI tools absent on a
+            # host running the agent in REST execution_mode). Surface it as a
+            # BackendError so callers (binary validation, usage reporting) get
+            # a clean diagnostic instead of a raw traceback.
+            if not silent:
+                logger.exception('Command not found: "%s".', command)
+            raise BackendError(f"Command not found: {e}") from e
 
     @abc.abstractmethod
     def list_resources(self) -> list[ClientResource]:

@@ -21,6 +21,8 @@ from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common.component_mapping import ComponentMapper
 from waldur_site_agent_slurm import utils
 from waldur_site_agent_slurm.client import SlurmClient
+from waldur_site_agent_slurm.interface import SlurmClientInterface
+from waldur_site_agent_slurm.schemas import ExecutionMode
 
 # Accepted values for the ``default_account_policy`` backend setting. An
 # unrecognized value (e.g. a typo) must fail loudly at construction rather than
@@ -63,9 +65,25 @@ class SlurmBackend(backends.BaseBackend):
         self.backend_type = BackendType.SLURM.value
         slurm_bin_path = self.backend_settings.get("slurm_bin_path", "/usr/bin")
         self.cluster_name: Optional[str] = self.backend_settings.get("cluster_name")
-        self.client: SlurmClient = SlurmClient(
-            slurm_tres, slurm_bin_path=slurm_bin_path, cluster_name=self.cluster_name
-        )
+        raw_execution_mode = self.backend_settings.get("execution_mode", ExecutionMode.CLI.value)
+        try:
+            self.execution_mode = ExecutionMode(raw_execution_mode)
+        except ValueError as e:
+            # Fail loudly: silently degrading a typo ("rset") to CLI mode
+            # would mask a misconfigured deployment.
+            msg = (
+                f"Unknown SLURM execution_mode {raw_execution_mode!r} — "
+                "expected 'cli' or 'rest'"
+            )
+            raise BackendError(msg) from e
+        if self.execution_mode is ExecutionMode.REST:
+            self.client: SlurmClientInterface = self._create_rest_client(
+                slurm_tres, slurm_bin_path
+            )
+        else:
+            self.client = SlurmClient(
+                slurm_tres, slurm_bin_path=slurm_bin_path, cluster_name=self.cluster_name
+            )
 
         # Optional LDAP integration for project groups
         self._ldap_client = None
@@ -115,6 +133,43 @@ class SlurmBackend(backends.BaseBackend):
 
         # Optional component mapping (Waldur components → SLURM TRES)
         self._component_mapper = ComponentMapper(slurm_tres)
+
+    def _create_rest_client(
+        self, slurm_tres: dict, slurm_bin_path: str
+    ) -> "SlurmClientInterface":
+        """Build a SlurmRestClient from the rest_api backend settings.
+
+        The REST client lives behind an optional dependency (httpx), mirroring
+        the optional LDAP integration.
+        """
+        rest_settings = self.backend_settings.get("rest_api")
+        if not rest_settings:
+            msg = "execution_mode is 'rest' but rest_api settings are missing"
+            raise BackendError(msg)
+        if not self.cluster_name:
+            msg = (
+                "execution_mode is 'rest' but cluster_name is not set — REST "
+                "association payloads require an explicit cluster"
+            )
+            raise BackendError(msg)
+        try:
+            from waldur_site_agent_slurm.rest_client import SlurmRestClient  # noqa: PLC0415
+        except ImportError as e:
+            # httpx is an unconditional base dependency, so a missing httpx is
+            # unlikely — surface the actual import error instead of always
+            # blaming the optional extra, which would misdirect debugging.
+            msg = (
+                f"execution_mode is 'rest' but the REST client failed to import: {e}. "
+                "If httpx is genuinely missing, install it with: "
+                "pip install 'waldur-site-agent-slurm[rest]'"
+            )
+            raise BackendError(msg) from e
+        return SlurmRestClient(
+            slurm_tres,
+            rest_settings=rest_settings,
+            cluster_name=self.cluster_name,
+            slurm_bin_path=slurm_bin_path,
+        )
 
     def _pre_create_resource(
         self,
@@ -362,19 +417,18 @@ class SlurmBackend(backends.BaseBackend):
 
         logger.info("SLURM tres components:\n%s\n", pprint.pformat(self.backend_components))
 
+        logger.info("SLURM execution mode: %s", self.execution_mode.value)
         try:
-            slurm_version_info = self.client._execute_command(
-                ["-V"], "sinfo", immediate=False, parsable=False
-            )
-            logger.info("Slurm version: %s", slurm_version_info.strip())
+            slurm_version_info = self.client.get_version()
+            logger.info("Slurm version: %s", slurm_version_info)
         except BackendError as err:
             logger.error("Unable to fetch SLURM info, reason: %s", err)
             return False
 
         if not self.client.validate_slurm_binary():
             logger.error(
-                "SLURM binary validation failed: sacctmgr does not appear to be a real "
-                "SLURM binary. This may indicate an emulator is shadowing the real binary. "
+                "SLURM backend validation failed: sacctmgr does not appear to be a real "
+                "SLURM binary (or slurmrestd does not respond to ping in REST mode). "
                 "Check slurm_bin_path setting (current: '%s').",
                 self.client.slurm_bin_path,
             )

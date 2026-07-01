@@ -73,6 +73,42 @@ offerings:
         unit_factor: 60
 ```
 
+### REST API Execution Mode (optional)
+
+The plugin can talk to [slurmrestd](https://slurm.schedmd.com/slurmrestd.html)
+instead of shelling out to `sacctmgr`/`scancel` for account, association,
+QoS and limit management. Usage reporting still uses `sacct` (the REST API
+has no `sreport` equivalent) — see
+[docs/slurm-rest-api-design.md](../../docs/slurm-rest-api-design.md) for the
+full design, scope and limitations.
+
+```yaml
+offerings:
+  - name: "My SLURM Cluster"
+    backend_type: "slurm"
+    backend_settings:
+      # ... basic settings as above ...
+      cluster_name: "mycluster"      # required in REST mode
+      execution_mode: "rest"         # "cli" (default) | "rest"
+      rest_api:
+        # http(s)://host:port or unix:///path/to/socket
+        url: "unix:///run/slurmrestd/slurmrestd.sock"
+        api_version: "v0.0.43"
+        username: "waldur-agent"
+        token_file: "/etc/waldur/slurmrestd.token"
+        # token_env: SLURM_JWT       # alternative to token_file
+```
+
+Requires the optional `httpx` dependency:
+
+```bash
+pip install 'waldur-site-agent-slurm[rest]'
+```
+
+The JWT token is re-read from `token_file` on HTTP 401, so an external
+rotator (e.g. a cron job running `scontrol token`) keeps the agent working
+without restarts. Recommended SLURM version for REST mode: 25.11 or newer.
+
 ### Account settings: users vs. accounts
 
 Two settings control how the agent places objects in the SLURM account tree.

@@ -12,11 +12,13 @@ dependencies = [
 
 [project.optional-dependencies]
 ldap = ["waldur-site-agent-ldap>=0.9.8"]
+rest = ["httpx>=0.27"]
 
 [dependency-groups]
 dev = [
     "slurm-emulator>=0.7.2",
     "pytest>=7.1.0",
+    "httpx>=0.27",
 ]
 
 [build-system]

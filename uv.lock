@@ -2458,9 +2458,13 @@ dependencies = [
 ldap = [
     { name = "waldur-site-agent-ldap" },
 ]
+rest = [
+    { name = "httpx" },
+]
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "pytest" },
     { name = "slurm-emulator" },
 ]
@@ -2468,13 +2472,15 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.25.0" },
+    { name = "httpx", marker = "extra == 'rest'", specifier = ">=0.27" },
     { name = "waldur-site-agent", editable = "." },
     { name = "waldur-site-agent-ldap", marker = "extra == 'ldap'", editable = "plugins/ldap" },
 ]
-provides-extras = ["ldap"]
+provides-extras = ["ldap", "rest"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=7.1.0" },
     { name = "slurm-emulator", specifier = ">=0.7.2" },
 ]

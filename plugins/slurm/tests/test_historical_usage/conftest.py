@@ -202,6 +202,20 @@ def mock_slurm_tres():
     }
 
 
+def _with_standard_flags(args, command_name, immediate, parsable):
+    """Re-add the flags the real ``_execute_command`` prepends to a command.
+
+    The emulator, like real SLURM, only emits pipe-delimited output when
+    ``--parsable2`` is passed, so the mock must reconstruct the full command.
+    """
+    full_args = list(args)
+    if immediate and command_name == "sacctmgr":
+        full_args = ["--immediate", *full_args]
+    if parsable:
+        full_args = ["--parsable2", "--noheader", *full_args]
+    return full_args
+
+
 @pytest.fixture
 def patched_slurm_client(sacct_emulator, sacctmgr_emulator):
     """Patch SlurmClient to use emulator instead of real SLURM commands."""
@@ -210,11 +224,7 @@ def patched_slurm_client(sacct_emulator, sacctmgr_emulator):
         args, command_name="sacctmgr", immediate=True, parsable=True, silent=False
     ):
         """Mock execute command that routes to emulator."""
-        # Mirror SlurmClient._execute_command, which prepends these flags
-        # to the real binary invocation; emulator >= 0.6.0 emits table
-        # output (like real sacct) unless --parsable2 is passed.
-        if parsable:
-            args = ["--parsable2", "--noheader", *args]
+        args = _with_standard_flags(args, command_name, immediate, parsable)
         if command_name == "sacct":
             return sacct_emulator.handle_command(args)
         if command_name == "sacctmgr":
@@ -301,9 +311,7 @@ def patched_slurm_client_with_cluster(clustered_usage_data, time_engine):
     def mock_execute_command(
         args, command_name="sacctmgr", immediate=True, parsable=True, silent=False
     ):
-        # Mirror SlurmClient._execute_command (see patched_slurm_client above).
-        if parsable:
-            args = ["--parsable2", "--noheader", *args]
+        args = _with_standard_flags(args, command_name, immediate, parsable)
         if command_name == "sacct":
             return sacct.handle_command(args)
         if command_name == "sacctmgr":
