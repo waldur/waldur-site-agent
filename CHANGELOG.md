@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.6-rc.1 - 2026-07-01
+
+- **SLURM**: Add optional slurmrestd REST API execution mode as an alternative to CLI commands (design + implementation).
+- **SLURM**: Fix allocation account being orphaned at the root after a project is reparented.
+- **Core**: Flag backend users for removal when they leave all their projects (gh-13).
+- **Core**: Add early exit in `create_user_homedirs` when a user's home directory already exists (gh-15).
+- **Core**: Ensure usage data is reported with two decimal places and keep set-usage idempotency in sync.
+- **Federation**: Refactor resource `end_date` sync to match project `end_date` sync behavior (WAL-10000).
+- **Docs**: Document the conflict between account name policy and resource slug templates (WAL-9925).
+
+> 7 commits, 28 files changed (+3216/-95)
+
+---
+
 ## 1.0.5 - 2026-06-29
 
 ### Highlights
