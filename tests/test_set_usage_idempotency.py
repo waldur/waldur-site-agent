@@ -8,6 +8,7 @@ is NOT called when the reported usage matches every existing record.
 from __future__ import annotations
 
 import datetime
+import json
 import unittest
 import uuid
 from types import SimpleNamespace
@@ -240,4 +241,79 @@ class TestSubmitTotalUsageIdempotencyIntegration(unittest.TestCase):
 
         assert set_usage_route.call_count == 1, (
             f"set_usage was called {set_usage_route.call_count} times; expected 1"
+        )
+
+    def test_skips_set_usage_when_only_sub_cent_precision_differs(self) -> None:
+        # The backend reports full-precision usage (100.004) but Waldur stores
+        # amounts rounded to 2 decimals (100.0000). Because submission rounds to
+        # 2 decimals, the reported value must also be rounded before the
+        # idempotency comparison — otherwise 100.004 vs 100.00 would look
+        # different and we'd resubmit (and fan out the marketplace signals) on
+        # every cycle even though nothing effectively changed.
+        self._stub_common()
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-usages/"
+        ).respond(200, json=[{
+            "uuid": uuid.uuid4().hex,
+            "type": "cpu",
+            "usage": "100.0000",
+        }])
+        set_usage_route = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).respond(201, json={})
+
+        proc = self._build_processor()
+        waldur_resource = mock.MagicMock()
+        waldur_resource.uuid.hex = self.resource_uuid
+        waldur_resource.backend_id = "alloc-01"
+        offering_components = [SimpleNamespace(type_="cpu")]
+
+        proc._submit_total_usage_for_resource(
+            waldur_resource=waldur_resource,
+            total_usage={"cpu": 100.004},  # rounds to 100.00 → matches existing
+            waldur_components=offering_components,
+            report_date=datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.timezone.utc),
+        )
+
+        assert set_usage_route.call_count == 0, (
+            f"set_usage was called {set_usage_route.call_count} times; expected 0 "
+            "because the reported value rounds to the stored amount"
+        )
+
+    def test_submitted_amount_is_rounded_to_two_decimals(self) -> None:
+        # Waldur rejects amounts with more than 2 decimal places, so the wire
+        # payload must be rounded regardless of the backend's precision.
+        self._stub_common()
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-usages/"
+        ).respond(200, json=[{
+            "uuid": uuid.uuid4().hex,
+            "type": "cpu",
+            "usage": "100.0000",
+        }])
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-user-usages/"
+        ).respond(200, json=[])
+        set_usage_route = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).respond(201, json={})
+
+        proc = self._build_processor()
+        waldur_resource = mock.MagicMock()
+        waldur_resource.uuid.hex = self.resource_uuid
+        waldur_resource.backend_id = "alloc-01"
+        offering_components = [SimpleNamespace(type_="cpu")]
+
+        proc._submit_total_usage_for_resource(
+            waldur_resource=waldur_resource,
+            total_usage={"cpu": 100.126},  # would be rejected as-is
+            waldur_components=offering_components,
+            report_date=datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.timezone.utc),
+        )
+
+        assert set_usage_route.call_count == 1
+        body = json.loads(set_usage_route.calls.last.request.content)
+        amounts = {u["type"]: u["amount"] for u in body["usages"]}
+        assert amounts["cpu"] == "100.13", (
+            f"expected amount rounded to 2 decimals, got {amounts['cpu']!r}"
         )

@@ -2883,6 +2883,16 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             billing_period_start: Date of the billing period start. Defaults to
                 first day of report_date's month.
         """
+        # Waldur rejects usage amounts with more than 2 decimal places, so
+        # round once here. Beyond satisfying the API, this keeps the
+        # idempotency check and anomaly detection below in sync with what
+        # Waldur actually stores: comparing a full-precision value against
+        # the persisted 2-decimal record would never match and would force a
+        # resubmission (and a downstream signal fan-out) on every cycle.
+        total_usage = {
+            component: round(amount, 2) for component, amount in total_usage.items()
+        }
+
         logger.info("Setting usages for %s: %s", waldur_resource.backend_id, total_usage)
         resource_uuid = waldur_resource.uuid.hex
 
@@ -2965,7 +2975,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     )
 
         usage_objects = [
-            ComponentUsageItemRequest(type_=component, amount=str(amount))
+            ComponentUsageItemRequest(type_=component, amount=f"{amount:.2f}")
             for component, amount in total_usage.items()
             if component in component_types
         ]
@@ -3063,7 +3073,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     continue
                 body = ComponentUserUsageCreateRequest(
                     username=username,
-                    usage=usage,
+                    usage=f"{usage:.2f}",
                     date=report_date,
                 )
                 user_url = offering_user_urls.get(username)
