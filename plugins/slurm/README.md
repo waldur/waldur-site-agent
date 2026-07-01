@@ -857,6 +857,38 @@ print(result)
 "
 ```
 
+### Verifying a raw-usage reset on the cluster
+
+When a periodic policy resets raw usage, Mastermind emits an
+`apply_periodic_settings` message with `reset_raw_usage: true`, and this plugin
+runs `sacctmgr modify account <account> set RawUsage=0`. The account name is the
+Waldur resource's `backend_id`. To confirm what actually happened on SLURM —
+independent of what the Waldur UI shows — use these commands (replace
+`waldur_project123` with the account):
+
+```bash
+# Ground-truth run time and actor of the reset (SLURM's own audit log)
+sacctmgr show transactions Start=2024-01-01 \
+  format=TimeStamp,Actor,Action,Info,Where
+
+# Current raw (fair-share) usage — refreshed every PriorityCalcPeriod (~5 min),
+# so it will not read exactly 0 shortly after a reset
+sshare -A waldur_project123 -o Account,User,RawUsage,GrpTRESRaw
+
+# Confirm SLURM is not also auto-resetting usage on its own schedule.
+# PriorityUsageResetPeriod = NONE means resets come only from this plugin.
+scontrol show config | grep -iE 'Priority(DecayHalfLife|UsageResetPeriod|CalcPeriod)'
+
+# The limit the reset is measured against
+sacctmgr show assoc account=waldur_project123 \
+  format=Account,User,GrpTRESMins,GrpTRES,Fairshare
+```
+
+> **Note:** the `executed_at` timestamp in the Waldur execution log is
+> Mastermind's **emit** time, not the cluster run time. `sacctmgr show
+> transactions` above is the authoritative source for when the reset actually
+> applied. Reconcile all timestamps in UTC before drawing conclusions.
+
 ## Support
 
 For issues, bug reports, or feature requests related to the SLURM plugin, please check:
