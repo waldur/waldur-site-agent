@@ -1736,6 +1736,31 @@ wheels = [
 ]
 
 [[package]]
+name = "python-multipart"
+version = "0.0.20"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version > '3.9' and python_full_version < '3.10'",
+    "python_full_version <= '3.9'",
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f3/87/f44d7c9f274c7ee665a29b885ec97089ec5dc034c7f3fafa03da9e39a09e/python_multipart-0.0.20.tar.gz", hash = "sha256:8dd0cab45b8e23064ae09147625994d090fa46f5b0d1e13af944c331a7fa9d13", size = 37158, upload-time = "2024-12-16T19:45:46.972Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/58/38b5afbc1a800eeea951b9285d3912613f2603bdf897a4ab0f4bd7f405fc/python_multipart-0.0.20-py3-none-any.whl", hash = "sha256:8a62d3a8335e06589fe01f2a3e178cdcc632f3fbe0d492ad9ee0ec35aab1f104", size = 24546, upload-time = "2024-12-16T19:45:44.423Z" },
+]
+
+[[package]]
+name = "python-multipart"
+version = "0.0.32"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.10'",
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz", hash = "sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e", size = 46881, upload-time = "2026-06-04T16:18:58.647Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl", hash = "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23", size = 30042, upload-time = "2026-06-04T16:18:57.319Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1925,21 +1950,24 @@ wheels = [
 
 [[package]]
 name = "slurm-emulator"
-version = "0.7.2"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "click", version = "8.3.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "fastapi" },
+    { name = "jinja2" },
     { name = "pydantic" },
     { name = "python-dateutil" },
+    { name = "python-multipart", version = "0.0.20", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "python-multipart", version = "0.0.32", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pyyaml" },
     { name = "uvicorn", version = "0.39.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "uvicorn", version = "0.40.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cb/80/8766b3e91aaaca9f5847de64f79ccbe27781ee37a6726ab3c7892019f58b/slurm_emulator-0.7.2.tar.gz", hash = "sha256:fdf4f5e5c031ce8d9621dee4c486c6173288d7aa941986e055238b872c120a5f", size = 109092, upload-time = "2026-06-25T07:34:49.271Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/ac/21face333d9d4d6462f97a858b60f83e6585d4892cec8a58b035af9ea64d/slurm_emulator-0.8.0.tar.gz", hash = "sha256:4c6a25f4746137f9f8d47c1f99ae552746ce0706ca94a3841dee3d302641e3e3", size = 159305, upload-time = "2026-07-01T22:51:51.924Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0d/af/a4a318e8032c4a7f7a8278d0fffea9f4e7f4153dedfda2a797a819f2779f/slurm_emulator-0.7.2-py3-none-any.whl", hash = "sha256:974c4e7cfb3fb6437d7b5131c243a6b9f56838eb66184e3df019d5ac207cf849", size = 125241, upload-time = "2026-06-25T07:34:47.858Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/84/0dd16e88f25f32bc17c58be0146ab10539a5bd61178b1ead7395c249d6d5/slurm_emulator-0.8.0-py3-none-any.whl", hash = "sha256:bcb7f635a7ad1ed2cedc5a705ca479beaff01c861213ce02f7bdcc84a7657e6e", size = 183361, upload-time = "2026-07-01T22:51:50.413Z" },
 ]
 
 [[package]]
@@ -2482,7 +2510,7 @@ provides-extras = ["ldap", "rest"]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=7.1.0" },
-    { name = "slurm-emulator", specifier = ">=0.7.2" },
+    { name = "slurm-emulator", specifier = ">=0.8.0" },
 ]
 
 [[package]]

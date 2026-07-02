@@ -140,6 +140,12 @@ class SlurmClient(SlurmClientInterface):
         leaves it blank — so the parent must be read from the association.  Each
         account has one account-level association (empty User) plus one per member
         user; only the account-level row carries the parent we want.
+
+        Account names are case-insensitive in Slurm and stored lower-cased, so
+        ``show assoc account=Proj_A`` reports the account as ``proj_a``.  Compare
+        case-insensitively, otherwise a project whose name has capital letters is
+        never matched here — the caller then treats it as unparented and issues a
+        redundant reparent that Slurm rejects.
         """
         output = self._execute_command(
             ["show", "assoc", f"account={account}", "format=Account,ParentName,User", "-n", "-P"]
@@ -149,7 +155,7 @@ class SlurmClient(SlurmClientInterface):
             parts = line.strip().split("|")
             if (
                 len(parts) > user_col
-                and parts[account_col].strip() == account
+                and parts[account_col].strip().lower() == account.lower()
                 and parts[user_col].strip() == ""
             ):
                 return parts[parent_col].strip() or None
