@@ -8,6 +8,7 @@ import pytest
 from httpx import URL
 
 from waldur_api_client.errors import UnexpectedStatus
+from waldur_api_client.models.oecd_fos_2007_code_enum import OecdFos2007CodeEnum
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.models.resource_state import ResourceState
@@ -1907,7 +1908,9 @@ class TestSyncResourceProject:
 
         backend.sync_resource_project(resource)
 
-        mock_client.update_project.assert_called_once_with("proj-b-uuid", "New description")
+        mock_client.update_project.assert_called_once_with(
+            "proj-b-uuid", description="New description"
+        )
 
     def test_skips_update_when_description_matches(self, backend, mock_client):
         mock_client.find_project_by_backend_id.return_value = {
@@ -1962,6 +1965,192 @@ class TestSyncResourceProject:
         backend.sync_resource_project(resource)
 
         mock_client.update_project.assert_not_called()
+
+    def _resource(self):
+        resource = MagicMock()
+        resource.project_uuid = "11111111-1111-1111-1111-111111111111"
+        resource.customer_uuid = "cust-uuid-a"
+        resource.project_description = "Same description"
+        return resource
+
+    def test_syncs_oecd_and_is_industry_from_source(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Same description",
+            "oecd_fos_2007_code": "1.1",
+            "is_industry": False,
+        }
+
+        a_project = MagicMock()
+        a_project.oecd_fos_2007_code = OecdFos2007CodeEnum("1.2")
+        a_project.is_industry = True
+        a_project.science_sub_domain_code = None
+
+        backend.sync_resource_project(self._resource(), a_project)
+
+        mock_client.update_project.assert_called_once_with(
+            "proj-b-uuid",
+            oecd_fos_2007_code=OecdFos2007CodeEnum("1.2"),
+            is_industry=True,
+        )
+
+    def test_skips_metadata_when_unchanged(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Same description",
+            "oecd_fos_2007_code": "1.1",
+            "is_industry": True,
+        }
+
+        a_project = MagicMock()
+        a_project.oecd_fos_2007_code = OecdFos2007CodeEnum("1.1")
+        a_project.is_industry = True
+        a_project.science_sub_domain_code = None
+
+        backend.sync_resource_project(self._resource(), a_project)
+
+        mock_client.update_project.assert_not_called()
+
+    def test_none_source_project_syncs_only_description(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Old description",
+            "oecd_fos_2007_code": "1.1",
+            "is_industry": False,
+        }
+
+        resource = self._resource()
+        resource.project_description = "New description"
+
+        # source_project is None (core could not fetch it); description still syncs.
+        backend.sync_resource_project(resource, None)
+
+        mock_client.update_project.assert_called_once_with(
+            "proj-b-uuid", description="New description"
+        )
+
+    def test_clears_oecd_on_b_when_source_is_blank(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Same description",
+            "oecd_fos_2007_code": "1.1",
+            "is_industry": False,
+        }
+
+        a_project = MagicMock()
+        a_project.oecd_fos_2007_code = None
+        a_project.is_industry = False
+        a_project.science_sub_domain_code = None
+
+        backend.sync_resource_project(self._resource(), a_project)
+
+        mock_client.update_project.assert_called_once_with(
+            "proj-b-uuid", oecd_fos_2007_code=None
+        )
+
+    def test_syncs_science_sub_domain_resolved_to_b_uuid(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Same description",
+            "oecd_fos_2007_code": "1.1",
+            "is_industry": True,
+            "science_sub_domain_code": "1.1",
+        }
+        b_sub_domain_uuid = UUID("22222222-2222-2222-2222-222222222222")
+        mock_client.find_science_sub_domain_by_code.return_value = b_sub_domain_uuid
+
+        a_project = MagicMock()
+        a_project.oecd_fos_2007_code = OecdFos2007CodeEnum("1.1")
+        a_project.is_industry = True
+        a_project.science_sub_domain_code = "1.2"
+
+        backend.sync_resource_project(self._resource(), a_project)
+
+        mock_client.find_science_sub_domain_by_code.assert_called_once_with("1.2")
+        mock_client.update_project.assert_called_once_with(
+            "proj-b-uuid", science_sub_domain=b_sub_domain_uuid
+        )
+
+    def test_skips_science_sub_domain_when_code_missing_on_b(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Same description",
+            "oecd_fos_2007_code": "1.1",
+            "is_industry": True,
+            "science_sub_domain_code": "1.1",
+        }
+        # No sub-domain with this code exists on Waldur B.
+        mock_client.find_science_sub_domain_by_code.return_value = None
+
+        a_project = MagicMock()
+        a_project.oecd_fos_2007_code = OecdFos2007CodeEnum("1.1")
+        a_project.is_industry = True
+        a_project.science_sub_domain_code = "1.2"
+
+        backend.sync_resource_project(self._resource(), a_project)
+
+        mock_client.find_science_sub_domain_by_code.assert_called_once_with("1.2")
+        # Unresolvable code is skipped, not pushed, so nothing else changed either.
+        mock_client.update_project.assert_not_called()
+
+    def test_clears_science_sub_domain_when_source_is_blank(self, backend, mock_client):
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Same description",
+            "oecd_fos_2007_code": "1.1",
+            "is_industry": True,
+            "science_sub_domain_code": "1.1",
+        }
+
+        a_project = MagicMock()
+        a_project.oecd_fos_2007_code = OecdFos2007CodeEnum("1.1")
+        a_project.is_industry = True
+        a_project.science_sub_domain_code = None
+
+        backend.sync_resource_project(self._resource(), a_project)
+
+        # Clearing needs no lookup; B's sub-domain is unset directly.
+        mock_client.find_science_sub_domain_by_code.assert_not_called()
+        mock_client.update_project.assert_called_once_with(
+            "proj-b-uuid", science_sub_domain=None
+        )
+
+    def test_write_failure_does_not_propagate(self, backend, mock_client):
+        # A failed metadata PATCH on B must not bubble up, otherwise the
+        # membership-sync cycle for this resource would be aborted.
+        mock_client.find_project_by_backend_id.return_value = {
+            "uuid": "proj-b-uuid",
+            "url": "/api/projects/proj-b-uuid/",
+            "name": "Test Project",
+            "description": "Old description",
+            "oecd_fos_2007_code": "1.1",
+            "is_industry": False,
+        }
+        mock_client.update_project.side_effect = UnexpectedStatus(
+            500, b"error", URL("https://waldur-b.example.com/api/projects/")
+        )
+
+        resource = self._resource()
+        resource.project_description = "New description"
+
+        # Must not raise.
+        backend.sync_resource_project(resource)
+
+        mock_client.update_project.assert_called_once()
 
 
 class TestProjectEndDateSync:
@@ -2037,11 +2226,7 @@ class TestProjectEndDateSync:
         a_project = MagicMock()
         a_project.end_date_updated_at = datetime.datetime(2025, 1, 10, 12, 0, 0)
 
-        with patch(
-            "waldur_api_client.api.projects.projects_retrieve.sync",
-            return_value=a_project,
-        ):
-            backend.sync_project_end_date(self._make_resource(a_date), MagicMock())
+        backend.sync_project_end_date(self._make_resource(a_date), MagicMock(), a_project)
 
         mock_client.set_project_end_date.assert_called_once_with(self.B_PROJECT_UUID, a_date)
 
@@ -2054,17 +2239,11 @@ class TestProjectEndDateSync:
         a_project = MagicMock()
         a_project.end_date_updated_at = datetime.datetime(2025, 1, 5, 12, 0, 0)
 
-        with (
-            patch(
-                "waldur_api_client.api.projects.projects_retrieve.sync",
-                return_value=a_project,
-            ),
-            patch(
-                "waldur_api_client.api.projects.projects_partial_update.sync_detailed"
-            ) as mock_patch,
-        ):
+        with patch(
+            "waldur_api_client.api.projects.projects_partial_update.sync_detailed"
+        ) as mock_patch:
             backend.sync_project_end_date(
-                self._make_resource(datetime.date(2025, 5, 1)), MagicMock()
+                self._make_resource(datetime.date(2025, 5, 1)), MagicMock(), a_project
             )
             mock_patch.assert_called_once()
             assert mock_patch.call_args.kwargs["body"].end_date == b_date
@@ -2078,13 +2257,9 @@ class TestProjectEndDateSync:
         a_project = MagicMock()
         a_project.end_date_updated_at = None
 
-        with patch(
-            "waldur_api_client.api.projects.projects_retrieve.sync",
-            return_value=a_project,
-        ):
-            backend.sync_project_end_date(
-                self._make_resource(datetime.date(2025, 6, 1)), MagicMock()
-            )
+        backend.sync_project_end_date(
+            self._make_resource(datetime.date(2025, 6, 1)), MagicMock(), a_project
+        )
 
         mock_client.set_project_end_date.assert_not_called()
 

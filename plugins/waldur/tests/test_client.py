@@ -102,46 +102,90 @@ class TestMarketplaceOrders:
 
 
 class TestProjectOperations:
+    def _make_b_project(self):
+        project = MagicMock()
+        project.uuid = PROJECT_UUID
+        project.url = "/api/projects/proj-uuid/"
+        project.name = "Test Project"
+        project.description = "desc"
+        project.oecd_fos_2007_code = None
+        project.is_industry = False
+        project.science_sub_domain_code = None
+        return project
+
     def test_find_project_by_backend_id_found(self, client):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = [
-            {
-                "uuid": str(PROJECT_UUID),
-                "url": "/api/projects/proj-uuid/",
-                "name": "Test Project",
-            }
-        ]
-
-        mock_httpx_client = MagicMock()
-        mock_httpx_client.get.return_value = mock_response
-
         with patch(
-            "waldur_api_client.client.AuthenticatedClient.get_httpx_client",
-            return_value=mock_httpx_client,
-        ):
+            "waldur_api_client.api.projects.projects_list.sync",
+            return_value=[self._make_b_project()],
+        ) as mock_list:
             result = client.find_project_by_backend_id("customer_project")
-            assert result is not None
-            assert result["name"] == "Test Project"
-            mock_httpx_client.get.assert_called_once_with(
-                "/api/projects/",
-                params={"backend_id": "customer_project"},
-            )
+
+        assert result is not None
+        assert result["name"] == "Test Project"
+        assert mock_list.call_args.kwargs["backend_id"] == "customer_project"
 
     def test_find_project_by_backend_id_not_found(self, client):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = []
-
-        mock_httpx_client = MagicMock()
-        mock_httpx_client.get.return_value = mock_response
-
         with patch(
-            "waldur_api_client.client.AuthenticatedClient.get_httpx_client",
-            return_value=mock_httpx_client,
+            "waldur_api_client.api.projects.projects_list.sync",
+            return_value=[],
         ):
             result = client.find_project_by_backend_id("nonexistent")
             assert result is None
+
+    def test_find_project_by_backend_id_caches_within_cycle(self, client):
+        with patch(
+            "waldur_api_client.api.projects.projects_list.sync",
+            return_value=[self._make_b_project()],
+        ) as mock_list:
+            first = client.find_project_by_backend_id("customer_project")
+            second = client.find_project_by_backend_id("customer_project")
+
+        assert first == second
+        mock_list.assert_called_once()
+
+    def test_find_project_cache_invalidated_after_update(self, client):
+        with (
+            patch(
+                "waldur_api_client.api.projects.projects_list.sync",
+                return_value=[self._make_b_project()],
+            ) as mock_list,
+            patch(
+                "waldur_api_client.api.projects.projects_partial_update.sync",
+                return_value=MagicMock(),
+            ),
+        ):
+            client.find_project_by_backend_id("customer_project")
+            client.update_project(str(PROJECT_UUID), description="new")
+            client.find_project_by_backend_id("customer_project")
+
+        assert mock_list.call_count == 2
+
+    def test_find_science_sub_domain_by_code_found(self, client):
+        target_uuid = UUID("33333333-3333-3333-3333-333333333333")
+        other_sub_domain = MagicMock()
+        other_sub_domain.code = "1.1"
+        other_sub_domain.uuid = UUID("11111111-1111-1111-1111-111111111111")
+        matching_sub_domain = MagicMock()
+        matching_sub_domain.code = "1.2"
+        matching_sub_domain.uuid = target_uuid
+
+        with patch("waldur_site_agent_waldur.client.science_sub_domains_list") as mock_list:
+            mock_list.sync_all.return_value = [other_sub_domain, matching_sub_domain]
+            result = client.find_science_sub_domain_by_code("1.2")
+
+        assert result == target_uuid
+        mock_list.sync_all.assert_called_once_with(client=client._api_client)
+
+    def test_find_science_sub_domain_by_code_not_found(self, client):
+        other_sub_domain = MagicMock()
+        other_sub_domain.code = "1.1"
+        other_sub_domain.uuid = UUID("11111111-1111-1111-1111-111111111111")
+
+        with patch("waldur_site_agent_waldur.client.science_sub_domains_list") as mock_list:
+            mock_list.sync_all.return_value = [other_sub_domain]
+            result = client.find_science_sub_domain_by_code("9.9")
+
+        assert result is None
 
     def test_find_or_create_project_existing(self, client):
         existing_project = {
@@ -257,6 +301,19 @@ class TestProjectEndDate:
             return_value=[],
         ):
             assert client.get_project_by_backend_id("nonexistent") is None
+
+    def test_get_project_by_backend_id_caches_within_cycle(self, client):
+        mock_project = MagicMock()
+        with patch(
+            "waldur_api_client.api.projects.projects_list.sync",
+            return_value=[mock_project],
+        ) as mock_list:
+            first = client.get_project_by_backend_id("customer_project")
+            second = client.get_project_by_backend_id("customer_project")
+
+        assert first is mock_project
+        assert second is mock_project
+        mock_list.assert_called_once()
 
     def test_set_project_end_date(self, client):
         import datetime

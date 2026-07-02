@@ -15,14 +15,15 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_effective_id,
     marketplace_provider_resources_set_end_date,
 )
-from waldur_api_client.api.projects import projects_partial_update, projects_retrieve
+from waldur_api_client.api.projects import projects_partial_update
 from waldur_api_client.models.patched_project_request import PatchedProjectRequest
-from waldur_api_client.models.project_field_enum import ProjectFieldEnum
+from waldur_api_client.models.project import Project
 from waldur_api_client.models.resource_effective_id_request import ResourceEffectiveIDRequest
 from waldur_api_client.models.resource_field_enum import ResourceFieldEnum
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
+from waldur_api_client.models.oecd_fos_2007_code_enum import OecdFos2007CodeEnum
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_end_date_request import ResourceEndDateRequest
@@ -52,6 +53,7 @@ class WaldurBackend(backends.BaseBackend):
 
     supports_async_orders = True
     supports_cycle_preflight = True
+    requires_source_project = True
     handled_resource_states = [ResourceState.OK, ResourceState.ERRED, ResourceState.CREATING]
 
     def __init__(
@@ -138,8 +140,27 @@ class WaldurBackend(backends.BaseBackend):
             return ""
         return waldur_resource.project_description
 
-    def sync_resource_project(self, waldur_resource: WaldurResource) -> None:
-        """Sync project description from Waldur A to the corresponding project on Waldur B."""
+    def sync_resource_project(
+        self,
+        waldur_resource: WaldurResource,
+        source_project: Optional[Project] = None,
+    ) -> None:
+        """Sync project metadata from Waldur A to the corresponding project on Waldur B.
+
+        Pushes the project description, the OECD FOS 2007 code, the industry flag
+        and the science sub-domain. Only fields that differ on Waldur B are sent.
+
+        ``source_project`` is the Waldur A project pre-fetched by core (see
+        ``requires_source_project``). The OECD/industry/science fields are read
+        from it. When it is ``None`` (fetch failed) only the description, which
+        is carried on the resource, is synced.
+
+        The science sub-domain is per-instance, so it is matched by its
+        portable ``code`` (e.g. ``"1.1"``): the code is read from Waldur A and
+        resolved to Waldur B's own sub-domain UUID. If Waldur B has no
+        sub-domain with that code, the field is left unchanged and a warning is
+        logged.
+        """
         project_uuid = waldur_resource.project_uuid
         customer_uuid = waldur_resource.customer_uuid
 
@@ -147,15 +168,63 @@ class WaldurBackend(backends.BaseBackend):
             return
 
         backend_id = f"{customer_uuid}_{project_uuid}"
-        description = self._get_project_description(waldur_resource)
 
         existing = self.client.find_project_by_backend_id(backend_id)
-        if existing and description and existing.get("description", "") != description:
+        if not existing:
+            return
+
+        changes: dict = {}
+
+        description = self._get_project_description(waldur_resource)
+        if description and existing.get("description", "") != description:
+            changes["description"] = description
+
+        if source_project is not None:
+            a_oecd = source_project.oecd_fos_2007_code
+            if (a_oecd or None) != (existing.get("oecd_fos_2007_code") or None):
+                changes["oecd_fos_2007_code"] = (
+                    a_oecd if isinstance(a_oecd, OecdFos2007CodeEnum) else None
+                )
+            a_is_industry = source_project.is_industry
+            if a_is_industry != existing.get("is_industry"):
+                changes["is_industry"] = a_is_industry
+
+            a_sub_domain_code = source_project.science_sub_domain_code or None
+            b_sub_domain_code = existing.get("science_sub_domain_code") or None
+            if a_sub_domain_code != b_sub_domain_code:
+                if a_sub_domain_code is None:
+                    changes["science_sub_domain"] = None
+                else:
+                    b_sub_domain_uuid = self.client.find_science_sub_domain_by_code(
+                        a_sub_domain_code
+                    )
+                    if b_sub_domain_uuid is not None:
+                        changes["science_sub_domain"] = b_sub_domain_uuid
+                    else:
+                        logger.warning(
+                            "Science sub-domain code %s from project %s not found "
+                            "on Waldur B; skipping science_sub_domain sync for "
+                            "backend_id=%s",
+                            a_sub_domain_code,
+                            project_uuid,
+                            backend_id,
+                        )
+
+        if changes:
             logger.info(
-                "Syncing project description for backend_id=%s",
+                "Syncing project metadata for backend_id=%s (fields: %s)",
                 backend_id,
+                ", ".join(sorted(changes)),
             )
-            self.client.update_project(existing["uuid"], description)
+            try:
+                self.client.update_project(existing["uuid"], **changes)
+            except UnexpectedStatus as e:
+                logger.warning(
+                    "Could not sync project metadata for backend_id=%s (status %s): %s",
+                    backend_id,
+                    e.status_code,
+                    e,
+                )
 
     def _pre_create_resource(
         self,
@@ -1359,6 +1428,7 @@ class WaldurBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         waldur_rest_client: AuthenticatedClient,
+        source_project: Optional[Project] = None,
     ) -> None:
         """Sync the project's end_date between Waldur A and Waldur B.
 
@@ -1367,7 +1437,11 @@ class WaldurBackend(backends.BaseBackend):
 
         Args:
             waldur_resource: Resource from Waldur A carrying ``project_end_date``.
-            waldur_rest_client: Authenticated client for the Waldur A API.
+            waldur_rest_client: Authenticated client for the Waldur A API
+                (used to write back to A in the B-to-A direction).
+            source_project: The Waldur A project pre-fetched by core (see
+                ``requires_source_project``); carries ``end_date_updated_at``
+                for the bidirectional last-update-wins comparison.
         """
         try:
             if self.end_date_sync_direction == EndDateSyncDirection.DISABLED:
@@ -1387,19 +1461,13 @@ class WaldurBackend(backends.BaseBackend):
             b_updated_at = b_project.end_date_updated_at or None
 
             # The resource does not carry the project end_date timestamp, so for
-            # bidirectional last-update-wins we read it from the Waldur A project.
+            # bidirectional we read it from the core-fetched source project
             a_updated_at = None
-            if self.end_date_sync_direction == EndDateSyncDirection.BIDIRECTIONAL:
-                a_project = projects_retrieve.sync(
-                    uuid=UUID(str(project_uuid)),
-                    client=waldur_rest_client,
-                    field=[
-                        ProjectFieldEnum.END_DATE,
-                        ProjectFieldEnum.END_DATE_UPDATED_AT,
-                    ],
-                )
-                if a_project:
-                    a_updated_at = a_project.end_date_updated_at or None
+            if (
+                self.end_date_sync_direction == EndDateSyncDirection.BIDIRECTIONAL
+                and source_project is not None
+            ):
+                a_updated_at = source_project.end_date_updated_at or None
 
             a_wins = self._decide_end_date_sync_direction(
                 a_end_date, b_end_date, a_updated_at, b_updated_at

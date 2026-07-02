@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, ClassVar, Optional
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.order_details import OrderDetails
+from waldur_api_client.models.project import Project
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_state import ResourceState
 
@@ -52,6 +53,12 @@ class BaseBackend(ABC):
     # order processing. The processor calls run_preflight() once per offering
     # cycle before handling orders.
     supports_cycle_preflight: bool = False
+
+    # Capability flag: Set to True for backends that mirror project metadata and
+    # need the full source project. When enabled, the processor pre-fetches the
+    # source project from Waldur and passes it to sync_resource_project so the
+    # plugin never calls Waldur itself.
+    requires_source_project: bool = False
 
     # Resource states the membership processor should fetch and handle.
     # Override in subclasses that need to process resources in additional
@@ -536,13 +543,15 @@ class BaseBackend(ABC):
         self,
         waldur_resource: WaldurResource,
         waldur_rest_client: AuthenticatedClient,
+        source_project: Optional[Project] = None,
     ) -> None:
         """Sync the project's end_date between source and target systems.
 
         No-op by default. Override in backends that manage project end_date
-        synchronization (e.g., Waldur-to-Waldur federation).
+        synchronization (e.g., Waldur-to-Waldur federation). ``source_project``
+        is the source project pre-fetched by core (see ``requires_source_project``).
         """
-        del waldur_resource, waldur_rest_client
+        del waldur_resource, waldur_rest_client, source_project
 
     def sync_resource_effective_id(
         self,
@@ -981,13 +990,23 @@ class BaseBackend(ABC):
         del waldur_a_offering_uuid, waldur_rest_client
         return False
 
-    def sync_resource_project(self, waldur_resource: WaldurResource) -> None:
+    def sync_resource_project(
+        self,
+        waldur_resource: WaldurResource,
+        source_project: Optional[Project] = None,
+    ) -> None:
         """Sync project metadata (e.g. description) from Waldur to the backend.
 
         Called once per resource during membership sync. Override in backends
         that manage their own projects (e.g., Waldur federation). Default: no-op.
+
+        ``source_project`` is the pre-fetched source project, supplied by core
+        when ``requires_source_project`` is True so overrides can read project
+        fields not carried on the resource (e.g. OECD FOS code, industry flag)
+        without calling Waldur themselves. ``None`` when not needed or the fetch
+        failed.
         """
-        del waldur_resource
+        del waldur_resource, source_project
 
     def process_existing_users(self, existing_users: set[str]) -> None:
         """Process existing users on the backend.
