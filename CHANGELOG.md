@@ -1,26 +1,24 @@
 # Changelog
 
-## 1.0.6-rc.3 - 2026-07-02
+## 1.0.6-rc.4 - 2026-07-02
 
-### Changes
-
-- **Waldur**: Add configurable resource-limit sync direction via `limit_sync_direction`, letting operators control whether limits flow to or from the backend.
-- **Waldur**: Sync project OECD code, industry flag, and science sub-domain to the backend (WAL-10044).
-- **Waldur**: Refactor resource `end_date` sync to match project `end_date` sync behavior (WAL-10000).
-- **SLURM**: Add optional slurmrestd REST API execution mode as an alternative to CLI-based commands.
+- **Waldur/Federation**: Add configurable resource-limit sync direction via `limit_sync_direction`.
+- **Waldur/Federation**: Sync project OECD code, industry flag and science sub-domain to the backend ([WAL-10044]).
+- **Waldur/Federation**: Refactor resource `end_date` sync to match project `end_date` sync ([WAL-10000]).
+- **SLURM**: Add optional slurmrestd REST API execution mode (design + implementation).
+- **SLURM**: Skip unchanged periodic settings to avoid redundant `sacctmgr` modifications.
 - **SLURM**: Match account names case-insensitively in `get_account_parent`.
 - **SLURM**: Fix allocation account being orphaned at root after project reparent.
-- **Core**: Add early exit in `create_user_homedirs` when home directories already exist (gh-15).
-- **Core**: Flag backend users for removal when they leave all their projects (gh-13).
-- **Core**: Ensure usage data is rounded to 2 decimal places while keeping `set_usage` idempotent.
-- **Docs**: Document cluster-side verification of raw-usage resets, and the account name policy vs. resource slug template conflict (WAL-9925).
+- **Core**: Surface real past-period usage 400s instead of masking them ([WAL-10071]).
+- **Core**: Ensure 2 decimal places on usage data and keep idempotency in sync.
+- **Core**: Flag backend users for removal when they leave all projects ([gh-13]).
+- **Core**: Add early exit in `create_user_homedirs` for existing home directories ([gh-15]).
+- **Docs**: Document cluster-side verification of raw-usage resets and the account name policy vs resource slug template conflict ([WAL-9925]).
 - **Tests**: Stabilize `test_e2e_qos_stomp` restore against an async policy-evaluation race.
 
-> 14 commits, 54 files changed (+4322/-306)
+> 17 commits, 56 files changed (+4715/-321)
 
 ---
-
-The changelog entry:
 
 ## 1.0.5 - 2026-06-29
 
