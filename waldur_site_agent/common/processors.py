@@ -3204,14 +3204,25 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 )
             except UnexpectedStatus as e:
                 http_bad_request = 400
-                if not is_current and e.status_code == http_bad_request:
+                if is_current or e.status_code != http_bad_request:
+                    raise
+                # A past-period 400 is expected when the backend refuses to
+                # backfill usage-based components (their usage would create
+                # retroactive invoice items) — that is benign, skip the period.
+                # Any other 400 (e.g. components not present on the offering)
+                # is a real misconfiguration and must be surfaced, not masked.
+                response_text = e.content.decode(errors="ignore")
+                if "backfilling past billing periods" in response_text:
                     logger.info(
-                        "Past period %04d-%02d rejected (HTTP 400) for resource %s, "
-                        "likely usage-based component — skipping",
+                        "Past period %04d-%02d skipped for resource %s: backend "
+                        "does not allow backfilling usage-based components",
                         year, month, resource_backend_id,
                     )
                 else:
-                    raise
+                    logger.warning(
+                        "Past period %04d-%02d rejected (HTTP 400) for resource %s: %s",
+                        year, month, resource_backend_id, response_text,
+                    )
             except UsageAnomalyError:
                 if is_current:
                     logger.info(
