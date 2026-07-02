@@ -5,6 +5,7 @@ import unittest
 import uuid
 from unittest import mock
 
+import httpx
 import respx
 from freezegun import freeze_time
 from pydantic import ValidationError
@@ -360,6 +361,122 @@ class TestMultiPeriodProcessorFlow(unittest.TestCase):
 
         # Current month still reported despite past month failure
         assert set_usage_response.call_count == 1
+
+    def test_past_period_backfill_rejection_skipped_as_info(self) -> None:
+        """A past-period 400 refusing to backfill usage components is benign.
+
+        It should be logged at INFO and must not block the current period.
+        """
+        self._setup_common_mocks()
+
+        self.mock_backend.pull_resource.return_value = BackendResourceInfo(
+            backend_id="test-allocation-01",
+            usage={"TOTAL_ACCOUNT_USAGE": {"cpu": 10, "mem": 30}},
+        )
+        self.mock_backend.get_usage_report_for_period.return_value = {
+            "test-allocation-01": {"TOTAL_ACCOUNT_USAGE": {"cpu": 5, "mem": 15}},
+        }
+
+        # Past period POST -> 400 backfill rejection; current POST -> 201.
+        set_usage_route = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).mock(
+            side_effect=[
+                httpx.Response(
+                    400,
+                    json={
+                        "date": [
+                            "Service providers can only specify date for "
+                            "limit-based or prepaid billing components when "
+                            "backfilling past billing periods."
+                        ]
+                    },
+                ),
+                httpx.Response(201, json={}),
+            ]
+        )
+
+        processor = OfferingReportProcessor(
+            OFFERING,
+            self.mock_client,
+            resource_backend=self.mock_backend,
+            resource_backend_version="test",
+            reporting_periods=2,
+        )
+        with mock.patch(
+            "waldur_site_agent.common.processors.logger"
+        ) as mock_logger:
+            processor.process_offering()
+
+        # Both periods attempted; current period still reported.
+        assert set_usage_route.call_count == 2
+        # Benign rejection logged at INFO, not surfaced as a warning.
+        assert any(
+            "does not allow backfilling" in str(call.args[0])
+            for call in mock_logger.info.call_args_list
+        )
+        assert not any(
+            "rejected (HTTP 400)" in str(call.args[0])
+            for call in mock_logger.warning.call_args_list
+        )
+
+    def test_past_period_other_400_logged_as_warning(self) -> None:
+        """A past-period 400 that is NOT a backfill rejection is a real error.
+
+        It must be surfaced as a warning (with the response body) rather than
+        masked as a benign skip, and must not block the current period.
+        """
+        self._setup_common_mocks()
+
+        self.mock_backend.pull_resource.return_value = BackendResourceInfo(
+            backend_id="test-allocation-01",
+            usage={"TOTAL_ACCOUNT_USAGE": {"cpu": 10, "mem": 30}},
+        )
+        self.mock_backend.get_usage_report_for_period.return_value = {
+            "test-allocation-01": {"TOTAL_ACCOUNT_USAGE": {"cpu": 5, "mem": 15}},
+        }
+
+        set_usage_route = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).mock(
+            side_effect=[
+                httpx.Response(
+                    400,
+                    json={
+                        "non_field_errors": [
+                            "These components are invalid: cpu, mem."
+                        ]
+                    },
+                ),
+                httpx.Response(201, json={}),
+            ]
+        )
+
+        processor = OfferingReportProcessor(
+            OFFERING,
+            self.mock_client,
+            resource_backend=self.mock_backend,
+            resource_backend_version="test",
+            reporting_periods=2,
+        )
+        with mock.patch(
+            "waldur_site_agent.common.processors.logger"
+        ) as mock_logger:
+            processor.process_offering()
+
+        # Current period still reported despite the past-period error.
+        assert set_usage_route.call_count == 2
+        # Real error surfaced as a warning containing the response body.
+        warning_calls = [
+            call
+            for call in mock_logger.warning.call_args_list
+            if "rejected (HTTP 400)" in str(call.args[0])
+        ]
+        assert warning_calls
+        assert any(
+            "These components are invalid" in str(call.args)
+            for call in warning_calls
+        )
 
 
 if __name__ == "__main__":
