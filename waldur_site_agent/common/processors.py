@@ -2404,9 +2404,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
     def _sync_resource_limits(self, waldur_resource: WaldurResource) -> None:
         """Syncs resource limits between Waldur and the backend."""
-        utils.sync_waldur_resource_limits(
-            self.resource_backend, self.waldur_rest_client, waldur_resource
-        )
+        self.resource_backend.sync_resource_limits(waldur_resource, self.waldur_rest_client)
 
     # TODO: adapt for RabbitMQ-based processing
     # introduce new event and add support for the event in the agent

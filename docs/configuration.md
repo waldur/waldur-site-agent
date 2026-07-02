@@ -256,6 +256,7 @@ backend_settings:
     PROJECT.ADMIN: PROJECT.ADMIN
     PROJECT.MANAGER: PROJECT.MANAGER
   end_date_sync_direction: "bidirectional"   # a_to_b | b_to_a | bidirectional | disabled
+  limit_sync_direction: "b_to_a"             # b_to_a (default) | disabled -- limit sync
   passthrough_attributes: []                 # Offering attribute keys forwarded verbatim to B
   fetch_consented_users_only: false          # Only sync users with data-sharing consent
   # Optional: target STOMP for instant async order completion

@@ -409,6 +409,7 @@ offerings:
         PROJECT.MANAGER: PROJECT.MANAGER
         PROJECT.MEMBER: PROJECT.MEMBER
       end_date_sync_direction: "bidirectional"  # a_to_b | b_to_a | bidirectional | disabled
+      limit_sync_direction: "b_to_a"     # b_to_a (default) | disabled -- limit sync
       passthrough_attributes: []         # Attribute keys forwarded verbatim to B
       fetch_consented_users_only: false  # Only sync users with data-sharing consent
     backend_components:
@@ -523,6 +524,7 @@ These settings are on the offering itself (not inside `backend_settings`):
 | `user_resolve_method` | No | `identity_bridge` | User lookup: `identity_bridge`, `remote_eduteams`, `user_field` |
 | `role_mapping` | No | `{}` | Map source role names to target (e.g. `PROJECT.ADMIN: PROJECT.MANAGER`) |
 | `end_date_sync_direction` | No | `bidirectional` | End-date sync: `a_to_b`, `b_to_a`, `bidirectional`, or `disabled` |
+| `limit_sync_direction` | No | `b_to_a` | Limit sync: `b_to_a` (push B's limits to A) or `disabled` (no limit sync) |
 | `passthrough_attributes` | No | `[]` | Offering attribute keys forwarded verbatim from the A order to B |
 | `fetch_consented_users_only` | No | `false` | If `true`, only sync users with data-sharing consent on Waldur A |
 

@@ -37,7 +37,7 @@ from waldur_site_agent.backend.structures import BackendResourceInfo
 
 from waldur_site_agent_waldur.client import DEFAULT_PROJECT_ROLE_NAME, WaldurClient
 from waldur_site_agent_waldur.component_mapping import ComponentMapper
-from waldur_site_agent_waldur.enums import EndDateSyncDirection
+from waldur_site_agent_waldur.enums import EndDateSyncDirection, LimitSyncDirection
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,9 @@ class WaldurBackend(backends.BaseBackend):
             backend_settings.get(
                 "end_date_sync_direction", EndDateSyncDirection.BIDIRECTIONAL
             )
+        )
+        self.limit_sync_direction = LimitSyncDirection(
+            backend_settings.get("limit_sync_direction", LimitSyncDirection.B_TO_A)
         )
 
         self.client: WaldurClient = WaldurClient(
@@ -503,6 +506,27 @@ class WaldurBackend(backends.BaseBackend):
             order.uuid,
         )
         return str(order.uuid)
+
+    def sync_resource_limits(
+        self,
+        waldur_resource: WaldurResource,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> None:
+        """Reconcile resource limits between Waldur A and the backend (Waldur B).
+
+        Behavior depends on the ``limit_sync_direction`` setting:
+        - ``"b_to_a"`` (default): Waldur B is the source of truth; pull B's
+          limits into A (the generic reconciliation in ``BaseBackend``).
+        - ``"disabled"``: no reconciliation; limits change only through orders.
+        """
+        if self.limit_sync_direction == LimitSyncDirection.DISABLED:
+            logger.info(
+                "Limit sync disabled for resource %s (%s), skipping",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+            )
+            return
+        super().sync_resource_limits(waldur_resource, waldur_rest_client)
 
     def set_resource_limits(
         self, resource_backend_id: str, limits: dict[str, int]

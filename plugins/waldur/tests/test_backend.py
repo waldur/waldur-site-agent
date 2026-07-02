@@ -20,7 +20,7 @@ from waldur_site_agent.backend.structures import BackendResourceInfo
 from pydantic import ValidationError
 
 from waldur_site_agent_waldur.backend import WaldurBackend
-from waldur_site_agent_waldur.enums import EndDateSyncDirection
+from waldur_site_agent_waldur.enums import EndDateSyncDirection, LimitSyncDirection
 from waldur_site_agent_waldur.schemas import WaldurBackendSettingsSchema
 
 # Valid test UUIDs
@@ -121,6 +121,24 @@ class TestSchemaValidation:
         assert schema.end_date_sync_direction == EndDateSyncDirection.BIDIRECTIONAL
         assert schema.passthrough_attributes == []
         assert schema.fetch_consented_users_only is False
+
+    def test_limit_sync_direction_accepted(self):
+        schema = WaldurBackendSettingsSchema(
+            **self.BASE_SETTINGS,
+            limit_sync_direction="disabled",
+        )
+        assert schema.limit_sync_direction == LimitSyncDirection.DISABLED
+
+    def test_limit_sync_direction_invalid_value_rejected(self):
+        with pytest.raises(ValidationError):
+            WaldurBackendSettingsSchema(
+                **self.BASE_SETTINGS,
+                limit_sync_direction="sideways",
+            )
+
+    def test_limit_sync_direction_default(self):
+        schema = WaldurBackendSettingsSchema(**self.BASE_SETTINGS)
+        assert schema.limit_sync_direction == LimitSyncDirection.B_TO_A
 
 
 class TestPingAndDiagnostics:
@@ -462,6 +480,81 @@ class TestGetLimits:
 
         # node_hours = 250/5 = 50
         assert limits["node_hours"] == 50
+
+
+class TestSyncResourceLimits:
+    """WaldurBackend.sync_resource_limits honours limit_sync_direction.
+
+    The generic B->A reconciliation lives in BaseBackend; the Waldur override
+    only adds the 'disabled' option.
+    """
+
+    def _waldur_resource(self, limits):
+        resource = MagicMock()
+        resource.name = "test-resource"
+        resource.backend_id = str(RESOURCE_UUID)
+        resource.uuid = RESOURCE_UUID
+        resource.limits.additional_properties = limits
+        return resource
+
+    @patch("waldur_site_agent.common.utils.marketplace_provider_resources_set_limits")
+    def test_b_to_a_writes_backend_limits_to_waldur_a(
+        self, mock_set_limits, backend_with_conversion, mock_client
+    ):
+        # B reports gpu_hours=500, storage_gb_hours=800 -> node_hours=180 (differs from A's 100)
+        mock_client.get_resource_limits.return_value = {
+            "gpu_hours": 500,
+            "storage_gb_hours": 800,
+        }
+        waldur_resource = self._waldur_resource({"node_hours": 100})
+
+        backend_with_conversion.sync_resource_limits(waldur_resource, MagicMock())
+
+        # B -> A: provider set_limits called against Waldur A
+        mock_set_limits.sync.assert_called_once()
+
+    @patch("waldur_site_agent.common.utils.marketplace_provider_resources_set_limits")
+    def test_b_to_a_skips_when_in_sync(
+        self, mock_set_limits, backend_with_conversion, mock_client
+    ):
+        mock_client.get_resource_limits.return_value = {
+            "gpu_hours": 500,
+            "storage_gb_hours": 800,
+        }
+        # A already equals reverse(B) = node_hours 180
+        waldur_resource = self._waldur_resource({"node_hours": 180})
+
+        backend_with_conversion.sync_resource_limits(waldur_resource, MagicMock())
+
+        mock_set_limits.sync.assert_not_called()
+
+    @patch("waldur_site_agent.common.utils.marketplace_provider_resources_set_limits")
+    def test_disabled_skips_reconciliation(
+        self, mock_set_limits, backend_with_conversion, mock_client
+    ):
+        # Offering opted out -> the override returns before the generic pull:
+        # no backend reads, no writes to A.
+        backend_with_conversion.limit_sync_direction = LimitSyncDirection.DISABLED
+        waldur_resource = self._waldur_resource({"node_hours": 100})
+
+        backend_with_conversion.sync_resource_limits(waldur_resource, MagicMock())
+
+        mock_client.get_resource_limits.assert_not_called()
+        mock_set_limits.sync.assert_not_called()
+
+
+class TestLimitSyncDirection:
+    """The backend owns the limit_sync_direction policy (mirrors end_date sync)."""
+
+    def test_default_is_b_to_a(self, backend):
+        assert backend.limit_sync_direction == LimitSyncDirection.B_TO_A
+
+    def test_disabled_parsed_from_settings(
+        self, backend_settings, backend_components_passthrough
+    ):
+        backend_settings["limit_sync_direction"] = "disabled"
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        assert backend.limit_sync_direction == LimitSyncDirection.DISABLED
 
 
 class TestUsageReporting:
