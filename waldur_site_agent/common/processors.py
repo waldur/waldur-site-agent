@@ -22,6 +22,7 @@ import time as _time
 from enum import Enum
 from time import sleep
 from typing import Any, ClassVar, Optional, Union
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from waldur_api_client.api.backend_resource_requests import (
@@ -77,7 +78,7 @@ from waldur_api_client.api.marketplace_service_providers import (
     marketplace_service_providers_list,
     marketplace_service_providers_project_service_accounts_list,
 )
-from waldur_api_client.api.projects import projects_list
+from waldur_api_client.api.projects import projects_list, projects_retrieve
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
     ComponentUsageCreateRequest,
@@ -128,6 +129,7 @@ from waldur_api_client.models.order_error_details_request import OrderErrorDetai
 from waldur_api_client.models.order_provider_rejection_request import (
     OrderProviderRejectionRequest,
 )
+from waldur_api_client.models.project import Project
 from waldur_api_client.models.project_user import ProjectUser
 from waldur_api_client.models.provider_offering_details import ProviderOfferingDetails
 from waldur_api_client.models.request_types import RequestTypes
@@ -1648,6 +1650,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         self._team_cache: dict[str, list[ProjectUser]] = {}
         self._service_accounts_cache: dict[str, list[ProjectServiceAccount]] = {}
         self._course_accounts_cache: dict[str, list[CourseAccount]] = {}
+        self._source_project_cache: dict[str, Optional[Project]] = {}
 
     def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[WaldurResource]:
         """Fetch Waldur resources for this offering, optionally filtered by project.
@@ -1778,6 +1781,43 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         self._process_resources(resource_report)
 
+    def _fetch_source_project(self, waldur_resource: WaldurResource) -> Optional[Project]:
+        """Pre-fetch the source project for backends that mirror project metadata.
+
+        Keeps Waldur communication in core: plugins receive the project as data
+        instead of calling Waldur themselves. Returns None when the backend does
+        not need it or the fetch fails. The result is cached per project for the
+        duration of the cycle, so resources sharing a project fetch it once.
+        """
+        if not self.resource_backend.requires_source_project:
+            return None
+        project_uuid = waldur_resource.project_uuid
+        cache_key = project_uuid.hex
+        if cache_key in self._source_project_cache:
+            logger.info("Using cached source project for project %s", cache_key)
+            return self._source_project_cache[cache_key]
+        try:
+            project = projects_retrieve.sync(
+                uuid=UUID(str(project_uuid)),
+                client=self.waldur_rest_client,
+                field=[
+                    ProjectFieldEnum.OECD_FOS_2007_CODE,
+                    ProjectFieldEnum.IS_INDUSTRY,
+                    ProjectFieldEnum.SCIENCE_SUB_DOMAIN_CODE,
+                    ProjectFieldEnum.END_DATE_UPDATED_AT,
+                ],
+            )
+        except UnexpectedStatus as e:
+            logger.warning(
+                "Could not fetch source project %s (status %s): %s",
+                project_uuid,
+                e.status_code,
+                e,
+            )
+            project = None
+        self._source_project_cache[cache_key] = project
+        return project
+
     def _recreate_missing_resources(self, waldur_resources: list[WaldurResource]) -> None:
         """Recreate backend resources that exist in Waldur but are absent on the backend.
 
@@ -1828,7 +1868,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         resource_report = self.resource_backend.pull_resources(waldur_resources)
         for waldur_resource, _ in resource_report.values():
             try:
-                self.resource_backend.sync_resource_project(waldur_resource)
+                source_project = self._fetch_source_project(waldur_resource)
+                self.resource_backend.sync_resource_project(waldur_resource, source_project)
             except Exception as e:
                 logger.exception(
                     "Error syncing project hierarchy for resource %s: %s",
@@ -2517,9 +2558,10 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         for waldur_resource, backend_resource_info in resource_report.values():
             try:
-                self.resource_backend.sync_resource_project(waldur_resource)
+                source_project = self._fetch_source_project(waldur_resource)
+                self.resource_backend.sync_resource_project(waldur_resource, source_project)
                 self.resource_backend.sync_project_end_date(
-                    waldur_resource, self.waldur_rest_client
+                    waldur_resource, self.waldur_rest_client, source_project
                 )
                 resource_usernames = self._sync_resource_users(
                     waldur_resource, backend_resource_info, offering_users

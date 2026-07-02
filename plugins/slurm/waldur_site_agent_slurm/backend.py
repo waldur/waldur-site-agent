@@ -7,6 +7,7 @@ from typing import Optional
 
 import httpx
 from waldur_api_client.client import AuthenticatedClient
+from waldur_api_client.models.project import Project
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.types import UNSET
 
@@ -238,7 +239,11 @@ class SlurmBackend(backends.BaseBackend):
         if self._qos_config.get("enabled"):
             self._setup_account_qos(resource_backend_id)
 
-    def sync_resource_project(self, waldur_resource: WaldurResource) -> None:
+    def sync_resource_project(
+        self,
+        waldur_resource: WaldurResource,
+        source_project: Optional[Project] = None,  # noqa: ARG002
+    ) -> None:
         """Reparent the SLURM project account when a Waldur project moves to a new customer.
 
         In the default (3-tier) hierarchy the project account's parent must match the

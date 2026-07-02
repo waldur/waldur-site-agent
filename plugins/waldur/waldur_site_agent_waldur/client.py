@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime
 import logging
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from uuid import UUID
 
 from waldur_api_client.api.marketplace_orders import marketplace_orders_list
@@ -24,8 +24,10 @@ from waldur_api_client.api.marketplace_resources import (
 )
 from waldur_api_client.api.projects import projects_list, projects_partial_update
 from waldur_api_client.api.roles import roles_list
+from waldur_api_client.api.science_sub_domains import science_sub_domains_list
 from waldur_api_client.api.version import version_retrieve
 from waldur_api_client.client import AuthenticatedClient
+from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.component_usage import ComponentUsage
 from waldur_api_client.models.component_user_usage import ComponentUserUsage
 from waldur_api_client.models.generic_order_attributes import GenericOrderAttributes
@@ -33,6 +35,7 @@ from waldur_api_client.models.order_create_request import OrderCreateRequest
 from waldur_api_client.models.order_create_request_limits import OrderCreateRequestLimits
 from waldur_api_client.models.order_details import OrderDetails
 from waldur_api_client.models.patched_project_request import PatchedProjectRequest
+from waldur_api_client.models.oecd_fos_2007_code_enum import OecdFos2007CodeEnum
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.project import Project
 from waldur_api_client.models.project_field_enum import ProjectFieldEnum
@@ -48,7 +51,7 @@ from waldur_api_client.models.resource_update_limits_request_limits import (
 )
 from waldur_api_client.models.user_role_create_request import UserRoleCreateRequest
 from waldur_api_client.models.user_role_delete_request import UserRoleDeleteRequest
-from waldur_api_client.types import UNSET
+from waldur_api_client.types import UNSET, Unset
 
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.exceptions import BackendError
@@ -97,6 +100,9 @@ class WaldurClient(BaseClient):
             token=api_token,
         )
         self._role_uuid_cache: dict[str, str] = {}
+        # Per-cycle cache of the Waldur B project keyed by backend_id, to avoid
+        # re-fetching the same project for resources that share it.
+        self._project_cache: dict[str, Optional[Project]] = {}
 
     def _get_role_uuid(self, role_name: str = DEFAULT_PROJECT_ROLE_NAME) -> str:
         """Look up a role UUID by name on Waldur B, with caching."""
@@ -373,29 +379,79 @@ class WaldurClient(BaseClient):
 
     # --- Project Operations ---
 
+    def _invalidate_project_caches(self) -> None:
+        """Drop the per-cycle Waldur B project cache after a project mutation.
+
+        Called after create/update so resources processed later in the cycle
+        re-read the project's current state instead of a stale cached copy.
+        """
+        self._project_cache.clear()
+
+    def _fetch_b_project(self, backend_id: str) -> Optional[Project]:
+        """Fetch the Waldur B project by backend_id, cached for the cycle."""
+        if backend_id in self._project_cache:
+            return self._project_cache[backend_id]
+        projects = projects_list.sync(
+            client=self._api_client,
+            backend_id=backend_id,
+            field=[
+                ProjectFieldEnum.UUID,
+                ProjectFieldEnum.URL,
+                ProjectFieldEnum.NAME,
+                ProjectFieldEnum.DESCRIPTION,
+                ProjectFieldEnum.OECD_FOS_2007_CODE,
+                ProjectFieldEnum.IS_INDUSTRY,
+                ProjectFieldEnum.SCIENCE_SUB_DOMAIN_CODE,
+                ProjectFieldEnum.END_DATE,
+                ProjectFieldEnum.END_DATE_UPDATED_AT,
+            ],
+        )
+        result = projects[0] if projects else None
+        self._project_cache[backend_id] = result
+        return result
+
     def find_project_by_backend_id(self, backend_id: str) -> Optional[dict]:
         """Find a project on Waldur B by its backend_id.
 
         Returns:
-            Project dict with uuid/url/name or None if not found.
+            Project dict with uuid/url/name/description/oecd_fos_2007_code/
+            is_industry/science_sub_domain_code or None if not found.
         """
         try:
-            response = self._api_client.get_httpx_client().get(
-                "/api/projects/",
-                params={"backend_id": backend_id},
-            )
-            if response.status_code == 200:
-                projects = response.json()
-                if projects:
-                    project = projects[0]
-                    return {
-                        "uuid": project.get("uuid", ""),
-                        "url": project.get("url", ""),
-                        "name": project.get("name", ""),
-                        "description": project.get("description", ""),
-                    }
+            project = self._fetch_b_project(backend_id)
         except Exception:
             logger.exception("Failed to find project by backend_id=%s", backend_id)
+            return None
+        if project is None:
+            return None
+        return {
+            "uuid": str(project.uuid) if project.uuid else "",
+            "url": project.url or "",
+            "name": project.name or "",
+            "description": project.description or "",
+            "oecd_fos_2007_code": project.oecd_fos_2007_code or None,
+            "is_industry": project.is_industry,
+            "science_sub_domain_code": project.science_sub_domain_code or None,
+        }
+
+    def find_science_sub_domain_by_code(self, code: str) -> Optional[UUID]:
+        """Find a science sub-domain on Waldur B by its code (e.g. ``"1.1"``).
+
+        Science sub-domains are defined per-instance, so they are matched by
+        their ``code`` rather than UUID. The list endpoint has no code filter,
+        so all definitions are fetched and matched locally.
+
+        Returns:
+            The sub-domain UUID on Waldur B, or None if no match is found.
+        """
+        try:
+            sub_domains = science_sub_domains_list.sync_all(client=self._api_client)
+        except UnexpectedStatus:
+            logger.exception("Failed to find science sub-domain by code=%s", code)
+            return None
+        for sub_domain in sub_domains:
+            if sub_domain.code == code:
+                return sub_domain.uuid
         return None
 
     def create_project(
@@ -425,36 +481,49 @@ class WaldurClient(BaseClient):
             client=self._api_client,
             body=body,
         )
+        self._invalidate_project_caches()
 
         return {
-            "uuid": str(project.uuid) if not isinstance(project.uuid, type(UNSET)) else "",
-            "url": project.url if not isinstance(project.url, type(UNSET)) else "",
-            "name": project.name if not isinstance(project.name, type(UNSET)) else "",
+            "uuid": str(project.uuid) if project.uuid else "",
+            "url": project.url or "",
+            "name": project.name or "",
         }
 
     def update_project(
         self,
         project_uuid: str,
-        description: str,
+        description: Union[str, Unset] = UNSET,
+        oecd_fos_2007_code: Union[OecdFos2007CodeEnum, None, Unset] = UNSET,
+        is_industry: Union[bool, Unset] = UNSET,
+        science_sub_domain: Union[UUID, None, Unset] = UNSET,
     ) -> dict:
-        """Update a project's description on Waldur B.
+        """Update project metadata on Waldur B.
+
+        Fields left as ``UNSET`` are unchanged. For ``oecd_fos_2007_code`` and
+        ``science_sub_domain`` an explicit ``None`` clears the value on B.
 
         Returns:
             Dict with uuid, url and name of the updated project.
         """
-        body = PatchedProjectRequest(description=description)
+        body = PatchedProjectRequest(
+            description=description,
+            oecd_fos_2007_code=oecd_fos_2007_code,
+            is_industry=is_industry,
+            science_sub_domain=science_sub_domain,
+        )
 
         project = projects_partial_update.sync(
             uuid=UUID(project_uuid),
             client=self._api_client,
             body=body,
         )
+        self._invalidate_project_caches()
 
         return {
-            "uuid": str(project.uuid) if not isinstance(project.uuid, type(UNSET)) else "",
-            "url": project.url if not isinstance(project.url, type(UNSET)) else "",
-            "name": project.name if not isinstance(project.name, type(UNSET)) else "",
-            "description": project.description if not isinstance(project.description, type(UNSET)) else "",
+            "uuid": str(project.uuid) if project.uuid else "",
+            "url": project.url or "",
+            "name": project.name or "",
+            "description": project.description or "",
         }
 
     def find_or_create_project(
@@ -495,18 +564,7 @@ class WaldurClient(BaseClient):
         Returns the typed ``Project`` (with ``end_date`` and
         ``end_date_updated_at``) or None if not found.
         """
-        projects = projects_list.sync(
-            client=self._api_client,
-            backend_id=backend_id,
-            field=[
-                ProjectFieldEnum.UUID,
-                ProjectFieldEnum.END_DATE,
-                ProjectFieldEnum.END_DATE_UPDATED_AT,
-            ],
-        )
-        if projects:
-            return projects[0]
-        return None
+        return self._fetch_b_project(backend_id)
 
     def set_project_end_date(
         self, project_uuid: UUID, end_date: Optional[datetime.date]
@@ -518,6 +576,7 @@ class WaldurClient(BaseClient):
             client=self._api_client,
             body=PatchedProjectRequest(end_date=end_date),
         )
+        self._invalidate_project_caches()
 
     # --- User Operations ---
 
