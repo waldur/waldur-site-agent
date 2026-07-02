@@ -1254,27 +1254,104 @@ class SlurmBackend(backends.BaseBackend):
             logger.error("Unexpected error applying settings to emulator: %s", e)
             return {"success": False, "error": str(e), "mode": PeriodicSettingsMode.EMULATOR.value}
 
+    def _fairshare_is_current(self, resource_id: str, target: int) -> bool:
+        """Return True when SLURM already holds the target fairshare value.
+
+        Reads the account's current fairshare and compares it against the
+        target. Any read failure, unknown value, or non-numeric comparison
+        returns False so the caller falls back to applying the setting — a
+        stale read must never suppress a needed change.
+        """
+        try:
+            current = self.client.get_account_fairshare(resource_id)
+        except Exception as e:
+            logger.debug(
+                "Could not read current fairshare for account %s (%s); applying",
+                resource_id,
+                e,
+            )
+            return False
+        if current is None:
+            return False
+        try:
+            return int(current) == int(target)
+        except (TypeError, ValueError):
+            return False
+
+    def _changed_tres_limits(
+        self, resource_id: str, limit_type: str, target: dict
+    ) -> Optional[dict]:
+        """Return only the TRES entries whose value differs from SLURM state.
+
+        An empty dict means every requested TRES already matches (nothing to
+        apply). Any read failure or unknown current state returns the full
+        target so the caller applies it — a failed read never skips a change.
+        """
+        try:
+            current_all = self.client.get_account_limits(resource_id)
+        except Exception as e:
+            logger.debug(
+                "Could not read current limits for account %s (%s); applying",
+                resource_id,
+                e,
+            )
+            return dict(target)
+        if current_all is None:
+            return dict(target)
+        current = current_all.get(limit_type) or {}
+        # Current values are strings (see SlurmClient._parse_tres_string); the
+        # target may carry ints, so compare on the string form of both.
+        return {
+            tres: value
+            for tres, value in target.items()
+            if str(current.get(tres)) != str(value)
+        }
+
     def _apply_settings_production(self, resource_id: str, settings: dict, config: dict) -> dict:
-        """Apply settings to production SLURM cluster."""
+        """Apply settings to production SLURM cluster.
+
+        Each setting is diffed against current SLURM state and skipped when
+        unchanged, so periodic re-applies with identical values produce no
+        ``sacctmgr modify`` calls. Reads are fail-safe: a failed or unknown
+        read falls back to applying the setting.
+        """
         logger.info("Applying settings to production SLURM cluster")
         self.client.clear_executed_commands()
 
         try:
-            # Apply fairshare
+            # Apply fairshare only when it differs from current SLURM state.
             if settings.get("fairshare"):
-                logger.debug(
-                    "Setting fairshare=%s for account %s", settings["fairshare"], resource_id
-                )
-                self.client.set_account_fairshare(resource_id, settings["fairshare"])
+                if self._fairshare_is_current(resource_id, settings["fairshare"]):
+                    logger.debug(
+                        "Fairshare for account %s already %s; skipping",
+                        resource_id,
+                        settings["fairshare"],
+                    )
+                else:
+                    logger.debug(
+                        "Setting fairshare=%s for account %s", settings["fairshare"], resource_id
+                    )
+                    self.client.set_account_fairshare(resource_id, settings["fairshare"])
 
-            # Apply limits based on limit_type
+            # Apply only the TRES limits that actually changed.
             if settings.get("grp_tres_mins") or settings.get("max_tres_mins"):
                 limit_type = settings.get("limit_type", config.get("limit_type", "GrpTRESMins"))
-                limits = settings.get("grp_tres_mins") or settings.get("max_tres_mins")
-                logger.debug("Setting %s=%s for account %s", limit_type, limits, resource_id)
-                self.client.set_account_limits(resource_id, limit_type, limits)
+                limits = settings.get("grp_tres_mins") or settings.get("max_tres_mins") or {}
+                changed = self._changed_tres_limits(resource_id, limit_type, limits)
+                if changed:
+                    logger.debug("Setting %s=%s for account %s", limit_type, changed, resource_id)
+                    self.client.set_account_limits(resource_id, limit_type, changed)
+                else:
+                    logger.debug(
+                        "%s for account %s already matches %s; skipping",
+                        limit_type,
+                        resource_id,
+                        limits,
+                    )
 
-            # Reset raw usage if requested
+            # Reset raw usage if requested. This is not gated on a diff: the
+            # caller only sets the flag when a reset is due, and the target
+            # value (0) is transient by nature.
             if settings.get("reset_raw_usage"):
                 logger.debug("Resetting raw usage for account %s", resource_id)
                 self.client.reset_raw_usage(resource_id)
