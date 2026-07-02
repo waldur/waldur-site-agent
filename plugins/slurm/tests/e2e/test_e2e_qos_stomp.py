@@ -271,26 +271,53 @@ def _wait_for_qos(
     return last
 
 
-def _wait_for_resource_flags(
+def _settle_resource_flags(
     client,
+    policy_uuid: str,
     resource_uuid: str,
-    expected_paused: bool,
-    expected_downscaled: bool,
-    timeout: float = STOMP_WAIT_TIMEOUT,
+    expected: tuple[bool, bool],
+    *,
+    timeout: float = 90.0,
+    hold: float = 5.0,
+    reeval_gap: float = 6.0,
 ) -> tuple[bool, bool]:
-    """Poll the resource until paused/downscaled settle to the expected values.
+    """Drive the resource to ``expected`` (paused, downscaled) and confirm it holds.
 
-    The agent re-fetches live resource state when it processes a RESOURCE
-    event, so the QoS it writes reflects whatever Mastermind reports at that
-    instant. Asserting QoS while the flags are still flipping is racy — wait
-    for Mastermind to settle the resource first, then assert on the QoS.
+    A single ``/evaluate/`` call is not enough on its own: each ``set_usage``
+    write also kicks off an *asynchronous* policy-evaluation chain in Mastermind
+    (``process_component_usage_billing`` -> ``evaluate_slurm_resource_policy`` ->
+    ``evaluate_resource_against_policy``). One of those in-flight chains, spawned
+    by an earlier usage write, can land *after* the manual evaluate and flip the
+    flags back, so passively waiting for the flags to settle races the async
+    pipeline and flakes deterministically under CI load.
+
+    Instead we re-issue the evaluate whenever the flags drift from the target.
+    Re-evaluation reads the current usage under a row lock (Mastermind
+    serialises concurrent evaluations of the same resource), so once the finite
+    set of async chains from earlier usage writes has drained, our evaluate is
+    the last writer and the state converges. The manual evaluate does not itself
+    write ``ComponentUsage``, so it never spawns a new competing chain. We then
+    require the state to hold for ``hold`` seconds *without* re-evaluating,
+    proving the resource genuinely settled rather than momentarily flipping
+    under our command.
     """
     deadline = time.time() + timeout
+    stable_since = None
+    last_eval = 0.0
     flags = _resource_flags(client, resource_uuid)
     while time.time() < deadline:
         flags = _resource_flags(client, resource_uuid)
-        if flags == (expected_paused, expected_downscaled):
-            return flags
+        now = time.time()
+        if flags == expected:
+            if stable_since is None:
+                stable_since = now
+            elif now - stable_since >= hold:
+                return flags
+        else:
+            stable_since = None
+            if now - last_eval >= reeval_gap:
+                _evaluate_policy(client, policy_uuid, resource_uuid)
+                last_eval = now
         time.sleep(1)
     return flags
 
@@ -465,6 +492,18 @@ class TestQosStomp:
             f"Expected paused=True in STOMP message, got {msg!r}"
         )
 
+        # Settle the flags to (paused, downscaled) before asserting QoS so the
+        # agent's STOMP-driven sync (which re-fetches live resource state) reads
+        # a stable pause rather than a value still flipping under the async
+        # evaluation chain. This also gives test_03 a deterministic baseline.
+        paused, downscaled = _settle_resource_flags(
+            qos_stomp_client, s["policy_uuid"], s["resource_uuid"], (True, True)
+        )
+        assert (paused, downscaled) == (True, True), (
+            f"Resource did not settle to paused+downscaled (paused={paused}, "
+            f"downscaled={downscaled}) after usage above the limit"
+        )
+
         # The capture handler delegates to on_resource_message_stomp, which
         # runs process_resource_by_uuid → _sync_resource_status → set qos=paused.
         qos = _wait_for_qos(qos_slurm_bin_path, s["backend_id"], "paused")
@@ -506,17 +545,20 @@ class TestQosStomp:
             f"Expected paused=False in restore message, got {new_msg!r}"
         )
 
-        # Wait for Mastermind to actually settle the resource to unpaused +
-        # un-downscaled before asserting QoS. If it does not settle, the
-        # failure is a Mastermind re-pause, not an agent QoS-write bug — the
-        # message distinguishes the two.
-        paused, downscaled = _wait_for_resource_flags(
-            qos_stomp_client, s["resource_uuid"], False, False
+        # Drive the resource to unpaused + un-downscaled and confirm it holds
+        # before asserting QoS. Submitting usage=0 kicks off an async policy
+        # re-evaluation chain that races the manual evaluate above; a stale
+        # in-flight chain can re-pause the resource right after we restore it.
+        # _settle_resource_flags re-issues the restore evaluate until the flags
+        # stay put, so the assertion reflects the settled state rather than a
+        # transient mid-race read.
+        paused, downscaled = _settle_resource_flags(
+            qos_stomp_client, s["policy_uuid"], s["resource_uuid"], (False, False)
         )
         assert (paused, downscaled) == (False, False), (
             f"Resource did not settle to the restored state "
-            f"(paused={paused}, downscaled={downscaled}); Mastermind appears to "
-            "be re-pausing/re-downscaling rather than the agent failing to write QoS"
+            f"(paused={paused}, downscaled={downscaled}) even after repeated "
+            "re-evaluation; the async policy pipeline is not converging to usage=0"
         )
 
         qos = _wait_for_qos(qos_slurm_bin_path, s["backend_id"], "normal")
@@ -541,8 +583,10 @@ class TestQosStomp:
         if not s:
             pytest.skip("setup did not run")
 
-        # Baseline QoS should be "normal" from test_03.
-        qos_before = get_account_qos(qos_slurm_bin_path, s["backend_id"])
+        # Baseline QoS should be "normal" from test_03. Poll rather than assert
+        # immediately so any residual STOMP propagation lag from the restore
+        # does not cascade a spurious precondition failure into this test.
+        qos_before = _wait_for_qos(qos_slurm_bin_path, s["backend_id"], "normal", timeout=15)
         assert qos_before == "normal", (
             f"Precondition: expected QoS=normal before idempotency test, got {qos_before!r}"
         )
