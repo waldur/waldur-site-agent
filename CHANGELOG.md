@@ -1,21 +1,26 @@
 # Changelog
 
-The changelog entry:
+## 1.0.6-rc.3 - 2026-07-02
 
-## 1.0.6-rc.2 - 2026-07-02
+### Changes
 
-- **SLURM**: Add optional slurmrestd REST API execution mode as an alternative to CLI-based command execution.
+- **Waldur**: Add configurable resource-limit sync direction via `limit_sync_direction`, letting operators control whether limits flow to or from the backend.
+- **Waldur**: Sync project OECD code, industry flag, and science sub-domain to the backend (WAL-10044).
+- **Waldur**: Refactor resource `end_date` sync to match project `end_date` sync behavior (WAL-10000).
+- **SLURM**: Add optional slurmrestd REST API execution mode as an alternative to CLI-based commands.
 - **SLURM**: Match account names case-insensitively in `get_account_parent`.
-- **SLURM**: Fix allocation account left orphaned at root after project reparenting.
-- **Core**: Flag backend users for removal when they leave all their projects (gh-13).
+- **SLURM**: Fix allocation account being orphaned at root after project reparent.
 - **Core**: Add early exit in `create_user_homedirs` when home directories already exist (gh-15).
-- **Core**: Ensure usage data is rounded to 2 decimal places and keep set-usage idempotency consistent.
-- **Federation**: Refactor resource `end_date` sync to match project `end_date` sync behavior ([WAL-10000]).
-- **Docs**: Document account name policy vs. resource slug template conflict ([WAL-9925]), cluster-side verification of raw-usage resets, and the slurmrestd REST API design.
+- **Core**: Flag backend users for removal when they leave all their projects (gh-13).
+- **Core**: Ensure usage data is rounded to 2 decimal places while keeping `set_usage` idempotent.
+- **Docs**: Document cluster-side verification of raw-usage resets, and the account name policy vs. resource slug template conflict (WAL-9925).
+- **Tests**: Stabilize `test_e2e_qos_stomp` restore against an async policy-evaluation race.
 
-> 9 commits, 27 files changed (+3439/-154)
+> 14 commits, 54 files changed (+4322/-306)
 
 ---
+
+The changelog entry:
 
 ## 1.0.5 - 2026-06-29
 
