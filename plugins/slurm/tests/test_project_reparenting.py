@@ -163,6 +163,25 @@ class TestGetAccountParent:
         assert "account=hpc_project-alpha" in cmd
         assert "format=Account,ParentName,User" in cmd
 
+    def test_matches_account_case_insensitively(self, client):
+        # Slurm folds account names to lower case: a project created as
+        # 2026_00A is stored and reported as 2026_00a. The Waldur backend_id
+        # keeps the original case, so the row must still be matched — this is
+        # the exact output real sacctmgr emits for the mixed-case query.
+        client.execute_command.return_value = "2026_00a|hpc_org-a|\n2026_00a|hpc_org-a|alice\n"
+        assert client.get_account_parent("2026_00A") == "hpc_org-a"
+
+    def test_returns_none_when_only_case_differs_but_account_absent(self, client):
+        # A genuinely different account (not just a case variant) still misses.
+        client.execute_command.return_value = "2026_00b|hpc_org-a|\n"
+        assert client.get_account_parent("2026_00A") is None
+
+    def test_matches_when_stored_upper_and_query_lower(self, client):
+        # Symmetry guard: the fold must work in both directions, not only when
+        # the stored form happens to be lower case.
+        client.execute_command.return_value = "PROJ_X|hpc_org-a|\n"
+        assert client.get_account_parent("proj_x") == "hpc_org-a"
+
 
 class TestSetAccountParent:
     """Unit tests for SlurmClient.set_account_parent()."""

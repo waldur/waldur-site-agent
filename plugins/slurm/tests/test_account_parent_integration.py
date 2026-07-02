@@ -117,3 +117,30 @@ class TestSyncResourceProjectIsIdempotent:
         assert before == "c-org"
         if client.get_account_parent("p-proj") != "c-org":  # pragma: no cover
             client.set_account_parent("p-proj", "c-org")
+
+
+class TestAccountCaseInsensitivity:
+    """A project whose Waldur name has capital letters must still be matched.
+
+    Slurm stores account names lower-cased, so ``get_account_parent`` reads
+    back a folded name while the Waldur backend_id keeps the original case.
+    The emulator (>=0.8.0, pinned in this plugin's dev deps) reproduces that
+    folding, so these exercise the real mismatch end-to-end rather than the
+    hand-mocked output of the unit tests.
+    """
+
+    def test_get_account_parent_matches_mixed_case_backend_id(self, client):
+        # Created as 2026_00A; Slurm (and the emulator) store it as 2026_00a.
+        client._emulator.handle_command(["add", "account", "2026_00A", "parent=c-org"])
+        assert client.get_account_parent("2026_00A") == "c-org"
+
+    def test_no_spurious_reparent_for_correctly_parented_mixed_case_account(self, client):
+        # The production symptom: the buggy exact-match saw no parent for a
+        # capitalised project every cycle and reissued a reparent that Slurm
+        # rejected. With case-insensitive matching the parent is detected, so
+        # a redundant set_account_parent to the same (already-correct) parent
+        # is a no-op that does not raise.
+        client._emulator.handle_command(["add", "account", "2026_00A", "parent=c-org"])
+        assert client.get_account_parent("2026_00A") == "c-org"
+        assert client.set_account_parent("2026_00A", "c-org") == ""
+        assert client.get_account_parent("2026_00A") == "c-org"
