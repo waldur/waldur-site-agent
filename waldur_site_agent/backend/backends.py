@@ -544,6 +544,21 @@ class BaseBackend(ABC):
         """
         del waldur_resource, waldur_rest_client
 
+    def sync_resource_limits(
+        self,
+        waldur_resource: WaldurResource,
+        waldur_rest_client: AuthenticatedClient,
+    ) -> None:
+        """Reconcile the resource limits between the backend and Waldur.
+
+        Default: the backend is the source of truth; pull its limits into the
+        Waldur resource. Override in backends that manage limits differently
+        (e.g. Waldur federation, which can disable this via ``limit_sync_direction``).
+        """
+        from waldur_site_agent.common.utils import sync_waldur_resource_limits  # noqa: PLC0415
+
+        sync_waldur_resource_limits(self, waldur_rest_client, waldur_resource)
+
     def sync_resource_effective_id(
         self,
         waldur_resource: WaldurResource,

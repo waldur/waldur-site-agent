@@ -11,7 +11,7 @@ from waldur_site_agent.common.plugin_schemas import (
     PluginComponentSchema,
     TargetComponentConfig,
 )
-from waldur_site_agent_waldur.enums import EndDateSyncDirection
+from waldur_site_agent_waldur.enums import EndDateSyncDirection, LimitSyncDirection
 
 
 class WaldurComponentSchema(PluginComponentSchema):
@@ -92,6 +92,12 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
         description="Direction for end-date synchronisation between Waldur A and B. "
         "'a_to_b': push A end-date to B. 'b_to_a': pull B end-date into A. "
         "'bidirectional': sync whichever side changes. 'disabled': no sync.",
+    )
+    limit_sync_direction: LimitSyncDirection = Field(
+        default=LimitSyncDirection.B_TO_A,
+        description="Direction for resource-limit synchronization between Waldur A and B. "
+        "'b_to_a' (default): Waldur B is the source of truth, push B's limits into A. "
+        "'disabled': do not synchronize limits (limits change only via orders).",
     )
     passthrough_attributes: list[str] = Field(
         default_factory=list,

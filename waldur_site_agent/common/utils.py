@@ -1563,7 +1563,7 @@ def sync_resource_limits() -> None:
         logger.info("Processing limits for %s resource(s)", len(waldur_resources))
         for waldur_resource in waldur_resources:
             try:
-                sync_waldur_resource_limits(backend, waldur_rest_client, waldur_resource)
+                backend.sync_resource_limits(waldur_resource, waldur_rest_client)
             except (BackendError, UnexpectedStatus, TimeoutException) as e:
                 logger.error(
                     "Failed to sync resource limits for %s, reason: %s", waldur_resource.name, e

@@ -10,3 +10,10 @@ class EndDateSyncDirection(str, Enum):
     B_TO_A = "b_to_a"
     BIDIRECTIONAL = "bidirectional"
     DISABLED = "disabled"
+
+
+class LimitSyncDirection(str, Enum):
+    """Direction for resource-limit synchronization between Waldur instances."""
+
+    B_TO_A = "b_to_a"
+    DISABLED = "disabled"
