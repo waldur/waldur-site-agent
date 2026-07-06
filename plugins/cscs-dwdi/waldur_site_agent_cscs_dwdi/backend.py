@@ -849,3 +849,325 @@ class CSCSDWDIStorageBackend(BaseBackend):
             "CSCS-DWDI storage backend is reporting-only and does not support resource downscaling"
         )
         raise NotImplementedError(msg)
+
+
+
+class CSCSDWDIInferenceBackend(BaseBackend):
+    """Backend for reporting inference cost from CSCS-DWDI API."""
+
+    supports_decreasing_usage: bool = True
+
+    def __init__(
+        self, backend_settings: dict[str, Any], backend_components: dict[str, Any]
+    ) -> None:
+        """Initialize CSCS-DWDI storage backend.
+
+        Args:
+            backend_settings: Backend-specific settings from the offering
+            backend_components: Component configuration from the offering
+        """
+        normalized_backend_components = {}
+
+        for name, component in backend_components.items():
+            if isinstance(component, BackendComponent):
+                # Use to_dict() method for BackendComponent
+                normalized_backend_components[name] = component.to_dict()
+            elif isinstance(component, BaseModel):
+                # Use model_dump() for other Pydantic models
+                normalized_backend_components[name] = component.model_dump()
+            else:
+                # Fallback for plain objects or dicts
+                normalized_backend_components[name] = component
+
+        super().__init__(backend_settings, normalized_backend_components)
+        self.backend_type = "cscs-dwdi-inference"
+
+        self.filesystem = backend_settings.get("storage_filesystem", "")
+        self.data_type = backend_settings.get("storage_data_type", "")
+        self.tenant = backend_settings.get("storage_tenant", "")
+        # Extract CSCS-DWDI specific configuration
+        self.api_url = backend_settings.get("cscs_dwdi_api_url", "")
+        self.client_id = backend_settings.get("cscs_dwdi_client_id", "")
+        self.client_secret = backend_settings.get("cscs_dwdi_client_secret", "")
+
+        # Required OIDC configuration
+        self.oidc_token_url = backend_settings.get("cscs_dwdi_oidc_token_url", "")
+        self.oidc_scope = backend_settings.get("cscs_dwdi_oidc_scope")
+
+        # Optional SOCKS proxy configuration
+        self.socks_proxy = backend_settings.get("socks_proxy")
+
+        if not all([self.api_url, self.client_id, self.client_secret, self.oidc_token_url]):
+            msg = (
+                "CSCS-DWDI inference backend requires cscs_dwdi_api_url, cscs_dwdi_client_id, "
+                "cscs_dwdi_client_secret, and cscs_dwdi_oidc_token_url in backend_settings"
+            )
+            raise ValueError(msg)
+
+
+        self.cscs_client = CSCSDWDIClient(
+            api_url=self.api_url,
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            oidc_token_url=self.oidc_token_url,
+            oidc_scope=self.oidc_scope,
+            socks_proxy=self.socks_proxy,
+        )
+
+        if self.socks_proxy:
+            logger.info("CSCS-DWDI Inference Backend: Using SOCKS proxy: %s", self.socks_proxy)
+
+    def ping(self, raise_exception: bool = False) -> bool:  # noqa: ARG002
+        """Check if CSCS-DWDI API is accessible.
+
+        Args:
+            raise_exception: Whether to raise an exception on failure
+
+        Returns:
+            True if API is accessible, False otherwise
+        """
+        return self.cscs_client.ping_inference()
+
+    def _get_inference_cost_for_month(
+        self, resource_uuids: list[str], from_month: str, to_month : str
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Shared helper to query storage usage for a specific month.
+
+        Args:
+            resource_uuids: List of resource identifiers (paths or mapped IDs)
+            from_month: Month in "YYYY-MM" format
+            to_month: Month in "YYYY-MM" format
+
+        Returns:
+            Formatted usage report dict.
+        """
+        if not resource_uuids:
+            logger.warning("No resource backend UUIDs provided for inference cost report")
+            return {}
+
+        logger.info(
+            "Fetching inference cost report for %d resources for month %s",
+            len(resource_uuids),
+            to_month,
+        )
+
+        usage_report: dict[str, dict[str, dict[str, float]]] = {}
+
+        try:
+            # Map resource IDs to inference paths
+
+            response = self.cscs_client.get_inference_cost_for_month(
+                resource_uuid=resource_uuids,
+                month_from=from_month,
+                month_to=to_month
+            )
+
+            inference_data = response.get("inference", [])
+
+            for inference_entry in inference_data:
+                uuid = inference_entry.get("waldurResourceUuid")
+                if not uuid:
+                    logger.warning("Resource entry missing uuid, skipping")
+                    continue
+
+
+                total_cost = inference_entry.get("totalCost", 0)
+
+                resource_id = inference_entry.get("waldurResourceUuid")
+
+                inference_usage: dict[str, float] = {}
+                for component_name, component_config in self.backend_components.items():
+                    if (
+                        component_name.lower() == "token_cost"
+                    ):
+                        unit_factor = component_config.get(
+                            "unit_factor_reporting", component_config.get("unit_factor", 1)
+                        )
+                        inference_usage[component_name] = round(
+                            total_cost * (1.0 / unit_factor), 2
+                        )
+
+
+                usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE": inference_usage}
+
+            logger.info(
+                "Successfully retrieved inference cost for %d resources",
+                len(usage_report),
+            )
+
+            return usage_report
+
+        except Exception:
+            logger.exception("Failed to get inference cost report from CSCS-DWDI")
+            raise
+
+    def _get_usage_report(
+        self, resource_uuids: list[str]
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Get inference usage report for the current month."""
+        today = datetime.now(tz=timezone.utc).date()
+        exact_month = today.strftime("%Y-%m")
+        return self._get_inference_cost_for_month(
+            resource_uuids=resource_uuids, from_month=exact_month, to_month=exact_month)
+
+    def get_usage_report_for_period(
+        self, resource_uuids: list[str], year: int, month: int,
+        waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Get storage usage report for a specific billing period."""
+        if not resource_uuids:
+            return {}
+        exact_month = f"{year:04d}-{month:02d}"
+        return self._get_inference_cost_for_month(
+            resource_uuids, from_month=exact_month, to_month=exact_month)
+
+    def _pull_backend_resource(
+        self, resource_uuid: str
+    ) -> Optional[structures.BackendResourceInfo]:
+        """Pull resource data from the backend."""
+        logger.info("Pulling resource %s", resource_uuid)
+
+        if resource_uuid is None:
+            logger.warning("There is no resource with UUID %s in the backend", resource_uuid)
+            return None
+
+        logger.info("Resource UUID %s", resource_uuid)
+        usage = self._get_usage_report([resource_uuid])
+
+        if usage is None:
+            empty_usage = dict.fromkeys(self.backend_components, 0.0)
+            usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
+
+        return structures.BackendResourceInfo(
+            users=[resource_uuid],
+            usage=usage,
+            backend_id=resource_uuid,
+        )
+
+
+    def get_account(self, account_name: str) -> Optional[dict[str, Any]]:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support account management"
+        raise NotImplementedError(msg)
+
+
+    def create_account(self, account_data: dict) -> bool:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support account creation"
+        raise NotImplementedError(msg)
+
+
+    def delete_account(self, account_name: str) -> bool:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support account deletion"
+        raise NotImplementedError(msg)
+
+
+    def update_account_limit_deposit(
+            self,
+            account_name: str,
+            component_type: str,
+            component_amount: float,
+            offering_component_data: dict,
+    ) -> bool:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support limit updates"
+        raise NotImplementedError(msg)
+
+
+    def reset_account_limit_deposit(
+            self,
+            account_name: str,
+            component_type: str,
+            offering_component_data: dict,
+    ) -> bool:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support limit resets"
+        raise NotImplementedError(msg)
+
+
+    def add_account_users(self, account_name: str, user_backend_ids: list[str]) -> bool:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support user management"
+        raise NotImplementedError(msg)
+
+
+    def delete_account_users(self, account_name: str, user_backend_ids: list[str]) -> bool:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support user management"
+        raise NotImplementedError(msg)
+
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support account listing"
+        raise NotImplementedError(msg)
+
+
+    def set_resource_limits(self, resource_backend_id: str, limits: dict[str, int]) -> None:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support resource limits"
+        raise NotImplementedError(msg)
+
+
+    def diagnostics(self) -> bool:
+        """Get diagnostic information for the backend."""
+        logger.info(
+            "CSCS-DWDI Inference Backend Diagnostics - Type: %s, API: %s, Components: %s, Ping: %s",
+            self.backend_type,
+            self.api_url,
+            list(self.backend_components.keys()),
+            self.ping(),
+        )
+        return self.ping()
+
+
+    def get_resource_metadata(self, resource_backend_id: str) -> dict[str, Any]:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support resource metadata"
+        raise NotImplementedError(msg)
+
+
+    def list_components(self) -> list[str]:
+        """List configured components for this backend."""
+        return list(self.backend_components.keys())
+
+
+    def _collect_resource_limits(
+            self, waldur_resource: WaldurResource
+    ) -> tuple[dict[str, int], dict[str, int]]:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support resource limits"
+        raise NotImplementedError(msg)
+
+
+    def _pre_create_resource(
+            self,
+            waldur_resource: WaldurResource,
+            user_context: Optional[dict] = None,
+    ) -> None:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support resource creation"
+        raise NotImplementedError(msg)
+
+
+    def pause_resource(self, resource_backend_id: str) -> bool:
+        """Not implemented for reporting-only backend."""
+        msg = "CSCS-DWDI storage backend is reporting-only and does not support resource pausing"
+        raise NotImplementedError(msg)
+
+
+    def restore_resource(self, resource_backend_id: str) -> bool:
+        """Not implemented for reporting-only backend."""
+        msg = (
+            "CSCS-DWDI storage backend is reporting-only and does not support resource restoration"
+        )
+        raise NotImplementedError(msg)
+
+
+    def downscale_resource(self, resource_backend_id: str) -> bool:
+        """Not implemented for reporting-only backend."""
+        msg = (
+            "CSCS-DWDI storage backend is reporting-only and does not support resource downscaling"
+        )
+        raise NotImplementedError(msg)
