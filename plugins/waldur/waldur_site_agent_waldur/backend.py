@@ -537,6 +537,16 @@ class WaldurBackend(backends.BaseBackend):
             Target order UUID when an update order was submitted on Waldur B.
         """
         target_limits = self.component_mapper.convert_limits_to_target(limits)
+        current_limits = self.client.get_resource_limits(resource_backend_id)
+        if target_limits and all(
+            current_limits.get(key) == value for key, value in target_limits.items()
+        ):
+            logger.info(
+                "Limits for resource %s already in sync on Waldur B (%s), skipping update order",
+                resource_backend_id,
+                target_limits,
+            )
+            return None
         try:
             order_uuid = self.client.create_update_order(
                 resource_uuid=UUID(resource_backend_id),
