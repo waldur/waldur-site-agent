@@ -426,3 +426,88 @@ class CSCSDWDIClient:
         except Exception:
             logger.exception("Storage ping failed")
             return False
+
+
+    def get_inference_cost_for_month(
+        self,
+        resource_uuid: list[str],
+        month_from: str,
+        month_to: str,
+    ) -> dict[str, Any]:
+        """Get inference cost data for specified paths for a month.
+
+        Args:
+            resource_uuid: Resource UUID
+            month_from: Month in YYYY-MM format
+            month_to: Month in YYYY-MM format
+
+        Returns:
+            API response with inference cost data
+
+        Raises:
+            httpx.HTTPError: If API request fails
+        """
+        token = self._get_auth_token()
+
+        params: dict[str, Any] = {
+            "from": month_from,
+            "to": month_to
+        }
+
+        # Add optional parameters
+        if resource_uuid:
+            params["resource_uuid"] = resource_uuid
+
+        headers = {"Authorization": f"Bearer {token}"}
+
+        url = f"{self.api_url}/inference/resource/cost"
+
+        logger.debug(
+            "Fetching inference cost for resources with resource_uuid %s for month %s",
+            resource_uuid,
+            month_to,
+        )
+
+        # Configure httpx client with SOCKS proxy if specified
+        client_args: dict[str, Any] = {"timeout": 30.0}
+        if self.socks_proxy:
+            client_args["proxy"] = self.socks_proxy
+            logger.debug("Using SOCKS proxy for API request: %s", self.socks_proxy)
+
+        with httpx.Client(**client_args) as client:
+            response = client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            return response.json()
+
+
+    def ping_inference(self) -> bool:
+        """Check if CSCS-DWDI inference API is accessible.
+
+        Returns:
+            True if API is accessible, False otherwise
+        """
+        try:
+            token = self._get_auth_token()
+            headers = {"Authorization": f"Bearer {token}"}
+
+            # Use a simple query to test connectivity
+            today = datetime.now(tz=timezone.utc).date()
+            params = {
+                "exact-date": today.strftime("%Y-%m-%d"),
+            }
+
+            # Use default values for ping test
+            url = f"{self.api_url}/inference/resource/cost"
+
+            # Configure httpx client with SOCKS proxy if specified
+            client_args: dict[str, Any] = {"timeout": 10.0}
+            if self.socks_proxy:
+                client_args["proxy"] = self.socks_proxy
+                logger.debug("Using SOCKS proxy for storage ping: %s", self.socks_proxy)
+
+            with httpx.Client(**client_args) as client:
+                response = client.get(url, params=params, headers=headers)
+                return response.status_code == HTTP_OK
+        except Exception:
+            logger.exception("Inference ping failed")
+            return False
