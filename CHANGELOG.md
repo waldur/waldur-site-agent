@@ -1,23 +1,24 @@
 # Changelog
 
-## 1.0.6-rc.7 - 2026-07-07
+## 1.0.6-rc.8 - 2026-07-07
 
-- **SLURM**: Add optional `slurmrestd` REST API execution mode as an alternative to CLI-based operations.
-- **Federation**: Add configurable resource-limit sync direction via `limit_sync_direction`.
-- **Federation**: Skip no-op limit-update orders when the limit value is unchanged.
-- **Federation**: Sync project OECD code, industry flag, and science sub-domain to the Waldur backend ([WAL-10044]).
-- **Federation**: Refactor resource `end_date` sync to match project `end_date` sync behavior ([WAL-10000]).
-- **SLURM**: Fix allocation account being orphaned at root after a project reparent.
+- **SLURM**: Add optional `slurmrestd` REST API execution mode as an alternative to CLI-based command execution.
+- **SLURM**: Sanitize newlines in account descriptions to prevent malformed `sacctmgr` commands (issue #17).
 - **SLURM**: Match account names case-insensitively in `get_account_parent`.
 - **SLURM**: Skip unchanged periodic settings to avoid redundant `sacctmgr` modifications.
-- **Core**: Flag backend users for removal when they leave all their projects ([gh-13]).
-- **Core**: Early-exit `create_user_homedirs` when home directories already exist ([gh-15]).
+- **SLURM**: Fix allocation account being orphaned at root after a project reparent.
+- **Federation**: Add configurable resource-limit sync direction via `limit_sync_direction`.
+- **Federation**: Skip no-op limit-update orders to avoid redundant processing.
+- **Federation**: Sync project OECD code, industry flag, and science sub-domain to the Waldur backend ([WAL-10044]).
+- **Federation**: Refactor resource `end_date` sync to match project `end_date` sync ([WAL-10000]).
 - **Core**: Surface real past-period usage 400 errors instead of masking them ([WAL-10071]).
-- **Core**: Ensure usage data is reported with 2 decimal places and keep idempotency in sync.
-- **cscs-dwdi**: Add inference reporting support in the backend and client.
+- **Core**: Ensure usage data is reported with 2 decimal places while preserving idempotency.
+- **Core**: Flag backend users for removal when they leave all projects ([gh-13]).
+- **Core**: Add early exit in `create_user_homedirs` for existing home directories ([gh-15]).
+- **cscs-dwdi**: Add inference reporting support.
 - **Docs**: Document cluster-side verification of raw-usage resets and the account name policy vs. resource slug template conflict ([WAL-9925]).
 
-> 23 commits, 58 files changed (+5150/-321)
+> 26 commits, 58 files changed (+5215/-339)
 
 ---
 
