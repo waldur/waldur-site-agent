@@ -1,99 +1,99 @@
 [[IgnoredVulns]]
 id = "GHSA-2xpw-w6gg-jr37"
 reason = "urllib3 v1→v2 is a breaking change. Requires migration effort. requests 2.32.x pins urllib3<2."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-38jv-5279-wg99"
 reason = "urllib3 v1→v2 is a breaking change. Requires migration effort. requests 2.32.x pins urllib3<2."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-gm62-xv2j-4w53"
 reason = "urllib3 v1→v2 is a breaking change. Requires migration effort. requests 2.32.x pins urllib3<2."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-pq67-6m6q-mj2v"
 reason = "urllib3 v1→v2 is a breaking change. Requires migration effort. requests 2.32.x pins urllib3<2."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-qccp-gfcp-xxvc"
 reason = "Affects urllib3 1.26.20 (Python 3.9 path only); fix is in 2.7.0. urllib3 v1→v2 is a breaking change and requests 2.32.x pins urllib3<2 on Python <3.10. The Python ≥3.10 path is already on 2.7.0."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-gc5v-m9x4-r6x2"
 reason = "requests 2.33.0 requires urllib3>=2, which is a breaking change for this project."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-6w46-j5rx-g56g"
 reason = "pytest is a dev-only dependency. pytest 9.0.3+ requires Python>=3.10, but this project supports Python 3.9. The vuln is a local tmpdir privilege escalation, low risk for CI/dev."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "PYSEC-2026-161"
 reason = "starlette is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi 0.128.7, which pins starlette<1.0. The fix is in starlette 1.0.1, a major upgrade unreachable without bumping fastapi. starlette is never used in production code; the Host-header path-validation flaw has no exposure here."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-537c-gmf6-5ccf"
 reason = "cryptography is upgraded to 49.0.0 (>= the 48.0.1 fix) on Python > 3.9. Only the Python 3.9 path remains on 47.0.0 because cryptography 48+ dropped Python 3.9 support, which this project still targets. Revisit and drop this entry once Python 3.9 support is removed."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-82w8-qh3p-5jfq"
 reason = "starlette is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi, which pins starlette<1.0. The fix is in starlette 1.3.1, a major upgrade unreachable without bumping fastapi. starlette is never used in production code."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-jp82-jpqv-5vv3"
 reason = "starlette is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi, which pins starlette<1.0. The fix is in starlette 1.3.0, a major upgrade unreachable without bumping fastapi. starlette is never used in production code."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-wqp7-x3pw-xc5r"
 reason = "starlette is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi, which pins starlette<1.0. The fix is in starlette 1.1.0, a major upgrade unreachable without bumping fastapi. starlette is never used in production code."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-x746-7m8f-x49c"
 reason = "starlette is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi, which pins starlette<1.0. The fix is in starlette 1.1.0, a major upgrade unreachable without bumping fastapi. starlette is never used in production code."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-wp53-j4wj-2cfg"
 reason = "python-multipart is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi's dashboard form handling. Every fixed release requires Python>=3.10, so the Python 3.9 path is stuck on 0.0.20; the Python >=3.10 path already resolves the fixed 0.0.32. python-multipart is never used in production code. Revisit and drop this entry once Python 3.9 support is removed."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-pp6c-gr5w-3c5g"
 reason = "python-multipart is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi's dashboard form handling. Every fixed release requires Python>=3.10, so the Python 3.9 path is stuck on 0.0.20; the Python >=3.10 path already resolves the fixed 0.0.32. python-multipart is never used in production code. Revisit and drop this entry once Python 3.9 support is removed."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-5rvq-cxj2-64vf"
 reason = "python-multipart is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi's dashboard form handling. Every fixed release requires Python>=3.10, so the Python 3.9 path is stuck on 0.0.20; the Python >=3.10 path already resolves the fixed 0.0.32. python-multipart is never used in production code. Revisit and drop this entry once Python 3.9 support is removed."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-mj87-hwqh-73pj"
 reason = "python-multipart is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi's dashboard form handling. Every fixed release requires Python>=3.10, so the Python 3.9 path is stuck on 0.0.20; the Python >=3.10 path already resolves the fixed 0.0.32. python-multipart is never used in production code. Revisit and drop this entry once Python 3.9 support is removed."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-6jv3-5f52-599m"
 reason = "python-multipart is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi's dashboard form handling. Every fixed release requires Python>=3.10, so the Python 3.9 path is stuck on 0.0.20; the Python >=3.10 path already resolves the fixed 0.0.32. python-multipart is never used in production code. Revisit and drop this entry once Python 3.9 support is removed."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-v9pg-7xvm-68hf"
 reason = "python-multipart is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi's dashboard form handling. Every fixed release requires Python>=3.10, so the Python 3.9 path is stuck on 0.0.20; the Python >=3.10 path already resolves the fixed 0.0.32. python-multipart is never used in production code. Revisit and drop this entry once Python 3.9 support is removed."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-vffw-93wf-4j4q"
 reason = "python-multipart is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi's dashboard form handling. Every fixed release requires Python>=3.10, so the Python 3.9 path is stuck on 0.0.20; the Python >=3.10 path already resolves the fixed 0.0.32. python-multipart is never used in production code. Revisit and drop this entry once Python 3.9 support is removed."
-ignoreUntil = 2026-07-07T00:00:00Z
+ignoreUntil = 2027-01-07T00:00:00Z
