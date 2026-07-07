@@ -111,8 +111,13 @@ class SlurmClient(SlurmClientInterface):
 
         Strips double quotes to prevent breaking out of the quoted context
         and injecting additional sacctmgr parameters.
+
+        Collapses any whitespace runs (including newlines and tabs) into a
+        single space. Newlines stored in an account's description otherwise
+        make ``sacctmgr --parsable2`` emit a multi-line record, which breaks
+        line-based parsing on read-back (see issue #17).
         """
-        return value.replace('"', "")
+        return " ".join(value.replace('"', "").split())
 
     def create_resource(
         self,
@@ -417,11 +422,16 @@ class SlurmClient(SlurmClientInterface):
         return output.strip().isdigit()
 
     def _parse_account(self, line: str) -> ClientResource:
-        parts = line.split("|")
+        # Accounts created before descriptions were sanitized may contain
+        # newlines, in which case ``sacctmgr --parsable2`` splits the record
+        # across several lines and this ``line`` holds only the leading part
+        # (see issue #17). Pad with empty fields instead of raising IndexError
+        # so such accounts can still be detected and processed.
+        name, description, organization, *_ = (*line.split("|"), "", "")
         return ClientResource(
-            name=parts[0],
-            description=parts[1],
-            organization=parts[2],
+            name=name,
+            description=description,
+            organization=organization,
         )
 
     def _parse_association(self, line: str) -> Association:

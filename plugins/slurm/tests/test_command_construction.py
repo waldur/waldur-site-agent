@@ -650,3 +650,40 @@ class TestClusterFilteringWithEmulator:
         assert qos.flags == "DenyOnLimit,NoDecay"
         assert qos.grp_tres == "cpu=100"
         assert qos.max_jobs == 50
+
+
+class TestDescriptionSanitization:
+    """Newlines and quotes in descriptions must not break sacctmgr (issue #17)."""
+
+    @pytest.fixture
+    def client(self):
+        client = SlurmClient({"cpu": "CPU"}, slurm_bin_path="")
+        with patch.object(client, "execute_command", return_value=""):
+            yield client
+
+    def test_newlines_collapsed_in_create_resource(self, client):
+        """A multi-line description is flattened to a single space-joined line."""
+        client.create_resource("acct1", "line one\nline two\r\nline three", "org")
+        cmd = client.executed_commands[0]
+        assert "\n" not in cmd
+        assert "\r" not in cmd
+        assert 'description="line one line two line three"' in cmd
+
+    def test_quotes_and_whitespace_stripped(self, client):
+        """Quotes are removed and whitespace runs collapsed."""
+        assert client._sanitize_sacctmgr_value('a "quote"\t and\n\n newlines') == "a quote and newlines"
+
+    def test_parse_account_tolerates_truncated_line(self, client):
+        """A record split by a stored newline must not raise IndexError."""
+        resource = client._parse_account("2026_084|2026_084: gpu-accelerated integration of")
+        assert resource.name == "2026_084"
+        assert resource.organization == ""
+
+    def test_get_resource_survives_newline_corrupted_account(self):
+        """get_resource returns a resource instead of crashing on a broken record."""
+        client = SlurmClient({"cpu": "CPU"}, slurm_bin_path="")
+        broken = "2026_084|2026_084: gpu-accelerated integration of\ntranscriptomics data|2026_084"
+        with patch.object(client, "execute_command", return_value=broken):
+            resource = client.get_resource("2026_084")
+        assert resource is not None
+        assert resource.name == "2026_084"
