@@ -451,6 +451,24 @@ class TestSetLimits:
         target_limits = call_args.kwargs["limits"]
         assert target_limits == {"gpu_hours": 500, "storage_gb_hours": 1000}
 
+    def test_set_resource_limits_skips_when_already_in_sync(self, backend, mock_client):
+        # Waldur B already holds the target value -> no redundant update order
+        mock_client.get_resource_limits.return_value = {"cpu": 200}
+
+        result = backend.set_resource_limits(str(RESOURCE_UUID), {"cpu": 200})
+
+        assert result is None
+        mock_client.create_update_order.assert_not_called()
+
+    def test_set_resource_limits_creates_order_when_changed(self, backend, mock_client):
+        mock_client.get_resource_limits.return_value = {"cpu": 100}
+        mock_client.create_update_order.return_value = ORDER_UUID
+
+        result = backend.set_resource_limits(str(RESOURCE_UUID), {"cpu": 200})
+
+        assert result == str(ORDER_UUID)
+        mock_client.create_update_order.assert_called_once()
+
 
 class TestGetLimits:
     def test_get_resource_limits_passthrough(self, backend, mock_client):

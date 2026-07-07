@@ -1,26 +1,23 @@
 # Changelog
 
-## 1.0.6-rc.5 - 2026-07-06
+## 1.0.6-rc.6 - 2026-07-06
 
-### Changes
-
+- **SLURM**: Add optional `slurmrestd` REST API execution mode as an alternative to CLI-based command execution.
 - **Waldur**: Add configurable resource-limit sync direction via `limit_sync_direction`.
+- **Waldur**: Skip no-op limit-update orders when the limit value is unchanged.
 - **Waldur**: Sync project OECD code, industry flag and science sub-domain to the backend ([WAL-10044]).
 - **Waldur**: Refactor resource `end_date` sync to match project `end_date` sync ([WAL-10000]).
-- **SLURM**: Add optional slurmrestd REST API execution mode (design and implementation).
-- **SLURM**: Skip unchanged periodic settings to avoid redundant `sacctmgr` modifications.
-- **SLURM**: Match account names case-insensitively in `get_account_parent`.
-- **SLURM**: Fix allocation account left orphaned at root after project reparent.
-- **CSCS-DWDI**: Add inference report support.
+- **CSCS-DWDI**: Add inference reporting support to the backend and client.
 - **Core**: Surface real past-period usage 400 errors instead of masking them ([WAL-10071]).
-- **Core**: Ensure 2 decimal places on usage data and keep idempotency in sync.
+- **Core**: Ensure usage data is reported with 2 decimal places and keep idempotency in sync.
 - **Core**: Flag backend users for removal when they leave all projects ([gh-13]).
-- **Core**: Add early exit in `create_user_homedirs` for existing home directories ([gh-15]).
-- **Docs**: Document cluster-side verification of raw-usage resets, and the account name policy vs. resource slug template conflict ([WAL-9925]).
+- **Core**: Early-exit `create_user_homedirs` when home directories already exist ([gh-15]).
+- **SLURM**: Fix allocation account orphaned at root after project reparent.
+- **SLURM**: Match account names case-insensitively in `get_account_parent`.
+- **SLURM**: Skip unchanged periodic settings to avoid redundant `sacctmgr` modifications.
+- **Docs**: Document cluster-side verification of raw-usage resets and the account name policy vs resource slug template conflict ([WAL-9925]).
 
-### Statistics
-
-> 14 commits, 58 files changed (+5121/-321 lines)
+> 16 commits, 58 files changed (+5153/-321 lines)
 
 ---
 
