@@ -21,7 +21,7 @@ else:
 # Marketplace offering type constants
 MARKETPLACE_SLURM_OFFERING_TYPE = "Marketplace.Slurm"
 # Agent processing intervals (in minutes) - configurable via environment variables
-WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES = int(
+WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES = float(
     os.environ.get("WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES", "5")
 )
 WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES = int(
