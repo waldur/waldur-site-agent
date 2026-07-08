@@ -22,7 +22,6 @@ import time as _time
 from enum import Enum
 from time import sleep
 from typing import Any, ClassVar, Optional, Union
-from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from waldur_api_client.api.backend_resource_requests import (
@@ -77,8 +76,9 @@ from waldur_api_client.api.marketplace_service_providers import (
     marketplace_service_providers_keys_list,
     marketplace_service_providers_list,
     marketplace_service_providers_project_service_accounts_list,
+    marketplace_service_providers_projects_list,
 )
-from waldur_api_client.api.projects import projects_list, projects_retrieve
+from waldur_api_client.api.projects import projects_list
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
     ComponentUsageCreateRequest,
@@ -1788,6 +1788,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         instead of calling Waldur themselves. Returns None when the backend does
         not need it or the fetch fails. The result is cached per project for the
         duration of the cycle, so resources sharing a project fetch it once.
+
+        Uses the service-provider-scoped projects endpoint for non-staff access.
         """
         if not self.resource_backend.requires_source_project:
             return None
@@ -1797,9 +1799,10 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.info("Using cached source project for project %s", cache_key)
             return self._source_project_cache[cache_key]
         try:
-            project = projects_retrieve.sync(
-                uuid=UUID(str(project_uuid)),
+            projects = marketplace_service_providers_projects_list.sync(
+                self.service_provider.uuid,
                 client=self.waldur_rest_client,
+                query=cache_key,
                 field=[
                     ProjectFieldEnum.OECD_FOS_2007_CODE,
                     ProjectFieldEnum.IS_INDUSTRY,
@@ -1807,6 +1810,18 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     ProjectFieldEnum.END_DATE_UPDATED_AT,
                 ],
             )
+            if not projects:
+                logger.warning("Source project %s not found", project_uuid)
+                project = None
+            elif len(projects) > 1:
+                logger.warning(
+                    "Query for source project %s matched %s projects, skipping",
+                    project_uuid,
+                    len(projects),
+                )
+                project = None
+            else:
+                project = projects[0]
         except UnexpectedStatus as e:
             logger.warning(
                 "Could not fetch source project %s (status %s): %s",
