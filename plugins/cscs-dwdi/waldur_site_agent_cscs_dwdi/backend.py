@@ -1034,13 +1034,14 @@ class CSCSDWDIInferenceBackend(BaseBackend):
         logger.info("Resource UUID %s", resource_uuid)
         usage = self._get_usage_report([resource_uuid])
 
+
         if usage is None:
             empty_usage = dict.fromkeys(self.backend_components, 0.0)
-            usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
+            usage = {resource_uuid:{"TOTAL_ACCOUNT_USAGE": empty_usage}}
 
         return structures.BackendResourceInfo(
             users=[resource_uuid],
-            usage=usage,
+            usage=usage[resource_uuid],
             backend_id=resource_uuid,
         )
 
