@@ -508,8 +508,7 @@ class MembershipSyncTest(unittest.TestCase):
         assert "cuid:bob" not in user_cuids
 
     def test_group_resource_usernames_mixed_users_with_identity_bridge(self) -> None:
-        """With identity bridge, users with offering_user_username use that;
-        CUID-only users fall back to CUID. Both appear in results."""
+        """With identity bridge, membership diff keys are always CUIDs."""
         processor = object.__new__(OfferingMembershipProcessor)
         processor._team_cache = {}
         processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
@@ -552,17 +551,66 @@ class MembershipSyncTest(unittest.TestCase):
             waldur_resource, backend_resource_info, offering_users=[alice_ou, bob_ou]
         )
 
-        # Both users should be new
-        assert "alice-on-b" in new_usernames
-        assert "cuid:bob" in new_usernames
+        assert new_usernames == {"cuid:alice", "cuid:bob"}
 
-        # Roles mapped correctly per key type
-        assert user_roles["alice-on-b"] == "PROJECT.MANAGER"
+        assert user_roles["cuid:alice"] == "PROJECT.MANAGER"
         assert user_roles["cuid:bob"] == "PROJECT.MEMBER"
 
-        # CUIDs: alice keyed by offering username, bob keyed by CUID
-        assert user_cuids["alice-on-b"] == "cuid:alice"
+        assert user_cuids["cuid:alice"] == "cuid:alice"
         assert user_cuids["cuid:bob"] == "cuid:bob"
+
+    def test_group_resource_usernames_federation_cuid_matches_backend(self) -> None:
+        """Regression: offering username on A must not break compare when B lists CUIDs.
+
+        Reproduces Waldur federation churn where A team has offering_user_username
+        (domeneca) but Waldur B pull_resources reports myaccessid CUIDs.
+        """
+        processor = object.__new__(OfferingMembershipProcessor)
+        processor._team_cache = {}
+        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
+        processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
+
+        waldur_resource = SimpleNamespace(
+            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+        )
+        cuid = "bc7eb766-edited-e638a46f163c@myaccessid.org"
+        backend_resource_info = SimpleNamespace(users=[cuid])
+
+        team = [
+            SimpleNamespace(
+                offering_user_username="domeneca",
+                username=cuid,
+                role="PROJECT.MANAGER",
+            ),
+        ]
+        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
+
+        offering_user = SimpleNamespace(
+            username="domeneca",
+            user_username=cuid,
+            user_email="domeneca@example.com",
+            state=None,
+        )
+
+        (
+            existing_usernames,
+            stale_usernames,
+            new_usernames,
+            user_roles,
+            user_emails,
+            user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[offering_user]
+        )
+
+        assert existing_usernames == {cuid}
+        assert new_usernames == set()
+        assert stale_usernames == set()
+        assert user_roles[cuid] == "PROJECT.MANAGER"
+        assert user_cuids[cuid] == cuid
+        assert user_emails[cuid] == "domeneca@example.com"
 
     def test_group_resource_usernames_cuid_user_existing_on_backend(self) -> None:
         """CUID-only user (ToS accepted) already on backend should appear in existing, not new."""

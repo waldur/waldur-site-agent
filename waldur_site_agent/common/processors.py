@@ -2168,9 +2168,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             - new_usernames: users in the Waldur team but not yet on the backend
             - user_roles: mapping of username to role name
             - user_emails: mapping of username to email address
-            - user_cuids: mapping of offering username to CUID (user_username)
-            - user_attributes: mapping of offering username to profile attributes
-            - offering_user_states: mapping of offering username to OfferingUserState
+            - user_cuids: mapping of sync username to CUID for identity resolution
+            - user_attributes: mapping of sync username to profile attributes
+            - offering_user_states: mapping of sync username to OfferingUserState
+
+        When the backend uses identity-bridge resolution, sync usernames are CUIDs
+        (ProjectUser.username). Otherwise they are offering usernames.
         """
         logger.info("Fetching new, existing and stale resource users")
         usernames: list[str] = backend_resource_info.users
@@ -2199,52 +2202,47 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             offering_user.username for offering_user in offering_users if offering_user.username
         }
 
-        resource_usernames = {
-            user.offering_user_username for user in team if user.offering_user_username
-        }
-        # Federation (Waldur↔Waldur) deadlock breaker:
-        # Membership sync must be able to add users to Waldur B even if A does not
-        # yet have offering_user_username. When the backend supports identity bridge resolution,
-        # fall back to using the user's CUID (ProjectUser.username) as the identifier.
-        # Consent filtering is enforced upstream via has_consent=True on the team API call.
         if use_identity_bridge:
-            cuid_only_usernames = {
+            # Federation (Waldur↔Waldur): compare using CUID (ProjectUser.username),
+            # which is stable across instances and matches what identity-bridge backends
+            # report via pull_resources. Offering usernames are provider-local posix
+            # accounts and must not be used as the membership diff key.
+            resource_usernames = {
                 user.username
                 for user in team
                 if user.username
-                and not user.offering_user_username
             }
-            resource_usernames |= cuid_only_usernames
+            user_roles = {
+                user.username: user.role
+                for user in team
+                if user.username and user.role
+            }
+            user_emails = {
+                offering_user.user_username: offering_user.user_email
+                for offering_user in offering_users
+                if offering_user.user_username
+                and isinstance(offering_user.user_email, str)
+            }
+        else:
+            resource_usernames = {
+                user.offering_user_username for user in team if user.offering_user_username
+            }
+            user_roles = {
+                user.offering_user_username: user.role
+                for user in team
+                if user.offering_user_username and user.role
+            }
+            user_emails = {
+                offering_user.username: offering_user.user_email
+                for offering_user in offering_users
+                if offering_user.username
+                and isinstance(offering_user.user_email, str)
+            }
         logger.info(
-            "Resource offering usernames (%s): %s",
+            "Resource team usernames (%s): %s",
             len(resource_usernames),
             ", ".join(str(u) for u in resource_usernames),
         )
-
-        # Build user_roles mapping (username -> Waldur role) for backends that need it
-        user_roles = {
-            user.offering_user_username: user.role
-            for user in team
-            if user.offering_user_username and user.role
-        }
-        if use_identity_bridge:
-            user_roles.update(
-                {
-                    user.username: user.role
-                    for user in team
-                    if user.username
-                    and not user.offering_user_username
-                    and user.role
-                }
-            )
-
-        # Build user_emails mapping (username -> email) for backends that need it
-        user_emails = {
-            offering_user.username: offering_user.user_email
-            for offering_user in offering_users
-            if offering_user.username
-            and isinstance(offering_user.user_email, str)
-        }
 
         logger.info("Number of offering user usernames: %s", len(offering_user_usernames))
 
@@ -2268,32 +2266,43 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             "Resource stale usernames (%s): %s", len(stale_usernames), ", ".join(stale_usernames)
         )
 
-        # Build user_cuids mapping (offering_username -> user_username/CUID)
-        # for backends that need the CUID for identity resolution
-        user_cuids = {
-            user.offering_user_username: user.username
-            for user in team
-            if user.offering_user_username and user.username
-        }
+        # Build user_cuids mapping for backends that need the CUID for identity resolution.
         if use_identity_bridge:
-            # If we used CUID as the resource username key, map it to itself so backend
-            # resolution uses identity bridge with the CUID.
-            user_cuids.update(
-                {
-                    user.username: user.username
-                    for user in team
-                    if user.username
-                    and not user.offering_user_username
-                }
-            )
+            user_cuids = {
+                user.username: user.username
+                for user in team
+                if user.username
+            }
+        else:
+            user_cuids = {
+                user.offering_user_username: user.username
+                for user in team
+                if user.offering_user_username and user.username
+            }
 
         user_attributes = self._build_user_attributes_mapping(offering_users)
+        if use_identity_bridge:
+            user_attributes = {
+                offering_user.user_username: attrs
+                for offering_user in offering_users
+                if offering_user.user_username
+                and offering_user.username
+                and (attrs := user_attributes.get(offering_user.username))
+            }
 
-        offering_user_states: dict[str, OfferingUserState] = {
-            ou.username: ou.state
-            for ou in offering_users
-            if ou.username
-        }
+        if use_identity_bridge:
+            offering_user_states = {
+                offering_user.user_username: offering_user.state
+                for offering_user in offering_users
+                if offering_user.user_username
+                and hasattr(offering_user, "state")
+            }
+        else:
+            offering_user_states = {
+                ou.username: ou.state
+                for ou in offering_users
+                if ou.username
+            }
 
         return (
             existing_usernames,
