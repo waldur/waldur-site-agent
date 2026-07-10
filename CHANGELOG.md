@@ -1,26 +1,28 @@
 # Changelog
 
-## 1.0.6-rc.10 - 2026-07-09
+## 1.0.6-rc.11 - 2026-07-10
 
-- **SLURM**: Add optional `slurmrestd` REST API execution mode as an alternative to CLI-based command execution.
-- **Federation**: Add configurable resource-limit sync direction via `limit_sync_direction`.
+- **Core**: Add configurable resource-limit sync direction via `limit_sync_direction` to control whether limits flow to or from the backend.
 - **Federation**: Sync project OECD code, industry flag and science sub-domain to the Waldur backend ([WAL-10044]).
-- **Federation**: Refactor resource `end_date` sync to match project `end_date` sync ([WAL-10000]).
+- **Federation**: Refactor resource `end_date` sync to match project `end_date` sync behavior ([WAL-10000]).
 - **Federation**: Skip no-op limit-update orders to avoid redundant backend calls.
-- **Core**: Change order process period configuration type from int to float.
-- **Core**: Flag backend users for removal when they leave all their projects ([gh-13]).
+- **SLURM**: Add optional `slurmrestd` REST API execution mode as an alternative to CLI-based command execution.
+- **Core**: Add early exit in `create_user_homedirs` when a home directory already exists (gh-15).
+- **Core**: Flag backend users for removal when they leave all their projects (gh-13).
 - **Core**: Fetch source project via the service-provider-scoped projects endpoint.
 - **Core**: Surface real past-period usage 400 errors instead of masking them ([WAL-10071]).
-- **Core**: Ensure usage data is reported with 2 decimal places while keeping set-usage idempotent.
-- **Core**: Add early exit in `create_user_homedirs` for existing home directories ([gh-15]).
-- **SLURM**: Fix allocation account being orphaned at root after a project reparent.
-- **SLURM**: Match account names case-insensitively in `get_account_parent`.
+- **Core**: Ensure usage data is reported with 2 decimal places while preserving idempotency.
+- **CSCS-DWDI**: Add inference reporting support.
 - **SLURM**: Skip unchanged periodic settings to avoid redundant `sacctmgr` modifications.
+- **SLURM**: Match account names case-insensitively in `get_account_parent`.
 - **SLURM**: Sanitize newlines in account descriptions (issue #17).
-- **CSCS-DWDI**: Add inference reporting and fix the inference reporting plugin.
-- **Docs**: Document the account name policy vs. resource slug template conflict ([WAL-9925]) and cluster-side verification of raw-usage resets.
+- **Core**: Fix mass user add and revoke.
+- **CSCS-DWDI**: Fix inference reporting plugin.
+- **Core**: Change order process period configuration type from int to float.
+- **SLURM**: Fix allocation account orphaned at root after project reparent.
+- **Docs**: Document account name policy vs resource slug template conflict ([WAL-9925]), cluster-side verification of raw-usage resets, and the `limit_sync_direction` option.
 
-> 31 commits, 59 files changed (+5260/-339)
+> 33 commits, 59 files changed (+5388/-410 lines)
 
 ---
 
