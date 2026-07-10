@@ -1,28 +1,28 @@
 # Changelog
 
-## 1.0.6-rc.11 - 2026-07-10
+## 1.0.6-rc.12 - 2026-07-10
 
-- **Core**: Add configurable resource-limit sync direction via `limit_sync_direction` to control whether limits flow to or from the backend.
-- **Federation**: Sync project OECD code, industry flag and science sub-domain to the Waldur backend ([WAL-10044]).
-- **Federation**: Refactor resource `end_date` sync to match project `end_date` sync behavior ([WAL-10000]).
-- **Federation**: Skip no-op limit-update orders to avoid redundant backend calls.
-- **SLURM**: Add optional `slurmrestd` REST API execution mode as an alternative to CLI-based command execution.
-- **Core**: Add early exit in `create_user_homedirs` when a home directory already exists (gh-15).
-- **Core**: Flag backend users for removal when they leave all their projects (gh-13).
-- **Core**: Fetch source project via the service-provider-scoped projects endpoint.
-- **Core**: Surface real past-period usage 400 errors instead of masking them ([WAL-10071]).
-- **Core**: Ensure usage data is reported with 2 decimal places while preserving idempotency.
-- **CSCS-DWDI**: Add inference reporting support.
-- **SLURM**: Skip unchanged periodic settings to avoid redundant `sacctmgr` modifications.
+- **SLURM**: Add optional `slurmrestd` REST API execution mode as an alternative to CLI-based operations.
+- **SLURM**: Sanitize newlines in account descriptions to prevent malformed `sacctmgr` commands (#17).
 - **SLURM**: Match account names case-insensitively in `get_account_parent`.
-- **SLURM**: Sanitize newlines in account descriptions (issue #17).
-- **Core**: Fix mass user add and revoke.
-- **CSCS-DWDI**: Fix inference reporting plugin.
+- **SLURM**: Skip unchanged periodic settings to avoid redundant `sacctmgr` modifications.
+- **SLURM**: Fix allocation account left orphaned at the root after a project reparent.
+- **Federation**: Add configurable resource-limit sync direction via `limit_sync_direction`.
+- **Federation**: Sync project OECD code, industry flag and science sub-domain to the Waldur backend ([WAL-10044]).
+- **Federation**: Refactor resource `end_date` sync to match project `end_date` sync ([WAL-10000]).
+- **Federation**: Skip no-op limit-update orders on the target Waldur instance.
+- **Federation**: Keep federation users consented to a sibling offering in the shared project.
+- **Federation**: Fetch the source project via the service-provider-scoped projects endpoint.
+- **Core**: Fix mass user add and revoke handling.
+- **Core**: Flag backend users for removal when they leave all projects (gh-13).
+- **Core**: Add early exit in `create_user_homedirs` when home directories already exist (gh-15).
+- **Core**: Surface real past-period usage 400 errors instead of masking them ([WAL-10071]).
+- **Core**: Ensure usage data is rounded to 2 decimal places and keep idempotency in sync.
 - **Core**: Change order process period configuration type from int to float.
-- **SLURM**: Fix allocation account orphaned at root after project reparent.
-- **Docs**: Document account name policy vs resource slug template conflict ([WAL-9925]), cluster-side verification of raw-usage resets, and the `limit_sync_direction` option.
+- **CSCS-DWDI**: Add inference reporting and fix the inference reporting plugin.
+- **Docs**: Document cluster-side verification of raw-usage resets and the account-name-policy vs resource-slug-template conflict ([WAL-9925]).
 
-> 33 commits, 59 files changed (+5388/-410 lines)
+> 35 commits, 60 files changed (+5705/-413)
 
 ---
 
