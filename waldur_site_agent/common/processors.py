@@ -2139,11 +2139,108 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             logger.info("Using cached team for project %s", cache_key)
             return self._team_cache[cache_key]
         logger.info("Fetching Waldur resource team")
-        team = marketplace_provider_resources_team_list.sync(
-            client=self.waldur_rest_client, uuid=resource.uuid.hex, has_consent=has_consent
-        )
+        if has_consent is True and self.resource_backend.shared_project_membership:
+            # Backends where many resources collapse onto one shared backend project
+            # (Waldur-to-Waldur federation) must keep a user as long as they consented
+            # to ANY offering with a resource in the project. Reconciling against a
+            # single resource's consented team would revoke a user who consented to a
+            # sibling offering but not to this one.
+            team = self._get_project_wide_consented_team(resource)
+        else:
+            team = marketplace_provider_resources_team_list.sync(
+                client=self.waldur_rest_client, uuid=resource.uuid.hex, has_consent=has_consent
+            )
         self._team_cache[cache_key] = team
         return team
+
+    def _fetch_consented_team(self, resource_uuid: str) -> list[ProjectUser]:
+        """Fetch the consent-filtered team for a single resource."""
+        return (
+            marketplace_provider_resources_team_list.sync(
+                client=self.waldur_rest_client, uuid=resource_uuid, has_consent=True
+            )
+            or []
+        )
+
+    def _get_project_wide_consented_team(
+        self, resource: WaldurResource
+    ) -> list[ProjectUser]:
+        """Return the union of consented teams across the project's federated resources.
+
+        Used for shared-project backends: a user must remain a member of the shared
+        backend project while they have consented to at least one offering that has a
+        resource in the source project. Falls back to the single resource's consented
+        team if the sibling resources cannot be listed (e.g. the agent token cannot see
+        offerings owned by another service provider).
+        """
+        project_uuid = resource.project_uuid.hex
+        try:
+            project_resources = marketplace_provider_resources_list.sync_all(
+                client=self.waldur_rest_client,
+                project_uuid=project_uuid,
+                state=self.resource_backend.handled_resource_states,
+                field=[ResourceFieldEnum.UUID, ResourceFieldEnum.PROJECT_UUID],
+            )
+        except Exception:
+            logger.exception(
+                "Could not list resources for project %s; falling back to the "
+                "single-resource consented team",
+                project_uuid,
+            )
+            return self._fetch_consented_team(resource.uuid.hex)
+
+        resource_uuids = {
+            project_resource.uuid.hex
+            for project_resource in project_resources
+            if project_resource.uuid
+        }
+        resource_uuids.add(resource.uuid.hex)
+
+        merged: dict[str, ProjectUser] = {}
+        own_member_keys: set[str] = set()
+        own_team_fetched = False
+        for resource_uuid in resource_uuids:
+            try:
+                team = self._fetch_consented_team(resource_uuid)
+            except Exception:
+                logger.exception(
+                    "Could not fetch consented team for resource %s", resource_uuid
+                )
+                continue
+            is_own_resource = resource_uuid == resource.uuid.hex
+            if is_own_resource:
+                own_team_fetched = True
+            for member in team:
+                if member.uuid:
+                    key: Optional[str] = member.uuid.hex
+                elif member.username:
+                    key = member.username
+                else:
+                    key = None
+                if key is not None:
+                    merged[key] = member
+                    if is_own_resource:
+                        own_member_keys.add(key)
+
+        # Members kept only because they consented to a sibling offering, not to this
+        # one. In the shared Waldur B project they gain access to this offering's
+        # resource without its consent — a fragile, over-provisioning scenario worth
+        # surfacing to log aggregation.
+        retained_via_sibling = sorted(
+            member.username
+            for key, member in merged.items()
+            if key not in own_member_keys and member.username
+        )
+        if own_team_fetched and retained_via_sibling:
+            logger.info(
+                "federation.shared_project.retained_via_sibling",
+                project_uuid=project_uuid,
+                offering_uuid=self.offering.uuid,
+                sibling_resource_count=len(resource_uuids) - 1,
+                retained_count=len(retained_via_sibling),
+                retained_users=retained_via_sibling,
+            )
+        return list(merged.values())
 
     def _group_resource_usernames(
         self,
