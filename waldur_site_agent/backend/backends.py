@@ -60,6 +60,14 @@ class BaseBackend(ABC):
     # plugin never calls Waldur itself.
     requires_source_project: bool = False
 
+    # Capability flag: Set to True for backends where every resource federated from a
+    # given source project collapses onto one shared backend project (e.g. Waldur-to-
+    # Waldur federation). When enabled, membership sync reconciles against the union of
+    # consented teams across all the project's resources, so a user is kept while they
+    # consent to any offering with a resource in the project instead of being revoked
+    # when a sibling offering's team is synced.
+    shared_project_membership: bool = False
+
     # Resource states the membership processor should fetch and handle.
     # Override in subclasses that need to process resources in additional
     # states (e.g., CREATING for backends with async order tracking).

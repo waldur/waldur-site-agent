@@ -54,6 +54,10 @@ class WaldurBackend(backends.BaseBackend):
     supports_async_orders = True
     supports_cycle_preflight = True
     requires_source_project = True
+    # Every resource federated from a given source project maps onto the same Waldur B
+    # project (backend_id = "{customer_uuid}_{project_uuid}"), so all resources share
+    # one project membership. See BaseBackend.shared_project_membership.
+    shared_project_membership = True
     handled_resource_states = [ResourceState.OK, ResourceState.ERRED, ResourceState.CREATING]
 
     def __init__(
