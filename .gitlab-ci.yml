@@ -21,8 +21,65 @@ include:
   # - project: "waldur/waldur-pipelines"
   #   file: "/templates/sbom/generate-python-codebase-sbom.yml"
 
+# Avoid running two full pipelines for every MR-branch push. Job rules here match
+# both `$CI_COMMIT_BRANCH` and `merge_request_event`, so an MR branch push used to
+# spawn a redundant branch pipeline AND the merge-request pipeline for the same
+# SHA (~2x CI cost on every active MR). Suppress the branch pipeline when an MR is
+# open; tags, scheduled runs, upstream triggers, and branches without an open MR
+# still run normally.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - when: always
+
 variables:
   COMPONENT_VERSION: "latest"
+  # Project-relative uv cache dir so the default cache: block can persist it
+  # (uv's default cache lives outside $CI_PROJECT_DIR and can't be cached).
+  UV_CACHE_DIR: .uv-cache
+
+# Default cache for all jobs: share uv's download cache across the pipeline keyed
+# on the lockfile. Previously the repo had NO cache, so all ~45 test jobs ran
+# `pip install uv && uv sync --all-packages` completely cold. Consumer jobs pull;
+# the .pre "Prime uv cache" job below is the single writer.
+cache: &uv_cache
+  key:
+    files:
+      - uv.lock
+  policy: pull
+  paths:
+    - .uv-cache
+
+Prime uv cache:
+  stage: .pre
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  interruptible: true
+  # Cache warming is best-effort: it must never red the pipeline. Without rules a
+  # job defaults to `only: branches/tags` and is skipped in MR pipelines (where it
+  # is most useful), so gate it explicitly on the same events as the consumers.
+  # allow_failure covers the occasional uv/hatchling build race in `uv sync`.
+  allow_failure: true
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: $CI_COMMIT_TAG
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
+  cache:
+    <<: *uv_cache
+    policy: pull-push
+  script:
+    - pip install uv
+    - uv sync --all-packages
 
 # Helm linting and validation
 Lint helm chart:
