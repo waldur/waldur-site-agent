@@ -97,3 +97,8 @@ ignoreUntil = 2027-01-07T00:00:00Z
 id = "GHSA-vffw-93wf-4j4q"
 reason = "python-multipart is pulled in only via slurm-emulator (a dev/test-only dependency of the slurm plugin) through fastapi's dashboard form handling. Every fixed release requires Python>=3.10, so the Python 3.9 path is stuck on 0.0.20; the Python >=3.10 path already resolves the fixed 0.0.32. python-multipart is never used in production code. Revisit and drop this entry once Python 3.9 support is removed."
 ignoreUntil = 2027-01-07T00:00:00Z
+
+[[IgnoredVulns]]
+id = "PYSEC-2026-2132"
+reason = "click is upgraded to 8.4.2 (>= the 8.3.3 fix) on Python >= 3.10. Only the Python 3.9 path remains on 8.1.8 because click 8.2+ dropped Python 3.9 support, which this project still targets. Revisit and drop this entry once Python 3.9 support is removed."
+ignoreUntil = 2027-01-07T00:00:00Z
