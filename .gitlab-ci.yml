@@ -125,7 +125,17 @@ Lint helm chart:
 .Run tests base:
   stage: test
   interruptible: true
+  # One image + matrix over all supported interpreters, shared by every suite
+  # job below. Replaces the 45 hand-written "Run python vX.Y <suite> tests" jobs
+  # and their 9 wrapper templates — adding a Python version is now one entry here.
+  image: "registry.hpc.ut.ee/mirror/library/python:$PYTHON_VERSION"
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
   coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
+  # Hoisted from the 9 identical wrapper templates.
+  before_script:
+    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
   artifacts:
     when: always
     reports:
@@ -135,7 +145,7 @@ Lint helm chart:
         path: coverage.xml
 
 # Core tests template - runs tests/ directory
-.Run core tests template:
+Run core tests:
   extends: .Run tests base
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
@@ -157,7 +167,7 @@ Lint helm chart:
     - pytest --cov=waldur_site_agent --cov-report=xml --cov-report=term --junitxml=report.xml tests/
 
 # Plugin test templates - each runs only when its plugin or core changes
-.Run slurm tests template:
+Run slurm tests:
   extends: .Run tests base
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
@@ -178,7 +188,7 @@ Lint helm chart:
     - source .venv/bin/activate
     - pytest --cov=plugins/slurm --cov-report=xml --cov-report=term --junitxml=report.xml plugins/slurm/
 
-.Run mup tests template:
+Run mup tests:
   extends: .Run tests base
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
@@ -199,7 +209,7 @@ Lint helm chart:
     - source .venv/bin/activate
     - pytest --cov=plugins/mup --cov-report=xml --cov-report=term --junitxml=report.xml plugins/mup/
 
-.Run harbor tests template:
+Run harbor tests:
   extends: .Run tests base
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
@@ -220,7 +230,7 @@ Lint helm chart:
     - source .venv/bin/activate
     - pytest --cov=plugins/harbor --cov-report=xml --cov-report=term --junitxml=report.xml plugins/harbor/
 
-.Run okd tests template:
+Run okd tests:
   extends: .Run tests base
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
@@ -241,7 +251,7 @@ Lint helm chart:
     - source .venv/bin/activate
     - pytest --cov=plugins/okd --cov-report=xml --cov-report=term --junitxml=report.xml plugins/okd/
 
-.Run rancher tests template:
+Run rancher tests:
   extends: .Run tests base
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
@@ -262,7 +272,7 @@ Lint helm chart:
     - source .venv/bin/activate
     - pytest --cov=plugins/rancher --cov-report=xml --cov-report=term --junitxml=report.xml plugins/rancher/
 
-.Run croit-s3 tests template:
+Run croit-s3 tests:
   extends: .Run tests base
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
@@ -283,7 +293,7 @@ Lint helm chart:
     - source .venv/bin/activate
     - pytest --cov=plugins/croit-s3 --cov-report=xml --cov-report=term --junitxml=report.xml plugins/croit-s3/
 
-.Run cscs-dwdi tests template:
+Run cscs-dwdi tests:
   extends: .Run tests base
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
@@ -304,7 +314,7 @@ Lint helm chart:
     - source .venv/bin/activate
     - pytest --cov=plugins/cscs-dwdi --cov-report=xml --cov-report=term --junitxml=report.xml plugins/cscs-dwdi/
 
-.Run waldur tests template:
+Run waldur tests:
   extends: .Run tests base
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
@@ -330,286 +340,17 @@ Scan Python dependencies:
   variables:
     LOCKFILE_PATH: "uv.lock"
 
-Run python v3.9 linters:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
+Run linters:
+  image: "registry.hpc.ut.ee/mirror/library/python:$PYTHON_VERSION"
   extends: .Run linters template
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
   before_script:
     - |
       echo 'default_language_version:' >> .pre-commit-config.yaml
-      echo '  python: python3.9' >> .pre-commit-config.yaml
+      echo "  python: python$PYTHON_VERSION" >> .pre-commit-config.yaml
     - cat .pre-commit-config.yaml
-
-Run python v3.10 linters:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Run linters template
-  before_script:
-    - |
-      echo 'default_language_version:' >> .pre-commit-config.yaml
-      echo '  python: python3.10' >> .pre-commit-config.yaml
-    - cat .pre-commit-config.yaml
-
-Run python v3.11 linters:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Run linters template
-  before_script:
-    - |
-      echo 'default_language_version:' >> .pre-commit-config.yaml
-      echo '  python: python3.11' >> .pre-commit-config.yaml
-    - cat .pre-commit-config.yaml
-
-Run python v3.12 linters:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Run linters template
-  before_script:
-    - |
-      echo 'default_language_version:' >> .pre-commit-config.yaml
-      echo '  python: python3.12' >> .pre-commit-config.yaml
-    - cat .pre-commit-config.yaml
-
-Run python v3.13 linters:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Run linters template
-  before_script:
-    - |
-      echo 'default_language_version:' >> .pre-commit-config.yaml
-      echo '  python: python3.13' >> .pre-commit-config.yaml
-    - cat .pre-commit-config.yaml
-
-# Core test job templates
-.Core test template:
-  extends: .Run core tests template
-  before_script:
-    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-
-# Plugin test job templates
-.Slurm test template:
-  extends: .Run slurm tests template
-  before_script:
-    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-
-.Mup test template:
-  extends: .Run mup tests template
-  before_script:
-    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-
-.Harbor test template:
-  extends: .Run harbor tests template
-  before_script:
-    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-
-.Okd test template:
-  extends: .Run okd tests template
-  before_script:
-    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-
-.Rancher test template:
-  extends: .Run rancher tests template
-  before_script:
-    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-
-.Croit-s3 test template:
-  extends: .Run croit-s3 tests template
-  before_script:
-    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-
-.Cscs-dwdi test template:
-  extends: .Run cscs-dwdi tests template
-  before_script:
-    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-
-.Waldur test template:
-  extends: .Run waldur tests template
-  before_script:
-    - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-
-# Core tests - Python versions
-Run python v3.9 core tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Core test template
-
-Run python v3.10 core tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Core test template
-
-Run python v3.11 core tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Core test template
-
-Run python v3.12 core tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Core test template
-
-Run python v3.13 core tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Core test template
-
-# SLURM plugin tests - Python versions
-Run python v3.9 slurm tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Slurm test template
-
-Run python v3.10 slurm tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Slurm test template
-
-Run python v3.11 slurm tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Slurm test template
-
-Run python v3.12 slurm tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Slurm test template
-
-Run python v3.13 slurm tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Slurm test template
-
-# MUP plugin tests - Python versions
-Run python v3.9 mup tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Mup test template
-
-Run python v3.10 mup tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Mup test template
-
-Run python v3.11 mup tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Mup test template
-
-Run python v3.12 mup tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Mup test template
-
-Run python v3.13 mup tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Mup test template
-
-# Harbor plugin tests - Python versions
-Run python v3.9 harbor tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Harbor test template
-
-Run python v3.10 harbor tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Harbor test template
-
-Run python v3.11 harbor tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Harbor test template
-
-Run python v3.12 harbor tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Harbor test template
-
-Run python v3.13 harbor tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Harbor test template
-
-# OKD plugin tests - Python versions
-Run python v3.9 okd tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Okd test template
-
-Run python v3.10 okd tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Okd test template
-
-Run python v3.11 okd tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Okd test template
-
-Run python v3.12 okd tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Okd test template
-
-Run python v3.13 okd tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Okd test template
-
-# Rancher plugin tests - Python versions
-Run python v3.9 rancher tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Rancher test template
-
-Run python v3.10 rancher tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Rancher test template
-
-Run python v3.11 rancher tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Rancher test template
-
-Run python v3.12 rancher tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Rancher test template
-
-Run python v3.13 rancher tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Rancher test template
-
-# Croit-S3 plugin tests - Python versions
-Run python v3.9 croit-s3 tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Croit-s3 test template
-
-Run python v3.10 croit-s3 tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Croit-s3 test template
-
-Run python v3.11 croit-s3 tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Croit-s3 test template
-
-Run python v3.12 croit-s3 tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Croit-s3 test template
-
-Run python v3.13 croit-s3 tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Croit-s3 test template
-
-# CSCS-DWDI plugin tests - Python versions
-Run python v3.9 cscs-dwdi tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Cscs-dwdi test template
-
-Run python v3.10 cscs-dwdi tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Cscs-dwdi test template
-
-Run python v3.11 cscs-dwdi tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Cscs-dwdi test template
-
-Run python v3.12 cscs-dwdi tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Cscs-dwdi test template
-
-Run python v3.13 cscs-dwdi tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Cscs-dwdi test template
-
-# Waldur federation plugin tests - Python versions
-Run python v3.9 waldur tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.9"
-  extends: .Waldur test template
-
-Run python v3.10 waldur tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.10"
-  extends: .Waldur test template
-
-Run python v3.11 waldur tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.11"
-  extends: .Waldur test template
-
-Run python v3.12 waldur tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.12"
-  extends: .Waldur test template
-
-Run python v3.13 waldur tests:
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  extends: .Waldur test template
 
 # E2E integration tests: boots a minimal Waldur stack (PostgreSQL + RabbitMQ +
 # Mastermind API/Worker) via Docker-in-Docker, loads the site_agent_e2e demo
