@@ -93,7 +93,11 @@ class AgentIdentityManager:
             "Registering a new identity for offering %s with name %s", self.offering.name, name
         )
 
-        last_restarted = datetime.datetime.now()
+        # Timezone-aware UTC: a naive local timestamp is serialized without
+        # an offset and interpreted as UTC by the backend, shifting
+        # last_restarted into the future for any agent east of UTC and
+        # rendering a negative uptime in the UI.
+        last_restarted = datetime.datetime.now(datetime.timezone.utc)
         dependencies = [
             AgentDependencyRequest(package=dependency["package"], version=dependency["version"])
             for dependency in utils.DEPENDENCIES
