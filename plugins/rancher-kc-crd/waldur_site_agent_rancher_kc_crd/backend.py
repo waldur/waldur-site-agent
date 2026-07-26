@@ -221,11 +221,18 @@ class RancherKcCrdBackend(backends.BaseBackend):
                 waldur_resource.uuid,
                 len(rps),
             )
+            self._warn_unmapped_roles(
+                cluster_ur_dicts,
+                self.backend_settings.get("cluster_role_map") or {},
+                "cluster_role_map",
+                str(waldur_resource.uuid),
+            )
 
         for rp in rps:
             user_roles = self._fetch_resource_project_users(rp.uuid)
             rp_dict = self._resource_project_to_dict(rp)
             ur_dicts = [self._user_role_to_dict(u) for u in user_roles]
+            self._warn_unmapped_roles(ur_dicts, self.role_map, "role_map", f"{rp.name} ({rp.uuid})")
 
             body = build_cr_spec(
                 resource=resource_dict,
@@ -405,6 +412,34 @@ class RancherKcCrdBackend(backends.BaseBackend):
             "user_uuid": u.user_uuid.hex if getattr(u, "user_uuid", None) else None,
             "user_username": getattr(u, "user_username", None),
         }
+
+    @staticmethod
+    def _warn_unmapped_roles(
+        user_roles: list[dict], role_map: dict, map_name: str, scope_label: str
+    ) -> None:
+        """Warn about role grants the translator will silently drop.
+
+        The translator skips user-roles whose role name is absent from the
+        configured map (it cannot invent a Rancher role template ID). That
+        skip is invisible to everyone unless surfaced here: the user was
+        granted a role in Waldur but never gains access in Rancher.
+        """
+        unmapped = sorted(
+            {
+                ur["role_name"]
+                for ur in user_roles
+                if ur.get("role_name") and ur["role_name"] not in role_map
+            }
+        )
+        if unmapped:
+            logger.warning(
+                "rancher-kc-crd: role(s) %s on %s are not present in the "
+                "agent's %s and will NOT be synced to Rancher; add them to "
+                "the offering's agent configuration to bind them",
+                ", ".join(unmapped),
+                scope_label,
+                map_name,
+            )
 
     # ------------------------------------------------------------------
     # Per-user mutations — routed through CR apply
