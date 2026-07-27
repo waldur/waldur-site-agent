@@ -137,6 +137,20 @@ def on_order_message_stomp(
         logger.info("Skipping order %s with state %s", order_uuid, order_state)
         return
 
+    # Mastermind emits an event for every order state transition; these states
+    # are never actionable for an agent (the processor would fetch the order
+    # and skip it with a warning anyway), so drop them before any REST calls.
+    if order_state in [
+        OrderState.CANCELED,
+        OrderState.REJECTED,
+        OrderState.PENDING_PROJECT,
+        OrderState.PENDING_START_DATE,
+    ]:
+        logger.info(
+            "Skipping order %s with non-actionable state %s", order_uuid, order_state
+        )
+        return
+
     try:
         waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
         agent_service = register_event_process_service(

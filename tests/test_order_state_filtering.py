@@ -63,6 +63,32 @@ class TestOrderStateFiltering(unittest.TestCase):
         mock_identity_list.sync.assert_not_called()
         mock_service_register.sync.assert_not_called()
 
+    def test_stomp_handler_skips_non_actionable_orders(
+        self,
+        mock_processor_class,
+        mock_get_client,
+        mock_identity_create,
+        mock_identity_list,
+        mock_service_register,
+    ):
+        """Orders in states an agent can never act on are dropped before any
+        REST calls. Mastermind emits an event for every state transition, so
+        these arrive routinely."""
+        for state in ["canceled", "rejected", "pending-project", "pending-start-date"]:
+            with self.subTest(state=state):
+                message = {"order_uuid": self.order_uuid, "order_state": state}
+
+                mock_frame = mock.Mock()
+                mock_frame.body = json.dumps(message)
+
+                handlers.on_order_message_stomp(mock_frame, self.offering, self.user_agent)
+
+                mock_processor_class.assert_not_called()
+                mock_get_client.assert_not_called()
+                mock_identity_create.sync.assert_not_called()
+                mock_identity_list.sync.assert_not_called()
+                mock_service_register.sync.assert_not_called()
+
     def test_stomp_handler_processes_executing_orders(
         self,
         mock_processor_class,
