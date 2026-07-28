@@ -17,14 +17,19 @@ from waldur_api_client.api.marketplace_component_usages import (
     marketplace_component_usages_set_usage,
     marketplace_component_usages_set_user_usage,
 )
+from waldur_api_client.api.marketplace_component_user_usages import (
+    marketplace_component_user_usages_list,
+)
 from waldur_api_client.api.marketplace_offering_users import marketplace_offering_users_list
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_list,
 )
+from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models import (
     ComponentUsageCreateRequest,
     ComponentUsageFieldEnum,
     ComponentUserUsageCreateRequest,
+    ComponentUserUsageFieldEnum,
     OfferingUserFieldEnum,
     ResourceFieldEnum,
 )
@@ -134,6 +139,9 @@ def load_historical_usage_for_month(
     total_months: int,
     *,
     skip_user_usage: bool = False,
+    dry_run: bool = False,
+    reconcile_stale: bool = False,
+    resource_backend_ids: Optional[list[str]] = None,
 ) -> None:
     """Load historical usage data for a specific month.
 
@@ -145,6 +153,10 @@ def load_historical_usage_for_month(
         month_count: Current month number in sequence (for progress)
         total_months: Total number of months to process
         skip_user_usage: If True, skip per-user usage submission
+        dry_run: If True, log intended submissions without sending them
+        reconcile_stale: If True, zero out totals for resources absent from
+            backend data and per-user records for users absent from it
+        resource_backend_ids: If set, process only resources with these backend IDs
     """
     logger.info(
         "Processing month %d/%d: %04d-%02d for offering '%s' (%s)",
@@ -182,6 +194,20 @@ def load_historical_usage_for_month(
     # Filter resources that have backend IDs
     active_resources = [resource for resource in waldur_resources if resource.backend_id]
 
+    if resource_backend_ids:
+        requested = set(resource_backend_ids)
+        found = {resource.backend_id for resource in active_resources}
+        missing = requested - found
+        if missing:
+            logger.warning(
+                "Requested backend IDs not found in offering '%s': %s",
+                offering.name,
+                ", ".join(sorted(missing)),
+            )
+        active_resources = [
+            resource for resource in active_resources if resource.backend_id in requested
+        ]
+
     if not active_resources:
         logger.info("No active resources found for offering, skipping month")
         return
@@ -204,15 +230,14 @@ def load_historical_usage_for_month(
         username_to_offering_user = {}
 
     try:
-        # Get resource backend IDs
-        resource_backend_ids = [resource.backend_id for resource in active_resources]
+        backend_ids_to_query = [resource.backend_id for resource in active_resources]
 
         # Get historical usage data from backend - reuse existing method
         usage_report = resource_backend.get_usage_report_for_period(
-            resource_backend_ids, year, month
+            backend_ids_to_query, year, month
         )
 
-        if not usage_report:
+        if not usage_report and not reconcile_stale:
             logger.info("No usage data found for %04d-%02d", year, month)
             return
 
@@ -225,72 +250,62 @@ def load_historical_usage_for_month(
         # Create the usage date for the first day of the month
         usage_date = datetime.datetime(year=year, month=month, day=1)
 
+        # Components to zero out for resources absent from backend data
+        zero_usage = (
+            dict.fromkeys(resource_backend.backend_components, 0.0) if reconcile_stale else {}
+        )
+
         processed_resources = 0
 
-        # Process each resource
+        # Process each resource independently: a submission failure for one
+        # resource must not abort the remaining resources of the month.
         for resource in active_resources:
-            backend_id = resource.backend_id
-
-            logger.info(
-                "Processing resource '%s' (backend_id: %s, uuid: %s)",
-                resource.name,
-                backend_id,
-                resource.uuid.hex,
-            )
-
-            if backend_id not in usage_report:
-                logger.warning(
-                    "No usage data for resource '%s' (%s) in offering '%s'",
-                    resource.name,
-                    backend_id,
-                    offering.name,
+            try:
+                processed = _process_resource_for_month(
+                    waldur_rest_client,
+                    resource,
+                    usage_report,
+                    zero_usage,
+                    username_to_offering_user,
+                    usage_date,
+                    offering,
+                    skip_user_usage=skip_user_usage,
+                    dry_run=dry_run,
+                    reconcile_stale=reconcile_stale,
                 )
-                continue
-
-            account_usage = usage_report[backend_id]
-            total_usage = account_usage.get("TOTAL_ACCOUNT_USAGE", {})
-
-            if not total_usage:
-                logger.warning(
-                    "No total usage for resource '%s' in offering '%s'",
-                    resource.name,
-                    offering.name,
-                )
-                continue
-
-            # Submit resource-level usage
-            _submit_resource_usage(waldur_rest_client, resource, total_usage, usage_date, offering)
-
-            # Submit per-user usage (unless skipped)
-            if not skip_user_usage:
-                user_count = 0
-                for username, user_usage in account_usage.items():
-                    if username == "TOTAL_ACCOUNT_USAGE":
-                        continue
-
-                    _submit_user_usage(
-                        waldur_rest_client,
-                        resource,
-                        username,
-                        user_usage,
-                        username_to_offering_user,
-                        usage_date,
-                        offering,
+            except UnexpectedStatus as e:
+                response_text = e.content.decode(errors="ignore")
+                if "backfilling past billing periods" in response_text:
+                    logger.error(
+                        "Resource '%s' rejected for %04d-%02d: the marketplace only "
+                        "allows staff tokens to backfill usage-based components into "
+                        "past billing periods. Re-run with a staff --user-token. (%s)",
+                        resource.name,
+                        year,
+                        month,
+                        response_text,
                     )
-                    user_count += 1
-
-                logger.info(
-                    "Submitted usage for resource '%s': %d users processed",
+                else:
+                    logger.error(
+                        "Failed to process resource '%s' for %04d-%02d: %s",
+                        resource.name,
+                        year,
+                        month,
+                        response_text,
+                    )
+                continue
+            except Exception as e:
+                logger.error(
+                    "Failed to process resource '%s' for %04d-%02d: %s",
                     resource.name,
-                    user_count,
+                    year,
+                    month,
+                    e,
                 )
-            else:
-                logger.info(
-                    "Submitted resource-level usage for '%s' (user usage skipped)",
-                    resource.name,
-                )
+                continue
 
-            processed_resources += 1
+            if processed:
+                processed_resources += 1
 
         logger.info(
             "Completed processing %04d-%02d for offering '%s' (%d resources)",
@@ -304,23 +319,252 @@ def load_historical_usage_for_month(
         logger.error("Failed to process %04d-%02d: %s", year, month, e)
 
 
+def _process_resource_for_month(
+    waldur_rest_client: AuthenticatedClient,
+    resource: WaldurResource,
+    usage_report: dict,
+    zero_usage: dict,
+    username_to_offering_user: dict[str, OfferingUser],
+    usage_date: datetime.datetime,
+    offering: Offering,
+    *,
+    skip_user_usage: bool,
+    dry_run: bool,
+    reconcile_stale: bool,
+) -> bool:
+    """Submit (and optionally reconcile) one resource's usage for one month.
+
+    Returns True if the resource was processed, False if it was skipped.
+    """
+    backend_id = resource.backend_id
+
+    logger.info(
+        "Processing resource '%s' (backend_id: %s, uuid: %s)",
+        resource.name,
+        backend_id,
+        resource.uuid.hex,
+    )
+
+    account_usage = usage_report.get(backend_id, {})
+    total_usage = account_usage.get("TOTAL_ACCOUNT_USAGE", {})
+
+    if not total_usage:
+        if not reconcile_stale:
+            logger.warning(
+                "No usage data for resource '%s' (%s) in offering '%s'",
+                resource.name,
+                backend_id,
+                offering.name,
+            )
+            return False
+        logger.info(
+            "No backend data for resource '%s' (%s); zeroing stale records",
+            resource.name,
+            backend_id,
+        )
+        _submit_resource_usage(
+            waldur_rest_client,
+            resource,
+            zero_usage,
+            usage_date,
+            offering,
+            dry_run=dry_run,
+            include_zero=True,
+        )
+        if not skip_user_usage:
+            _reconcile_stale_user_usages(
+                waldur_rest_client,
+                resource,
+                set(),
+                username_to_offering_user,
+                usage_date,
+                dry_run=dry_run,
+            )
+        return True
+
+    # Submit resource-level usage
+    _submit_resource_usage(
+        waldur_rest_client, resource, total_usage, usage_date, offering, dry_run=dry_run
+    )
+
+    # Submit per-user usage (unless skipped)
+    if not skip_user_usage:
+        user_count = 0
+        for username, user_usage in account_usage.items():
+            if username == "TOTAL_ACCOUNT_USAGE":
+                continue
+
+            _submit_user_usage(
+                waldur_rest_client,
+                resource,
+                username,
+                user_usage,
+                username_to_offering_user,
+                usage_date,
+                offering,
+                dry_run=dry_run,
+            )
+            user_count += 1
+
+        logger.info(
+            "Submitted usage for resource '%s': %d users processed",
+            resource.name,
+            user_count,
+        )
+
+        if reconcile_stale:
+            reported_usernames = {
+                username for username in account_usage if username != "TOTAL_ACCOUNT_USAGE"
+            }
+            _reconcile_stale_user_usages(
+                waldur_rest_client,
+                resource,
+                reported_usernames,
+                username_to_offering_user,
+                usage_date,
+                dry_run=dry_run,
+            )
+    else:
+        logger.info(
+            "Submitted resource-level usage for '%s' (user usage skipped)",
+            resource.name,
+        )
+
+    return True
+
+
+def _reconcile_stale_user_usages(
+    waldur_rest_client: AuthenticatedClient,
+    resource: WaldurResource,
+    reported_usernames: set,
+    username_to_offering_user: dict[str, OfferingUser],
+    usage_date: datetime.datetime,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Zero out per-user usage records absent from the backend report.
+
+    Existing non-zero ComponentUserUsage records for the billing period whose
+    username is not present in the backend data are stale (e.g. usage that was
+    misattributed to this month) and are overwritten with zero.
+    """
+    billing_period = usage_date.date().replace(day=1)
+    existing_user_usages = marketplace_component_user_usages_list.sync_all(
+        client=waldur_rest_client,
+        resource_uuid=resource.uuid.hex,
+        component_usage_billing_period=billing_period,
+        field=[
+            ComponentUserUsageFieldEnum.USERNAME,
+            ComponentUserUsageFieldEnum.COMPONENT_TYPE,
+            ComponentUserUsageFieldEnum.USAGE,
+            ComponentUserUsageFieldEnum.COMPONENT_USAGE,
+        ],
+    )
+
+    stale_count = 0
+    for user_usage in existing_user_usages:
+        if user_usage.username in reported_usernames:
+            continue
+        if not user_usage.usage or float(user_usage.usage) == 0:
+            continue
+        if not user_usage.component_usage:
+            logger.warning(
+                "Stale user usage for '%s' in resource '%s' has no parent "
+                "component usage reference, skipping",
+                user_usage.username,
+                resource.name,
+            )
+            continue
+
+        # component_usage is a URL like ".../marketplace-component-usages/<uuid>/"
+        component_usage_uuid = str(user_usage.component_usage).rstrip("/").split("/")[-1]
+
+        if dry_run:
+            logger.info(
+                "[DRY-RUN] Would zero stale user usage '%s'/'%s' in resource '%s' "
+                "for %s (was %s)",
+                user_usage.username,
+                user_usage.component_type,
+                resource.name,
+                billing_period,
+                user_usage.usage,
+            )
+            stale_count += 1
+            continue
+
+        body = ComponentUserUsageCreateRequest(
+            username=user_usage.username,
+            usage="0",
+            date=usage_date,
+        )
+        offering_user = username_to_offering_user.get(user_usage.username)
+        if offering_user:
+            body.user = offering_user.url
+
+        try:
+            marketplace_component_usages_set_user_usage.sync_detailed(
+                uuid=component_usage_uuid, client=waldur_rest_client, body=body
+            )
+            logger.info(
+                "Zeroed stale user usage '%s'/'%s' in resource '%s' for %s (was %s)",
+                user_usage.username,
+                user_usage.component_type,
+                resource.name,
+                billing_period,
+                user_usage.usage,
+            )
+            stale_count += 1
+        except Exception as e:
+            logger.error(
+                "Failed to zero stale user usage '%s'/'%s' in resource '%s': %s",
+                user_usage.username,
+                user_usage.component_type,
+                resource.name,
+                e,
+            )
+
+    if stale_count:
+        logger.info(
+            "Reconciled %d stale user usage records for resource '%s' in %s",
+            stale_count,
+            resource.name,
+            billing_period,
+        )
+
+
 def _submit_resource_usage(
     waldur_rest_client: AuthenticatedClient,
     resource: WaldurResource,
     total_usage: dict[str, int],
     usage_date: datetime.datetime,
     offering: Offering,
+    *,
+    dry_run: bool = False,
+    include_zero: bool = False,
 ) -> None:
     """Submit resource-level usage data to Waldur."""
     usage_objects = [
         ComponentUsageItemRequest(type_=component, amount=str(amount))
         for component, amount in total_usage.items()
-        if amount > 0
+        if include_zero or amount > 0
     ]
 
     if not usage_objects:
         logger.info(
             "No non-zero usage for resource '%s' in offering '%s'", resource.name, offering.name
+        )
+        return
+
+    if dry_run:
+        logger.info(
+            "[DRY-RUN] Would submit resource usage for '%s' (uuid: %s) in offering "
+            "'%s' (%s) with date %s: %s",
+            resource.name,
+            resource.uuid.hex,
+            offering.name,
+            offering.uuid,
+            usage_date.date(),
+            total_usage,
         )
         return
 
@@ -360,6 +604,8 @@ def _submit_user_usage(
     username_to_offering_user: dict[str, OfferingUser],
     usage_date: datetime.datetime,
     offering: Offering,
+    *,
+    dry_run: bool = False,
 ) -> None:
     """Submit per-user usage data to Waldur."""
     logger.info(
@@ -399,6 +645,20 @@ def _submit_user_usage(
                 resource.name,
                 offering.name,
             )
+            continue
+
+        if dry_run:
+            logger.info(
+                "[DRY-RUN] Would submit user usage: '%s'/'%s' in resource '%s' "
+                "(offering: '%s') - %s=%s",
+                username,
+                component_type,
+                resource.name,
+                offering.name,
+                component_type,
+                amount,
+            )
+            submitted_components += 1
             continue
 
         # Create user usage request
@@ -494,6 +754,16 @@ Examples:
     --start-date 2024-01-01 \\
     --end-date 2024-03-31 \\
     --no-staff-check
+
+  # Preview a correction of one account's past month, zeroing stale records
+  waldur_site_load_historical_usage \\
+    --config /etc/waldur/waldur-site-agent-config.yaml \\
+    --offering-uuid 12345678-1234-1234-1234-123456789abc \\
+    --user-token your-staff-token \\
+    --start-date 2026-01-01 \\
+    --end-date 2026-01-31 \\
+    --resource-backend-id account1 \\
+    --reconcile-stale --dry-run
         """,
     )
 
@@ -529,6 +799,32 @@ Examples:
         default=False,
         help="Skip staff user validation (use with service provider tokens; "
         "API enforces permissions server-side)",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Log intended submissions without sending anything to Waldur",
+    )
+
+    parser.add_argument(
+        "--reconcile-stale",
+        action="store_true",
+        default=False,
+        help="Zero out usage records that are absent from backend data: resource "
+        "totals for accounts the backend does not report, and per-user records "
+        "for users missing from the backend report (e.g. usage misattributed "
+        "to the wrong month)",
+    )
+
+    parser.add_argument(
+        "--resource-backend-id",
+        action="append",
+        dest="resource_backend_ids",
+        metavar="BACKEND_ID",
+        help="Process only the resource with this backend ID; may be repeated. "
+        "Useful for verifying a targeted correction before an offering-wide run",
     )
 
     args = parser.parse_args()
@@ -567,6 +863,9 @@ Examples:
         total_months = len(periods)
         logger.info("Will process %d months of data", total_months)
 
+        if args.dry_run:
+            logger.info("Dry-run mode: no data will be submitted to Waldur")
+
         # Process each month
         for month_count, (year, month, _, _) in enumerate(periods, 1):
             load_historical_usage_for_month(
@@ -577,6 +876,9 @@ Examples:
                 month_count,
                 total_months,
                 skip_user_usage=args.skip_user_usage,
+                dry_run=args.dry_run,
+                reconcile_stale=args.reconcile_stale,
+                resource_backend_ids=args.resource_backend_ids,
             )
 
         logger.info("Historical usage loading completed successfully!")

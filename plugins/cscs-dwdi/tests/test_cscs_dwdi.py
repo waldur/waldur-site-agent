@@ -5,7 +5,12 @@ from typing import Any, Optional
 from unittest.mock import MagicMock, call, patch
 
 import pytest
-from waldur_site_agent_cscs_dwdi.backend import CSCSDWDIComputeBackend, CSCSDWDIStorageBackend
+from freezegun import freeze_time
+from waldur_site_agent_cscs_dwdi.backend import (
+    CSCSDWDIComputeBackend,
+    CSCSDWDIInferenceBackend,
+    CSCSDWDIStorageBackend,
+)
 from waldur_site_agent_cscs_dwdi.client import CSCSDWDIClient
 
 
@@ -467,6 +472,15 @@ class TestCSCSDWDIComputeBackend:
         mock_get_usage.assert_called_once()
         call_args = mock_get_usage.call_args
         assert call_args.kwargs["accounts"] == ["account1", "account2"]
+        assert call_args.kwargs["from_date"].day == 1
+        assert call_args.kwargs["from_date"] <= call_args.kwargs["to_date"]
+        assert (
+            call_args.kwargs["from_date"].year,
+            call_args.kwargs["from_date"].month,
+        ) == (
+            call_args.kwargs["to_date"].year,
+            call_args.kwargs["to_date"].month,
+        )
 
     def test_get_usage_report_filters_accounts(self) -> None:
         """Test that usage report only includes requested accounts."""
@@ -910,3 +924,101 @@ class TestCSCSDWDIStorageBackend:
         result = backend.get_usage_report_for_period([], 2024, 6)
 
         assert result == {}
+
+
+@freeze_time("2025-12-31 23:30:00")
+class TestCurrentMonthTimezoneBoundary:
+    """Current-month reports must use the configured timezone, not UTC.
+
+    Frozen at 2025-12-31 23:30 UTC: in Europe/Zurich (UTC+1) it is already
+    2026-01-01 00:30, so the current billing period is January. Querying by
+    UTC here would fetch the full December report and misattribute it to
+    January.
+    """
+
+    @staticmethod
+    def _make_compute_backend(timezone_str: str) -> CSCSDWDIComputeBackend:
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+        }
+        backend_components = {
+            "nodeHours": {
+                "measured_unit": "node-hours",
+                "unit_factor": 1,
+                "accounting_type": "usage",
+                "label": "Node Hours",
+            }
+        }
+        backend = CSCSDWDIComputeBackend(backend_settings, backend_components)
+        backend.timezone = timezone_str
+        return backend
+
+    def test_compute_uses_configured_timezone_month(self) -> None:
+        backend = self._make_compute_backend("Europe/Zurich")
+
+        with patch.object(backend.cscs_client, "get_usage_for_month") as mock_get:
+            mock_get.return_value = {"compute": []}
+            backend._get_usage_report(["account1"])
+
+        call_kwargs = mock_get.call_args.kwargs
+        assert call_kwargs["from_date"] == date(2026, 1, 1)
+        assert call_kwargs["to_date"] == date(2026, 1, 1)
+
+    def test_compute_utc_timezone_still_reports_december(self) -> None:
+        backend = self._make_compute_backend("UTC")
+
+        with patch.object(backend.cscs_client, "get_usage_for_month") as mock_get:
+            mock_get.return_value = {"compute": []}
+            backend._get_usage_report(["account1"])
+
+        call_kwargs = mock_get.call_args.kwargs
+        assert call_kwargs["from_date"] == date(2025, 12, 1)
+        assert call_kwargs["to_date"] == date(2025, 12, 31)
+
+    def test_storage_uses_configured_timezone_month(self) -> None:
+        backend = TestCSCSDWDIStorageBackend._make_storage_backend()
+        backend.timezone = "Europe/Zurich"
+
+        with patch.object(backend.cscs_client, "get_storage_usage_for_month") as mock_get:
+            mock_get.return_value = {"storage": []}
+            backend._get_usage_report(["/store/projects/proj1"])
+
+        assert mock_get.call_args.kwargs["exact_month"] == "2026-01"
+
+    def test_storage_utc_timezone_still_reports_december(self) -> None:
+        backend = TestCSCSDWDIStorageBackend._make_storage_backend()
+        backend.timezone = "UTC"
+
+        with patch.object(backend.cscs_client, "get_storage_usage_for_month") as mock_get:
+            mock_get.return_value = {"storage": []}
+            backend._get_usage_report(["/store/projects/proj1"])
+
+        assert mock_get.call_args.kwargs["exact_month"] == "2025-12"
+
+    def test_inference_uses_configured_timezone_month(self) -> None:
+        backend_settings = {
+            "cscs_dwdi_api_url": "https://api.example.com",
+            "cscs_dwdi_client_id": "test_client",
+            "cscs_dwdi_client_secret": "test_secret",
+            "cscs_dwdi_oidc_token_url": "https://oidc.example.com/token",
+        }
+        backend_components = {
+            "token_cost": {
+                "measured_unit": "EUR",
+                "unit_factor": 1,
+                "accounting_type": "usage",
+                "label": "Token cost",
+            }
+        }
+        backend = CSCSDWDIInferenceBackend(backend_settings, backend_components)
+        backend.timezone = "Europe/Zurich"
+
+        with patch.object(backend.cscs_client, "get_inference_cost_for_month") as mock_get:
+            mock_get.return_value = {"inference": []}
+            backend._get_usage_report(["resource-uuid-1"])
+
+        assert mock_get.call_args.kwargs["month_from"] == "2026-01"
+        assert mock_get.call_args.kwargs["month_to"] == "2026-01"

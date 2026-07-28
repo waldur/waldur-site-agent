@@ -2,7 +2,7 @@
 
 import calendar
 import logging
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any, Optional
 
 from pydantic import BaseModel
@@ -10,6 +10,7 @@ from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.types import Unset
 
 from waldur_site_agent.backend import structures
+from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.backends import BaseBackend
 from waldur_site_agent.common.structures import BackendComponent
 
@@ -165,8 +166,14 @@ class CSCSDWDIComputeBackend(BaseBackend):
     def _get_usage_report(
         self, resource_backend_ids: list[str], clusters: Optional[list[str]] = None
     ) -> dict[str, dict[str, dict[str, float]]]:
-        """Get usage report for the current month."""
-        today = datetime.now(tz=timezone.utc).date()
+        """Get usage report for the current month.
+
+        The month is derived in the configured timezone so it always matches
+        the billing period computed by the reporting processor; using UTC here
+        would fetch the previous month's data during the first hours of the
+        1st in timezones ahead of UTC.
+        """
+        today = backend_utils.get_current_time_in_timezone(self.timezone).date()
         from_date = today.replace(day=1)
         return self._get_compute_usage_for_dates(
             resource_backend_ids, from_date, today, clusters=clusters
@@ -696,8 +703,12 @@ class CSCSDWDIStorageBackend(BaseBackend):
     def _get_usage_report(
         self, resource_backend_ids: list[str]
     ) -> dict[str, dict[str, dict[str, float]]]:
-        """Get storage usage report for the current month."""
-        today = datetime.now(tz=timezone.utc).date()
+        """Get storage usage report for the current month.
+
+        The month is derived in the configured timezone so it always matches
+        the billing period computed by the reporting processor.
+        """
+        today = backend_utils.get_current_time_in_timezone(self.timezone).date()
         exact_month = today.strftime("%Y-%m")
         return self._get_storage_usage_for_month(resource_backend_ids, exact_month)
 
@@ -1004,8 +1015,12 @@ class CSCSDWDIInferenceBackend(BaseBackend):
     def _get_usage_report(
         self, resource_uuids: list[str]
     ) -> dict[str, dict[str, dict[str, float]]]:
-        """Get inference usage report for the current month."""
-        today = datetime.now(tz=timezone.utc).date()
+        """Get inference usage report for the current month.
+
+        The month is derived in the configured timezone so it always matches
+        the billing period computed by the reporting processor.
+        """
+        today = backend_utils.get_current_time_in_timezone(self.timezone).date()
         exact_month = today.strftime("%Y-%m")
         return self._get_inference_cost_for_month(
             resource_uuids=resource_uuids, from_month=exact_month, to_month=exact_month)

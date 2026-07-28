@@ -258,6 +258,9 @@ waldur_site_load_historical_usage \
 | `--end-date` | End date in YYYY-MM-DD format |
 | `--no-staff-check` | Skip staff user validation (use with service provider tokens) |
 | `--skip-user-usage` | Only submit resource-level totals, skip per-user breakdown |
+| `--dry-run` | Log intended submissions without sending anything to Waldur |
+| `--reconcile-stale` | Zero out usage records absent from backend data (see below) |
+| `--resource-backend-id` | Process only the resource with this backend ID; repeatable |
 
 ### Notes
 
@@ -267,6 +270,58 @@ waldur_site_load_historical_usage \
   per-user usage submission, which can significantly speed up large loads
 - Resources must already exist in Waldur with valid `backend_id` values matching DWDI accounts
 - Maximum date range is 5 years
+- Backfilling `usage`-billing-type components into past billing periods is only permitted
+  for **staff** tokens; with a service provider token the Waldur API rejects such
+  submissions with an HTTP 400 mentioning "backfilling past billing periods"
+
+### Correcting Misreported Months
+
+If a past month holds wrong values (for example usage misattributed across a month
+boundary), the loader can rewrite that month from the authoritative backend data.
+A staff token is required, since usage-based components are being backfilled.
+
+Two flags exist specifically for corrections:
+
+- `--reconcile-stale` also *zeroes* records that the backend does not report:
+  resource totals for accounts with no backend data in that month, and per-user
+  usage rows for users missing from the backend report. Without it, phantom values
+  in Waldur survive whenever the backend has nothing to overwrite them with.
+- `--dry-run` prints every intended submission so the correction can be reviewed
+  before anything is written.
+
+Recommended sequence:
+
+```bash
+# 1. Review the correction for a single affected account first
+waldur_site_load_historical_usage \
+  --config /etc/waldur/cscs-dwdi-config.yaml \
+  --offering-uuid <offering-uuid> \
+  --user-token <staff-token> \
+  --start-date 2026-01-01 --end-date 2026-01-31 \
+  --resource-backend-id <account> \
+  --reconcile-stale --dry-run
+
+# 2. Apply it for that account
+waldur_site_load_historical_usage ... --resource-backend-id <account> --reconcile-stale
+
+# 3. Sweep the whole offering for the affected months (dry-run first, then apply)
+waldur_site_load_historical_usage \
+  --config /etc/waldur/cscs-dwdi-config.yaml \
+  --offering-uuid <offering-uuid> \
+  --user-token <staff-token> \
+  --start-date 2026-01-01 --end-date 2026-01-31 \
+  --reconcile-stale
+```
+
+Caveats:
+
+- Rewriting a past-period usage re-triggers marketplace billing for that record, but
+  the invoice item is only updated while the month's invoice is still mutable;
+  otherwise Waldur logs a warning and leaves the invoice untouched. Align with the
+  billing owner on which behaviour is expected before applying corrections.
+- Newly created past-month usage records are stored without a plan period, so they
+  do not generate retroactive invoice items — the correction is display/reporting
+  oriented by design.
 
 ## Example Configurations
 
