@@ -125,6 +125,16 @@ Lint helm chart:
 .Run tests base:
   stage: test
   interruptible: true
+  # script_failure is included because `uv sync` occasionally dies on a
+  # uv/hatchling build race in the extracted .uv-cache (same flake the
+  # "Prime uv cache" job retries for); the cost is one wasted re-run when
+  # a test failure is real.
+  retry: &uv_flake_retry
+    max: 1
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
   # One image + matrix over all supported interpreters, shared by every suite
   # job below. Replaces the 45 hand-written "Run python vX.Y <suite> tests" jobs
   # and their 9 wrapper templates — adding a Python version is now one entry here.
@@ -359,6 +369,9 @@ E2E integration tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.11"
   stage: test
   interruptible: true
+  # Same uv-flake / infrastructure retry as .Run tests base — this job also
+  # runs `uv sync` and is not covered by that template.
+  retry: *uv_flake_retry
   services:
     - name: "docker:24.0-dind"
       command: ["--mtu=1400"]

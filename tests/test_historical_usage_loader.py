@@ -7,6 +7,7 @@ from uuid import UUID
 import pytest
 
 from waldur_site_agent.common.historical_usage_loader import (
+    _reconcile_stale_user_usages,
     _submit_resource_usage,
     _submit_user_usage,
     load_historical_usage_for_month,
@@ -403,6 +404,315 @@ class TestHistoricalUsageLoader:
 
             # Offering users list should NOT be called
             mock_offering_users_list.assert_not_called()
+
+    def test_submit_resource_usage_dry_run(self):
+        """Test that dry-run mode does not submit resource usage."""
+        mock_client = Mock()
+        mock_resource = Mock()
+        mock_resource.name = "test_resource"
+        mock_resource.uuid = UUID("12345678-1234-1234-1234-123456789abc")
+
+        with patch(f"{MODULE}.marketplace_component_usages_set_usage") as mock_set_usage:
+            _submit_resource_usage(
+                mock_client,
+                mock_resource,
+                {"cpu": 1500},
+                datetime(2024, 1, 1),
+                Mock(),
+                dry_run=True,
+            )
+
+            mock_set_usage.sync_detailed.assert_not_called()
+
+    def test_submit_resource_usage_include_zero(self):
+        """Test that include_zero submits all-zero usage (stale-record reset)."""
+        mock_client = Mock()
+        mock_resource = Mock()
+        mock_resource.name = "test_resource"
+        mock_resource.uuid = UUID("12345678-1234-1234-1234-123456789abc")
+
+        with patch(f"{MODULE}.marketplace_component_usages_set_usage") as mock_set_usage:
+            _submit_resource_usage(
+                mock_client,
+                mock_resource,
+                {"cpu": 0.0, "mem": 0.0},
+                datetime(2024, 1, 1),
+                Mock(),
+                include_zero=True,
+            )
+
+            mock_set_usage.sync_detailed.assert_called_once()
+            request_body = mock_set_usage.sync_detailed.call_args[1]["body"]
+            assert len(request_body.usages) == 2
+
+    def test_submit_user_usage_dry_run(self):
+        """Test that dry-run mode does not submit per-user usage."""
+        mock_client = Mock()
+        mock_resource = Mock()
+        mock_resource.name = "test_resource"
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = "resource-uuid-hex"
+
+        mock_component_usages = [Mock(type_="cpu", uuid=Mock())]
+
+        with (
+            patch(
+                f"{MODULE}.marketplace_component_usages_list.sync_all",
+                return_value=mock_component_usages,
+            ),
+            patch(
+                f"{MODULE}.marketplace_component_usages_set_user_usage"
+            ) as mock_set_user_usage,
+        ):
+            _submit_user_usage(
+                mock_client,
+                mock_resource,
+                "testuser1",
+                {"cpu": 750},
+                {},
+                datetime(2024, 1, 1),
+                Mock(),
+                dry_run=True,
+            )
+
+            mock_set_user_usage.sync_detailed.assert_not_called()
+
+    def test_reconcile_stale_zeroes_absent_users(self):
+        """Test that reconcile zeroes user records absent from backend data."""
+        mock_client = Mock()
+        mock_resource = Mock()
+        mock_resource.name = "test_resource"
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = "resource-uuid-hex"
+
+        stale_row = Mock(
+            username="ghost_user",
+            component_type="cpu",
+            usage="51.18",
+            component_usage="https://waldur.example.com/api/marketplace-component-usages/abc123/",
+        )
+        reported_row = Mock(
+            username="active_user",
+            component_type="cpu",
+            usage="10.0",
+            component_usage="https://waldur.example.com/api/marketplace-component-usages/def456/",
+        )
+        zero_row = Mock(
+            username="idle_user",
+            component_type="cpu",
+            usage="0",
+            component_usage="https://waldur.example.com/api/marketplace-component-usages/ghi789/",
+        )
+
+        with (
+            patch(
+                f"{MODULE}.marketplace_component_user_usages_list.sync_all",
+                return_value=[stale_row, reported_row, zero_row],
+            ),
+            patch(
+                f"{MODULE}.marketplace_component_usages_set_user_usage"
+            ) as mock_set_user_usage,
+        ):
+            _reconcile_stale_user_usages(
+                mock_client,
+                mock_resource,
+                {"active_user"},
+                {},
+                datetime(2026, 4, 1),
+            )
+
+            # Only the non-zero record of the unreported user is zeroed
+            mock_set_user_usage.sync_detailed.assert_called_once()
+            call_args = mock_set_user_usage.sync_detailed.call_args
+            assert call_args[1]["uuid"] == "abc123"
+            request_body = call_args[1]["body"]
+            assert request_body.username == "ghost_user"
+            assert request_body.usage == "0"
+
+    def test_reconcile_stale_dry_run(self):
+        """Test that reconcile dry-run does not submit anything."""
+        mock_client = Mock()
+        mock_resource = Mock()
+        mock_resource.name = "test_resource"
+        mock_resource.uuid = Mock()
+        mock_resource.uuid.hex = "resource-uuid-hex"
+
+        stale_row = Mock(
+            username="ghost_user",
+            component_type="cpu",
+            usage="51.18",
+            component_usage="https://waldur.example.com/api/marketplace-component-usages/abc123/",
+        )
+
+        with (
+            patch(
+                f"{MODULE}.marketplace_component_user_usages_list.sync_all",
+                return_value=[stale_row],
+            ),
+            patch(
+                f"{MODULE}.marketplace_component_usages_set_user_usage"
+            ) as mock_set_user_usage,
+        ):
+            _reconcile_stale_user_usages(
+                mock_client,
+                mock_resource,
+                set(),
+                {},
+                datetime(2026, 4, 1),
+                dry_run=True,
+            )
+
+            mock_set_user_usage.sync_detailed.assert_not_called()
+
+    def test_load_month_reconcile_absent_account(self):
+        """Test that reconcile zeroes totals for accounts absent from backend data."""
+        mock_offering = Mock()
+        mock_offering.api_url = "https://waldur.example.com/api/"
+        mock_offering.uuid = "offering-uuid"
+        mock_offering.verify_ssl = True
+
+        mock_resource = Mock()
+        mock_resource.name = "test_resource"
+        mock_resource.backend_id = "test_account_123"
+        mock_resource.uuid = Mock()
+
+        mock_backend = Mock()
+        mock_backend.get_usage_report_for_period.return_value = {}
+        mock_backend.backend_components = {"cpu": {"unit_factor": 1}}
+
+        with (
+            patch(f"{MODULE}.utils.get_client"),
+            patch(
+                f"{MODULE}.marketplace_provider_resources_list.sync_all",
+                return_value=[mock_resource],
+            ),
+            patch(
+                f"{MODULE}.marketplace_offering_users_list.sync_all",
+                return_value=[],
+            ),
+            patch(
+                f"{MODULE}.utils.get_backend_for_offering",
+                return_value=(mock_backend, "1.0.0"),
+            ),
+            patch(f"{MODULE}._submit_resource_usage") as mock_submit_resource,
+            patch(f"{MODULE}._reconcile_stale_user_usages") as mock_reconcile,
+        ):
+            load_historical_usage_for_month(
+                mock_offering, "staff-token", 2026, 4, 1, 1, reconcile_stale=True
+            )
+
+            # Totals are zeroed for the absent account
+            mock_submit_resource.assert_called_once()
+            args, kwargs = mock_submit_resource.call_args
+            assert args[2] == {"cpu": 0.0}
+            assert kwargs["include_zero"] is True
+
+            # Per-user records reconciled against an empty reported set
+            mock_reconcile.assert_called_once()
+            assert mock_reconcile.call_args[0][2] == set()
+
+    def test_load_month_resource_backend_id_filter(self):
+        """Test that --resource-backend-id restricts processing to matching resources."""
+        mock_offering = Mock()
+        mock_offering.api_url = "https://waldur.example.com/api/"
+        mock_offering.uuid = "offering-uuid"
+        mock_offering.verify_ssl = True
+
+        resource_a = Mock()
+        resource_a.name = "resource_a"
+        resource_a.backend_id = "account_a"
+        resource_a.uuid = Mock()
+        resource_b = Mock()
+        resource_b.name = "resource_b"
+        resource_b.backend_id = "account_b"
+        resource_b.uuid = Mock()
+
+        mock_backend = Mock()
+        mock_backend.get_usage_report_for_period.return_value = {
+            "account_a": {"TOTAL_ACCOUNT_USAGE": {"cpu": 100}},
+            "account_b": {"TOTAL_ACCOUNT_USAGE": {"cpu": 200}},
+        }
+
+        with (
+            patch(f"{MODULE}.utils.get_client"),
+            patch(
+                f"{MODULE}.marketplace_provider_resources_list.sync_all",
+                return_value=[resource_a, resource_b],
+            ),
+            patch(
+                f"{MODULE}.marketplace_offering_users_list.sync_all",
+                return_value=[],
+            ),
+            patch(
+                f"{MODULE}.utils.get_backend_for_offering",
+                return_value=(mock_backend, "1.0.0"),
+            ),
+            patch(f"{MODULE}._submit_resource_usage") as mock_submit_resource,
+        ):
+            load_historical_usage_for_month(
+                mock_offering,
+                "staff-token",
+                2026,
+                1,
+                1,
+                1,
+                resource_backend_ids=["account_a"],
+            )
+
+            # Only the filtered resource is queried and submitted
+            mock_backend.get_usage_report_for_period.assert_called_once_with(
+                ["account_a"], 2026, 1
+            )
+            mock_submit_resource.assert_called_once()
+            assert mock_submit_resource.call_args[0][1] is resource_a
+
+    def test_load_month_per_resource_error_isolation(self):
+        """Test that one resource's submission failure does not abort the others."""
+        mock_offering = Mock()
+        mock_offering.api_url = "https://waldur.example.com/api/"
+        mock_offering.uuid = "offering-uuid"
+        mock_offering.verify_ssl = True
+
+        resource_a = Mock()
+        resource_a.name = "resource_a"
+        resource_a.backend_id = "account_a"
+        resource_a.uuid = Mock()
+        resource_b = Mock()
+        resource_b.name = "resource_b"
+        resource_b.backend_id = "account_b"
+        resource_b.uuid = Mock()
+
+        mock_backend = Mock()
+        mock_backend.get_usage_report_for_period.return_value = {
+            "account_a": {"TOTAL_ACCOUNT_USAGE": {"cpu": 100}},
+            "account_b": {"TOTAL_ACCOUNT_USAGE": {"cpu": 200}},
+        }
+
+        with (
+            patch(f"{MODULE}.utils.get_client"),
+            patch(
+                f"{MODULE}.marketplace_provider_resources_list.sync_all",
+                return_value=[resource_a, resource_b],
+            ),
+            patch(
+                f"{MODULE}.marketplace_offering_users_list.sync_all",
+                return_value=[],
+            ),
+            patch(
+                f"{MODULE}.utils.get_backend_for_offering",
+                return_value=(mock_backend, "1.0.0"),
+            ),
+            patch(
+                f"{MODULE}._submit_resource_usage",
+                side_effect=[Exception("HTTP 400"), None],
+            ) as mock_submit_resource,
+        ):
+            load_historical_usage_for_month(
+                mock_offering, "staff-token", 2026, 1, 1, 1, skip_user_usage=True
+            )
+
+            # Both resources were attempted despite the first one failing
+            assert mock_submit_resource.call_count == 2
 
     def test_no_staff_check_skips_validation(self):
         """Test that --no-staff-check skips validate_staff_user call."""
