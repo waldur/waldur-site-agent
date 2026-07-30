@@ -49,6 +49,10 @@ class BaseBackend(ABC):
     # and calls check_pending_order() to track remote order completion.
     supports_async_orders: bool = False
 
+    # Whether the backend consumes a Waldur-minted resource API key: the agent
+    # fetches the key over REST and applies it via rotate_api_key(backend_id, key).
+    supports_resource_api_keys: bool = False
+
     # Capability flag: Set to True for backends that depend on a remote API during
     # order processing. The processor calls run_preflight() once per offering
     # cycle before handling orders.

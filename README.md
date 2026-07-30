@@ -95,6 +95,7 @@ you push.
 | [croit-s3](plugins/croit-s3/README.md) | Croit S3 storage plugin |
 | [cscs-dwdi](plugins/cscs-dwdi/README.md) | CSCS-DWDI reporting plugin |
 | [digitalocean](plugins/digitalocean/README.md) | DigitalOcean plugin |
+| [envoy-ai-gateway](plugins/envoy-ai-gateway/README.md) | Envoy AI Gateway plugin |
 | [harbor](plugins/harbor/README.md) | Harbor container registry plugin |
 | [k8s-ut-namespace](plugins/k8s-ut-namespace/README.md) | Kubernetes UT ManagedNamespace plugin |
 | keycloak-client | Shared Keycloak client for Waldur Site Agent plugins |

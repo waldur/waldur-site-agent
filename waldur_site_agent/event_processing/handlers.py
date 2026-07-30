@@ -36,6 +36,7 @@ from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.event_processing.structures import (
     AccountMessage,
+    ApiKeyRotationMessage,
     BackendResourceRequestMessage,
     OfferingResourcesSyncMessage,
     OfferingUserMessage,
@@ -433,9 +434,7 @@ def _report_command_result_to_waldur(
         policy_uuid_str = message.get("policy_uuid", "")
 
         if not policy_uuid_str:
-            logger.warning(
-                "No policy_uuid in periodic limits message, cannot report result"
-            )
+            logger.warning("No policy_uuid in periodic limits message, cannot report result")
             return
 
         body = SlurmCommandResultRequest(
@@ -516,6 +515,58 @@ def on_resource_periodic_limits_update_stomp(
         logger.error("Error processing periodic limits update: %s", e)
 
 
+def on_resource_api_key_rotation_stomp(
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,  # noqa: ARG001
+) -> None:
+    """Handle a resource API key command (rotate / revoke / add).
+
+    The agent generates keys and applies them to the backend, then reports the
+    outcome to Waldur via the provider endpoints.
+    """
+    try:
+        message: ApiKeyRotationMessage = json.loads(frame.body)
+        action = message.get("action")
+        resource_uuid = message.get("resource_uuid")
+        backend_id = message.get("resource_backend_id")
+        api_key_uuid = message.get("api_key_uuid")
+        client_id = message.get("client_id")
+        logger.info("Processing API key %s for resource %s", action, resource_uuid)
+
+        if not resource_uuid or not backend_id:
+            logger.error("Invalid API key message: missing resource_uuid/backend_id")
+            return
+
+        backend, _ = common_utils.get_backend_for_offering(offering, "order_processing_backend")
+        if not getattr(backend, "supports_resource_api_keys", False):
+            logger.warning("Backend %s does not support API keys", type(backend).__name__)
+            return
+
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
+
+        if action in ("rotate", "revoke"):
+            if not api_key_uuid or not client_id:
+                logger.error("%s command missing api_key_uuid/client_id", action)
+                return
+            if action == "rotate":
+                common_utils.rotate_resource_api_key(
+                    waldur_rest_client, api_key_uuid, client_id, backend
+                )
+            else:
+                common_utils.revoke_resource_api_key(
+                    waldur_rest_client, api_key_uuid, client_id, backend
+                )
+        else:
+            logger.error("Unknown API key action: %s", action)
+
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse API key STOMP message: %s", e)
+    except Exception as e:
+        logger.error("Error handling API key event: %s", e)
+
+
 def on_offering_user_message_stomp(
     frame: stomp.utils.Frame,
     offering: structures.Offering,
@@ -555,14 +606,10 @@ def _process_offering_user_message(
             _forward_user_attributes_to_backend(offering, username, attributes, user_agent)
         elif action == "create":
             attributes = message.get("attributes", {})
-            logger.info(
-                "Offering user %s created with attributes: %s", username, list(attributes)
-            )
+            logger.info("Offering user %s created with attributes: %s", username, list(attributes))
             _forward_user_attributes_to_backend(offering, username, attributes, user_agent)
         elif action in ("update", "delete"):
-            logger.info(
-                "Offering user %s action: %s (no attribute forwarding)", username, action
-            )
+            logger.info("Offering user %s action: %s (no attribute forwarding)", username, action)
         elif action == "username_set":
             resource_backend_ids = message.get("resource_backend_ids", [])
             logger.info(
@@ -571,10 +618,15 @@ def _process_offering_user_message(
                 len(resource_backend_ids),
             )
             user_cuid = _resolve_user_cuid(
-                waldur_rest_client, message.get("user_uuid", ""), offering.uuid,
+                waldur_rest_client,
+                message.get("user_uuid", ""),
+                offering.uuid,
             )
             _add_user_to_resources(
-                offering, username, resource_backend_ids, waldur_rest_client,
+                offering,
+                username,
+                resource_backend_ids,
+                waldur_rest_client,
                 user_cuid=user_cuid,
             )
         else:
@@ -610,9 +662,7 @@ def _forward_user_attributes_to_backend(
         backend, _ = common_utils.get_backend_for_offering(offering, "membership_sync_backend")
         if hasattr(backend, "update_user_attributes"):
             backend.update_user_attributes(username, attributes)
-            logger.info(
-                "Forwarded %d attributes for user %s to backend", len(attributes), username
-            )
+            logger.info("Forwarded %d attributes for user %s to backend", len(attributes), username)
         else:
             logger.debug(
                 "Backend %s does not support update_user_attributes",

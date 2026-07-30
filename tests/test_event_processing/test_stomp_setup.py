@@ -35,6 +35,7 @@ class TestDetermineObjectTypes(unittest.TestCase):
 
         expected = [
             ObservableObjectTypeEnum.ORDER,
+            ObservableObjectTypeEnum.RESOURCE_API_KEY_ROTATION,
             ObservableObjectTypeEnum.USER_ROLE,
             ObservableObjectTypeEnum.RESOURCE,
             ObservableObjectTypeEnum.SERVICE_ACCOUNT,
@@ -59,7 +60,13 @@ class TestDetermineObjectTypes(unittest.TestCase):
 
         result = utils._determine_observable_object_types(offering)
 
-        self.assertEqual(result, [ObservableObjectTypeEnum.ORDER])
+        self.assertEqual(
+            result,
+            [
+                ObservableObjectTypeEnum.ORDER,
+                ObservableObjectTypeEnum.RESOURCE_API_KEY_ROTATION,
+            ],
+        )
 
     def test_only_membership_sync(self):
         """Test returns membership types when only membership sync is enabled."""
@@ -495,7 +502,10 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
         mock_rest_client = mock.Mock()
         mock_get_client.return_value = mock_rest_client
         mock_determine_types.return_value = []  # No object types
-        mock_register_identity.return_value = (mock.Mock(), mock.Mock())  # Identity succeeds but no types
+        mock_register_identity.return_value = (
+            mock.Mock(),
+            mock.Mock(),
+        )  # Identity succeeds but no types
 
         # Call function
         result = utils.setup_stomp_offering_subscriptions(self.offering, "test-agent")

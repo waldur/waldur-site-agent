@@ -1,0 +1,37 @@
+[project]
+name = "waldur-site-agent-envoy-ai-gateway"
+version = "1.0.5rc13"
+description = "Envoy AI Gateway (API key lifecycle + usage reporting) plugin for Waldur Site Agent"
+readme = "README.md"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9, <4"
+dependencies = [
+    "waldur-site-agent>=1.0.5rc13",
+    "kubernetes>=28.0.0,<32.0.0",
+    "httpx>=0.25.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+
+# Entry points for exporting backends. envoy = API key lifecycle (order_processing);
+# `envoy-usage` = usage reporting from the gateway's usage warehouse (reporting).
+[project.entry-points."waldur_site_agent.backends"]
+envoy = "waldur_site_agent_envoy_ai_gateway.backend:EnvoyAIGatewayBackend"
+envoy-usage = "waldur_site_agent_envoy_ai_gateway.reporting:EnvoyUsageReportingBackend"
+
+# Entry points for plugin-specific schema validation
+[project.entry-points."waldur_site_agent.component_schemas"]
+envoy = "waldur_site_agent_envoy_ai_gateway.schemas:EnvoyAIGatewayComponentSchema"
+envoy-usage = "waldur_site_agent_envoy_ai_gateway.schemas:EnvoyUsageComponentSchema"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+envoy = "waldur_site_agent_envoy_ai_gateway.schemas:EnvoyAIGatewayBackendSettingsSchema"
+envoy-usage = "waldur_site_agent_envoy_ai_gateway.schemas:EnvoyUsageBackendSettingsSchema"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

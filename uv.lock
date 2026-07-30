@@ -14,6 +14,7 @@ members = [
     "waldur-site-agent-croit-s3",
     "waldur-site-agent-cscs-dwdi",
     "waldur-site-agent-digitalocean",
+    "waldur-site-agent-envoy-ai-gateway",
     "waldur-site-agent-harbor",
     "waldur-site-agent-k8s-ut-namespace",
     "waldur-site-agent-keycloak-client",
@@ -2183,16 +2184,16 @@ wheels = [
 
 [[package]]
 name = "waldur-api-client"
-version = "8.0.9.dev348"
+version = "8.1.0rc19.dev20260726180605"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "httpx" },
     { name = "python-dateutil" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7d/50/509c749ad7b7ebcd2c150f058799e645bfda937f9e3fa498f0b7110686ad/waldur_api_client-8.0.9.dev348.tar.gz", hash = "sha256:0b742464772598fb1144340303120b7e3f6437eaef03ffd5da3f8e38789e6a00", size = 2247475, upload-time = "2026-06-18T10:57:34.397Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ea/fc/77e962b1815116d746fa2a8481acc585046879418108e980422038c20991/waldur_api_client-8.1.0rc19.dev20260726180605.tar.gz", hash = "sha256:a51e4d10dfa8a2433071166e0f4eec8c88d94e1d5abca75a51eaafe01436706a", size = 2453738, upload-time = "2026-07-26T20:55:28.145Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/80/70c15c21f32e8b5e09a90c58704a8e3d8118c38207b83831d75d07f7e8dd/waldur_api_client-8.0.9.dev348-py3-none-any.whl", hash = "sha256:0953dd2069c6e05e6c4457eca3a0e869199e366564eaceb99a9d06b35bd312a5", size = 6897539, upload-time = "2026-06-18T10:57:31.976Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/ac/bf86a592e395d8142767467d2036469f1c198bbf9add3fe261ef5c3ff226/waldur_api_client-8.1.0rc19.dev20260726180605-py3-none-any.whl", hash = "sha256:0e797c10b3a4668798ed905319fe19cd5dc6c09f239d234af57e2cee6883123b", size = 7360786, upload-time = "2026-07-26T20:55:30.752Z" },
 ]
 
 [[package]]
@@ -2237,7 +2238,7 @@ requires-dist = [
     { name = "sentry-sdk", specifier = "==2.8.0" },
     { name = "stomp-py", specifier = ">=8.2.0,<9" },
     { name = "structlog", specifier = ">=25.4.0" },
-    { name = "waldur-api-client", specifier = "==8.0.9.dev348" },
+    { name = "waldur-api-client", specifier = "==8.1.0rc19.dev20260726180605" },
 ]
 
 [package.metadata.requires-dev]
@@ -2310,6 +2311,23 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "python-digitalocean" },
+    { name = "waldur-site-agent", editable = "." },
+]
+
+[[package]]
+name = "waldur-site-agent-envoy-ai-gateway"
+version = "1.0.5rc13"
+source = { editable = "plugins/envoy-ai-gateway" }
+dependencies = [
+    { name = "httpx" },
+    { name = "kubernetes" },
+    { name = "waldur-site-agent" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.25.0" },
+    { name = "kubernetes", specifier = ">=28.0.0,<32.0.0" },
     { name = "waldur-site-agent", editable = "." },
 ]
 
