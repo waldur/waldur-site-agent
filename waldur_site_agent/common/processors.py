@@ -3077,6 +3077,28 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             )
             return
 
+        current_usage_by_type: dict[str, float] = {}
+        for u in existing_usages:
+            if isinstance(u.type_, type(UNSET)) or isinstance(u.usage, type(UNSET)):
+                continue
+            try:
+                current_usage_by_type[u.type_] = float(u.usage)
+            except (TypeError, ValueError):
+                continue
+
+        for component, new_amount in total_usage.items():
+            current_amount = current_usage_by_type.get(component)
+            if current_amount == new_amount:
+                continue
+            logger.debug(
+                "Usage for resource %s, component %s: current=%s, new=%s, diff=%s",
+                waldur_resource.backend_id,
+                component,
+                current_amount,
+                new_amount,
+                None if current_amount is None else round(new_amount - current_amount, 2),
+            )
+
         if not self.resource_backend.supports_decreasing_usage:
             # Filter out component usages that have per-user breakdowns;
             # only aggregate records should participate in anomaly detection.
