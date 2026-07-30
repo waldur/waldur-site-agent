@@ -398,9 +398,7 @@ class BaseBackend(ABC):
             if quota_config is not None:
                 try:
                     homedir_path = quota.get_user_homedir(username, homedir_base_path)
-                    quota.apply_homedir_quota(
-                        self.client, username, homedir_path, quota_config
-                    )
+                    quota.apply_homedir_quota(self.client, username, homedir_path, quota_config)
                 except Exception:
                     logger.exception(
                         "Failed to apply homedir quota for %s",
@@ -457,6 +455,24 @@ class BaseBackend(ABC):
             except Exception as e:
                 logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
         return report
+
+    def get_membership_sync_report(
+        self,
+        waldur_resource: WaldurResource,  # noqa: ARG002
+    ) -> Optional[list[dict]]:
+        """Per-grant sync states for the resource, or None when unsupported.
+
+        Backends that can confirm which role grants actually landed on
+        the provider side (e.g. the rancher-kc-crd plugin reading CR
+        status) return a list of entries shaped for the Waldur
+        ``set_membership_sync_statuses`` endpoint:
+        ``{username, scope_type, resource_project_uuid?, role_name,
+        state, message?}``. The membership processor posts the report
+        after each resource sync when the offering opted in via the
+        ``enable_membership_sync_status`` plugin option. Returning None
+        (the default) keeps the backend silent.
+        """
+        return None
 
     def pull_resource(
         self, waldur_resource: WaldurResource
@@ -733,9 +749,7 @@ class BaseBackend(ABC):
         resource_backend_id = self._get_resource_backend_id(waldur_resource.slug)
 
         # Create resource with generated ID
-        return self.create_resource_with_id(
-            waldur_resource, resource_backend_id, user_context
-        )
+        return self.create_resource_with_id(waldur_resource, resource_backend_id, user_context)
 
     @abstractmethod
     def _pre_create_resource(
@@ -804,9 +818,7 @@ class BaseBackend(ABC):
         )
 
         # Actions after resource creation
-        self.post_create_resource(
-            backend_resource_info, waldur_resource, user_context
-        )
+        self.post_create_resource(backend_resource_info, waldur_resource, user_context)
         return backend_resource_info
 
     def _setup_resource_limits(
@@ -889,9 +901,7 @@ class BaseBackend(ABC):
 
         return added_users
 
-    def add_user(
-        self, waldur_resource: WaldurResource, username: str, **kwargs: str
-    ) -> bool:
+    def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Add association between user and backend resource if it doesn't exists."""
         del kwargs  # Used by subclass overrides (e.g. WaldurBackend for role_name)
         resource_backend_id = waldur_resource.backend_id
@@ -963,9 +973,7 @@ class BaseBackend(ABC):
         """
         del resource_backend_id, username
 
-    def remove_user(
-        self, waldur_resource: WaldurResource, username: str, **kwargs: str
-    ) -> bool:
+    def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Delete association between user and backend resource if it exists."""
         del kwargs  # Used by subclass overrides (e.g. WaldurBackend for role_name)
         resource_backend_id = waldur_resource.backend_id
@@ -1200,7 +1208,6 @@ class UnknownBackend(BaseBackend):
 
     def _get_usage_report(self, _: list[str]) -> dict:
         return {}
-
 
 
 class AbstractUsernameManagementBackend(ABC):
