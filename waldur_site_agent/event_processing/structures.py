@@ -42,6 +42,8 @@ class UserRoleMessage(TypedDict):
         project_name (str): The name of the project where the role change occurred.
         role_name (str): The name of the role that was granted or revoked.
         granted (bool, optional): True if the role was granted, False if it was revoked.
+        resource_uuid (str, optional): When set (resource-scoped resync trigger),
+            limits the sync to this resource instead of the whole project.
     """
 
     user_uuid: str | None
@@ -50,6 +52,7 @@ class UserRoleMessage(TypedDict):
     project_name: str
     role_name: str
     granted: bool | None
+    resource_uuid: str | None
 
 
 class ResourceMessage(TypedDict):

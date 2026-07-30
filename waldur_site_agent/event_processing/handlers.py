@@ -239,8 +239,21 @@ def on_user_role_message_stomp(
                 user_uuid, project_uuid, role_granted, role_name=role_name
             )
         else:
-            logger.info("Processing full project all users sync event for project %s", project_name)
-            processor.process_project_user_sync(project_uuid)
+            resource_uuid = message.get("resource_uuid")
+            if resource_uuid:
+                # Resource-scoped resync trigger: same USER_ROLE channel,
+                # narrowed to one resource by the added payload field.
+                logger.info(
+                    "Processing user sync event for resource %s in project %s",
+                    resource_uuid,
+                    project_name,
+                )
+                processor.process_resource_user_sync(resource_uuid)
+            else:
+                logger.info(
+                    "Processing full project all users sync event for project %s", project_name
+                )
+                processor.process_project_user_sync(project_uuid)
     except Exception as e:
         if user_uuid:
             logger.error(

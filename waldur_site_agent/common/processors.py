@@ -69,6 +69,7 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_backend_metadata,
     marketplace_provider_resources_set_endpoints,
     marketplace_provider_resources_set_limits,
+    marketplace_provider_resources_set_membership_sync_statuses,
     marketplace_provider_resources_team_list,
 )
 from waldur_api_client.api.marketplace_service_providers import (
@@ -114,6 +115,12 @@ from waldur_api_client.models.component_user_usage_bulk_create_request import (
 )
 from waldur_api_client.models.component_user_usage_create_request import (
     ComponentUserUsageCreateRequest,
+)
+from waldur_api_client.models.member_sync_status_report_request import (
+    MemberSyncStatusReportRequest,
+)
+from waldur_api_client.models.member_sync_status_report_result import (
+    MemberSyncStatusReportResult,
 )
 from waldur_api_client.models.offering_component import OfferingComponent
 from waldur_api_client.models.offering_user import OfferingUser
@@ -279,6 +286,7 @@ class OfferingBaseProcessor(abc.ABC):
                 ProviderOfferingDetailsFieldEnum.COMPONENTS,
                 ProviderOfferingDetailsFieldEnum.CUSTOMER_UUID,
                 ProviderOfferingDetailsFieldEnum.PARTITIONS,
+                ProviderOfferingDetailsFieldEnum.PLUGIN_OPTIONS,
             ],
         )
         utils.extend_backend_components(self.offering, self.waldur_offering.components)
@@ -294,6 +302,14 @@ class OfferingBaseProcessor(abc.ABC):
         self.resource_backend.offering_partitions = sorted(
             p.partition_name for p in (self.waldur_offering.partitions or []) if p.partition_name
         )
+        # Per-offering QoS enforcement flag (plugin_options.enforce_qos). The
+        # backend resolves it against any agent-level override. Only backends
+        # that model QoS enforcement (SLURM) read this attribute.
+        if hasattr(self.resource_backend, "offering_enforce_qos"):
+            plugin_options = getattr(self.waldur_offering, "plugin_options", None)
+            props = getattr(plugin_options, "additional_properties", None)
+            enforce_qos = props.get("enforce_qos") if isinstance(props, dict) else None
+            self.resource_backend.offering_enforce_qos = bool(enforce_qos)
 
         # Per-cycle cache for offering users (avoids redundant API calls)
         self._offering_users_cache: list[OfferingUser] | None = None
@@ -1674,6 +1690,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 ResourceFieldEnum.LIMITS,
                 ResourceFieldEnum.PAUSED,
                 ResourceFieldEnum.DOWNSCALED,
+                ResourceFieldEnum.ATTRIBUTES,
                 ResourceFieldEnum.OFFERING_PLUGIN_OPTIONS,
                 ResourceFieldEnum.OFFERING_BACKEND_ID,
                 ResourceFieldEnum.PROJECT_NAME,
@@ -2458,7 +2475,95 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             user_cuids,
         )
 
+        self._report_membership_sync_statuses(waldur_resource)
+
         return existing_usernames | added_usernames
+
+    def _report_membership_sync_statuses(self, waldur_resource: WaldurResource) -> None:
+        """Post the backend's per-grant sync report to Waldur, if any.
+
+        Best-effort: skipped when the offering has not opted in via the
+        enable_membership_sync_status plugin option or the backend does
+        not implement get_membership_sync_report; failures are logged,
+        never fatal to the sync cycle.
+        """
+        plugin_options = getattr(waldur_resource, "offering_plugin_options", None)
+        props = getattr(plugin_options, "additional_properties", None)
+        if not (isinstance(props, dict) and props.get("enable_membership_sync_status")):
+            return
+        try:
+            report = self.resource_backend.get_membership_sync_report(waldur_resource)
+        except Exception as exc:
+            logger.warning(
+                "Unable to build membership sync report for %s: %s",
+                waldur_resource.uuid,
+                exc,
+            )
+            return
+        if report is None:
+            return
+        try:
+            response = (
+                marketplace_provider_resources_set_membership_sync_statuses.sync_detailed(
+                    waldur_resource.uuid,
+                    client=self.waldur_rest_client,
+                    body=MemberSyncStatusReportRequest.from_dict({"statuses": report}),
+                )
+            )
+            result = response.parsed
+            if isinstance(result, MemberSyncStatusReportResult):
+                logger.info(
+                    "Reported %s membership sync statuses for %s (skipped: %s)",
+                    result.stored,
+                    waldur_resource.name,
+                    result.skipped or "none",
+                )
+            else:
+                logger.warning(
+                    "Membership sync status report for %s rejected: HTTP %s %s",
+                    waldur_resource.name,
+                    response.status_code,
+                    getattr(result, "detail", ""),
+                )
+        except Exception as exc:
+            logger.warning(
+                "Unable to report membership sync statuses for %s: %s",
+                waldur_resource.name,
+                exc,
+            )
+
+    def process_resource_user_sync(self, resource_uuid: str) -> None:
+        """Perform full user synchronization for a single resource.
+
+        Resource-scoped sibling of process_project_user_sync, driven by
+        the resource_uuid field the resource-level resync trigger adds
+        to the USER_ROLE message.
+        """
+        logger.info("Processing sync of all users for resource %s", resource_uuid)
+        normalized = resource_uuid.replace("-", "")
+        resources = [
+            resource for resource in self._get_waldur_resources() if resource.uuid.hex == normalized
+        ]
+        if not resources:
+            logger.warning(
+                "Resource %s not found under offering %s, skipping sync",
+                resource_uuid,
+                self.offering.name,
+            )
+            return
+        resource_report = self.resource_backend.pull_resources(resources)
+        offering_users = self._refresh_local_offering_users()
+        self._sync_user_profiles_to_backend(offering_users)
+        for waldur_resource, backend_resource_info in resource_report.values():
+            try:
+                self._sync_resource_users(waldur_resource, backend_resource_info, offering_users)
+            except Exception as exc:
+                logger.error(
+                    "Unable to sync resource %s (%s), error: %s",
+                    waldur_resource.name,
+                    waldur_resource.backend_id,
+                    exc,
+                )
 
     def _sync_resource_status(self, waldur_resource: WaldurResource) -> None:
         """Syncs resource status between Waldur and the backend."""
@@ -2900,6 +3005,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 ResourceFieldEnum.CUSTOMER_SLUG,
                 ResourceFieldEnum.LIMITS,
                 ResourceFieldEnum.BACKEND_METADATA,
+                ResourceFieldEnum.ATTRIBUTES,
                 ResourceFieldEnum.OFFERING_PLUGIN_OPTIONS,
                 ResourceFieldEnum.OFFERING_BACKEND_ID,
             ],

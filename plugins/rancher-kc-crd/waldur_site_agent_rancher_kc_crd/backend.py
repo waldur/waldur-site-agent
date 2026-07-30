@@ -46,7 +46,80 @@ _CR_PHASE_ERROR = "Error"
 # returns these as the human-readable display value, not the integer.
 _RP_STATES_PROGRESSING = frozenset({"Creating", "Updating", "Erred"})
 
+_CR_PHASES_PROGRESSING = frozenset({"Pending", "Creating", "Updating"})
+
 logger = logging.getLogger(__name__)
+
+
+def _derive_grant_states(
+    user_roles: list[dict],
+    role_map: dict,
+    cr_status: dict,
+    scope_type: str,
+    resource_project_uuid: Optional[str],
+    use_user_id: bool,
+) -> list[dict]:
+    """Map desired grants against operator-confirmed CR status.
+
+    Derivation per grant (only roles present in the map — unmapped ones
+    never reach the CR and stay unreported, which serializes as null on
+    the Waldur side):
+
+    - CR phase progressing (or unknown yet) -> pending
+    - CR phase Error                        -> error
+    - phase Ready, member confirmed         -> synced
+    - phase Ready, member absent            -> missing_in_idp
+
+    Membership confirmation uses the union of syncedMembers across the
+    CR's bindings — per-binding attribution would require reversing the
+    rendered group names, and a member missing from one group but
+    present in another within the same CR only occurs transiently.
+    """
+    phase = (cr_status or {}).get("phase")
+    bindings_key = (
+        "clusterKeycloakRoleBindings" if scope_type == "resource" else "keycloakRoleBindings"
+    )
+    confirmed = set()
+    for rb in (cr_status or {}).get(bindings_key) or []:
+        for member in rb.get("syncedMembers") or []:
+            ident = member.get("userIdentifier") if isinstance(member, dict) else member
+            if ident:
+                confirmed.add(ident)
+
+    entries: list[dict] = []
+    for ur in user_roles:
+        role = ur.get("role_name")
+        if not role or role not in role_map:
+            continue
+        ident = ur.get("user_uuid") if use_user_id else ur.get("user_username")
+        if not ident:
+            continue
+        if phase == "Error":
+            state = "error"
+            message = "Reconciliation failed on the provider side"
+        elif phase in _CR_PHASES_PROGRESSING or not phase:
+            state = "pending"
+            message = ""
+        elif ident in confirmed:
+            state = "synced"
+            message = ""
+        else:
+            state = "missing_in_idp"
+            message = (
+                "User not confirmed in the identity provider; "
+                "access activates after their first login"
+            )
+        entry = {
+            "scope_type": scope_type,
+            "role_name": role,
+            "state": state,
+            "message": message,
+        }
+        entry["user_uuid" if use_user_id else "username"] = ident
+        if resource_project_uuid:
+            entry["resource_project_uuid"] = resource_project_uuid
+        entries.append(entry)
+    return entries
 
 
 class RancherKcCrdBackend(backends.BaseBackend):
@@ -81,6 +154,10 @@ class RancherKcCrdBackend(backends.BaseBackend):
 
         self.namespace: str = backend_settings.get("namespace", "waldur-system")
         self.role_map: dict[str, str] = backend_settings.get("role_map", {})
+        # Per-resource sync reports built during pull_resource from CR
+        # status, served to the membership processor via
+        # get_membership_sync_report after the user sync.
+        self._membership_sync_reports: dict[str, list[dict]] = {}
 
         self.crd = CrdClient(
             namespace=self.namespace,
@@ -228,6 +305,10 @@ class RancherKcCrdBackend(backends.BaseBackend):
                 str(waldur_resource.uuid),
             )
 
+        sync_report: list[dict] = []
+        use_user_id = bool(self.backend_settings.get("keycloak_use_user_id"))
+        last_cr_status: dict = {}
+
         for rp in rps:
             user_roles = self._fetch_resource_project_users(rp.uuid)
             rp_dict = self._resource_project_to_dict(rp)
@@ -248,6 +329,32 @@ class RancherKcCrdBackend(backends.BaseBackend):
             cr_status = cr.get("status") or {}
             synced_users.update(extract_synced_users(cr_status))
             self._sync_rp_state_from_cr(rp, cr_status)
+            last_cr_status = cr_status
+            sync_report.extend(
+                _derive_grant_states(
+                    ur_dicts,
+                    self.role_map,
+                    cr_status,
+                    "resource_project",
+                    rp.uuid.hex,
+                    use_user_id,
+                )
+            )
+
+        # Cluster-scope grants ride every CR; any CR's status carries the
+        # shared clusterKeycloakRoleBindings, so the last one suffices.
+        if cluster_ur_dicts:
+            sync_report.extend(
+                _derive_grant_states(
+                    cluster_ur_dicts,
+                    self.backend_settings.get("cluster_role_map") or {},
+                    last_cr_status,
+                    "resource",
+                    None,
+                    use_user_id,
+                )
+            )
+        self._membership_sync_reports[waldur_resource.uuid.hex] = sync_report
 
         # Prune CRs whose backing ResourceProject no longer exists in
         # Waldur. List by `waldur.io/resource-uuid` label (set by the
@@ -412,6 +519,10 @@ class RancherKcCrdBackend(backends.BaseBackend):
             "user_uuid": u.user_uuid.hex if getattr(u, "user_uuid", None) else None,
             "user_username": getattr(u, "user_username", None),
         }
+
+    def get_membership_sync_report(self, waldur_resource: WaldurResource) -> Optional[list[dict]]:
+        """Return the per-grant states derived during the last pull_resource."""
+        return self._membership_sync_reports.get(waldur_resource.uuid.hex)
 
     @staticmethod
     def _warn_unmapped_roles(
