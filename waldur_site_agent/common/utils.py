@@ -45,6 +45,12 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_as_erred,
     marketplace_provider_resources_set_limits,
 )
+from waldur_api_client.api.marketplace_resource_api_keys import (
+    marketplace_resource_api_keys_destroy,
+    marketplace_resource_api_keys_report_created,
+    marketplace_resource_api_keys_set_erred,
+    marketplace_resource_api_keys_set_key,
+)
 from waldur_api_client.api.marketplace_resources import marketplace_resources_list
 from waldur_api_client.api.users import users_me_retrieve
 from waldur_api_client.api.version import version_retrieve
@@ -70,6 +76,15 @@ from waldur_api_client.models.offering_user_state_transition_request import (
 )
 from waldur_api_client.models.patched_offering_user_request import PatchedOfferingUserRequest
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.models.resource_api_key_report_created_request import (
+    ResourceApiKeyReportCreatedRequest,
+)
+from waldur_api_client.models.resource_api_key_set_erred_request import (
+    ResourceApiKeySetErredRequest,
+)
+from waldur_api_client.models.resource_api_key_set_key_request import (
+    ResourceApiKeySetKeyRequest,
+)
 from waldur_api_client.models.resource_set_limits_request_limits import (
     ResourceSetLimitsRequestLimits,
 )
@@ -763,11 +778,8 @@ def _build_component_kwargs(component_info: dict) -> dict:
     return kwargs
 
 
-def _get_limit_period_enum(value: Union[
-    BlankEnum,
-    LimitPeriodEnum,
-    None,
-    Unset]
+def _get_limit_period_enum(
+    value: Union[BlankEnum, LimitPeriodEnum, None, Unset],
 ) -> Optional[LimitPeriodEnum]:
     """Convert API/client limit period values to LimitPeriodEnum when set."""
     if value is UNSET or value is None:
@@ -818,9 +830,7 @@ def load_components_to_waldur(
             if component_type in waldur_offering_components:
                 existing_component = waldur_offering_components[component_type]
                 if "limit_period" not in extra_kwargs:
-                    existing_limit_period = _get_limit_period_enum(
-                        existing_component.limit_period
-                    )
+                    existing_limit_period = _get_limit_period_enum(existing_component.limit_period)
                     if existing_limit_period is not None:
                         extra_kwargs["limit_period"] = existing_limit_period
                 logger.info(
@@ -1226,10 +1236,7 @@ def _can_generate_usernames(
     # The agent only generates usernames under the service_provider policy.
     # Other policies are handled by Waldur Mastermind, so the
     # service_provider_can_create_offering_user flag is irrelevant there.
-    if (
-        plugin_options.username_generation_policy
-        != UsernameGenerationPolicyEnum.SERVICE_PROVIDER
-    ):
+    if plugin_options.username_generation_policy != UsernameGenerationPolicyEnum.SERVICE_PROVIDER:
         return False
 
     # Check if service provider is allowed to create offering users
@@ -1680,3 +1687,71 @@ def get_all_paginated(api_function, client, **kwargs) -> list:  # noqa: ANN001, 
         page += 1
 
     return all_items
+
+
+def provision_resource_api_keys(
+    waldur_rest_client: AuthenticatedClient,
+    resource_uuid: str,
+    resource_backend_id: str,
+    backend,  # noqa: ANN001 - BaseBackend would be a circular import
+    count: Optional[int] = None,
+) -> None:
+    """Generate keys in the backend and report each to Waldur (encrypted).
+
+    The agent owns generation: it applies each key to the backend first, then
+    pushes the value so Waldur only ever stores a live key.
+    """
+    kwargs = {} if count is None else {"count": count}
+    for key in backend.generate_resource_keys(resource_backend_id, **kwargs):
+        marketplace_resource_api_keys_report_created.sync(
+            client=waldur_rest_client,
+            body=ResourceApiKeyReportCreatedRequest(
+                resource=resource_uuid,
+                client_id=key["client_id"],
+                api_key=key["api_key"],
+            ),
+        )
+
+
+def rotate_resource_api_key(
+    waldur_rest_client: AuthenticatedClient,
+    api_key_uuid: str,
+    client_id: str,
+    backend,  # noqa: ANN001
+) -> None:
+    """Rotate one key in the backend, then report the new value to Waldur."""
+    try:
+        new_key = backend.rotate_resource_key(client_id)
+    except Exception as exc:
+        logger.error("Failed to rotate API key %s: %s", client_id, exc)
+        marketplace_resource_api_keys_set_erred.sync(
+            uuid=api_key_uuid,
+            client=waldur_rest_client,
+            body=ResourceApiKeySetErredRequest(error_message=str(exc)),
+        )
+        return
+    marketplace_resource_api_keys_set_key.sync(
+        uuid=api_key_uuid,
+        client=waldur_rest_client,
+        body=ResourceApiKeySetKeyRequest(api_key=new_key),
+    )
+
+
+def revoke_resource_api_key(
+    waldur_rest_client: AuthenticatedClient,
+    api_key_uuid: str,
+    client_id: str,
+    backend,  # noqa: ANN001
+) -> None:
+    """Remove one key from the backend, then confirm to Waldur (deletes the row)."""
+    try:
+        backend.revoke_resource_key(client_id)
+    except Exception as exc:
+        logger.error("Failed to revoke API key %s: %s", client_id, exc)
+        marketplace_resource_api_keys_set_erred.sync(
+            uuid=api_key_uuid,
+            client=waldur_rest_client,
+            body=ResourceApiKeySetErredRequest(error_message=str(exc)),
+        )
+        return
+    marketplace_resource_api_keys_destroy.sync(uuid=api_key_uuid, client=waldur_rest_client)

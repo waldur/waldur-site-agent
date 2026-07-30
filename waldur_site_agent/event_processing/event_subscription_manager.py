@@ -35,6 +35,9 @@ OBJECT_TYPE_TO_HANDLER_STOMP: dict[ObservableObjectTypeEnum, Callable] = {
     ObservableObjectTypeEnum.OFFERING_RESOURCES_SYNC: (
         handlers.on_offering_resources_sync_message_stomp
     ),
+    ObservableObjectTypeEnum.RESOURCE_API_KEY_ROTATION: (
+        handlers.on_resource_api_key_rotation_stomp
+    ),
 }
 PID_FILE_PATH = "/var/run/waldur_site_agent.pid"
 

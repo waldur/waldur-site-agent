@@ -122,6 +122,27 @@ class BackendComponent(BaseModel):
         return self.model_dump(exclude_unset=True, mode="json")
 
 
+def normalize_backend_components(
+    components: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Normalize backend components to plain dicts for BaseBackend compatibility.
+
+    Accepts ``BackendComponent`` instances, other pydantic models, or dicts (e.g.
+    from ``model_copy``) and returns a ``name -> dict`` mapping.
+    """
+    result: dict[str, dict[str, Any]] = {}
+    for name, component in components.items():
+        if isinstance(component, BackendComponent):
+            result[name] = component.to_dict()
+        elif isinstance(component, BaseModel):
+            result[name] = component.model_dump()
+        elif isinstance(component, dict):
+            result[name] = component
+        else:
+            result[name] = dict(component)
+    return result
+
+
 class Offering(BaseModel):
     """Configuration structure for a Waldur marketplace offering.
 
@@ -252,17 +273,7 @@ class Offering(BaseModel):
     @property
     def backend_components_dict(self) -> dict[str, dict[str, Any]]:
         """Convert backend components to dictionary format for BaseBackend compatibility."""
-        result = {}
-        for name, component in self.backend_components.items():
-            if isinstance(component, BackendComponent):
-                result[name] = component.to_dict()
-            elif isinstance(component, dict):
-                # Handle case where component is still a dict (e.g., from model_copy)
-                result[name] = component
-            else:
-                # Fallback - convert to dict
-                result[name] = dict(component)
-        return result
+        return normalize_backend_components(self.backend_components)
 
 
 class AgentMode(Enum):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 import stomp
 from waldur_api_client.models.event_subscription import EventSubscription
@@ -109,6 +109,24 @@ class PeriodicLimitsMessage(TypedDict):
     action: str
     settings: dict
     timestamp: str
+
+
+class ApiKeyRotationMessage(TypedDict):
+    """A command to reconcile one of a resource's API keys.
+
+    Attributes:
+        action (str): one of ``rotate`` / ``revoke`` / ``add``
+        resource_uuid (str): UUID of the resource in Waldur
+        resource_backend_id (str): backend id the key client-ids derive from
+        api_key_uuid (Optional[str]): the ResourceApiKey to act on (None for ``add``)
+        client_id (Optional[str]): the key's gateway client-id (None for ``add``)
+    """
+
+    action: str
+    resource_uuid: str
+    resource_backend_id: str
+    api_key_uuid: Optional[str]
+    client_id: Optional[str]
 
 
 class OfferingUserMessage(TypedDict):

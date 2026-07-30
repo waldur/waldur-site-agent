@@ -48,6 +48,9 @@ def _determine_observable_object_types(
 
     if offering.order_processing_backend:
         object_types.append(ObservableObjectTypeEnum.ORDER)
+        # Rotation is an order-processing-backend capability; the handler no-ops for
+        # backends that do not implement rotate_api_key (only Envoy does today).
+        object_types.append(ObservableObjectTypeEnum.RESOURCE_API_KEY_ROTATION)
     else:
         logger.info(
             "Order processing is disabled for offering %s, skipping start of STOMP connections",
@@ -242,9 +245,7 @@ def setup_stomp_offering_subscriptions(
     # BaseBackend.setup_target_event_subscriptions returns [] by default.
     if waldur_offering.order_processing_backend:
         try:
-            backend, _ = get_backend_for_offering(
-                waldur_offering, "order_processing_backend"
-            )
+            backend, _ = get_backend_for_offering(waldur_offering, "order_processing_backend")
             target_consumers = backend.setup_target_event_subscriptions(
                 waldur_offering, waldur_user_agent, global_proxy
             )
@@ -256,7 +257,6 @@ def setup_stomp_offering_subscriptions(
             )
 
     return stomp_connections
-
 
 
 def start_stomp_consumers(
@@ -423,9 +423,7 @@ def run_periodic_username_reconciliation(
             continue
         try:
             waldur_rest_client = get_client_for_offering(offering, user_agent)
-            resource_backend, _ = get_backend_for_offering(
-                offering, "membership_sync_backend"
-            )
+            resource_backend, _ = get_backend_for_offering(offering, "membership_sync_backend")
             updated = resource_backend.sync_offering_user_usernames(
                 offering.uuid, waldur_rest_client
             )
@@ -435,9 +433,7 @@ def run_periodic_username_reconciliation(
                     offering.name,
                 )
         except Exception:
-            logger.exception(
-                "Reconciliation failed for offering %s", offering.name
-            )
+            logger.exception("Reconciliation failed for offering %s", offering.name)
 
 
 def run_periodic_offering_user_reconciliation(
@@ -482,18 +478,14 @@ def run_periodic_offering_user_reconciliation(
                 offering.name,
             )
 
-            updated = common_utils.update_offering_users(
-                offering, waldur_rest_client, stuck_users
-            )
+            updated = common_utils.update_offering_users(offering, waldur_rest_client, stuck_users)
             if updated:
                 logger.info(
                     "Offering user reconciliation: usernames updated for %s",
                     offering.name,
                 )
         except Exception:
-            logger.exception(
-                "Offering user reconciliation failed for %s", offering.name
-            )
+            logger.exception("Offering user reconciliation failed for %s", offering.name)
 
 
 def run_periodic_order_reconciliation(
@@ -531,16 +523,13 @@ def run_periodic_order_reconciliation(
                 continue
 
             logger.info(
-                "Order reconciliation: found %d stuck order(s) for %s "
-                "(modified before %s)",
+                "Order reconciliation: found %d stuck order(s) for %s (modified before %s)",
                 len(stuck_orders),
                 offering.name,
                 cutoff.isoformat(),
             )
 
-            order_processor = common_processors.OfferingOrderProcessor(
-                offering, waldur_rest_client
-            )
+            order_processor = common_processors.OfferingOrderProcessor(offering, waldur_rest_client)
             for order in stuck_orders:
                 touch_heartbeat()
                 try:
@@ -548,9 +537,7 @@ def run_periodic_order_reconciliation(
                 except Exception as e:
                     order_processor.log_order_processing_error(order, e)
         except Exception:
-            logger.exception(
-                "Order reconciliation failed for offering %s", offering.name
-            )
+            logger.exception("Order reconciliation failed for offering %s", offering.name)
 
 
 def run_periodic_project_hierarchy_sync(
@@ -583,9 +570,7 @@ def run_periodic_project_hierarchy_sync(
             )
             processor.sync_all_resource_projects()
         except Exception:
-            logger.exception(
-                "Project hierarchy sync failed for offering %s", offering.name
-            )
+            logger.exception("Project hierarchy sync failed for offering %s", offering.name)
 
 
 def send_agent_health_checks(offerings: list[common_structures.Offering], user_agent: str) -> None:

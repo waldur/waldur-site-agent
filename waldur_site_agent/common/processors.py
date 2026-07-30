@@ -292,9 +292,7 @@ class OfferingBaseProcessor(abc.ABC):
         self.service_provider = service_providers[0]
         self.resource_backend.service_provider_uuid = self.service_provider.uuid.hex
         self.resource_backend.offering_partitions = sorted(
-            p.partition_name
-            for p in (self.waldur_offering.partitions or [])
-            if p.partition_name
+            p.partition_name for p in (self.waldur_offering.partitions or []) if p.partition_name
         )
 
         # Per-cycle cache for offering users (avoids redundant API calls)
@@ -367,11 +365,9 @@ class OfferingBaseProcessor(abc.ABC):
         exposed_names: list[str] = []
 
         try:
-            attr_config = (
-                marketplace_provider_offerings_user_attribute_config_retrieve.sync(
-                    uuid=self.offering.uuid,
-                    client=self.waldur_rest_client,
-                )
+            attr_config = marketplace_provider_offerings_user_attribute_config_retrieve.sync(
+                uuid=self.offering.uuid,
+                client=self.waldur_rest_client,
             )
             exposed_names = attr_config.exposed_fields
             logger.info(
@@ -387,8 +383,7 @@ class OfferingBaseProcessor(abc.ABC):
 
         except Exception:
             logger.warning(
-                "Could not fetch user attribute config for offering %s, "
-                "requesting default fields",
+                "Could not fetch user attribute config for offering %s, requesting default fields",
                 self.offering.name,
             )
             exposed_names = list(self._DEFAULT_EXPOSED_FIELDS)
@@ -415,9 +410,7 @@ class OfferingBaseProcessor(abc.ABC):
         cached = _ATTRIBUTE_CONFIG_CACHE.get(offering_uuid)
         return cached[1] if cached else list(self._DEFAULT_EXPOSED_FIELDS)
 
-    def _build_user_attributes_mapping(
-        self, offering_users: list[OfferingUser]
-    ) -> dict[str, dict]:
+    def _build_user_attributes_mapping(self, offering_users: list[OfferingUser]) -> dict[str, dict]:
         """Build a mapping of offering_username -> exposed user profile attributes.
 
         Driven by the offering's OfferingUserAttributeConfig: only fields
@@ -426,9 +419,7 @@ class OfferingBaseProcessor(abc.ABC):
         so newly-resolved users have proper first_name / last_name / email
         instead of being created as bare username-only records.
         """
-        offering_user_by_username = {
-            ou.username: ou for ou in offering_users if ou.username
-        }
+        offering_user_by_username = {ou.username: ou for ou in offering_users if ou.username}
         exposed_fields = self._get_exposed_fields()
         user_attributes: dict[str, dict] = {}
         for ou_username, ou in offering_user_by_username.items():
@@ -552,9 +543,7 @@ class OfferingBaseProcessor(abc.ABC):
         uniqueness_check_enabled = self.offering.backend_settings.get(
             "check_backend_id_uniqueness", False
         )
-        configured_retries = self.offering.backend_settings.get(
-            "backend_id_max_retries", 50
-        )
+        configured_retries = self.offering.backend_settings.get("backend_id_max_retries", 50)
         max_retries = configured_retries if (use_project_slug or uniqueness_check_enabled) else 1
 
         # Try creating resource with generated IDs
@@ -605,9 +594,7 @@ class OfferingBaseProcessor(abc.ABC):
         Args:
             offering_users: List of offering users to process
         """
-        result = utils.update_offering_users(
-            self.offering, self.waldur_rest_client, offering_users
-        )
+        result = utils.update_offering_users(self.offering, self.waldur_rest_client, offering_users)
         if result:
             # Usernames were modified, invalidate the cache
             self._invalidate_offering_users_cache()
@@ -823,9 +810,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     order = order_info
                 else:
                     # Re-fetch on retries for freshness
-                    order_fetched: Optional[OrderDetails] = self.get_order_info(
-                        order_info.uuid.hex
-                    )
+                    order_fetched: Optional[OrderDetails] = self.get_order_info(order_info.uuid.hex)
                     if order_fetched is None:
                         logger.error("Failed to get order %s info", order_info.uuid)
                         return
@@ -1046,9 +1031,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         # Enrich user_context with pre-resolved data for backends
         plan_uuid = getattr(waldur_resource, "plan_uuid", None)
-        user_context["plan_quotas"] = self._resolve_plan_limits(
-            plan_uuid, waldur_resource.name
-        )
+        user_context["plan_quotas"] = self._resolve_plan_limits(plan_uuid, waldur_resource.name)
         user_context["ssh_keys"] = self._fetch_service_provider_ssh_keys()
 
         # Use the provided user context for resource creation
@@ -1071,9 +1054,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             marketplace_provider_resources_set_limits.sync(
                 uuid=waldur_resource.uuid.hex,
                 body=ResourceSetLimitsRequest(
-                    limits=ResourceSetLimitsRequestLimits.from_dict(
-                        backend_resource_info.limits
-                    )
+                    limits=ResourceSetLimitsRequestLimits.from_dict(backend_resource_info.limits)
                 ),
                 client=self.waldur_rest_client,
             )
@@ -1103,9 +1084,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     client=self.waldur_rest_client,
                     body=ResourceEndpointsRequest(
                         endpoints=[
-                            ResourceEndpointRequest(
-                                name=endpoint["name"], url=endpoint["url"]
-                            )
+                            ResourceEndpointRequest(name=endpoint["name"], url=endpoint["url"])
                             for endpoint in backend_resource_info.endpoints
                         ]
                     ),
@@ -1117,7 +1096,34 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             except Exception as e:
                 logger.warning("Failed to push access endpoints to Waldur: %s", e)
 
+        self._provision_resource_api_keys(waldur_resource, backend_resource_info)
+
         return backend_resource_info
+
+    def _provision_resource_api_keys(
+        self,
+        waldur_resource: WaldurResource,
+        backend_resource_info: BackendResourceInfo,
+    ) -> None:
+        """Generate the resource's API keys and report each to Waldur.
+
+        The agent decides the count (the Envoy plugin makes two so one can be
+        rotated with no downtime). A failure is not fatal: the key can be added
+        later. Runs on both fresh creates and restores/re-creates — a restored
+        resource has no keys (they were removed on terminate), so it must be
+        re-provisioned or it would come back with no way to authenticate.
+        """
+        if not getattr(self.resource_backend, "supports_resource_api_keys", False):
+            return
+        try:
+            utils.provision_resource_api_keys(
+                self.waldur_rest_client,
+                waldur_resource.uuid.hex,
+                backend_resource_info.backend_id,
+                self.resource_backend,
+            )
+        except Exception as e:
+            logger.warning("Failed to provision the resource API keys: %s", e)
 
     def _fetch_user_context_for_resource(self, resource_uuid: str) -> dict:
         """Fetch comprehensive user context for resource operations.
@@ -1242,9 +1248,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         user_cuids = {
             ou.username: ou.user_username
             for ou in offering_users
-            if ou.username
-            and ou.user_username
-            and not isinstance(ou.user_username, type(UNSET))
+            if ou.username and ou.user_username and not isinstance(ou.user_username, type(UNSET))
         }
 
         user_roles = {
@@ -1389,23 +1393,21 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             backend_resource_info = self.resource_backend.create_resource_with_id(
                 waldur_resource, waldur_resource.backend_id, user_context
             )
+            # create_resource_with_id only registers the resource; unlike
+            # _create_resource it does not provision keys. A restored resource has
+            # none (removed on terminate), so provision them here too (F12).
+            if backend_resource_info is not None:
+                self._provision_resource_api_keys(waldur_resource, backend_resource_info)
         else:
-            backend_resource_info = self._create_resource(
-                waldur_resource, user_context
-            )
+            backend_resource_info = self._create_resource(waldur_resource, user_context)
         if backend_resource_info is None:
             msg = f"Unable to create the resource {waldur_resource.name}"
             raise backend_exceptions.BackendError(msg)
 
         # Handle async creation: set order backend_id and stay EXECUTING.
         # Only used by backends with supports_async_orders enabled.
-        if (
-            backend_resource_info.pending_order_id
-            and self.resource_backend.supports_async_orders
-        ):
-            return self._submit_async_target_order(
-                order, backend_resource_info.pending_order_id
-            )
+        if backend_resource_info.pending_order_id and self.resource_backend.supports_async_orders:
+            return self._submit_async_target_order(order, backend_resource_info.pending_order_id)
 
         waldur_resource.backend_id = backend_resource_info.backend_id
 
@@ -1501,9 +1503,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             )
         return True
 
-    def _resolve_plan_limits(
-        self, plan_uuid: object, resource_name: str = ""
-    ) -> dict[str, int]:
+    def _resolve_plan_limits(self, plan_uuid: object, resource_name: str = "") -> dict[str, int]:
         """Resolve resource limits from a plan's fixed-component quotas.
 
         When an offering uses FIXED billing components, the plan's quotas
@@ -1524,11 +1524,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 uuid=str(plan_uuid), client=self.waldur_rest_client
             )
             if plan and hasattr(plan, "quotas") and plan.quotas:
-                raw = (
-                    plan.quotas.to_dict()
-                    if hasattr(plan.quotas, "to_dict")
-                    else plan.quotas
-                )
+                raw = plan.quotas.to_dict() if hasattr(plan.quotas, "to_dict") else plan.quotas
                 quotas = {k: int(v) for k, v in raw.items() if v}
                 if quotas:
                     logger.info(
@@ -1968,13 +1964,17 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                         logger.info("The resource is restricted, skipping new role.")
                         continue
                     self.resource_backend.add_user(
-                        waldur_resource, username,
-                        role_name=role_name, user_cuid=user_cuid,
+                        waldur_resource,
+                        username,
+                        role_name=role_name,
+                        user_cuid=user_cuid,
                     )
                 else:
                     self.resource_backend.remove_user(
-                        waldur_resource, username,
-                        role_name=role_name, user_cuid=user_cuid,
+                        waldur_resource,
+                        username,
+                        role_name=role_name,
+                        user_cuid=user_cuid,
                     )
             except Exception as exc:
                 logger.error(
@@ -2162,9 +2162,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             or []
         )
 
-    def _get_project_wide_consented_team(
-        self, resource: WaldurResource
-    ) -> list[ProjectUser]:
+    def _get_project_wide_consented_team(self, resource: WaldurResource) -> list[ProjectUser]:
         """Return the union of consented teams across the project's federated resources.
 
         Used for shared-project backends: a user must remain a member of the shared
@@ -2203,9 +2201,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             try:
                 team = self._fetch_consented_team(resource_uuid)
             except Exception:
-                logger.exception(
-                    "Could not fetch consented team for resource %s", resource_uuid
-                )
+                logger.exception("Could not fetch consented team for resource %s", resource_uuid)
                 continue
             is_own_resource = resource_uuid == resource.uuid.hex
             if is_own_resource:
@@ -2248,9 +2244,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         backend_resource_info: BackendResourceInfo,
         offering_users: list[OfferingUser],
     ) -> tuple[
-        set[str], set[str], set[str],
-        dict[str, str], dict[str, str],
-        dict[str, str], dict[str, dict],
+        set[str],
+        set[str],
+        set[str],
+        dict[str, str],
+        dict[str, str],
+        dict[str, str],
+        dict[str, dict],
         dict[str, OfferingUserState],
     ]:
         """Group resource usernames into existing, stale, and new sets.
@@ -2304,21 +2304,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             # which is stable across instances and matches what identity-bridge backends
             # report via pull_resources. Offering usernames are provider-local posix
             # accounts and must not be used as the membership diff key.
-            resource_usernames = {
-                user.username
-                for user in team
-                if user.username
-            }
-            user_roles = {
-                user.username: user.role
-                for user in team
-                if user.username and user.role
-            }
+            resource_usernames = {user.username for user in team if user.username}
+            user_roles = {user.username: user.role for user in team if user.username and user.role}
             user_emails = {
                 offering_user.user_username: offering_user.user_email
                 for offering_user in offering_users
-                if offering_user.user_username
-                and isinstance(offering_user.user_email, str)
+                if offering_user.user_username and isinstance(offering_user.user_email, str)
             }
         else:
             resource_usernames = {
@@ -2332,8 +2323,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             user_emails = {
                 offering_user.username: offering_user.user_email
                 for offering_user in offering_users
-                if offering_user.username
-                and isinstance(offering_user.user_email, str)
+                if offering_user.username and isinstance(offering_user.user_email, str)
             }
         logger.info(
             "Resource team usernames (%s): %s",
@@ -2365,11 +2355,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         # Build user_cuids mapping for backends that need the CUID for identity resolution.
         if use_identity_bridge:
-            user_cuids = {
-                user.username: user.username
-                for user in team
-                if user.username
-            }
+            user_cuids = {user.username: user.username for user in team if user.username}
         else:
             user_cuids = {
                 user.offering_user_username: user.username
@@ -2391,15 +2377,10 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             offering_user_states = {
                 offering_user.user_username: offering_user.state
                 for offering_user in offering_users
-                if offering_user.user_username
-                and hasattr(offering_user, "state")
+                if offering_user.user_username and hasattr(offering_user, "state")
             }
         else:
-            offering_user_states = {
-                ou.username: ou.state
-                for ou in offering_users
-                if ou.username
-            }
+            offering_user_states = {ou.username: ou.state for ou in offering_users if ou.username}
 
         return (
             existing_usernames,
@@ -2433,9 +2414,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             user_cuids,
             user_attributes,
             offering_user_states,
-        ) = self._group_resource_usernames(
-            waldur_resource, backend_resource_info, offering_users
-        )
+        ) = self._group_resource_usernames(waldur_resource, backend_resource_info, offering_users)
 
         if waldur_resource.restrict_member_access:
             # The idea is to remove the existing associations in both sides
@@ -2593,12 +2572,10 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         if cache_key in self._service_accounts_cache:
             service_accounts = self._service_accounts_cache[cache_key]
         else:
-            service_accounts = (
-                marketplace_service_providers_project_service_accounts_list.sync_all(
-                    service_provider_uuid=self.service_provider.uuid.hex,
-                    project_uuid=cache_key,
-                    client=self.waldur_rest_client,
-                )
+            service_accounts = marketplace_service_providers_project_service_accounts_list.sync_all(
+                service_provider_uuid=self.service_provider.uuid.hex,
+                project_uuid=cache_key,
+                client=self.waldur_rest_client,
             )
             self._service_accounts_cache[cache_key] = service_accounts
 
@@ -3050,9 +3027,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         # Waldur actually stores: comparing a full-precision value against
         # the persisted 2-decimal record would never match and would force a
         # resubmission (and a downstream signal fan-out) on every cycle.
-        total_usage = {
-            component: round(amount, 2) for component, amount in total_usage.items()
-        }
+        total_usage = {component: round(amount, 2) for component, amount in total_usage.items()}
 
         logger.info("Setting usages for %s: %s", waldur_resource.backend_id, total_usage)
         resource_uuid = waldur_resource.uuid.hex
@@ -3118,10 +3093,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     parent_uuid = uu.component_usage.rstrip("/").split("/")[-1]
                     user_usage_parent_uuids.add(parent_uuid)
 
-            aggregate_usages = [
-                u for u in existing_usages
-                if str(u.uuid) not in user_usage_parent_uuids
-            ] if user_usage_parent_uuids else existing_usages
+            aggregate_usages = (
+                [u for u in existing_usages if str(u.uuid) not in user_usage_parent_uuids]
+                if user_usage_parent_uuids
+                else existing_usages
+            )
 
             for component, amount in total_usage.items():
                 if component in component_types and self._check_usage_anomaly(
@@ -3131,9 +3107,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                         "Skipping usage update for resource %s due to anomaly detection",
                         waldur_resource.backend_id,
                     )
-                    raise UsageAnomalyError(
-                        f"Usage anomaly detected for component {component}"
-                    )
+                    raise UsageAnomalyError(f"Usage anomaly detected for component {component}")
 
         usage_objects = [
             ComponentUsageItemRequest(type_=component, amount=f"{amount:.2f}")
@@ -3161,9 +3135,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         """
         # Only components that exist in Waldur participate in the comparison;
         # the others are dropped at submission time anyway and logged above.
-        new_pairs = {
-            c: amount for c, amount in total_usage.items() if c in component_types
-        }
+        new_pairs = {c: amount for c, amount in total_usage.items() if c in component_types}
 
         existing_by_type: dict[str, float] = {}
         for u in existing_usages:
@@ -3220,9 +3192,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         # Build offering user lookup: username -> offering user URL
         cached_offering_users = self._get_cached_offering_users()
         offering_user_urls: dict[str, str] = {
-            ou.username: ou.url
-            for ou in cached_offering_users
-            if ou.username and ou.url
+            ou.username: ou.url for ou in cached_offering_users if ou.username and ou.url
         }
 
         for component_usage in waldur_component_usages:
@@ -3337,12 +3307,17 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     logger.info(
                         "Past period %04d-%02d skipped for resource %s: backend "
                         "does not allow backfilling usage-based components",
-                        year, month, resource_backend_id,
+                        year,
+                        month,
+                        resource_backend_id,
                     )
                 else:
                     logger.warning(
                         "Past period %04d-%02d rejected (HTTP 400) for resource %s: %s",
-                        year, month, resource_backend_id, response_text,
+                        year,
+                        month,
+                        resource_backend_id,
+                        response_text,
                     )
             except UsageAnomalyError:
                 if is_current:
@@ -3352,14 +3327,18 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     return
                 logger.info(
                     "Skipping past period %04d-%02d for resource %s due to usage anomaly",
-                    year, month, resource_backend_id,
+                    year,
+                    month,
+                    resource_backend_id,
                 )
             except Exception:
                 if is_current:
                     raise
                 logger.warning(
                     "Failed to report past period %04d-%02d for resource %s, continuing",
-                    year, month, resource_backend_id,
+                    year,
+                    month,
+                    resource_backend_id,
                     exc_info=True,
                 )
 
@@ -3386,17 +3365,23 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         else:
             logger.info(
                 "Fetching historical usage for %s, period %04d-%02d",
-                resource_backend_id, year, month,
+                resource_backend_id,
+                year,
+                month,
             )
             period_report = self.resource_backend.get_usage_report_for_period(
-                [resource_backend_id], year, month,
+                [resource_backend_id],
+                year,
+                month,
                 waldur_resource=waldur_resource_info,
             )
             usages = period_report.get(resource_backend_id, {})
             if not usages:
                 logger.info(
                     "No historical data for %s in %04d-%02d, skipping",
-                    resource_backend_id, year, month,
+                    resource_backend_id,
+                    year,
+                    month,
                 )
                 return
 
@@ -3404,7 +3389,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         if total_usage is None:
             logger.warning(
                 "No TOTAL_ACCOUNT_USAGE for %s in %04d-%02d, skipping",
-                resource_backend_id, year, month,
+                resource_backend_id,
+                year,
+                month,
             )
             return
 
