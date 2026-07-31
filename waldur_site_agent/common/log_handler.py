@@ -4,11 +4,11 @@ This module provides a logging handler that integrates with the CircularLogBuffe
 to capture log entries and store them in memory for later shipping to Waldur Mastermind.
 """
 
-import ast
 import logging
 from typing import Optional
 
 from .log_buffer import CircularLogBuffer, LogEntry
+from .structlog_message import parse_structlog_message
 
 _EXCLUDED_LOGGER_PREFIXES = ("httpx", "httpcore")
 
@@ -50,12 +50,9 @@ class BufferedLogHandler(logging.Handler):
         """
         try:
             msg = record.getMessage()
-            try:
-                data = ast.literal_eval(msg)
-                if isinstance(data, dict) and "event" in data:
-                    msg = str(data["event"])
-            except (ValueError, SyntaxError):
-                pass
+            parsed = parse_structlog_message(msg)
+            if parsed is not None:
+                msg = parsed[0]
             entry = LogEntry(
                 timestamp=record.created,
                 level=record.levelname,

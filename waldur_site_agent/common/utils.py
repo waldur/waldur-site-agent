@@ -441,7 +441,9 @@ def load_configuration(
         if configuration.sentry_dsn:
             import sentry_sdk  # noqa: PLC0415
 
-            sentry_sdk.init(dsn=configuration.sentry_dsn)
+            from .sentry import before_send  # noqa: PLC0415
+
+            sentry_sdk.init(dsn=configuration.sentry_dsn, before_send=before_send)
 
         # Handle Elastic APM configuration - initialize if server URL is provided
         if configuration.elastic_apm_server_url:
