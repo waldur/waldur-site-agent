@@ -273,6 +273,38 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
     qos_downscaled: Optional[str] = Field(default=None, description="QoS for downscaled accounts")
     qos_paused: Optional[str] = Field(default=None, description="QoS for paused accounts")
 
+    # Opt-in gate for QoS enforcement. Off by default: enforcement never
+    # activates — regardless of any offering's plugin_options.enforce_qos —
+    # until the operator enables it here. This keeps a remote Mastermind flag
+    # from making the agent mutate SLURM QoS without the operator's consent.
+    qos_enforcement_enabled: bool = Field(
+        default=False,
+        description=(
+            "Master opt-in for QoS enforcement on this agent. False (default) "
+            "disables enforcement for every offering regardless of the remote "
+            "plugin_options.enforce_qos flag. Set True to allow enforcement, "
+            "then scope it with enforce_offering_qos / the per-offering flag."
+        ),
+    )
+
+    # Enforcement override, applied ONLY when qos_enforcement_enabled is True
+    # (three-state):
+    #   None  — respect the per-offering plugin_options.enforce_qos flag (default)
+    #   True  — force enforcement for every offering this agent serves
+    #   False — force informational mode (never touch SLURM QoS) regardless of offering
+    # When enforcing, the agent grants the selected QoS on the user association
+    # (QosLevel/DefaultQOS) and uses an orthogonal pause lever (GrpSubmitJobs)
+    # instead of the account-QoS overwrite, so pausing never clobbers the grant.
+    enforce_offering_qos: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Override for per-offering QoS enforcement, applied only when "
+            "qos_enforcement_enabled is True. None (default) respects each "
+            "offering's plugin_options.enforce_qos; True forces enforcement; "
+            "False forces informational mode."
+        ),
+    )
+
     # Per-account QoS management (optional, for EFP-style deployments)
     qos_management: Optional[QosManagementConfig] = Field(
         default=None, description="Per-account QoS creation and management"
@@ -307,6 +339,30 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
     periodic_limits: Optional[PeriodicLimitsConfig] = Field(
         default=None, description="Periodic limits configuration"
     )
+
+    @model_validator(mode="after")
+    def validate_qos_enforcement_conflict(self) -> SlurmBackendSettingsSchema:
+        """Reject forced QoS enforcement alongside the QoS-swap pause settings.
+
+        Forcing enforcement is incompatible with the account-QoS-swap
+        pause/downscale mechanism, which would clobber the per-association
+        grant. When enforcement is forced on, the enforced path uses an
+        orthogonal pause lever, so qos_paused/qos_downscaled must be dropped.
+        Only fires when enforcement is actually reachable — the opt-in gate is
+        on and enforcement is forced for every offering (so no offering could
+        legitimately still use the swap-based pause).
+        """
+        forced_everywhere = self.qos_enforcement_enabled and self.enforce_offering_qos is True
+        if forced_everywhere and (self.qos_paused or self.qos_downscaled):
+            msg = (
+                "qos_enforcement_enabled and enforce_offering_qos are both True "
+                "but qos_paused/qos_downscaled are set — the account-QoS-swap "
+                "pause conflicts with per-association QoS grants. Remove "
+                "qos_paused/qos_downscaled (the enforced path uses an orthogonal "
+                "pause lever) or unset enforce_offering_qos."
+            )
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def validate_rest_mode(self) -> SlurmBackendSettingsSchema:

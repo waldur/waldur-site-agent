@@ -172,6 +172,44 @@ QoS state (normal / downscaled / paused) is driven by the resource flags
 through the top-level `qos_default` / `qos_downscaled` / `qos_paused`
 backend settings — the same path used by manual pause/downscale.
 
+### QoS enforcement (multi-QoS offerings)
+
+When an offering exposes multiple QoS profiles per partition, the plugin can
+switch from the QoS-swap model above to a **per-association QoS grant**: in this
+mode `add_user` reads the QoS (and optional partition) the consumer selected at
+order time and grants it on the user→account association (`QosLevel` /
+`DefaultQOS`), rather than mutating the account-level QoS.
+
+Enforcement is **opt-in on the agent**. It stays off — regardless of any
+offering's `plugin_options.enforce_qos` — until the operator enables the
+`qos_enforcement_enabled` gate, so a remote flag can never make the agent mutate
+SLURM QoS without consent:
+
+```yaml
+backend_settings:
+  qos_enforcement_enabled: true     # opt-in gate (default false)
+  # Once opted in, scope enforcement:
+  #   enforce_offering_qos: null    # (default) respect each offering's flag
+  #   enforce_offering_qos: true    # force enforcement for every offering
+  #   enforce_offering_qos: false   # force informational mode
+  # Optional per-offering partition scoping still applies (see above):
+  # offering_partitions + enforce_offering_partitions.
+```
+
+- **Partition scope.** The grant is scoped to the consumer's selected
+  partition; if none was selected it spans the enforced `offering_partitions`,
+  else the `default_partition`. QoS composes with partitions — SLURM stores one
+  association row per partition, each carrying the grant.
+- **Pause / downscale.** Because the association QoS is a grant (not the
+  operational lever), pause/downscale block new submissions with
+  `GrpSubmitJobs=0` and restore clears it (`GrpSubmitJobs=-1`), leaving the QoS
+  grant untouched. The `qos_paused` / `qos_downscaled` settings are **not** used
+  in this mode (and forcing enforcement together with them is rejected at config
+  validation).
+- **Execution modes.** Both `cli` and `rest` execution modes implement the QoS
+  grant and the `GrpSubmitJobs` lever. In REST mode the grant is a single
+  `users_association` POST whose `association` template carries the QoS.
+
 ### Storage Quotas
 
 The SLURM plugin supports two independent filesystem-quota subsystems:

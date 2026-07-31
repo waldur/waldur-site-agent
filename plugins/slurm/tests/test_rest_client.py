@@ -343,6 +343,62 @@ class TestAssociations:
         assert condition["partitions"] == ["cn", "gpu"]
         assert condition["association"] == {"fairshare": FAIRSHARE_USE_PARENT}
 
+    def test_create_association_with_qos_single_request(self, client, handler):
+        client.create_association_with_qos(
+            "user1",
+            "acc1",
+            ["normal", "boost"],
+            default_qos="boost",
+            partitions=["gpu", "cn"],
+            default_account="defacc",
+        )
+        request = handler.requests[0]
+        assert request.url.path == f"/slurmdb/{API}/users_association/"
+        condition = handler.body()["association_condition"]
+        # Partitions sorted; one row per partition, each carrying the qos.
+        assert condition["partitions"] == ["cn", "gpu"]
+        # Flat ASSOC_REC_SET template keys (qoslevel/defaultqos), plus parent fairshare.
+        assert condition["association"] == {
+            "fairshare": FAIRSHARE_USE_PARENT,
+            "qoslevel": "normal,boost",
+            "defaultqos": "boost",
+        }
+        assert handler.body()["user"] == {"default": {"account": "defacc"}}
+
+    def test_create_association_with_qos_no_partition(self, client, handler):
+        client.create_association_with_qos("user1", "acc1", ["normal"])
+        condition = handler.body()["association_condition"]
+        assert "partitions" not in condition
+        assert condition["association"]["qoslevel"] == "normal"
+        assert "defaultqos" not in condition["association"]
+
+    def test_create_association_with_qos_empty_rejected(self, client):
+        with pytest.raises(BackendError, match="non-empty"):
+            client.create_association_with_qos("user1", "acc1", [])
+
+    def test_create_association_with_qos_invalid_name_rejected(self, client):
+        with pytest.raises(BackendError, match="Invalid SLURM QoS name"):
+            client.create_association_with_qos("user1", "acc1", ["a; rm -rf /"])
+
+    def test_create_association_with_qos_invalid_partition_rejected(self, client):
+        with pytest.raises(BackendError, match="Invalid SLURM partition name"):
+            client.create_association_with_qos("user1", "acc1", ["normal"], partitions=["bad name"])
+
+    def test_set_account_grp_submit_jobs(self, client, handler):
+        client.set_account_grp_submit_jobs("acc1", 0)
+        request = handler.requests[0]
+        assert request.url.path == f"/slurmdb/{API}/associations/"
+        assoc = handler.body()["associations"][0]
+        # Account-level row (user="") with the nested grp_submit_jobs path.
+        assert assoc["account"] == "acc1"
+        assert assoc["user"] == ""
+        assert assoc["max"] == {"jobs": {"per": {"submitted": 0}}}
+
+    def test_clear_account_grp_submit_jobs(self, client, handler):
+        client.set_account_grp_submit_jobs("acc1", -1)
+        assoc = handler.body()["associations"][0]
+        assert assoc["max"] == {"jobs": {"per": {"submitted": -1}}}
+
     def test_create_association_with_invalid_partition_raises(self, client):
         with pytest.raises(BackendError, match="Invalid SLURM partition name"):
             client.create_association_with_partitions("user1", "acc1", ["bad name"], "")
