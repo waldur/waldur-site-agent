@@ -16,6 +16,8 @@ from waldur_site_agent_slurm.interface import SlurmClientInterface
 from waldur_site_agent_slurm.parser import SlurmAssociationLine, SlurmReportLine
 
 _PARTITION_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+# QoS names share the partition character set; guards against sacctmgr injection.
+_QOS_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class SlurmClient(SlurmClientInterface):
@@ -589,6 +591,16 @@ class SlurmClient(SlurmClientInterface):
             ["modify", "account", "set", f"defaultqos={qos_name}", "where", f"account={account}"]
         )
 
+    def set_account_grp_submit_jobs(self, account: str, value: int) -> None:
+        """Set GrpSubmitJobs on the account (``value=-1`` clears the limit).
+
+        The orthogonal pause lever for QoS-enforcing offerings: ``GrpSubmitJobs=0``
+        blocks new job submission without touching the account/association QoS, so
+        a pause cannot clobber a per-association QoS grant. Restore clears it with
+        ``value=-1``.
+        """
+        self._execute_command(["modify", "account", account, "set", f"GrpSubmitJobs={value}"])
+
     # ===== PARTITION-AWARE ASSOCIATION EXTENSION =====
 
     def create_association_with_partition(
@@ -636,6 +648,54 @@ class SlurmClient(SlurmClientInterface):
         if default_account is not None:
             args.append(f"DefaultAccount={default_account}")
         args.extend([f"Partitions={','.join(sorted_parts)}", "Share=parent"])
+        return self._execute_command(args)
+
+    def create_association_with_qos(
+        self,
+        username: str,
+        resource_id: str,
+        qos_list: Sequence[str],
+        default_qos: Optional[str] = None,
+        partitions: Optional[Sequence[str]] = None,
+        default_account: Optional[str] = None,
+    ) -> str:
+        """Create a user→account association granting a specific QoS set.
+
+        Emits ``sacctmgr add user … [Partitions=p1,p2] QosLevel=q1,q2
+        [DefaultQOS=d] Share=parent`` — the per-association qos_list /
+        def_qos_id grant (slurmdb_assoc_rec_t). QoS composes with partitions:
+        SLURM stores one association row per partition, each carrying the same
+        QoS grant, so a multi-partition call grants the QoS on every partition;
+        with no partition a single cluster-wide association is granted. The QoS
+        names must also be permitted by each partition's AllowQos gate
+        (site-admin config); this only sets the association side.
+        """
+        if not qos_list:
+            msg = "qos_list must be non-empty"
+            raise BackendError(msg)
+        for name in qos_list:
+            if not _QOS_NAME_RE.match(name):
+                msg = f"Invalid SLURM QoS name: {name!r}"
+                raise BackendError(msg)
+        if default_qos is not None and not _QOS_NAME_RE.match(default_qos):
+            msg = f"Invalid SLURM QoS name: {default_qos!r}"
+            raise BackendError(msg)
+        sorted_parts: list[str] = []
+        if partitions:
+            for name in partitions:
+                if not _PARTITION_NAME_RE.match(name):
+                    msg = f"Invalid SLURM partition name: {name!r}"
+                    raise BackendError(msg)
+            sorted_parts = sorted(partitions)
+        args = ["add", "user", username, f"account={resource_id}"]
+        if default_account is not None:
+            args.append(f"DefaultAccount={default_account}")
+        if sorted_parts:
+            args.append(f"Partitions={','.join(sorted_parts)}")
+        args.append(f"QosLevel={','.join(qos_list)}")
+        if default_qos is not None:
+            args.append(f"DefaultQOS={default_qos}")
+        args.append("Share=parent")
         return self._execute_command(args)
 
     # ===== PERIODIC LIMITS EXTENSION =====

@@ -30,7 +30,11 @@ import httpx
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import Association, ClientResource
-from waldur_site_agent_slurm.client import _PARTITION_NAME_RE, SlurmClient
+from waldur_site_agent_slurm.client import (
+    _PARTITION_NAME_RE,
+    _QOS_NAME_RE,
+    SlurmClient,
+)
 from waldur_site_agent_slurm.interface import SlurmClientInterface
 
 # SLURMDB_FS_USE_PARENT in slurm/slurmdb.h — the shares_raw sentinel
@@ -657,8 +661,14 @@ class SlurmRestClient(SlurmClientInterface):
         default_account: Optional[str],
         partitions: Optional[Sequence[str]] = None,
         use_parent_fairshare: bool = True,
+        association_fields: Optional[dict] = None,
     ) -> str:
-        """POST users_association — the REST equivalent of ``sacctmgr add user``."""
+        """POST users_association — the REST equivalent of ``sacctmgr add user``.
+
+        ``association_fields`` are extra flat ASSOC_REC_SET template keys
+        (e.g. ``qoslevel``, ``defaultqos``) applied to every association the
+        call creates — including each partition-scoped row.
+        """
         condition: dict[str, Any] = {
             "users": [username],
             "accounts": [resource_id],
@@ -666,8 +676,13 @@ class SlurmRestClient(SlurmClientInterface):
         }
         if partitions:
             condition["partitions"] = list(partitions)
+        template: dict[str, Any] = {}
         if use_parent_fairshare:
-            condition["association"] = {"fairshare": FAIRSHARE_USE_PARENT}
+            template["fairshare"] = FAIRSHARE_USE_PARENT
+        if association_fields:
+            template.update(association_fields)
+        if template:
+            condition["association"] = template
         body: dict[str, Any] = {"association_condition": condition}
         if default_account:
             body["user"] = {"default": {"account": default_account}}
@@ -717,6 +732,59 @@ class SlurmRestClient(SlurmClientInterface):
         return self._add_user_associations(
             username, resource_id, default_account, partitions=sorted(partitions)
         )
+
+    def create_association_with_qos(
+        self,
+        username: str,
+        resource_id: str,
+        qos_list: Sequence[str],
+        default_qos: Optional[str] = None,
+        partitions: Optional[Sequence[str]] = None,
+        default_account: Optional[str] = None,
+    ) -> str:
+        """Create a user-account association granting a QoS set.
+
+        REST equivalent of ``sacctmgr add user … [Partitions=…] QosLevel=…
+        [DefaultQOS=…]``: a single ``users_association`` POST whose ``association``
+        template carries the flat ``qoslevel``/``defaultqos`` keys, so SLURM
+        stores one partition-scoped row per partition, each with the QoS grant
+        (with no partition, a single cluster-wide association).
+        """
+        if not qos_list:
+            msg = "qos_list must be non-empty"
+            raise BackendError(msg)
+        for name in qos_list:
+            if not _QOS_NAME_RE.match(name):
+                msg = f"Invalid SLURM QoS name: {name!r}"
+                raise BackendError(msg)
+        if default_qos is not None and not _QOS_NAME_RE.match(default_qos):
+            msg = f"Invalid SLURM QoS name: {default_qos!r}"
+            raise BackendError(msg)
+        sorted_parts: Optional[list[str]] = None
+        if partitions:
+            for name in partitions:
+                if not _PARTITION_NAME_RE.match(name):
+                    msg = f"Invalid SLURM partition name: {name!r}"
+                    raise BackendError(msg)
+            sorted_parts = sorted(partitions)
+        association_fields: dict[str, Any] = {"qoslevel": ",".join(qos_list)}
+        if default_qos is not None:
+            association_fields["defaultqos"] = default_qos
+        return self._add_user_associations(
+            username,
+            resource_id,
+            default_account,
+            partitions=sorted_parts,
+            association_fields=association_fields,
+        )
+
+    def set_account_grp_submit_jobs(self, account: str, value: int) -> None:
+        """Set GrpSubmitJobs on the account association (``value=-1`` clears it).
+
+        Targets the account-level row (``user=""``) via the ASSOC record path
+        ``max/jobs/per/submitted`` (``grp_submit_jobs``).
+        """
+        self._post_association(account, self._nested(("max", "jobs", "per", "submitted"), value))
 
     def delete_association(self, username: str, resource_id: str) -> str:
         """Delete the association between the account and the user."""

@@ -135,6 +135,31 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
     ) -> str:
         """Create a user-account association restricted to the given partitions."""
 
+    @abc.abstractmethod
+    def create_association_with_qos(
+        self,
+        username: str,
+        resource_id: str,
+        qos_list: Sequence[str],
+        default_qos: Optional[str] = None,
+        partitions: Optional[Sequence[str]] = None,
+        default_account: Optional[str] = None,
+    ) -> str:
+        """Create a user-account association granting a QoS set.
+
+        QoS composes with partitions: one association row per partition, each
+        carrying the QoS grant; with no partition a single cluster-wide
+        association is granted.
+        """
+
+    @abc.abstractmethod
+    def set_account_grp_submit_jobs(self, account: str, value: int) -> None:
+        """Set GrpSubmitJobs on the account association (``value=-1`` clears it).
+
+        The pause lever for QoS-enforcing offerings: ``GrpSubmitJobs=0`` blocks
+        new job submission without touching the account/association QoS grant.
+        """
+
     # ===== JOB CONTROL =====
 
     @abc.abstractmethod

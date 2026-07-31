@@ -72,15 +72,10 @@ class SlurmBackend(backends.BaseBackend):
         except ValueError as e:
             # Fail loudly: silently degrading a typo ("rset") to CLI mode
             # would mask a misconfigured deployment.
-            msg = (
-                f"Unknown SLURM execution_mode {raw_execution_mode!r} — "
-                "expected 'cli' or 'rest'"
-            )
+            msg = f"Unknown SLURM execution_mode {raw_execution_mode!r} — expected 'cli' or 'rest'"
             raise BackendError(msg) from e
         if self.execution_mode is ExecutionMode.REST:
-            self.client: SlurmClientInterface = self._create_rest_client(
-                slurm_tres, slurm_bin_path
-            )
+            self.client: SlurmClientInterface = self._create_rest_client(slurm_tres, slurm_bin_path)
         else:
             self.client = SlurmClient(
                 slurm_tres, slurm_bin_path=slurm_bin_path, cluster_name=self.cluster_name
@@ -122,6 +117,20 @@ class SlurmBackend(backends.BaseBackend):
         # Expose enforcement state to the processor so it can warn loudly when
         # partitions are configured but the offering cannot produce usernames.
         self.partition_enforcement_enabled = self._enforce_offering_partitions
+
+        # QoS enforcement is opt-in on the agent: the operator must enable it
+        # locally, so a remote plugin_options.enforce_qos flag alone can never
+        # make the agent mutate SLURM QoS. Off by default.
+        self._qos_enforcement_enabled: bool = bool(
+            self.backend_settings.get("qos_enforcement_enabled", False)
+        )
+        # Three-state override applied only once opted in (None/True/False).
+        # None respects the per-offering plugin_options.enforce_qos flag, which
+        # the processor resolves and pushes onto ``self.offering_enforce_qos``.
+        self._enforce_offering_qos: Optional[bool] = self.backend_settings.get(
+            "enforce_offering_qos"
+        )
+        self.offering_enforce_qos: bool = False
         self._default_account_policy: str = self.backend_settings.get(
             "default_account_policy", "common"
         )
@@ -135,9 +144,7 @@ class SlurmBackend(backends.BaseBackend):
         # Optional component mapping (Waldur components → SLURM TRES)
         self._component_mapper = ComponentMapper(slurm_tres)
 
-    def _create_rest_client(
-        self, slurm_tres: dict, slurm_bin_path: str
-    ) -> "SlurmClientInterface":
+    def _create_rest_client(self, slurm_tres: dict, slurm_bin_path: str) -> "SlurmClientInterface":
         """Build a SlurmRestClient from the rest_api backend settings.
 
         The REST client lives behind an optional dependency (httpx), mirroring
@@ -272,9 +279,7 @@ class SlurmBackend(backends.BaseBackend):
             return
 
         project_backend_id = self._get_project_backend_id(waldur_resource.project_slug)
-        expected_customer_backend_id = self._get_customer_backend_id(
-            waldur_resource.customer_slug
-        )
+        expected_customer_backend_id = self._get_customer_backend_id(waldur_resource.customer_slug)
 
         # Guard: identical IDs (same prefix + colliding slugs) would cause self-parenting.
         if project_backend_id == expected_customer_backend_id:
@@ -344,8 +349,7 @@ class SlurmBackend(backends.BaseBackend):
             self.client.set_account_parent(waldur_resource.backend_id, project_backend_id)
         except BackendError:
             logger.exception(
-                "sync_resource_project: failed to create/reparent project account %s "
-                "under %s",
+                "sync_resource_project: failed to create/reparent project account %s under %s",
                 project_backend_id,
                 expected_customer_backend_id,
             )
@@ -476,9 +480,7 @@ class SlurmBackend(backends.BaseBackend):
         logger.info('Default user account "%s" is in place', default_account_name)
 
         if self.client.get_resource(self._root_account) is None:
-            logger.error(
-                "Root parent account %s does not exist in the cluster", self._root_account
-            )
+            logger.error("Root parent account %s does not exist in the cluster", self._root_account)
             return False
         logger.info('Root parent account "%s" is in place', self._root_account)
         logger.info("")
@@ -531,14 +533,11 @@ class SlurmBackend(backends.BaseBackend):
     def has_prepaid_components(self) -> bool:
         """Return True if any backend component uses ONE_TIME (prepaid) billing."""
         return any(
-            data.get("accounting_type") == "one"
-            for data in self.backend_components.values()
+            data.get("accounting_type") == "one" for data in self.backend_components.values()
         )
 
     @staticmethod
-    def _calculate_duration_months(
-        created: datetime.datetime, end_date: datetime.date
-    ) -> int:
+    def _calculate_duration_months(created: datetime.datetime, end_date: datetime.date) -> int:
         """Calculate the number of whole months between created and end_date.
 
         Uses the same logic as Waldur backend for consistency.
@@ -593,7 +592,8 @@ class SlurmBackend(backends.BaseBackend):
         # For prepaid components, multiply allocation limits by subscription duration.
         # GrpTRESMins is a cumulative budget, so limit * months gives the total budget.
         prepaid_components = [
-            name for name, data in self.backend_components.items()
+            name
+            for name, data in self.backend_components.items()
             if data.get("accounting_type") == "one"
         ]
         if prepaid_components:
@@ -610,7 +610,9 @@ class SlurmBackend(backends.BaseBackend):
                 )
                 logger.info(
                     "Prepaid resource: duration=%d months (created=%s, end_date=%s)",
-                    duration_months, resource_created, resource_end_date,
+                    duration_months,
+                    resource_created,
+                    resource_end_date,
                 )
                 for comp_key in prepaid_components:
                     if comp_key in allocation_limits:
@@ -649,6 +651,38 @@ class SlurmBackend(backends.BaseBackend):
 
         return allocation_limits, waldur_resource_limits
 
+    def qos_enforced(self) -> bool:
+        """Resolve whether QoS is enforced.
+
+        Opt-in on the agent side: enforcement stays off unless the operator
+        enables it locally (``qos_enforcement_enabled``). Once opted in, an
+        explicit ``enforce_offering_qos`` override wins; otherwise the
+        per-offering ``plugin_options.enforce_qos`` flag from Mastermind decides.
+        """
+        if not self._qos_enforcement_enabled:
+            return False
+        if self._enforce_offering_qos is not None:
+            return self._enforce_offering_qos
+        return self.offering_enforce_qos
+
+    @staticmethod
+    def _selected_qos(
+        waldur_resource: WaldurResource,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Read the QoS and partition the user selected at order time.
+
+        Both are recorded on the resource ``attributes`` (attributes.qos /
+        attributes.partition) by the order form. Returns ``(qos, partition)``,
+        either of which may be None.
+        """
+        attributes = getattr(waldur_resource, "attributes", None)
+        props = getattr(attributes, "additional_properties", None)
+        if not isinstance(props, dict):
+            return None, None
+        qos = props.get("qos") or None
+        partition = props.get("partition") or None
+        return qos, partition
+
     def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Add user to SLURM account, with optional partition and LDAP group."""
         del kwargs
@@ -672,7 +706,31 @@ class SlurmBackend(backends.BaseBackend):
                     default_account = None
                 else:  # "common"
                     default_account = self.backend_settings.get("default_account", "root")
-                if self.offering_partitions and self._enforce_offering_partitions:
+                selected_qos, selected_partition = self._selected_qos(waldur_resource)
+                if self.qos_enforced() and selected_qos:
+                    # Grant the selected QoS on the association (QosLevel/DefaultQOS).
+                    # QoS composes with partitions — SLURM stores one association
+                    # row per partition, each carrying the grant — so scope to the
+                    # user's selected partition when given, otherwise span the
+                    # enforced offering partitions rather than silently dropping
+                    # them, otherwise fall back to the default partition.
+                    if selected_partition:
+                        qos_partitions: Optional[list[str]] = [selected_partition]
+                    elif self.offering_partitions and self._enforce_offering_partitions:
+                        qos_partitions = list(self.offering_partitions)
+                    elif self._default_partition:
+                        qos_partitions = [self._default_partition]
+                    else:
+                        qos_partitions = None
+                    self.client.create_association_with_qos(
+                        username,
+                        resource_backend_id,
+                        [selected_qos],
+                        default_qos=selected_qos,
+                        partitions=qos_partitions,
+                        default_account=default_account,
+                    )
+                elif self.offering_partitions and self._enforce_offering_partitions:
                     self.client.create_association_with_partitions(
                         username,
                         resource_backend_id,
@@ -884,6 +942,17 @@ class SlurmBackend(backends.BaseBackend):
 
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale the resource QoS respecting the backend settings."""
+        if self.qos_enforced():
+            # In QoS-enforcement mode the account QoS is a per-association grant,
+            # not the operational lever — swapping it would clobber the grant.
+            # Block new submissions (GrpSubmitJobs=0) as a coarse downscale;
+            # fine-grained capacity reduction is a follow-up.
+            logger.info(
+                "Downscaling account %s via GrpSubmitJobs=0 (QoS enforcement mode)",
+                resource_backend_id,
+            )
+            self.client.set_account_grp_submit_jobs(resource_backend_id, 0)
+            return True
         qos_downscaled = self.backend_settings.get("qos_downscaled")
         if not qos_downscaled:
             logger.error(
@@ -909,6 +978,15 @@ class SlurmBackend(backends.BaseBackend):
 
     def pause_resource(self, resource_backend_id: str) -> bool:
         """Set the resource QoS to a paused one respecting the backend settings."""
+        if self.qos_enforced():
+            # Orthogonal pause lever: block new submissions without touching the
+            # account/association QoS, so the pause cannot clobber a QoS grant.
+            logger.info(
+                "Pausing account %s via GrpSubmitJobs=0 (QoS enforcement mode)",
+                resource_backend_id,
+            )
+            self.client.set_account_grp_submit_jobs(resource_backend_id, 0)
+            return True
         qos_paused = self.backend_settings.get("qos_paused")
         if not qos_paused:
             logger.error(
@@ -944,6 +1022,14 @@ class SlurmBackend(backends.BaseBackend):
         account set qos=`` is idempotent, so the extra write when the
         account happens to already be on default is harmless.
         """
+        if self.qos_enforced():
+            # Clear the orthogonal pause lever; the QoS grant was never touched.
+            logger.info(
+                "Restoring account %s via GrpSubmitJobs=-1 (QoS enforcement mode)",
+                resource_backend_id,
+            )
+            self.client.set_account_grp_submit_jobs(resource_backend_id, -1)
+            return True
         current_qos = self.client.get_current_account_qos(resource_backend_id)
         default_qos = self.backend_settings.get("qos_default", "normal")
 
@@ -1166,7 +1252,9 @@ class SlurmBackend(backends.BaseBackend):
         backend_limits, _ = self._collect_resource_limits(waldur_resource)
         if backend_limits:
             logger.info(
-                "Syncing prepaid limits for %s: %s", backend_id, backend_limits,
+                "Syncing prepaid limits for %s: %s",
+                backend_id,
+                backend_limits,
             )
             self.client.set_resource_limits(backend_id, backend_limits)
 
@@ -1302,9 +1390,7 @@ class SlurmBackend(backends.BaseBackend):
         # Current values are strings (see SlurmClient._parse_tres_string); the
         # target may carry ints, so compare on the string form of both.
         return {
-            tres: value
-            for tres, value in target.items()
-            if str(current.get(tres)) != str(value)
+            tres: value for tres, value in target.items() if str(current.get(tres)) != str(value)
         }
 
     def _apply_settings_production(self, resource_id: str, settings: dict, config: dict) -> dict:
