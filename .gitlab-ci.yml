@@ -148,6 +148,7 @@ Lint helm chart:
     - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
   artifacts:
     when: always
+    expire_in: 1 week
     reports:
       junit: report.xml
       coverage_report:
