@@ -112,8 +112,8 @@ _PATCH_PREFIX = "waldur_site_agent.common.processors"
 @mock.patch(f"{_PATCH_PREFIX}.marketplace_provider_resources_set_backend_id")
 @mock.patch(f"{_PATCH_PREFIX}.marketplace_provider_resources_set_as_ok")
 @mock.patch(f"{_PATCH_PREFIX}.marketplace_provider_resources_refresh_last_sync")
-@mock.patch(f"{_PATCH_PREFIX}.marketplace_service_providers_project_service_accounts_list")
-@mock.patch(f"{_PATCH_PREFIX}.marketplace_service_providers_course_accounts_list")
+@mock.patch(f"{_PATCH_PREFIX}.marketplace_provider_offerings_list_project_service_accounts_list")
+@mock.patch(f"{_PATCH_PREFIX}.marketplace_provider_offerings_list_course_accounts_list")
 class TestOrderProcessingLogging:
     """Tests for logging at key decision points during order processing."""
 
@@ -129,9 +129,7 @@ class TestOrderProcessingLogging:
     ):
         """Configure mocks for a successful create order flow."""
         # Approval returns 200
-        mock_approve.sync_detailed.return_value = mock.Mock(
-            status_code=HTTPStatus.OK
-        )
+        mock_approve.sync_detailed.return_value = mock.Mock(status_code=HTTPStatus.OK)
 
         # After approval, retrieve returns executing order
         executing_order = mock.Mock()
@@ -150,20 +148,16 @@ class TestOrderProcessingLogging:
         mock_retrieve.sync.side_effect = [executing_order, refreshed_for_done]
 
         # set_state_done returns 200
-        mock_set_done.sync_detailed.return_value = mock.Mock(
-            status_code=HTTPStatus.OK
-        )
+        mock_set_done.sync_detailed.return_value = mock.Mock(status_code=HTTPStatus.OK)
 
         # Resource retrieval
         mock_res_retrieve.sync.return_value = mock_resource
 
         # Backend creates resource
-        mock_resource_backend.create_resource_with_id.return_value = (
-            BackendResourceInfo(backend_id="test-backend-id")
+        mock_resource_backend.create_resource_with_id.return_value = BackendResourceInfo(
+            backend_id="test-backend-id"
         )
-        mock_resource_backend._get_resource_backend_id.return_value = (
-            "test-backend-id"
-        )
+        mock_resource_backend._get_resource_backend_id.return_value = "test-backend-id"
         mock_resource_backend.pull_resource.return_value = None
 
     def test_logs_approval_response_status(
@@ -386,9 +380,7 @@ class TestOrderProcessingLogging:
     ):
         """Order completes when resource already exists on backend."""
         # Approval returns 200
-        mock_approve.sync_detailed.return_value = mock.Mock(
-            status_code=HTTPStatus.OK
-        )
+        mock_approve.sync_detailed.return_value = mock.Mock(status_code=HTTPStatus.OK)
 
         # After approval, order is executing
         executing_order = mock.Mock()
@@ -437,9 +429,7 @@ class TestOrderProcessingLogging:
     ):
         """Failure to set order to erred state is logged."""
         # Approval returns 200
-        mock_approve.sync_detailed.return_value = mock.Mock(
-            status_code=HTTPStatus.OK
-        )
+        mock_approve.sync_detailed.return_value = mock.Mock(status_code=HTTPStatus.OK)
 
         # After approval, order is executing
         executing_order = mock.Mock()
@@ -487,9 +477,7 @@ class TestOrderProcessingLogging:
     ):
         """Error log includes the current order state."""
         # Approval returns 200
-        mock_approve.sync_detailed.return_value = mock.Mock(
-            status_code=HTTPStatus.OK
-        )
+        mock_approve.sync_detailed.return_value = mock.Mock(status_code=HTTPStatus.OK)
 
         # After approval, order is executing
         executing_order = mock.Mock()
@@ -534,9 +522,7 @@ class TestOrderProcessingLogging:
     ):
         """When resource exists on backend, creation is skipped and order completes."""
         # Approval returns 200
-        mock_approve.sync_detailed.return_value = mock.Mock(
-            status_code=HTTPStatus.OK
-        )
+        mock_approve.sync_detailed.return_value = mock.Mock(status_code=HTTPStatus.OK)
 
         # After approval, order is executing
         executing_order = mock.Mock()

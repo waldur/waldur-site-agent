@@ -203,8 +203,7 @@ class MembershipSyncTest(unittest.TestCase):
             state=ServiceAccountState.OK,
         )
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/project_service_accounts/",
-            params={"project_uuid": self.waldur_resource.project_uuid.hex, "page_size": 100},
+            url__regex=rf".*/api/marketplace-provider-offerings/{self.offering.uuid}/list_project_service_accounts/.*",
         ).respond(200, json=[service_account.to_dict()])
         course_account = CourseAccount(
             url="",
@@ -226,8 +225,7 @@ class MembershipSyncTest(unittest.TestCase):
             project_end_date=datetime.now(),
         )
         respx.get(
-            f"{self.BASE_URL}/api/marketplace-service-providers/{service_provider.uuid.hex}/course_accounts/",
-            params={"project_uuid": self.waldur_resource.project_uuid.hex, "page_size": 100},
+            url__regex=rf".*/api/marketplace-provider-offerings/{self.offering.uuid}/list_course_accounts/.*",
         ).respond(200, json=[course_account.to_dict()])
         respx.get(
             f"{self.BASE_URL}/api/component-user-usage-limits/",
@@ -294,9 +292,7 @@ class MembershipSyncTest(unittest.TestCase):
         self.mock_downscale_resource = mock.patch.object(
             backend.SlurmBackend, "downscale_resource"
         ).start()
-        mock.patch.object(
-            backend.SlurmBackend, "sync_resource_project"
-        ).start()
+        mock.patch.object(backend.SlurmBackend, "sync_resource_project").start()
 
     def test_association_create(
         self,
@@ -535,7 +531,9 @@ class MembershipSyncTest(unittest.TestCase):
         ]
         processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
 
-        alice_ou = SimpleNamespace(username="alice-on-b", user_username="cuid:alice", user_email=None, state=None)
+        alice_ou = SimpleNamespace(
+            username="alice-on-b", user_username="cuid:alice", user_email=None, state=None
+        )
         bob_ou = SimpleNamespace(username=None, user_username="cuid:bob", user_email=None)
 
         (

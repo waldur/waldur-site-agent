@@ -28,7 +28,9 @@ from waldur_site_agent.common.processors import (
 _NOW = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
-def _make_offering_user(username: str, state: OfferingUserState = OfferingUserState.OK) -> OfferingUser:
+def _make_offering_user(
+    username: str, state: OfferingUserState = OfferingUserState.OK
+) -> OfferingUser:
     return OfferingUser(
         uuid=uuid.uuid4(),
         user_uuid=uuid.uuid4(),
@@ -61,8 +63,12 @@ def _make_project_user(username: str) -> ProjectUser:
     )
 
 
-def _make_service_account(username: str, state: ServiceAccountState = ServiceAccountState.OK):
-    proj = uuid.uuid4()
+def _make_service_account(
+    username: str,
+    state: ServiceAccountState = ServiceAccountState.OK,
+    project_uuid: uuid.UUID | None = None,
+):
+    proj = project_uuid or uuid.uuid4()
     return ProjectServiceAccount(
         url="",
         uuid=uuid.uuid4(),
@@ -82,8 +88,12 @@ def _make_service_account(username: str, state: ServiceAccountState = ServiceAcc
     )
 
 
-def _make_course_account(username: str, state: ServiceAccountState = ServiceAccountState.OK):
-    proj = uuid.uuid4()
+def _make_course_account(
+    username: str,
+    state: ServiceAccountState = ServiceAccountState.OK,
+    project_uuid: uuid.UUID | None = None,
+):
+    proj = project_uuid or uuid.uuid4()
     return CourseAccount(
         url="",
         uuid=uuid.uuid4(),
@@ -315,7 +325,7 @@ class TestServiceAccountsCache:
 
     @mock.patch(
         "waldur_site_agent.common.processors"
-        ".marketplace_service_providers_project_service_accounts_list"
+        ".marketplace_provider_offerings_list_project_service_accounts_list"
     )
     def test_same_project_uses_cache(self, mock_api):
         """Two resources in the same project share a single service accounts API call."""
@@ -324,7 +334,7 @@ class TestServiceAccountsCache:
         resource_b = _make_waldur_resource(project_uuid)
         resource_b.uuid = uuid.uuid4()
 
-        accounts = [_make_service_account("svc-01")]
+        accounts = [_make_service_account("svc-01", project_uuid=project_uuid)]
         mock_api.sync_all.return_value = accounts
 
         processor = _make_membership_processor()
@@ -333,28 +343,38 @@ class TestServiceAccountsCache:
         processor._sync_resource_service_accounts(resource_b)
 
         assert mock_api.sync_all.call_count == 1
-        # Backend should have been called for both resources
+        # Backend should have been called for both resources with the account.
         assert processor.resource_backend.add_users_to_resource.call_count == 2
+        for call in processor.resource_backend.add_users_to_resource.call_args_list:
+            assert call.args[1] == {"svc-01"}
 
     @mock.patch(
         "waldur_site_agent.common.processors"
-        ".marketplace_service_providers_project_service_accounts_list"
+        ".marketplace_provider_offerings_list_project_service_accounts_list"
     )
-    def test_different_projects_get_separate_cache(self, mock_api):
-        """Resources in different projects each trigger their own API call."""
+    def test_offering_fetched_once_and_filtered_per_project(self, mock_api):
+        """One offering-scoped fetch is shared across projects; accounts are
+        filtered to each resource's project client-side."""
         resource_a = _make_waldur_resource()
         resource_b = _make_waldur_resource()
 
-        accounts_a = [_make_service_account("svc-a")]
-        accounts_b = [_make_service_account("svc-b")]
-        mock_api.sync_all.side_effect = [accounts_a, accounts_b]
+        account_a = _make_service_account("svc-a", project_uuid=resource_a.project_uuid)
+        account_b = _make_service_account("svc-b", project_uuid=resource_b.project_uuid)
+        mock_api.sync_all.return_value = [account_a, account_b]
 
         processor = _make_membership_processor()
 
         processor._sync_resource_service_accounts(resource_a)
         processor._sync_resource_service_accounts(resource_b)
 
-        assert mock_api.sync_all.call_count == 2
+        # Single offering-level fetch, cached and reused for the second project.
+        assert mock_api.sync_all.call_count == 1
+        # Each resource only received its own project's account.
+        calls = processor.resource_backend.add_users_to_resource.call_args_list
+        assert calls[0].args[0] is resource_a
+        assert calls[0].args[1] == {"svc-a"}
+        assert calls[1].args[0] is resource_b
+        assert calls[1].args[1] == {"svc-b"}
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +387,7 @@ class TestCourseAccountsCache:
 
     @mock.patch(
         "waldur_site_agent.common.processors"
-        ".marketplace_service_providers_course_accounts_list"
+        ".marketplace_provider_offerings_list_course_accounts_list"
     )
     def test_same_project_uses_cache(self, mock_api):
         """Two resources in the same project share a single course accounts API call."""
@@ -376,7 +396,7 @@ class TestCourseAccountsCache:
         resource_b = _make_waldur_resource(project_uuid)
         resource_b.uuid = uuid.uuid4()
 
-        accounts = [_make_course_account("course-01")]
+        accounts = [_make_course_account("course-01", project_uuid=project_uuid)]
         mock_api.sync_all.return_value = accounts
 
         processor = _make_membership_processor()
@@ -389,20 +409,27 @@ class TestCourseAccountsCache:
 
     @mock.patch(
         "waldur_site_agent.common.processors"
-        ".marketplace_service_providers_course_accounts_list"
+        ".marketplace_provider_offerings_list_course_accounts_list"
     )
-    def test_different_projects_get_separate_cache(self, mock_api):
-        """Resources in different projects each trigger their own API call."""
+    def test_offering_fetched_once_and_filtered_per_project(self, mock_api):
+        """One offering-scoped fetch is shared across projects; accounts are
+        filtered to each resource's project client-side."""
         resource_a = _make_waldur_resource()
         resource_b = _make_waldur_resource()
 
-        accounts_a = [_make_course_account("course-a")]
-        accounts_b = [_make_course_account("course-b")]
-        mock_api.sync_all.side_effect = [accounts_a, accounts_b]
+        account_a = _make_course_account("course-a", project_uuid=resource_a.project_uuid)
+        account_b = _make_course_account("course-b", project_uuid=resource_b.project_uuid)
+        mock_api.sync_all.return_value = [account_a, account_b]
 
         processor = _make_membership_processor()
 
         processor._sync_resource_course_accounts(resource_a)
         processor._sync_resource_course_accounts(resource_b)
 
-        assert mock_api.sync_all.call_count == 2
+        # Single offering-level fetch, cached and reused for the second project.
+        assert mock_api.sync_all.call_count == 1
+        calls = processor.resource_backend.add_users_to_resource.call_args_list
+        assert calls[0].args[0] is resource_a
+        assert calls[0].args[1] == {"course-a"}
+        assert calls[1].args[0] is resource_b
+        assert calls[1].args[1] == {"course-b"}

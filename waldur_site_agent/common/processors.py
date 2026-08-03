@@ -57,6 +57,8 @@ from waldur_api_client.api.marketplace_plans import (
 )
 from waldur_api_client.api.marketplace_provider_offerings import (
     marketplace_provider_offerings_check_unique_backend_id,
+    marketplace_provider_offerings_list_course_accounts_list,
+    marketplace_provider_offerings_list_project_service_accounts_list,
     marketplace_provider_offerings_retrieve,
     marketplace_provider_offerings_user_attribute_config_retrieve,
 )
@@ -73,10 +75,8 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_team_list,
 )
 from waldur_api_client.api.marketplace_service_providers import (
-    marketplace_service_providers_course_accounts_list,
     marketplace_service_providers_keys_list,
     marketplace_service_providers_list,
-    marketplace_service_providers_project_service_accounts_list,
     marketplace_service_providers_projects_list,
 )
 from waldur_api_client.api.projects import projects_list
@@ -261,6 +261,11 @@ class OfferingBaseProcessor(abc.ABC):
         self.timezone: str = timezone
         self.waldur_rest_client = waldur_rest_client
         self.expose_backend_error_details = expose_backend_error_details
+        # One offering-scoped listing covers every project under the offering,
+        # so cache it per offering (keyed by offering uuid) and reuse it across
+        # resources within a processing pass instead of re-fetching per resource.
+        self._service_accounts_cache: dict[str, list[ProjectServiceAccount]] = {}
+        self._course_accounts_cache: dict[str, list[CourseAccount]] = {}
         # Use dependency injection if backend is provided, otherwise create it
         if resource_backend is not None:
             self.resource_backend = resource_backend
@@ -631,6 +636,33 @@ class OfferingBaseProcessor(abc.ABC):
             service, processor_name, backend_type, self.resource_backend_version
         )
 
+    def _offering_project_service_accounts(self) -> list[ProjectServiceAccount]:
+        """Every project's service accounts under the offering, cached per offering.
+
+        Uses the offering-scoped listing (readable by an offering-scoped agent
+        identity, unlike the service-provider-scoped endpoint). One fetch covers
+        all projects, so it is cached and reused across resources.
+        """
+        if self.offering.uuid not in self._service_accounts_cache:
+            self._service_accounts_cache[self.offering.uuid] = (
+                marketplace_provider_offerings_list_project_service_accounts_list.sync_all(
+                    self.offering.uuid,
+                    client=self.waldur_rest_client,
+                )
+            )
+        return self._service_accounts_cache[self.offering.uuid]
+
+    def _offering_course_accounts(self) -> list[CourseAccount]:
+        """Every project's course accounts under the offering, cached per offering."""
+        if self.offering.uuid not in self._course_accounts_cache:
+            self._course_accounts_cache[self.offering.uuid] = (
+                marketplace_provider_offerings_list_course_accounts_list.sync_all(
+                    self.offering.uuid,
+                    client=self.waldur_rest_client,
+                )
+            )
+        return self._course_accounts_cache[self.offering.uuid]
+
     def _sync_resource_service_accounts(self, waldur_resource: WaldurResource) -> None:
         """Sync project service accounts between Waldur and the backend resource."""
         logger.info(
@@ -642,11 +674,13 @@ class OfferingBaseProcessor(abc.ABC):
             logger.warning("No service provider configured, skipping service accounts sync")
             return
 
-        service_accounts = marketplace_service_providers_project_service_accounts_list.sync_all(
-            service_provider_uuid=self.service_provider.uuid.hex,
-            project_uuid=waldur_resource.project_uuid.hex,
-            client=self.waldur_rest_client,
-        )
+        # Offering-scoped accounts cover every project; filter to this one.
+        project_uuid = waldur_resource.project_uuid.hex
+        service_accounts = [
+            account
+            for account in self._offering_project_service_accounts()
+            if account.project_uuid and account.project_uuid.hex == project_uuid
+        ]
         usernames_active = {
             account.username
             for account in service_accounts
@@ -672,11 +706,13 @@ class OfferingBaseProcessor(abc.ABC):
             logger.warning("No service provider configured, skipping service accounts sync")
             return
 
-        course_accounts = marketplace_service_providers_course_accounts_list.sync_all(
-            service_provider_uuid=self.service_provider.uuid.hex,
-            project_uuid=waldur_resource.project_uuid.hex,
-            client=self.waldur_rest_client,
-        )
+        # Offering-scoped accounts cover every project; filter to this one.
+        project_uuid = waldur_resource.project_uuid.hex
+        course_accounts = [
+            account
+            for account in self._offering_course_accounts()
+            if account.project_uuid and account.project_uuid.hex == project_uuid
+        ]
         usernames_active = {
             account.username
             for account in course_accounts
@@ -1659,9 +1695,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             expose_backend_error_details=expose_backend_error_details,
         )
         # Per-cycle caches to avoid redundant API calls per project
+        # (service/course account caches live on the base processor).
         self._team_cache: dict[str, list[ProjectUser]] = {}
-        self._service_accounts_cache: dict[str, list[ProjectServiceAccount]] = {}
-        self._course_accounts_cache: dict[str, list[CourseAccount]] = {}
         self._source_project_cache: dict[str, Optional[Project]] = {}
 
     def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[WaldurResource]:
@@ -2503,12 +2538,10 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         if report is None:
             return
         try:
-            response = (
-                marketplace_provider_resources_set_membership_sync_statuses.sync_detailed(
-                    waldur_resource.uuid,
-                    client=self.waldur_rest_client,
-                    body=MemberSyncStatusReportRequest.from_dict({"statuses": report}),
-                )
+            response = marketplace_provider_resources_set_membership_sync_statuses.sync_detailed(
+                waldur_resource.uuid,
+                client=self.waldur_rest_client,
+                body=MemberSyncStatusReportRequest.from_dict({"statuses": report}),
             )
             result = response.parsed
             if isinstance(result, MemberSyncStatusReportResult):
@@ -2667,78 +2700,6 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     exc,
                 )
 
-    def _sync_resource_service_accounts(self, waldur_resource: WaldurResource) -> None:
-        """Sync service accounts with per-project caching."""
-        if self.service_provider is None:
-            logger.warning("No service provider configured, skipping service accounts sync")
-            return
-
-        cache_key = waldur_resource.project_uuid.hex
-        if cache_key in self._service_accounts_cache:
-            service_accounts = self._service_accounts_cache[cache_key]
-        else:
-            service_accounts = marketplace_service_providers_project_service_accounts_list.sync_all(
-                service_provider_uuid=self.service_provider.uuid.hex,
-                project_uuid=cache_key,
-                client=self.waldur_rest_client,
-            )
-            self._service_accounts_cache[cache_key] = service_accounts
-
-        logger.info(
-            "Syncing service accounts for the resource %s (%s)",
-            waldur_resource.name,
-            waldur_resource.backend_id,
-        )
-        usernames_active = {
-            account.username
-            for account in service_accounts
-            if account.username and account.state == ServiceAccountState.OK
-        }
-        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
-
-        usernames_closed = {
-            account.username
-            for account in service_accounts
-            if account.username and account.state == ServiceAccountState.CLOSED
-        }
-        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
-
-    def _sync_resource_course_accounts(self, waldur_resource: WaldurResource) -> None:
-        """Sync course accounts with per-project caching."""
-        if self.service_provider is None:
-            logger.warning("No service provider configured, skipping course accounts sync")
-            return
-
-        cache_key = waldur_resource.project_uuid.hex
-        if cache_key in self._course_accounts_cache:
-            course_accounts = self._course_accounts_cache[cache_key]
-        else:
-            course_accounts = marketplace_service_providers_course_accounts_list.sync_all(
-                service_provider_uuid=self.service_provider.uuid.hex,
-                project_uuid=cache_key,
-                client=self.waldur_rest_client,
-            )
-            self._course_accounts_cache[cache_key] = course_accounts
-
-        logger.info(
-            "Syncing course accounts for the resource %s (%s)",
-            waldur_resource.name,
-            waldur_resource.backend_id,
-        )
-        usernames_active = {
-            account.username
-            for account in course_accounts
-            if account.username and account.state == ServiceAccountState.OK
-        }
-        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
-
-        usernames_closed = {
-            account.username
-            for account in course_accounts
-            if account.username and account.state == ServiceAccountState.CLOSED
-        }
-        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
-
     def _process_resources(
         self,
         resource_report: dict[str, tuple[WaldurResource, BackendResourceInfo]],
@@ -2819,17 +2780,15 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
     def process_account_creation(self, account_username: str, account_type: AccountType) -> None:
         """Process service or course account creation."""
-        params = {
-            "service_provider_uuid": self.service_provider.uuid.hex,
-            "username": account_username,
-            "client": self.waldur_rest_client,
-        }
+        # Offering-scoped listing returns every account under the offering;
+        # match the one we were notified about by username client-side.
         if account_type == AccountType.SERVICE_ACCOUNT:
-            accounts = marketplace_service_providers_project_service_accounts_list.sync_all(
-                **params
-            )
+            offering_accounts: list = self._offering_project_service_accounts()
         else:
-            accounts = marketplace_service_providers_course_accounts_list.sync_all(**params)
+            offering_accounts = self._offering_course_accounts()
+        accounts = [
+            account for account in offering_accounts if account.username == account_username
+        ]
 
         if len(accounts) == 0:
             logger.info(

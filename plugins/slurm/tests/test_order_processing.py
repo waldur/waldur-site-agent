@@ -80,12 +80,12 @@ def setup_common_respx_mocks(
         f"{base_url}/api/marketplace-service-providers/",
         params={"customer_uuid": waldur_offering["customer_uuid"]},
     ).respond(200, json=[service_provider.to_dict()])
-    # Mock service and course account endpoints (return empty lists by default)
+    # Mock offering-scoped service and course account endpoints (empty by default)
     respx.get(
-        f"{base_url}/api/marketplace-service-providers/{service_provider.uuid.hex}/project_service_accounts/",
+        url__regex=rf".*/api/marketplace-provider-offerings/{OFFERING.uuid}/list_project_service_accounts/.*",
     ).respond(200, json=[])
     respx.get(
-        f"{base_url}/api/marketplace-service-providers/{service_provider.uuid.hex}/course_accounts/",
+        url__regex=rf".*/api/marketplace-provider-offerings/{OFFERING.uuid}/list_course_accounts/.*",
     ).respond(200, json=[])
 
 
@@ -155,9 +155,7 @@ class CreationOrderTest(unittest.TestCase):
             project_slug="project-1",
             customer_slug="customer-1",
         ).to_dict()
-        self.waldur_user = user_me_api_response(
-            base_url=self.BASE_URL, username="test-user"
-        )
+        self.waldur_user = user_me_api_response(base_url=self.BASE_URL, username="test-user")
 
         self.waldur_offering = models.Offering(
             uuid=OFFERING.uuid,
@@ -448,9 +446,7 @@ class TerminationOrderTest(unittest.TestCase):
         ).to_dict()
 
         # Create user data
-        self.waldur_user = user_me_api_response(
-            base_url=self.base_url, username="test-user"
-        )
+        self.waldur_user = user_me_api_response(base_url=self.base_url, username="test-user")
 
         # Create offering data
         self.waldur_offering = models.Offering(
@@ -517,7 +513,9 @@ class TerminationOrderTest(unittest.TestCase):
         # The method was called twice: for project account and for allocation account
         assert slurm_client.delete_resource.call_count == 2
 
-    def test_soft_delete_zeroes_limits_instead_of_removing(self, slurm_client_class: mock.Mock) -> None:
+    def test_soft_delete_zeroes_limits_instead_of_removing(
+        self, slurm_client_class: mock.Mock
+    ) -> None:
         """When soft_delete is enabled, termination should zero limits instead of deleting the account."""
         setup_common_respx_mocks(
             self.base_url,
@@ -584,9 +582,7 @@ class RestoreOrderTest(unittest.TestCase):
             project_slug="project-1",
             customer_slug="customer-1",
         ).to_dict()
-        self.waldur_user = user_me_api_response(
-            base_url=self.BASE_URL, username="test-user"
-        )
+        self.waldur_user = user_me_api_response(base_url=self.BASE_URL, username="test-user")
         self.waldur_offering = models.Offering(
             uuid=OFFERING.uuid,
             name=OFFERING.name,
@@ -655,7 +651,9 @@ class RestoreOrderTest(unittest.TestCase):
         respx.stop()
         self.client_patcher.stop()
 
-    def test_restore_recreates_account_with_same_backend_id(self, slurm_client_class: mock.Mock) -> None:
+    def test_restore_recreates_account_with_same_backend_id(
+        self, slurm_client_class: mock.Mock
+    ) -> None:
         """RESTORE order when soft_delete is disabled: account was hard-deleted,
         should recreate with the same backend_id and re-add users."""
         project_account = "hpc_project-1"
@@ -707,7 +705,9 @@ class RestoreOrderTest(unittest.TestCase):
             self.waldur_offering_user["username"], self.backend_id, "root"
         )
 
-    def test_restore_skips_creation_when_account_still_exists(self, slurm_client_class: mock.Mock) -> None:
+    def test_restore_skips_creation_when_account_still_exists(
+        self, slurm_client_class: mock.Mock
+    ) -> None:
         """RESTORE order when soft_delete was enabled: account still exists,
         should skip creation and complete immediately."""
         self.waldur_order.update(
@@ -811,9 +811,7 @@ class UpdateOrderTest(unittest.TestCase):
         ).to_dict()
 
         # Create user data
-        self.waldur_user = user_me_api_response(
-            base_url=self.base_url, username="test-user"
-        )
+        self.waldur_user = user_me_api_response(base_url=self.base_url, username="test-user")
 
         # Create offering data
         self.waldur_offering = models.Offering(
@@ -905,9 +903,7 @@ class DuplicateResourceCreationTest(unittest.TestCase):
         self.project_uuid = uuid.uuid4().hex
         self.order_uuid = uuid.UUID("2c76f6ea-3482-4cb9-a975-ae0235ba4ac7").hex
 
-        self.waldur_user = user_me_api_response(
-            base_url=self.BASE_URL, username="test-user"
-        )
+        self.waldur_user = user_me_api_response(base_url=self.BASE_URL, username="test-user")
 
         self.waldur_offering = models.Offering(
             uuid=OFFERING.uuid,
