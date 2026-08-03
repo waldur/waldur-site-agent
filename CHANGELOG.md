@@ -1,28 +1,20 @@
 # Changelog
 
-## 1.0.6-rc.12 - 2026-07-10
+## 1.0.6-rc.13 - 2026-08-03
 
-- **SLURM**: Add optional `slurmrestd` REST API execution mode as an alternative to CLI-based operations.
-- **SLURM**: Sanitize newlines in account descriptions to prevent malformed `sacctmgr` commands (#17).
-- **SLURM**: Match account names case-insensitively in `get_account_parent`.
-- **SLURM**: Skip unchanged periodic settings to avoid redundant `sacctmgr` modifications.
-- **SLURM**: Fix allocation account left orphaned at the root after a project reparent.
-- **Federation**: Add configurable resource-limit sync direction via `limit_sync_direction`.
-- **Federation**: Sync project OECD code, industry flag and science sub-domain to the Waldur backend ([WAL-10044]).
-- **Federation**: Refactor resource `end_date` sync to match project `end_date` sync ([WAL-10000]).
-- **Federation**: Skip no-op limit-update orders on the target Waldur instance.
-- **Federation**: Keep federation users consented to a sibling offering in the shared project.
-- **Federation**: Fetch the source project via the service-provider-scoped projects endpoint.
-- **Core**: Fix mass user add and revoke handling.
-- **Core**: Flag backend users for removal when they leave all projects (gh-13).
-- **Core**: Add early exit in `create_user_homedirs` when home directories already exist (gh-15).
-- **Core**: Surface real past-period usage 400 errors instead of masking them ([WAL-10071]).
-- **Core**: Ensure usage data is rounded to 2 decimal places and keep idempotency in sync.
-- **Core**: Change order process period configuration type from int to float.
-- **CSCS-DWDI**: Add inference reporting and fix the inference reporting plugin.
-- **Docs**: Document cluster-side verification of raw-usage resets and the account-name-policy vs resource-slug-template conflict ([WAL-9925]).
-
-> 35 commits, 60 files changed (+5705/-413)
+- **SLURM**: Add QoS-scoped associations and `qos-=` operator support (WAL-10154).
+- **SLURM**: Add optional `slurmrestd` REST API execution mode alongside the CLI backend.
+- **SLURM**: Skip unchanged periodic settings and skip no-op association updates to avoid redundant `sacctmgr` calls.
+- **SLURM**: Match account names case-insensitively in `get_account_parent` and fix allocation accounts being orphaned at root after project reparenting.
+- **SLURM**: Sanitize newlines in account descriptions (issue #17).
+- **Envoy AI Gateway**: Add new plugin for AI Gateway rate-limit and usage management (WAL-10066).
+- **CSCS DWDI**: Fix month-boundary usage misattribution (WAL-10166) and fix inference reporting.
+- **Rancher KC CRD**: Report per-grant membership sync statuses, honor resource-scoped resync, report agent restart time in UTC, and warn about unmapped role grants.
+- **Waldur backend**: Add configurable resource-limit sync direction (`limit_sync_direction`); sync project OECD code, industry flag, and science sub-domain (WAL-10044); refactor resource `end_date` sync to match project `end_date` sync (WAL-10000); keep federation users consented to a sibling offering in the shared project; skip no-op limit-update orders; fetch source project via the service-provider-scoped projects endpoint.
+- **Core**: Group structlog-rendered Sentry events by message instead of dict repr for cleaner error grouping.
+- **Core**: Fix mass user add/revoke, surface real past-period usage 400s instead of masking them (WAL-10071), ensure 2 decimal places on usage data, skip non-actionable order states in the STOMP handler, flag backend users for removal when they leave all projects (gh-13), add early exit in `create_user_homedirs` for existing home directories (gh-15), and add logging for current vs. new component usage values.
+- **Core**: Fix order process period configuration type (int → float).
+- **CI/Security**: Bump click/pyasn1 and address OSV scanner findings.
 
 ---
 
