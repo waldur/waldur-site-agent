@@ -3,7 +3,7 @@ name = "waldur-site-agent-ldap"
 version = "1.0.6rc13"
 description = "LDAP plugin for Waldur Site Agent"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
-requires-python = ">=3.9, <4"
+requires-python = ">=3.9.2, <4"
 dependencies = [
     "waldur-site-agent>=1.0.6rc13",
     "ldap3>=2.9.0,<3",
