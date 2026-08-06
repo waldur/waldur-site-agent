@@ -595,6 +595,27 @@ class TestUsageReporting:
         assert total["cpu"] == 100.0
         assert total["mem"] == 200.0
 
+    def test_get_usage_report_scopes_to_current_billing_period(self, backend, mock_client):
+        mock_usage = MagicMock()
+        mock_usage.type_ = "cpu"
+        mock_usage.usage = 100
+
+        mock_client.get_component_usages.return_value = [mock_usage]
+        mock_client.get_component_user_usages.return_value = []
+
+        with patch(
+            "waldur_site_agent_waldur.backend.backend_utils.get_current_time_in_timezone",
+            return_value=datetime.datetime(2026, 8, 6, 12, 0),
+        ):
+            backend._get_usage_report([str(RESOURCE_UUID)])
+
+        expected_period = datetime.date(2026, 8, 1)
+        assert mock_client.get_component_usages.call_args.kwargs["billing_period"] == expected_period
+        assert (
+            mock_client.get_component_user_usages.call_args.kwargs["billing_period"]
+            == expected_period
+        )
+
     def test_get_usage_report_with_conversion(self, backend_with_conversion, mock_client):
         mock_usage1 = MagicMock()
         mock_usage1.type_ = "gpu_hours"

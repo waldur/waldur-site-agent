@@ -770,7 +770,7 @@ class WaldurClient(BaseClient):
         )
         from waldur_api_client.types import UNSET as _UNSET  # noqa: PLC0415
 
-        return marketplace_component_usages_list.sync(
+        return marketplace_component_usages_list.sync_all(
             client=self._api_client,
             resource_uuid=resource_uuid,
             billing_period=billing_period if billing_period is not None else _UNSET,
@@ -798,7 +798,7 @@ class WaldurClient(BaseClient):
         if billing_period is not None:
             kwargs["component_usage_billing_period"] = billing_period
 
-        return marketplace_component_user_usages_list.sync(**kwargs)
+        return marketplace_component_user_usages_list.sync_all(**kwargs)
 
     # --- BaseClient Abstract Method Implementations ---
 
