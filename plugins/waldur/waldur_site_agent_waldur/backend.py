@@ -32,6 +32,7 @@ from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import backends
+from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError, BackendNotReadyError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
@@ -744,19 +745,21 @@ class WaldurBackend(backends.BaseBackend):
     def _get_usage_report(
         self, resource_backend_ids: list[str]
     ) -> dict[str, dict[str, dict[str, float]]]:
-        """Pull usage from Waldur B and reverse-convert via ComponentMapper.
+        """Pull current-month usage from Waldur B and reverse-convert via ComponentMapper.
 
-        For each resource:
-        1. Fetch component usages from Waldur B
-        2. Fetch per-user component usages from Waldur B
-        3. Reverse-map target component usage -> source components
-        4. Build report with TOTAL_ACCOUNT_USAGE key
+        The billing period is mandatory: an unfiltered query returns every month
+        Waldur B has ever recorded and sums them into the current one.
         """
+        now = backend_utils.get_current_time_in_timezone(self.timezone)
+        billing_period = datetime.date(now.year, now.month, 1)
+
         report: dict[str, dict[str, dict[str, float]]] = {}
 
         for resource_id in resource_backend_ids:
             try:
-                resource_report = self._get_single_resource_usage(resource_id)
+                resource_report = self._get_single_resource_usage(
+                    resource_id, billing_period=billing_period
+                )
                 report[resource_id] = resource_report
             except Exception:
                 logger.exception("Failed to get usage for resource %s", resource_id)
