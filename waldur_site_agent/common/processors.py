@@ -171,6 +171,7 @@ from waldur_site_agent.backend.backends import (
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import agent_identity_management, structures, utils
+from waldur_site_agent.common.healthz import touch_heartbeat
 from waldur_site_agent.common.structures import AccountType
 
 # Module-level cache for offering user attribute configs.
@@ -179,6 +180,9 @@ from waldur_site_agent.common.structures import AccountType
 # create a new processor per STOMP message.
 _ATTRIBUTE_CONFIG_CACHE: dict[str, tuple[list[OfferingUserFieldEnum], list[str], float]] = {}
 _ATTRIBUTE_CONFIG_TTL = 300  # seconds
+
+# Touch the liveness heartbeat after every N items in long per-offering loops.
+_HEARTBEAT_BATCH_SIZE = 10
 
 
 def _serialize_attr_value(val: object) -> object:
@@ -823,7 +827,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         if not orders:
             logger.info("There are no pending or executing orders")
             return
-        for order in orders:
+        for index, order in enumerate(orders):
+            if index % _HEARTBEAT_BATCH_SIZE == 0:
+                touch_heartbeat()
             try:
                 self.process_order_with_retries(order)
             except Exception as e:
@@ -2718,7 +2724,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         ):
             offering_users = self._get_waldur_offering_users()
 
-        for waldur_resource, backend_resource_info in resource_report.values():
+        for index, (waldur_resource, backend_resource_info) in enumerate(resource_report.values()):
+            if index % _HEARTBEAT_BATCH_SIZE == 0:
+                touch_heartbeat()
             try:
                 source_project = self._fetch_source_project(waldur_resource)
                 self.resource_backend.sync_resource_project(waldur_resource, source_project)
@@ -2977,7 +2985,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             "Fetched %s resources under %s offering", len(waldur_resources), self.offering.name
         )
 
-        for waldur_resource in waldur_resources:
+        for index, waldur_resource in enumerate(waldur_resources):
+            if index % _HEARTBEAT_BATCH_SIZE == 0:
+                touch_heartbeat()
             try:
                 self._process_resource_with_retries(waldur_resource, waldur_offering)
             except Exception as e:
