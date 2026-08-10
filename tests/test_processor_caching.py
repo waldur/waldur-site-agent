@@ -352,6 +352,24 @@ class TestServiceAccountsCache:
         "waldur_site_agent.common.processors"
         ".marketplace_provider_offerings_list_project_service_accounts_list"
     )
+    def test_listing_failure_is_best_effort(self, mock_api):
+        """A failed listing is swallowed (never propagated), so account sync
+        cannot ERR the resource, and no users are touched on the backend."""
+        mock_api.sync_all.side_effect = RuntimeError("boom")
+        processor = _make_membership_processor()
+        resource = _make_waldur_resource()
+
+        # Must not raise — the caller (e.g. _process_resources) would otherwise
+        # mark the whole resource ERRED.
+        processor._sync_resource_service_accounts(resource)
+
+        processor.resource_backend.add_users_to_resource.assert_not_called()
+        processor.resource_backend.remove_users_from_resource.assert_not_called()
+
+    @mock.patch(
+        "waldur_site_agent.common.processors"
+        ".marketplace_provider_offerings_list_project_service_accounts_list"
+    )
     def test_offering_fetched_once_and_filtered_per_project(self, mock_api):
         """One offering-scoped fetch is shared across projects; accounts are
         filtered to each resource's project client-side."""
