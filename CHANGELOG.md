@@ -1,20 +1,31 @@
 # Changelog
 
-## 1.0.6-rc.13 - 2026-08-03
+## 1.0.6-rc.14 - 2026-08-10
 
-- **SLURM**: Add QoS-scoped associations and `qos-=` operator support (WAL-10154).
-- **SLURM**: Add optional `slurmrestd` REST API execution mode alongside the CLI backend.
-- **SLURM**: Skip unchanged periodic settings and skip no-op association updates to avoid redundant `sacctmgr` calls.
-- **SLURM**: Match account names case-insensitively in `get_account_parent` and fix allocation accounts being orphaned at root after project reparenting.
-- **SLURM**: Sanitize newlines in account descriptions (issue #17).
-- **Envoy AI Gateway**: Add new plugin for AI Gateway rate-limit and usage management (WAL-10066).
-- **CSCS DWDI**: Fix month-boundary usage misattribution (WAL-10166) and fix inference reporting.
-- **Rancher KC CRD**: Report per-grant membership sync statuses, honor resource-scoped resync, report agent restart time in UTC, and warn about unmapped role grants.
-- **Waldur backend**: Add configurable resource-limit sync direction (`limit_sync_direction`); sync project OECD code, industry flag, and science sub-domain (WAL-10044); refactor resource `end_date` sync to match project `end_date` sync (WAL-10000); keep federation users consented to a sibling offering in the shared project; skip no-op limit-update orders; fetch source project via the service-provider-scoped projects endpoint.
-- **Core**: Group structlog-rendered Sentry events by message instead of dict repr for cleaner error grouping.
-- **Core**: Fix mass user add/revoke, surface real past-period usage 400s instead of masking them (WAL-10071), ensure 2 decimal places on usage data, skip non-actionable order states in the STOMP handler, flag backend users for removal when they leave all projects (gh-13), add early exit in `create_user_homedirs` for existing home directories (gh-15), and add logging for current vs. new component usage values.
-- **Core**: Fix order process period configuration type (int → float).
-- **CI/Security**: Bump click/pyasn1 and address OSV scanner findings.
+- **Envoy AI Gateway**: Add new plugin for managing Envoy AI Gateway resources and usage reporting ([WAL-10066]).
+- **SLURM**: Add optional slurmrestd REST API execution mode as an alternative to CLI commands.
+- **SLURM**: Add QoS-scoped associations and support for the `qos-=` operator ([WAL-10154]).
+- **SLURM**: Match account names case-insensitively in parent lookups and sanitize newlines in account descriptions (issue #17).
+- **SLURM**: Skip unchanged periodic settings to avoid redundant sacctmgr modifications.
+- **SLURM**: Fix allocation account being orphaned at root after project reparenting.
+- **Waldur**: Add configurable resource-limit sync direction (`limit_sync_direction`).
+- **Waldur**: Fix backend reporting lifetime usage as current-month usage.
+- **Waldur**: Sync project OECD code, industry flag and science sub-domain ([WAL-10044]).
+- **Waldur**: Skip no-op limit-update orders and refactor resource end date sync to match project end date sync ([WAL-10000]).
+- **Waldur**: Keep federation users consented to a sibling offering in the shared project.
+- **CSCS-DWDI**: Fix month-boundary usage misattribution ([WAL-10166]) and add inference usage reporting.
+- **Rancher KC CRD**: Report per-grant membership sync statuses, honor resource-scoped resync, and warn about unmapped role grants.
+- **Core**: Add loop enumeration to prevent liveness probe from killing agent pods during long per-offering processing.
+- **Core**: Read service and course accounts via offering-scoped endpoint and fetch source projects via service-provider-scoped endpoint.
+- **Core**: Fix mass user add and revoke during membership sync.
+- **Core**: Flag backend users for removal when they leave all projects (gh-13) and add early exit for existing home directories (gh-15).
+- **Core**: Surface real past-period usage 400 errors instead of masking them ([WAL-10071]).
+- **Core**: Ensure two decimal places on usage data and keep idempotency checks in sync; log current vs new component usage values.
+- **Core**: Skip non-actionable order states in the STOMP handler and allow float values for the order process period.
+- **Core**: Group structlog-rendered Sentry events by message instead of dict representation.
+- **Security**: Fix cryptography, click and pyasn1 vulnerabilities flagged by the OSV scanner.
+
+> 53 commits, 102 files changed (+11020/-1345 lines)
 
 ---
 
