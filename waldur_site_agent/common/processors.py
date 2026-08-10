@@ -668,7 +668,12 @@ class OfferingBaseProcessor(abc.ABC):
         return self._course_accounts_cache[self.offering.uuid]
 
     def _sync_resource_service_accounts(self, waldur_resource: WaldurResource) -> None:
-        """Sync project service accounts between Waldur and the backend resource."""
+        """Sync project service accounts between Waldur and the backend resource.
+
+        Best-effort: a failure (listing or backend error) is logged and never
+        propagates, so a transient hiccup in this secondary enrichment step
+        cannot flip an otherwise-healthy resource to ERRED.
+        """
         logger.info(
             "Syncing service accounts for the resource %s (%s)",
             waldur_resource.name,
@@ -678,58 +683,78 @@ class OfferingBaseProcessor(abc.ABC):
             logger.warning("No service provider configured, skipping service accounts sync")
             return
 
-        # Offering-scoped accounts cover every project; filter to this one.
-        project_uuid = waldur_resource.project_uuid.hex
-        service_accounts = [
-            account
-            for account in self._offering_project_service_accounts()
-            if account.project_uuid and account.project_uuid.hex == project_uuid
-        ]
-        usernames_active = {
-            account.username
-            for account in service_accounts
-            if account.username and account.state == ServiceAccountState.OK
-        }
-        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
+        try:
+            # Offering-scoped accounts cover every project; filter to this one.
+            project_uuid = waldur_resource.project_uuid.hex
+            service_accounts = [
+                account
+                for account in self._offering_project_service_accounts()
+                if account.project_uuid and account.project_uuid.hex == project_uuid
+            ]
+            usernames_active = {
+                account.username
+                for account in service_accounts
+                if account.username and account.state == ServiceAccountState.OK
+            }
+            self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
 
-        usernames_closed = {
-            account.username
-            for account in service_accounts
-            if account.username and account.state == ServiceAccountState.CLOSED
-        }
-        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
+            usernames_closed = {
+                account.username
+                for account in service_accounts
+                if account.username and account.state == ServiceAccountState.CLOSED
+            }
+            self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
+        except Exception as exc:
+            logger.warning(
+                "Failed to sync service accounts for resource %s (%s): %s",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+                exc,
+            )
 
     def _sync_resource_course_accounts(self, waldur_resource: WaldurResource) -> None:
-        """Sync course accounts between Waldur and the backend resource."""
+        """Sync course accounts between Waldur and the backend resource.
+
+        Best-effort (see _sync_resource_service_accounts): failures are logged
+        and never propagate, so they cannot ERR the resource.
+        """
         logger.info(
             "Syncing course accounts for the resource %s (%s)",
             waldur_resource.name,
             waldur_resource.backend_id,
         )
         if self.service_provider is None:
-            logger.warning("No service provider configured, skipping service accounts sync")
+            logger.warning("No service provider configured, skipping course accounts sync")
             return
 
-        # Offering-scoped accounts cover every project; filter to this one.
-        project_uuid = waldur_resource.project_uuid.hex
-        course_accounts = [
-            account
-            for account in self._offering_course_accounts()
-            if account.project_uuid and account.project_uuid.hex == project_uuid
-        ]
-        usernames_active = {
-            account.username
-            for account in course_accounts
-            if account.username and account.state == ServiceAccountState.OK
-        }
-        self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
+        try:
+            # Offering-scoped accounts cover every project; filter to this one.
+            project_uuid = waldur_resource.project_uuid.hex
+            course_accounts = [
+                account
+                for account in self._offering_course_accounts()
+                if account.project_uuid and account.project_uuid.hex == project_uuid
+            ]
+            usernames_active = {
+                account.username
+                for account in course_accounts
+                if account.username and account.state == ServiceAccountState.OK
+            }
+            self.resource_backend.add_users_to_resource(waldur_resource, usernames_active)
 
-        usernames_closed = {
-            account.username
-            for account in course_accounts
-            if account.username and account.state == ServiceAccountState.CLOSED
-        }
-        self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
+            usernames_closed = {
+                account.username
+                for account in course_accounts
+                if account.username and account.state == ServiceAccountState.CLOSED
+            }
+            self.resource_backend.remove_users_from_resource(waldur_resource, usernames_closed)
+        except Exception as exc:
+            logger.warning(
+                "Failed to sync course accounts for resource %s (%s): %s",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+                exc,
+            )
 
 
 class OfferingOrderProcessor(OfferingBaseProcessor):
