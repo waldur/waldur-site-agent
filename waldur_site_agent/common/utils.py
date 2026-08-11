@@ -91,7 +91,7 @@ from waldur_api_client.models.resource_set_limits_request_limits import (
 from waldur_api_client.models.update_offering_component_request import (
     UpdateOfferingComponentRequest,
 )
-from waldur_api_client.models.user import User
+from waldur_api_client.models.user_me import UserMe
 from waldur_api_client.models.username_generation_policy_enum import UsernameGenerationPolicyEnum
 from waldur_api_client.types import UNSET, Unset
 
@@ -885,14 +885,14 @@ def load_components_to_waldur(
             logger.exception(e)
 
 
-def get_current_user_from_client(waldur_rest_client: AuthenticatedClient) -> User:
+def get_current_user_from_client(waldur_rest_client: AuthenticatedClient) -> UserMe:
     """Retrieve current authenticated user information from Waldur.
 
     Args:
         waldur_rest_client: Authenticated Waldur API client
 
     Returns:
-        User object containing current user details and permissions
+        UserMe object containing current user details and permissions
     """
     return users_me_retrieve.sync(client=waldur_rest_client)
 
@@ -1095,14 +1095,14 @@ def create_homedirs_for_offering_users() -> None:
         offering_backend.create_user_homedirs(offering_user_usernames, umask)
 
 
-def print_current_user(current_user: User) -> None:
+def print_current_user(current_user: UserMe) -> None:
     """Log detailed information about a Waldur user.
 
     Displays user details including username, full name, staff status,
     and all associated permissions with their scopes and expiration times.
 
     Args:
-        current_user: User object to display information for
+        current_user: UserMe object to display information for
     """
     logger.info("Current user username: %s", current_user.username)
     logger.info("Current user full name: %s", current_user.full_name)
@@ -1113,7 +1113,6 @@ def print_current_user(current_user: User) -> None:
         logger.info("List of permissions:")
         for permission in current_user.permissions:
             logger.info("Role name: %s", permission.role_name)
-            logger.info("Role description: %s", permission.role_description)
             logger.info("Scope type: %s", permission.scope_type)
             logger.info("Scope name: %s", permission.scope_name)
             logger.info("Scope UUID: %s", permission.scope_uuid)
