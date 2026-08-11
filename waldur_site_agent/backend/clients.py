@@ -20,11 +20,14 @@ class BaseClient:
             logger.debug("Executing command: %s", " ".join(command))
             return subprocess.check_output(command, stderr=subprocess.STDOUT, encoding="utf-8")
         except subprocess.CalledProcessError as e:
-            if not silent:
-                logger.exception('Failed to execute command "%s".', command)
             stdout = e.output or ""
             lines = stdout.splitlines()
             stdout = "\n".join(lines)
+            if not silent:
+                # CalledProcessError.__str__ only reports the exit code, not what the
+                # backend actually printed — log the captured output explicitly so the
+                # real failure reason (e.g. a rejected sacctmgr operation) is visible.
+                logger.exception('Failed to execute command "%s": %s', command, stdout)
             raise BackendError(stdout) from e
         except FileNotFoundError as e:
             # The binary itself is missing (e.g. SLURM CLI tools absent on a

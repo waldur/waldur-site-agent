@@ -258,6 +258,13 @@ class SlurmBackend(backends.BaseBackend):
         moved between organizations in Waldur the API already reflects the new customer,
         but the SLURM parent is stale.  This method detects that mismatch and corrects it.
 
+        SLURM's account tree is defined by each association's ParentName reference, so
+        an allocation account under the project keeps pointing at the (unrenamed)
+        project account and moves with it automatically once the project account is
+        reparented — reparenting it too is normally a no-op ("Nothing modified",
+        sacctmgr exit 1). It's only actually reparented here as a safety net, when its
+        own parent turns out to already be wrong.
+
         Skipped when flat hierarchy is configured (parent_account setting), because in
         that mode no customer tier exists in SLURM.
         """
@@ -343,10 +350,6 @@ class SlurmBackend(backends.BaseBackend):
                 expected_customer_backend_id,
             )
             self.client.set_account_parent(project_backend_id, expected_customer_backend_id)
-            # sacctmgr modify account set parent= moves the project account but does
-            # NOT carry its child accounts with it — the allocation account ends up
-            # orphaned at root.  Re-attach it explicitly under the project account.
-            self.client.set_account_parent(waldur_resource.backend_id, project_backend_id)
         except BackendError:
             logger.exception(
                 "sync_resource_project: failed to create/reparent project account %s under %s",
@@ -380,27 +383,75 @@ class SlurmBackend(backends.BaseBackend):
                 expected_customer_backend_id,
             )
 
+        self._reparent_resource_account_if_stale(waldur_resource.backend_id, project_backend_id)
+
+    def _reparent_resource_account_if_stale(
+        self, resource_backend_id: str, project_backend_id: str
+    ) -> None:
+        """Safety net: reparent a resource account only if it's genuinely out of sync.
+
+        An allocation account's ParentName should already point at the (unrenamed)
+        project account and move with it for free once the project account is
+        reparented, so this checks first rather than reparenting unconditionally —
+        sacctmgr treats an already-correct "set parent=" as an error ("Nothing
+        modified", exit 1), which would otherwise spam misleading failure logs for
+        the common no-op case.
+        """
         try:
-            actual_resource_parent = self.client.get_account_parent(waldur_resource.backend_id)
+            resource_parent = self.client.get_account_parent(resource_backend_id)
+        except BackendError:
+            logger.warning(
+                "sync_resource_project: could not read parent of resource account %s",
+                resource_backend_id,
+            )
+            return
+
+        if resource_parent == project_backend_id:
+            logger.debug(
+                "sync_resource_project: resource account %s parent already correct (%s)",
+                resource_backend_id,
+                project_backend_id,
+            )
+            return
+
+        logger.info(
+            "sync_resource_project: resource account %s has parent %r but expects %s "
+            "— reparenting",
+            resource_backend_id,
+            resource_parent,
+            project_backend_id,
+        )
+        try:
+            self.client.set_account_parent(resource_backend_id, project_backend_id)
+        except BackendError:
+            logger.exception(
+                "sync_resource_project: failed to reparent resource account %s under %s",
+                resource_backend_id,
+                project_backend_id,
+            )
+            return
+
+        try:
+            actual_resource_parent = self.client.get_account_parent(resource_backend_id)
         except BackendError:
             logger.warning(
                 "sync_resource_project: could not verify parent of resource account %s "
                 "after reparent attempt",
-                waldur_resource.backend_id,
+                resource_backend_id,
             )
-            actual_resource_parent = None
+            return
         if actual_resource_parent != project_backend_id:
             logger.warning(
                 "sync_resource_project: parent of resource account %s is %r after reparent "
                 "attempt (expected %s) — reparent may have silently failed",
-                waldur_resource.backend_id,
+                resource_backend_id,
                 actual_resource_parent,
                 project_backend_id,
             )
         else:
             logger.info(
                 "sync_resource_project: set parent of resource account %s to %s",
-                waldur_resource.backend_id,
+                resource_backend_id,
                 project_backend_id,
             )
 
