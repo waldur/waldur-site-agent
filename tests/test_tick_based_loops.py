@@ -21,6 +21,7 @@ def _make_config(**overrides):
     config.timezone = "UTC"
     config.reporting_periods = 1
     config.global_proxy = None
+    config.expose_backend_error_details = True
     config.log_shipping = mock.Mock(spec=common_structures.LogShippingConfig)
     config.log_shipping.enabled = False
     return config

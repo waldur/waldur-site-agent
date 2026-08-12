@@ -9,6 +9,11 @@ import structlog
 
 ACCOUNT_NAME_REGEX = "a-zA-Z0-9-_"
 
+# Two, so one key stays usable while the other is rotated. Shared rather than
+# per-plugin because the count is reconciled against what Waldur already holds in
+# common.utils, which has to know the target without asking the backend.
+DEFAULT_RESOURCE_KEY_COUNT = 2
+
 
 class BackendType(Enum):
     """Enum for backend types."""
@@ -16,7 +21,7 @@ class BackendType(Enum):
     SLURM = "slurm"
     MOAB = "moab"
     MUP = "mup"
-    CROIT_S3 = "croit_s3"
+    CEPH_S3 = "ceph_s3"
     DIGITALOCEAN = "digitalocean"
     CUSTOM = "custom"
     UNKNOWN = "unknown"
@@ -104,6 +109,14 @@ def configure_logger(log_level: str = "INFO") -> None:
     for bh in buffered_handlers:
         root_logger.addHandler(bh)
     root_logger.setLevel(level)
+
+    # httpx logs whole request URLs at INFO, and croit's create-key endpoint takes
+    # the S3 secret as a query parameter — so the transport's own request log is a
+    # credential sink at the agent's default level. Nothing downstream can filter it
+    # by logger name either: the record reaches the JSON handler with its logger
+    # rendered as "None".
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 # ---------------------------------------------------------------------------

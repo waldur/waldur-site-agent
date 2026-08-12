@@ -13,7 +13,7 @@ data between Waldur Mastermind and service provider backends. It uses a
 pyproject.toml                  # Core package (waldur-site-agent)
 waldur_site_agent/              # Core source code
 plugins/                        # Plugin packages (own pyproject.toml)
-  slurm/  moab/  mup/  okd/  harbor/  croit-s3/  cscs-dwdi/
+  slurm/  moab/  mup/  okd/  harbor/  ceph-s3/  cscs-dwdi/
   basic_username_management/  waldur/  keycloak-client/
   k8s-ut-namespace/  rancher/  digitalocean/  opennebula/
 tests/                          # Core tests

@@ -46,7 +46,7 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_limits,
 )
 from waldur_api_client.api.marketplace_resource_api_keys import (
-    marketplace_resource_api_keys_destroy,
+    marketplace_resource_api_keys_list,
     marketplace_resource_api_keys_report_created,
     marketplace_resource_api_keys_set_erred,
     marketplace_resource_api_keys_set_key,
@@ -96,6 +96,7 @@ from waldur_api_client.models.username_generation_policy_enum import UsernameGen
 from waldur_api_client.types import UNSET, Unset
 
 from waldur_site_agent.backend import (
+    DEFAULT_RESOURCE_KEY_COUNT,
     BackendType,
     configure_logger,
     get_log_buffer_manager,
@@ -441,9 +442,22 @@ def load_configuration(
         if configuration.sentry_dsn:
             import sentry_sdk  # noqa: PLC0415
 
-            from .sentry import before_send  # noqa: PLC0415
+            from .sentry import before_breadcrumb, before_send  # noqa: PLC0415
 
-            sentry_sdk.init(dsn=configuration.sentry_dsn, before_send=before_send)
+            sentry_sdk.init(
+                dsn=configuration.sentry_dsn,
+                before_send=before_send,
+                before_breadcrumb=before_breadcrumb,
+                # An exception event carries every frame's locals, and the frames
+                # that mint an S3 key hold the secret as a bare string: croit's
+                # create_user_key takes it as an argument, and _request holds both
+                # the params dict and the signed URL. before_send is no defence --
+                # it never sees frame vars, and the query-parameter scrubber needs a
+                # name=value shape a lone secret does not have. The cost is losing
+                # locals on every event in the agent, which is the price of this
+                # being the error path of the code that handles credentials.
+                include_local_variables=False,
+            )
 
         # Handle Elastic APM configuration - initialize if server URL is provided
         if configuration.elastic_apm_server_url:
@@ -1702,8 +1716,34 @@ def provision_resource_api_keys(
     The agent owns generation: it applies each key to the backend first, then
     pushes the value so Waldur only ever stores a live key.
     """
-    kwargs = {} if count is None else {"count": count}
-    for key in backend.generate_resource_keys(resource_backend_id, **kwargs):
+    # Provisioning is also the path an interrupted create comes back through: the
+    # user survives with whatever keys the earlier attempt applied, and adopting it
+    # would carry them into a live resource with no row in Waldur to rotate them by.
+    # Cleared before minting, so the fresh pairs are never candidates for it.
+    known_client_ids = _known_client_ids(waldur_rest_client, resource_uuid)
+    if known_client_ids is not None:
+        try:
+            backend.prune_unknown_resource_keys(resource_backend_id, known_client_ids)
+        except Exception as exc:
+            # Clearing residue is hygiene; minting is what this function is for. The
+            # caller swallows everything raised here, so letting a prune failure
+            # through ends with a provisioned resource holding no keys and an order
+            # marked done -- and there is no add command to recover with.
+            logger.warning(
+                "Could not clear the stale keys of resource %s, minting anyway: %s",
+                resource_uuid,
+                exc,
+            )
+
+    # The count is a target for the resource, not an amount to add. The prune above
+    # keeps every key Waldur already holds, so minting a full set on top of one
+    # would leave a re-processed create order with four live keys against a cap of
+    # two. An unknown set (None) still mints the full count: it cannot be told apart
+    # from "Waldur holds none", and there is no add command to make up a shortfall.
+    target = DEFAULT_RESOURCE_KEY_COUNT if count is None else count
+    missing = max(0, target - len(known_client_ids or []))
+
+    for key in backend.generate_resource_keys(resource_backend_id, count=missing):
         marketplace_resource_api_keys_report_created.sync(
             client=waldur_rest_client,
             body=ResourceApiKeyReportCreatedRequest(
@@ -1714,45 +1754,110 @@ def provision_resource_api_keys(
         )
 
 
+def _known_client_ids(
+    waldur_rest_client: AuthenticatedClient, resource_uuid: str
+) -> Optional[list[str]]:
+    """List every client_id Waldur holds for a resource, or None if it cannot.
+
+    Feeds the backend's orphan pruning. None means "unknown", which the backends
+    treat as "prune nothing" — a listing failure must not be read as "Waldur holds
+    no keys" and take out every credential the resource has.
+    """
+    try:
+        keys = marketplace_resource_api_keys_list.sync_all(
+            client=waldur_rest_client, resource_uuid=resource_uuid
+        )
+    except Exception as exc:
+        logger.warning("Could not list the API keys of resource %s: %s", resource_uuid, exc)
+        return None
+
+    client_ids = [key.client_id for key in keys if key.client_id]
+    if len(client_ids) != len(keys):
+        # A row whose client_id has not landed yet is still a key Waldur holds.
+        # Dropping it presents the set as complete when it is not, and the backends
+        # prune everything outside what they are given.
+        logger.warning(
+            "Resource %s has %d API key row(s) with no client_id; treating the "
+            "known set as unknown so nothing is pruned",
+            resource_uuid,
+            len(keys) - len(client_ids),
+        )
+        return None
+    # An empty listing is not proof that the resource has no keys — a filter
+    # mismatch or a scoping change produces the same 200. Only a complete,
+    # non-empty listing is safe to prune against.
+    return client_ids or None
+
+
+def _set_key_body(result: Union[str, dict]) -> ResourceApiKeySetKeyRequest:
+    """Build the report body from whichever shape the backend returned.
+
+    A backend whose public identifier rotates with the secret (an S3 access key)
+    returns both halves; one with a stable client_id (an Envoy Secret slot) returns
+    just the secret. Anything else is a plugin bug, and raising here puts it on the
+    error path rather than letting a malformed body reach Waldur.
+    """
+    if isinstance(result, dict):
+        missing = sorted({"api_key", "client_id"} - set(result))
+        if missing:
+            msg = f"rotate_resource_key returned a dict missing {missing}"
+            raise ValueError(msg)
+        return ResourceApiKeySetKeyRequest(
+            api_key=result["api_key"], client_id=result["client_id"]
+        )
+    if not isinstance(result, str) or not result:
+        msg = (
+            "rotate_resource_key returned "
+            f"{type(result).__name__}, expected a non-empty str or a dict"
+        )
+        raise ValueError(msg)
+    return ResourceApiKeySetKeyRequest(api_key=result)
+
+
 def rotate_resource_api_key(
     waldur_rest_client: AuthenticatedClient,
     api_key_uuid: str,
     client_id: str,
     backend,  # noqa: ANN001
+    resource_backend_id: str,
+    resource_uuid: Optional[str] = None,
+    expose_backend_error_details: bool = True,
 ) -> None:
-    """Rotate one key in the backend, then report the new value to Waldur."""
+    """Rotate one key in the backend, then report the new value to Waldur.
+
+    A backend whose public identifier rotates together with the secret (an S3
+    access key) returns both halves as a dict; one with a stable client_id (an
+    Envoy Secret slot) returns just the new secret.
+
+    When ``resource_uuid`` is given, the resource's known client_ids travel with the
+    rotation so a backend can drop keys Waldur never learned about — the residue of
+    an earlier rotation whose reply was lost.
+    """
+    known = (
+        _known_client_ids(waldur_rest_client, resource_uuid)
+        if resource_uuid is not None
+        else None
+    )
     try:
-        new_key = backend.rotate_resource_key(client_id)
+        result = backend.rotate_resource_key(
+            client_id, resource_backend_id, known_client_ids=known
+        )
+        # The report is inside the try on purpose. Outside it, a failed set_key left
+        # the row Updating with modified unadvanced, which is exactly what the
+        # reconciliation sweep selects — so every tick re-minted a live key and threw
+        # the previous one away. Mastermind refuses set_erred from OK, so a late erred
+        # after a set_key that did land is rejected rather than flipping a healthy key.
+        marketplace_resource_api_keys_set_key.sync(
+            uuid=api_key_uuid,
+            client=waldur_rest_client,
+            body=_set_key_body(result),
+        )
     except Exception as exc:
         logger.error("Failed to rotate API key %s: %s", client_id, exc)
+        error_message, _ = format_waldur_error_details(exc, expose_backend_error_details)
         marketplace_resource_api_keys_set_erred.sync(
             uuid=api_key_uuid,
             client=waldur_rest_client,
-            body=ResourceApiKeySetErredRequest(error_message=str(exc)),
+            body=ResourceApiKeySetErredRequest(error_message=error_message),
         )
         return
-    marketplace_resource_api_keys_set_key.sync(
-        uuid=api_key_uuid,
-        client=waldur_rest_client,
-        body=ResourceApiKeySetKeyRequest(api_key=new_key),
-    )
-
-
-def revoke_resource_api_key(
-    waldur_rest_client: AuthenticatedClient,
-    api_key_uuid: str,
-    client_id: str,
-    backend,  # noqa: ANN001
-) -> None:
-    """Remove one key from the backend, then confirm to Waldur (deletes the row)."""
-    try:
-        backend.revoke_resource_key(client_id)
-    except Exception as exc:
-        logger.error("Failed to revoke API key %s: %s", client_id, exc)
-        marketplace_resource_api_keys_set_erred.sync(
-            uuid=api_key_uuid,
-            client=waldur_rest_client,
-            body=ResourceApiKeySetErredRequest(error_message=str(exc)),
-        )
-        return
-    marketplace_resource_api_keys_destroy.sync(uuid=api_key_uuid, client=waldur_rest_client)

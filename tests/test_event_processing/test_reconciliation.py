@@ -1,9 +1,15 @@
 """Tests for periodic username/order/offering-user reconciliation and event processing main loop."""
 
+import datetime
+import inspect
 import unittest
+import uuid
 from unittest import mock
 
 from waldur_api_client.models.offering_user_state import OfferingUserState
+from waldur_api_client.models.resource_api_key_state import ResourceApiKeyState
+from waldur_api_client.models.resource_api_key_status import ResourceApiKeyStatus
+from waldur_api_client.types import UNSET
 
 from waldur_site_agent.common import structures as common_structures
 from waldur_site_agent.event_processing import utils
@@ -515,3 +521,239 @@ class TestMainLoopTimers(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, 1)
         mock_utils.stop_stomp_consumers.assert_called_once_with(stomp_map)
+
+
+class TestRunPeriodicApiKeyReconciliation(unittest.TestCase):
+    """Tests for run_periodic_api_key_reconciliation function."""
+
+    @staticmethod
+    def _stuck_key(uuid_hex=None, client_id="cid-1", backend_id="res-1"):
+        """A real ResourceApiKeyStatus, not a Mock.
+
+        A Mock answers to any attribute, so it would keep this suite green through a
+        schema change that leaves the sweep calling a field the API stopped serving.
+        """
+        return ResourceApiKeyStatus(
+            uuid=uuid.UUID(uuid_hex) if uuid_hex else uuid.uuid4(),
+            resource_uuid=uuid.uuid4(),
+            resource_backend_id=backend_id,
+            modified=datetime.datetime.now(tz=datetime.timezone.utc),
+            client_id=client_id,
+            state=ResourceApiKeyState.UPDATING,
+        )
+
+    def test_skips_offering_without_order_processing_backend(self):
+        """Rotation is an order-processing capability."""
+        offering = _make_offering(stomp_enabled=True)
+        with mock.patch(
+            "waldur_site_agent.event_processing.utils.get_client_for_offering"
+        ) as mock_get_client:
+            utils.run_periodic_api_key_reconciliation([offering], "agent")
+            mock_get_client.assert_not_called()
+
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_resource_api_keys_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
+    def test_skips_backend_without_key_support(
+        self, mock_get_backend, mock_get_client, mock_keys_list
+    ):
+        """A backend that leaves supports_resource_api_keys False is not swept."""
+        offering = _make_offering(order_processing_backend="slurm")
+        mock_get_backend.return_value = (mock.Mock(spec=[]), "1.0")
+
+        utils.run_periodic_api_key_reconciliation([offering], "agent")
+
+        mock_keys_list.sync_all.assert_not_called()
+
+    @mock.patch("waldur_site_agent.event_processing.utils.common_utils.rotate_resource_api_key")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_resource_api_keys_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
+    def test_re_issues_the_rotation_of_a_stuck_key(
+        self, mock_get_backend, mock_get_client, mock_keys_list, mock_rotate
+    ):
+        """A key stuck in Updating is rotated again, with its backend id."""
+        offering = _make_offering(order_processing_backend="envoy")
+        backend = mock.Mock()
+        backend.supports_resource_api_keys = True
+        mock_get_backend.return_value = (backend, "1.0")
+        stuck = self._stuck_key()
+        mock_keys_list.sync_all.return_value = [stuck]
+
+        utils.run_periodic_api_key_reconciliation([offering], "agent")
+
+        call_kwargs = mock_keys_list.sync_all.call_args.kwargs
+        # Only long-stuck keys: a rotation still in flight must be left alone.
+        self.assertIn("modified_before", call_kwargs)
+        self.assertEqual(call_kwargs["offering_uuid"], offering.waldur_offering_uuid)
+        self.assertEqual(call_kwargs["state"], [ResourceApiKeyState.UPDATING])
+        mock_rotate.assert_called_once_with(
+            mock_get_client.return_value,
+            stuck.uuid.hex,
+            "cid-1",
+            backend,
+            "res-1",
+            stuck.resource_uuid.hex,
+            expose_backend_error_details=True,
+        )
+
+    @mock.patch("waldur_site_agent.event_processing.utils.common_utils.rotate_resource_api_key")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_resource_api_keys_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
+    def test_the_sweep_forwards_the_error_exposure_flag(
+        self, mock_get_backend, mock_get_client, mock_keys_list, mock_rotate
+    ):
+        """An offering that opted out of raw backend errors opted out everywhere.
+
+        The STOMP handler already honours the flag; the sweep rotates the same keys
+        by another route, so leaving it on the default leaked exactly what the flag
+        exists to withhold.
+        """
+        offering = _make_offering(order_processing_backend="envoy")
+        backend = mock.Mock()
+        backend.supports_resource_api_keys = True
+        mock_get_backend.return_value = (backend, "1.0")
+        mock_keys_list.sync_all.return_value = [self._stuck_key()]
+
+        utils.run_periodic_api_key_reconciliation(
+            [offering], "agent", expose_backend_error_details=False
+        )
+
+        self.assertIs(mock_rotate.call_args.kwargs["expose_backend_error_details"], False)
+
+    @mock.patch("waldur_site_agent.event_processing.utils.common_utils.rotate_resource_api_key")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_resource_api_keys_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
+    def test_skips_when_nothing_is_stuck(
+        self, mock_get_backend, mock_get_client, mock_keys_list, mock_rotate
+    ):
+        offering = _make_offering(order_processing_backend="envoy")
+        backend = mock.Mock()
+        backend.supports_resource_api_keys = True
+        mock_get_backend.return_value = (backend, "1.0")
+        mock_keys_list.sync_all.return_value = []
+
+        utils.run_periodic_api_key_reconciliation([offering], "agent")
+
+        mock_rotate.assert_not_called()
+
+    @mock.patch("waldur_site_agent.event_processing.utils.common_utils.rotate_resource_api_key")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_resource_api_keys_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
+    def test_one_failing_key_does_not_stop_the_others(
+        self, mock_get_backend, mock_get_client, mock_keys_list, mock_rotate
+    ):
+        """A sweep must not abandon the remaining keys when one rotation throws."""
+        offering = _make_offering(order_processing_backend="envoy")
+        backend = mock.Mock()
+        backend.supports_resource_api_keys = True
+        mock_get_backend.return_value = (backend, "1.0")
+        mock_keys_list.sync_all.return_value = [
+            self._stuck_key(client_id="cid-1"),
+            self._stuck_key(client_id="cid-2"),
+        ]
+        mock_rotate.side_effect = [Exception("gateway down"), None]
+
+        utils.run_periodic_api_key_reconciliation([offering], "agent")
+
+        self.assertEqual(mock_rotate.call_count, 2)
+
+    @mock.patch("waldur_site_agent.event_processing.utils.common_utils.rotate_resource_api_key")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_resource_api_keys_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
+    def test_a_key_without_a_client_id_is_skipped(
+        self, mock_get_backend, mock_get_client, mock_keys_list, mock_rotate
+    ):
+        """client_id is Union[Unset, str]; an Unset object must not reach a URL.
+
+        The STOMP handler rejects a falsy client_id, but the sweep reads the same
+        field off a list response and had no equivalent guard.
+        """
+        offering = _make_offering(order_processing_backend="envoy")
+        backend = mock.Mock()
+        backend.supports_resource_api_keys = True
+        mock_get_backend.return_value = (backend, "1.0")
+        mock_keys_list.sync_all.return_value = [self._stuck_key(client_id=UNSET)]
+
+        utils.run_periodic_api_key_reconciliation([offering], "agent")
+
+        mock_rotate.assert_not_called()
+
+    @mock.patch("waldur_site_agent.event_processing.utils.common_utils.rotate_resource_api_key")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_resource_api_keys_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
+    def test_a_key_without_a_resource_backend_id_is_skipped(
+        self, mock_get_backend, mock_get_client, mock_keys_list, mock_rotate
+    ):
+        """An empty backend id makes envoy re-provision the key active on a paused
+        resource: list_client_ids("") matches nothing, so the pause check sees no
+        siblings and the fallback lands the key in the active Secret."""
+        offering = _make_offering(order_processing_backend="envoy")
+        backend = mock.Mock()
+        backend.supports_resource_api_keys = True
+        mock_get_backend.return_value = (backend, "1.0")
+        mock_keys_list.sync_all.return_value = [self._stuck_key(backend_id="")]
+
+        utils.run_periodic_api_key_reconciliation([offering], "agent")
+
+        mock_rotate.assert_not_called()
+
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_resource_api_keys_list")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
+    def test_exception_is_logged_and_does_not_propagate(
+        self, mock_get_backend, mock_get_client, mock_keys_list
+    ):
+        """One broken offering must not stop the tick loop."""
+        offering = _make_offering(order_processing_backend="envoy")
+        backend = mock.Mock()
+        backend.supports_resource_api_keys = True
+        mock_get_backend.return_value = (backend, "1.0")
+        mock_keys_list.sync_all.side_effect = Exception("api down")
+
+        utils.run_periodic_api_key_reconciliation([offering], "agent")
+
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_backend_for_offering")
+    def test_the_sweep_filters_exist_in_the_installed_client(
+        self, mock_get_backend, mock_get_client
+    ):
+        """The sweep's filters must exist in the pinned waldur-api-client.
+
+        Every other test here mocks the endpoint, so a pin predating the
+        offering_uuid / state / modified_before filters sails through them and then
+        TypeErrors on the first real tick — where the offering-level handler swallows
+        it, leaving an ERROR per offering per tick and a sweep that never runs. Bind
+        against the real function object instead: that is what a stale pin breaks.
+        """
+        offering = _make_offering(order_processing_backend="envoy")
+        backend = mock.Mock()
+        backend.supports_resource_api_keys = True
+        mock_get_backend.return_value = (backend, "1.0")
+
+        # Captured before patching — reading it afterwards would read the Mock's
+        # own (*args, **kwargs), which accepts anything and proves nothing.
+        bind_only = _BindOnly(utils.marketplace_resource_api_keys_list.sync_all)
+
+        with mock.patch.object(
+            utils.marketplace_resource_api_keys_list, "sync_all", side_effect=bind_only
+        ), mock.patch.object(utils.logger, "exception") as mock_log_exception:
+            utils.run_periodic_api_key_reconciliation([offering], "agent")
+
+        mock_log_exception.assert_not_called()
+
+
+class _BindOnly:
+    """Bind arguments against a real function's signature, then return []."""
+
+    def __init__(self, func):
+        self._signature = inspect.signature(func)
+
+    def __call__(self, *args, **kwargs):
+        self._signature.bind(*args, **kwargs)
+        return []

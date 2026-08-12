@@ -11,9 +11,9 @@ management across different agent components and backend plugins.
 
 from __future__ import annotations
 
-from enum import Enum
-
 # Import after to avoid circular imports
+import zoneinfo
+from enum import Enum
 from typing import Any, Optional
 
 from pydantic import (
@@ -400,6 +400,23 @@ class WaldurAgentConfiguration(BaseModel):
         """Legacy property for backward compatibility."""
         return self.offerings
 
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        """Reject a timezone the billing period cannot be computed in.
+
+        The croit backend's month boundary falls back to UTC on an unparseable
+        value while the reporting processor's clock falls back to naive system
+        local time. Near a month boundary those two disagree about which month it
+        is, so an accepted typo files a whole period's usage against the wrong one.
+        """
+        try:
+            zoneinfo.ZoneInfo(v)
+        except Exception as exc:
+            msg = f"Unknown timezone {v!r}: {exc}"
+            raise ValueError(msg) from exc
+        return v
+
 
 class RootConfiguration(BaseModel):
     """Root configuration model for parsing YAML configuration files.
@@ -522,6 +539,23 @@ class RootConfiguration(BaseModel):
             expose_backend_error_details=self.expose_backend_error_details,
             log_shipping=self.log_shipping,
         )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        """Reject a timezone the billing period cannot be computed in.
+
+        The croit backend's month boundary falls back to UTC on an unparseable
+        value while the reporting processor's clock falls back to naive system
+        local time. Near a month boundary those two disagree about which month it
+        is, so an accepted typo files a whole period's usage against the wrong one.
+        """
+        try:
+            zoneinfo.ZoneInfo(v)
+        except Exception as exc:
+            msg = f"Unknown timezone {v!r}: {exc}"
+            raise ValueError(msg) from exc
+        return v
 
 
 class AccountType(Enum):

@@ -12,9 +12,13 @@ from contextlib import contextmanager
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_offering_users import marketplace_offering_users_list
 from waldur_api_client.api.marketplace_orders import marketplace_orders_list
+from waldur_api_client.api.marketplace_resource_api_keys import (
+    marketplace_resource_api_keys_list,
+)
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.order_state import OrderState
+from waldur_api_client.models.resource_api_key_state import ResourceApiKeyState
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import agent_identity_management
@@ -49,7 +53,7 @@ def _determine_observable_object_types(
     if offering.order_processing_backend:
         object_types.append(ObservableObjectTypeEnum.ORDER)
         # Rotation is an order-processing-backend capability; the handler no-ops for
-        # backends that do not implement rotate_api_key (only Envoy does today).
+        # backends that leave supports_resource_api_keys False.
         object_types.append(ObservableObjectTypeEnum.RESOURCE_API_KEY_ROTATION)
     else:
         logger.info(
@@ -538,6 +542,99 @@ def run_periodic_order_reconciliation(
                     order_processor.log_order_processing_error(order, e)
         except Exception:
             logger.exception("Order reconciliation failed for offering %s", offering.name)
+
+
+def run_periodic_api_key_reconciliation(
+    waldur_offerings: list[common_structures.Offering],
+    user_agent: str = "",
+    stuck_threshold_minutes: int = 30,
+    expose_backend_error_details: bool = True,
+) -> None:
+    """Re-issue rotations for API keys whose reply to Waldur never arrived.
+
+    A rotate command is a fire-and-forget STOMP message. If the agent is down when
+    it goes out, or the handler dies mid-way, the key stays ``Updating``: the portal
+    shows a spinner that never resolves, and the consumer cannot retry because
+    ``set_updating`` only accepts ``OK`` / ``Erred``.
+
+    Rotating again converges. Each rotation applies a fresh value before removing
+    the old one and then reports it, and deleting an already-absent key is a no-op,
+    so re-running the rotation a backend already completed still ends with one live
+    key that Waldur knows the value of.
+
+    Only picks up keys older than ``stuck_threshold_minutes`` (default 30) so a
+    rotation still in flight is left alone, and only for offerings whose backend
+    manages resource API keys.
+
+    ``expose_backend_error_details`` is threaded through because this sweep rotates
+    the same keys the STOMP handler does. Left on the default, an agent that opted
+    out of raw backend errors still got them by this route.
+    """
+    cutoff = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(
+        minutes=stuck_threshold_minutes
+    )
+
+    for offering in waldur_offerings:
+        touch_heartbeat()
+        if not offering.order_processing_backend:
+            continue
+        try:
+            backend, _ = get_backend_for_offering(offering, "order_processing_backend")
+            if not getattr(backend, "supports_resource_api_keys", False):
+                continue
+
+            waldur_rest_client = get_client_for_offering(offering, user_agent)
+            stuck_keys = marketplace_resource_api_keys_list.sync_all(
+                client=waldur_rest_client,
+                offering_uuid=offering.waldur_offering_uuid,
+                state=[ResourceApiKeyState.UPDATING],
+                modified_before=cutoff,
+            )
+
+            if not stuck_keys:
+                continue
+
+            logger.info(
+                "API key reconciliation: found %d stuck key(s) for %s (modified before %s)",
+                len(stuck_keys),
+                offering.name,
+                cutoff.isoformat(),
+            )
+
+            for api_key in stuck_keys:
+                touch_heartbeat()
+                # The STOMP handler rejects these; the sweep reads the same fields
+                # off a list response where client_id is Union[Unset, str], so it
+                # has to as well. An Unset object would otherwise be interpolated
+                # into a backend URL, and an empty backend id makes envoy's pause
+                # check see no siblings and re-provision the key active.
+                if not api_key.client_id:
+                    logger.warning(
+                        "Skipping API key %s: no client_id to rotate from", api_key.uuid
+                    )
+                    continue
+                if not api_key.resource_backend_id:
+                    logger.warning(
+                        "Skipping API key %s: the resource has no backend id",
+                        api_key.uuid,
+                    )
+                    continue
+                try:
+                    common_utils.rotate_resource_api_key(
+                        waldur_rest_client,
+                        api_key.uuid.hex,
+                        api_key.client_id,
+                        backend,
+                        api_key.resource_backend_id,
+                        api_key.resource_uuid.hex,
+                        expose_backend_error_details=expose_backend_error_details,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to re-issue the rotation of API key %s", api_key.uuid
+                    )
+        except Exception:
+            logger.exception("API key reconciliation failed for offering %s", offering.name)
 
 
 def run_periodic_project_hierarchy_sync(

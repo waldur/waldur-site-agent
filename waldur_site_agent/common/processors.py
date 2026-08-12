@@ -1190,11 +1190,13 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     ) -> None:
         """Generate the resource's API keys and report each to Waldur.
 
-        The agent decides the count (the Envoy plugin makes two so one can be
-        rotated with no downtime). A failure is not fatal: the key can be added
-        later. Runs on both fresh creates and restores/re-creates — a restored
-        resource has no keys (they were removed on terminate), so it must be
-        re-provisioned or it would come back with no way to authenticate.
+        The agent decides the count (both plugins make two so one can be rotated
+        with no downtime). Keys are reported as they are applied, so a failure
+        part-way leaves the already-reported keys usable and the rest unminted;
+        there is no add command, so a shortfall is only recovered by a restore.
+        Runs on both fresh creates and restores/re-creates — a restored resource
+        has no keys (they were removed on terminate), so it must be re-provisioned
+        or it would come back with no way to authenticate.
         """
         if not getattr(self.resource_backend, "supports_resource_api_keys", False):
             return
@@ -3196,7 +3198,12 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 component,
                 current_amount,
                 new_amount,
-                None if current_amount is None else round(new_amount - current_amount, 2),
+                # A backend may hand back Decimal while current_amount comes back
+                # from the API as float. Mixing the two raises, and a debug log must
+                # never be the thing that fails a usage report.
+                None
+                if current_amount is None
+                else round(float(new_amount) - current_amount, 2),
             )
 
         if not self.resource_backend.supports_decreasing_usage:

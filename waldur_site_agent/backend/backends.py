@@ -49,8 +49,22 @@ class BaseBackend(ABC):
     # and calls check_pending_order() to track remote order completion.
     supports_async_orders: bool = False
 
-    # Whether the backend consumes a Waldur-minted resource API key: the agent
-    # fetches the key over REST and applies it via rotate_api_key(backend_id, key).
+    # Whether the backend manages resource API keys. The agent — not Waldur — mints
+    # them: it applies a key to the backend first and only then reports the value, so
+    # a key Waldur stores is always one the backend already accepts.
+    #
+    # An implementation provides two methods. Generation takes the resource backend id
+    # and a count, and returns one dict per key with the public "client_id" and the
+    # secret "api_key"; it runs once, at provisioning. Rotation takes the client_id
+    # being rotated, the resource backend id, and the client_ids Waldur currently
+    # holds for that resource. It returns just the new secret when the client_id is a
+    # stable slot, or both halves when the public identifier rotates with it (an S3
+    # access key). The known set lets a backend drop keys Waldur never learned about,
+    # such as the residue of a rotation whose reply was lost; None means unknown, so
+    # nothing is pruned — reading it as empty would delete every live credential.
+    #
+    # There is no revoke: the key count is fixed at provisioning and a rotation
+    # replaces a value in place.
     supports_resource_api_keys: bool = False
 
     # Capability flag: Set to True for backends that depend on a remote API during
@@ -1106,6 +1120,19 @@ class BaseBackend(ABC):
             "Setting user %s limits to %s for resource %s", username, limits, resource_backend_id
         )
         self.client.set_resource_user_limits(resource_backend_id, username, limits)
+
+    def prune_unknown_resource_keys(self, resource_backend_id: str, keep: list[str]) -> None:
+        """Drop the resource's backend keys that Waldur does not hold.
+
+        Called at provisioning, before any key is minted, and only with a known set
+        the caller could actually read — ``None`` there means unknown, and nothing
+        is pruned rather than everything.
+
+        A backend whose keys only ever exist because it just made them has no
+        residue to clear, so the default does nothing. Not abstract for that reason:
+        implementing it is the exception, not the contract.
+        """
+        del resource_backend_id, keep
 
     def _get_resource_backend_id(self, resource_slug: str, prefix: str = "") -> str:
         prefix = self.backend_settings.get("allocation_prefix", "")
