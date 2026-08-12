@@ -1,30 +1,27 @@
 # Changelog
 
-## 1.0.6-rc.16 - 2026-08-11
+## 1.0.6-rc.17 - 2026-08-12
 
-- **Envoy AI Gateway**: Add new plugin for provisioning and usage reporting (WAL-10066).
-- **SLURM**: Add optional slurmrestd REST API execution mode as an alternative to CLI commands.
-- **SLURM**: Add QoS-scoped associations and `qos-=` operator support in the client (WAL-10154).
-- **SLURM**: Fix allocation account being orphaned at root after project reparenting, and match account names case-insensitively when resolving parents.
-- **SLURM**: Skip unchanged periodic settings to avoid redundant sacctmgr modifications.
-- **SLURM**: Sanitize newlines in account descriptions (issue #17).
-- **Waldur**: Fix backend reporting lifetime usage as current-month usage.
-- **Waldur**: Add configurable resource-limit sync direction (`limit_sync_direction`) and skip no-op limit-update orders.
-- **Waldur**: Sync project OECD code, industry flag and science sub-domain (WAL-10044), and align resource end_date sync with project end_date sync (WAL-10000).
-- **Waldur**: Keep federation users consented to a sibling offering in the shared project.
-- **CSCS DWDI**: Fix month-boundary usage misattribution (WAL-10166) and inference reporting issues.
+- **Ceph S3**: Rename the `croit-s3` plugin to `ceph-s3` and add a native RadosGW admin-API client alongside the existing Croit flavour ([RWA-56]). Operators using `croit-s3` must update their package name and offering configuration.
+- **Envoy AI Gateway**: Add a new plugin for provisioning and usage reporting against Envoy AI Gateway ([WAL-10066]).
+- **SLURM**: Add an optional `slurmrestd` REST API execution mode as an alternative to shell-based `sacctmgr` commands, with design docs and E2E coverage.
+- **SLURM**: Add QoS-scoped associations and support for the `qos-=` operator ([WAL-10154]).
+- **SLURM**: Stop reparenting allocation accounts on project move, and fix accounts being orphaned at the cluster root after a reparent.
+- **SLURM**: Skip unchanged periodic settings to avoid redundant `sacctmgr` modifications, match account names case-insensitively in `get_account_parent`, and sanitize newlines in account descriptions (gh-17).
+- **Federation**: Add configurable resource-limit sync direction via `limit_sync_direction`.
+- **Federation**: Sync project OECD code, industry flag and science sub-domain ([WAL-10044]); refactor resource `end_date` sync to match project `end_date` sync ([WAL-10000]).
+- **Federation**: Fix lifetime usage being reported as current-month usage, skip no-op limit-update orders, and keep users consented to a sibling offering in the shared project.
+- **CSCS DWDI**: Add inference usage reporting and fix month-boundary usage misattribution ([WAL-10166]).
+- **Core**: Prevent liveness probes from killing agent pods during long per-offering processing.
+- **Core**: Make service/course account sync best-effort so failures can no longer push resources into ERRED, and read those accounts via the offering-scoped endpoint.
+- **Core**: Skip non-actionable order states in the STOMP handler and surface real past-period usage 400s instead of masking them ([WAL-10071]).
+- **Core**: Group structlog-rendered Sentry events by message instead of dict repr, log current vs new component usage values, and report agent restart time in UTC.
+- **Core**: Flag backend users for removal when they leave all projects (gh-13), fix mass user add and revoke, and exit early in `create_user_homedirs` for existing home directories (gh-15).
+- **Core**: Fix a crash on trimmed `MePermission` payloads from `/api/users/me`, fetch the source project via the service-provider-scoped endpoint, and accept float values for the order process period.
 - **Rancher KC CRD**: Report per-grant membership sync statuses, honor resource-scoped resync, and warn about unmapped role grants.
-- **Core**: Fix crash on trimmed MePermission payload from /api/users/me.
-- **Core**: Make service/course account sync best-effort so failures cannot mark resources as ERRED, and read the accounts via an offering-scoped endpoint.
-- **Core**: Prevent liveness probe from killing agent pods during long per-offering processing.
-- **Core**: Fix mass user add and revoke during membership sync, and flag backend users for removal when they leave all projects (gh-13).
-- **Core**: Add early exit in create_user_homedirs for existing home directories (gh-15).
-- **Core**: Surface real past-period usage submission errors instead of masking them (WAL-10071), round usage data to 2 decimal places, and log current vs new component usage values.
-- **Core**: Skip non-actionable order states in the STOMP handler and allow fractional order-process period configuration.
-- **Core**: Group structlog-rendered Sentry events by message instead of dict representation.
-- **Security**: Update dependencies to fix cryptography, click and pyasn1 vulnerabilities flagged by the OSV scanner.
+- **Security**: Bump `cryptography`, `click` and `pyasn1` to clear OSV scanner findings.
 
-> 57 commits, 103 files changed (+11143/-1377 lines)
+> 60 commits, 139 files changed (+19479/-3685)
 
 ---
 
