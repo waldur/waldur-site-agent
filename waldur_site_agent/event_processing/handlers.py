@@ -546,12 +546,13 @@ def on_resource_api_key_rotation_stomp(
     frame: stomp.utils.Frame,
     offering: structures.Offering,
     user_agent: str,
-    expose_backend_error_details: bool = True,  # noqa: ARG001
+    expose_backend_error_details: bool = True,
 ) -> None:
-    """Handle a resource API key command (rotate / revoke / add).
+    """Handle a resource API key rotation command.
 
-    The agent generates keys and applies them to the backend, then reports the
-    outcome to Waldur via the provider endpoints.
+    The agent generates the key and applies it to the backend, then reports the
+    outcome to Waldur via the provider endpoints. Rotation is the only command:
+    the key count is fixed at provisioning.
     """
     try:
         message: ApiKeyRotationMessage = json.loads(frame.body)
@@ -573,20 +574,21 @@ def on_resource_api_key_rotation_stomp(
 
         waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
 
-        if action in ("rotate", "revoke"):
-            if not api_key_uuid or not client_id:
-                logger.error("%s command missing api_key_uuid/client_id", action)
-                return
-            if action == "rotate":
-                common_utils.rotate_resource_api_key(
-                    waldur_rest_client, api_key_uuid, client_id, backend
-                )
-            else:
-                common_utils.revoke_resource_api_key(
-                    waldur_rest_client, api_key_uuid, client_id, backend
-                )
-        else:
+        if action != "rotate":
             logger.error("Unknown API key action: %s", action)
+            return
+        if not api_key_uuid or not client_id:
+            logger.error("rotate command missing api_key_uuid/client_id")
+            return
+        common_utils.rotate_resource_api_key(
+            waldur_rest_client,
+            api_key_uuid,
+            client_id,
+            backend,
+            backend_id,
+            resource_uuid,
+            expose_backend_error_details=expose_backend_error_details,
+        )
 
     except json.JSONDecodeError as e:
         logger.error("Failed to parse API key STOMP message: %s", e)

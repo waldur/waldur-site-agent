@@ -10,9 +10,54 @@ structlog keys into the event's extra data, and pins a grouping fingerprint that
 ignores volatile identifiers.
 """
 
-from typing import Any
+import re
+from typing import Any, Optional
 
 from .structlog_message import normalize_for_fingerprint, parse_structlog_message
+
+# Secrets that travel as query parameters rather than in a request body. croit's
+# create-key endpoint is the reason this exists: it takes the S3 secret as
+# ?secretKey=, so any component that captures a URL captures a live credential.
+# A denylist rather than an allowlist because an allowlist silently stops covering
+# a parameter someone adds later.
+# Hyphenated spellings are not stylistic variants to be tidied away: RadosGW's
+# Admin Ops API takes the S3 secret as a query parameter literally named
+# "secret-key", so omitting it leaks a live credential into any log line or
+# Sentry event that carries the URL.
+_SECRET_QUERY_PARAMS = (
+    "secretKey",
+    "secret_key",
+    "secret-key",
+    "api_key",
+    "apiKey",
+    "api-key",
+    "token",
+    "password",
+)
+_SECRET_QUERY_RE = re.compile(
+    r"\b(" + "|".join(_SECRET_QUERY_PARAMS) + r")=[^&\s\"']+",
+    re.IGNORECASE,
+)
+
+
+def scrub_secret_query_params(text: str) -> str:
+    """Replace the value of any secret-bearing query parameter with a placeholder."""
+    return _SECRET_QUERY_RE.sub(r"\1=[REDACTED]", text)
+
+
+def before_breadcrumb(crumb: dict, hint: dict) -> Optional[dict]:
+    """Strip secret query parameters from a breadcrumb before it leaves the process.
+
+    sentry-sdk's logging integration turns every INFO record into a breadcrumb, so
+    a transport that logs request URLs exports credentials on the next captured
+    event. The httpx logger is quieted at source (see ``configure_logger``); this
+    catches anything that reaches a breadcrumb by another route.
+    """
+    del hint
+    message = crumb.get("message")
+    if isinstance(message, str):
+        crumb["message"] = scrub_secret_query_params(message)
+    return crumb
 
 
 def before_send(event: dict, hint: dict) -> dict:

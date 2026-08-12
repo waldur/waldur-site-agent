@@ -80,7 +80,7 @@ def test_generate_resource_keys_makes_two_by_default() -> None:
     backend = _make_backend()
     backend.gateway_client.list_client_ids.return_value = []
 
-    keys = backend.generate_resource_keys("res-1")
+    keys = list(backend.generate_resource_keys("res-1"))
 
     assert [k["client_id"] for k in keys] == ["res-1-1", "res-1-2"]
     assert all(k["api_key"].startswith("sk-") for k in keys)
@@ -91,7 +91,7 @@ def test_generate_resource_keys_continues_past_existing() -> None:
     backend = _make_backend()
     backend.gateway_client.list_client_ids.return_value = ["res-1-1", "res-1-2"]
 
-    keys = backend.generate_resource_keys("res-1", count=1)
+    keys = list(backend.generate_resource_keys("res-1", count=1))
 
     assert [k["client_id"] for k in keys] == ["res-1-3"]
 
@@ -100,7 +100,7 @@ def test_rotate_resource_key_generates_and_applies() -> None:
     backend = _make_backend()
     backend.gateway_client.rotate_key.return_value = True
 
-    new_key = backend.rotate_resource_key("res-1-1")
+    new_key = backend.rotate_resource_key("res-1-1", "res-1")
 
     assert new_key.startswith("sk-")
     backend.gateway_client.rotate_key.assert_called_once_with("res-1-1", new_key)
@@ -112,7 +112,7 @@ def test_rotate_resource_key_provisions_when_absent() -> None:
     backend.gateway_client.rotate_key.return_value = False
     backend.gateway_client.list_client_ids.return_value = []
 
-    new_key = backend.rotate_resource_key("res-1-1")
+    new_key = backend.rotate_resource_key("res-1-1", "res-1")
 
     backend.gateway_client.provision_key.assert_called_once_with("res-1-1", new_key, blocked=False)
 
@@ -126,7 +126,7 @@ def test_rotate_fallback_stays_blocked_on_paused_resource() -> None:
     backend.gateway_client.list_client_ids.return_value = ["res-1-1", "res-1-2"]
     backend.gateway_client.is_active.return_value = False
 
-    new_key = backend.rotate_resource_key("res-1-1")
+    new_key = backend.rotate_resource_key("res-1-1", "res-1")
 
     backend.gateway_client.provision_key.assert_called_once_with("res-1-1", new_key, blocked=True)
 
@@ -138,7 +138,7 @@ def test_generate_resource_keys_blocks_new_key_on_paused_resource() -> None:
     backend.gateway_client.list_client_ids.return_value = ["res-1-1"]
     backend.gateway_client.is_active.return_value = False
 
-    backend.generate_resource_keys("res-1", count=1)
+    list(backend.generate_resource_keys("res-1", count=1))
 
     backend.gateway_client.provision_key.assert_called_once_with("res-1-2", mock.ANY, blocked=True)
 
@@ -148,16 +148,9 @@ def test_generate_resource_keys_active_when_resource_live() -> None:
     backend.gateway_client.list_client_ids.return_value = ["res-1-1"]
     backend.gateway_client.is_active.return_value = True
 
-    backend.generate_resource_keys("res-1", count=1)
+    list(backend.generate_resource_keys("res-1", count=1))
 
     backend.gateway_client.provision_key.assert_called_once_with("res-1-2", mock.ANY, blocked=False)
-
-
-def test_revoke_resource_key_removes_one() -> None:
-    backend = _make_backend()
-    backend.revoke_resource_key("res-1-1")
-    backend.gateway_client.deprovision_key.assert_called_once_with("res-1-1")
-
 
 def test_create_resource_with_id_uses_given_id() -> None:
     # The site-agent processor calls create_resource_with_id with its own backend id.

@@ -92,10 +92,10 @@ you push.
 | Plugin | Description |
 | ------ | ----------- |
 | [basic_username_management](plugins/basic_username_management/README.md) | Basic username management plugin |
-| [croit-s3](plugins/croit-s3/README.md) | Croit S3 storage plugin |
+| [ceph-s3](plugins/ceph-s3/README.md) | Ceph S3 storage plugin (croit and RadosGW flavours) |
 | [cscs-dwdi](plugins/cscs-dwdi/README.md) | CSCS-DWDI reporting plugin |
 | [digitalocean](plugins/digitalocean/README.md) | DigitalOcean plugin |
-| [envoy-ai-gateway](plugins/envoy-ai-gateway/README.md) | Envoy AI Gateway plugin |
+| [envoy-ai-gateway](plugins/envoy-ai-gateway/README.md) | Envoy AI Gateway (API keys + usage reporting) plugin |
 | [harbor](plugins/harbor/README.md) | Harbor container registry plugin |
 | [k8s-ut-namespace](plugins/k8s-ut-namespace/README.md) | Kubernetes UT ManagedNamespace plugin |
 | keycloak-client | Shared Keycloak client for Waldur Site Agent plugins |

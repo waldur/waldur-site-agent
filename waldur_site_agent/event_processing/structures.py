@@ -118,11 +118,14 @@ class ApiKeyRotationMessage(TypedDict):
     """A command to reconcile one of a resource's API keys.
 
     Attributes:
-        action (str): one of ``rotate`` / ``revoke`` / ``add``
+        action (str): ``rotate`` — the key count is fixed at provisioning
         resource_uuid (str): UUID of the resource in Waldur
         resource_backend_id (str): backend id the key client-ids derive from
-        api_key_uuid (Optional[str]): the ResourceApiKey to act on (None for ``add``)
-        client_id (Optional[str]): the key's gateway client-id (None for ``add``)
+        api_key_uuid (Optional[str]): the ResourceApiKey to act on
+        client_id (Optional[str]): the key's gateway client-id
+
+    The two key fields are optional because this is parsed straight from an
+    untrusted frame body; the handler rejects a command missing either.
     """
 
     action: str

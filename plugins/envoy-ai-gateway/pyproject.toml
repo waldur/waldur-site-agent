@@ -1,7 +1,7 @@
 [project]
 name = "waldur-site-agent-envoy-ai-gateway"
 version = "1.0.6rc16"
-description = "Envoy AI Gateway (API key lifecycle + usage reporting) plugin for Waldur Site Agent"
+description = "Envoy AI Gateway (API keys + usage reporting) plugin for Waldur Site Agent"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9.2, <4"

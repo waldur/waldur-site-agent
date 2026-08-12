@@ -8,13 +8,13 @@ here returns nothing.
 from __future__ import annotations
 
 import logging
-import re
 import secrets
+from collections.abc import Iterator
 from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
-from waldur_site_agent.backend import backends
+from waldur_site_agent.backend import DEFAULT_RESOURCE_KEY_COUNT, backends
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
@@ -26,8 +26,10 @@ logger = logging.getLogger(__name__)
 # ~1.3 chars per entropy byte.
 _KEY_PREFIX = "sk-"
 _KEY_ENTROPY_BYTES = 32
-# Inference resources get two keys so one can be rotated with no downtime.
-_DEFAULT_KEY_COUNT = 2
+# Inference resources get two keys so one can be rotated with no downtime. Taken from
+# the core, because common.utils reconciles the count against what Waldur already holds
+# and so has to agree with this module on the target.
+_DEFAULT_KEY_COUNT = DEFAULT_RESOURCE_KEY_COUNT
 
 
 def _generate_key() -> str:
@@ -124,7 +126,7 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
     def _resource_is_paused(self, existing_client_ids: list[str]) -> bool:
         """A resource is paused when it owns keys and none of them are active.
 
-        Used so an ``add`` or a rotate-fallback on a paused resource lands the new
+        Used so provisioning or a rotate-fallback on a paused resource lands the new
         key in the blocked Secret rather than silently un-pausing the resource.
         """
         if not existing_client_ids:
@@ -133,48 +135,59 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
 
     def generate_resource_keys(
         self, resource_backend_id: str, count: int = _DEFAULT_KEY_COUNT
-    ) -> list[dict]:
-        """Generate ``count`` new keys, apply each, return them.
+    ) -> Iterator[dict]:
+        """Generate ``count`` new keys, applying and yielding one at a time.
 
         Client-ids are ``<resource_backend_id>-<n>``, continuing past any keys the
-        resource already has so an add never collides with an existing one. New keys
+        resource already has so a re-run never collides with an existing one. New keys
         land in the active Secret, except on a paused resource where they land
         blocked (adding a live key to a paused resource would bypass its pause).
+
+        Yields rather than returns so the caller reports each key before the next is
+        applied; applying all of them first strands any key minted before a failure,
+        live in the Secret with no row in Waldur.
         """
         existing = list(self.list_resource_client_ids(resource_backend_id))
         blocked = self._resource_is_paused(existing)
         existing_set = set(existing)
         prefix = self._key_prefix(resource_backend_id)
-        results: list[dict] = []
+        produced = 0
         n = 1
-        while len(results) < count:
+        while produced < count:
             client_id = f"{prefix}{n}"
             n += 1
             if client_id in existing_set:
                 continue
             api_key = _generate_key()
             self.gateway_client.provision_key(client_id, api_key, blocked=blocked)
-            results.append({"client_id": client_id, "api_key": api_key})
-        logger.info(
-            "Generated %s Envoy AI Gateway key(s) for resource %s (blocked=%s)",
-            count,
-            resource_backend_id,
-            blocked,
-        )
-        return results
+            produced += 1
+            logger.info(
+                "Generated Envoy AI Gateway key %s (blocked=%s)", client_id, blocked
+            )
+            yield {"client_id": client_id, "api_key": api_key}
 
-    def rotate_resource_key(self, client_id: str) -> str:
+    def rotate_resource_key(
+        self,
+        client_id: str,
+        resource_backend_id: str,
+        known_client_ids: Optional[list[str]] = None,
+    ) -> str:
         """Generate a new value for one key and apply it, revoking the previous one.
 
         The other keys are untouched, so rotation is zero-downtime. Returns the new
-        key value for the caller to report to Waldur.
+        key value for the caller to report to Waldur; the client_id is a stable slot
+        here, so it does not change.
+
+        ``known_client_ids`` is accepted and ignored: a rotation overwrites the value
+        in an existing Secret entry rather than creating a new one, so a lost reply
+        leaves nothing behind for Waldur to lose track of.
         """
+        del known_client_ids
         api_key = _generate_key()
         if not self.gateway_client.rotate_key(client_id, api_key):
             # The key had no entry in either Secret (lost / never applied). Re-apply
             # it, but honour the resource's pause state: blind-provisioning to the
             # active Secret would resurrect a paused resource's key.
-            resource_backend_id = re.sub(r"-\d+$", "", client_id)
             siblings = [
                 cid
                 for cid in self.list_resource_client_ids(resource_backend_id)
@@ -185,11 +198,6 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
             )
         logger.info("Rotated Envoy AI Gateway key %s", client_id)
         return api_key
-
-    def revoke_resource_key(self, client_id: str) -> None:
-        """Remove one key from both Secrets; the resource's other keys stay live."""
-        self.gateway_client.deprovision_key(client_id)
-        logger.info("Revoked Envoy AI Gateway key %s", client_id)
 
     def create_resource_with_id(
         self,

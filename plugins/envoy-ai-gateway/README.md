@@ -171,6 +171,24 @@ not create, pause, restore, or otherwise manage resources (those belong to the `
 Usage is reported for the current month via `_get_usage_report()` and for arbitrary past months
 via `get_usage_report_for_period()`, which the historical loader uses.
 
+### Per-key requests, per-resource billing
+
+A resource owns several API keys, but usage is attributed **per resource** — otherwise
+rotating a key would split a tenant's bill in two.
+
+The gateway forwards `x-client-id` per key (`<resource_backend_id>-<n>`), and the rollup
+happens at the **usage-shipper** (a Vector pipeline): its `remap` transform strips the
+`-<n>` suffix, so usage lands under the resource's `backend_id`:
+
+```coffee
+# usage-shipper (Vector) remap transform
+cid = replace(cid, r'-\d+$', "")
+```
+
+`envoy-usage` then queries the warehouse by `resource_backend_id` unchanged — no key
+enumeration. Pause, restore and terminate are the opposite: they act on the gateway Secret
+rather than on usage, so they fan out to **every** client-id the resource owns.
+
 ## Installation
 
 The plugin is discovered automatically once `waldur-site-agent-envoy-ai-gateway` is installed

@@ -74,6 +74,11 @@ def _run_without_username_reconciliation(
             utils.run_periodic_order_reconciliation(
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
+            utils.run_periodic_api_key_reconciliation(
+                configuration.waldur_offerings,
+                configuration.waldur_user_agent,
+                expose_backend_error_details=configuration.expose_backend_error_details,
+            )
             utils.run_periodic_offering_user_reconciliation(
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
@@ -106,6 +111,11 @@ def _run_with_reconciliation(configuration: common_structures.WaldurAgentConfigu
             )
             utils.run_periodic_order_reconciliation(
                 configuration.waldur_offerings, configuration.waldur_user_agent
+            )
+            utils.run_periodic_api_key_reconciliation(
+                configuration.waldur_offerings,
+                configuration.waldur_user_agent,
+                expose_backend_error_details=configuration.expose_backend_error_details,
             )
             utils.run_periodic_offering_user_reconciliation(
                 configuration.waldur_offerings, configuration.waldur_user_agent
