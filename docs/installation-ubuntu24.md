@@ -181,7 +181,7 @@ Waldur Site Agent uses a modular plugin architecture. Install plugins based on y
 - **waldur-site-agent-mup**: MUP portal integration
 - **waldur-site-agent-okd**: OpenShift/OKD container platform management
 - **waldur-site-agent-harbor**: Harbor container registry management
-- **waldur-site-agent-croit-s3**: Croit S3 storage management
+- **waldur-site-agent-ceph-s3**: Ceph S3 storage management (croit and RadosGW)
 - **waldur-site-agent-cscs-dwdi**: CSCS DWDI integration
 - **waldur-site-agent-basic-username-management**: Username management
 
@@ -205,8 +205,8 @@ uv tool install waldur-site-agent-okd
 # Install Harbor plugin
 uv tool install waldur-site-agent-harbor
 
-# Install Croit S3 plugin
-uv tool install waldur-site-agent-croit-s3
+# Install Ceph S3 plugin
+uv tool install waldur-site-agent-ceph-s3
 
 # Install CSCS DWDI plugin
 uv tool install waldur-site-agent-cscs-dwdi
@@ -239,7 +239,7 @@ python -c "import waldur_site_agent_slurm; print('SLURM plugin installed')"
 # sudo apt install python3-waldur-site-agent-mup
 # sudo apt install python3-waldur-site-agent-okd
 # sudo apt install python3-waldur-site-agent-harbor
-# sudo apt install python3-waldur-site-agent-croit-s3
+# sudo apt install python3-waldur-site-agent-ceph-s3
 # sudo apt install python3-waldur-site-agent-cscs-dwdi
 # sudo apt install python3-waldur-site-agent-basic-username-management
 ```
@@ -331,13 +331,26 @@ oc version
 
 **Configuration**: Set `order_processing_backend: "harbor"` in your config file.
 
-#### Croit S3 Plugin (waldur-site-agent-croit-s3)
+#### Ceph S3 Plugin (waldur-site-agent-ceph-s3)
 
-**Required for**: Croit S3 storage management
+**Required for**: Ceph object storage, either croit-managed or a stock cluster
+reached through RadosGW Admin Ops.
 
-**No additional system requirements** - uses S3-compatible API calls only.
+**No additional system requirements** - uses HTTP API calls only.
 
-**Configuration**: Set `order_processing_backend: "croit-s3"` in your config file.
+**Configuration**: a croit-managed cluster, which is the flavour that can meter:
+
+```yaml
+backend_type: "ceph_s3"
+order_processing_backend: "ceph_s3"
+membership_sync_backend: "ceph_s3"
+reporting_backend: "croit_usage"  # GB-day metering; a separate backend, croit only
+```
+
+Note the underscore: backend names are entry-point names and are matched exactly,
+so a hyphenated value resolves to no backend at all. A stock RadosGW cluster runs
+the same `ceph_s3` backend under `flavour: "radosgw"` with no `reporting_backend`
+— it exposes no equivalent series and cannot be metered.
 
 #### CSCS DWDI Plugin (waldur-site-agent-cscs-dwdi)
 
