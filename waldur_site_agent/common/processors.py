@@ -2366,6 +2366,41 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             ", ".join(local_usernames),
         )
 
+        # Some backends (e.g. rancher-kc-crd) don't have a single flat
+        # membership list per Resource -- membership lives at a finer scope
+        # (per ResourceProject) and is already fully reconciled by
+        # pull_resource before this method runs. Diffing such a backend's
+        # reported members against the flat Waldur Project team produces
+        # bogus "new"/"stale" signals for anyone whose access is scoped
+        # below the Resource level. Backends opt out via this flag rather
+        # than have every member outside the flat team misreported as stale.
+        #
+        # `is True` (not plain truthiness) deliberately: resource_backend is
+        # a bare mock.Mock() in a lot of tests, and any unset attribute
+        # access on a Mock auto-vivifies a truthy child Mock rather than
+        # raising or returning the getattr default -- plain truthiness would
+        # silently flip this branch on for every such test.
+        if getattr(self.resource_backend, "skip_resource_team_diff", False) is True:
+            logger.info(
+                "Backend for resource %s (%s) manages membership independently "
+                "of the flat Waldur Project team; skipping the team-vs-backend "
+                "membership diff",
+                waldur_resource.backend_id,
+                waldur_resource.uuid,
+            )
+            user_attributes = self._build_user_attributes_mapping(offering_users)
+            offering_user_states = {ou.username: ou.state for ou in offering_users if ou.username}
+            return (
+                local_usernames,
+                set(),
+                set(),
+                {},
+                {},
+                {},
+                user_attributes,
+                offering_user_states,
+            )
+
         use_identity_bridge = (
             getattr(self.resource_backend, "user_resolve_method", None) == "identity_bridge"
         )

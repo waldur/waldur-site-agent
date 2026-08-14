@@ -136,6 +136,14 @@ class RancherKcCrdBackend(backends.BaseBackend):
     actual Keycloak/Rancher mutations.
     """
 
+    #: Tells the common processor's membership-sync loop to skip
+    #: diffing this backend's reported members against the flat
+    #: Waldur Project team. Our membership unit is a ResourceProject's
+    #: own UserRole list, already fully reconciled by pull_resource --
+    #: a flat-team diff would misclassify any ResourceProject-only
+    #: member (not on the parent Project's team) as stale.
+    skip_resource_team_diff = True
+
     def __init__(
         self,
         backend_settings: dict,
@@ -555,6 +563,22 @@ class RancherKcCrdBackend(backends.BaseBackend):
     # ------------------------------------------------------------------
     # Per-user mutations — routed through CR apply
     # ------------------------------------------------------------------
+    #
+    # add_users_to_resource/remove_users_from_resource are intentionally
+    # NOT overridden here. With skip_resource_team_diff = True, the
+    # common processor's membership diff (common/processors.py) never
+    # computes a non-empty new/stale set for this backend in the first
+    # place — the base BaseBackend.add_users_to_resource/
+    # remove_users_from_resource already log an accurate "No new users
+    # to add" / "No users to remove" for that case, so there's nothing
+    # left for a plugin-level override to correct.
+    #
+    # Kept for the direct role-change event path (process_user_role_change),
+    # which calls these singular methods straight from a Waldur *Project*
+    # role-grant/revoke webhook rather than the flat-team diff above. The
+    # username passed in is a project-level offering-user username; we
+    # ignore it and re-pull the true ResourceProject-scoped membership
+    # instead of trying to interpret it as a Keycloak identifier.
 
     def add_user(
         self,
@@ -568,18 +592,31 @@ class RancherKcCrdBackend(backends.BaseBackend):
         that. Easiest way to push the new state through is to re-run
         ``pull_resource``, which fetches the current ResourceProject
         users (now including this grant) and re-applies the CR.
+
+        ``username`` is the *offering user* username that triggered this
+        call (from the generic membership-sync loop), not the identifier
+        used for the Keycloak lookup — that's each ResourceProject's
+        ``UserRole.user_username``, which can differ and is only known
+        once ``pull_resource`` re-fetches it below.
         """
         logger.info(
-            "add_user(rancher-kc-crd): user=%s resource=%s role=%s — re-syncing CR",
+            "add_user(rancher-kc-crd): offering_user=%s resource=%s (%s) role=%s — re-syncing CR",
             username,
+            waldur_resource.backend_id,
             waldur_resource.uuid,
             kwargs.get("role_name"),
         )
         try:
-            self.pull_resource(waldur_resource)
+            info = self.pull_resource(waldur_resource)
         except Exception as exc:
             logger.warning("add_user CR re-sync failed: %s", exc)
             return False
+        logger.info(
+            "add_user(rancher-kc-crd): resource=%s (%s) synced Keycloak members after re-sync: %s",
+            waldur_resource.backend_id,
+            waldur_resource.uuid,
+            ", ".join(info.users) if info and info.users else "(none)",
+        )
         return True
 
     def remove_user(
@@ -588,18 +625,31 @@ class RancherKcCrdBackend(backends.BaseBackend):
         username: str,
         **kwargs: Any,  # noqa: ANN401
     ) -> bool:
-        """Re-apply the affected CR after a role revoke."""
+        """Re-apply the affected CR after a role revoke.
+
+        See :meth:`add_user` — ``username`` is the offering-user username,
+        not the Keycloak lookup identifier.
+        """
         logger.info(
-            "remove_user(rancher-kc-crd): user=%s resource=%s role=%s — re-syncing CR",
+            "remove_user(rancher-kc-crd): offering_user=%s resource=%s (%s) role=%s "
+            "— re-syncing CR",
             username,
+            waldur_resource.backend_id,
             waldur_resource.uuid,
             kwargs.get("role_name"),
         )
         try:
-            self.pull_resource(waldur_resource)
+            info = self.pull_resource(waldur_resource)
         except Exception as exc:
             logger.warning("remove_user CR re-sync failed: %s", exc)
             return False
+        logger.info(
+            "remove_user(rancher-kc-crd): resource=%s (%s) synced Keycloak members "
+            "after re-sync: %s",
+            waldur_resource.backend_id,
+            waldur_resource.uuid,
+            ", ".join(info.users) if info and info.users else "(none)",
+        )
         return True
 
     # ------------------------------------------------------------------
