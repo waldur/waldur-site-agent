@@ -43,6 +43,16 @@ Rancher cluster ID; this plugin does not stand up Rancher clusters.
 `membership_sync_backend: rancher-kc-crd` on the offering's
 site-agent config to route its membership sync through this plugin.
 
+**Membership is per-ResourceProject, not a flat per-Resource team.**
+Unlike SLURM-style backends, there's no single "team" for the whole
+Resource — each ResourceProject has its own `UserRole` list, and
+that's what drives Keycloak group membership (see
+[User identity matching](#user-identity-matching) for exactly which
+field). The site agent's generic team-vs-backend membership diff
+(used by flat-team backends to detect new/stale users) doesn't apply
+here and is skipped for this backend — see `skip_resource_team_diff`
+in `waldur_site_agent_rancher_kc_crd/backend.py`.
+
 ---
 
 ## Architecture
@@ -421,6 +431,19 @@ The plugin can match Waldur users to Keycloak users either by username
   that `Waldur.user.uuid == Keycloak.user.id`. The username path is
   preferred because it tolerates UUID divergence and works in more
   topologies.
+
+**This is not `OfferingUser.username`.** SLURM-style backends key
+membership off `OfferingUser.username` — a per-offering, often
+auto-generated identifier (e.g. a POSIX account name like
+`test-rancher-00`) meant for the *target system*, not Keycloak. This
+plugin never looks at that field. Its membership unit is each
+ResourceProject's `UserRole`, and the identity it hands to the
+operator is `UserRole.user_username` (or `user_uuid`) — the person's
+actual Waldur account identity. If a user was added to Keycloak under
+a name that doesn't match their real Waldur username, the operator
+logs `WARNING User <id> not found in Keycloak` and silently skips
+them (see Troubleshooting) even though everything else — CR, group,
+PRTB — looks fully synced.
 
 **The operator never creates users.** A user that doesn't exist in
 Keycloak under the chosen identifier gets logged as
