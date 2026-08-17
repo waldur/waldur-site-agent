@@ -62,6 +62,18 @@ The following table lists the configurable parameters of the Waldur Site Agent c
 | `secret.name` | Secret name (generated if empty) | `""` |
 | `secret.data.config.yaml` | Complete agent configuration | See values.yaml |
 
+### ServiceAccount Configuration
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `serviceAccount.create` | Create a ServiceAccount (named after the chart fullname if `name` is empty) | `false` |
+| `serviceAccount.name` | ServiceAccount to run agent pods as (`default` if empty and `create` is false) | `""` |
+| `serviceAccount.annotations` | Annotations for the created ServiceAccount | `{}` |
+
+Backends that call the Kubernetes API (e.g. `envoy`) need a ServiceAccount with matching RBAC.
+Set `serviceAccount.name` to a pre-created ServiceAccount, or set `serviceAccount.create: true`
+and bind the required Role to it.
+
 ### Resources & Security
 
 | Parameter | Description | Default |

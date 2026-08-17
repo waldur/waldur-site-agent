@@ -89,3 +89,22 @@ tests:
           value:
             - waldur_site_healthz
             - --liveness-only
+
+  - it: should run pods as default service account by default
+    template: templates/deployment-membership-sync.yaml
+    set:
+      agents.membershipSync.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: default
+
+  - it: should run pods as custom service account when set
+    template: templates/deployment-membership-sync.yaml
+    set:
+      agents.membershipSync.enabled: true
+      serviceAccount.name: waldur-site-agent
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: waldur-site-agent
