@@ -174,9 +174,14 @@ class RancherKcCrdBackend(backends.BaseBackend):
         )
 
         # Waldur SDK client for fetching ResourceProjects + UserRoles.
-        # The base BaseBackend doesn't get a client at construction
-        # time, so we build our own from backend_settings (matching
-        # the pattern used by other plugins that need API access).
+        # This duplicates the offering's top-level waldur_api_url/token
+        # on purpose: backends don't get handed the framework's own
+        # Waldur client, and that's intentional -- it stays scoped to
+        # the processor rather than becoming something every backend
+        # can reach into. This plugin is the exception that actually
+        # needs to read Waldur directly (ResourceProjects/UserRoles
+        # aren't handed down any other way), so it builds its own
+        # client from its own settings instead.
         # Optional: when not configured, the backend can still write
         # CRs from external callers (e.g. tests injecting via
         # apply_resource_project) but pull_resource will be a no-op.
