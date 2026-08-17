@@ -350,7 +350,14 @@ offerings:
     membership_sync_backend: "rancher-kc-crd"
 
     backend_settings:
-      # SDK client (the plugin builds its own AuthenticatedClient).
+      # Repeats the top-level waldur_api_url/waldur_api_token on purpose.
+      # This plugin fetches ResourceProjects and UserRoles directly from
+      # Waldur inside pull_resource, but backends aren't handed the
+      # framework's own Waldur client -- that's deliberately scoped to
+      # the processor, not backends in general. So the plugin builds its
+      # own AuthenticatedClient from these settings instead. Most other
+      # backends don't need this because they don't talk to the Waldur
+      # API themselves.
       waldur_api_url: "https://waldur.example.com/api/"
       waldur_api_token: "${WALDUR_API_TOKEN}"
       waldur_verify_ssl: true
@@ -455,6 +462,10 @@ user appears in Keycloak (e.g. their first OIDC login).
 ---
 
 ## Configuration reference
+
+`waldur_api_url`/`waldur_api_token` below intentionally repeat the
+offering's top-level fields of the same name — see the setup example
+above for why.
 
 | Key | Type | Required | Description |
 |---|---|---|---|
