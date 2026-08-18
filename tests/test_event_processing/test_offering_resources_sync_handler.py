@@ -81,6 +81,51 @@ class TestOfferingResourcesSyncHandler(unittest.TestCase):
         # which fetches unfinished orders and runs the backend preflight itself.
         mock_order_processor_cls.return_value.process_offering.assert_called_once_with()
 
+    def test_order_processor_reuses_membership_offering_context(
+        self,
+        mock_register,
+        mock_get_client,
+        mock_get_backend,
+        mock_membership_processor_cls,
+        mock_order_processor_cls,
+    ):
+        mock_get_backend.return_value = (mock.Mock(), "1.0")
+        membership_processor = mock_membership_processor_cls.return_value
+
+        on_offering_resources_sync_message_stomp(_make_frame(), _make_offering(), "test-agent")
+
+        # One forced-sync message must resolve the offering context once and
+        # share it, not re-fetch it in the order processor's constructor.
+        mock_order_processor_cls.assert_called_once_with(
+            mock.ANY,
+            mock.ANY,
+            waldur_offering=membership_processor.waldur_offering,
+            service_provider=membership_processor.service_provider,
+            current_user=membership_processor.current_user,
+            expose_backend_error_details=mock.ANY,
+        )
+
+    def test_order_processor_fetches_context_when_membership_sync_disabled(
+        self,
+        mock_register,
+        mock_get_client,
+        mock_get_backend,
+        mock_membership_processor_cls,
+        mock_order_processor_cls,
+    ):
+        offering = _make_offering(membership_sync_backend="")
+
+        on_offering_resources_sync_message_stomp(_make_frame(), offering, "test-agent")
+
+        mock_order_processor_cls.assert_called_once_with(
+            mock.ANY,
+            mock.ANY,
+            waldur_offering=None,
+            service_provider=None,
+            current_user=None,
+            expose_backend_error_details=mock.ANY,
+        )
+
     def test_membership_sync_disabled_skips_recreation(
         self,
         mock_register,
