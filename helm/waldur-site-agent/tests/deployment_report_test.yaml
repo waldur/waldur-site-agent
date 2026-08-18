@@ -100,3 +100,19 @@ tests:
           content:
             name: tmp
             mountPath: /tmp
+
+  - it: should run pods as default service account by default
+    template: templates/deployment-report.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: default
+
+  - it: should run pods as custom service account when set
+    template: templates/deployment-report.yaml
+    set:
+      serviceAccount.name: waldur-site-agent
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: waldur-site-agent

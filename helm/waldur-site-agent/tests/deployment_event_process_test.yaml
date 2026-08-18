@@ -317,3 +317,19 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].name
           value: event-process
+
+  - it: should run pods as default service account by default
+    template: templates/deployment-event-process.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: default
+
+  - it: should run pods as custom service account when set
+    template: templates/deployment-event-process.yaml
+    set:
+      serviceAccount.name: waldur-site-agent
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: waldur-site-agent

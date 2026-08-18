@@ -15,6 +15,11 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# ServiceAccount for agent pods; with create: false and empty name pods run as "default"
+serviceAccount:
+  create: false
+  name: ""
+  annotations: {}
 
 podAnnotations: {}
 

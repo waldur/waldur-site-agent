@@ -49,3 +49,38 @@ tests:
             name: config
             secret:
               secretName: my-existing-secret
+
+  - it: should resolve service account name to default
+    template: templates/deployment-event-process.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: default
+
+  - it: should resolve service account name to custom name without create
+    template: templates/deployment-event-process.yaml
+    set:
+      serviceAccount.name: waldur-site-agent
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: waldur-site-agent
+
+  - it: should resolve service account name to fullname when created
+    template: templates/deployment-event-process.yaml
+    set:
+      serviceAccount.create: true
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: test-release-waldur-site-agent
+
+  - it: should resolve service account name to custom name when created
+    template: templates/deployment-event-process.yaml
+    set:
+      serviceAccount.create: true
+      serviceAccount.name: waldur-site-agent
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: waldur-site-agent
