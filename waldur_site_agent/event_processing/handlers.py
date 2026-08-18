@@ -336,6 +336,11 @@ def on_offering_resources_sync_message_stomp(
     # Membership sync (account recreation + user/limit/QoS reconciliation) and
     # order re-processing are independent goals of a forced sync, so each runs in
     # its own try block: a failure in one must not skip the other.
+    # The offering context resolved by the first processor is reused by the
+    # second one to avoid duplicate API calls within one forced sync.
+    waldur_offering = None
+    service_provider = None
+    current_user = None
     if offering.membership_sync_backend:
         try:
             agent_service = register_event_process_service(
@@ -351,6 +356,9 @@ def on_offering_resources_sync_message_stomp(
                 resource_backend_version=resource_backend_version,
                 expose_backend_error_details=expose_backend_error_details,
             )
+            waldur_offering = membership_processor.waldur_offering
+            service_provider = membership_processor.service_provider
+            current_user = membership_processor.current_user
             membership_processor.register(agent_service)
             membership_processor.process_offering(recreate_missing_resources=True)
         except Exception as e:
@@ -374,6 +382,9 @@ def on_offering_resources_sync_message_stomp(
             order_processor = common_processors.OfferingOrderProcessor(
                 offering,
                 waldur_rest_client,
+                waldur_offering=waldur_offering,
+                service_provider=service_provider,
+                current_user=current_user,
                 expose_backend_error_details=expose_backend_error_details,
             )
             order_processor.process_offering()

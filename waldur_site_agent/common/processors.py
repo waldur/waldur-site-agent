@@ -155,6 +155,8 @@ from waldur_api_client.models.resource_endpoints_request import (
 from waldur_api_client.models.resource_set_limits_request_limits import (
     ResourceSetLimitsRequestLimits,
 )
+from waldur_api_client.models.service_provider import ServiceProvider
+from waldur_api_client.models.user_me import UserMe
 from waldur_api_client.models.username_generation_policy_enum import (
     UsernameGenerationPolicyEnum,
 )
@@ -243,6 +245,9 @@ class OfferingBaseProcessor(abc.ABC):
         timezone: str = "",
         resource_backend: Optional[BaseBackend] = None,
         resource_backend_version: Optional[str] = None,
+        waldur_offering: Optional[ProviderOfferingDetails] = None,
+        service_provider: Optional[ServiceProvider] = None,
+        current_user: Optional[UserMe] = None,
         expose_backend_error_details: bool = True,
     ) -> None:
         """Initialize the offering processor.
@@ -255,6 +260,12 @@ class OfferingBaseProcessor(abc.ABC):
                 (optional, will be created if not provided)
             resource_backend_version: Version of the resource backend
                 (optional, will be determined if not provided)
+            waldur_offering: Provider offering details
+                (optional, will be fetched if not provided)
+            service_provider: Service provider of the offering
+                (optional, will be fetched if not provided)
+            current_user: Authenticated Waldur user of the client
+                (optional, will be fetched if not provided)
             expose_backend_error_details: Whether to forward raw exception
                 details to Waldur when marking objects as ERRED
 
@@ -286,27 +297,34 @@ class OfferingBaseProcessor(abc.ABC):
                 f"Unable to create backend for {self.offering.name}"
             )
 
+        if current_user is None:
+            current_user = utils.get_current_user_from_client(self.waldur_rest_client)
+        self.current_user = current_user
         self._print_current_user()
 
-        self.waldur_offering = marketplace_provider_offerings_retrieve.sync(
-            client=self.waldur_rest_client,
-            uuid=self.offering.uuid,
-            field=[
-                ProviderOfferingDetailsFieldEnum.COMPONENTS,
-                ProviderOfferingDetailsFieldEnum.CUSTOMER_UUID,
-                ProviderOfferingDetailsFieldEnum.PARTITIONS,
-                ProviderOfferingDetailsFieldEnum.PLUGIN_OPTIONS,
-            ],
-        )
+        if waldur_offering is None:
+            waldur_offering = marketplace_provider_offerings_retrieve.sync(
+                client=self.waldur_rest_client,
+                uuid=self.offering.uuid,
+                field=[
+                    ProviderOfferingDetailsFieldEnum.COMPONENTS,
+                    ProviderOfferingDetailsFieldEnum.CUSTOMER_UUID,
+                    ProviderOfferingDetailsFieldEnum.PARTITIONS,
+                    ProviderOfferingDetailsFieldEnum.PLUGIN_OPTIONS,
+                ],
+            )
+        self.waldur_offering = waldur_offering
         utils.extend_backend_components(self.offering, self.waldur_offering.components)
 
-        service_providers = marketplace_service_providers_list.sync(
-            customer_uuid=self.waldur_offering.customer_uuid.hex,
-            client=self.waldur_rest_client,
-            field=[ServiceProviderFieldEnum.UUID],
-        )
+        if service_provider is None:
+            service_providers = marketplace_service_providers_list.sync(
+                customer_uuid=self.waldur_offering.customer_uuid.hex,
+                client=self.waldur_rest_client,
+                field=[ServiceProviderFieldEnum.UUID],
+            )
+            service_provider = service_providers[0]
 
-        self.service_provider = service_providers[0]
+        self.service_provider = service_provider
         self.resource_backend.service_provider_uuid = self.service_provider.uuid.hex
         self.resource_backend.offering_partitions = sorted(
             p.partition_name for p in (self.waldur_offering.partitions or []) if p.partition_name
@@ -325,8 +343,7 @@ class OfferingBaseProcessor(abc.ABC):
 
     def _print_current_user(self) -> None:
         """Log information about the current authenticated Waldur user."""
-        current_user = utils.get_current_user_from_client(self.waldur_rest_client)
-        utils.print_current_user(current_user)
+        utils.print_current_user(self.current_user)
 
     # Mapping from OfferingUserAttributeConfig exposed field names to
     # OfferingUserFieldEnum values that should be requested from the API.
