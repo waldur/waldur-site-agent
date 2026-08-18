@@ -1,0 +1,41 @@
+[project]
+name = "waldur-site-agent-nextcloud"
+version = "1.0.6rc17"
+description = "Nextcloud plugin for Waldur Site Agent"
+readme = "README.md"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9, <4"
+dependencies = [
+    "waldur-site-agent>=1.0.6rc17",
+    "httpx>=0.25.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+
+[project.entry-points."waldur_site_agent.backends"]
+nextcloud = "waldur_site_agent_nextcloud.backend:NextcloudBackend"
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.extend-per-file-ignores]
+"waldur_site_agent_nextcloud/**/*.py" = [
+    "ARG002",  # BaseClient/BaseBackend interface methods carry unused args by design
+    "EM101",   # exception messages are short literals; variable indirection adds noise
+    "PLR2004", # HTTP status codes and POSIX sentinels (-3) are self-documenting
+    "ANN401",  # Any is required for **kwargs in generic BaseClient methods
+    "TRY301",  # ping() raise-inside-try pattern is intentional (conditional re-raise)
+]
+"tests/**/*.py" = [
+    "S101",    # assert statements are fine in tests
+    "ANN001",  # type annotations not required in test functions
+    "PLR2004", # magic values are expected in test assertions
+    "PT011",   # broad pytest.raises without match= is acceptable here
+    "S106",    # hardcoded passwords are OK in test fixtures
+    "ARG002",  # unused function arguments appear in fixture signatures
+]

@@ -86,6 +86,16 @@ class BaseBackend(ABC):
     # when a sibling offering's team is synced.
     shared_project_membership: bool = False
 
+    # How many times to attempt fetching the team for a resource before giving
+    # up.  The retry loop only fires when the team list comes back empty, so it
+    # covers the race where Waldur hasn't yet committed a new membership row.
+    # Set > 1 in backends where that race is common (e.g. Nextcloud via STOMP).
+    # Applied in both order-processing and HTTP-polling paths.
+    team_fetch_attempts: int = 1
+
+    # Seconds to wait between team-fetch retries.  Paired with team_fetch_attempts.
+    team_fetch_delay: float = 3.0
+
     # Resource states the membership processor should fetch and handle.
     # Override in subclasses that need to process resources in additional
     # states (e.g., CREATING for backends with async order tracking).

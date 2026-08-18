@@ -44,6 +44,18 @@ tolerations: []
 
 affinity: {}
 
+# Extra environment variables injected into every agent container
+extraEnv: []
+
+# Extra volumes added to every agent pod (e.g. munge key, slurm.conf)
+extraVolumes: []
+
+# Extra volume mounts added to every agent container
+extraVolumeMounts: []
+
+# /etc/hosts entries added to every agent pod (e.g. SLURM node hostnames)
+hostAliases: []
+
 # Agent deployment modes - enable specific agents
 agents:
   # Event-based processing (default configuration)

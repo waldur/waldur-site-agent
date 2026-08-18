@@ -102,6 +102,7 @@ you push.
 | [ldap](plugins/ldap/README.md) | LDAP plugin |
 | [moab](plugins/moab/README.md) | MOAB plugin |
 | [mup](plugins/mup/README.md) | MUP plugin |
+| [nextcloud](plugins/nextcloud/README.md) | Nextcloud plugin |
 | [okd](plugins/okd/README.md) | OKD/OpenShift plugin |
 | [opennebula](plugins/opennebula/README.md) | OpenNebula VDC plugin |
 | [rancher](plugins/rancher/README.md) | Rancher plugin |

@@ -20,6 +20,7 @@ members = [
     "waldur-site-agent-ldap",
     "waldur-site-agent-moab",
     "waldur-site-agent-mup",
+    "waldur-site-agent-nextcloud",
     "waldur-site-agent-okd",
     "waldur-site-agent-opennebula",
     "waldur-site-agent-rancher",
@@ -2340,6 +2341,21 @@ dependencies = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "pycountry", specifier = ">=23.12.0" },
+    { name = "waldur-site-agent", editable = "." },
+]
+
+[[package]]
+name = "waldur-site-agent-nextcloud"
+version = "1.0.6rc17"
+source = { editable = "plugins/nextcloud" }
+dependencies = [
+    { name = "httpx" },
+    { name = "waldur-site-agent" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.25.0" },
     { name = "waldur-site-agent", editable = "." },
 ]
 

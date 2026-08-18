@@ -24,6 +24,8 @@ offerings: # Settings for offerings
     resource_import_enabled: false # Whether to expose importable resources to Waldur
     username_reconciliation_enabled: false # Enable periodic username reconciliation from target backend (e.g. Waldur B). Only needed for Waldur federation setups.
     stomp_enabled: false # STOMP feature toggler
+    # stomp_membership_sync_enabled: false  # Inherits stomp_enabled. Set false to keep
+    #   HTTP polling for membership sync even when stomp_enabled is true.
     websocket_use_tls: true # Whether to use TLS for WebSocket connection
     backend_type: "slurm" # type of backend, for now only `slurm` is supported
     backend_settings: # backend-specific settings

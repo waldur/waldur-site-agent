@@ -61,7 +61,10 @@ def _determine_observable_object_types(
             offering.name,
         )
 
-    if offering.membership_sync_backend:
+    # stomp_membership_sync_enabled=None inherits stomp_enabled (True here);
+    # False opts out of STOMP membership so the polling agent handles it instead.
+    stomp_membership = offering.stomp_membership_sync_enabled is not False
+    if offering.membership_sync_backend and stomp_membership:
         object_types.extend(
             [
                 ObservableObjectTypeEnum.USER_ROLE,
@@ -399,7 +402,7 @@ def process_offering(
     else:
         logger.info("Order processing is disabled for this offering, skipping it")
 
-    if offering.membership_sync_backend:
+    if offering.membership_sync_backend and offering.stomp_membership_sync_enabled is not False:
         membership_processor = common_processors.OfferingMembershipProcessor(
             offering,
             waldur_rest_client,
