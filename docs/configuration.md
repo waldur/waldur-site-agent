@@ -129,6 +129,19 @@ username_management_backend: "base"  # Backend for username management
 - **Default**: `false`
 - **Description**: Enable STOMP-based event processing
 
+#### `stomp_membership_sync_enabled`
+
+- **Type**: Boolean or null
+- **Default**: `null` (inherits `stomp_enabled`)
+- **Description**: Controls whether membership sync uses STOMP events or HTTP
+  polling.  When `stomp_enabled` is `true` this defaults to `true` as well.
+  Set to `false` to keep HTTP polling for membership sync while using STOMP for
+  order processing.
+- **Note**: Setting this to `true` while `stomp_enabled` is `false` leaves
+  membership sync with no runner at all — the polling agent skips it (assuming
+  STOMP owns it) and the STOMP consumers never start. The agent logs a
+  `MISCONFIGURATION` warning on startup if it sees this combination.
+
 #### `websocket_use_tls`
 
 - **Type**: Boolean

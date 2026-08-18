@@ -241,6 +241,27 @@ Run harbor tests:
     - source .venv/bin/activate
     - pytest --cov=plugins/harbor --cov-report=xml --cov-report=term --junitxml=report.xml plugins/harbor/
 
+Run nextcloud tests:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/nextcloud/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --cov=plugins/nextcloud --cov-report=xml --cov-report=term --junitxml=report.xml plugins/nextcloud/
+
 Run okd tests:
   extends: .Run tests base
   rules:

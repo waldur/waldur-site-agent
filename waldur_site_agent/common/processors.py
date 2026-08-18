@@ -1231,10 +1231,26 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         """
         try:
             logger.info("Fetching user context for resource %s", resource_uuid)
-            # Get project team members
-            team = marketplace_provider_resources_team_list.sync(
-                client=self.waldur_rest_client, uuid=resource_uuid
-            )
+            # Get project team members.  The retry only fires when the list is
+            # completely empty, covering the race where a STOMP create-order event
+            # arrives before Waldur has committed the initial team membership row.
+            # It does NOT help when the team is non-empty but stale (new member
+            # missing) — that case breaks on attempt 1.
+            max_attempts = self.resource_backend.team_fetch_attempts
+            retry_delay = self.resource_backend.team_fetch_delay
+            team = None
+            for attempt in range(max_attempts):
+                team = marketplace_provider_resources_team_list.sync(
+                    client=self.waldur_rest_client, uuid=resource_uuid
+                )
+                if team:
+                    break
+                if attempt < max_attempts - 1:
+                    logger.info(
+                        "No team members yet for resource %s, retrying in %.0fs (attempt %d/%d)",
+                        resource_uuid, retry_delay, attempt + 1, max_attempts,
+                    )
+                    sleep(retry_delay)
 
             if not team:
                 raise ObjectNotFoundError(f"No team members found for resource {resource_uuid}")  # noqa: TRY301

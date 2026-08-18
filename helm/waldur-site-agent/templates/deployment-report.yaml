@@ -44,12 +44,19 @@ spec:
             - "report"
             - "--config-file"
             - "/etc/waldur-site-agent/config.yaml"
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/waldur-site-agent
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- if .Values.healthCheck.enabled }}
           livenessProbe:
             exec:
@@ -79,6 +86,13 @@ spec:
             secretName: {{ include "waldur-site-agent.secretName" . }}
         - name: tmp
           emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -32,7 +32,12 @@ def _process_offerings(
         # fresh (and the heartbeat file is created on the first iteration,
         touch_heartbeat()
         try:
-            if offering.stomp_enabled:
+            use_stomp = (
+                offering.stomp_membership_sync_enabled
+                if offering.stomp_membership_sync_enabled is not None
+                else offering.stomp_enabled
+            )
+            if use_stomp:
                 logger.info(
                     "Skipping HTTP polling for the offering %s, "
                     "because it uses event-based processing",

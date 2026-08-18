@@ -12,6 +12,7 @@ management across different agent components and backend plugins.
 from __future__ import annotations
 
 # Import after to avoid circular imports
+import logging
 import zoneinfo
 from enum import Enum
 from typing import Any, Optional
@@ -25,6 +26,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AccountingType(Enum):
@@ -192,6 +195,11 @@ class Offering(BaseModel):
     # Event processing
     websocket_use_tls: bool = Field(default=True, description="Use TLS for websocket connections")
     stomp_enabled: bool = Field(default=False, description="Enable STOMP event processing")
+    stomp_membership_sync_enabled: Optional[bool] = Field(
+        default=None,
+        description="Use STOMP for membership sync; defaults to stomp_enabled. "
+        "Set to false to keep HTTP polling for membership sync even when stomp_enabled=true.",
+    )
     stomp_ws_host: Optional[str] = Field(default=None, description="STOMP WebSocket host")
     stomp_ws_port: Optional[int] = Field(default=None, description="STOMP WebSocket port")
     stomp_ws_path: Optional[str] = Field(default=None, description="STOMP WebSocket path")
@@ -226,6 +234,29 @@ class Offering(BaseModel):
                 "oidc_client_id, oidc_client_secret must be set"
             )
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def warn_on_orphaned_stomp_membership_sync(self) -> Offering:
+        """Warn when membership sync is configured into a state where nothing runs it.
+
+        stomp_membership_sync_enabled=True tells the polling agent that STOMP owns
+        membership sync, so it skips HTTP polling.  But the STOMP consumers are
+        started only when stomp_enabled is True, so with stomp_enabled=False no
+        component performs membership sync at all and the offering silently stops
+        syncing team members.
+        """
+        if self.stomp_membership_sync_enabled is True and not self.stomp_enabled:
+            logger.warning(
+                "MISCONFIGURATION for offering '%s': stomp_membership_sync_enabled=true "
+                "but stomp_enabled=false. Membership sync will NOT run at all -- the "
+                "polling agent skips it (it assumes STOMP owns it) and the STOMP "
+                "consumers are never started (they require stomp_enabled=true). "
+                "Team members will stop being synced to the backend. "
+                "Fix: set stomp_enabled=true to use event-based membership sync, or "
+                "remove stomp_membership_sync_enabled to fall back to HTTP polling.",
+                self.name,
+            )
         return self
 
     @field_validator("waldur_api_url")

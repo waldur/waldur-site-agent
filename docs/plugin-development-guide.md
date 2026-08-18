@@ -518,6 +518,27 @@ class MyAsyncBackend(BaseBackend):
     handled_resource_states = [ResourceState.OK, ResourceState.ERRED, ResourceState.CREATING]
 ```
 
+### `team_fetch_attempts: int = 1` and `team_fetch_delay: float = 3.0`
+
+Control retry behaviour when `_fetch_user_context_for_resource` gets back
+an empty team list. The retry only fires on a completely empty response —
+it covers the race where a create-order event arrives before Waldur has
+committed the first membership row to the database.
+
+The default of `1` (no retries) is correct for synchronous backends where
+the Waldur API is always consistent by the time the agent reads it. Raise
+`team_fetch_attempts` for backends that receive work over STOMP, where the
+event and the membership row may arrive out of order:
+
+```python
+class MyStompBackend(BaseBackend):
+    team_fetch_attempts = 4   # retry up to 4 times
+    team_fetch_delay = 3.0    # seconds between retries
+```
+
+These are **backend class attributes**, not YAML configuration keys. They
+cannot be set per-offering in the configuration file.
+
 ## Decision matrix for no-op implementations
 
 If your backend does not support a certain operation, use these return values:
