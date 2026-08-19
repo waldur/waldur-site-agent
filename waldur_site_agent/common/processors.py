@@ -20,10 +20,12 @@ import datetime
 import math
 import time as _time
 from enum import Enum
+from http import HTTPStatus
 from time import sleep
 from typing import Any, ClassVar, Optional, Union
 from zoneinfo import ZoneInfo
 
+import httpx
 from waldur_api_client.api.backend_resource_requests import (
     backend_resource_requests_retrieve,
     backend_resource_requests_set_done,
@@ -185,6 +187,21 @@ _ATTRIBUTE_CONFIG_TTL = 300  # seconds
 
 # Touch the liveness heartbeat after every N items in long per-offering loops.
 _HEARTBEAT_BATCH_SIZE = 10
+
+
+def _is_transient_waldur_api_error(e: Exception) -> bool:
+    """Whether the exception is a transient Waldur API failure worth retrying.
+
+    Covers server-side errors (HTTP 5xx), rate limiting (429) and network-level
+    failures. Other client errors (4xx) indicate a real problem with the request
+    and are not transient.
+    """
+    if isinstance(e, httpx.TransportError):
+        return True
+    return isinstance(e, UnexpectedStatus) and (
+        e.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR
+        or e.status_code == HTTPStatus.TOO_MANY_REQUESTS
+    )
 
 
 def _serialize_attr_value(val: object) -> object:
@@ -917,7 +934,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     order = order_fetched
                 self.process_order(order)
                 break
-            except UnexpectedStatus as e:
+            except (UnexpectedStatus, httpx.TransportError) as e:
                 self.log_order_processing_error(order, e)
                 logger.info("Retrying order %s processing in %s seconds", order_info.uuid, delay)
                 sleep(delay)
@@ -939,6 +956,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
         Args:
             order: The order to process
         """
+        # Whether the backend provisioning calls have begun. Failures before
+        # this point (evaluation, approval, rejection) keep the order pending;
+        # failures after it mark the order erred.
+        provisioning_started = False
         try:
             logger.info(
                 "Processing order %s (%s) type %s, state %s",
@@ -1006,6 +1027,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 )
                 return
 
+            provisioning_started = True
             order_is_done = False
             if order.type_ in (RequestTypes.CREATE, RequestTypes.RESTORE):
                 order_is_done = self._process_create_order(order)
@@ -1071,6 +1093,28 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 e,
             )
         except Exception as e:
+            if _is_transient_waldur_api_error(e):
+                # A Waldur API hiccup (5xx / network failure) says nothing about
+                # the order itself — leave its state unchanged and let
+                # process_order_with_retries or the next polling cycle retry it.
+                logger.warning(
+                    "Transient Waldur API error while processing order %s, "
+                    "keeping order state %s: %s",
+                    order.uuid,
+                    order.state,
+                    e,
+                )
+                raise
+            if not provisioning_started:
+                # Nothing has been provisioned yet, so erring the order (which
+                # would also terminate the resource) is never the right
+                # outcome — keep it pending and re-evaluate on the next cycle.
+                logger.exception(
+                    "Evaluation of pending order %s failed, keeping it pending: %s",
+                    order.uuid,
+                    e,
+                )
+                return
             logger.exception(
                 "Error while processing order %s (%s %s), current state %s: %s",
                 order.uuid.hex,

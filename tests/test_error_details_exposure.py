@@ -46,11 +46,13 @@ ORDER_UUID = UUID("11111111-1111-1111-1111-111111111111")
 
 @pytest.fixture()
 def failing_order():
+    """Executing order whose resource retrieval fails during processing."""
     order = mock.Mock()
     order.uuid = ORDER_UUID
-    order.state = OrderState.PENDING_PROVIDER
+    order.state = OrderState.EXECUTING
     order.type_ = RequestTypes.CREATE
     order.resource_name = "test-resource"
+    order.marketplace_resource_uuid = UUID("44444444-4444-4444-4444-444444444444")
     return order
 
 
@@ -63,17 +65,17 @@ def _make_processor(expose: bool):
     processor.offering.uuid = "offering-uuid"
     processor.offering.backend_settings = {}
     processor.resource_backend = mock.Mock()
-    processor.resource_backend.evaluate_pending_order.side_effect = RuntimeError(
-        "internal lib error"
-    )
+    processor.resource_backend.supports_async_orders = False
     processor.expose_backend_error_details = expose
     return processor
 
 
+@mock.patch(f"{_PATCH_PREFIX}.marketplace_provider_resources_retrieve")
 @mock.patch(f"{_PATCH_PREFIX}.marketplace_orders_set_state_erred")
 def test_processor_sends_generic_message_when_flag_disabled(
-    mock_set_erred, failing_order
+    mock_set_erred, mock_resource_retrieve, failing_order
 ):
+    mock_resource_retrieve.sync.side_effect = RuntimeError("internal lib error")
     processor = _make_processor(expose=False)
     processor.process_order(failing_order)
 
@@ -83,10 +85,12 @@ def test_processor_sends_generic_message_when_flag_disabled(
     assert body.error_traceback == ""
 
 
+@mock.patch(f"{_PATCH_PREFIX}.marketplace_provider_resources_retrieve")
 @mock.patch(f"{_PATCH_PREFIX}.marketplace_orders_set_state_erred")
 def test_processor_sends_raw_message_when_flag_enabled(
-    mock_set_erred, failing_order
+    mock_set_erred, mock_resource_retrieve, failing_order
 ):
+    mock_resource_retrieve.sync.side_effect = RuntimeError("internal lib error")
     processor = _make_processor(expose=True)
     processor.process_order(failing_order)
 
