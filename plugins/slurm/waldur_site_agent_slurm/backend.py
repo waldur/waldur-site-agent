@@ -60,6 +60,11 @@ class PeriodicSettingsMode(Enum):
 class SlurmBackend(backends.BaseBackend):
     """Main class for management of SLURM resources."""
 
+    # SLURM runs on the same POSIX hosts as the users' home directories and
+    # implements apply_periodic_settings below.
+    supports_user_homedirs = True
+    supports_periodic_settings = True
+
     def __init__(self, slurm_settings: dict, slurm_tres: dict[str, dict]) -> None:
         """Init backend data and creates a corresponding client."""
         super().__init__(slurm_settings, slurm_tres)

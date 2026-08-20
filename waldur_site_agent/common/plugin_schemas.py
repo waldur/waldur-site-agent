@@ -7,11 +7,12 @@ Pydantic models for validating plugin-specific configuration fields.
 from __future__ import annotations
 
 import sys
-from typing import Any
+from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from waldur_site_agent.backend import logger
+from waldur_site_agent.backend.quota import HomedirQuotaConfig
 
 if sys.version_info >= (3, 10):
     from importlib.metadata import entry_points
@@ -53,6 +54,57 @@ class PluginBackendSettingsSchema(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")  # Plugin schemas should be explicit
+
+
+class HomedirSettingsSchema(PluginBackendSettingsSchema):
+    """Backend settings for POSIX home directory management.
+
+    These settings are consumed by core code — ``BaseBackend.create_user_homedirs``
+    and the standalone ``create_homedirs_for_offering_users`` command — so they
+    live here rather than in any one plugin. Any backend that declares
+    ``supports_user_homedirs`` should inherit this schema so its configuration
+    validates the same way.
+    """
+
+    enable_user_homedir_account_creation: Optional[bool] = Field(
+        default=True, description="Create home directories for users"
+    )
+    default_homedir_umask: Optional[str] = Field(
+        default="0077", description="Umask for created home directories"
+    )
+    homedir_base_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base path for user home directories (e.g. '/cephfs/home'). "
+            "When set, quota is applied to {homedir_base_path}/{username}. "
+            "When unset, the path is looked up from the system passwd database."
+        ),
+    )
+    homedir_quota: Optional[HomedirQuotaConfig] = Field(
+        default=None,
+        description="Filesystem quota settings for user home directories",
+    )
+
+    @field_validator("default_homedir_umask")
+    @classmethod
+    def validate_umask(cls, v: Optional[str]) -> Optional[str]:
+        """Validate that umask is a valid octal permission."""
+
+        def _raise_umask_error(value: str) -> None:
+            msg = f"Invalid umask range: {value}"
+            raise ValueError(msg)
+
+        if v is not None:
+            try:
+                # Try to parse as octal
+                umask_value = int(v, 8)
+                max_umask = 0o777
+                if umask_value < 0 or umask_value > max_umask:
+                    _raise_umask_error(v)
+            except ValueError as e:
+                msg = f"default_homedir_umask must be valid octal permissions (e.g., '0077'): {e}"
+                raise ValueError(msg) from e
+        return v
 
 
 def get_plugin_component_schemas() -> dict[str, type[PluginComponentSchema]]:

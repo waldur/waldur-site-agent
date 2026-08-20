@@ -523,17 +523,44 @@ def on_resource_periodic_limits_update_stomp(
 
         if not backend_id or action != "apply_periodic_settings":
             logger.error("Invalid periodic limits message: missing backend_id or invalid action")
+            _report_command_result_to_waldur(
+                offering,
+                message,
+                {
+                    "success": False,
+                    "error": "Invalid periodic limits message: "
+                    "missing backend_id or invalid action",
+                },
+            )
             return
 
-        # Get backend for the offering
-        backend, _ = common_utils.get_backend_for_offering(offering, "order_processing_backend")
+        # Every path below reports an outcome to Waldur: an unsupported backend
+        # yields an explicit failure result from the base implementation, and a
+        # raising backend is converted into one here. Waldur must never be left
+        # without a verdict for a command it dispatched.
+        try:
+            backend, _ = common_utils.get_backend_for_offering(offering, "order_processing_backend")
 
-        if not hasattr(backend, "apply_periodic_settings"):
-            logger.warning("Backend %s does not support periodic limits", type(backend).__name__)
-            return
+            if not backend.supports_periodic_settings:
+                backend_name = type(backend).__name__
+                logger.warning("Backend %s does not support periodic limits", backend_name)
 
-        # Apply periodic settings via backend
-        result = backend.apply_periodic_settings(backend_id, settings)
+            backend_result = backend.apply_periodic_settings(backend_id, settings)
+        except Exception as e:
+            logger.exception("Error applying periodic settings for resource %s", backend_id)
+            backend_result = {"success": False, "error": str(e), "commands_executed": []}
+
+        if isinstance(backend_result, dict):
+            result = backend_result
+        else:
+            # A backend returning None or a non-dict would otherwise raise on
+            # result.get() below, escape to the outer handler, and leave the
+            # policy without a verdict.
+            error = (
+                f"apply_periodic_settings returned {type(backend_result).__name__}, expected dict"
+            )
+            logger.error("Invalid periodic settings result for %s: %s", backend_id, error)
+            result = {"success": False, "error": error, "commands_executed": []}
 
         if result.get("success"):
             logger.info("Successfully applied periodic settings for resource %s", backend_id)

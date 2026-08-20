@@ -1,5 +1,6 @@
 """Tests for _report_command_result_to_waldur handler."""
 
+import json
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
@@ -11,7 +12,10 @@ from waldur_api_client.models.slurm_command_result_request import (
 from waldur_site_agent.common import structures
 from waldur_site_agent.event_processing.handlers import (
     _report_command_result_to_waldur,
+    on_resource_periodic_limits_update_stomp,
 )
+
+from tests.fixtures import ConcreteBackend
 
 
 @pytest.fixture
@@ -127,3 +131,88 @@ class TestReportCommandResult:
         assert body.success is False
         assert body.error_message == "SLURM down"
         assert len(body["commands_executed"]) == 1
+
+
+class TestPeriodicLimitsHandlerReporting:
+    """The handler must always hand Waldur a verdict for a dispatched command."""
+
+    @staticmethod
+    def _frame(message):
+        frame = MagicMock()
+        frame.body = json.dumps(message)
+        return frame
+
+    @patch("waldur_site_agent.event_processing.handlers._report_command_result_to_waldur")
+    @patch("waldur_site_agent.event_processing.handlers.common_utils.get_backend_for_offering")
+    def test_unsupported_backend_reports_failure(self, mock_get_backend, mock_report, offering, message):
+        """A backend without periodic-limits support reports failure, not silence."""
+
+        backend = ConcreteBackend({}, {})
+        assert backend.supports_periodic_settings is False
+        mock_get_backend.return_value = (backend, "test")
+
+        on_resource_periodic_limits_update_stomp(self._frame(message), offering, "test-agent")
+
+        mock_report.assert_called_once()
+        result = mock_report.call_args.args[2]
+        assert result["success"] is False
+        assert "does not support periodic settings" in result["error"]
+
+    @patch("waldur_site_agent.event_processing.handlers._report_command_result_to_waldur")
+    @patch("waldur_site_agent.event_processing.handlers.common_utils.get_backend_for_offering")
+    def test_raising_backend_reports_failure(self, mock_get_backend, mock_report, offering, message):
+        """An exception inside the backend is converted into a reported failure."""
+        backend = MagicMock()
+        backend.supports_periodic_settings = True
+        backend.apply_periodic_settings.side_effect = RuntimeError("sacctmgr exploded")
+        mock_get_backend.return_value = (backend, "test")
+
+        on_resource_periodic_limits_update_stomp(self._frame(message), offering, "test-agent")
+
+        mock_report.assert_called_once()
+        result = mock_report.call_args.args[2]
+        assert result["success"] is False
+        assert result["error"] == "sacctmgr exploded"
+
+    @patch("waldur_site_agent.event_processing.handlers._report_command_result_to_waldur")
+    @patch("waldur_site_agent.event_processing.handlers.common_utils.get_backend_for_offering")
+    def test_invalid_message_reports_failure(self, mock_get_backend, mock_report, offering, message):
+        """A malformed message is reported too, so the policy does not hang."""
+        message["action"] = "something_else"
+
+        on_resource_periodic_limits_update_stomp(self._frame(message), offering, "test-agent")
+
+        mock_get_backend.assert_not_called()
+        mock_report.assert_called_once()
+        assert mock_report.call_args.args[2]["success"] is False
+
+    @patch("waldur_site_agent.event_processing.handlers._report_command_result_to_waldur")
+    @patch("waldur_site_agent.event_processing.handlers.common_utils.get_backend_for_offering")
+    def test_non_dict_result_reports_failure(self, mock_get_backend, mock_report, offering, message):
+        """A backend returning None must not escape the reporting invariant."""
+        backend = MagicMock()
+        backend.supports_periodic_settings = True
+        backend.apply_periodic_settings.return_value = None
+        mock_get_backend.return_value = (backend, "test")
+
+        on_resource_periodic_limits_update_stomp(self._frame(message), offering, "test-agent")
+
+        mock_report.assert_called_once()
+        result = mock_report.call_args.args[2]
+        assert result["success"] is False
+        assert "expected dict" in result["error"]
+
+    @patch("waldur_site_agent.event_processing.handlers._report_command_result_to_waldur")
+    @patch("waldur_site_agent.event_processing.handlers.common_utils.get_backend_for_offering")
+    def test_success_is_reported(self, mock_get_backend, mock_report, offering, message):
+        """The happy path still reports the backend's own result."""
+        backend = MagicMock()
+        backend.supports_periodic_settings = True
+        backend.apply_periodic_settings.return_value = {"success": True, "commands_executed": ["x"]}
+        mock_get_backend.return_value = (backend, "test")
+
+        on_resource_periodic_limits_update_stomp(self._frame(message), offering, "test-agent")
+
+        backend.apply_periodic_settings.assert_called_once_with("test-project", {})
+        mock_report.assert_called_once()
+        assert mock_report.call_args.args[2]["success"] is True

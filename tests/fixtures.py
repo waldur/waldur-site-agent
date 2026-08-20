@@ -5,6 +5,7 @@ from uuid import UUID
 
 from waldur_api_client.models.user_me import UserMe
 
+from waldur_site_agent.backend.backends import BaseBackend
 from waldur_site_agent.common.structures import Offering
 
 
@@ -87,3 +88,40 @@ OFFERING = Offering(
         },
     },
 )
+
+
+class ConcreteBackend(BaseBackend):
+    """Minimal concrete subclass for testing BaseBackend.create_user_homedirs."""
+
+    def ping(self, raise_exception=False):
+        return True
+
+    def list_backend_components(self):
+        return []
+
+    def list_components(self):
+        return []
+
+    def _get_usage_report(self, resource_backend_ids):
+        return {}
+
+    def _collect_resource_limits(self, waldur_resource):
+        return {}, {}
+
+    def _pre_create_resource(self, *args, **kwargs):
+        pass
+
+    def diagnostics(self):
+        return {}
+
+    def downscale_resource(self, *args, **kwargs):
+        pass
+
+    def get_resource_metadata(self, *args, **kwargs):
+        return {}
+
+    def pause_resource(self, *args, **kwargs):
+        pass
+
+    def restore_resource(self, *args, **kwargs):
+        pass

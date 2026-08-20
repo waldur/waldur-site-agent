@@ -72,6 +72,20 @@ class BaseBackend(ABC):
     # cycle before handling orders.
     supports_cycle_preflight: bool = False
 
+    # Capability flag: Set to True for backends that can create POSIX home
+    # directories for their users. Gates the standalone homedir-creation command
+    # (``create_homedirs_for_offering_users``) so it is driven by what a backend
+    # declares rather than by its backend type. The default implementation of
+    # ``create_user_homedirs`` shells out to the local ``mkhomedir_helper``, which
+    # is meaningless for API-only backends — hence opt-in.
+    supports_user_homedirs: bool = False
+
+    # Capability flag: Set to True for backends that implement
+    # ``apply_periodic_settings`` (periodic usage-policy limits pushed by Waldur).
+    # The default implementation returns an explicit failure result so the caller
+    # always has something to report back to Waldur.
+    supports_periodic_settings: bool = False
+
     # Capability flag: Set to True for backends that mirror project metadata and
     # need the full source project. When enabled, the processor pre-fetches the
     # source project from Waldur and passes it to sync_resource_project so the
@@ -428,6 +442,40 @@ class BaseBackend(ABC):
                         "Failed to apply homedir quota for %s",
                         username,
                     )
+
+    def apply_periodic_settings(
+        self,
+        resource_id: str,
+        settings: dict,
+        config: Optional[dict] = None,
+    ) -> dict:
+        """Apply periodic usage-policy settings calculated by Waldur.
+
+        Backends that support periodic limits override this method and set
+        ``supports_periodic_settings = True``. The default implementation is a
+        declared no-op that reports failure, so the caller can always relay a
+        definite outcome to Waldur instead of silently dropping the request.
+
+        Args:
+            resource_id: Backend identifier of the resource to apply settings to.
+            settings: Settings calculated by Waldur (fairshare, limits, resets).
+            config: Optional backend-specific configuration override.
+
+        Returns:
+            Result dict with at least a ``success`` key; on failure an ``error``
+            message explaining why.
+        """
+        del settings, config
+        logger.warning(
+            "Backend %s does not support periodic settings, skipping resource %s",
+            type(self).__name__,
+            resource_id,
+        )
+        return {
+            "success": False,
+            "error": f"Backend {type(self).__name__} does not support periodic settings",
+            "commands_executed": [],
+        }
 
     def _get_homedir_quota_config(self) -> quota.HomedirQuotaConfig | None:
         """Parse and return the homedir_quota config, or None if not configured."""
