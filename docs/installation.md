@@ -103,7 +103,9 @@ waldur_site_load_components -c /etc/waldur/waldur-site-agent-config.yaml
 
 ### Create Home Directories (Optional)
 
-If your backend requires home directory creation:
+If your backend supports and requires home directory creation (any backend
+declaring `supports_user_homedirs`, e.g. SLURM), with
+`enable_user_homedir_account_creation` left enabled for the offering:
 
 ```bash
 waldur_site_create_homedirs -c /etc/waldur/waldur-site-agent-config.yaml

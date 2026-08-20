@@ -97,7 +97,6 @@ from waldur_api_client.types import UNSET, Unset
 
 from waldur_site_agent.backend import (
     DEFAULT_RESOURCE_KEY_COUNT,
-    BackendType,
     configure_logger,
     get_log_buffer_manager,
     get_log_shipping_manager,
@@ -609,6 +608,30 @@ def get_backend_for_offering(
     return backend_class(offering.backend_settings, offering.backend_components_dict), dist_version
 
 
+def get_backend_class_for_offering(
+    offering: structures.Offering, backend_type_key: str = "order_processing_backend"
+) -> Optional[type[BaseBackend]]:
+    """Resolve the backend class for an offering without instantiating it.
+
+    Class-level capability flags can be read from the class alone. Constructing
+    a backend opens real clients (Kubernetes, Harbor, OpenNebula...) and raises
+    when its settings are incomplete, so callers that only need to inspect a
+    capability must not pay that cost for offerings they will skip.
+
+    Args:
+        offering: The offering configuration
+        backend_type_key: Key to determine which backend type to use
+
+    Returns:
+        The backend class, or None when the backend type is not registered.
+    """
+    backend_type = getattr(offering, backend_type_key, "")
+    backend_info = BACKENDS.get(backend_type)
+    if not backend_info:
+        return None
+    return backend_info[0]
+
+
 def get_offering_backend(
     offering: structures.Offering, backend_type_key: str = "order_processing_backend"
 ) -> BaseBackend:
@@ -1073,40 +1096,57 @@ def create_homedirs_for_offering_users() -> None:
     """Create home directories for all offering users.
 
     This utility function creates home directories for users associated
-    with offerings that have home directory creation enabled. Currently
-    supports SLURM backends with configurable umask settings.
+    with offerings that have home directory creation enabled. Any backend
+    declaring ``supports_user_homedirs`` participates; the per-offering
+    ``enable_user_homedir_account_creation`` setting can still opt out.
     """
     configuration = init_configuration()
     for offering in configuration.waldur_offerings:
-        # Feature is exclusive for SLURM temporarily
-        if offering.backend_type != BackendType.SLURM.value or not offering.backend_settings.get(
-            "enable_user_homedir_account_creation", True
-        ):
+        if not offering.backend_settings.get("enable_user_homedir_account_creation", True):
+            continue
+
+        # Read the capability off the class. Instantiating every offering's
+        # backend just to skip it would open unrelated clients and let one
+        # misconfigured offering abort homedir creation for all the others.
+        backend_class = get_backend_class_for_offering(offering, "order_processing_backend")
+
+        if backend_class is None or not backend_class.supports_user_homedirs:
+            logger.info(
+                "Backend %s of offering %s does not support homedir creation, skipping",
+                offering.backend_type,
+                offering.name,
+            )
             continue
 
         logger.info("Creating homedirs for %s offering users", offering.name)
 
-        waldur_rest_client = get_client(
-            offering.api_url,
-            offering.api_token,
-            configuration.waldur_user_agent,
-            offering.verify_ssl,
-            configuration.global_proxy,
-        )
-        offering_users = marketplace_offering_users_list.sync_all(
-            client=waldur_rest_client,
-            offering_uuid=[offering.uuid],
-            state=[OfferingUserState.OK],
-            is_restricted=False,
-            field=[OfferingUserFieldEnum.USERNAME],
-        )
+        # One offering's unreachable backend or API must not cost the remaining
+        # offerings their homedirs — this command sweeps all of them in one run.
+        try:
+            waldur_rest_client = get_client(
+                offering.api_url,
+                offering.api_token,
+                configuration.waldur_user_agent,
+                offering.verify_ssl,
+                configuration.global_proxy,
+            )
+            offering_users = marketplace_offering_users_list.sync_all(
+                client=waldur_rest_client,
+                offering_uuid=[offering.uuid],
+                state=[OfferingUserState.OK],
+                is_restricted=False,
+                field=[OfferingUserFieldEnum.USERNAME],
+            )
 
-        offering_user_usernames: set[str] = {
-            offering_user.username for offering_user in offering_users
-        }
-        umask = offering.backend_settings.get("default_homedir_umask", "0077")
-        offering_backend, _ = get_backend_for_offering(offering, "order_processing_backend")
-        offering_backend.create_user_homedirs(offering_user_usernames, umask)
+            offering_user_usernames: set[str] = {
+                offering_user.username for offering_user in offering_users
+            }
+            umask = offering.backend_settings.get("default_homedir_umask", "0077")
+            offering_backend, _ = get_backend_for_offering(offering, "order_processing_backend")
+            offering_backend.create_user_homedirs(offering_user_usernames, umask)
+        except Exception:
+            logger.exception("Failed to create homedirs for offering %s", offering.name)
+            continue
 
 
 def print_current_user(current_user: UserMe) -> None:

@@ -9,10 +9,10 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
-from waldur_site_agent.backend.quota import HomedirQuotaConfig
 from waldur_site_agent.common.plugin_schemas import (
+    HomedirSettingsSchema,
     PluginBackendSettingsSchema,
     PluginComponentSchema,
 )
@@ -204,10 +204,12 @@ class SlurmRestApiConfig(PluginBackendSettingsSchema):
         return self
 
 
-class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
+class SlurmBackendSettingsSchema(HomedirSettingsSchema):
     """SLURM-specific backend settings validation.
 
     Based on actual SLURM plugin usage patterns from backend.py analysis.
+    Home directory settings come from ``HomedirSettingsSchema``, shared with
+    every other backend that declares ``supports_user_homedirs``.
     """
 
     model_config = ConfigDict(extra="allow")  # Allow additional settings
@@ -310,26 +312,6 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
         default=None, description="Per-account QoS creation and management"
     )
 
-    # User home directory management (used by backend.py)
-    enable_user_homedir_account_creation: Optional[bool] = Field(
-        default=True, description="Create home directories for users"
-    )
-    default_homedir_umask: Optional[str] = Field(
-        default="0077", description="Umask for created home directories"
-    )
-    homedir_base_path: Optional[str] = Field(
-        default=None,
-        description=(
-            "Base path for user home directories (e.g. '/cephfs/home'). "
-            "When set, quota is applied to {homedir_base_path}/{username}. "
-            "When unset, the path is looked up from the system passwd database."
-        ),
-    )
-    homedir_quota: Optional[HomedirQuotaConfig] = Field(
-        default=None,
-        description="Filesystem quota settings for user home directories",
-    )
-
     # Project directory management (optional, for sites with shared project storage)
     project_directory: Optional[ProjectDirectoryConfig] = Field(
         default=None, description="Project directory creation and quota settings"
@@ -378,24 +360,3 @@ class SlurmBackendSettingsSchema(PluginBackendSettingsSchema):
                 )
                 raise ValueError(msg)
         return self
-
-    @field_validator("default_homedir_umask")
-    @classmethod
-    def validate_umask(cls, v: Optional[str]) -> Optional[str]:
-        """Validate that umask is a valid octal permission."""
-
-        def _raise_umask_error(value: str) -> None:
-            msg = f"Invalid umask range: {value}"
-            raise ValueError(msg)
-
-        if v is not None:
-            try:
-                # Try to parse as octal
-                umask_value = int(v, 8)
-                max_umask = 0o777
-                if umask_value < 0 or umask_value > max_umask:
-                    _raise_umask_error(v)
-            except ValueError as e:
-                msg = f"default_homedir_umask must be valid octal permissions (e.g., '0077'): {e}"
-                raise ValueError(msg) from e
-        return v
