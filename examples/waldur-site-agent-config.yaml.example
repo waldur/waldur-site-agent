@@ -23,6 +23,7 @@ offerings: # Settings for offerings
     reporting_backend: "slurm" # Name of the backend from entrypoints to use for reporting
     resource_import_enabled: false # Whether to expose importable resources to Waldur
     username_reconciliation_enabled: false # Enable periodic username reconciliation from target backend (e.g. Waldur B). Only needed for Waldur federation setups.
+    omit_anomalous_usage_components: false # If false (default), a decreasing component blocks the whole usage payload. Set true to omit only the decreasing components and still report the rest (recommended for Waldur-to-Waldur).
     stomp_enabled: false # STOMP feature toggler
     # stomp_membership_sync_enabled: false  # Inherits stomp_enabled. Set false to keep
     #   HTTP polling for membership sync even when stomp_enabled is true.

@@ -214,11 +214,12 @@ def _serialize_attr_value(val: object) -> object:
 
 
 class UsageAnomalyError(Exception):
-    """Raised when usage anomaly is detected.
+    """Raised when every reported component is anomalous.
 
-    This exception is raised when the system detects that new usage data
-    is lower than previously reported usage for the same billing period,
-    which typically indicates a data collection or processing error.
+    An anomalous component is one whose new usage is lower than previously
+    reported usage for the same billing period. Individual anomalous
+    components are omitted from ``set_usage`` and do not raise; this
+    exception is only used when nothing remains to submit.
     """
 
 
@@ -2992,7 +2993,10 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
     The processor includes anomaly detection to prevent reporting usage data
     that appears to have decreased from previous reports, which typically
-    indicates a data collection error.
+    indicates a data collection error. By default a single decreasing
+    component blocks the whole payload. Set
+    ``omit_anomalous_usage_components`` on the offering to omit only the
+    decreasing components and still report the rest.
 
     Supports multi-period reporting: by default reports both the current month
     and the previous month. Controlled by ``reporting_periods`` (default 1
@@ -3224,8 +3228,19 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_components: list[OfferingComponent],
         report_date: Optional[datetime.datetime] = None,
         billing_period_start: Optional[datetime.date] = None,
-    ) -> None:
+    ) -> list[str]:
         """Reports total usage for a backend resource to Waldur.
+
+        Components whose usage would decrease are treated as anomalies.
+        By default that blocks the whole payload. If the offering has
+        ``omit_anomalous_usage_components`` enabled, only those components
+        are omitted and the rest are still submitted. ``set_usage`` updates
+        only the types in the request, so omitted components keep their
+        existing values.
+
+        Returns the omitted component types so the caller can skip the same
+        types in per-user ``set_user_usages``. An empty list means nothing
+        was refused (including the unchanged-totals early return).
 
         Args:
             waldur_resource: The Waldur resource to report usage for.
@@ -3234,6 +3249,15 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             report_date: Datetime to use as the report date. Defaults to current time.
             billing_period_start: Date of the billing period start. Defaults to
                 first day of report_date's month.
+
+        Returns:
+            Component types omitted from ``set_usage`` because they decreased.
+            Empty when nothing was omitted.
+
+        Raises:
+            UsageAnomalyError: When every offered component is anomalous
+                and nothing remains to submit, or when the offering still
+                uses drop-all anomaly behaviour.
         """
         # Waldur rejects usage amounts with more than 2 decimal places, so
         # round once here. Beyond satisfying the API, this keeps the
@@ -3289,7 +3313,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 waldur_resource.backend_id,
                 billing_period_start,
             )
-            return
+            return []
 
         current_usage_by_type: dict[str, float] = {}
         for u in existing_usages:
@@ -3318,6 +3342,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 else round(float(new_amount) - current_amount, 2),
             )
 
+        skipped_components: list[str] = []
         if not self.resource_backend.supports_decreasing_usage:
             # Filter out component usages that have per-user breakdowns;
             # only aggregate records should participate in anomaly detection.
@@ -3340,15 +3365,48 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 else existing_usages
             )
 
-            for component, amount in total_usage.items():
+            for component, amount in list(total_usage.items()):
                 if component in component_types and self._check_usage_anomaly(
                     component, amount, aggregate_usages
                 ):
-                    logger.warning(
-                        "Skipping usage update for resource %s due to anomaly detection",
-                        waldur_resource.backend_id,
+                    skipped_components.append(component)
+
+            if skipped_components:
+                logger.warning(
+                    "Skipping usage update for components %s on resource %s "
+                    "due to anomaly detection",
+                    skipped_components,
+                    waldur_resource.backend_id,
+                )
+                offering = getattr(self, "offering", None)
+                if not getattr(offering, "omit_anomalous_usage_components", False):
+                    raise UsageAnomalyError(
+                        f"Usage anomaly detected for component {skipped_components[0]}"
                     )
-                    raise UsageAnomalyError(f"Usage anomaly detected for component {component}")
+                for component in skipped_components:
+                    del total_usage[component]
+
+                submittable = {c: a for c, a in total_usage.items() if c in component_types}
+                if not submittable:
+                    raise UsageAnomalyError(
+                        f"Usage anomaly detected for component {skipped_components[0]}"
+                    )
+
+                # Remaining amounts may already match Waldur. Do not use
+                # `_usage_matches_existing` here: that helper treats omitted
+                # types as disappearances and would force a resubmit.
+                if self._reported_amounts_match_existing(
+                    total_usage, existing_usages, component_types
+                ):
+                    logger.info(
+                        "Usage unchanged for resource %s in billing period %s "
+                        "after omitting anomalous components %s; "
+                        "skipping set_usage submission.",
+                        waldur_resource.backend_id,
+                        billing_period_start,
+                        skipped_components,
+                    )
+                    return skipped_components
 
         usage_objects = [
             ComponentUsageItemRequest(type_=component, amount=f"{amount:.2f}")
@@ -3361,6 +3419,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         marketplace_component_usages_set_usage.sync_detailed(
             client=self.waldur_rest_client, body=request_body
         )
+        return skipped_components
 
     @staticmethod
     def _usage_matches_existing(
@@ -3409,6 +3468,45 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             )
             for ctype, amount in new_pairs.items()
         )
+
+    @staticmethod
+    def _reported_amounts_match_existing(
+        total_usage: dict[str, float],
+        existing_usages: list[ComponentUsage],
+        component_types: list[str],
+    ) -> bool:
+        """Return True when every component about to be submitted matches Waldur.
+
+        Unlike ``_usage_matches_existing``, omitted types are ignored. Used
+        after anomalous components have been dropped from the payload so a
+        skipped type is not treated as a disappearance.
+        """
+        new_pairs = {c: amount for c, amount in total_usage.items() if c in component_types}
+        if not new_pairs:
+            return True
+
+        existing_by_type: dict[str, float] = {}
+        for u in existing_usages:
+            if isinstance(u.type_, type(UNSET)) or isinstance(u.usage, type(UNSET)):
+                continue
+            if u.type_ in existing_by_type:
+                return False
+            try:
+                existing_by_type[u.type_] = float(u.usage)
+            except (TypeError, ValueError):
+                return False
+
+        for ctype, amount in new_pairs.items():
+            if ctype not in existing_by_type:
+                return False
+            if not math.isclose(
+                float(amount),
+                existing_by_type[ctype],
+                rel_tol=1e-9,
+                abs_tol=1e-6,
+            ):
+                return False
+        return True
 
     def _submit_bulk_user_usages_for_resource(
         self,
@@ -3636,7 +3734,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             )
             return
 
-        self._submit_total_usage_for_resource(
+        skipped_components = self._submit_total_usage_for_resource(
             waldur_resource_info,
             total_usage,
             waldur_offering.components,
@@ -3647,6 +3745,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         # Skip per-user usage if the dict is empty
         if not usages:
             return
+
+        # Skip per-user usage for components omitted from set_usage.
+        for user_usage in usages.values():
+            for component in skipped_components:
+                user_usage.pop(component, None)
 
         waldur_component_usages = marketplace_component_usages_list.sync_all(
             client=self.waldur_rest_client,

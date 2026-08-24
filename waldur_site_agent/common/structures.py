@@ -222,6 +222,15 @@ class Offering(BaseModel):
         default=False, description="Enable periodic username reconciliation from target backend"
     )
     verify_ssl: bool = Field(default=True, description="Verify SSL certificates")
+    omit_anomalous_usage_components: bool = Field(
+        default=False,
+        description=(
+            "If False (default), a decreasing component blocks the whole set_usage "
+            "payload. If True, only the decreasing components are omitted and the "
+            "rest are still reported. Use True for backends whose meters are "
+            "independent (e.g. Waldur-to-Waldur)."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_auth_config(self) -> Offering:
