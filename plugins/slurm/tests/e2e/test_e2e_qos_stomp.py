@@ -23,6 +23,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from uuid import UUID
 
 import pytest
@@ -96,16 +97,15 @@ class ResourceEventCapture:
     def __init__(self):
         self._messages: list[dict] = []
         self._lock = threading.Lock()
-        self._waiters: dict[str, threading.Event] = {}
+        self._waiters: list[tuple[Callable[[dict], bool], threading.Event]] = []
 
     def make_handler(self, delegate):
         def handler(frame, offering, user_agent, expose_backend_error_details=True):  # noqa: ARG001
             message = json.loads(frame.body)
             with self._lock:
                 self._messages.append(message)
-                for key, evt in list(self._waiters.items()):
-                    field, value = key.split("=", 1)
-                    if str(message.get(field, "")) == value:
+                for predicate, evt in list(self._waiters):
+                    if predicate(message):
                         evt.set()
             # Delegate to the real handler so the agent's resource sync runs.
             delegate(frame, offering, user_agent)
@@ -113,21 +113,41 @@ class ResourceEventCapture:
         return handler
 
     def wait_for(
-        self, field: str, value: str, timeout: float = STOMP_WAIT_TIMEOUT
+        self,
+        field: str,
+        value: str,
+        timeout: float = STOMP_WAIT_TIMEOUT,
+        where: Callable[[dict], bool] | None = None,
     ) -> dict | None:
+        """Wait for a RESOURCE event on `field == value`, optionally narrowed by `where`.
+
+        A resource emits several RESOURCE events over its lifetime, and earlier
+        ones are already buffered by the time a test waits for a later state
+        change. Matching on the identifier alone returns whichever event happens
+        to be buffered rather than the one under test, so the assertion passes or
+        fails purely on timing. Pass `where` to wait for the specific transition
+        being asserted.
+        """
+
+        def matches(msg: dict) -> bool:
+            return str(msg.get(field, "")) == value and (where is None or where(msg))
+
         with self._lock:
             for msg in reversed(self._messages):
-                if str(msg.get(field, "")) == value:
+                if matches(msg):
                     return msg
-            key = f"{field}={value}"
             evt = threading.Event()
-            self._waiters[key] = evt
+            self._waiters.append((matches, evt))
 
-        if evt.wait(timeout=timeout):
+        try:
+            if evt.wait(timeout=timeout):
+                with self._lock:
+                    for msg in reversed(self._messages):
+                        if matches(msg):
+                            return msg
+        finally:
             with self._lock:
-                for msg in reversed(self._messages):
-                    if str(msg.get(field, "")) == value:
-                        return msg
+                self._waiters = [(p, e) for p, e in self._waiters if e is not evt]
         return None
 
     def messages_for(self, resource_uuid: str) -> list[dict]:
@@ -484,12 +504,15 @@ class TestQosStomp:
         _evaluate_policy(qos_stomp_client, s["policy_uuid"], s["resource_uuid"])
 
         # Mastermind flips paused=True → resource.save() → RESOURCE STOMP event.
-        msg = resource_capture.wait_for("resource_uuid", s["resource_uuid"])
-        assert msg is not None, (
-            f"No RESOURCE event received within {STOMP_WAIT_TIMEOUT}s after pausing"
+        msg = resource_capture.wait_for(
+            "resource_uuid",
+            s["resource_uuid"],
+            where=lambda m: m.get("paused") is True,
         )
-        assert msg.get("paused") is True, (
-            f"Expected paused=True in STOMP message, got {msg!r}"
+        assert msg is not None, (
+            f"No RESOURCE event with paused=True received within {STOMP_WAIT_TIMEOUT}s "
+            f"after pausing; events seen for this resource: "
+            f"{resource_capture.messages_for(s['resource_uuid'])!r}"
         )
 
         # Settle the flags to (paused, downscaled) before asserting QoS so the

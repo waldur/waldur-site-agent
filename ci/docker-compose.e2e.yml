@@ -26,7 +26,7 @@ services:
       retries: 10
 
   waldur-queue:
-    image: "${DOCKER_REGISTRY_PREFIX}library/rabbitmq:4.1.2"
+    image: "${DOCKER_REGISTRY_PREFIX}library/rabbitmq:4.3.5"
     environment:
       RABBITMQ_DEFAULT_USER: waldur
       RABBITMQ_DEFAULT_PASS: waldur
