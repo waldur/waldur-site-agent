@@ -64,7 +64,29 @@ class TestWiring:
 
     def test_it_sums_buckets_per_owner_in_the_query(self, backend):
         """One request answers for every resource, and bucket churn needs no code."""
-        assert backend.usage_query == "sum by (owner) (ceph_rgw_user_stored_bytes)"
+        assert backend.usage_query == (
+            "sum by (owner) (last_over_time(ceph_rgw_user_stored_bytes[30m]))"
+        )
+
+    def test_the_reading_is_looked_for_across_a_whole_collection_interval(self, backend):
+        """A bare selector carries only a 5-minute staleness window.
+
+        A range query evaluates on a grid of `step`, so a collector writing every
+        30 minutes would be visible only when its samples happened to land in the
+        5 minutes before a grid point — observed in production as a resource
+        reporting 0 datapoints while its series plainly had a reading. The window
+        has to span the interval, not the database's default.
+        """
+        assert f"[{backend.query_step}]" in backend.usage_query
+
+    def test_the_lookback_can_exceed_the_step(self):
+        """A collector slower than the step still has to be seen."""
+        backend = PrometheusUsageBackend(
+            dict(SETTINGS, prometheus_step="30m", prometheus_lookback="2h"),
+            dict(COMPONENTS),
+        )
+        assert "[2h]" in backend.usage_query
+        assert backend.query_step == "30m"
 
     def test_the_metric_and_label_are_configurable(self):
         """A community RadosGW exporter names these differently."""
@@ -76,7 +98,9 @@ class TestWiring:
             ),
             dict(COMPONENTS),
         )
-        assert backend.usage_query == "sum by (user) (radosgw_usage_bucket_bytes)"
+        assert backend.usage_query == (
+            "sum by (user) (last_over_time(radosgw_usage_bucket_bytes[30m]))"
+        )
 
     def test_a_trailing_slash_does_not_double_up(self, backend):
         assert backend.promql_client.url == "https://vm.example.org"

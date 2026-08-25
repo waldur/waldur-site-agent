@@ -24,7 +24,7 @@ Wire it up alongside the management backend::
     reporting_backend: prometheus_usage
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 from .backend import logger
 from .promql import PromQLClient, PromQLError
@@ -65,6 +65,9 @@ class PrometheusUsageBackend(_GbDayUsageBackend):
             "prometheus_owner_label", DEFAULT_OWNER_LABEL
         )
         self.query_step = backend_settings.get("prometheus_step", DEFAULT_STEP)
+        # Defaults to the step so that every evaluation point looks back exactly one
+        # collection interval; see usage_query for why a bare selector cannot.
+        self.lookback = backend_settings.get("prometheus_lookback", self.query_step)
         self.promql_client = PromQLClient(
             url,
             timeout=backend_settings.get("prometheus_timeout", 30),
@@ -94,11 +97,25 @@ class PrometheusUsageBackend(_GbDayUsageBackend):
         Aggregating in the query rather than in the agent is what makes one
         request answer for every resource, and it means a bucket appearing or
         disappearing mid-period needs no handling here — the sum simply follows.
+
+        ``last_over_time`` over the lookback window is what makes the reading
+        visible at all. A range query evaluates on a grid of ``step``, and a bare
+        selector carries only the database's 5-minute staleness window, so a
+        collector writing every 30 minutes is seen only when its samples happen to
+        land in the 5 minutes before a grid point. Whether a month bills correctly
+        or not at all would come down to the phase between a cron and the grid.
+        Widening the window to the collection interval makes every sample fall
+        inside exactly one evaluation.
         """
-        return f"sum by ({self.owner_label}) ({self.usage_metric})"
+        return (
+            f"sum by ({self.owner_label}) "
+            f"(last_over_time({self.usage_metric}[{self.lookback}]))"
+        )
 
     @staticmethod
-    def _datapoint(timestamp: object, value: object) -> dict:
+    def _datapoint(
+        timestamp: Union[str, float], value: Union[str, float]
+    ) -> dict:
         """One reply pair as a datapoint, with NaN carried rather than billed.
 
         Prometheus renders a stale or absent reading as ``NaN``. That is the same

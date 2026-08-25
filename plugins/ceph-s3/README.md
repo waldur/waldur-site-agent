@@ -162,6 +162,11 @@ operator did not intend.
 - **`prometheus_step`** (optional, default: `"30m"`): range query resolution.
   Match it to the collector's interval; a month at 30 m is 1488 points, and a
   range query caps out around 11k
+- **`prometheus_lookback`** (optional, default: the step): how far back each
+  evaluation point looks for a reading. A bare selector carries only the
+  database's 5-minute staleness window, so a collector writing less often than
+  that is seen only when its samples happen to land just before a grid point.
+  Raise it above the step if the collector is slower than the resolution you want
 - **`prometheus_timeout`** (optional, default: `30`), **`prometheus_verify_ssl`**
   (optional, default: `true`), and **`prometheus_username`** /
   **`prometheus_password`** or **`prometheus_token`** for authentication
@@ -305,13 +310,17 @@ A collector outside the agent records bytes held per bucket, labelled by the S3
 uid. The agent then asks the database for the whole period in one range query:
 
 ```promql
-sum by (owner) (ceph_rgw_user_stored_bytes)
+sum by (owner) (last_over_time(ceph_rgw_user_stored_bytes[30m]))
 ```
 
 Summing in the query is what makes a single request answer for every resource,
 and it means buckets appearing and disappearing mid-period need no handling — the
-sum follows them. The reply's `[timestamp, value]` pairs are the same rectangles
-croit's datapoints are, integrated by the same code.
+sum follows them. `last_over_time` over one collection interval is what makes the
+reading visible at all: a range query evaluates on a grid of `step`, and a bare
+selector would only carry the database's 5-minute staleness window, so whether a
+month billed correctly or not at all would come down to the phase between the
+collector's cron and the grid. The reply's `[timestamp, value]` pairs are the same
+rectangles croit's datapoints are, integrated by the same code.
 
 Prometheus renders a stale or absent reading as `NaN`, which is handed to the
 integrator as a null and carried the way a null in croit's series is: billing the
