@@ -438,6 +438,52 @@ E2E integration tests:
     - docker compose -f ci/docker-compose.e2e.yml up waldur-db-migration
     - docker compose -f ci/docker-compose.e2e.yml up -d
     - docker compose -f ci/docker-compose.e2e.yml ps
+    # Guard against the RabbitMQ `transient_nonexcl_queues` deprecation
+    # crash-looping the Celery worker. RabbitMQ 4.3 denies transient,
+    # non-exclusive queues by default -- the combination kombu's pidbox and
+    # Celery's gossip queues declare unless the mastermind image sets
+    # CELERY_CONTROL_QUEUE_EXCLUSIVE / CELERY_EVENT_QUEUE_EXCLUSIVE. This
+    # guards both sides: the broker conf and the image.
+    #
+    # Polls rather than sleeping a fixed interval -- the worker connects,
+    # runs mingle, and only then declares the pidbox queue, so on a loaded
+    # runner the failure can surface well after a short sleep.
+    - |
+      COMPOSE="docker compose -f ci/docker-compose.e2e.yml"
+      echo "Waiting for waldur-worker to start cleanly against RabbitMQ..."
+      worker_ready=""
+      for _ in $(seq 1 18); do
+        logs=$($COMPOSE logs waldur-worker 2>&1 || true)
+        case "$logs" in
+          *transient_nonexcl_queues*)
+            echo "ERROR: RabbitMQ rejected a Celery queue declaration (transient_nonexcl_queues)."
+            echo "Either the broker is missing deprecated_features.permit.transient_nonexcl_queues,"
+            echo "or the mastermind image predates the exclusive control-plane queue settings."
+            echo "$logs"
+            exit 1
+            ;;
+        esac
+        if $COMPOSE ps --status exited --status dead --services | grep -qx waldur-worker; then
+          echo "ERROR: waldur-worker container stopped during startup."
+          $COMPOSE ps -a waldur-worker
+          echo "$logs"
+          exit 1
+        fi
+        case "$logs" in
+          *" ready."*)
+            worker_ready=1
+            break
+            ;;
+        esac
+        sleep 5
+      done
+      if [ -z "$worker_ready" ]; then
+        echo "ERROR: waldur-worker did not report ready within 90s."
+        $COMPOSE ps -a waldur-worker
+        $COMPOSE logs waldur-worker
+        exit 1
+      fi
+      echo "waldur-worker started cleanly."
     # Wait for Waldur API to be ready (401 = up but unauthenticated, which is expected)
     - |
       echo "Waiting for Waldur API..."
