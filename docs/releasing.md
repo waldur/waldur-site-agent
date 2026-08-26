@@ -83,6 +83,7 @@ Pushing the tag to origin triggers GitLab CI, which:
 | **Publish Helm chart** | Packages chart, pushes to GitHub Pages |
 | **Publish Docker image** | Builds and pushes multiarch images |
 | **Generate SBOM** | Creates CycloneDX SBOM, uploads to docs |
+| **Announce release on Slack** | Posts the tag's `CHANGELOG.md` entry to Slack, after the jobs above succeed |
 
 ## Running Individual Scripts
 
