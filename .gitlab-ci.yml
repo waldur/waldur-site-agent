@@ -348,6 +348,27 @@ Run cscs-dwdi tests:
     - source .venv/bin/activate
     - pytest --cov=plugins/cscs-dwdi --cov-report=xml --cov-report=term --junitxml=report.xml plugins/cscs-dwdi/
 
+Run litellm tests:
+  extends: .Run tests base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/litellm/**/*
+        - pyproject.toml
+        - waldur_site_agent/**/*
+        - uv.lock
+  script:
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
+    - pytest --cov=plugins/litellm --cov-report=xml --cov-report=term --junitxml=report.xml plugins/litellm/
+
 Run waldur tests:
   extends: .Run tests base
   rules:

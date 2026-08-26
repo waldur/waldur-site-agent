@@ -100,6 +100,7 @@ you push.
 | [k8s-ut-namespace](plugins/k8s-ut-namespace/README.md) | Kubernetes UT ManagedNamespace plugin |
 | keycloak-client | Shared Keycloak client for Waldur Site Agent plugins |
 | [ldap](plugins/ldap/README.md) | LDAP plugin |
+| [litellm](plugins/litellm/README.md) | LiteLLM (virtual key lifecycle + usage reporting) plugin |
 | [moab](plugins/moab/README.md) | MOAB plugin |
 | [mup](plugins/mup/README.md) | MUP plugin |
 | [nextcloud](plugins/nextcloud/README.md) | Nextcloud plugin |

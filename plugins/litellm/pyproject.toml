@@ -1,0 +1,36 @@
+[project]
+name = "waldur-site-agent-litellm"
+version = "1.0.6rc17"
+description = "LiteLLM (virtual key lifecycle + usage reporting) plugin for Waldur Site Agent"
+readme = "README.md"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9.2, <4"
+dependencies = [
+    "waldur-site-agent>=1.0.6rc17",
+    "httpx>=0.25.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+
+# Entry points for exporting backends. litellm = virtual key lifecycle
+# (order_processing / membership_sync); litellm-usage = spend reporting (reporting).
+[project.entry-points."waldur_site_agent.backends"]
+litellm = "waldur_site_agent_litellm.backend:LiteLLMBackend"
+litellm-usage = "waldur_site_agent_litellm.reporting:LiteLLMUsageReportingBackend"
+
+# Entry points for plugin-specific schema validation
+[project.entry-points."waldur_site_agent.component_schemas"]
+litellm = "waldur_site_agent_litellm.schemas:LiteLLMComponentSchema"
+litellm-usage = "waldur_site_agent_litellm.schemas:LiteLLMUsageComponentSchema"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+litellm = "waldur_site_agent_litellm.schemas:LiteLLMBackendSettingsSchema"
+litellm-usage = "waldur_site_agent_litellm.schemas:LiteLLMUsageBackendSettingsSchema"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
