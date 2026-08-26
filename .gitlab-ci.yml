@@ -13,6 +13,8 @@ include:
     file: "/templates/test/lint-dockerfile.yaml"
   - project: "waldur/waldur-pipelines"
     file: "/templates/test/vulnerability-scan.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/license-scan.yml"
   # Temporarily disabled
   # - project: "waldur/waldur-pipelines"
   #   file: "/templates/sbom/upload-sboms-to-docs.yml"
@@ -769,3 +771,17 @@ Publish multiarch waldur-site-agent docker image (YOLO):
   stage: test
   variables:
     IMAGE_TAG: "opennode/${CI_PROJECT_NAME}:yolo"
+
+# Fails when a dependency arrives under a licence Waldur cannot ship — strong
+# copyleft (GPL, AGPL), source-available (SSPL, BUSL, Elastic) or non-OSI
+# use-restricted (Hippocratic, JSON). LGPL and MPL pass but stay listed in the
+# job artifact. See waldur/waldur-mastermind#285.
+#
+# The job only runs on merge requests that touch pyproject.toml or uv.lock, plus
+# the default branch and release tags.
+#
+# allow_failure is inherited as true from the template, so this cannot redden an
+# MR while it is being adopted. Override it with `allow_failure: false` to make
+# the gate binding once this repo is known clean.
+Check dependency licences:
+  extends: .Licence gate (python) template
