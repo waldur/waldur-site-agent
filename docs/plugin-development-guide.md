@@ -158,7 +158,8 @@ backend needs custom behavior.
 | `sync_resource_project` | No-op | Push project metadata to backends that manage their own projects |
 | `update_user_attributes` | No-op | Forward `OFFERING_USER` attribute updates to the backend |
 | `sync_offering_user_usernames` | Returns `False` | Pull backend-assigned usernames into Waldur (federation) |
-| `create_user_homedirs` | Provided | Override only to customise homedir quota or path logic |
+| `create_user_homedirs` | Provided | Customise homedir quota or path logic (see `supports_user_homedirs`) |
+| `apply_periodic_settings` | Reports failure | Apply periodic usage-policy settings (see `supports_periodic_settings`) |
 
 ### Non-blocking order creation (optional)
 
@@ -465,7 +466,7 @@ Calculation: `120000 / 60000 = 2`, `122880 / 61440 = 2`.
 
 ## Capability flags and class attributes
 
-`BaseBackend` exposes three class-level capability flags that change how
+`BaseBackend` exposes class-level capability flags that change how
 the core processor treats your backend.
 
 ### `supports_decreasing_usage: bool = False`
@@ -504,6 +505,63 @@ class MyAsyncBackend(BaseBackend):
     supports_async_orders = True
 ```
 
+### `supports_user_homedirs: bool = False`
+
+Set to `True` for backends that can create POSIX home directories for
+their users. The standalone `waldur_site_create_homedirs` command iterates
+over every configured offering and calls `create_user_homedirs` on each
+backend that declares support — the gate is the capability, not the
+backend type. The per-offering `enable_user_homedir_account_creation`
+setting can still opt out.
+
+```python
+class MyHpcBackend(BaseBackend):
+    supports_user_homedirs = True
+```
+
+A backend that opts in should also inherit `HomedirSettingsSchema` from
+`waldur_site_agent.common.plugin_schemas` in its settings schema, so
+`enable_user_homedir_account_creation`, `default_homedir_umask`,
+`homedir_base_path` and `homedir_quota` validate identically everywhere:
+
+```python
+from waldur_site_agent.common.plugin_schemas import HomedirSettingsSchema
+
+class MyHpcBackendSettingsSchema(HomedirSettingsSchema):
+    model_config = ConfigDict(extra="allow")
+```
+
+SLURM declares the flag today. Leave it `False` for API-only backends: the
+inherited `create_linux_user_homedir` shells out to the local
+`/sbin/mkhomedir_helper`, which is meaningless where the users have no
+account on the agent's host.
+
+Note that enabling the flag on an existing backend is a behaviour change for
+its deployments — `enable_user_homedir_account_creation` defaults to `True`,
+so operators already running `waldur_site_create_homedirs` will start getting
+home directories with no config change of their own. Land it with a release
+note.
+
+### `supports_periodic_settings: bool = False`
+
+Set to `True` for backends that implement `apply_periodic_settings`, the
+hook Waldur calls with periodic usage-policy settings (fairshare, limits,
+usage resets). Override the method alongside the flag:
+
+```python
+class MyBackend(BaseBackend):
+    supports_periodic_settings = True
+
+    def apply_periodic_settings(self, resource_id, settings, config=None):
+        ...
+        return {"success": True, "commands_executed": [...]}
+```
+
+The return value is relayed to Waldur's report-command-result endpoint, so
+it must carry a `success` key and, on failure, an `error` message. The
+default implementation returns an explicit failure — an unsupported backend
+still reports a verdict rather than leaving the policy without an answer.
+
 ### `handled_resource_states: list = [ResourceState.OK, ResourceState.ERRED]`
 
 Controls which resource states the membership processor fetches and
@@ -517,6 +575,27 @@ from waldur_api_client.models.resource_state import ResourceState
 class MyAsyncBackend(BaseBackend):
     handled_resource_states = [ResourceState.OK, ResourceState.ERRED, ResourceState.CREATING]
 ```
+
+### `team_fetch_attempts: int = 1` and `team_fetch_delay: float = 3.0`
+
+Control retry behaviour when `_fetch_user_context_for_resource` gets back
+an empty team list. The retry only fires on a completely empty response —
+it covers the race where a create-order event arrives before Waldur has
+committed the first membership row to the database.
+
+The default of `1` (no retries) is correct for synchronous backends where
+the Waldur API is always consistent by the time the agent reads it. Raise
+`team_fetch_attempts` for backends that receive work over STOMP, where the
+event and the membership row may arrive out of order:
+
+```python
+class MyStompBackend(BaseBackend):
+    team_fetch_attempts = 4   # retry up to 4 times
+    team_fetch_delay = 3.0    # seconds between retries
+```
+
+These are **backend class attributes**, not YAML configuration keys. They
+cannot be set per-offering in the configuration file.
 
 ## Decision matrix for no-op implementations
 
