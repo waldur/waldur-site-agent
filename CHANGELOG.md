@@ -1,36 +1,33 @@
 # Changelog
 
-## 1.0.6-rc.18 - 2026-08-26
+## 1.0.6-rc.19 - 2026-08-26
 
-- **Nextcloud**: Add new plugin for provisioning Nextcloud resources.
-- **Envoy AI Gateway**: Add new plugin for usage reporting and API key management ([WAL-10066]).
-- **Ceph-S3**: Rename croit-s3 plugin to ceph-s3 and add a radosgw client flavour ([RWA-56]).
-- **SLURM**: Add optional slurmrestd REST API execution mode as an alternative to CLI commands.
-- **SLURM**: Add QoS-scoped associations and `qos-=` operator support ([WAL-10154]).
-- **SLURM**: Stop reparenting allocation accounts on project move, fixing accounts orphaned at root.
-- **SLURM**: Skip unchanged periodic settings to avoid redundant sacctmgr modifications, match account names case-insensitively, and sanitize newlines in account descriptions.
-- **Core**: Gate homedir creation and periodic settings on declared backend capabilities.
-- **Core**: Allow omitting decreasing usage components instead of aborting the whole usage report.
-- **Core**: Keep orders pending on evaluation failures and transient API errors instead of failing them.
-- **Core**: Make service/course account sync best-effort so it cannot mark resources as erred, and read accounts via the offering-scoped endpoint.
-- **Core**: Fix mass user add and revoke during membership sync, and flag backend users for removal when they leave all projects ([gh-13]).
-- **Core**: Fix liveness probe killing agent pods during long per-offering processing.
-- **Core**: Keep federation users consented to a sibling offering in the shared project.
-- **Core**: Skip non-actionable order states in the STOMP handler and fetch offering context once per forced resources sync.
-- **Core**: Fix crash on trimmed MePermission payload from `/api/users/me`.
-- **Core**: Surface real past-period usage errors instead of masking them ([WAL-10071]), ensure two decimal places on usage data, and log current vs new component usage values.
-- **Core**: Group structlog-rendered Sentry events by message instead of dict representation.
-- **Core**: Add early exit in home directory creation for already-existing directories ([gh-15]).
-- **Waldur**: Fix reporting of lifetime usage as current-month usage.
-- **Waldur**: Add configurable resource-limit sync direction (`limit_sync_direction`) and skip no-op limit-update orders.
-- **Waldur**: Sync project OECD code, industry flag and science sub-domain ([WAL-10044]), and align resource end_date sync with project end_date sync ([WAL-10000]).
-- **CSCS-DWDI**: Fix month-boundary usage misattribution ([WAL-10166]) and inference reporting issues.
-- **Rancher-KC-CRD**: Report per-grant membership sync statuses, honor resource-scoped resync, warn about unmapped role grants, and fix misleading membership-sync logs.
+- **LiteLLM**: Add a new plugin for provisioning and usage reporting against LiteLLM (#12).
+- **Nextcloud**: Add a new plugin with backend, client and membership sync support.
+- **Envoy AI Gateway**: Add a new plugin for the site agent, including usage reporting (WAL-10066).
+- **Ceph S3**: Rename the `croit-s3` plugin to `ceph-s3` and add a radosgw client flavour alongside the Croit one (RWA-56).
+- **SLURM**: Add an optional slurmrestd REST API execution mode as an alternative to CLI-based `sacctmgr` calls.
+- **SLURM**: Add QoS-scoped associations and the `qos-=` operator (WAL-10154).
+- **SLURM**: Skip unchanged periodic settings and unchanged association limits to avoid redundant `sacctmgr` modifications.
+- **SLURM**: Match account names case-insensitively in `get_account_parent`, stop reparenting allocation accounts on project move, and fix allocation accounts left orphaned at root after a project reparent.
+- **SLURM**: Sanitize newlines in account descriptions (#17).
+- **Core**: Gate homedir creation and periodic settings on declared backend capabilities, and skip `create_user_homedirs` early when home directories already exist (gh-15).
+- **Core**: Keep orders pending on evaluation failures and transient API errors instead of marking them erred.
+- **Core**: Make service/course account sync best-effort so it can no longer push resources into an error state, and read those accounts via the offering-scoped endpoint.
+- **Core**: Allow omitting decreasing usage components instead of aborting the whole `set_usage` call.
+- **Core**: Round usage values to 2 decimal places and keep the idempotency check in sync; surface real past-period usage 400s instead of masking them (WAL-10071).
+- **Core**: Flag backend users for removal when they leave all projects (gh-13), and fix mass user add and revoke.
+- **Core**: Skip non-actionable order states in the STOMP handler, fetch offering context once per forced resources sync, and add enumeration so the liveness probe no longer kills pods during long per-offering processing.
+- **Core**: Group structlog-rendered Sentry events by message instead of dict repr, log current vs new component usage values, and report agent restart time in UTC.
+- **Federation**: Add configurable resource-limit sync direction (`limit_sync_direction`), sync project OECD code, industry flag and science sub-domain (WAL-10044), refactor resource `end_date` sync (WAL-10000), skip no-op limit-update orders, and keep users consented to a sibling offering in the shared project.
+- **Federation**: Fix reporting lifetime usage as current-month usage.
+- **CSCS DWDI**: Add inference usage reporting and fix month-boundary usage misattribution (WAL-10166).
+- **Rancher KC CRD**: Report per-grant membership sync statuses, honor resource-scoped resync, warn about unmapped role grants, fix misleading membership-sync logs, and add a manual testing guide.
 - **Helm**: Add ServiceAccount support to the chart.
-- **Dependencies**: Fix cryptography vulnerabilities flagged by the OSV scanner and bump click/pyasn1.
-- **Infrastructure**: Prepare RabbitMQ 4.3 upgrade compatibility, and change order process period configuration type from int to float.
+- **Core**: Fix a crash on trimmed `MePermission` payloads from `/api/users/me`, and change the order process period config type from int to float.
+- **Security**: Bump `cryptography`, `click` and `pyasn1` to clear OSV scanner findings.
 
-> 70 commits, 180 files changed (+24064/-3847 lines)
+> 73 commits, 192 files changed (+27428/-3847)
 
 ---
 
