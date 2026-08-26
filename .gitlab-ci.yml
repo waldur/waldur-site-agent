@@ -15,6 +15,8 @@ include:
     file: "/templates/test/vulnerability-scan.yml"
   - project: "waldur/waldur-pipelines"
     file: "/templates/test/license-scan.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/release/announce-slack.yml"
   # Temporarily disabled
   # - project: "waldur/waldur-pipelines"
   #   file: "/templates/sbom/upload-sboms-to-docs.yml"
@@ -792,6 +794,30 @@ Publish multiarch waldur-site-agent docker image (YOLO):
   stage: test
   variables:
     IMAGE_TAG: "opennode/${CI_PROJECT_NAME}:yolo"
+
+# Posts the CHANGELOG.md entry for the tag to Slack, to the same channels the
+# platform release is announced in. Runs in postdeploy behind the publish jobs,
+# so a tag whose artifacts never reached PyPI, the chart repository or Docker
+# Hub announces nothing.
+#
+# The `latest` image job only exists for stable tags, so it is depended on
+# optionally — otherwise every candidate would be blocked on a job that its own
+# pipeline never creates.
+Announce release on Slack:
+  extends: .Announce release on Slack template
+  stage: postdeploy
+  needs:
+    - job: "Publish python module tagged release with uv"
+    - job: "Publish new chart version and update docs on github"
+    - job: "Publish multiarch waldur-site-agent docker image with version"
+    - job: "Publish multiarch waldur-site-agent docker image latest"
+      optional: true
+  variables:
+    SLACK_PRODUCT_NAME: "Waldur Site Agent"
+    # CHANGELOG.md is not synced into waldur-docs, so the link points at the
+    # GitHub mirror, whose heading anchors keep the ' - ' as three hyphens.
+    SLACK_CHANGELOG_URL: "https://github.com/waldur/waldur-site-agent/blob/main/CHANGELOG.md"
+    SLACK_ANCHOR_STYLE: "github"
 
 # Fails when a dependency arrives under a licence Waldur cannot ship — strong
 # copyleft (GPL, AGPL), source-available (SSPL, BUSL, Elastic) or non-OSI
