@@ -18,6 +18,7 @@ members = [
     "waldur-site-agent-k8s-ut-namespace",
     "waldur-site-agent-keycloak-client",
     "waldur-site-agent-ldap",
+    "waldur-site-agent-litellm",
     "waldur-site-agent-moab",
     "waldur-site-agent-mup",
     "waldur-site-agent-nextcloud",
@@ -2313,6 +2314,21 @@ dependencies = [
 requires-dist = [
     { name = "jinja2", specifier = ">=3.0.0,<4.0" },
     { name = "ldap3", specifier = ">=2.9.0,<3" },
+    { name = "waldur-site-agent", editable = "." },
+]
+
+[[package]]
+name = "waldur-site-agent-litellm"
+version = "1.0.6rc17"
+source = { editable = "plugins/litellm" }
+dependencies = [
+    { name = "httpx" },
+    { name = "waldur-site-agent" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.25.0" },
     { name = "waldur-site-agent", editable = "." },
 ]
 
