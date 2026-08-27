@@ -2,6 +2,18 @@
 
 This guide covers production deployment of Waldur Site Agent using systemd services.
 
+> **Deploying on Kubernetes?** Use the published Helm chart instead:
+>
+> ```bash
+> helm repo add waldur https://waldur.github.io/waldur-site-agent
+> helm repo update
+> helm install waldur-site-agent waldur/waldur-site-agent
+> ```
+>
+> The chart runs the same agent modes described below as separate deployments.
+> See the [chart README](../helm/waldur-site-agent/README.md) for available
+> versions and configurable values.
+
 ## Deployment Overview
 
 The agent can run in 4 different modes, deployed as separate systemd services:

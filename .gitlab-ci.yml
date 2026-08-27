@@ -766,6 +766,10 @@ Publish new chart version and update docs on github:
     - git checkout $CI_COMMIT_TAG -- docs/ || true
     - git add README.md || true
     - git add docs/ || true
+    # Publish Artifact Hub repository metadata next to index.yaml so the
+    # repository is recognised as coming from a verified publisher
+    - git checkout $CI_COMMIT_TAG -- artifacthub-repo.yml || true
+    - git add artifacthub-repo.yml || true
     # Move archive to directory and update index
     - mkdir charts/ || true
     - mv waldur-site-agent-$CI_COMMIT_TAG.tgz charts/
