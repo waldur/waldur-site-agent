@@ -10,9 +10,51 @@ service provider backends (SLURM, MOAB, MUP clusters).
 - Kubernetes 1.19+
 - Helm 3.2.0+
 
+### Adding the Chart Repository
+
+Released charts are published to a Helm repository hosted on GitHub Pages:
+
+```bash
+helm repo add waldur https://waldur.github.io/waldur-site-agent
+helm repo update
+```
+
+List the available versions:
+
+```bash
+helm search repo waldur/waldur-site-agent --versions
+```
+
+Release candidates (for example `1.0.6-rc.19`) are pre-release versions and are
+hidden unless you pass `--devel`:
+
+```bash
+helm search repo waldur/waldur-site-agent --versions --devel
+```
+
+The chart is also indexed on Artifact Hub, which tracks the same repository:
+<https://artifacthub.io/packages/helm/waldur-site-agent/waldur-site-agent>
+
 ### Installing the Chart
 
 To install the chart with the release name `my-waldur-site-agent`:
+
+```bash
+helm install my-waldur-site-agent waldur/waldur-site-agent
+```
+
+Pin an explicit version (recommended for production). Add `--devel` when
+installing a release candidate:
+
+```bash
+helm install my-waldur-site-agent waldur/waldur-site-agent --version <VERSION>
+```
+
+The chart version mirrors the agent release version, and the chart's default
+`image.tag` is set to the matching agent image at release time.
+
+To install from a checkout of this repository instead — useful when developing
+the chart itself:
 
 ```bash
 helm install my-waldur-site-agent ./helm/waldur-site-agent
