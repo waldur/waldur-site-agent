@@ -28,62 +28,30 @@ include:
 # Avoid running two full pipelines for every MR-branch push. Job rules here match
 # both `$CI_COMMIT_BRANCH` and `merge_request_event`, so an MR branch push used to
 # spawn a redundant branch pipeline AND the merge-request pipeline for the same
-# SHA (~2x CI cost on every active MR). Suppress the branch pipeline when an MR is
-# open; tags, scheduled runs, upstream triggers, and branches without an open MR
-# still run normally.
+# SHA (~2x CI cost on every active MR). Branch pipelines are therefore limited to
+# `main`; feature branches are tested through their merge request. Pushing a
+# branch *before* opening its MR no longer triggers a pipeline either (that gap
+# used to cost a full run per new branch). Tags, scheduled runs, upstream
+# triggers and pipelines started from the web UI / API still run normally, as
+# does a push with `-o ci.variable=RUN_E2E=true` (the E2E escape hatch).
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+    - if: '$RUN_E2E == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != "main"'
       when: never
     - when: always
 
 variables:
   COMPONENT_VERSION: "latest"
-  # Project-relative uv cache dir so the default cache: block can persist it
-  # (uv's default cache lives outside $CI_PROJECT_DIR and can't be cached).
-  UV_CACHE_DIR: .uv-cache
+  # pre-commit hook environments are cached below; the dir must live inside
+  # $CI_PROJECT_DIR to be cacheable.
+  PRE_COMMIT_HOME: $CI_PROJECT_DIR/.cache/pre-commit
 
-# Default cache for all jobs: share uv's download cache across the pipeline keyed
-# on the lockfile. Previously the repo had NO cache, so all ~45 test jobs ran
-# `pip install uv && uv sync --all-packages` completely cold. Consumer jobs pull;
-# the .pre "Prime uv cache" job below is the single writer.
-cache: &uv_cache
-  key:
-    files:
-      - uv.lock
-  policy: pull
-  paths:
-    - .uv-cache
-
-Prime uv cache:
-  stage: .pre
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  interruptible: true
-  # Cache warming is best-effort: it must never red the pipeline. Without rules a
-  # job defaults to `only: branches/tags` and is skipped in MR pipelines (where it
-  # is most useful), so gate it explicitly on the same events as the consumers.
-  # allow_failure covers the occasional uv/hatchling build race in `uv sync`.
-  allow_failure: true
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: $CI_COMMIT_TAG
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
-  retry:
-    max: 2
-    when:
-      - runner_system_failure
-      - stuck_or_timeout_failure
-      - script_failure
-  cache:
-    <<: *uv_cache
-    policy: pull-push
-  script:
-    - pip install uv
-    - uv sync --all-packages
+# No uv cache: the runner cache is local-only and never hit by the test jobs
+# (every trace showed "Cache file does not exist"), while a cold
+# `uv sync --all-packages` takes ~5-10s. The former ".pre" cache-priming job also
+# serialised every pipeline behind itself for no benefit.
 
 # Helm linting and validation
 Lint helm chart:
@@ -92,6 +60,7 @@ Lint helm chart:
     entrypoint: [""]
   stage: test
   interruptible: true
+  needs: []
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
       when: never
@@ -125,289 +94,223 @@ Lint helm chart:
     paths:
       - rendered-templates
 
-# Base test template with common settings
+# ---------------------------------------------------------------------------
+# Unit tests
+#
+# Interpreter matrix: merge requests run only the supported floor and ceiling
+# (3.9, 3.13); the three interpreters in between run on main, tags and
+# scheduled pipelines via the "(3.10-3.12)" companion jobs. Suites are split into
+# three jobs -- core, slurm (the two long ones) and one job that loops over every
+# other plugin -- because the per-job overhead (runner prep + uv sync, ~30s) used
+# to exceed the pytest time of most plugin suites, and half a dozen plugins with
+# tests had no CI job at all.
+# ---------------------------------------------------------------------------
+
+.mr_python_versions: &mr_python_versions ["3.9", "3.13"]
+.extra_python_versions: &extra_python_versions ["3.10", "3.11", "3.12"]
+
 .Run tests base:
   stage: test
   interruptible: true
+  needs: []
   # script_failure is included because `uv sync` occasionally dies on a
-  # uv/hatchling build race in the extracted .uv-cache (same flake the
-  # "Prime uv cache" job retries for); the cost is one wasted re-run when
-  # a test failure is real.
+  # uv/hatchling build race; the cost is one wasted re-run when a test failure
+  # is real.
   retry: &uv_flake_retry
     max: 1
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
       - script_failure
-  # One image + matrix over all supported interpreters, shared by every suite
-  # job below. Replaces the 45 hand-written "Run python vX.Y <suite> tests" jobs
-  # and their 9 wrapper templates — adding a Python version is now one entry here.
   image: "registry.hpc.ut.ee/mirror/library/python:$PYTHON_VERSION"
   parallel:
     matrix:
-      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+      - PYTHON_VERSION: *mr_python_versions
   coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
-  # Hoisted from the 9 identical wrapper templates.
   before_script:
     - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
   artifacts:
     when: always
     expire_in: 1 week
     reports:
-      junit: report.xml
+      junit: report*.xml
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
 
-# Core tests template - runs tests/ directory
-Run core tests:
+# Rules shared by the "(3.10-3.12)" companion jobs: on merge requests only when
+# the pipeline definition itself changes, so a CI edit that breaks them cannot
+# reach main unexercised.
+.full_matrix_rules: &full_matrix_rules
+  - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+    when: never
+  - if: '$CI_COMMIT_BRANCH == "main"'
+  - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+  - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    changes:
+      - .gitlab-ci.yml
+
+.Core tests:
   extends: .Run tests base
+  script:
+    - pytest --cov=waldur_site_agent --cov-report=xml --cov-report=term --junitxml=report.xml tests/
+
+Run core tests:
+  extends: .Core tests
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
       when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
     - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - tests/**/*
-        - pyproject.toml
         - waldur_site_agent/**/*
+        - pyproject.toml
         - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=waldur_site_agent --cov-report=xml --cov-report=term --junitxml=report.xml tests/
+        - .gitlab-ci.yml
 
-# Plugin test templates - each runs only when its plugin or core changes
-Run slurm tests:
+Run core tests (3.10-3.12):
+  extends: .Core tests
+  parallel:
+    matrix:
+      - PYTHON_VERSION: *extra_python_versions
+  rules: *full_matrix_rules
+
+.Slurm tests:
   extends: .Run tests base
+  script:
+    - cd plugins/slurm
+    - pytest --cov=waldur_site_agent_slurm --cov-report=xml:$CI_PROJECT_DIR/coverage.xml --cov-report=term --junitxml=$CI_PROJECT_DIR/report.xml tests/ --ignore=tests/e2e
+
+Run slurm tests:
+  extends: .Slurm tests
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
       when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
     - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - plugins/slurm/**/*
-        - pyproject.toml
         - waldur_site_agent/**/*
+        - pyproject.toml
         - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/slurm --cov-report=xml --cov-report=term --junitxml=report.xml plugins/slurm/
+        - .gitlab-ci.yml
 
-Run mup tests:
+Run slurm tests (3.10-3.12):
+  extends: .Slurm tests
+  parallel:
+    matrix:
+      - PYTHON_VERSION: *extra_python_versions
+  rules: *full_matrix_rules
+
+# Every plugin except slurm, run one after another from inside its own directory
+# (entry points only resolve reliably that way -- see CLAUDE.md). A failure in
+# one plugin does not stop the others; the job fails at the end and the summary
+# names the offenders. e2e/ directories are gated by env vars anyway but are
+# skipped outright to keep collection cheap.
+.Plugin tests:
   extends: .Run tests base
+  script:
+    - |
+      failed=""
+      for tests_dir in plugins/*/tests; do
+        plugin_dir=$(dirname "$tests_dir")
+        plugin=$(basename "$plugin_dir")
+        [ "$plugin" = "slurm" ] && continue
+        package=$(cd "$plugin_dir" && ls -d waldur_site_agent_* 2>/dev/null | head -1)
+        echo ""
+        echo "=================== $plugin ==================="
+        if ! (cd "$plugin_dir" && pytest --cov="${package:-.}" \
+              --cov-report=xml:"$CI_PROJECT_DIR/coverage-$plugin.xml" --cov-report=term \
+              --junitxml="$CI_PROJECT_DIR/report-$plugin.xml" tests/ --ignore=tests/e2e); then
+          failed="$failed $plugin"
+        fi
+      done
+      echo ""
+      if [ -n "$failed" ]; then
+        echo "FAILED plugin suites:$failed"
+        exit 1
+      fi
+      echo "All plugin suites passed."
+  artifacts:
+    when: always
+    expire_in: 1 week
+    reports:
+      junit: report-*.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage-*.xml
+
+Run plugin tests:
+  extends: .Plugin tests
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
       when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
     - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
-        - plugins/mup/**/*
-        - pyproject.toml
+        - plugins/**/*
         - waldur_site_agent/**/*
+        - pyproject.toml
         - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/mup --cov-report=xml --cov-report=term --junitxml=report.xml plugins/mup/
+        - .gitlab-ci.yml
 
-Run harbor tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/harbor/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/harbor --cov-report=xml --cov-report=term --junitxml=report.xml plugins/harbor/
-
-Run nextcloud tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/nextcloud/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/nextcloud --cov-report=xml --cov-report=term --junitxml=report.xml plugins/nextcloud/
-
-Run okd tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/okd/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/okd --cov-report=xml --cov-report=term --junitxml=report.xml plugins/okd/
-
-Run rancher tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/rancher/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/rancher --cov-report=xml --cov-report=term --junitxml=report.xml plugins/rancher/
-
-Run ceph-s3 tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/ceph-s3/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/ceph-s3 --cov-report=xml --cov-report=term --junitxml=report.xml plugins/ceph-s3/
-
-Run cscs-dwdi tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/cscs-dwdi/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/cscs-dwdi --cov-report=xml --cov-report=term --junitxml=report.xml plugins/cscs-dwdi/
-
-Run litellm tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/litellm/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/litellm --cov-report=xml --cov-report=term --junitxml=report.xml plugins/litellm/
-
-Run waldur tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/waldur/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/waldur --cov-report=xml --cov-report=term --junitxml=report.xml plugins/waldur/ --ignore=plugins/waldur/tests/e2e/
+Run plugin tests (3.10-3.12):
+  extends: .Plugin tests
+  parallel:
+    matrix:
+      - PYTHON_VERSION: *extra_python_versions
+  rules: *full_matrix_rules
 
 Scan Python dependencies:
   extends: .Vulnerability scan template
   variables:
     LOCKFILE_PATH: "uv.lock"
 
-Run linters:
-  image: "registry.hpc.ut.ee/mirror/library/python:$PYTHON_VERSION"
+# Linters run once, on the newest interpreter. Only mypy is interpreter
+# sensitive (ruff's target-version is pinned in pyproject.toml, the rest is
+# YAML/Markdown/whitespace), so the supported floor gets a mypy-only job instead
+# of a second full pre-commit run.
+.Linters base:
   extends: .Run linters template
-  parallel:
-    matrix:
-      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+  image: "registry.hpc.ut.ee/mirror/library/python:$PYTHON_VERSION"
+  needs: []
+  # Keyed per interpreter: the two linter jobs run concurrently and would
+  # otherwise overwrite each other's hook environments.
+  cache:
+    key:
+      prefix: "pre-commit-py$PYTHON_VERSION"
+      files:
+        - .pre-commit-config.yaml
+    paths:
+      - .cache/pre-commit
   before_script:
     - |
       echo 'default_language_version:' >> .pre-commit-config.yaml
       echo "  python: python$PYTHON_VERSION" >> .pre-commit-config.yaml
-    - cat .pre-commit-config.yaml
+
+Run linters:
+  extends: .Linters base
+  variables:
+    PYTHON_VERSION: "3.13"
+
+Run mypy (3.9):
+  extends: .Linters base
+  variables:
+    PYTHON_VERSION: "3.9"
+  script:
+    - pip install pre-commit
+    - pre-commit run --all-files mypy
 
 # E2E integration tests: boots a minimal Waldur stack (PostgreSQL + RabbitMQ +
 # Mastermind API/Worker) via Docker-in-Docker, loads the site_agent_e2e demo
@@ -416,6 +319,7 @@ E2E integration tests:
   image: "registry.hpc.ut.ee/mirror/library/python:3.11"
   stage: test
   interruptible: true
+  needs: []
   # Same uv-flake / infrastructure retry as .Run tests base — this job also
   # runs `uv sync` and is not covered by that template.
   retry: *uv_flake_retry
@@ -652,11 +556,20 @@ E2E integration tests:
       - plugins/slurm/tests/e2e/*-report.json
     expire_in: 1 week
 
+# Lints the published opennode/waldur-site-agent:latest image from Docker Hub --
+# never the merge request's own content -- so there is nothing for it to verify
+# on an MR. It runs where the image can actually have changed.
 Lint docker image:
   extends: .Lint docker image template
+  needs: []
   variables:
     IMAGE: opennode/waldur-site-agent:latest
-    RUN_IMAGE_LINT: "true"
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
 
 Lint dockerfile:
   extends: .Lint dockerfile template
