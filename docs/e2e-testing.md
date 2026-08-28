@@ -71,6 +71,7 @@ and role assignments.
 ```bash
 docker compose -f ci/docker-compose.e2e.yml up waldur-db-migration
 docker compose -f ci/docker-compose.e2e.yml up -d
+# add `--profile ldap` (or COMPOSE_PROFILES=ldap) to also start OpenLDAP for test_e2e_ldap.py
 
 # Wait for API to be ready
 curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/
@@ -174,7 +175,8 @@ added to exactly one job's `script`, otherwise it never runs in CI.
 4. Wait for the Celery worker and the API (`curl http://docker:8080/api/`)
 5. Copy and load `site_agent_e2e` demo preset
 6. Force-set deterministic auth token
-7. Run the job's pytest invocations, each with its own config env var
+7. One `pytest` invocation over the job's test files, with coverage disabled
+   (`-o addopts=`) and every `WALDUR_E2E_*_CONFIG` variable the files need
 8. Collect JUnit XML reports, stack logs, and markdown reports as artifacts
 
 Steps 1-6 live in `before_script` and cost ~3 min per job; splitting the
@@ -196,7 +198,7 @@ suites across jobs trades that for running them in parallel (~21 min serial
 
 ### Artifacts
 
-- `e2e-report-rest.xml` / `e2e-report-stomp.xml` — JUnit test results
+- `e2e-report-*.xml` — JUnit test results (one file per job)
 - `waldur-stack-logs.txt` — Docker stack logs for debugging failures
 - `plugins/slurm/tests/e2e/*-report.md` — Detailed markdown reports with API call tables
 - `plugins/slurm/tests/e2e/*-report.json` — Machine-readable API call counts
