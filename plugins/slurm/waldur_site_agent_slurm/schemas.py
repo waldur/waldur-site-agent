@@ -120,6 +120,25 @@ class QosManagementConfig(PluginBackendSettingsSchema):
         default=None,
         description="Additional QoS names to attach to accounts (e.g., ['2cpu-single-host'])",
     )
+    skip_qos_swap: bool = Field(
+        default=False,
+        description=(
+            "When true, restore/pause/downscale do not overwrite the account QoS list "
+            "(no sacctmgr `set qos=`). Pause/downscale use GrpSubmitJobs=0 instead; "
+            "restore clears it with GrpSubmitJobs=-1. Same orthogonal lever as QoS "
+            "enforcement. Opt-in: dedicated per-account QoS must not be replaced by "
+            "qos_default/qos_paused/qos_downscaled. Default false keeps the classic "
+            "QoS-swap pause/restore path."
+        ),
+    )
+    apply_limits_to_qos: bool = Field(
+        default=False,
+        description=(
+            "When true, write/read GrpTRESMins on the per-account QoS instead of the "
+            "account association. Requires enabled and skip_qos_swap. Default false "
+            "keeps allocation limits on the account."
+        ),
+    )
 
 
 class LustreQuotaConfig(PluginBackendSettingsSchema):
@@ -321,6 +340,50 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
     periodic_limits: Optional[PeriodicLimitsConfig] = Field(
         default=None, description="Periodic limits configuration"
     )
+
+    @model_validator(mode="after")
+    def validate_qos_management_flags(self) -> SlurmBackendSettingsSchema:
+        """Reject incompatible qos_management flag combinations.
+
+        ``enabled`` keeps its original meaning (create a dedicated QoS). The
+        new flags are opt-in and default false, so existing qos_management
+        configs are unchanged. ``apply_limits_to_qos`` needs that QoS to
+        exist and must not be paired with the account-QoS-swap restore path.
+        ``skip_qos_swap`` cannot coexist with qos_paused/qos_downscaled —
+        those names would never be applied. With ``skip_qos_swap``,
+        ``qos_default`` is also dead config (restore never applies it).
+        """
+        qos_mgmt = self.qos_management
+        if qos_mgmt is None:
+            return self
+        if qos_mgmt.apply_limits_to_qos:
+            if not qos_mgmt.enabled:
+                msg = (
+                    "qos_management.apply_limits_to_qos requires qos_management.enabled "
+                    "so a dedicated per-account QoS exists to hold GrpTRESMins"
+                )
+                raise ValueError(msg)
+            if not qos_mgmt.skip_qos_swap:
+                msg = (
+                    "qos_management.apply_limits_to_qos requires qos_management.skip_qos_swap "
+                    "— otherwise restore/pause would overwrite the QoS that holds the budget"
+                )
+                raise ValueError(msg)
+        if qos_mgmt.skip_qos_swap and (self.qos_paused or self.qos_downscaled):
+            msg = (
+                "qos_management.skip_qos_swap is set but qos_paused/qos_downscaled are "
+                "also set — the account-QoS-swap pause would never run. Remove "
+                "qos_paused/qos_downscaled from this offering."
+            )
+            raise ValueError(msg)
+        if qos_mgmt.skip_qos_swap and self.qos_default and "qos_default" in self.model_fields_set:
+            msg = (
+                "qos_management.skip_qos_swap is set but qos_default is also set — "
+                "restore_resource will not apply qos_default. Remove qos_default "
+                "from this offering."
+            )
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def validate_qos_enforcement_conflict(self) -> SlurmBackendSettingsSchema:

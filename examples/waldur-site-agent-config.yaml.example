@@ -161,6 +161,11 @@ offerings: # Settings for offerings
         max_jobs: 10
         max_submit: 20
         max_wall: "2880"
+        # Opt-in (default false). Existing enabled-only deploys are unchanged.
+        # skip_qos_swap: true            # pause/downscale via GrpSubmitJobs; never set qos=
+        # apply_limits_to_qos: true      # GrpTRESMins on the QoS, not the account
+        # (apply_limits_to_qos requires enabled and skip_qos_swap; drop qos_default /
+        # qos_paused / qos_downscaled when skip_qos_swap is true)
       # Project directory on shared filesystem
       project_directory:
         enabled: true
@@ -223,6 +228,9 @@ offerings: # Settings for offerings
         max_wall: "120"
         min_tres_per_job: "gres/gpu=1"
         additional_qos: ["2cpu-single-host"]
+        # Opt-in (default false). Existing enabled-only deploys are unchanged.
+        # skip_qos_swap: true
+        # apply_limits_to_qos: true
     backend_components:
       billing:
         limit: 2328000

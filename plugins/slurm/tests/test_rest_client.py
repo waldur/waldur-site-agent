@@ -516,6 +516,65 @@ class TestQos:
         client.set_account_default_qos("acc1", "qos1")
         assert handler.body()["associations"][0]["default"] == {"qos": "qos1"}
 
+    def test_set_qos_grp_tres_mins_posts_qos_limits(self, client, handler):
+        handler.responses[f"GET /slurmdb/{API}/qos/qos1"] = envelope(qos=[])
+        client.set_qos_grp_tres_mins("qos1", {"billing": 19854000, "gres/gpu": 300000})
+        qos = handler.body(-1)["qos"][0]
+        assert qos["name"] == "qos1"
+        minutes = qos["limits"]["max"]["tres"]["group"]["minutes"]
+        assert {"count": 19854000, "type": "billing"} in minutes
+        assert {"count": 300000, "type": "gres", "name": "gpu"} in minutes
+
+    def test_set_qos_grp_tres_mins_merges_existing(self, client, handler):
+        handler.responses[f"GET /slurmdb/{API}/qos/qos1"] = envelope(
+            qos=[
+                {
+                    "name": "qos1",
+                    "limits": {
+                        "max": {
+                            "tres": {
+                                "group": {
+                                    "minutes": [
+                                        {"type": "billing", "count": 100},
+                                        {"type": "gres", "name": "gpu", "count": 50},
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                }
+            ]
+        )
+        client.set_qos_grp_tres_mins("qos1", {"billing": 200})
+        minutes = handler.body(-1)["qos"][0]["limits"]["max"]["tres"]["group"]["minutes"]
+        assert {"count": 200, "type": "billing"} in minutes
+        assert {"count": 50, "type": "gres", "name": "gpu"} in minutes
+
+    def test_get_qos_grp_tres_mins(self, client, handler):
+        handler.responses[f"GET /slurmdb/{API}/qos/qos1"] = envelope(
+            qos=[
+                {
+                    "name": "qos1",
+                    "limits": {
+                        "max": {
+                            "tres": {
+                                "group": {
+                                    "minutes": [
+                                        {"type": "billing", "count": 14428800},
+                                        {"type": "gres", "name": "gpu", "count": 216000},
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                }
+            ]
+        )
+        assert client.get_qos_grp_tres_mins("qos1") == {
+            "billing": 14428800,
+            "gres/gpu": 216000,
+        }
+
 
 class TestFairshareAndMisc:
     def test_set_account_fairshare(self, client, handler):

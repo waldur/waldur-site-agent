@@ -898,6 +898,36 @@ class SlurmRestClient(SlurmClientInterface):
         """Set the default QoS for the account."""
         self._post_association(account, {"default": {"qos": qos_name}})
 
+    def set_qos_grp_tres_mins(self, qos_name: str, limits_dict: dict[str, int]) -> None:
+        """Set GrpTRESMins on the named QoS via slurmrestd.
+
+        slurmrestd replaces the whole TRES list at
+        ``limits/max/tres/group/minutes``. Read-merge the incoming values over
+        the current list so unmentioned TRES (e.g. usage-based statics written
+        at create time) survive later partial updates — same parity goal as
+        ``set_account_limits``.
+        """
+        merged = self.get_qos_grp_tres_mins(qos_name)
+        merged.update({key: int(value) for key, value in limits_dict.items()})
+        tres = self._tres_dict_to_list(merged)
+        qos: dict[str, Any] = {"name": qos_name}
+        self._merge(qos, self._nested(("limits", "max", "tres", "group", "minutes"), tres))
+        self._request("POST", self._db("qos/"), body={"qos": [qos]})
+
+    def get_qos_grp_tres_mins(self, qos_name: str) -> dict[str, int]:
+        """Return GrpTRESMins of the named QoS."""
+        payload = self._request("GET", self._db(f"qos/{quote(qos_name)}"), allow_errors=True)
+        qos_list = payload.get("qos") or []
+        if not qos_list:
+            return {}
+        return self._tres_list_to_dict(
+            self._dig(qos_list[0], "limits", "max", "tres", "group", "minutes")
+        )
+
+    def reset_qos_raw_usage(self, qos_name: str) -> None:
+        """Reset QoS RawUsage — delegated to sacctmgr (no REST equivalent)."""
+        self._cli.reset_qos_raw_usage(qos_name)
+
     # ===== FAIRSHARE =====
 
     def set_account_fairshare(self, account: str, fairshare: int) -> bool:
