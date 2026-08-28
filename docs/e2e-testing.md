@@ -151,23 +151,35 @@ WALDUR_E2E_BENCH_RESOURCES=10 \
 
 ## CI pipeline
 
-The E2E job runs in the `E2E integration tests` stage in `.gitlab-ci.yml`.
-It triggers on pushes to `main` and release tags.
+The E2E suites run as three jobs in `.gitlab-ci.yml`, all extending a shared
+`.E2E base` that boots its own Waldur stack:
 
-### CI flow
+- `E2E: REST & STOMP` — REST suite, `test_e2e_stomp.py`,
+  `test_e2e_qos_backcompat.py`. Runs on MRs touching slurm/ldap/core/ci
+  files, on tags, and when `RUN_E2E_TESTS` / `RUN_E2E` is set.
+- `E2E: policy, QoS & LDAP` — `test_e2e_policy.py`,
+  `test_e2e_qos_polling.py`, `test_e2e_qos_stomp.py`, `test_e2e_ldap.py`.
+  Same triggers as above.
+- `E2E: QoS matrix` — `test_e2e_qos_matrix.py` (11 policy configs, ~5 min).
+  Runs on tags; on `main` / MRs only with `RUN_E2E_TESTS`.
+
+The REST job lists its test files explicitly. A new `test_e2e_*.py` must be
+added to exactly one job's `script`, otherwise it never runs in CI.
+
+### CI flow (per job)
 
 1. Install Docker CLI + Compose plugin (static binaries)
 2. `uv sync --all-packages` — install site-agent + slurm-emulator
 3. `docker compose -f ci/docker-compose.e2e.yml up` — boot Waldur stack
-4. Wait for API health check (`curl http://docker:8080/api/`)
+4. Wait for the Celery worker and the API (`curl http://docker:8080/api/`)
 5. Copy and load `site_agent_e2e` demo preset
 6. Force-set deterministic auth token
-7. **REST E2E tests** — `pytest plugins/slurm/tests/e2e/ --ignore=test_e2e_stomp.py`
-8. **STOMP E2E tests** — `pytest plugins/slurm/tests/e2e/test_e2e_stomp.py`
-9. Collect JUnit XML reports, stack logs, and markdown reports as artifacts
+7. Run the job's pytest invocations, each with its own config env var
+8. Collect JUnit XML reports, stack logs, and markdown reports as artifacts
 
-The REST and STOMP tests run sequentially in the same job to reuse the
-~14min Docker stack boot + migration time.
+Steps 1-6 live in `before_script` and cost ~3 min per job; splitting the
+suites across jobs trades that for running them in parallel (~21 min serial
+→ ~10 min wall).
 
 ### CI files
 
