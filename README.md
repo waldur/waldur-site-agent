@@ -103,13 +103,20 @@ you push.
 
 ## Documentation
 
-- [Architecture & Plugin Development](docs/architecture.md)
+For operators deploying the agent:
+
+- [Quickstart](docs/quickstart.md) - the fastest path from a fresh install to a running, verified agent
 - [Installation Guide](docs/installation.md)
 - [Configuration Reference](docs/configuration.md)
+- [Configuration Validation](docs/configuration-validation.md) - how config errors are reported, and how to read them
 - [Deployment Guide](docs/deployment.md)
 - [Upgrading Guide](docs/upgrading.md)
 - [Username Management](docs/offering-users.md)
 - [SLURM Usage Reporting Setup](docs/slurm-usage-reporting-setup.md)
+
+For contributors:
+
+- [Architecture & Plugin Development](docs/architecture.md)
 - [Releasing Guide](docs/releasing.md)
 
 ## Plugins
