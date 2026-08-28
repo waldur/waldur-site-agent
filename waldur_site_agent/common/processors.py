@@ -2909,6 +2909,15 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                         client=self.waldur_rest_client,
                     )
             except Exception as e:
+                if _is_transient_waldur_api_error(e):
+                    # Handle transient Waldur API errors.
+                    logger.warning(
+                        "Transient Waldur API error while processing allocation %s, "
+                        "keeping resource state unchanged: %s",
+                        waldur_resource.backend_id,
+                        e,
+                    )
+                    continue
                 logger.exception(
                     "Error while processing allocation %s: %s",
                     waldur_resource.backend_id,
