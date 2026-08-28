@@ -1,9 +1,8 @@
-"""Tests for transient Waldur API error handling during order processing.
+"""Tests for transient Waldur API error handling in order and membership sync.
 
 A transient server-side error (HTTP 5xx or a network failure) while talking to
-the Waldur API must not mark the order as erred: the order should keep its
-current state so the agent can retry on the next attempt or polling cycle.
-Client errors (4xx) still mark the order as erred.
+the Waldur API must not mark the order or resource as erred: the object should
+keep its current state so the agent can retry on the next cycle.
 """
 
 from unittest import mock
@@ -14,8 +13,14 @@ import pytest
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.request_types import RequestTypes
+from waldur_api_client.models.resource_state import ResourceState
 
-from waldur_site_agent.common.processors import OfferingOrderProcessor
+from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.structures import BackendResourceInfo
+from waldur_site_agent.common.processors import (
+    OfferingMembershipProcessor,
+    OfferingOrderProcessor,
+)
 
 
 @pytest.fixture()
@@ -44,11 +49,68 @@ def processor():
     return processor
 
 
-def make_unexpected_status(status_code: int) -> UnexpectedStatus:
+def make_unexpected_status(
+    status_code: int,
+    url: str = "https://waldur.example.com/api/marketplace-orders/",
+) -> UnexpectedStatus:
     return UnexpectedStatus(
         status_code=status_code,
         content=b"<html>Server Error</html>",
-        url=httpx.URL("https://waldur.example.com/api/marketplace-orders/"),
+        url=httpx.URL(url),
+    )
+
+
+@pytest.fixture()
+def mock_resource():
+    resource = mock.Mock()
+    resource.uuid = UUID("11111111-1111-1111-1111-111111111111")
+    resource.backend_id = "test-allocation-01"
+    resource.name = "test-resource"
+    resource.state = ResourceState.OK
+    return resource
+
+
+@pytest.fixture()
+def membership_processor():
+    processor = OfferingMembershipProcessor.__new__(OfferingMembershipProcessor)
+    processor.waldur_rest_client = mock.Mock()
+    processor.offering = mock.Mock()
+    processor.offering.uuid = "offering-uuid"
+    processor.offering.username_reconciliation_enabled = False
+    processor.resource_backend = mock.Mock()
+    processor.expose_backend_error_details = True
+    processor._refresh_local_offering_users = mock.Mock(return_value=[])
+    processor._sync_user_profiles_to_backend = mock.Mock()
+    processor._fetch_source_project = mock.Mock(return_value=None)
+    processor._sync_resource_users = mock.Mock(return_value=set())
+    processor._sync_resource_service_accounts = mock.Mock()
+    processor._sync_resource_course_accounts = mock.Mock()
+    processor._sync_resource_status = mock.Mock()
+    processor._sync_resource_limits = mock.Mock()
+    processor._sync_resource_user_limits = mock.Mock()
+    processor.resource_backend.sync_resource_project = mock.Mock()
+    processor.resource_backend.sync_project_end_date = mock.Mock()
+    processor.resource_backend.sync_resource_end_date = mock.Mock()
+    processor.resource_backend.sync_resource_effective_id = mock.Mock()
+    return processor
+
+
+def _membership_resource_report(resource):
+    return {
+        resource.backend_id: (
+            resource,
+            BackendResourceInfo(backend_id=resource.backend_id),
+        )
+    }
+
+
+def _refresh_last_sync_error(status_code: int) -> UnexpectedStatus:
+    return make_unexpected_status(
+        status_code,
+        url=(
+            "https://waldur.example.com/api/marketplace-provider-resources/"
+            "11111111-1111-1111-1111-111111111111/refresh_last_sync/"
+        ),
     )
 
 
@@ -208,3 +270,52 @@ def test_transport_errors_are_retried(
 
     assert processor.resource_backend.evaluate_pending_order.call_count == 3
     mock_erred.sync_detailed.assert_not_called()
+
+
+@mock.patch("waldur_site_agent.common.processors.marketplace_provider_resources_refresh_last_sync")
+@mock.patch("waldur_site_agent.common.processors.utils.mark_waldur_resources_as_erred")
+def test_membership_refresh_last_sync_500_does_not_erred_resource(
+    mock_mark_erred, mock_refresh_last_sync, membership_processor, mock_resource
+):
+    mock_refresh_last_sync.sync_detailed.side_effect = _refresh_last_sync_error(500)
+
+    membership_processor._process_resources(_membership_resource_report(mock_resource))
+
+    mock_mark_erred.assert_not_called()
+
+
+@mock.patch("waldur_site_agent.common.processors.marketplace_provider_resources_refresh_last_sync")
+@mock.patch("waldur_site_agent.common.processors.utils.mark_waldur_resources_as_erred")
+def test_membership_refresh_last_sync_transport_error_does_not_erred_resource(
+    mock_mark_erred, mock_refresh_last_sync, membership_processor, mock_resource
+):
+    mock_refresh_last_sync.sync_detailed.side_effect = httpx.ConnectError("connection refused")
+
+    membership_processor._process_resources(_membership_resource_report(mock_resource))
+
+    mock_mark_erred.assert_not_called()
+
+
+@mock.patch("waldur_site_agent.common.processors.marketplace_provider_resources_refresh_last_sync")
+@mock.patch("waldur_site_agent.common.processors.utils.mark_waldur_resources_as_erred")
+def test_membership_refresh_last_sync_429_does_not_erred_resource(
+    mock_mark_erred, mock_refresh_last_sync, membership_processor, mock_resource
+):
+    mock_refresh_last_sync.sync_detailed.side_effect = _refresh_last_sync_error(429)
+
+    membership_processor._process_resources(_membership_resource_report(mock_resource))
+
+    mock_mark_erred.assert_not_called()
+
+
+@mock.patch("waldur_site_agent.common.processors.marketplace_provider_resources_refresh_last_sync")
+@mock.patch("waldur_site_agent.common.processors.utils.mark_waldur_resources_as_erred")
+def test_membership_backend_error_still_marks_resource_erred(
+    mock_mark_erred, mock_refresh_last_sync, membership_processor, mock_resource
+):
+    membership_processor._sync_resource_users.side_effect = BackendError("SLURM is broken")
+
+    membership_processor._process_resources(_membership_resource_report(mock_resource))
+
+    mock_mark_erred.assert_called_once()
+    mock_refresh_last_sync.sync_detailed.assert_not_called()
