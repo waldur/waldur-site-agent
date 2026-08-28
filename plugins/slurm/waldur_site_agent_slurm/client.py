@@ -591,6 +591,37 @@ class SlurmClient(SlurmClientInterface):
             ["modify", "account", "set", f"defaultqos={qos_name}", "where", f"account={account}"]
         )
 
+    def set_qos_grp_tres_mins(self, qos_name: str, limits_dict: dict[str, int]) -> None:
+        """Set GrpTRESMins on the QoS (allocation budget lives on the QoS)."""
+        limits_str = ",".join([f"{key}={value}" for key, value in sorted(limits_dict.items())])
+        self._execute_command(["modify", "qos", qos_name, "set", f"GrpTRESMins={limits_str}"])
+
+    def get_qos_grp_tres_mins(self, qos_name: str) -> dict[str, int]:
+        """Return GrpTRESMins of the named QoS."""
+        output = self._execute_command(
+            ["show", "qos", qos_name, "format=Name,GrpTRESMins"],
+            immediate=False,
+        )
+        for line in output.splitlines():
+            if "|" not in line:
+                continue
+            name, _, tres_field = line.partition("|")
+            if name.strip() != qos_name:
+                continue
+            parsed = self._parse_tres_string(tres_field.strip())
+            result: dict[str, int] = {}
+            for key, value in parsed.items():
+                try:
+                    result[key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+            return result
+        return {}
+
+    def reset_qos_raw_usage(self, qos_name: str) -> None:
+        """Reset RawUsage on the QoS so the new GrpTRESMins budget starts clean."""
+        self._execute_command(["modify", "qos", qos_name, "set", "RawUsage=0"])
+
     def set_account_grp_submit_jobs(self, account: str, value: int) -> None:
         """Set GrpSubmitJobs on the account (``value=-1`` clears the limit).
 

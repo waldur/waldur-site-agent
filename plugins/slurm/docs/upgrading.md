@@ -69,8 +69,42 @@ Optional per-account QoS creation during resource provisioning is available via
 backend_settings:
   qos_management:
     enabled: true
+    # Opt-in; both default false so existing enabled-only configs are unchanged.
+    # skip_qos_swap: true         # pause/downscale/restore use GrpSubmitJobs, never set qos=
+    # apply_limits_to_qos: true   # GrpTRESMins on the QoS (requires enabled + skip_qos_swap)
     # ...other QoS management keys
 ```
+
+`skip_qos_swap` cannot be combined with `qos_default` / `qos_paused` /
+`qos_downscaled` — `SlurmBackend` construction raises `BackendError` (plugin
+schema validation alone is soft-fail and only logs a warning). Drop those keys
+on the offering that uses `skip_qos_swap`.
+
+**Trade-off:** with `skip_qos_swap`, Waldur `paused` / `downscaled` no longer change
+the account QoS list. Instead the agent sets `GrpSubmitJobs=0` (block new
+submissions) and clears it with `GrpSubmitJobs=-1` on restore — the same
+orthogonal lever used by QoS enforcement. Budget exhaustion is still enforced by
+`DenyOnLimit` on the dedicated QoS when `apply_limits_to_qos` is also on. This is
+compatible with QoS enforcement: enabling both does not silently disable pause.
+
+**`apply_limits_to_qos` prerequisites:**
+
+- Requires `enabled` and `skip_qos_swap`. Misconfiguration
+  (`apply_limits_to_qos` without `enabled`) is rejected at backend construction —
+  otherwise the agent would write GrpTRESMins to a QoS that was never created
+  and SLURM would silently leave the allocation uncapped.
+- The agent creates a QoS with the **same name as the allocation account** and
+  writes `GrpTRESMins` there. Do not enable this on an offering where a QoS with
+  that name already exists and is shared across accounts — creation is skipped when
+  the name exists; GrpTRESMins is still written, but `RawUsage` is **not** reset
+  on collision (only on a freshly created QoS).
+- When `backend_components` use `target_components` (one Waldur component mapped to
+  several SLURM TRES, e.g. `node_hours` → `billing` + `gres/gpu`), pushing limits
+  **from Waldur to SLURM** works. Pulling limits **from SLURM back into Waldur**
+  during periodic sync does not yet reverse-map multi-target caps — the sync step
+  no-ops and Waldur keeps the limits from the order. **Usage reporting (`sacct`) is
+  unaffected**; only the limit echo is incomplete until a single reverse source is
+  configured (follow-up).
 
 ## Account hierarchy and `sync_resource_project`
 

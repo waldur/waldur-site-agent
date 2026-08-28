@@ -113,6 +113,18 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
     def set_account_default_qos(self, account: str, qos_name: str) -> None:
         """Set the default QoS for an account."""
 
+    @abc.abstractmethod
+    def set_qos_grp_tres_mins(self, qos_name: str, limits_dict: dict[str, int]) -> None:
+        """Set GrpTRESMins on the named QoS (not the account association)."""
+
+    @abc.abstractmethod
+    def get_qos_grp_tres_mins(self, qos_name: str) -> dict[str, int]:
+        """Return GrpTRESMins of the named QoS as TRES-name to integer minutes."""
+
+    @abc.abstractmethod
+    def reset_qos_raw_usage(self, qos_name: str) -> None:
+        """Reset RawUsage on the named QoS (clean budget start)."""
+
     # ===== PARTITION-AWARE ASSOCIATIONS =====
 
     @abc.abstractmethod

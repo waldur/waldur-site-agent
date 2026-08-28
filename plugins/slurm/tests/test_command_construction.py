@@ -217,6 +217,36 @@ class TestCommandPrefixByMethod:
         c.reset_raw_usage("acct1")
         assert self._get_command(c).startswith("sacctmgr --parsable2 --noheader --immediate")
 
+    def test_set_qos_grp_tres_mins(self, client):
+        """set_qos_grp_tres_mins modifies the QoS, not the account."""
+        c, _ = client
+        c.set_qos_grp_tres_mins("acct1", {"billing": 19854000, "gres/gpu": 300000})
+        cmd = self._get_command(c)
+        assert cmd.startswith("sacctmgr --parsable2 --noheader --immediate")
+        assert "modify qos acct1 set GrpTRESMins=" in cmd
+        assert "billing=19854000" in cmd
+        assert "gres/gpu=300000" in cmd
+        assert "modify account" not in cmd
+
+    def test_get_qos_grp_tres_mins(self, client):
+        """get_qos_grp_tres_mins uses show qos without --immediate."""
+        c, mock_exec = client
+        mock_exec.return_value = "acct1|billing=14428800,gres/gpu=216000\n"
+        result = c.get_qos_grp_tres_mins("acct1")
+        cmd = self._get_command(c)
+        assert cmd.startswith("sacctmgr --parsable2 --noheader")
+        assert "--immediate" not in cmd
+        assert "show qos acct1" in cmd
+        assert result == {"billing": 14428800, "gres/gpu": 216000}
+
+    def test_reset_qos_raw_usage(self, client):
+        """reset_qos_raw_usage uses sacctmgr with all standard flags."""
+        c, _ = client
+        c.reset_qos_raw_usage("acct1")
+        cmd = self._get_command(c)
+        assert cmd.startswith("sacctmgr --parsable2 --noheader --immediate")
+        assert "modify qos acct1 set RawUsage=0" in cmd
+
     def test_get_account_fairshare_method(self, client):
         """get_account_fairshare uses sacctmgr with all standard flags."""
         c, mock_exec = client
