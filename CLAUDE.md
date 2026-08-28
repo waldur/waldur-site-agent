@@ -69,8 +69,9 @@ so manual tagging still works.
   (rancher, k8s-ut-namespace).
 - **Workspace sources**: Each plugin uses `[tool.uv.sources]`
   to map internal deps to the workspace during development.
-- **Python compatibility**: 3.9 through 3.13. CI runs tests
-  and linters across all five versions. Do **not** use
+- **Python compatibility**: 3.9 through 3.13. Merge requests
+  test on 3.9 and 3.13; `main`, tags and schedules run all five
+  (plus mypy on 3.9). Do **not** use
   `X | Y` union syntax or other 3.10+ features — use
   `Optional[X]` and `Union[X, Y]` from `typing` instead.
 - **Structured logging**: JSON format via structlog to stdout.
@@ -84,10 +85,15 @@ so manual tagging still works.
   `waldur/waldur-pipelines`.
 - Tag pushes trigger: PyPI publish (all packages), Helm chart
   publish (GitHub Pages), Docker image publish, SBOM generation.
-- MR/branch pushes trigger: linters (5 Python versions),
-  core tests (5 versions), plugin tests (5 versions each),
-  Helm lint, Dockerfile lint.
-- The `E2E integration tests` job in CI sets `WALDUR_E2E_TESTS=true`
+- Merge requests trigger (by changed paths): linters on 3.13 +
+  mypy on 3.9, `Run core tests`, `Run slurm tests` and one
+  `Run plugin tests` job that loops over every other
+  `plugins/*/tests` (each on 3.9 and 3.13), Helm lint,
+  Dockerfile lint, and the E2E jobs when slurm/ldap/core/ci
+  files change. Pushing a feature branch **without** an open MR
+  starts no pipeline (use `-o ci.variable=RUN_E2E=true` or the
+  web UI to force one).
+- The `E2E: *` jobs in CI set `WALDUR_E2E_TESTS=true`
   — so any test under `plugins/<plugin>/tests/e2e/` that isn't
   gated correctly will run there even though it's "manual-only"
   in your head. Verify gating with `pytest --collect-only` from

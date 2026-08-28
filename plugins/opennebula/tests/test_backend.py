@@ -614,7 +614,10 @@ class TestOpenNebulaClientNetworkOps:
         assert 'NAME="waldur_test_router"' in call_args[0][0]
 
     def test_instantiate_vr(self, client, mock_one):
-        mock_one.vrouter.instantiate.return_value = 500
+        # vrouter.instantiate returns the VR ID; the VM ID is read back
+        # from vrouter.info(...).VMS.ID.
+        mock_one.vrouter.instantiate.return_value = 30
+        mock_one.vrouter.info.return_value.VMS.ID = [500]
 
         vm_id = client._instantiate_vr(
             30, 8, "waldur_test_router_vm", 'NIC=[NETWORK_ID="50"]'
