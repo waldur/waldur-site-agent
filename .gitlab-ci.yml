@@ -339,6 +339,16 @@ Run mypy (3.9):
     DOCKER_TLS_CERTDIR: ""
     DOCKER_REGISTRY_PREFIX: "registry.hpc.ut.ee/mirror/"
     WALDUR_MASTERMIND_IMAGE_TAG: "latest"
+    # Common pytest environment; each job adds the WALDUR_E2E_*_CONFIG variables
+    # its test files read. Every test file reads exactly one config variable, so
+    # all suites of a job run in a single pytest invocation (one interpreter
+    # start + collection instead of one per suite).
+    WALDUR_E2E_TESTS: "true"
+    WALDUR_E2E_PROJECT_A_UUID: "e2eb0000000000000000000000000001"
+    # The E2E runs are not coverage-gated and coverage tracing adds ~65% to the
+    # agent code that runs between API calls, so the root addopts (--cov) are
+    # cleared for these jobs.
+    E2E_PYTEST: "pytest -o addopts= -v"
   before_script:
     # Install Docker CLI + Compose plugin (static binaries)
     - apt-get update -qq && apt-get install -y -qq curl
@@ -473,18 +483,19 @@ Run mypy (3.9):
 "E2E: REST & STOMP":
   extends: .E2E base
   rules: *e2e_mr_rules
+  variables:
+    WALDUR_E2E_CONFIG: ci/e2e-ci-config.yaml
+    WALDUR_E2E_STOMP_CONFIG: ci/e2e-ci-config-stomp.yaml
+    WALDUR_E2E_BENCH_RESOURCES: "5"
   script:
-    # REST suite (stomp_enabled=false). Files are listed explicitly rather than
+    # REST suite (stomp_enabled=false), then STOMP (stomp_enabled=true) and the
+    # QoS backwards-compatibility file. Files are listed explicitly rather than
     # via --ignore so that a new test_e2e_*.py gated on another job's config
     # variable is not silently collected here and skipped green; a new file must
     # be wired into exactly one job.
     - |
       source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_CONFIG=ci/e2e-ci-config.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      WALDUR_E2E_BENCH_RESOURCES=5 \
-      pytest -v --junitxml=e2e-report-rest.xml \
+      $E2E_PYTEST --junitxml=e2e-report-rest.xml \
         plugins/slurm/tests/e2e/test_e2e_api_optimizations.py \
         plugins/slurm/tests/e2e/test_e2e_benchmark.py \
         plugins/slurm/tests/e2e/test_e2e_default_account_policy.py \
@@ -493,52 +504,20 @@ Run mypy (3.9):
         plugins/slurm/tests/e2e/test_e2e_prepaid.py \
         plugins/slurm/tests/e2e/test_e2e_resources_sync.py \
         plugins/slurm/tests/e2e/test_e2e_rest_api.py \
-        plugins/slurm/tests/e2e/test_e2e_restore.py
-    # STOMP suite (stomp_enabled=true)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_STOMP_CONFIG=ci/e2e-ci-config-stomp.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_stomp.py -v \
-        --junitxml=e2e-report-stomp.xml
-    # QoS backwards-compatibility (legacy periodic-limits payload)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_CONFIG=ci/e2e-ci-config.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_qos_backcompat.py -v \
-        --junitxml=e2e-report-qos-backcompat.xml
+        plugins/slurm/tests/e2e/test_e2e_restore.py \
+        plugins/slurm/tests/e2e/test_e2e_stomp.py \
+        plugins/slurm/tests/e2e/test_e2e_qos_backcompat.py
 
 "E2E: policy, QoS & LDAP":
   extends: .E2E base
   rules: *e2e_mr_rules
+  variables:
+    WALDUR_E2E_POLICY_CONFIG: ci/e2e-ci-config-policy.yaml
+    WALDUR_E2E_STOMP_CONFIG: ci/e2e-ci-config-stomp.yaml
+    WALDUR_E2E_LDAP_CONFIG: ci/e2e-ci-config-ldap.yaml
+    # Only this job needs the OpenLDAP container (compose profile "ldap").
+    COMPOSE_PROFILES: ldap
   script:
-    # Policy suite (11 distinct SLURM policy configurations)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_POLICY_CONFIG=ci/e2e-ci-config-policy.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_policy.py -v \
-        --junitxml=e2e-report-policy.xml
-    # QoS-flow polling path (one policy offering, focused phases)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_POLICY_CONFIG=ci/e2e-ci-config-policy.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_qos_polling.py -v \
-        --junitxml=e2e-report-qos-polling.xml
-    # QoS-flow STOMP path (RESOURCE event -> agent -> emulator)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_STOMP_CONFIG=ci/e2e-ci-config-stomp.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_qos_stomp.py -v \
-        --junitxml=e2e-report-qos-stomp.xml
     # Wait for OpenLDAP to be ready
     - |
       echo "Waiting for OpenLDAP..."
@@ -556,14 +535,15 @@ Run mypy (3.9):
         fi
         sleep 2
       done
-    # Run LDAP E2E tests (LDAP + SLURM emulator)
+    # Policy suite (11 SLURM policy configurations), QoS-flow polling path,
+    # QoS-flow STOMP path (RESOURCE event -> agent -> emulator), LDAP suite.
     - |
       source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_LDAP_CONFIG=ci/e2e-ci-config-ldap.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_ldap.py -v \
-        --junitxml=e2e-report-ldap.xml
+      $E2E_PYTEST --junitxml=e2e-report-policy-qos-ldap.xml \
+        plugins/slurm/tests/e2e/test_e2e_policy.py \
+        plugins/slurm/tests/e2e/test_e2e_qos_polling.py \
+        plugins/slurm/tests/e2e/test_e2e_qos_stomp.py \
+        plugins/slurm/tests/e2e/test_e2e_ldap.py
 
 "E2E: QoS matrix":
   extends: .E2E base
@@ -576,15 +556,14 @@ Run mypy (3.9):
     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
     - if: '$RUN_E2E_TESTS && $CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$RUN_E2E == "true"'
+  variables:
+    WALDUR_E2E_POLICY_CONFIG: ci/e2e-ci-config-policy.yaml
   script:
     # QoS matrix across all 11 policy configs
     - |
       source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_POLICY_CONFIG=ci/e2e-ci-config-policy.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_qos_matrix.py -v \
-        --junitxml=e2e-report-qos-matrix.xml
+      $E2E_PYTEST --junitxml=e2e-report-qos-matrix.xml \
+        plugins/slurm/tests/e2e/test_e2e_qos_matrix.py
 
 # Lints the published opennode/waldur-site-agent:latest image from Docker Hub --
 # never the merge request's own content -- so there is nothing for it to verify

@@ -78,6 +78,9 @@ services:
 
   waldur-ldap:
     image: "${DOCKER_REGISTRY_PREFIX}osixia/openldap:1.5.0"
+    # Only the LDAP E2E suite needs this container: start it with
+    # `docker compose --profile ldap up` / COMPOSE_PROFILES=ldap.
+    profiles: ["ldap"]
     environment:
       LDAP_ORGANISATION: "SofiaTech"
       LDAP_DOMAIN: "sofiatech.bg"
