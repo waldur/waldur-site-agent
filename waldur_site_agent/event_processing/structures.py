@@ -5,9 +5,11 @@ from __future__ import annotations
 from typing import Optional, TypedDict
 
 import stomp
-from waldur_api_client.models.event_subscription import EventSubscription
 
 from waldur_site_agent.common import structures as common_structures
+from waldur_site_agent.common.structures import UnifiedQueue
+
+__all__ = ["UnifiedQueue"]  # re-exported for event-processing callers
 
 
 class ObservableObject(TypedDict):
@@ -26,8 +28,9 @@ class ObservableObject(TypedDict):
 # A tuple of offering name and UUID used as a key for connection mapping.
 StompConsumerKey = tuple[str, str]
 
-# A tuple containing STOMP connection, subscription, and offering information.
-StompConsumer = tuple[stomp.WSStompConnection, EventSubscription, common_structures.Offering]
+# A tuple containing STOMP connection, unified-queue descriptor, and offering.
+# Unified path: exactly one StompConsumer per offering (one queue, all types).
+StompConsumer = tuple[stomp.WSStompConnection, UnifiedQueue, common_structures.Offering]
 
 StompConsumersMap = dict[StompConsumerKey, list[StompConsumer]]
 

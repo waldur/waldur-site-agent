@@ -21,6 +21,7 @@ from unittest import mock
 from stomp.utils import calculate_heartbeats
 
 from waldur_site_agent.common import structures as common_structures
+from waldur_site_agent.common.structures import UnifiedQueue
 from waldur_site_agent.event_processing.event_subscription_manager import (
     EventSubscriptionManager,
 )
@@ -81,9 +82,11 @@ class TestSetupStompConnectionHeartbeats(unittest.TestCase):
             stomp_ws_path="/ws",
         )
 
-        self.event_subscription = mock.Mock()
-        self.event_subscription.uuid = uuid.uuid4()
-        self.event_subscription.user_uuid = uuid.uuid4()
+        self.unified_queue = UnifiedQueue(
+            queue_name=f"consumer_{uuid.uuid4().hex}",
+            rmq_username=uuid.uuid4().hex,
+            vhost=uuid.uuid4().hex,
+        )
 
     @mock.patch("waldur_site_agent.event_processing.event_subscription_manager.stomp.WSStompConnection")
     def test_heartbeats_passed_to_connection_constructor(self, mock_ws_conn_class):
@@ -95,13 +98,10 @@ class TestSetupStompConnectionHeartbeats(unittest.TestCase):
         mock_connection = mock_ws_conn_class.return_value
         mock_connection.transport = mock.Mock()
 
-        manager = EventSubscriptionManager(
-            offering=self.offering,
-            observable_object_type="order",
-        )
+        manager = EventSubscriptionManager(offering=self.offering)
 
         manager.setup_stomp_connection(
-            self.event_subscription,
+            self.unified_queue,
             self.offering.stomp_ws_host,
             self.offering.stomp_ws_port,
             self.offering.stomp_ws_path,

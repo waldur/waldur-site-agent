@@ -8,9 +8,10 @@ from unittest import mock
 import httpx
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.errors import UnexpectedStatus
-from waldur_api_client.models import AgentIdentity, EventSubscription, ObservableObjectTypeEnum
+from waldur_api_client.models import AgentIdentity, ObservableObjectTypeEnum
 
 from waldur_site_agent.common import structures as common_structures
+from waldur_site_agent.common.structures import UnifiedQueue
 from waldur_site_agent.event_processing import utils
 
 
@@ -202,8 +203,8 @@ class TestRegisterIdentity(unittest.TestCase):
         mock_manager.register_identity.assert_called_once()
 
 
-class TestSetupSingleSubscription(unittest.TestCase):
-    """Tests for _setup_single_stomp_subscription function."""
+class TestSetupUnifiedConnection(unittest.TestCase):
+    """Tests for _setup_unified_stomp_connection (one register_queue + one connection)."""
 
     def setUp(self) -> None:
         """Set up test fixtures."""
@@ -218,162 +219,91 @@ class TestSetupSingleSubscription(unittest.TestCase):
             stomp_ws_port=443,
             stomp_ws_path="/rmqws-stomp",
         )
-        self.waldur_rest_client = AuthenticatedClient(
-            base_url="https://waldur.example.com",
-            token="test_token",
-            headers={},
-        )
         self.mock_identity = mock.Mock(spec=AgentIdentity)
         self.mock_identity.uuid = uuid.uuid4()
         self.mock_identity.name = f"agent-{self.offering.waldur_offering_uuid}"
         self.mock_identity.user_uuid = uuid.uuid4()
 
-        self.mock_event_subscription = mock.Mock(spec=EventSubscription)
-        self.mock_event_subscription.uuid = uuid.uuid4()
-        self.mock_event_subscription.user_uuid = uuid.uuid4()
-
+        self.unified_queue = UnifiedQueue(
+            queue_name=f"consumer_{uuid.uuid4().hex}",
+            rmq_username=uuid.uuid4().hex,
+            vhost=uuid.uuid4().hex,
+            observable_object_types=["order", "user_role"],
+            agent_identity_uuid=self.mock_identity.uuid.hex,
+        )
         self.mock_identity_manager = mock.Mock()
-        self.object_type = ObservableObjectTypeEnum.ORDER
+        self.object_types = [
+            ObservableObjectTypeEnum.ORDER,
+            ObservableObjectTypeEnum.USER_ROLE,
+        ]
 
     @mock.patch("waldur_site_agent.event_processing.utils.EventSubscriptionManager")
-    def test_successful_subscription_setup(self, mock_esm_class):
-        """Test successful STOMP subscription setup."""
-        # Setup mocks
-        self.mock_identity_manager.register_event_subscription.return_value = (
-            self.mock_event_subscription
-        )
-        self.mock_identity_manager.create_event_subscription_queue.return_value = mock.Mock()
-
+    def test_successful_unified_setup(self, mock_esm_class):
+        """One register_queue + one connection -> (connection, unified_queue, offering)."""
+        self.mock_identity_manager.register_queue.return_value = self.unified_queue
         mock_connection = mock.Mock()
         mock_esm = mock_esm_class.return_value
         mock_esm.setup_stomp_connection.return_value = mock_connection
         mock_esm.start_stomp_connection.return_value = True
 
-        # Call function
-        result = utils._setup_single_stomp_subscription(
+        result = utils._setup_unified_stomp_connection(
             self.offering,
             self.mock_identity,
             self.mock_identity_manager,
             "test-agent",
-            self.object_type,
+            self.object_types,
         )
 
-        # Verify
         self.assertIsNotNone(result)
         self.assertEqual(result[0], mock_connection)
-        self.assertEqual(result[1], self.mock_event_subscription)
+        self.assertEqual(result[1], self.unified_queue)
         self.assertEqual(result[2], self.offering)
+        # register_queue called ONCE with the full type list (not per-type).
+        self.mock_identity_manager.register_queue.assert_called_once_with(
+            self.mock_identity, self.object_types
+        )
 
-    def test_event_subscription_registration_fails(self):
-        """Test returns None when event subscription registration fails."""
-        # Setup mock to raise exception
-        self.mock_identity_manager.register_event_subscription.side_effect = UnexpectedStatus(
+    def test_register_queue_fails(self):
+        """Returns None when register_queue raises."""
+        self.mock_identity_manager.register_queue.side_effect = UnexpectedStatus(
             500, b"API Error", "https://test.com/api/"
         )
-
-        # Call function
-        result = utils._setup_single_stomp_subscription(
+        result = utils._setup_unified_stomp_connection(
             self.offering,
             self.mock_identity,
             self.mock_identity_manager,
             "test-agent",
-            self.object_type,
+            self.object_types,
         )
-
-        # Verify
-        self.assertIsNone(result)
-
-    @mock.patch("waldur_site_agent.event_processing.utils.EventSubscriptionManager")
-    def test_queue_creation_fails(self, mock_esm_class):
-        """Test returns None when queue creation returns None."""
-        # Setup mocks
-        self.mock_identity_manager.register_event_subscription.return_value = (
-            self.mock_event_subscription
-        )
-        self.mock_identity_manager.create_event_subscription_queue.return_value = None
-
-        # Call function
-        result = utils._setup_single_stomp_subscription(
-            self.offering,
-            self.mock_identity,
-            self.mock_identity_manager,
-            "test-agent",
-            self.object_type,
-        )
-
-        # Verify
-        self.assertIsNone(result)
-        mock_esm_class.assert_not_called()
-
-    @mock.patch("waldur_site_agent.event_processing.utils.EventSubscriptionManager")
-    def test_connection_setup_fails(self, mock_esm_class):
-        """Test returns None when connection setup fails."""
-        # Setup mocks
-        self.mock_identity_manager.register_event_subscription.return_value = (
-            self.mock_event_subscription
-        )
-        self.mock_identity_manager.create_event_subscription_queue.return_value = mock.Mock()
-
-        mock_esm = mock_esm_class.return_value
-        mock_esm.setup_stomp_connection.return_value = None
-        mock_esm.start_stomp_connection.return_value = False
-
-        # Call function
-        result = utils._setup_single_stomp_subscription(
-            self.offering,
-            self.mock_identity,
-            self.mock_identity_manager,
-            "test-agent",
-            self.object_type,
-        )
-
-        # Verify - even if connection setup returns None, we still try to start it
-        # The function should return None because start returns False
         self.assertIsNone(result)
 
     @mock.patch("waldur_site_agent.event_processing.utils.EventSubscriptionManager")
     def test_connection_start_fails(self, mock_esm_class):
-        """Test returns None when connection start returns False."""
-        # Setup mocks
-        self.mock_identity_manager.register_event_subscription.return_value = (
-            self.mock_event_subscription
-        )
-        self.mock_identity_manager.create_event_subscription_queue.return_value = mock.Mock()
-
-        mock_connection = mock.Mock()
+        """Returns None when the STOMP connection fails to start."""
+        self.mock_identity_manager.register_queue.return_value = self.unified_queue
         mock_esm = mock_esm_class.return_value
-        mock_esm.setup_stomp_connection.return_value = mock_connection
+        mock_esm.setup_stomp_connection.return_value = mock.Mock()
         mock_esm.start_stomp_connection.return_value = False
 
-        # Call function
-        result = utils._setup_single_stomp_subscription(
+        result = utils._setup_unified_stomp_connection(
             self.offering,
             self.mock_identity,
             self.mock_identity_manager,
             "test-agent",
-            self.object_type,
+            self.object_types,
         )
-
-        # Verify
         self.assertIsNone(result)
 
     def test_timeout_during_registration(self):
-        """Test returns None when timeout occurs during registration."""
-        # Setup mock to raise timeout
-        self.mock_identity_manager.register_event_subscription.side_effect = httpx.TimeoutException(
-            "Timeout"
-        )
-
-        # Call function
-        result = utils._setup_single_stomp_subscription(
+        """Returns None when register_queue times out."""
+        self.mock_identity_manager.register_queue.side_effect = httpx.TimeoutException("Timeout")
+        result = utils._setup_unified_stomp_connection(
             self.offering,
             self.mock_identity,
             self.mock_identity_manager,
             "test-agent",
-            self.object_type,
+            self.object_types,
         )
-
-        # Verify
         self.assertIsNone(result)
 
 
@@ -395,44 +325,40 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
             stomp_ws_path="/rmqws-stomp",
         )
 
-    @mock.patch("waldur_site_agent.event_processing.utils._setup_single_stomp_subscription")
+    @mock.patch("waldur_site_agent.event_processing.utils._setup_unified_stomp_connection")
     @mock.patch("waldur_site_agent.event_processing.utils._register_agent_identity")
     @mock.patch("waldur_site_agent.event_processing.utils._determine_observable_object_types")
     @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
-    def test_successful_setup_all_features(
+    def test_successful_setup_one_connection_for_all_types(
         self,
         mock_get_client,
         mock_determine_types,
         mock_register_identity,
-        mock_setup_single,
+        mock_setup_unified,
     ):
-        """Test successful setup when all features are enabled."""
-        # Setup mocks
-        mock_rest_client = mock.Mock()
-        mock_get_client.return_value = mock_rest_client
-
+        """Unified: ONE connection regardless of how many object types are enabled."""
+        mock_get_client.return_value = mock.Mock()
         mock_determine_types.return_value = [
             ObservableObjectTypeEnum.ORDER,
             ObservableObjectTypeEnum.USER_ROLE,
+            ObservableObjectTypeEnum.RESOURCE,
         ]
-
         mock_identity = mock.Mock()
         mock_identity_manager = mock.Mock()
         mock_register_identity.return_value = (mock_identity, mock_identity_manager)
 
-        mock_consumer1 = (mock.Mock(), mock.Mock(), self.offering)
-        mock_consumer2 = (mock.Mock(), mock.Mock(), self.offering)
-        mock_setup_single.side_effect = [mock_consumer1, mock_consumer2]
+        mock_consumer = (mock.Mock(), mock.Mock(), self.offering)
+        mock_setup_unified.return_value = mock_consumer
 
-        # Call function
         result = utils.setup_stomp_offering_subscriptions(self.offering, "test-agent")
 
-        # Verify
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0], mock_consumer1)
-        self.assertEqual(result[1], mock_consumer2)
-        mock_setup_single.assert_called()
-        self.assertEqual(mock_setup_single.call_count, 2)
+        # Exactly one consumer, from exactly one _setup_unified_stomp_connection call,
+        # which received the FULL type list.
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], mock_consumer)
+        self.assertEqual(mock_setup_unified.call_count, 1)
+        called_types = mock_setup_unified.call_args.args[4]
+        self.assertEqual(len(called_types), 3)
 
     @mock.patch("waldur_site_agent.event_processing.utils._register_agent_identity")
     @mock.patch("waldur_site_agent.event_processing.utils._determine_observable_object_types")
@@ -441,109 +367,43 @@ class TestSetupStompSubscriptionsIntegration(unittest.TestCase):
         self, mock_get_client, mock_determine_types, mock_register_identity
     ):
         """Test returns empty list when identity registration fails."""
-        # Setup mocks
-        mock_rest_client = mock.Mock()
-        mock_get_client.return_value = mock_rest_client
-
+        mock_get_client.return_value = mock.Mock()
         mock_determine_types.return_value = [ObservableObjectTypeEnum.ORDER]
         mock_register_identity.return_value = None  # Registration fails
 
-        # Call function
         result = utils.setup_stomp_offering_subscriptions(self.offering, "test-agent")
-
-        # Verify
         self.assertEqual(result, [])
 
-    @mock.patch("waldur_site_agent.event_processing.utils._setup_single_stomp_subscription")
-    @mock.patch("waldur_site_agent.event_processing.utils._register_agent_identity")
     @mock.patch("waldur_site_agent.event_processing.utils._determine_observable_object_types")
     @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
-    def test_partial_subscription_failures(
-        self,
-        mock_get_client,
-        mock_determine_types,
-        mock_register_identity,
-        mock_setup_single,
-    ):
-        """Test returns successful subscriptions when some fail."""
-        # Setup mocks
-        mock_rest_client = mock.Mock()
-        mock_get_client.return_value = mock_rest_client
-
-        mock_determine_types.return_value = [
-            ObservableObjectTypeEnum.ORDER,
-            ObservableObjectTypeEnum.USER_ROLE,
-            ObservableObjectTypeEnum.RESOURCE,
-        ]
-
-        mock_identity = mock.Mock()
-        mock_identity_manager = mock.Mock()
-        mock_register_identity.return_value = (mock_identity, mock_identity_manager)
-
-        mock_consumer1 = (mock.Mock(), mock.Mock(), self.offering)
-        # First succeeds, second fails, third succeeds
-        mock_setup_single.side_effect = [mock_consumer1, None, mock_consumer1]
-
-        # Call function
-        result = utils.setup_stomp_offering_subscriptions(self.offering, "test-agent")
-
-        # Verify - only 2 successful subscriptions returned
-        self.assertEqual(len(result), 2)
-        self.assertEqual(mock_setup_single.call_count, 3)
-
-    @mock.patch("waldur_site_agent.event_processing.utils._register_agent_identity")
-    @mock.patch("waldur_site_agent.event_processing.utils._determine_observable_object_types")
-    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
-    def test_no_object_types_returns_empty(
-        self, mock_get_client, mock_determine_types, mock_register_identity
-    ):
-        """Test returns empty list when no features are enabled."""
-        # Setup mocks
-        mock_rest_client = mock.Mock()
-        mock_get_client.return_value = mock_rest_client
+    def test_no_object_types_returns_empty(self, mock_get_client, mock_determine_types):
+        """No enabled features -> no queue registered, empty result."""
+        mock_get_client.return_value = mock.Mock()
         mock_determine_types.return_value = []  # No object types
-        mock_register_identity.return_value = (
-            mock.Mock(),
-            mock.Mock(),
-        )  # Identity succeeds but no types
 
-        # Call function
         result = utils.setup_stomp_offering_subscriptions(self.offering, "test-agent")
-
-        # Verify
         self.assertEqual(result, [])
 
-    @mock.patch("waldur_site_agent.event_processing.utils._setup_single_stomp_subscription")
+    @mock.patch("waldur_site_agent.event_processing.utils._setup_unified_stomp_connection")
     @mock.patch("waldur_site_agent.event_processing.utils._register_agent_identity")
     @mock.patch("waldur_site_agent.event_processing.utils._determine_observable_object_types")
     @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
-    def test_all_subscriptions_fail(
+    def test_connection_setup_fails_returns_empty(
         self,
         mock_get_client,
         mock_determine_types,
         mock_register_identity,
-        mock_setup_single,
+        mock_setup_unified,
     ):
-        """Test returns empty list when all individual setups fail."""
-        # Setup mocks
-        mock_rest_client = mock.Mock()
-        mock_get_client.return_value = mock_rest_client
-
+        """Test returns empty list when the unified connection setup fails."""
+        mock_get_client.return_value = mock.Mock()
         mock_determine_types.return_value = [
             ObservableObjectTypeEnum.ORDER,
             ObservableObjectTypeEnum.USER_ROLE,
         ]
+        mock_register_identity.return_value = (mock.Mock(), mock.Mock())
+        mock_setup_unified.return_value = None  # setup fails
 
-        mock_identity = mock.Mock()
-        mock_identity_manager = mock.Mock()
-        mock_register_identity.return_value = (mock_identity, mock_identity_manager)
-
-        # All setups fail
-        mock_setup_single.return_value = None
-
-        # Call function
         result = utils.setup_stomp_offering_subscriptions(self.offering, "test-agent")
-
-        # Verify
         self.assertEqual(result, [])
-        self.assertEqual(mock_setup_single.call_count, 2)
+        self.assertEqual(mock_setup_unified.call_count, 1)

@@ -14,6 +14,7 @@ from __future__ import annotations
 # Import after to avoid circular imports
 import logging
 import zoneinfo
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
@@ -603,3 +604,20 @@ class AccountType(Enum):
 
     SERVICE_ACCOUNT = "service_account"
     COURSE_ACCOUNT = "course_account"
+
+
+@dataclass
+class UnifiedQueue:
+    """Descriptor of a single unified consumer queue (``consumer_{uuid}``).
+
+    Returned by ``AgentIdentityManager.register_queue()``. One queue per agent
+    identity receives ALL observable object types; the object type of each
+    message is carried in the payload, so routing happens per-message rather
+    than per-queue (unlike the legacy per-object-type subscription queues).
+    """
+
+    queue_name: str
+    rmq_username: str
+    vhost: str
+    observable_object_types: list[str] = field(default_factory=list)
+    agent_identity_uuid: str = ""

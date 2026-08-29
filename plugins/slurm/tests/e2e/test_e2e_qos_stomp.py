@@ -64,6 +64,7 @@ from waldur_site_agent.common.utils import get_client, load_configuration
 from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.event_subscription_manager import (
     WALDUR_LISTENER_NAME,
+    route_message,
 )
 from waldur_site_agent.event_processing.utils import (
     setup_stomp_offering_subscriptions,
@@ -406,18 +407,23 @@ def qos_stomp_consumers(request, qos_stomp_offering, resource_capture):
         delegate=handlers.on_resource_message_stomp
     )
 
-    for conn, event_subscription, _offering in consumers:
-        observable_objects = getattr(event_subscription, "observable_objects", [])
-        for obj in observable_objects:
-            if obj.object_type == ObservableObjectTypeEnum.RESOURCE.value:
-                listener = conn.get_listener(WALDUR_LISTENER_NAME)
-                if listener:
-                    listener.on_message_callback = resource_handler
-                    logger.info(
-                        "Hooked RESOURCE event handler for offering %s",
-                        _offering.name,
-                    )
-                break
+    def capturing_router(frame, offering, user_agent, expose_backend_error_details=True):
+        # Unified queue: intercept RESOURCE by payload object_type, fall through
+        # to the agent's own router (ORDER etc.) for everything else.
+        if json.loads(frame.body).get("object_type") == ObservableObjectTypeEnum.RESOURCE.value:
+            resource_handler(frame, offering, user_agent, expose_backend_error_details)
+        else:
+            route_message(frame, offering, user_agent, expose_backend_error_details)
+
+    for conn, unified_queue, _offering in consumers:
+        listener = conn.get_listener(WALDUR_LISTENER_NAME)
+        if listener:
+            listener.on_message_callback = capturing_router
+            logger.info(
+                "Hooked RESOURCE capture on queue %s for offering %s",
+                unified_queue.queue_name,
+                _offering.name,
+            )
 
     consumers_map = {(qos_stomp_offering.name, qos_stomp_offering.uuid): consumers}
 

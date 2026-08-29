@@ -8,6 +8,7 @@ import sys
 import types
 from collections.abc import Generator
 from contextlib import contextmanager
+from typing import Callable, Optional
 
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_offering_users import marketplace_offering_users_list
@@ -135,78 +136,68 @@ def _register_agent_identity(
         return None
 
 
-def _setup_single_stomp_subscription(
+def _setup_unified_stomp_connection(
     offering: common_structures.Offering,
     agent_identity: agent_identity_management.AgentIdentity,
     agent_identity_manager: agent_identity_management.AgentIdentityManager,
     waldur_user_agent: str,
-    object_type: ObservableObjectTypeEnum,
+    object_types: list[ObservableObjectTypeEnum],
     global_proxy: str = "",
     expose_backend_error_details: bool = True,
+    on_message_callback: Optional[Callable] = None,
 ) -> StompConsumer | None:
-    """Setup a single STOMP subscription for the given object type.
+    """Register the single unified consumer queue and open ONE STOMP connection.
+
+    Replaces the legacy per-object-type setup: one register_queue call binds all
+    requested object types to a single ``consumer_{uuid}`` queue, and one STOMP
+    connection drains it with payload-based routing (see route_message).
 
     Args:
-        offering: The Waldur offering configuration
-        agent_identity: The registered agent identity
-        agent_identity_manager: Manager for agent identity operations
-        waldur_user_agent: User agent string
-        object_type: Type of observable object to subscribe to
-        global_proxy: Optional proxy configuration
-        expose_backend_error_details: Whether to forward raw exception details to Waldur
+        offering: The Waldur offering configuration.
+        agent_identity: The registered agent identity.
+        agent_identity_manager: Manager for agent identity operations.
+        waldur_user_agent: User agent string.
+        object_types: Observable object types the queue should receive.
+        global_proxy: Optional proxy configuration.
+        expose_backend_error_details: Whether to forward raw exception details.
+        on_message_callback: Optional custom router (used by the federation target
+            path to dispatch the unified queue to per-type target handlers).
+            Defaults to the standard payload router.
 
     Returns:
-        Tuple of (connection, event_subscription, offering) if successful, None if failed
+        Tuple of (connection, unified_queue, offering) if successful, else None.
     """
     try:
-        event_subscription = agent_identity_manager.register_event_subscription(
-            agent_identity, object_type
-        )
-
-        event_subscription_queue = agent_identity_manager.create_event_subscription_queue(
-            event_subscription, object_type
-        )
-        if event_subscription_queue is None:
-            logger.error(
-                "Failed to create event subscription queue for the offering %s, object type %s",
-                offering.name,
-                object_type,
-            )
-            return None
+        unified_queue = agent_identity_manager.register_queue(agent_identity, object_types)
 
         event_subscription_manager = EventSubscriptionManager(
             offering,
             None,
-            None,
+            on_message_callback,
             waldur_user_agent,
-            object_type,
             global_proxy,
             expose_backend_error_details=expose_backend_error_details,
         )
         connection = event_subscription_manager.setup_stomp_connection(
-            event_subscription,
+            unified_queue,
             offering.stomp_ws_host,
             offering.stomp_ws_port,
             offering.stomp_ws_path,
         )
-        connected = event_subscription_manager.start_stomp_connection(
-            event_subscription, connection
-        )
+        connected = event_subscription_manager.start_stomp_connection(unified_queue, connection)
         if not connected:
             logger.error(
-                "Failed to start STOMP connection for the offering %s (%s), object type %s",
+                "Failed to start unified STOMP connection for the offering %s (%s)",
                 offering.name,
                 offering.uuid,
-                object_type,
             )
             return None
 
-        return (connection, event_subscription, offering)
+        return (connection, unified_queue, offering)
     except Exception as e:
         logger.exception(
-            "Unable to register event subscription for offering %s object type %s: %s",
+            "Unable to register unified event queue for offering %s: %s",
             offering.name,
-            object_type,
             e,
         )
         return None
@@ -223,6 +214,15 @@ def setup_stomp_offering_subscriptions(
 
     # Determine which object types to subscribe to
     object_types = _determine_observable_object_types(waldur_offering)
+    if not object_types:
+        # No event-driven features enabled: nothing to subscribe to. Do NOT
+        # register a queue with an empty type list — the backend reads an empty
+        # list as "all types", which is not what an idle offering wants.
+        logger.info(
+            "No observable object types for offering %s; skipping STOMP setup",
+            waldur_offering.name,
+        )
+        return stomp_connections
 
     waldur_rest_client = get_client_for_offering(waldur_offering, waldur_user_agent, global_proxy)
 
@@ -233,19 +233,18 @@ def setup_stomp_offering_subscriptions(
 
     agent_identity, agent_identity_manager = result
 
-    # Setup subscription for each object type
-    for object_type in object_types:
-        consumer = _setup_single_stomp_subscription(
-            waldur_offering,
-            agent_identity,
-            agent_identity_manager,
-            waldur_user_agent,
-            object_type,
-            global_proxy,
-            expose_backend_error_details=expose_backend_error_details,
-        )
-        if consumer is not None:
-            stomp_connections.append(consumer)
+    # One unified queue + one STOMP connection for ALL object types.
+    consumer = _setup_unified_stomp_connection(
+        waldur_offering,
+        agent_identity,
+        agent_identity_manager,
+        waldur_user_agent,
+        object_types,
+        global_proxy,
+        expose_backend_error_details=expose_backend_error_details,
+    )
+    if consumer is not None:
+        stomp_connections.append(consumer)
 
     # Set up target event subscriptions for backends that support them
     # (e.g., Waldur federation backend subscribes to ORDER events on Waldur B).
@@ -300,7 +299,7 @@ def stop_stomp_consumers(
         logger.info("Stopping STOMP connections for %s (%s)", offering_name, offering_uuid)
         for (
             connection,
-            event_subscription,
+            unified_queue,
             offering,
         ) in consumers:
             try:
@@ -308,12 +307,10 @@ def stop_stomp_consumers(
                     offering,
                 )
                 logger.info(
-                    "Stopping STOMP connection for %s (%s), observable object type: %s",
+                    "Stopping unified STOMP connection for %s (%s), queue: %s",
                     offering_name,
                     offering_uuid,
-                    event_subscription.observable_objects[0].object_type
-                    if event_subscription.observable_objects
-                    else "N/A",
+                    unified_queue.queue_name,
                 )
                 event_subscription_manager.stop_stomp_connection(connection)
             except Exception as exc:

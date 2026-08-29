@@ -437,7 +437,8 @@ class TestSetupTargetEventSubscriptions:
     def test_enabled_calls_stomp_setup(
         self, backend_settings, backend_components_passthrough
     ):
-        """target_stomp_enabled=True -> sets up ORDER, OFFERING_USER, and RESOURCE subscriptions."""
+        """target_stomp_enabled=True -> ONE unified queue routed to the three
+        target handlers (ORDER, OFFERING_USER, RESOURCE) by payload object_type."""
         backend_settings["target_stomp_enabled"] = True
         backend = WaldurBackend(backend_settings, backend_components_passthrough)
         backend.client = MagicMock()
@@ -452,37 +453,30 @@ class TestSetupTargetEventSubscriptions:
         source_offering.stomp_ws_port = None
         source_offering.stomp_ws_path = None
 
-        # Each call to _setup_single_stomp_subscription returns a fresh consumer
-        def _make_consumer():
-            conn = MagicMock()
-            conn.get_listener.return_value = MagicMock()
-            return (conn, MagicMock(), MagicMock())
+        unified_consumer = (MagicMock(), MagicMock(), MagicMock())
 
         with (
             patch(
-                "waldur_site_agent.event_processing.utils._register_agent_identity"
-            ) as mock_register,
-            patch(
-                "waldur_site_agent.event_processing.utils._setup_single_stomp_subscription"
+                "waldur_site_agent.event_processing.utils._setup_unified_stomp_connection"
             ) as mock_setup,
-            patch(
-                "waldur_site_agent.common.utils.get_client"
-            ),
+            patch("waldur_site_agent.common.utils.get_client"),
             patch(
                 "waldur_site_agent.common.agent_identity_management.AgentIdentityManager"
             ),
         ):
-            mock_register.return_value = MagicMock()
-            mock_setup.side_effect = [_make_consumer(), _make_consumer(), _make_consumer()]
+            mock_setup.return_value = unified_consumer
 
             result = backend.setup_target_event_subscriptions(source_offering)
 
-            assert len(result) == 3
-            assert mock_setup.call_count == 3
-            # Verify custom handlers were set on both listeners
-            for conn, _, _ in result:
-                listener = conn.get_listener.return_value
-                assert listener.on_message_callback is not None
+            # ONE unified connection, not three per-type ones.
+            assert len(result) == 1
+            assert mock_setup.call_count == 1
+            # It was asked to bind all three object types...
+            requested_types = mock_setup.call_args.args[4]
+            assert len(requested_types) == 3
+            # ...and given a custom router that dispatches by payload object_type.
+            router = mock_setup.call_args.kwargs["on_message_callback"]
+            assert callable(router)
 
     def test_enabled_but_registration_fails(
         self, backend_settings, backend_components_passthrough
