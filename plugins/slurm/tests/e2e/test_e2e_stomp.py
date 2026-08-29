@@ -36,7 +36,6 @@ from waldur_api_client.api.marketplace_orders import (
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_retrieve,
 )
-from waldur_api_client.models import EventSubscriptionObservableObject
 from waldur_api_client.models.generic_order_attributes import GenericOrderAttributes
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 from waldur_api_client.models.order_create_request import OrderCreateRequest
@@ -49,6 +48,7 @@ from waldur_site_agent.common.utils import get_client, load_configuration
 from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.event_subscription_manager import (
     WALDUR_LISTENER_NAME,
+    route_message,
 )
 from waldur_site_agent.event_processing.utils import (
     setup_stomp_offering_subscriptions,
@@ -312,25 +312,27 @@ def stomp_consumers(request, stomp_offering, order_capture, offering_user_captur
     )
 
     handler_map = {
-        ObservableObjectTypeEnum.ORDER.value: (order_handler, "ORDER"),
-        ObservableObjectTypeEnum.OFFERING_USER.value: (offering_user_handler, "OFFERING_USER"),
+        ObservableObjectTypeEnum.ORDER.value: order_handler,
+        ObservableObjectTypeEnum.OFFERING_USER.value: offering_user_handler,
     }
 
-    for conn, event_subscription, offering in consumers:
-        observable_objects : list[EventSubscriptionObservableObject] = event_subscription.observable_objects
-        for obj in observable_objects:
-            obj_type = obj.object_type
-            if obj_type in handler_map:
-                listener = conn.get_listener(WALDUR_LISTENER_NAME)
-                if listener:
-                    handler, label = handler_map[obj_type]
-                    listener.on_message_callback = handler
-                    logger.info(
-                        "Replaced %s handler with capture handler for offering %s",
-                        label,
-                        offering.name,
-                    )
-                break
+    def capturing_router(frame, offering, user_agent, expose_backend_error_details=True):
+        # Unified queue: every object type arrives on the single consumer_{uuid}
+        # queue, so intercept by payload object_type and fall through to the
+        # agent's own router for everything else.
+        object_type = json.loads(frame.body).get("object_type")
+        handler = handler_map.get(object_type, route_message)
+        handler(frame, offering, user_agent, expose_backend_error_details)
+
+    for conn, unified_queue, offering in consumers:
+        listener = conn.get_listener(WALDUR_LISTENER_NAME)
+        if listener:
+            listener.on_message_callback = capturing_router
+            logger.info(
+                "Installed capturing router on queue %s for offering %s",
+                unified_queue.queue_name,
+                offering.name,
+            )
 
     consumers_map = {(stomp_offering.name, stomp_offering.uuid): consumers}
 
@@ -365,19 +367,15 @@ class TestStompEventProcessing:
         connected_count = 0
         total_count = len(stomp_consumers)
 
-        for conn, event_subscription, offering in stomp_consumers:
+        for conn, unified_queue, offering in stomp_consumers:
             is_connected = conn.is_connected()
-            observable_type = "N/A"
-            observable_objects = getattr(event_subscription, "observable_objects", [])
-            if observable_objects:
-                observable_type = observable_objects[0].object_type
 
             stomp_report.status_snapshot(
-                f"Consumer: {observable_type}",
+                f"Consumer: {unified_queue.queue_name}",
                 {
                     "offering": offering.name,
                     "connected": str(is_connected),
-                    "subscription_uuid": event_subscription.uuid.hex,
+                    "object_types": ", ".join(unified_queue.observable_object_types),
                 },
             )
 

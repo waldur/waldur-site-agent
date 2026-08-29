@@ -439,11 +439,21 @@ def on_account_message_stomp(
     user_agent: str,
     expose_backend_error_details: bool = True,
 ) -> None:
-    """Service account handler for STOMP."""
+    """Service/course account handler for STOMP.
+
+    Under the unified queue the destination is ``consumer_{uuid}`` and no longer
+    encodes the account type, so the type is read from the message payload
+    ``object_type`` (stamped by Mastermind) rather than the queue name. Falls
+    back to the legacy queue-name suffix for any message without object_type.
+    """
     message: AccountMessage = json.loads(frame.body)
-    queue: str = frame.headers[HDR_DESTINATION]
-    queue_parts = queue.split("_")
-    account_type_raw = f"{queue_parts[-2]}_{queue_parts[-1]}"
+    account_type_raw = message.get("object_type")
+    if account_type_raw is None:
+        # Legacy per-object-type queue: derive from the queue name suffix.
+        # TODO: drop once no Mastermind still serves per-type subscription queues.
+        queue: str = frame.headers[HDR_DESTINATION]
+        queue_parts = queue.split("_")
+        account_type_raw = f"{queue_parts[-2]}_{queue_parts[-1]}"
     account_type = structures.AccountType.SERVICE_ACCOUNT
     observable_object = ObservableObjectTypeEnum.SERVICE_ACCOUNT
     if account_type_raw == structures.AccountType.COURSE_ACCOUNT.value:

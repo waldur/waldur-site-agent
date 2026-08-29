@@ -1573,16 +1573,15 @@ class WaldurBackend(backends.BaseBackend):
             # via entry_point.load(), which re-imports this module. Importing
             # anything that transitively touches common.utils at module level
             # causes a circular import when this plugin is loaded first.
+            import json
+
             from waldur_site_agent.common.agent_identity_management import (
                 AgentIdentityManager,
             )
             from waldur_site_agent.common.structures import Offering
             from waldur_site_agent.common.utils import get_client
-            from waldur_site_agent.event_processing.event_subscription_manager import (
-                WALDUR_LISTENER_NAME,
-            )
             from waldur_site_agent.event_processing.utils import (
-                _setup_single_stomp_subscription,
+                _setup_unified_stomp_connection,
             )
             from waldur_site_agent_waldur.target_event_handler import (
                 make_target_offering_user_handler,
@@ -1630,77 +1629,65 @@ class WaldurBackend(backends.BaseBackend):
                 )
                 return []
 
-            consumers = []
+            # Unified: ONE queue on Waldur B receives ORDER, OFFERING_USER and
+            # RESOURCE, routed to their distinct target handlers by payload
+            # object_type (replacing the former three per-type connections).
+            target_handlers = {
+                ObservableObjectTypeEnum.ORDER.value: make_target_order_handler(
+                    source_offering
+                ),
+                ObservableObjectTypeEnum.OFFERING_USER.value: (
+                    make_target_offering_user_handler(source_offering, self)
+                ),
+                ObservableObjectTypeEnum.RESOURCE.value: (
+                    make_target_resource_end_date_handler(source_offering, self)
+                ),
+            }
 
-            # Set up STOMP subscription for ORDER events
-            order_consumer = _setup_single_stomp_subscription(
+            def target_router(frame, offering, agent, expose_backend_error_details=True):
+                try:
+                    payload = json.loads(frame.body)
+                except (ValueError, TypeError):
+                    logger.exception("Dropping non-JSON target STOMP message")
+                    return
+                handler = target_handlers.get(payload.get("object_type"))
+                if handler is None:
+                    # ack=auto: an unrouted message is gone, so say so loudly.
+                    logger.warning(
+                        "No target handler for object_type %s, dropping",
+                        payload.get("object_type"),
+                    )
+                    return
+                handler(frame, offering, agent, expose_backend_error_details)
+
+            consumer = _setup_unified_stomp_connection(
                 target_offering,
                 agent_identity,
                 agent_identity_manager,
                 user_agent,
-                ObservableObjectTypeEnum.ORDER,
+                [
+                    ObservableObjectTypeEnum.ORDER,
+                    ObservableObjectTypeEnum.OFFERING_USER,
+                    ObservableObjectTypeEnum.RESOURCE,
+                ],
                 global_proxy,
+                on_message_callback=target_router,
             )
-            if order_consumer is not None:
-                connection, event_subscription, _ = order_consumer
-                custom_handler = make_target_order_handler(source_offering)
-                listener = connection.get_listener(WALDUR_LISTENER_NAME)
-                if listener is not None:
-                    listener.on_message_callback = custom_handler
-                consumers.append((connection, event_subscription, target_offering))
-
-            offering_user_consumer = _setup_single_stomp_subscription(
-                target_offering,
-                agent_identity,
-                agent_identity_manager,
-                user_agent,
-                ObservableObjectTypeEnum.OFFERING_USER,
-                global_proxy,
-            )
-            if offering_user_consumer is not None:
-                connection, event_subscription, _ = offering_user_consumer
-                custom_handler = make_target_offering_user_handler(
-                    source_offering, self
-                )
-                listener = connection.get_listener(WALDUR_LISTENER_NAME)
-                if listener is not None:
-                    listener.on_message_callback = custom_handler
-                consumers.append((connection, event_subscription, target_offering))
-
-            # Set up STOMP subscription for RESOURCE events (end_date sync)
-            resource_consumer = _setup_single_stomp_subscription(
-                target_offering,
-                agent_identity,
-                agent_identity_manager,
-                user_agent,
-                ObservableObjectTypeEnum.RESOURCE,
-                global_proxy,
-            )
-            if resource_consumer is not None:
-                connection, event_subscription, _ = resource_consumer
-                custom_handler = make_target_resource_end_date_handler(
-                    source_offering, self
-                )
-                listener = connection.get_listener(WALDUR_LISTENER_NAME)
-                if listener is not None:
-                    listener.on_message_callback = custom_handler
-                consumers.append((connection, event_subscription, target_offering))
-
-            if not consumers:
+            if consumer is None:
                 logger.error(
-                    "Failed to set up target STOMP subscriptions for %s",
+                    "Failed to set up target STOMP subscription for %s",
                     source_offering.name,
                 )
                 return []
 
+            connection, unified_queue, _ = consumer
             logger.info(
-                "Target STOMP subscriptions active for %s -> %s (%d subscriptions)",
+                "Target STOMP subscription active for %s -> %s (queue %s)",
                 source_offering.name,
                 target_offering.name,
-                len(consumers),
+                unified_queue.queue_name,
             )
-
-            return consumers
+            return [(connection, unified_queue, target_offering)]
 
         except Exception:
             logger.exception(

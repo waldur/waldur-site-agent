@@ -1,22 +1,23 @@
-"""Classes and functions for event subscription management."""
+"""Classes and functions for unified event-queue management.
 
+Unified pub/sub (WAL-10011): each agent identity drains ONE RabbitMQ queue
+(``consumer_{uuid}``) that receives every observable object type. The object
+type of each message is carried in the payload, so a single STOMP connection is
+opened per offering and messages are routed to per-type handlers at receive
+time (``route_message``) rather than by binding one connection per type.
+"""
+
+import json
 import threading
-from pathlib import Path
 from typing import Callable, Optional
 
 import stomp
 import urllib3.util
-import yaml
-from waldur_api_client.api.event_subscriptions import (
-    event_subscriptions_destroy,
-)
-from waldur_api_client.errors import UnexpectedStatus
-from waldur_api_client.models.event_subscription import EventSubscription
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import utils
-from waldur_site_agent.common.structures import Offering
+from waldur_site_agent.common.structures import Offering, UnifiedQueue
 from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.listener import WaldurListener, connect_to_stomp_server
 
@@ -39,11 +40,40 @@ OBJECT_TYPE_TO_HANDLER_STOMP: dict[ObservableObjectTypeEnum, Callable] = {
         handlers.on_resource_api_key_rotation_stomp
     ),
 }
-PID_FILE_PATH = "/var/run/waldur_site_agent.pid"
+
+
+def route_message(
+    frame: stomp.utils.Frame,
+    offering: Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,
+) -> None:
+    """Dispatch a unified-queue message to the handler for its payload object type.
+
+    Every message on ``consumer_{uuid}`` carries ``object_type`` in its body
+    (stamped by Mastermind's build_messages/prepare_messages). This is the
+    single-connection replacement for the legacy per-queue handler binding.
+    """
+    try:
+        payload = json.loads(frame.body)
+    except (ValueError, TypeError):
+        logger.exception("Dropping non-JSON STOMP message: %s", frame.body)
+        return
+    raw_type = payload.get("object_type")
+    try:
+        object_type = ObservableObjectTypeEnum(raw_type)
+    except ValueError:
+        logger.warning("Unknown object_type %r in message, dropping", raw_type)
+        return
+    handler = OBJECT_TYPE_TO_HANDLER_STOMP.get(object_type)
+    if handler is None:
+        logger.warning("No handler registered for object_type %s, dropping", object_type)
+        return
+    handler(frame, offering, user_agent, expose_backend_error_details)
 
 
 class EventSubscriptionManager:
-    """Class responsible for management over event subscriptions and STOMP connections."""
+    """Manages the single unified STOMP connection for one offering."""
 
     def __init__(
         self,
@@ -51,7 +81,6 @@ class EventSubscriptionManager:
         on_connect_callback: Optional[Callable] = None,
         on_message_callback: Optional[Callable] = None,
         user_agent: str = "",
-        observable_object_type: str = "",
         global_proxy: str = "",
         expose_backend_error_details: bool = True,
     ) -> None:
@@ -60,98 +89,50 @@ class EventSubscriptionManager:
         self.offering = offering
         self.user_agent = user_agent
         self.on_connect_callback = on_connect_callback
-        self.on_message_callback = on_message_callback
-        self.observable_object_type = observable_object_type
+        # A custom router may be injected (tests); default is payload routing.
+        self.on_message_callback = on_message_callback or route_message
         self.expose_backend_error_details = expose_backend_error_details
-
-    def _read_pid_file(self) -> dict:
-        content = {}
-        logger.info("Reading event subscriptions info from %s", PID_FILE_PATH)
-        try:
-            with Path(PID_FILE_PATH).open("r", encoding="utf-8") as pid_file:
-                content = yaml.safe_load(pid_file)
-        except FileNotFoundError:
-            return content
-        return content or {}
-
-    def _write_event_subscription_info_to_pidfile(
-        self, event_subscription: EventSubscription
-    ) -> None:
-        """Write event subscription to file."""
-        pid_file_content = self._read_pid_file()
-        logger.info(
-            "Writing %s event subscription info to %s", self.observable_object_type, PID_FILE_PATH
-        )
-
-        with Path(PID_FILE_PATH).open("w+", encoding="utf-8") as pid_file:
-            payload = {self.observable_object_type: event_subscription["uuid"]}
-            pid_file_content.update(payload)
-            yaml.dump(pid_file_content, pid_file)
-
-    def _delete_event_subscription_from_pidfile(self) -> None:
-        """Delete event subscription from pidfile."""
-        pid_file_content = self._read_pid_file()
-        logger.info(
-            "Deleting %s event subscription info from %s if exists",
-            self.observable_object_type,
-            PID_FILE_PATH,
-        )
-        pid_file_content.pop(self.observable_object_type, None)
-        with Path(PID_FILE_PATH).open("w+", encoding="utf-8") as pid_file:
-            yaml.dump(pid_file_content, pid_file)
 
     def setup_stomp_connection(
         self,
-        event_subscription: EventSubscription,
+        unified_queue: UnifiedQueue,
         custom_stomp_ws_host: Optional[str] = None,
         custom_stomp_ws_port: Optional[int] = None,
         custom_stomp_ws_path: Optional[str] = None,
     ) -> stomp.WSStompConnection:
-        """Create a STOMP connection with the given parameters.
+        """Create the STOMP connection to the unified consumer queue.
 
         Args:
-            event_subscription (EventSubscription): Event subscription.
-            custom_stomp_ws_host (Optional[str], optional): Custom host of the STOMP server.
-                Defaults to None.
-            custom_stomp_ws_port (Optional[int], optional): Custom port of the STOMP server.
-                Defaults to None.
-            custom_stomp_ws_path (Optional[str], optional): Custom path of the STOMP server.
-                Defaults to None.
+            unified_queue: descriptor returned by register_queue (queue name,
+                RMQ username, vhost).
+            custom_stomp_ws_host: broker host override (e2e tests dial RabbitMQ
+                web_stomp directly instead of the nginx proxy).
+            custom_stomp_ws_port: broker port override.
+            custom_stomp_ws_path: broker WebSocket path override.
 
         Returns:
-            stomp.WSStompConnection: The constructed connection
+            The constructed (not yet connected) STOMP connection.
         """
         logger.info(
-            "Setting up STOMP connection for event subscription %s",
-            event_subscription.uuid.hex,
+            "Setting up unified STOMP connection for queue %s", unified_queue.queue_name
         )
-        # Mapped to a vhost in RabbitMQ bound to a Waldur User object
-        vhost_name = event_subscription.user_uuid.hex
-        event_subscription_uuid = event_subscription.uuid.hex
-        # Mapped to a username in RabbitMQ bound to the Waldur EventSubscription object
-        username = event_subscription_uuid
-        # Normalize offering UUID to hex (no dashes) to match the queue name format
-        # used by Waldur Mastermind's EventSubscriptionQueue.queue_name property.
-        offering_uuid_hex = self.offering.uuid.replace("-", "")
-        queue_name = (
-            f"subscription_{event_subscription_uuid}_"
-            f"offering_{offering_uuid_hex}_{self.observable_object_type}"
-        )
+        # vhost is the owning Waldur user; RMQ username/password authenticate the
+        # consumer. For a session-token registration the RMQ password equals the
+        # agent's api_token (see resolve_consumer_rmq_password on the server).
+        vhost_name = unified_queue.vhost
+        username = unified_queue.rmq_username
+        password = self.offering.api_token
+        queue_name = unified_queue.queue_name
 
         stomp_host = custom_stomp_ws_host or urllib3.util.parse_url(self.offering.api_url).host
         stomp_port = custom_stomp_ws_port or (
             443 if self.waldur_rest_client._verify_ssl else 80
-        )  # TODO: Temporary workaround, improve later
+        )
         ws_path = custom_stomp_ws_path or "/rmqws-stomp"
 
-        password = self.offering.api_token
         logger.info("Using %s:%s/%s%s broker", stomp_host, stomp_port, vhost_name, ws_path)
-        # Transport-level reconnection is intentionally limited to a single attempt.
-        # Application-level retries with exponential backoff are handled by
-        # connect_to_stomp_server() in listener.py.  See the module docstring
-        # there for the full reconnection design and stomp.py corner cases.
-        # IMPORTANT: reconnect_attempts_max=0 disables ALL connection attempts
-        # (the transport loop condition is `count < max`, so 0 < 0 is False).
+        # reconnect_attempts_max=1: transport does a single attempt; app-level
+        # retries with backoff live in connect_to_stomp_server() (listener.py).
         connection = stomp.WSStompConnection(
             host_and_ports=[(stomp_host, stomp_port)],
             ws_path=ws_path,
@@ -162,7 +143,6 @@ class EventSubscriptionManager:
         if self.offering.websocket_use_tls:
             connection.set_ssl(for_hosts=[(stomp_host, stomp_port)])
 
-        callback_function = OBJECT_TYPE_TO_HANDLER_STOMP[self.observable_object_type]
         connection.set_listener(
             WALDUR_LISTENER_NAME,
             WaldurListener(
@@ -170,7 +150,7 @@ class EventSubscriptionManager:
                 queue_name,
                 username,
                 password,
-                callback_function,
+                self.on_message_callback,
                 self.offering,
                 self.user_agent,
                 expose_backend_error_details=self.expose_backend_error_details,
@@ -181,9 +161,9 @@ class EventSubscriptionManager:
             thread = threading.Thread(
                 target=callback,
                 group=None,
-                name=f"waldur-{self.observable_object_type}-listener",
+                name=f"waldur-{self.offering.uuid}-listener",
             )
-            thread.daemon = True  # Don't let thread prevent termination
+            thread.daemon = True
             thread.start()
             return thread
 
@@ -192,22 +172,16 @@ class EventSubscriptionManager:
 
     def start_stomp_connection(
         self,
-        event_subscription: EventSubscription,
+        unified_queue: UnifiedQueue,
         connection: stomp.WSStompConnection,
     ) -> bool:
-        """Start STOMP connection."""
+        """Start (connect) the unified STOMP connection."""
         try:
-            logger.info(
-                "Starting STOMP connection for event subscription %s",
-                event_subscription.uuid.hex,
-            )
+            logger.info("Starting unified STOMP connection for queue %s", unified_queue.queue_name)
             connect_to_stomp_server(
-                connection, event_subscription.uuid.hex, self.offering.api_token
+                connection, unified_queue.rmq_username, self.offering.api_token
             )
-            logger.info(
-                "Started STOMP connection for event subscription %s",
-                event_subscription.uuid.hex,
-            )
+            logger.info("Started unified STOMP connection for queue %s", unified_queue.queue_name)
         except Exception as e:
             logger.error("Failed to start STOMP connection: %s", e)
             return False
@@ -215,20 +189,10 @@ class EventSubscriptionManager:
             return True
 
     def stop_stomp_connection(self, connection: stomp.WSStompConnection) -> None:
-        """Stop the STOMP connection."""
+        """Stop the STOMP connection.
+
+        The unified queue itself is left in place so it is reused on the next
+        start (register_queue is idempotent).
+        """
         connection.remove_listener(WALDUR_LISTENER_NAME)
         connection.disconnect()
-
-    def delete_event_subscription(self, event_subscription: EventSubscription) -> None:
-        """Delete the event subscription."""
-        try:
-            logger.info("Deleting event subscription %s", event_subscription["uuid"])
-            event_subscriptions_destroy.sync_detailed(
-                uuid=event_subscription["uuid"], client=self.waldur_rest_client
-            )
-            logger.info("Event subscription deleted: %s", event_subscription["uuid"])
-            self._delete_event_subscription_from_pidfile()
-        except UnexpectedStatus as e:
-            logger.error(
-                "Failed to delete event subscription %s: %s", event_subscription["uuid"], e
-            )
