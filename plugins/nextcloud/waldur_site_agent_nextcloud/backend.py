@@ -445,6 +445,36 @@ class NextcloudBackend(backends.BaseBackend):
                 logger.exception("Failed to remove user %s from group %s", username, group_id)
         return removed
 
+    def add_user(
+        self,
+        waldur_resource: WaldurResource,
+        username: str,
+        **kwargs: str,
+    ) -> bool:
+        """Add a single user to the Nextcloud group.
+
+        The STOMP user_role event handler calls this singular form. The
+        base-class fallback delegates to ``client.get_association`` which
+        always returns ``None`` for Nextcloud, so no OCS call is ever made.
+        Delegate to the batch method which handles the OCS API call.
+        """
+        return bool(self.add_users_to_resource(waldur_resource, {username}))
+
+    def remove_user(
+        self,
+        waldur_resource: WaldurResource,
+        username: str,
+        **kwargs: str,
+    ) -> bool:
+        """Remove a single user from the Nextcloud group.
+
+        The STOMP user_role event handler calls this singular form. The
+        base-class fallback calls ``client.get_association`` which always
+        returns ``None`` for Nextcloud, so the deletion is silently skipped.
+        Delegate to the batch method which handles the OCS API call.
+        """
+        return username in self.remove_users_from_resource(waldur_resource, {username})
+
     def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
         """Return storage usage for the given folder IDs.
 
