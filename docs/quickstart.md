@@ -30,8 +30,31 @@ Budget about 15-20 minutes if the offering side is already set up in Waldur.
 
   ![offering-uuid](img/offering-uuid.png)
 
-- Create an API token for a user with the **OFFERING.MANAGER** role on this offering. You'll need
-  it below too.
+- Create a dedicated **agent account** — a Waldur login that exists only for the agent to
+  authenticate with, not a real person's. As a staff user, go to the `Support` workspace →
+  `User management` → `Users` → `Create user`, and work through the wizard: set a `username` and
+  `email`, and set (or generate) a `Password` on the Account step — leave it blank and the account
+  ends up passwordless. Leave `Staff` and `Support` unchecked; offering-level access, granted next,
+  is all this account needs.
+
+- Grant that account the **OFFERING.MANAGER** role on this specific offering — not a customer-wide
+  role. On the offering's `Team` tab, use `Add` to invite the account with the `OFFERING.MANAGER`
+  role. This is the minimum the agent needs and nothing more: it covers order approval, usage
+  reporting, and resource state/backend-metadata updates. It's unrelated to the
+  `GET_SERVICE_PROVIDER_API_SECRET_CODE` permission mentioned in step 3 below — that one's only
+  needed by a *human* using the UI config generator, not by the agent's own token.
+
+- Create an API token for the agent account. You'll need it below too. Log in as that account,
+  open the avatar menu in the top-right corner → **Profile** → **API token** tab, then click the
+  eye icon to reveal and copy the token.
+
+  That page also has a **Token lifetime** setting (10/30 min, 1/2/12 hours, or indefinite) — it's
+  extended automatically on each successful API call, but the agent runs unattended and can go
+  quiet for stretches (initial setup, a paused service, sparse polling intervals) that outlast any
+  timed option. **Set it to indefinite** — anything shorter will eventually expire and break the
+  agent's auth. The UI warns that an indefinite token can be used by anyone who has it until it's
+  changed, so treat it like any other long-lived service credential: keep it out of version
+  control and out of shell history.
 
 ## 2. Install the agent
 
