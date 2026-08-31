@@ -1,0 +1,11 @@
+# Artifact Hub repository metadata.
+#
+# Artifact Hub reads this file from the root of the Helm chart repository
+# (https://waldur.github.io/waldur-site-agent/artifacthub-repo.yml) and, when
+# repositoryID matches the repository registered by the Waldur organisation,
+# flags the repository as coming from a verified publisher.
+#
+# It is published by the "Publish new chart version and update docs on github"
+# job in .gitlab-ci.yml, which copies it to the gh-pages branch next to
+# index.yaml. See https://artifacthub.io/docs/topics/repositories/
+repositoryID: 453614ba-ce3a-42db-83ce-02703890299c

@@ -1,6 +1,16 @@
 # Configuration Reference
 
-This document provides a complete reference for configuring Waldur Site Agent.
+This document provides a complete reference for configuring Waldur Site Agent. It's a reference,
+not a tutorial — if this is your first setup, start with the [Quickstart](quickstart.md) instead
+and come back here once something needs a field this page covers but the Quickstart didn't.
+
+**Required in every offering**, regardless of backend: [`name`](#name),
+[`waldur_api_url`](#waldur_api_url), [`waldur_api_token`](#waldur_api_token),
+[`waldur_offering_uuid`](#waldur_offering_uuid), a `*_backend` setting for each process you run
+(e.g. `order_processing_backend`), and at least one entry under
+[`backend_components`](#backend-components). Everything else on this page — global settings,
+event processing, resource management, backend-specific `backend_settings`, and the ~15 optional
+component fields — has a working default and can be added when you actually need it.
 
 ## Configuration File Structure
 

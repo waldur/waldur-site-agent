@@ -18,6 +18,32 @@ The agent uses a **uv workspace architecture** with pluggable backends:
 - `membership_sync`: Synchronizes user memberships
 - `event_process`: Event-based processing using STOMP
 
+## Installation
+
+The core agent and every plugin are published to PyPI. Install the core package
+plus the plugins you need — all packages share the same version number, so keep
+them in sync:
+
+```bash
+pip install waldur-site-agent waldur-site-agent-slurm
+```
+
+See the [plugin table](#plugins) below for the full list of published packages.
+
+For Kubernetes, released Helm charts are published to a chart repository hosted
+on GitHub Pages:
+
+```bash
+helm repo add waldur https://waldur.github.io/waldur-site-agent
+helm repo update
+helm search repo waldur/waldur-site-agent --versions
+helm install waldur-site-agent waldur/waldur-site-agent
+```
+
+Release candidates are pre-release versions — add `--devel` to see and install
+them. Configurable values are documented in the
+[chart README](https://github.com/waldur/waldur-site-agent/blob/main/helm/waldur-site-agent/README.md).
+
 ## Usage
 
 ```bash
@@ -77,39 +103,47 @@ you push.
 
 ## Documentation
 
-- [Architecture & Plugin Development](docs/architecture.md)
+For operators deploying the agent:
+
+- [Quickstart](docs/quickstart.md) - the fastest path from a fresh install to a running, verified agent
 - [Installation Guide](docs/installation.md)
 - [Configuration Reference](docs/configuration.md)
+- [Configuration Validation](docs/configuration-validation.md) - how config errors are reported, and how to read them
 - [Deployment Guide](docs/deployment.md)
 - [Upgrading Guide](docs/upgrading.md)
 - [Username Management](docs/offering-users.md)
 - [SLURM Usage Reporting Setup](docs/slurm-usage-reporting-setup.md)
+
+For contributors:
+
+- [Architecture & Plugin Development](docs/architecture.md)
 - [Releasing Guide](docs/releasing.md)
 
 ## Plugins
 
 <!-- BEGIN PLUGIN TABLE -->
-| Plugin | Description |
-| ------ | ----------- |
-| [basic_username_management](plugins/basic_username_management/README.md) | Basic username management plugin |
-| [ceph-s3](plugins/ceph-s3/README.md) | Ceph S3 storage plugin (croit and RadosGW flavours) |
-| [cscs-dwdi](plugins/cscs-dwdi/README.md) | CSCS-DWDI reporting plugin |
-| [digitalocean](plugins/digitalocean/README.md) | DigitalOcean plugin |
-| [envoy-ai-gateway](plugins/envoy-ai-gateway/README.md) | Envoy AI Gateway (API keys + usage reporting) plugin |
-| [harbor](plugins/harbor/README.md) | Harbor container registry plugin |
-| [k8s-ut-namespace](plugins/k8s-ut-namespace/README.md) | Kubernetes UT ManagedNamespace plugin |
-| keycloak-client | Shared Keycloak client for Waldur Site Agent plugins |
-| [ldap](plugins/ldap/README.md) | LDAP plugin |
-| [litellm](plugins/litellm/README.md) | LiteLLM (virtual key lifecycle + usage reporting) plugin |
-| [moab](plugins/moab/README.md) | MOAB plugin |
-| [mup](plugins/mup/README.md) | MUP plugin |
-| [nextcloud](plugins/nextcloud/README.md) | Nextcloud plugin |
-| [okd](plugins/okd/README.md) | OKD/OpenShift plugin |
-| [opennebula](plugins/opennebula/README.md) | OpenNebula VDC plugin |
-| [rancher](plugins/rancher/README.md) | Rancher plugin |
-| [rancher-kc-crd](plugins/rancher-kc-crd/README.md) | Rancher + Keycloak CRD-driven plugin |
-| [slurm](plugins/slurm/README.md) | SLURM plugin |
-| [waldur](plugins/waldur/README.md) | Waldur-to-Waldur federation plugin |
+<!-- pyml disable-num-lines 21 line-length -->
+| Plugin | PyPI package | Description |
+| ------ | ------------ | ----------- |
+| [basic_username_management](plugins/basic_username_management/README.md) | [`waldur-site-agent-basic-username-management`](https://pypi.org/project/waldur-site-agent-basic-username-management/) | Basic username management plugin |
+| [ceph-s3](plugins/ceph-s3/README.md) | [`waldur-site-agent-ceph-s3`](https://pypi.org/project/waldur-site-agent-ceph-s3/) | Ceph S3 storage plugin (croit and RadosGW flavours) |
+| [cscs-dwdi](plugins/cscs-dwdi/README.md) | [`waldur-site-agent-cscs-dwdi`](https://pypi.org/project/waldur-site-agent-cscs-dwdi/) | CSCS-DWDI reporting plugin |
+| [digitalocean](plugins/digitalocean/README.md) | [`waldur-site-agent-digitalocean`](https://pypi.org/project/waldur-site-agent-digitalocean/) | DigitalOcean plugin |
+| [envoy-ai-gateway](plugins/envoy-ai-gateway/README.md) | [`waldur-site-agent-envoy-ai-gateway`](https://pypi.org/project/waldur-site-agent-envoy-ai-gateway/) | Envoy AI Gateway (API keys + usage reporting) plugin |
+| [harbor](plugins/harbor/README.md) | [`waldur-site-agent-harbor`](https://pypi.org/project/waldur-site-agent-harbor/) | Harbor container registry plugin |
+| [k8s-ut-namespace](plugins/k8s-ut-namespace/README.md) | [`waldur-site-agent-k8s-ut-namespace`](https://pypi.org/project/waldur-site-agent-k8s-ut-namespace/) | Kubernetes UT ManagedNamespace plugin |
+| [keycloak-client](plugins/keycloak-client/) | [`waldur-site-agent-keycloak-client`](https://pypi.org/project/waldur-site-agent-keycloak-client/) | Shared Keycloak client for Waldur Site Agent plugins |
+| [ldap](plugins/ldap/README.md) | [`waldur-site-agent-ldap`](https://pypi.org/project/waldur-site-agent-ldap/) | LDAP plugin |
+| [litellm](plugins/litellm/README.md) | [`waldur-site-agent-litellm`](https://pypi.org/project/waldur-site-agent-litellm/) | LiteLLM (virtual key lifecycle + usage reporting) plugin |
+| [moab](plugins/moab/README.md) | [`waldur-site-agent-moab`](https://pypi.org/project/waldur-site-agent-moab/) | MOAB plugin |
+| [mup](plugins/mup/README.md) | [`waldur-site-agent-mup`](https://pypi.org/project/waldur-site-agent-mup/) | MUP plugin |
+| [nextcloud](plugins/nextcloud/README.md) | [`waldur-site-agent-nextcloud`](https://pypi.org/project/waldur-site-agent-nextcloud/) | Nextcloud plugin |
+| [okd](plugins/okd/README.md) | [`waldur-site-agent-okd`](https://pypi.org/project/waldur-site-agent-okd/) | OKD/OpenShift plugin |
+| [opennebula](plugins/opennebula/README.md) | [`waldur-site-agent-opennebula`](https://pypi.org/project/waldur-site-agent-opennebula/) | OpenNebula VDC plugin |
+| [rancher](plugins/rancher/README.md) | [`waldur-site-agent-rancher`](https://pypi.org/project/waldur-site-agent-rancher/) | Rancher plugin |
+| [rancher-kc-crd](plugins/rancher-kc-crd/README.md) | [`waldur-site-agent-rancher-kc-crd`](https://pypi.org/project/waldur-site-agent-rancher-kc-crd/) | Rancher + Keycloak CRD-driven plugin |
+| [slurm](plugins/slurm/README.md) | [`waldur-site-agent-slurm`](https://pypi.org/project/waldur-site-agent-slurm/) | SLURM plugin |
+| [waldur](plugins/waldur/README.md) | [`waldur-site-agent-waldur`](https://pypi.org/project/waldur-site-agent-waldur/) | Waldur-to-Waldur federation plugin |
 <!-- END PLUGIN TABLE -->
 
 ## License

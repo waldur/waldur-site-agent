@@ -2,6 +2,19 @@
 
 This guide covers production deployment of Waldur Site Agent using systemd services.
 
+> **Deploying on Kubernetes?** Use the published Helm chart instead:
+>
+> ```bash
+> helm repo add waldur https://waldur.github.io/waldur-site-agent
+> helm repo update
+> helm install waldur-site-agent waldur/waldur-site-agent
+> ```
+>
+> The chart runs the same agent modes described below as separate deployments.
+> See the
+> [chart README](https://github.com/waldur/waldur-site-agent/blob/main/helm/waldur-site-agent/README.md)
+> for available versions and configurable values.
+
 ## Deployment Overview
 
 The agent can run in 4 different modes, deployed as separate systemd services:
@@ -250,6 +263,20 @@ sudo chown root:root /etc/waldur/waldur-site-agent-config.yaml
 - Configure firewall rules appropriately
 
 ## Troubleshooting
+
+Before digging into a specific symptom below, run:
+
+```bash
+waldur_site_diagnostics -c /etc/waldur/waldur-site-agent-config.yaml
+```
+
+This checks the Waldur side of the setup — API reachability, token auth, offering state, loaded
+components — regardless of which backend you're running. It does **not** check backend
+connectivity (SLURM/MOAB/etc.). If you're on the SLURM backend, follow up with
+`waldur_site_diagnose_slurm_account -c /etc/waldur/waldur-site-agent-config.yaml` for a deeper
+check that compares actual SLURM account state against what Waldur expects. Other backends don't
+have an equivalent tool yet — for those, the sections below and the service logs are your best
+signal.
 
 ### Common Issues
 

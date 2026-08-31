@@ -97,11 +97,27 @@ All plugin packages share the same version number as the core package.
 ### Helm chart
 
 If you deploy via Helm, the chart version mirrors the agent release version.
-Update `image.tag` (or use the chart's default) and run:
+Charts are published to <https://waldur.github.io/waldur-site-agent>. If you have
+not added that repository yet:
 
 ```bash
+helm repo add waldur https://waldur.github.io/waldur-site-agent
+```
+
+Refresh the index, check which versions are available, then upgrade. Update
+`image.tag` (or use the chart's default) and run:
+
+```bash
+helm repo update
+helm search repo waldur/waldur-site-agent --versions
 helm upgrade waldur-site-agent waldur/waldur-site-agent --version <NEW_VERSION>
 ```
+
+Add `--devel` to both `helm search` and `helm upgrade` when moving to a release
+candidate — Helm hides pre-release versions otherwise.
+
+See the [chart README](../helm/waldur-site-agent/README.md) for the full list of
+configurable values.
 
 ---
 

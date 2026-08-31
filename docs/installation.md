@@ -65,6 +65,20 @@ development tools, and fastest setup time.
 pip install waldur-site-agent
 ```
 
+### Kubernetes Installation (Helm)
+
+To run the agent on Kubernetes instead, install the published Helm chart:
+
+```bash
+helm repo add waldur https://waldur.github.io/waldur-site-agent
+helm repo update
+helm install waldur-site-agent waldur/waldur-site-agent
+```
+
+See the [chart README](../helm/waldur-site-agent/README.md) for available
+versions and the full list of configurable values. The rest of this guide covers
+the package-based installation.
+
 ### Development Installation
 
 For development or custom plugin work:
