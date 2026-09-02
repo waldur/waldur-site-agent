@@ -44,9 +44,6 @@ workflow:
 
 variables:
   COMPONENT_VERSION: "latest"
-  # pre-commit hook environments are cached below; the dir must live inside
-  # $CI_PROJECT_DIR to be cacheable.
-  PRE_COMMIT_HOME: $CI_PROJECT_DIR/.cache/pre-commit
 
 # No uv cache: the runner cache is local-only and never hit by the test jobs
 # (every trace showed "Cache file does not exist"), while a cold
@@ -289,11 +286,11 @@ Scan Python dependencies:
   # otherwise overwrite each other's hook environments.
   cache:
     key:
-      prefix: "pre-commit-py$PYTHON_VERSION"
+      prefix: "prek-py$PYTHON_VERSION"
       files:
         - .pre-commit-config.yaml
     paths:
-      - .cache/pre-commit
+      - .cache/prek
   before_script:
     - |
       echo 'default_language_version:' >> .pre-commit-config.yaml
@@ -308,9 +305,7 @@ Run mypy (3.9):
   extends: .Linters base
   variables:
     PYTHON_VERSION: "3.9"
-  script:
-    - pip install pre-commit
-    - pre-commit run --all-files mypy
+    PREK_RUN_ARGS: mypy
 
 # E2E integration tests: boot a minimal Waldur stack (PostgreSQL + RabbitMQ +
 # Mastermind API/Worker) via Docker-in-Docker, load the site_agent_e2e demo
