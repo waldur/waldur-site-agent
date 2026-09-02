@@ -186,7 +186,6 @@ class WaldurClient(BaseClient):
             plan=plan_url,
             limits=order_limits,
             attributes=order_attrs,
-            type_=RequestTypes.CREATE,
         )
 
         return marketplace_orders_create.sync(
