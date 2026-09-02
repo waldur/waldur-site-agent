@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.7 - 2026-09-02
+
+### Highlights
+
+This release promotes the 1.0.6-rc series to a stable 1.0.7 and picks up
+waldur-api-client 8.1.2, keeping the agent aligned with the current Waldur
+Mastermind API surface. Operators getting started also get clearer onboarding
+documentation for obtaining an API token.
+
+### Improvements
+
+- **Core**: Upgrade `waldur-api-client` to 8.1.2 and adapt the order
+  processors, test harness, federation client and SLURM/federation E2E
+  suites to the updated client API.
+- **Docs**: Document how to obtain the API token from the Waldur UI in the
+  quickstart guide.
+
+### Statistics
+
+> 2 commits, 15 files changed (+103/-163 lines)
+
+---
+
 ## 1.0.6-rc.20 - 2026-08-31
 
 - **Core**: Migrate agent to the unified pub/sub queue (WAL-10011).
