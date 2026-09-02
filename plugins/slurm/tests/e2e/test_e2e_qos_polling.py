@@ -35,6 +35,7 @@ from waldur_api_client.api.marketplace_orders import (
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_retrieve,
 )
+from waldur_api_client.api.marketplace_resources import marketplace_resources_terminate
 from waldur_api_client.api.marketplace_slurm_periodic_usage_policies import (
     marketplace_slurm_periodic_usage_policies_destroy,
 )
@@ -51,7 +52,7 @@ from waldur_api_client.models.order_create_request_limits import (
 )
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.policy_period_enum import PolicyPeriodEnum
-from waldur_api_client.models.request_types import RequestTypes
+from waldur_api_client.models.resource_terminate_request import ResourceTerminateRequest
 from waldur_api_client.types import UNSET
 from waldur_site_agent_slurm.backend import SlurmBackend
 
@@ -123,7 +124,6 @@ def _create_order(
         plan=plan_url,
         limits=order_limits,
         attributes=attrs,
-        type_=RequestTypes.CREATE,
     )
     order = marketplace_orders_create.sync(client=client, body=body)
     return order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
@@ -229,21 +229,15 @@ def _run_sync(offering, client, backend, resource_uuid: str) -> None:
     processor.process_resource_by_uuid(resource_uuid)
 
 
-def _terminate(offering, client, backend, resource_uuid: str, project_url: str):
-    offering_url, plan_url = _offering_url(client, offering.waldur_offering_uuid)
-    res = marketplace_provider_resources_retrieve.sync(uuid=resource_uuid, client=client)
-    resource_url = res.url if not isinstance(res.url, type(UNSET)) else None
-    body = OrderCreateRequest(
-        offering=offering_url,
-        project=project_url,
-        plan=plan_url,
-        attributes=GenericOrderAttributes(),
-        type_=RequestTypes.TERMINATE,
+def _terminate(offering, client, backend, resource_uuid: str):
+    result = marketplace_resources_terminate.sync(
+        uuid=resource_uuid, client=client, body=ResourceTerminateRequest()
     )
-    if resource_url:
-        body.additional_properties["resource"] = resource_url
-    order = marketplace_orders_create.sync(client=client, body=body)
-    order_uuid = order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
+    order_uuid = (
+        result.order_uuid.hex
+        if hasattr(result.order_uuid, "hex")
+        else str(result.order_uuid)
+    )
     _process_order_terminal(offering, client, backend, order_uuid)
 
 
@@ -499,8 +493,6 @@ class TestQosPolling:
             logger.warning("Policy delete failed: %s", exc)
 
         try:
-            _terminate(
-                qos_offering, qos_client, qos_backend, s["resource_uuid"], s["project_url"]
-            )
+            _terminate(qos_offering, qos_client, qos_backend, s["resource_uuid"])
         except Exception as exc:
             logger.warning("Resource terminate failed: %s", exc)

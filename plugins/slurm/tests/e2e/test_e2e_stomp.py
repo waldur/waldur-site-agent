@@ -30,17 +30,15 @@ from pathlib import Path
 import httpx as httpx_lib
 import pytest
 from waldur_api_client.api.marketplace_orders import (
-    marketplace_orders_create,
     marketplace_orders_retrieve,
 )
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_retrieve,
 )
-from waldur_api_client.models.generic_order_attributes import GenericOrderAttributes
+from waldur_api_client.api.marketplace_resources import marketplace_resources_terminate
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
-from waldur_api_client.models.order_create_request import OrderCreateRequest
 from waldur_api_client.models.order_state import OrderState
-from waldur_api_client.models.request_types import RequestTypes
+from waldur_api_client.models.resource_terminate_request import ResourceTerminateRequest
 from waldur_api_client.types import UNSET
 from waldur_site_agent_slurm.backend import SlurmBackend
 
@@ -578,7 +576,7 @@ class TestStompEventProcessing:
             stomp_report.text("**WARNING:** No username_set event received within timeout\n")
 
         assert msg is not None, (
-            f"No STOMP OFFERING_USER event with action=username_set received within 30s"
+            "No STOMP OFFERING_USER event with action=username_set received within 30s"
         )
         assert msg.get("username") == test_username
 
@@ -624,30 +622,17 @@ class TestStompEventProcessing:
             stomp_report.text("No resource to clean up.\n")
             return
 
-        offering_url = TestStompEventProcessing._state["offering_url"]
-        plan_url = TestStompEventProcessing._state["plan_url"]
-        project_url = TestStompEventProcessing._state["project_url"]
-
-        # Create a TERMINATE order
-        body = OrderCreateRequest(
-            offering=offering_url,
-            project=project_url,
-            plan=plan_url,
-            attributes=GenericOrderAttributes(),
-            type_=RequestTypes.TERMINATE,
-        )
-
-        res = marketplace_provider_resources_retrieve.sync(
-            uuid=resource_uuid, client=stomp_waldur_client
-        )
-        resource_url = res.url if not isinstance(res.url, type(UNSET)) else None
-
-        if resource_url:
-            body.additional_properties["resource"] = resource_url
-
         try:
-            order = marketplace_orders_create.sync(client=stomp_waldur_client, body=body)
-            terminate_uuid = order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
+            result = marketplace_resources_terminate.sync(
+                uuid=resource_uuid,
+                client=stomp_waldur_client,
+                body=ResourceTerminateRequest(),
+            )
+            terminate_uuid = (
+                result.order_uuid.hex
+                if hasattr(result.order_uuid, "hex")
+                else str(result.order_uuid)
+            )
             stomp_report.text(f"**Terminate order:** `{terminate_uuid}`\n")
 
             final_state = wait_for_order_terminal(

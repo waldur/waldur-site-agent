@@ -3417,6 +3417,14 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     )
                     return skipped_components
 
+        # `recurring` is left at its default of False, which mastermind resolves
+        # to a missing-usage policy of `none`: a period with no report stays
+        # unreported. That is what auto-reporting wants — the agent re-reports
+        # every component each cycle, so a silent period means the backend had
+        # nothing to say about it, and neither repeating the last value nor
+        # inventing a zero would be accurate. A later client release replaces
+        # `recurring` with an explicit `missing_usage_policy` enum, where `none`
+        # stays the intended value.
         usage_objects = [
             ComponentUsageItemRequest(type_=component, amount=f"{amount:.2f}")
             for component, amount in total_usage.items()
