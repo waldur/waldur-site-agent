@@ -38,16 +38,14 @@ def backend(tmp_path, monkeypatch):
 
 class TestSwapAgainstEmulator:
     def test_pause_and_restore_account_with_default_qos(self, backend):
-        account = "hpc-a136"
+        account = "hpc-proj-2"
         client = backend.client
         client._execute_command(["add", "account", account, "description=p", "organization=o"])
         client._execute_command(["modify", "account", account, "set", "defaultqos=normal"])
         client._execute_command(["add", "user", "alice", f"account={account}"])
-        if client.get_current_account_default_qos(account) != "normal":
-            # slurm-emulator < 0.9.5 stores the account default but does not report it on
-            # the association row, and applies no DefaultQOS-in-list check, so the swap
-            # cannot be exercised meaningfully against it.
-            pytest.skip("slurm-emulator too old: account DefaultQOS not reported")
+        # slurm-emulator>=0.9.5 (pinned) reports the account default on the association
+        # row and enforces slurmdbd's DefaultQOS-in-list check, so this is mandatory.
+        assert client.get_current_account_default_qos(account) == "normal"
 
         assert backend.pause_resource(account) is True
         assert client.get_current_account_qos(account) == "stop"

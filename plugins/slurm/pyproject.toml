@@ -19,7 +19,7 @@ dev = [
     # >=0.8.0 folds account names to lower case like real Slurm, which the
     # account case-insensitivity integration tests depend on to reproduce
     # the mixed-case mismatch.
-    "slurm-emulator>=0.9.3",
+    "slurm-emulator>=0.9.5",
     "pytest>=7.1.0",
     "httpx>=0.27",
 ]
