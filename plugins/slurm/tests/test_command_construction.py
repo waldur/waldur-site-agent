@@ -167,7 +167,23 @@ class TestCommandPrefixByMethod:
         """set_account_qos uses sacctmgr with all standard flags."""
         c, _ = client
         c.set_account_qos("acct1", "normal")
-        assert self._get_command(c).startswith("sacctmgr --parsable2 --noheader --immediate")
+        cmd = self._get_command(c)
+        assert cmd.startswith("sacctmgr --parsable2 --noheader --immediate")
+        assert cmd.endswith("modify account acct1 set qos=normal")
+        assert "defaultqos" not in cmd
+
+    def test_set_account_qos_with_default_in_one_command(self, client):
+        """qos= and defaultqos= go into a single modify so slurmdbd's check passes."""
+        c, _ = client
+        c.set_account_qos("acct1", "stop", default_qos="stop")
+        assert self._get_command(c).endswith("modify account acct1 set qos=stop defaultqos=stop")
+
+    def test_get_current_account_default_qos(self, client):
+        c, _ = client
+        c.get_current_account_default_qos("acct1")
+        cmd = self._get_command(c)
+        assert cmd.startswith("sacctmgr --parsable2 --noheader --immediate")
+        assert cmd.endswith("list associations format=account,defaultqos where account=acct1")
 
     def test_get_association(self, client):
         """get_association uses sacctmgr with all standard flags."""

@@ -58,6 +58,7 @@ def _backend(
     backend = SlurmBackend(settings, components or _CPU_COMPONENTS)
     backend.client = MagicMock()
     backend.client.get_association.return_value = None
+    backend.client.get_current_account_default_qos.return_value = ""
     backend.client.qos_exists.return_value = False
     backend.client.list_tres.return_value = ["cpu", "billing", "gres/gpu"]
     return backend

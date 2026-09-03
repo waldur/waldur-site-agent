@@ -106,6 +106,25 @@ compatible with QoS enforcement: enabling both does not silently disable pause.
   unaffected**; only the limit echo is incomplete until a single reverse source is
   configured (follow-up).
 
+### Accounts with a `DefaultQOS`
+
+slurmdbd requires every association's effective DefaultQOS to be in its
+effective QoS list and rolls back any `sacctmgr modify` that would break that
+(`These associations don't have access to their default qos`). The
+pause/downscale/restore swap reads the account's current default and, when it
+is set and not in the new list, writes `qos=<x> defaultqos=<x>` in one command.
+Accounts without a DefaultQOS are handled exactly as before (`qos=<x>` only);
+no configuration change is needed.
+
+The agent only writes the *account-level* default. A user association that
+carries its own explicit DefaultQOS outside the new list still makes slurmdbd
+reject the swap — the error lists the offending `U = <user>` rows. Either clear
+those user-level defaults so they inherit the account's, or move them by hand:
+
+```bash
+sacctmgr modify user where account=<acct> cluster=<cluster> set defaultqos=<qos_paused>
+```
+
 ## Account hierarchy and `sync_resource_project`
 
 When a project is moved to a different customer in Waldur, the SLURM account's parent

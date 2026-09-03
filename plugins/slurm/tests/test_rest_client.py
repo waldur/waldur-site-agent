@@ -490,7 +490,29 @@ class TestQos:
 
     def test_set_account_qos_splits_csv(self, client, handler):
         client.set_account_qos("acc1", "qos1,qos2")
-        assert handler.body()["associations"][0]["qos"] == ["qos1", "qos2"]
+        assoc = handler.body()["associations"][0]
+        assert assoc["qos"] == ["qos1", "qos2"]
+        assert "default" not in assoc
+
+    def test_set_account_qos_with_default_posts_default_qos(self, client, handler):
+        client.set_account_qos("acc1", "stop", default_qos="stop")
+        assoc = handler.body()["associations"][0]
+        assert assoc["qos"] == ["stop"]
+        assert assoc["default"] == {"qos": "stop"}
+
+    def test_get_current_account_default_qos(self, client, handler):
+        handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
+            associations=[
+                {"account": "acc1", "user": "", "qos": ["normal"], "default": {"qos": "normal"}}
+            ]
+        )
+        assert client.get_current_account_default_qos("acc1") == "normal"
+
+    def test_get_current_account_default_qos_missing(self, client, handler):
+        handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
+            associations=[{"account": "acc1", "user": "", "qos": ["normal"]}]
+        )
+        assert client.get_current_account_default_qos("acc1") == ""
 
     def test_get_current_account_qos(self, client, handler):
         handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
