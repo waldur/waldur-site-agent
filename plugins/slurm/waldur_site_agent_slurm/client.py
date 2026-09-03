@@ -204,9 +204,21 @@ class SlurmClient(SlurmClientInterface):
             ["modify", "user", username, "where", f"account={resource_id}", "set", quota]
         )
 
-    def set_account_qos(self, account: str, qos: str) -> None:
-        """Set the specified QoS for the account."""
-        self._execute_command(["modify", "account", account, "set", f"qos={qos}"])
+    def set_account_qos(self, account: str, qos: str, default_qos: Optional[str] = None) -> None:
+        """Set the specified QoS for the account.
+
+        ``default_qos`` is written in the same ``sacctmgr modify`` as the list.
+        slurmdbd validates the post-modify state of the account and of every
+        association under it: each effective DefaultQOS must be in its
+        effective QoS list, otherwise the whole request is rolled back with
+        "These associations don't have access to their default qos". Replacing
+        the list on an account that has a default therefore only succeeds when
+        the default moves with it, in the same command.
+        """
+        args = ["modify", "account", account, "set", f"qos={qos}"]
+        if default_qos:
+            args.append(f"defaultqos={default_qos}")
+        self._execute_command(args)
 
     def get_association(self, user: str, resource_id: str) -> Association | None:
         """Returns associations between the user and the account if exists."""
@@ -369,23 +381,35 @@ class SlurmClient(SlurmClientInterface):
 
     def get_current_account_qos(self, account: str) -> str:
         """Returns a name of the current QoS of the account."""
+        return self._get_account_association_column(account, "qos")
+
+    def get_current_account_default_qos(self, account: str) -> str:
+        """Return the effective DefaultQOS of the account, or "" when none is set.
+
+        ``sacctmgr list associations`` reports the inherited default when the
+        account row has none of its own, which is exactly the value slurmdbd
+        checks against the QoS list on modify.
+        """
+        return self._get_account_association_column(account, "defaultqos")
+
+    def _get_account_association_column(self, account: str, column: str) -> str:
         args = [
             "list",
             "associations",
-            "format=account,qos",
+            f"format=account,{column}",
             "where",
             f"account={account}",
         ]
         output = self._execute_command(args)
-        # sacctmgr returns one row per association ("account|qos"); --parsable2
-        # emits no trailing separator. Match on the account column and take the
-        # qos column.
-        min_columns_for_qos = 2
+        # sacctmgr returns one row per association ("account|<column>");
+        # --parsable2 emits no trailing separator. Match on the account column
+        # and take the requested column from the first matching row.
+        min_columns = 2
         for line in output.splitlines():
             if "|" not in line:
                 continue
             parts = line.split("|")
-            if len(parts) < min_columns_for_qos or parts[0].strip() != account:
+            if len(parts) < min_columns or parts[0].strip() != account:
                 continue
             return parts[1].strip()
         return ""

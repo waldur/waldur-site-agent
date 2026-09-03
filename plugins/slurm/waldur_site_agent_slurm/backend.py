@@ -1116,6 +1116,31 @@ class SlurmBackend(backends.BaseBackend):
         """
         return self.qos_enforced() or self._qos_skip_swap()
 
+    def _swap_account_qos(self, resource_backend_id: str, qos: str) -> None:
+        """Replace the account QoS list with ``qos``, moving the DefaultQOS along if needed.
+
+        slurmdbd rejects a list change that leaves the account's (or any child
+        association's) effective DefaultQOS outside the new list, so on
+        clusters that set a default the plain ``set qos=`` swap fails and the
+        resource flaps to ERRED on every sync. When the account has a default
+        that is not in the new list, write ``defaultqos=`` in the same command
+        so the request passes the check. Accounts without a default keep the
+        historical single-field write.
+        """
+        new_list = [item.strip() for item in qos.split(",") if item.strip()]
+        current_default = self.client.get_current_account_default_qos(resource_backend_id)
+        if current_default and new_list and current_default not in new_list:
+            logger.info(
+                "Account %s default QoS %s is not in the new QoS list %s, moving it to %s",
+                resource_backend_id,
+                current_default,
+                qos,
+                new_list[0],
+            )
+            self.client.set_account_qos(resource_backend_id, qos, default_qos=new_list[0])
+            return
+        self.client.set_account_qos(resource_backend_id, qos)
+
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale the resource QoS respecting the backend settings."""
         if self._use_grp_submit_jobs_lever():
@@ -1146,7 +1171,7 @@ class SlurmBackend(backends.BaseBackend):
             return True
 
         logger.info("Setting %s QoS for the SLURM account", qos_downscaled)
-        self.client.set_account_qos(resource_backend_id, qos_downscaled)
+        self._swap_account_qos(resource_backend_id, qos_downscaled)
         self._last_qos = qos_downscaled
         logger.info("The new QoS successfully set")
         return True
@@ -1180,7 +1205,7 @@ class SlurmBackend(backends.BaseBackend):
             return True
 
         logger.info("Setting %s QoS for the SLURM account", qos_paused)
-        self.client.set_account_qos(resource_backend_id, qos_paused)
+        self._swap_account_qos(resource_backend_id, qos_paused)
         self._last_qos = qos_paused
         logger.info("The new QoS successfully set")
         return True
@@ -1191,7 +1216,7 @@ class SlurmBackend(backends.BaseBackend):
         When ``skip_qos_swap`` or QoS enforcement is active, clears the
         ``GrpSubmitJobs`` pause lever and never writes ``set qos=`` — that
         overwrite is the ERRED/OK flap on clusters where DefQOS is not yet
-        in the allowed list (SLURM 24.11+), and would wipe a dedicated
+        in the allowed list (slurmdbd 23.11+), and would wipe a dedicated
         per-account QoS.
 
         Otherwise writes ``qos_default`` to the account unless we can confirm
@@ -1222,7 +1247,7 @@ class SlurmBackend(backends.BaseBackend):
             return False
 
         logger.info("Setting %s QoS", default_qos)
-        self.client.set_account_qos(resource_backend_id, default_qos)
+        self._swap_account_qos(resource_backend_id, default_qos)
         self._last_qos = default_qos
         logger.info("The new QoS is %s", default_qos)
 

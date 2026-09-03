@@ -861,10 +861,17 @@ class SlurmRestClient(SlurmClientInterface):
         """Delete a QoS from the SLURM cluster."""
         self._request("DELETE", self._db(f"qos/{quote(name)}"))
 
-    def set_account_qos(self, account: str, qos: str) -> None:
-        """Set the QoS list for the account (comma-separated string accepted)."""
+    def set_account_qos(self, account: str, qos: str, default_qos: Optional[str] = None) -> None:
+        """Set the QoS list for the account (comma-separated string accepted).
+
+        ``default_qos`` goes into the same POST: slurmdbd applies the same
+        DefaultQOS-in-list check to REST updates as to ``sacctmgr modify``.
+        """
         qos_list = [item.strip() for item in qos.split(",") if item.strip()]
-        self._post_association(account, {"qos": qos_list})
+        fields: dict[str, Any] = {"qos": qos_list}
+        if default_qos:
+            fields["default"] = {"qos": default_qos}
+        self._post_association(account, fields)
 
     def get_current_account_qos(self, account: str) -> str:
         """Return the QoS of the account as a comma-separated string."""
@@ -872,6 +879,14 @@ class SlurmRestClient(SlurmClientInterface):
         if assoc is None:
             return ""
         return ",".join(assoc.get("qos") or [])
+
+    def get_current_account_default_qos(self, account: str) -> str:
+        """Return the account's DefaultQOS (``default.qos`` in the ASSOC parser), or ""."""
+        assoc = self._get_account_association(account)
+        if assoc is None:
+            return ""
+        default = assoc.get("default") or {}
+        return default.get("qos") or ""
 
     def set_account_qos_list(self, account: str, qos_list: list[str]) -> None:
         """Set the full QoS list for the account."""

@@ -94,12 +94,16 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
         """Delete a QoS from the SLURM cluster."""
 
     @abc.abstractmethod
-    def set_account_qos(self, account: str, qos: str) -> None:
-        """Set the specified QoS for the account."""
+    def set_account_qos(self, account: str, qos: str, default_qos: Optional[str] = None) -> None:
+        """Set the specified QoS for the account, optionally moving its DefaultQOS too."""
 
     @abc.abstractmethod
     def get_current_account_qos(self, account: str) -> str:
         """Return a name of the current QoS of the account."""
+
+    @abc.abstractmethod
+    def get_current_account_default_qos(self, account: str) -> str:
+        """Return the effective DefaultQOS of the account, or "" when none is set."""
 
     @abc.abstractmethod
     def set_account_qos_list(self, account: str, qos_list: list[str]) -> None:
