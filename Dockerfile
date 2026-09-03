@@ -1,5 +1,11 @@
-FROM ghcr.io/astral-sh/uv:0.9.4 AS uv
-FROM python:3.13.0-alpine3.20
+# CI passes DOCKER_REGISTRY=registry.hpc.ut.ee/mirror/ so both base images come
+# through the pull-through cache the publish job is logged into. The uv image
+# used to be pulled from ghcr.io, which CI has no credentials for and which
+# timed out on its token endpoint (job 814758); astral publishes the same image
+# to Docker Hub under astral/uv.
+ARG DOCKER_REGISTRY=docker.io/
+FROM ${DOCKER_REGISTRY}astral/uv:0.9.4 AS uv
+FROM ${DOCKER_REGISTRY}python:3.13.0-alpine3.20
 
 # Install system dependencies
 RUN apk add --no-cache \
