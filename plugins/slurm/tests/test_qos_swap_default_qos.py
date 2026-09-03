@@ -40,53 +40,53 @@ def _with_state(backend, current_qos: str, current_default: str):
 class TestSwapMovesDefaultQos:
     def test_pause_moves_default_outside_new_list(self):
         backend = _with_state(_backend(), current_qos="normal", current_default="normal")
-        assert backend.pause_resource("a136") is True
-        backend.client.set_account_qos.assert_called_once_with("a136", "stop", default_qos="stop")
+        assert backend.pause_resource("acct1") is True
+        backend.client.set_account_qos.assert_called_once_with("acct1", "stop", default_qos="stop")
 
     def test_downscale_moves_default_outside_new_list(self):
         backend = _with_state(_backend(), current_qos="normal", current_default="normal")
-        assert backend.downscale_resource("a136") is True
+        assert backend.downscale_resource("acct1") is True
         backend.client.set_account_qos.assert_called_once_with(
-            "a136", "limited", default_qos="limited"
+            "acct1", "limited", default_qos="limited"
         )
 
     def test_restore_moves_default_back(self):
         backend = _with_state(_backend(), current_qos="stop", current_default="stop")
-        assert backend.restore_resource("a136") is True
+        assert backend.restore_resource("acct1") is True
         backend.client.set_account_qos.assert_called_once_with(
-            "a136", "normal", default_qos="normal"
+            "acct1", "normal", default_qos="normal"
         )
 
     def test_default_moves_to_first_entry_of_a_multi_qos_list(self):
         backend = _with_state(
             _backend(qos_paused="stop,debug"), current_qos="normal", current_default="normal"
         )
-        assert backend.pause_resource("a136") is True
+        assert backend.pause_resource("acct1") is True
         backend.client.set_account_qos.assert_called_once_with(
-            "a136", "stop,debug", default_qos="stop"
+            "acct1", "stop,debug", default_qos="stop"
         )
 
 
 class TestSwapLeavesDefaultAlone:
     def test_no_default_keeps_single_field_write(self):
         backend = _with_state(_backend(), current_qos="normal", current_default="")
-        assert backend.pause_resource("a136") is True
-        backend.client.set_account_qos.assert_called_once_with("a136", "stop")
+        assert backend.pause_resource("acct1") is True
+        backend.client.set_account_qos.assert_called_once_with("acct1", "stop")
 
     def test_default_already_in_new_list_is_not_rewritten(self):
         backend = _with_state(
             _backend(qos_paused="stop,normal"), current_qos="normal", current_default="normal"
         )
-        assert backend.pause_resource("a136") is True
-        backend.client.set_account_qos.assert_called_once_with("a136", "stop,normal")
+        assert backend.pause_resource("acct1") is True
+        backend.client.set_account_qos.assert_called_once_with("acct1", "stop,normal")
 
     def test_restore_with_default_already_on_target_is_plain(self):
         backend = _with_state(_backend(), current_qos="stop", current_default="normal")
-        assert backend.restore_resource("a136") is True
-        backend.client.set_account_qos.assert_called_once_with("a136", "normal")
+        assert backend.restore_resource("acct1") is True
+        backend.client.set_account_qos.assert_called_once_with("acct1", "normal")
 
     def test_already_paused_does_not_query_or_write(self):
         backend = _with_state(_backend(), current_qos="stop", current_default="stop")
-        assert backend.pause_resource("a136") is True
+        assert backend.pause_resource("acct1") is True
         backend.client.get_current_account_default_qos.assert_not_called()
         backend.client.set_account_qos.assert_not_called()
