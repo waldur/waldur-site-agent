@@ -11,7 +11,7 @@ Two **flavours** reach the same RGW concepts by different routes:
 | Talks to | croit's management API | RadosGW Admin Ops on the gateway |
 | Authenticates with | bearer token or basic auth | SigV4, as an RGW user with caps |
 | Users, keys, quotas | yes | yes |
-| GB-day metering | yes | **no** — see [Usage Reporting](#usage-reporting) |
+| GB-day metering | yes, from croit's series | yes, from a series you collect |
 
 The flavours differ only inside the client. Everything above it — key lifecycle,
 quota mapping, metadata, Waldur plumbing — is shared.
@@ -90,7 +90,7 @@ Talks Admin Ops directly to the gateway, for a Ceph cluster croit does not manag
     backend_type: "ceph_s3"
     order_processing_backend: "ceph_s3"
     membership_sync_backend: "ceph_s3"
-    # No reporting_backend: this flavour cannot meter. See Usage Reporting.
+    reporting_backend: "prometheus_usage"      # not croit_usage; see Usage Reporting
 
     backend_settings:
       flavour: "radosgw"
@@ -100,6 +100,9 @@ Talks Admin Ops directly to the gateway, for a Ceph cluster croit does not manag
       s3_region: "us-east-1"                   # must match what clients sign with
       admin_path: "admin"                      # only if rgw_admin_entry was renamed
       verify_ssl: true
+      # Where the storage series is read back from. Anything speaking the
+      # Prometheus HTTP API; something else has to be putting the readings in.
+      prometheus_url: "https://victoriametrics.example.com"
 ```
 
 `api_url`, `token`, `username` and `password` belong to the croit flavour and are
@@ -109,10 +112,15 @@ operator did not intend.
 
 #### Two behaviours that differ from croit
 
-- **No GB-day metering.** Admin Ops exposes no per-user stored-bytes series:
-  `/admin/usage` is bandwidth and operation counts, and bucket stats are a
-  point-in-time size. There is nothing to integrate, so leave `reporting_backend`
-  unset and bill this offering on a fixed component.
+- **Metering needs a collector you run.** Admin Ops exposes no per-user
+  stored-bytes series to integrate: `/admin/usage` is bandwidth and operation
+  counts, and bucket stats are a point-in-time size. `prometheus_usage` therefore
+  reads the curve out of a time series database rather than from the cluster, and
+  something outside the agent has to be filling it — a cron job pushing
+  `radosgw-admin bucket stats` to `/api/v1/import/prometheus`, or a RadosGW
+  exporter behind vmagent. **That collector is now part of the billing path**: a
+  gap in the series is a gap in the invoice, and nothing in the agent will notice
+  it stopped.
 - **Quota enforcement overshoots.** RGW syncs bucket statistics into the
   user-quota check periodically rather than on every write. Measured on squid: a
   6 MiB ceiling against 5 MiB already stored accepted a further 7 MiB before
@@ -140,6 +148,28 @@ operator did not intend.
 - **`admin_secret_key`** (radosgw only, required): its secret
 - **`admin_path`** (radosgw only, default: `"admin"`): the value of
   `rgw_admin_entry`, if the operator renamed it
+- **`prometheus_url`** (required by `prometheus_usage`): base URL of a
+  Prometheus-compatible database — VictoriaMetrics, Mimir, Thanos, Prometheus
+  itself. Only `/api/v1/query_range` is used
+- **`prometheus_metric`** (optional, default: `"ceph_rgw_user_stored_bytes"`):
+  the gauge carrying bytes held. Per-user is the safer shape — it can carry an
+  explicit zero for a user that owns no buckets, which a per-bucket metric cannot.
+  A per-bucket gauge works too, since the query sums by owner either way; set
+  `radosgw_usage_bucket_bytes` for the community RadosGW exporter
+- **`prometheus_owner_label`** (optional, default: `"owner"`): the label carrying
+  the S3 uid. It has to match the resource's `backend_id`, which is what the
+  report is keyed by
+- **`prometheus_step`** (optional, default: `"30m"`): range query resolution.
+  Match it to the collector's interval; a month at 30 m is 1488 points, and a
+  range query caps out around 11k
+- **`prometheus_lookback`** (optional, default: the step): how far back each
+  evaluation point looks for a reading. A bare selector carries only the
+  database's 5-minute staleness window, so a collector writing less often than
+  that is seen only when its samples happen to land just before a grid point.
+  Raise it above the step if the collector is slower than the resolution you want
+- **`prometheus_timeout`** (optional, default: `30`), **`prometheus_verify_ssl`**
+  (optional, default: `true`), and **`prometheus_username`** /
+  **`prometheus_password`** or **`prometheus_token`** for authentication
 - **`verify_ssl`** (optional, default: `true`): Enable/disable SSL certificate verification
 - **`timeout`** (optional, default: `30`): Request timeout in seconds
 - **`allocation_prefix`** (optional, default: `"waldur-"`): namespace every uid this
@@ -219,16 +249,28 @@ three keys is unaffected, they are simply ignored.
 
 ## Usage Reporting
 
-**Croit flavour only, and it needs its own backend.** Set
+**Metering needs its own backend, and which one depends on the flavour.** Set
 
 ```yaml
-    reporting_backend: "croit_usage"
+    reporting_backend: "croit_usage"       # croit flavour
+    reporting_backend: "prometheus_usage"  # radosgw flavour
 ```
 
-Metering reads croit's statistics subsystem, which has no RadosGW equivalent, so
-it lives in a separate backend class rather than as a method that works on one
-flavour and fails on the other. `croit_usage` refuses to start on a
-radosgw-flavoured offering.
+Both integrate the same curve the same way and differ only in where the readings
+come from: croit holds a per-user series already, while RadosGW holds none, so
+`prometheus_usage` reads one out of a time series database that somebody else
+fills (see
+[Metering needs a collector you run](#two-behaviours-that-differ-from-croit)).
+
+`croit_usage` refuses to start on a radosgw offering, having nothing to read.
+`prometheus_usage` imposes no such restriction — where the bytes came from is a
+property of whatever fills the database — but on croit prefer `croit_usage`: its
+series is native, sampled at 180 s, and covers periods predating any collector
+you deploy.
+
+Because that split is a fact about which class is wired in, it lives in the
+configuration rather than as a method that works on one flavour and fails on the
+other.
 
 Leaving `reporting_backend` at `ceph_s3` reports **nothing** — deliberately, not
 zeros. A zero is a legitimate usage value and would overwrite the period's
@@ -241,7 +283,7 @@ Usage is metered **per resource**, not per key: the series is the S3 user's, so
 the resource's two access keys never enter the calculation and rotating one
 cannot change a bill.
 
-### Where the number comes from
+### Where the number comes from, on croit
 
 `GET /api/stats?graph=s3-user-data&template-s3-user-name=<uid>` returns croit's
 per-user storage series as `{"t": unix seconds, "v": bytes}` datapoints at 180 s
@@ -261,6 +303,42 @@ is absolute: reporting is idempotent, and an agent that was down for two days
 returns the correct figure on its next pass with no catch-up logic. It also only
 rises within a period, so Waldur's anomaly detection stays useful and
 `supports_decreasing_usage` stays at the default `False`.
+
+### Where the number comes from, on radosgw
+
+A collector outside the agent records bytes held per bucket, labelled by the S3
+uid. The agent then asks the database for the whole period in one range query:
+
+```promql
+sum by (owner) (last_over_time(ceph_rgw_user_stored_bytes[30m]))
+```
+
+Summing in the query is what makes a single request answer for every resource,
+and it means buckets appearing and disappearing mid-period need no handling — the
+sum follows them. `last_over_time` over one collection interval is what makes the
+reading visible at all: a range query evaluates on a grid of `step`, and a bare
+selector would only carry the database's 5-minute staleness window, so whether a
+month billed correctly or not at all would come down to the phase between the
+collector's cron and the grid. The reply's `[timestamp, value]` pairs are the same
+rectangles croit's datapoints are, integrated by the same code.
+
+Prometheus renders a stale or absent reading as `NaN`, which is handed to the
+integrator as a null and carried the way a null in croit's series is: billing the
+gap at zero would turn a collector outage into a silent discount.
+
+Two things follow from the series being somebody else's:
+
+- **The collector is part of the billing path.** Nothing in the agent can tell a
+  tenant that deleted everything from a collector that stopped — both are simply
+  absent from the reply. Absence reports nothing and leaves the accrued total
+  alone, which is the safe direction, but it means **a tenant's drop to zero only
+  reaches the invoice if the collector publishes an explicit zero for it**. Emit
+  one for every S3 user, not only for users that currently own buckets.
+- **Retention has to cover re-reporting.** `get_usage_report_for_period` reads a
+  past month straight out of the database, which is what makes the tail of a month
+  billable after rollover. That needs roughly 90 days retained. Prometheus itself
+  defaults to 15 and documents that it is unsuitable where full accuracy is
+  required; VictoriaMetrics is the better target for invoice data.
 
 ### Why GB-days rather than GB
 
