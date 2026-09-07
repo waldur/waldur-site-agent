@@ -4,6 +4,9 @@ LiteLLM stores virtual keys sha256-hashed, so the plaintext ``sk-…`` is readab
 exactly once, in the ``/key/generate`` response. Every later call therefore addresses
 a key by its ``key_alias`` (which the agent chooses and which is stable) or by the
 hash LiteLLM returns as ``token``. This client never caches plaintext.
+
+It also manages LiteLLM *users*, which exist for a different reason than keys: see the
+"users" section below.
 """
 
 from __future__ import annotations
@@ -21,8 +24,22 @@ DEFAULT_TIMEOUT = 30.0
 # /key/list caps the page size; 100 keeps the number of round trips low without
 # tripping it.
 KEY_LIST_PAGE_SIZE = 100
+# /user/list caps page_size at 100 server-side; asking for more is a 422.
+USER_LIST_PAGE_SIZE = 100
 # A defensive stop so a paging bug cannot spin forever against a live proxy.
 MAX_PAGES = 1000
+# Substrings LiteLLM uses when the entity asked about simply is not there. It answers
+# 400 rather than 404 on some of these paths, so the status code alone cannot tell an
+# absent user from a malformed request -- see ``_request``.
+_MISSING_ENTITY_MARKERS = ("does not exist", "not found", "no user found")
+
+# Keys the plugin writes into a LiteLLM user's ``metadata``. The proxy has no field of
+# its own for "who does this belong to", and a user_id here is an email address, which
+# says nothing about which resource is paying for it -- so ownership is recorded here.
+# They live in the client rather than in either backend because both backends read
+# them: the management one stamps them, the reporting one resolves usage through them.
+META_RESOURCE = "waldur_resource"
+META_USERNAME = "waldur_username"
 
 
 def verify_ssl_setting(backend_settings: dict) -> bool:
@@ -108,6 +125,7 @@ class LiteLLMClient:
         params: Optional[dict] = None,
         json_body: Optional[dict] = None,
         none_on_404: bool = False,
+        none_on_missing_entity: bool = False,
     ) -> Any:  # noqa: ANN401 - the proxy returns both dicts and lists
         """Perform one request, translating every failure into a backend error.
 
@@ -115,11 +133,21 @@ class LiteLLMClient:
         treat an absent key as a state rather than a failure — the block/unblock/info
         paths all run against a key that may legitimately have been removed at the
         proxy.
+
+        ``none_on_missing_entity`` extends that to the paths where the proxy reports an
+        absent object with a 400 instead: ``/user/info`` is the one this plugin hits.
+        Without it, provisioning a user for the first time — the case where the lookup
+        is *expected* to find nothing — would raise instead of falling through to the
+        create. It is opt-in per call rather than global because on a write path the
+        same prose means the operation failed, and swallowing that would report a
+        create or a delete that never happened.
         """
         url = f"{self.api_url}{path}"
         try:
             response = self.session.request(method, url, params=params, json=json_body)
             if none_on_404 and response.status_code == httpx.codes.NOT_FOUND:
+                return None
+            if none_on_missing_entity and self._is_missing_entity(response):
                 return None
             self._raise_for_enterprise(response, path)
             response.raise_for_status()
@@ -136,6 +164,19 @@ class LiteLLMClient:
             # response.json() raises ValueError on a non-JSON body behind a 2xx.
             msg = f"LiteLLM {path} returned invalid JSON: {exc}"
             raise LiteLLMBackendError(msg) from exc
+
+    @staticmethod
+    def _is_missing_entity(response: httpx.Response) -> bool:
+        """True when the response says the object asked about does not exist."""
+        if response.is_success:
+            return False
+        if response.status_code not in (httpx.codes.BAD_REQUEST, httpx.codes.NOT_FOUND):
+            return False
+        try:
+            body = response.text.lower()
+        except Exception:  # pragma: no cover - httpx keeps the body in memory
+            return False
+        return any(marker in body for marker in _MISSING_ENTITY_MARKERS)
 
     @staticmethod
     def _raise_for_enterprise(response: httpx.Response, path: str) -> None:
@@ -319,3 +360,128 @@ class LiteLLMClient:
             msg = "LiteLLM /key/regenerate returned no key"
             raise LiteLLMBackendError(msg)
         return str(payload["key"])
+
+    # --- users ------------------------------------------------------------------
+    #
+    # A LiteLLM *user* is a different object from a virtual *key*. Keys carry the API
+    # surface; users exist so chat traffic arriving on Open WebUI's single shared key
+    # can be attributed to a person, because the proxy resolves the forwarded
+    # ``X-OpenWebUI-User-Email`` header to ``user_id`` verbatim. That is why every user
+    # here is created with ``user_id`` set to the person's email address rather than to
+    # a UUID: Open WebUI mints its own opaque ids and offers no way to set one, and
+    # LiteLLM declined to match on the ``user_email`` column (BerriAI/litellm#21927), so
+    # the email is the only identifier the two systems can agree on.
+
+    def create_user(
+        self,
+        user_id: str,
+        *,
+        user_email: str,
+        user_alias: Optional[str] = None,
+        models: Optional[list] = None,
+        max_budget: Optional[float] = None,
+        budget_duration: Optional[str] = None,
+        tpm_limit: Optional[int] = None,
+        rpm_limit: Optional[int] = None,
+        max_parallel_requests: Optional[int] = None,
+        metadata: Optional[dict] = None,
+    ) -> dict:
+        """Create one internal user and return the proxy's response.
+
+        ``auto_create_key`` is sent as false, against LiteLLM's own default of true. A
+        key minted here would be a live credential that Waldur never sees: the agent
+        does not keep key material, so it could not report it, and nothing in the
+        portal could then rotate or revoke it. Every key this plugin is responsible for
+        comes from ``generate_resource_keys`` and is reported to Waldur in the same
+        breath — see the module docstring.
+        """
+        body: dict = {
+            "user_id": user_id,
+            "user_email": user_email,
+            "user_role": "internal_user",
+            "auto_create_key": False,
+        }
+        if user_alias:
+            body["user_alias"] = user_alias
+        if models:
+            body["models"] = list(models)
+        if max_budget is not None:
+            body["max_budget"] = max_budget
+        if budget_duration is not None:
+            body["budget_duration"] = budget_duration
+        if tpm_limit is not None:
+            body["tpm_limit"] = tpm_limit
+        if rpm_limit is not None:
+            body["rpm_limit"] = rpm_limit
+        if max_parallel_requests is not None:
+            body["max_parallel_requests"] = max_parallel_requests
+        if metadata is not None:
+            body["metadata"] = dict(metadata)
+
+        payload = self._request("POST", "/user/new", json_body=body)
+        if not isinstance(payload, dict):
+            msg = f"LiteLLM /user/new returned no user record for {user_id}"
+            raise LiteLLMBackendError(msg)
+        return payload
+
+    def get_user(self, user_id: str) -> Optional[dict]:
+        """Return one user's record, or None when the proxy has no such user.
+
+        ``/user/info`` wraps the row in ``user_info`` on some versions and returns it
+        flat on others; both shapes are unwrapped here so callers see one.
+
+        A proxy that answers 400 rather than 404 for an unknown user is treated the
+        same way. LiteLLM is not consistent about which it uses, and reading "no such
+        user" as a transport failure would turn every first-time provision into an
+        error instead of a create.
+        """
+        payload = self._request(
+            "GET", "/user/info", params={"user_id": user_id}, none_on_404=True,
+            none_on_missing_entity=True,
+        )
+        if not isinstance(payload, dict):
+            return None
+        info = payload.get("user_info")
+        return info if isinstance(info, dict) else payload
+
+    def update_user(self, user_id: str, fields: dict) -> None:
+        """Apply ``fields`` to one user."""
+        body = dict(fields)
+        body["user_id"] = user_id
+        self._request("POST", "/user/update", json_body=body)
+
+    def delete_users(self, user_ids: list) -> None:
+        """Delete users by id. A no-op for an empty list."""
+        if not user_ids:
+            return
+        self._request("POST", "/user/delete", json_body={"user_ids": list(user_ids)})
+
+    def list_users(self, role: str = "internal_user") -> list:
+        """Return every user record with the given role.
+
+        Used to rebuild the email-to-resource map from the proxy itself, so the
+        reporting backend — which never sees Waldur's team lists — can attribute chat
+        usage without the management backend having to hand anything over.
+        """
+        users: list = []
+        page = 1
+        while page <= MAX_PAGES:
+            payload = self._request(
+                "GET",
+                "/user/list",
+                params={"role": role, "page": page, "page_size": USER_LIST_PAGE_SIZE},
+            )
+            if not isinstance(payload, dict):
+                break
+            batch = payload.get("users") or []
+            users.extend(item for item in batch if isinstance(item, dict))
+            # Same guard as the key walk: an empty page ends it whatever the metadata
+            # says, so a proxy that never clears ``total_pages`` cannot spin MAX_PAGES
+            # requests inside one pass.
+            if not batch:
+                break
+            total_pages = payload.get("total_pages") or 0
+            if page >= total_pages:
+                break
+            page += 1
+        return users

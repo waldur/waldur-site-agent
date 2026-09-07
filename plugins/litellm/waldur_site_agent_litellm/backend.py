@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import Iterator
 from typing import Optional
 
@@ -24,8 +25,16 @@ from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_site_agent.backend import DEFAULT_RESOURCE_KEY_COUNT, backends
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
+from waldur_site_agent.common import WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES
 
-from .client import LiteLLMBackendError, LiteLLMClient, LiteLLMEnterpriseFeatureError
+from .client import (
+    META_RESOURCE,
+    META_USERNAME,
+    LiteLLMBackendError,
+    LiteLLMClient,
+    LiteLLMEnterpriseFeatureError,
+)
+from .openwebui import ROLE_ACTIVE, ROLE_DISABLED, OpenWebUIClient, OpenWebUIError
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +51,29 @@ _LIMIT_FIELDS = {
     "tpm": "tpm_limit",
     "rpm": "rpm_limit",
 }
+
+# How long the proxy's internal-user listing stays reusable, in seconds. ``/user/list``
+# cannot be filtered by metadata, so establishing which users belong to one resource
+# means walking every internal user on the proxy -- and the membership processor pulls
+# one resource at a time, which without this would repeat that walk per resource per
+# pass. Half the membership-sync period for the same reason the usage cache uses half
+# the report period: it covers the whole of one pass and expires before the next.
+_USER_CACHE_TTL = WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES * 60 * 0.5
+
+# Account provisioning modes for the chat surface.
+#
+# ``sso``: Open WebUI is fronted by an identity provider (the same one as Waldur), so
+# an account materializes on first login with the address the IdP asserts. The agent
+# creates nothing -- there is no password to mint, transport or store -- and only ever
+# revokes. This is the target state and the default.
+#
+# ``managed_password``: the agent creates the account itself with an operator-supplied
+# temporary password, mirroring what an admin does by hand today. It exists because
+# that is where most deployments start, not because it is good: Waldur has no encrypted
+# channel to hand a password to an end user, so the same initial secret is used for
+# every account and the person is expected to change it on first login.
+PROVISIONING_SSO = "sso"
+PROVISIONING_MANAGED_PASSWORD = "managed_password"  # noqa: S105 - a mode name, not a secret
 
 
 class LiteLLMBackend(backends.BaseBackend):
@@ -84,6 +116,40 @@ class LiteLLMBackend(backends.BaseBackend):
 
         self.litellm_client = LiteLLMClient(backend_settings)
 
+        # Optional chat surface. Absent settings mean "API only": the offering sells
+        # keys and nothing here touches Open WebUI, which is why this is a nested block
+        # rather than a set of top-level settings -- an offering that does not sell chat
+        # should not have to name empty values for it.
+        openwebui_settings = backend_settings.get("openwebui") or {}
+        self.openwebui_settings = dict(openwebui_settings)
+        self.openwebui_client = (
+            OpenWebUIClient(self.openwebui_settings) if self.openwebui_settings else None
+        )
+        self.openwebui_url = str(self.openwebui_settings.get("url") or "").rstrip("/")
+        self.account_provisioning = str(
+            self.openwebui_settings.get("account_provisioning") or PROVISIONING_SSO
+        )
+        self.initial_password = self.openwebui_settings.get("initial_password")
+        if (
+            self.openwebui_client
+            and self.account_provisioning == PROVISIONING_MANAGED_PASSWORD
+            and not self.initial_password
+        ):
+            msg = (
+                "Open WebUI account_provisioning is 'managed_password' but no "
+                "'initial_password' is set; the agent has no other way to give the "
+                "person a credential they can sign in with"
+            )
+            raise BackendError(msg)
+        # Whether losing access demotes the account or deletes it. Demotion is the
+        # default: it ends access just as completely (Open WebUI refuses a 'pending'
+        # account) while keeping the person's chat history, so re-adding them later
+        # restores what they had instead of handing back an empty product.
+        self.remove_chat_accounts = bool(self.openwebui_settings.get("delete_accounts_on_removal"))
+
+        # ``/user/list`` results, cached for part of a pass -- see _USER_CACHE_TTL.
+        self._users_cache: Optional[tuple[float, dict]] = None
+
     # --- health / introspection -------------------------------------------------
 
     def ping(self, raise_exception: bool = False) -> bool:
@@ -107,6 +173,16 @@ class LiteLLMBackend(backends.BaseBackend):
             self.default_rpm_limit,
         )
         logger.info("Components: %s", list(self.backend_components.keys()))
+        if self.openwebui_client is None:
+            logger.info("Chat surface: not configured (API-only offering)")
+        else:
+            logger.info(
+                "Chat surface: %s (provisioning=%s, removal=%s, reachable=%s)",
+                self.openwebui_client.api_url,
+                self.account_provisioning,
+                "delete" if self.remove_chat_accounts else "disable",
+                self.openwebui_client.ping(),
+            )
         return self.ping(raise_exception=False)
 
     def list_components(self) -> list:
@@ -187,8 +263,18 @@ class LiteLLMBackend(backends.BaseBackend):
             backend_id=backend_id,
             limits=limits,
             backend_metadata={},
-            endpoints=[{"name": "OpenAI API", "url": f"{self.api_url}/v1"}],
+            # The chat URL is the offering's, not the proxy's, so it is only surfaced
+            # when the operator has actually named one -- otherwise the portal would
+            # advertise a chat surface that does not exist for this offering.
+            endpoints=self._endpoints(),
         )
+
+    def _endpoints(self) -> list:
+        """Access endpoints to surface on the resource in the portal."""
+        endpoints = [{"name": "OpenAI API", "url": f"{self.api_url}/v1"}]
+        if self.openwebui_url:
+            endpoints.append({"name": "Chat", "url": self.openwebui_url})
+        return endpoints
 
     def create_resource_with_id(
         self,
@@ -220,7 +306,24 @@ class LiteLLMBackend(backends.BaseBackend):
         that is already there.
         """
         if self._resource_keys(resource_backend_id):
-            return BackendResourceInfo(backend_id=resource_backend_id)
+            try:
+                # The membership processor diffs this against the project team to work
+                # out who to add and who has gone stale.
+                users = self.list_resource_users(resource_backend_id)
+            except BackendError:
+                # Existence is decided by the keys alone, so a failed ``/user/list``
+                # must not read as "resource missing": ``pull_resource`` swallows the
+                # error and the order processor answers ``None`` by re-creating a live
+                # resource, minting a second full set of keys for it. An empty member
+                # list only makes the next membership pass re-add the members, which
+                # is idempotent.
+                logger.exception(
+                    "Unable to list the users of resource %s; reporting it as existing "
+                    "with no members rather than as missing",
+                    resource_backend_id,
+                )
+                users = []
+            return BackendResourceInfo(backend_id=resource_backend_id, users=users)
         return None
 
     def recreate_missing_resource(self, waldur_resource: WaldurResource) -> bool:
@@ -455,6 +558,12 @@ class LiteLLMBackend(backends.BaseBackend):
         if not backend_id:
             logger.warning("No backend_id for resource %s; nothing to delete", waldur_resource.uuid)
             return
+        # Members first, keys second. A member left behind after the keys are gone is
+        # the dangerous residue: they can still chat (that traffic never touched this
+        # resource's keys) and their spend accrues against a resource Waldur has
+        # terminated. A key left behind while the members are gone only fails closed.
+        self._remove_all_users(backend_id)
+
         tokens = []
         orphans = []
         for alias, record in self._resource_keys(backend_id).items():
@@ -480,6 +589,42 @@ class LiteLLMBackend(backends.BaseBackend):
             )
             raise LiteLLMBackendError(msg)
 
+    def _remove_all_users(self, resource_backend_id: str) -> None:
+        """Revoke every member of a resource that is going away.
+
+        Failures are logged and do not stop the deletion: the keys still have to go,
+        and a terminate that aborts halfway leaves a live resource in Waldur's past.
+        """
+        try:
+            owned = self._resource_user_map(resource_backend_id)
+        except BackendError:
+            # The keys still have to go. Raising here would abort ``delete_resource``
+            # before the key-deletion loop, so a listing failure would leave every key
+            # of a terminated resource serving.
+            logger.exception(
+                "Unable to list the users of resource %s; continuing with key deletion",
+                resource_backend_id,
+            )
+            return
+        if not owned:
+            return
+        for email in sorted(owned.values()):
+            try:
+                self._revoke_chat_access(email, permanent=True)
+            except BackendError:
+                logger.exception("Unable to revoke chat access for %s", email)
+        try:
+            self.litellm_client.delete_users(sorted(owned.values()))
+        except BackendError:
+            logger.exception(
+                "Unable to delete the LiteLLM users of resource %s", resource_backend_id
+            )
+        else:
+            logger.info(
+                "Removed %d user(s) from resource %s", len(owned), resource_backend_id
+            )
+        self._invalidate_users_cache()
+
     # --- state transitions ------------------------------------------------------
 
     def pause_resource(self, resource_backend_id: str) -> bool:
@@ -502,7 +647,9 @@ class LiteLLMBackend(backends.BaseBackend):
             )
             return False
 
-        paused = True
+        # Both surfaces, because blocking the keys only closes the API one. Chat runs
+        # on Open WebUI's shared key, which no per-resource block can reach.
+        paused = self._set_chat_access_for_resource(resource_backend_id, enabled=False)
         for alias, record in records.items():
             token = self._token(record)
             if not token:
@@ -538,7 +685,7 @@ class LiteLLMBackend(backends.BaseBackend):
             )
             return False
 
-        restored = True
+        restored = self._set_chat_access_for_resource(resource_backend_id, enabled=True)
         for alias, record in records.items():
             token = self._token(record)
             if not token:
@@ -631,6 +778,363 @@ class LiteLLMBackend(backends.BaseBackend):
             "backend_type": self.backend_type,
             "active": any(not record.get("blocked") for record in records.values()),
         }
+
+    # --- users and chat access --------------------------------------------------
+    #
+    # A LiteLLM *user* is not a credential and does not gate anything. It exists so
+    # that chat traffic can be billed: Open WebUI authenticates every upstream call
+    # with one shared virtual key and forwards the signed-in person's address, which
+    # the proxy stamps onto the request's ``user_id`` -- after authentication, without
+    # looking the address up. Two consequences shape everything below.
+    #
+    # First, the user record is an *attribution* record. Budgets, rate limits and model
+    # allowlists written onto it are not consulted for chat traffic, because that
+    # request authenticated as the shared key and was checked against the shared key's
+    # owner. So this plugin writes nothing onto the user but identity and ownership.
+    # A ``max_budget`` here would read as an enforced cap that enforces nothing at all.
+    # Enforcement stays where it already is -- Waldur meters, pauses, and the
+    # agent blocks the keys and demotes the chat account.
+    #
+    # Second, removing the LiteLLM user does not end chat access. An address the proxy
+    # has never seen is not rejected; it accrues daily spend rows against a user row
+    # that does not exist. Revocation therefore has to happen in Open WebUI, which is
+    # why every removal path here touches both systems.
+
+    @staticmethod
+    def _email_of(record: dict) -> str:
+        """The address a managed user is keyed by, normalized for comparison."""
+        return str(record.get("user_id") or "").strip().lower()
+
+    @staticmethod
+    def _user_metadata(record: dict) -> dict:
+        metadata = record.get("metadata")
+        return metadata if isinstance(metadata, dict) else {}
+
+    def _managed_users(self) -> dict:
+        """Return ``{email: record}`` for every internal user on the proxy.
+
+        The whole listing rather than one resource's slice, because ``/user/list``
+        cannot filter on metadata and ownership only lives there. It is cached for part
+        of a pass so the per-resource walk does not repeat it.
+        """
+        now = time.monotonic()
+        cached = self._users_cache
+        if cached is not None and now - cached[0] < _USER_CACHE_TTL:
+            return cached[1]
+        users = {}
+        for record in self.litellm_client.list_users():
+            email = self._email_of(record)
+            if email:
+                users[email] = record
+        self._users_cache = (now, users)
+        return users
+
+    def _invalidate_users_cache(self) -> None:
+        """Drop the cached listing after a write that changes it.
+
+        Without this an add followed by a pull inside the same pass would read the
+        pre-add listing and report the new member as still missing, which the processor
+        would answer by adding them again.
+        """
+        self._users_cache = None
+
+    def _resource_user_map(self, resource_backend_id: str) -> dict:
+        """Return ``{offering_username: email}`` for the users this resource owns.
+
+        Keyed by offering username because that is the currency the membership
+        processor diffs in: it compares what this returns against the project team's
+        offering usernames. The email is what the proxy is addressed by, so both halves
+        of the mapping are needed and both are read back out of the user's metadata
+        rather than recomputed -- a person can change their address in Waldur, and the
+        record on the proxy is the one that says which address is actually billing.
+        """
+        found = {}
+        for email, record in self._managed_users().items():
+            metadata = self._user_metadata(record)
+            if metadata.get(META_RESOURCE) != resource_backend_id:
+                continue
+            username = metadata.get(META_USERNAME)
+            if username:
+                found[str(username)] = email
+        return found
+
+    def list_resource_users(self, resource_backend_id: str) -> list:
+        """Offering usernames of the people currently provisioned for the resource."""
+        return sorted(self._resource_user_map(resource_backend_id))
+
+    def add_users_to_resource(
+        self, waldur_resource: WaldurResource, user_ids: set, **kwargs: object
+    ) -> set:
+        """Provision each new member on the proxy and, if configured, in Open WebUI.
+
+        ``user_ids`` are offering usernames; the addresses come alongside them in
+        ``user_emails``, which the membership processor builds from the offering users.
+        A member with no address cannot be provisioned at all -- the email *is* the
+        identifier both systems agree on -- so they are skipped loudly rather than
+        provisioned under something that would never receive their usage.
+        """
+        backend_id = waldur_resource.backend_id
+        if not backend_id:
+            logger.warning("No backend_id for resource %s; cannot add users", waldur_resource.uuid)
+            return set()
+        if not user_ids:
+            logger.info("No new users to add")
+            return set()
+
+        # The processor threads these through as plain dicts; ``**kwargs: object`` is
+        # the base signature, so they are narrowed here rather than trusted.
+        user_emails = kwargs.get("user_emails")
+        user_emails = user_emails if isinstance(user_emails, dict) else {}
+        user_attributes = kwargs.get("user_attributes")
+        user_attributes = user_attributes if isinstance(user_attributes, dict) else {}
+        added = set()
+        for username in sorted(user_ids):
+            # ``user_emails`` is only built by the membership processor; the order
+            # processor and the service/course-account syncs pass the addresses inside
+            # ``user_attributes`` instead. Reading only the former skipped every member
+            # on those paths, so a CREATE order provisioned nobody until the next
+            # membership pass -- and never, in order-only mode.
+            attributes = user_attributes.get(username)
+            attributes = attributes if isinstance(attributes, dict) else {}
+            raw_email = user_emails.get(username) or attributes.get("email") or ""
+            email = str(raw_email).strip().lower()
+            if not email:
+                logger.error(
+                    "Offering user %s has no email address; LiteLLM and Open WebUI are "
+                    "married by email, so they cannot be added to resource %s",
+                    username,
+                    backend_id,
+                )
+                continue
+            attributes = user_attributes.get(username)
+            attributes = attributes if isinstance(attributes, dict) else {}
+            full_name = str(attributes.get("full_name") or username)
+            try:
+                if not self._ensure_litellm_user(email, username, full_name, backend_id):
+                    continue
+                self._ensure_chat_account(email, full_name)
+            except BackendError:
+                logger.exception(
+                    "Unable to add user %s (%s) to resource %s", username, email, backend_id
+                )
+                continue
+            added.add(username)
+        if added:
+            self._invalidate_users_cache()
+        return added
+
+    def _ensure_litellm_user(
+        self, email: str, username: str, full_name: str, backend_id: str
+    ) -> bool:
+        """Create or adopt the proxy-side user record. False means "not ours to touch".
+
+        A LiteLLM user id is global, and here it is an email address, so one person has
+        exactly one record on the proxy no matter how many resources they hold. That is
+        the per-person model's load-bearing constraint: usage arriving under an address
+        can only be billed to one resource, so a second resource claiming an address
+        another one already owns is **refused**, not taken over. Stealing it would move
+        the first resource's chat billing onto the second one silently, and the person
+        would keep using the chat throughout.
+
+        A record with no owner stamped on it is adopted rather than refused: it is
+        either a user an admin added by hand before Waldur managed this offering, or one
+        left behind by an interrupted add, and in both cases the alternative is a
+        resource that can never provision its own member.
+        """
+        metadata = {META_RESOURCE: backend_id, META_USERNAME: username}
+        existing = self.litellm_client.get_user(email)
+        if existing is None:
+            self.litellm_client.create_user(
+                email,
+                user_email=email,
+                user_alias=full_name,
+                metadata=metadata,
+            )
+            logger.info("Created LiteLLM user %s for resource %s", email, backend_id)
+            return True
+
+        owner = self._user_metadata(existing).get(META_RESOURCE)
+        if owner and owner != backend_id:
+            logger.error(
+                "LiteLLM user %s is already owned by resource %s; refusing to move it "
+                "to %s. A person's usage can only be billed to one resource, so the "
+                "chat surface supports one entitlement per person -- terminate the "
+                "other resource first.",
+                email,
+                owner,
+                backend_id,
+            )
+            return False
+
+        # Re-stamped on every add, not only on adoption: the offering username can
+        # change (Waldur regenerates it under some policies), and the membership diff
+        # is keyed on it, so a stale one would report the member as absent forever.
+        self.litellm_client.update_user(
+            email, {"user_email": email, "user_alias": full_name, "metadata": metadata}
+        )
+        logger.info("Adopted existing LiteLLM user %s for resource %s", email, backend_id)
+        return True
+
+    def _ensure_chat_account(
+        self, email: str, full_name: Optional[str] = None, *, create_missing: bool = True
+    ) -> None:
+        """Make sure the person can sign in to the chat surface, if there is one.
+
+        Under ``sso`` no account is created: the identity provider does that on first
+        login. What still runs is the *re-enable*, because a previous removal demoted
+        the account and an SSO login into a demoted account does not restore it.
+
+        ``create_missing=False`` re-enables only. Restore uses it: an account that is
+        not there was not paused by this plugin, and restore has no display name to
+        create one under -- it knows the offering username, not the person's name.
+        """
+        if self.openwebui_client is None:
+            return
+        account = self.openwebui_client.find_user(email)
+        if account is None:
+            if not create_missing:
+                logger.info("No Open WebUI account for %s; nothing to re-enable", email)
+                return
+            if self.account_provisioning != PROVISIONING_MANAGED_PASSWORD:
+                logger.info(
+                    "No Open WebUI account for %s; it will be created on first sign-in "
+                    "through the identity provider",
+                    email,
+                )
+                return
+            self.openwebui_client.create_user(
+                email, str(full_name or email), str(self.initial_password), role=ROLE_ACTIVE
+            )
+            logger.info("Created Open WebUI account for %s", email)
+            return
+
+        if str(account.get("role")) == ROLE_DISABLED:
+            self.openwebui_client.set_role(account, ROLE_ACTIVE)
+            logger.info("Re-enabled the Open WebUI account of %s", email)
+
+    def remove_users_from_resource(
+        self, waldur_resource: WaldurResource, usernames: set, **kwargs: object
+    ) -> list:
+        """Revoke a member's LiteLLM record and their chat access.
+
+        Both halves matter and in this order they are both required: deleting only the
+        LiteLLM user leaves the person chatting through the shared key with their usage
+        landing on rows nothing reconciles, and demoting only the chat account leaves a
+        billing record for someone who is no longer entitled.
+        """
+        del kwargs
+        backend_id = waldur_resource.backend_id
+        if not usernames:
+            logger.info("No users to remove")
+            return []
+
+        owned = self._resource_user_map(backend_id) if backend_id else {}
+        removed = []
+        for username in sorted(usernames):
+            email = owned.get(username)
+            if email is None:
+                # Already absent from the proxy. Reporting it as removed is correct --
+                # the desired end state holds -- and reporting a failure instead would
+                # have the processor retry it on every pass forever.
+                logger.info(
+                    "No LiteLLM user for %s on resource %s; nothing to remove",
+                    username,
+                    backend_id,
+                )
+                removed.append(username)
+                continue
+            try:
+                self._revoke_chat_access(email, permanent=True)
+                self.litellm_client.delete_users([email])
+            except BackendError:
+                logger.exception(
+                    "Unable to remove user %s (%s) from resource %s", username, email, backend_id
+                )
+                continue
+            logger.info("Removed user %s (%s) from resource %s", username, email, backend_id)
+            removed.append(username)
+        if removed:
+            self._invalidate_users_cache()
+        return removed
+
+    def _revoke_chat_access(self, email: str, *, permanent: bool = False) -> None:
+        """End one person's access to the chat surface.
+
+        Demotion by default, deletion only when the offering asks for it *and* the
+        entitlement is actually gone -- ``permanent`` is what says so, and only the
+        member-removal and terminate paths pass it. A pause is a temporary state, so
+        it always demotes however ``delete_accounts_on_removal`` is set: deleting there
+        would destroy the person's conversations over an unpaid invoice, and under
+        ``sso`` restore creates nothing back, so the loss would be permanent.
+
+        Both forms end access equally; demotion additionally keeps the person's
+        conversations so a re-add gives back what they had.
+
+        A missing account is not an error. Under ``sso`` a person may never have signed
+        in, and there is nothing to revoke for someone who never had access.
+        """
+        if self.openwebui_client is None:
+            return
+        account = self.openwebui_client.find_user(email)
+        if account is None:
+            return
+        role = str(account.get("role") or "")
+        if role not in (ROLE_ACTIVE, ROLE_DISABLED):
+            # An admin (or any other elevated role) can also be a project member. This
+            # plugin only ever grants ``user``, so anything else was set outside it and
+            # is not ours to take away: demoting it would lock the operator out of the
+            # admin API -- possibly with the very token this agent authenticates with --
+            # and restore only ever promotes back to ``user``, so the loss is permanent.
+            logger.info(
+                "Open WebUI account of %s has role %s; leaving it untouched", email, role
+            )
+            return
+        if permanent and self.remove_chat_accounts:
+            self.openwebui_client.delete_user(str(account.get("id")))
+            logger.info("Deleted the Open WebUI account of %s", email)
+            return
+        self.openwebui_client.set_role(account, ROLE_DISABLED)
+        logger.info("Disabled the Open WebUI account of %s", email)
+
+    def _set_chat_access_for_resource(self, resource_backend_id: str, *, enabled: bool) -> bool:
+        """Enable or disable the chat surface for every member of one resource.
+
+        Called from pause and restore. Blocking the resource's keys does **not** stop
+        its members chatting: that traffic authenticates as Open WebUI's own shared key,
+        which this plugin neither owns nor may block -- blocking it would cut off every
+        other tenant on the proxy. So a paused resource has to be paused person by
+        person, on the chat side.
+        """
+        if self.openwebui_client is None:
+            return True
+        succeeded = True
+        try:
+            emails = sorted(self._resource_user_map(resource_backend_id).values())
+        except BackendError:
+            # Raising would abort pause/restore before a single key is blocked, and in
+            # the membership pass it would also skip the rest of the per-resource work.
+            # Report the failure instead and let the caller block the keys anyway.
+            logger.exception(
+                "Unable to list the users of resource %s; chat access is unchanged",
+                resource_backend_id,
+            )
+            return False
+        for email in emails:
+            try:
+                if enabled:
+                    self._ensure_chat_account(email, create_missing=False)
+                else:
+                    self._revoke_chat_access(email)
+            except (BackendError, OpenWebUIError):
+                # A pause that half-worked still leaves someone spending past their
+                # quota, so this is an error and the caller reports the pause as failed.
+                logger.exception(
+                    "Unable to %s chat access for %s",
+                    "restore" if enabled else "revoke",
+                    email,
+                )
+                succeeded = False
+        return succeeded
 
     # --- usage reporting --------------------------------------------------------
 

@@ -2531,6 +2531,32 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         logger.info("Number of offering user usernames: %s", len(offering_user_usernames))
 
+        # A team member whose offering user carries no username cannot be provisioned:
+        # every backend keys on that username, so the person simply never appears in the
+        # diff above. Left unsaid that is invisible from both ends -- they hold a
+        # resource in state OK and see it in the portal, while the backend never heard of
+        # them. The usual cause is the offering's ``username_generation_policy`` being
+        # left at the default ``service_provider``, which returns an empty username and
+        # waits for the provider to assign one by hand.
+        #
+        # Identity-bridge mode keys the diff on the CUID (``user.username``) instead --
+        # see ``resource_usernames`` above -- so an empty ``offering_user_username`` there
+        # is the normal, provisioned case, not a skip. Checking it here would flag every
+        # federated member on every pass with a message that is simply false for them.
+        if not use_identity_bridge:
+            unnamed_members = sorted(
+                user.username for user in team if user.username and not user.offering_user_username
+            )
+            if unnamed_members:
+                logger.debug(
+                    "%s team member(s) of resource %s have no offering user username and were "
+                    "skipped: %s. Assign them a username, or set the offering's "
+                    "username_generation_policy so usernames are generated automatically.",
+                    len(unnamed_members),
+                    waldur_resource.backend_id,
+                    ", ".join(unnamed_members),
+                )
+
         existing_usernames: set[str] = resource_usernames & local_usernames
         logger.info(
             "Resource existing usernames (%s): %s",
