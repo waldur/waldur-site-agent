@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.8-rc.1 - 2026-09-07
+
+- **LiteLLM**: Add Open WebUI integration ([#15]).
+- **SLURM**: Move the account's DefaultQOS along with the QoS swap, and require slurm-emulator 0.9.5 so the swap is covered by tests ([#16]).
+- **Core**: Pull base Docker images through the registry mirror.
+
+> 5 commits, 28 files changed (+2784/-100 lines)
+
+---
+
 ## 1.0.7 - 2026-09-02
 
 ### Highlights
