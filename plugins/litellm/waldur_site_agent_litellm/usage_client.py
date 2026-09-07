@@ -110,6 +110,85 @@ class LiteLLMUsageClient:
             raise LiteLLMUsageBackendError(msg) from exc
         return payload if isinstance(payload, dict) else {}
 
+    def get_user_usage_rows(self, start_date: str, end_date: str) -> list:
+        """Return one row per (day, user, key) in the inclusive ``YYYY-MM-DD`` range.
+
+        Each row is ``{"user_id", "key_alias", "input_tokens", "output_tokens",
+        "token_cost"}``, where ``key_alias`` may be ``None``.
+
+        This is the chat surface's usage. Open WebUI authenticates every request with
+        one shared virtual key and forwards the signed-in person's address, which the
+        proxy stamps onto the record's ``user_id`` -- so the traffic is invisible in the
+        ``api_keys`` breakdown (it belongs to a key this plugin does not own) and shows
+        up only here, under ``breakdown.entities``, which ``/user/daily/activity``
+        indexes by user id.
+
+        The two breakdowns describe the **same** records from different angles, so a
+        caller that sums both double-counts. That is why the key each row was served on
+        is carried out alongside the user: it is what lets the caller drop the rows it
+        has already attributed by alias. Requests on a key with no user attached -- every
+        key this plugin mints -- land in LiteLLM's ``"Unassigned"`` bucket, which no
+        managed address ever matches, so the common case separates cleanly on its own.
+        """
+        rows: list = []
+        for result in self._walk_results(start_date, end_date):
+            entities = (result.get("breakdown") or {}).get("entities") or {}
+            for user_id, record in entities.items():
+                if not isinstance(record, dict):
+                    continue
+                by_key = record.get("api_key_breakdown") or {}
+                if by_key:
+                    for key_record in by_key.values():
+                        row = self._to_user_row(str(user_id), key_record)
+                        if row is not None:
+                            rows.append(row)
+                    continue
+                # No per-key split (an older proxy, or a record the proxy could not
+                # resolve a key for). The entity total is still the right number; it
+                # simply cannot be de-duplicated against the alias rows, so it is
+                # emitted with no alias and the caller counts it whole.
+                row = self._to_user_row(str(user_id), record)
+                if row is not None:
+                    rows.append(row)
+        return rows
+
+    @staticmethod
+    def _to_user_row(user_id: str, record: object) -> Optional[dict]:
+        """Map one entity (or entity-by-key) entry onto a usage row."""
+        if not isinstance(record, dict):
+            return None
+        metrics = record.get("metrics") or {}
+        alias = (record.get("metadata") or {}).get("key_alias")
+        return {
+            "user_id": user_id,
+            "key_alias": str(alias) if alias else None,
+            "input_tokens": int(metrics.get("prompt_tokens") or 0),
+            "output_tokens": int(metrics.get("completion_tokens") or 0),
+            "token_cost": float(metrics.get("spend") or 0.0),
+        }
+
+    def _walk_results(self, start_date: str, end_date: str) -> list:
+        """Return every daily ``results`` entry in the range, one page at a time."""
+        results: list = []
+        page = 1
+        while page <= MAX_PAGES:
+            payload = self._fetch_page(start_date, end_date, page)
+            batch = payload.get("results") or []
+            results.extend(item for item in batch if isinstance(item, dict))
+            # An empty page ends the walk whatever the metadata claims. The metadata
+            # alone is not a safe stop: a proxy that leaves ``has_more`` set, or reports
+            # it without a ``total_pages``, never satisfies the condition below, and the
+            # loop would spend all MAX_PAGES requests inside one reporting pass. A page
+            # that carried nothing has nothing after it either.
+            if not batch:
+                break
+            metadata = payload.get("metadata") or {}
+            total_pages = metadata.get("total_pages") or 0
+            if not metadata.get("has_more") and page >= total_pages:
+                break
+            page += 1
+        return results
+
     def get_usage_rows(self, start_date: str, end_date: str) -> list:
         """Return one usage row per (day, key) in the inclusive ``YYYY-MM-DD`` range.
 
@@ -123,31 +202,12 @@ class LiteLLMUsageClient:
         count the same spend two or three times.
         """
         rows: list = []
-        page = 1
-        while page <= MAX_PAGES:
-            payload = self._fetch_page(start_date, end_date, page)
-            results = payload.get("results") or []
-            for result in results:
-                if not isinstance(result, dict):
-                    continue
-                breakdown = result.get("breakdown") or {}
-                api_keys = breakdown.get("api_keys") or {}
-                for record in api_keys.values():
-                    row = self._to_row(record)
-                    if row is not None:
-                        rows.append(row)
-            # An empty page ends the walk whatever the metadata claims. The metadata
-            # alone is not a safe stop: a proxy that leaves ``has_more`` set, or reports
-            # it without a ``total_pages``, never satisfies the condition below, and the
-            # loop would spend all MAX_PAGES requests inside one reporting pass. A page
-            # that carried nothing has nothing after it either.
-            if not results:
-                break
-            metadata = payload.get("metadata") or {}
-            total_pages = metadata.get("total_pages") or 0
-            if not metadata.get("has_more") and page >= total_pages:
-                break
-            page += 1
+        for result in self._walk_results(start_date, end_date):
+            api_keys = (result.get("breakdown") or {}).get("api_keys") or {}
+            for record in api_keys.values():
+                row = self._to_row(record)
+                if row is not None:
+                    rows.append(row)
         return rows
 
     @staticmethod

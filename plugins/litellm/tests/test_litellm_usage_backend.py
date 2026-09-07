@@ -277,4 +277,241 @@ def test_an_idle_resource_zero_fills_only_the_metered_components() -> None:
 
     # "requests" is not something this backend can meter. Zero-filling it would report
     # a measured zero for an idle resource, while a resource with usage omits it.
-    assert set(info.usage["TOTAL_ACCOUNT_USAGE"]) == set(backend._usage_keys)
+    assert set(info.usage["TOTAL_ACCOUNT_USAGE"]) == set(backend._usage_metrics)
+
+
+# --- chat usage -------------------------------------------------------------
+
+CHAT_SETTINGS = dict(
+    SETTINGS, openwebui={"api_url": "http://chat:8080", "api_token": "owui-admin"}
+)
+
+
+def _chat_backend(components: object = None) -> LiteLLMUsageReportingBackend:
+    with (
+        mock.patch("waldur_site_agent_litellm.reporting.LiteLLMUsageClient"),
+        mock.patch("waldur_site_agent_litellm.reporting.LiteLLMClient"),
+    ):
+        backend = LiteLLMUsageReportingBackend(
+            dict(CHAT_SETTINGS), dict(COMPONENTS if components is None else components)
+        )
+    backend.usage_client = mock.MagicMock()
+    backend.usage_client.get_usage_rows.return_value = []
+    backend.usage_client.get_user_usage_rows.return_value = []
+    backend.litellm_client = mock.MagicMock()
+    backend.litellm_client.list_users.return_value = []
+    return backend
+
+
+def _user(email: str, resource: str) -> dict:
+    return {"user_id": email, "metadata": {"waldur_resource": resource}}
+
+
+def _user_row(email: str, alias: object, prompt: int, completion: int, cost: float) -> dict:
+    return {
+        "user_id": email,
+        "key_alias": alias,
+        "input_tokens": prompt,
+        "output_tokens": completion,
+        "token_cost": cost,
+    }
+
+
+def test_chat_usage_is_billed_to_the_resource_that_owns_the_address() -> None:
+    # Open WebUI's traffic arrives on a shared key this plugin does not own, so it is
+    # invisible by alias and identifiable only by the address the proxy stamped on it.
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [_user("ada@example.com", RID)]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _user_row("ada@example.com", "openwebui-shared", 100, 200, 1.5)
+    ]
+
+    report = backend.get_usage_report_for_period([RID], 2026, 8)
+
+    assert report[RID]["TOTAL_ACCOUNT_USAGE"] == {
+        "input_tokens": 100,
+        "output_tokens": 200,
+        "token_cost": 1.5,
+    }
+
+
+def test_the_two_surfaces_add_up_on_one_resource() -> None:
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [_user("ada@example.com", RID)]
+    backend.usage_client.get_usage_rows.return_value = [_row(f"{RID}-1", 10, 20, 0.5)]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _user_row("ada@example.com", "openwebui-shared", 100, 200, 1.5)
+    ]
+
+    totals = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    assert totals == {"input_tokens": 110, "output_tokens": 220, "token_cost": 2.0}
+
+
+def test_a_request_on_the_resources_own_key_is_not_billed_twice() -> None:
+    # The api_keys and entities breakdowns describe the same records from two angles.
+    # A person using their own API key appears in both, and summing both would double
+    # every request they make.
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [_user("ada@example.com", RID)]
+    backend.usage_client.get_usage_rows.return_value = [_row(f"{RID}-1", 10, 20, 0.5)]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _user_row("ada@example.com", f"{RID}-1", 10, 20, 0.5)
+    ]
+
+    totals = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    assert totals == {"input_tokens": 10, "output_tokens": 20, "token_cost": 0.5}
+
+
+def test_usage_under_an_unmanaged_address_is_billed_to_nobody() -> None:
+    backend = _chat_backend()
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _user_row("stranger@example.com", "openwebui-shared", 100, 200, 1.5),
+        # LiteLLM's bucket for requests on a key with no user attached — every key this
+        # plugin mints. It must never match a resource.
+        _user_row("Unassigned", f"{RID}-1", 10, 20, 0.5),
+    ]
+
+    assert backend.get_usage_report_for_period([RID], 2026, 8) == {}
+
+
+def test_chat_usage_for_another_resource_does_not_leak_into_this_one() -> None:
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [_user("bob@example.com", "other")]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _user_row("bob@example.com", "openwebui-shared", 100, 200, 1.5)
+    ]
+
+    assert backend.get_usage_report_for_period([RID], 2026, 8) == {}
+
+
+def test_an_api_only_offering_never_reads_the_user_list() -> None:
+    backend = _make_backend()
+    backend.usage_client.get_usage_rows.return_value = [_row(f"{RID}-1", 10, 20, 0.5)]
+
+    assert backend.litellm_client is None
+    assert backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"][
+        "input_tokens"
+    ] == 10
+    backend.usage_client.get_user_usage_rows.assert_not_called()
+
+
+def test_a_failing_user_list_does_not_take_the_api_usage_down_with_it() -> None:
+    backend = _chat_backend()
+    backend.litellm_client.list_users.side_effect = BackendError("no permission")
+    backend.usage_client.get_usage_rows.return_value = [_row(f"{RID}-1", 10, 20, 0.5)]
+
+    totals = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    assert totals["input_tokens"] == 10
+
+
+def test_the_user_map_is_read_once_for_every_resource_of_a_pass() -> None:
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [_user("ada@example.com", RID)]
+
+    backend.get_usage_report_for_period([RID], 2026, 8)
+    backend.get_usage_report_for_period(["other"], 2026, 8)
+
+    assert backend.litellm_client.list_users.call_count == 1
+
+
+# --- component_metrics: decoupling component names from metrics ------------------
+
+
+def test_component_metrics_feeds_one_metric_to_two_components() -> None:
+    """Spend caps on a LIMIT component and bills on a USAGE one, from one metric."""
+    components = {
+        "token_cost": {"measured_unit": "USD", "accounting_type": "limit"},
+        "inference_cost": {"measured_unit": "USD", "accounting_type": "usage"},
+    }
+    backend = _make_backend(
+        components,
+        {**SETTINGS, "component_metrics": {"inference_cost": "token_cost"}},
+    )
+    report: dict = {}
+    backend._accumulate(report, RID, _row(RID, 10, 20, 0.5))
+    backend._accumulate(report, RID, _row(RID, 1, 2, 0.25))
+
+    # token_cost is metered by its name alone; only inference_cost needed configuring.
+    assert report[RID]["TOTAL_ACCOUNT_USAGE"] == {
+        "token_cost": pytest.approx(0.75),
+        "inference_cost": pytest.approx(0.75),
+    }
+
+
+def test_component_metrics_rejects_unknown_metric() -> None:
+    with pytest.raises(BackendError, match="unknown metric"):
+        _make_backend(
+            {"inference_cost": {"measured_unit": "USD", "accounting_type": "usage"}},
+            {**SETTINGS, "component_metrics": {"inference_cost": "spend"}},
+        )
+
+
+def test_component_metrics_skips_components_the_offering_lacks() -> None:
+    """A stale mapping entry is dropped, not reported: Waldur rejects the whole pass."""
+    backend = _make_backend(
+        {"inference_cost": {"measured_unit": "USD", "accounting_type": "usage"}},
+        {
+            **SETTINGS,
+            "component_metrics": {
+                "inference_cost": "token_cost",
+                "retired": "input_tokens",
+            },
+        },
+    )
+    assert backend._usage_metrics == {"inference_cost": "token_cost"}
+
+
+def test_component_metrics_adds_to_the_name_based_defaults() -> None:
+    """The mapping carries only what the names do not already say."""
+    backend = _make_backend(
+        {**COMPONENTS, "inference_cost": {"measured_unit": "USD", "accounting_type": "usage"}},
+        {**SETTINGS, "component_metrics": {"inference_cost": "token_cost"}},
+    )
+    assert backend._usage_metrics == {
+        "input_tokens": "input_tokens",
+        "output_tokens": "output_tokens",
+        "token_cost": "token_cost",
+        "inference_cost": "token_cost",
+    }
+
+
+def test_without_component_metrics_names_still_drive_metering() -> None:
+    backend = _make_backend()
+    assert backend._usage_metrics == {
+        "input_tokens": "input_tokens",
+        "output_tokens": "output_tokens",
+        "token_cost": "token_cost",
+    }
+
+
+def test_api_usage_on_another_resources_key_is_not_billed_to_the_address_owner() -> None:
+    # Ada's address is owned by RID, but this request was served on a key of "other".
+    # Attribution by alias wins: the row belongs to "other" and is counted on the pass
+    # that has "other" in scope. Billing it to RID here would charge one resource's API
+    # traffic to another, and charge it twice overall.
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [
+        _user("ada@example.com", RID),
+        _user("bob@example.com", "other"),
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _user_row("ada@example.com", "other-1", 10, 20, 0.5)
+    ]
+
+    assert backend.get_usage_report_for_period([RID], 2026, 8) == {}
+
+
+def test_api_usage_on_a_key_only_resource_is_not_billed_to_the_address_owner() -> None:
+    # "other" holds keys but has no chat users of its own, so it never appears in the
+    # user map. Attribution is still by alias: billing this row to RID here would charge
+    # it to the wrong resource, and "other"'s own pass would charge it again.
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [_user("ada@example.com", RID)]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _user_row("ada@example.com", "other-1", 10, 20, 0.5)
+    ]
+
+    assert backend.get_usage_report_for_period([RID], 2026, 8) == {}

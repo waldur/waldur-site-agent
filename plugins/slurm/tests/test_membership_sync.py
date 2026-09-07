@@ -392,7 +392,9 @@ class MembershipSyncTest(unittest.TestCase):
 
         # Fake resource + backend info
         waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+            uuid=SimpleNamespace(hex="r"),
+            project_uuid=SimpleNamespace(hex="p"),
+            backend_id="r",
         )
         backend_resource_info = SimpleNamespace(users=[])
 
@@ -433,7 +435,9 @@ class MembershipSyncTest(unittest.TestCase):
         processor.resource_backend = SimpleNamespace(user_resolve_method="local")
 
         waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+            uuid=SimpleNamespace(hex="r"),
+            project_uuid=SimpleNamespace(hex="p"),
+            backend_id="r",
         )
         backend_resource_info = SimpleNamespace(users=[])
 
@@ -473,7 +477,9 @@ class MembershipSyncTest(unittest.TestCase):
         processor.resource_backend = SimpleNamespace()
 
         waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+            uuid=SimpleNamespace(hex="r"),
+            project_uuid=SimpleNamespace(hex="p"),
+            backend_id="r",
         )
         backend_resource_info = SimpleNamespace(users=[])
 
@@ -511,7 +517,9 @@ class MembershipSyncTest(unittest.TestCase):
         processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
 
         waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+            uuid=SimpleNamespace(hex="r"),
+            project_uuid=SimpleNamespace(hex="p"),
+            backend_id="r",
         )
         backend_resource_info = SimpleNamespace(users=[])
 
@@ -569,7 +577,9 @@ class MembershipSyncTest(unittest.TestCase):
         processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
 
         waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+            uuid=SimpleNamespace(hex="r"),
+            project_uuid=SimpleNamespace(hex="p"),
+            backend_id="r",
         )
         cuid = "bc7eb766-edited-e638a46f163c@myaccessid.org"
         backend_resource_info = SimpleNamespace(users=[cuid])
@@ -618,7 +628,9 @@ class MembershipSyncTest(unittest.TestCase):
         processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
 
         waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+            uuid=SimpleNamespace(hex="r"),
+            project_uuid=SimpleNamespace(hex="p"),
+            backend_id="r",
         )
         # Backend already has this CUID user
         backend_resource_info = SimpleNamespace(users=["cuid:alice"])
@@ -662,7 +674,9 @@ class MembershipSyncTest(unittest.TestCase):
         processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
 
         waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+            uuid=SimpleNamespace(hex="r"),
+            project_uuid=SimpleNamespace(hex="p"),
+            backend_id="r",
         )
         backend_resource_info = SimpleNamespace(users=[])
 
@@ -715,7 +729,9 @@ class MembershipSyncTest(unittest.TestCase):
         processor.resource_backend = SimpleNamespace(user_resolve_method=None)
 
         waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+            uuid=SimpleNamespace(hex="r"),
+            project_uuid=SimpleNamespace(hex="p"),
+            backend_id="r",
         )
         # Backend still reports the departed user alongside a current member.
         backend_resource_info = SimpleNamespace(users=["departed-user-01", "remaining-user-01"])
