@@ -1,12 +1,17 @@
 # Changelog
 
-## 1.0.8-rc.1 - 2026-09-07
+## 1.0.8-rc.2 - 2026-09-08
 
-- **LiteLLM**: Add Open WebUI integration ([#15]).
-- **SLURM**: Move the account's DefaultQOS along with the QoS swap, and require slurm-emulator 0.9.5 so the swap is covered by tests ([#16]).
-- **Core**: Pull base Docker images through the registry mirror.
+- **LDAP**: Take usernames and POSIX ids (uid/gid) from Waldur instead of reading them back from the directory, so Waldur is the source of truth for account identity (#17).
+- **LiteLLM**: Add Open WebUI integration, covering user provisioning and usage reporting alongside the existing LiteLLM client (#15).
+- **SLURM**: Move the account `DefaultQOS` along with the QoS swap so accounts are not left pointing at the old QoS after a swap (#16).
+- **Core**: Keep polling agents running when the Waldur backend refuses agent identity registration, with documentation for the new behaviour (waldur/waldur-mastermind#385).
+- **Core**: Keep the event-processing path working when the agent identity is unavailable (#24).
+- **Core**: Upgrade `waldur-api-client` to 8.1.3rc10.
+- **Release tooling**: Stop the release script from tagging when the changelog generation found no commits.
+- **CI/Build**: Pull Docker base images through the registry mirror and run both linter jobs with prek from the shared template (waldur/waldur-mastermind#343).
 
-> 5 commits, 28 files changed (+2784/-100 lines)
+> 11 commits, 81 files changed (+5969/-285)
 
 ---
 
