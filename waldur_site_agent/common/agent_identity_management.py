@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from typing import Optional
 
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_site_agent_identities import (
@@ -29,7 +30,7 @@ from waldur_api_client.models.agent_dependency_request import AgentDependencyReq
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import WALDUR_SITE_AGENT_VERSION, utils
-from waldur_site_agent.common.structures import Offering, UnifiedQueue
+from waldur_site_agent.common.structures import LogShippingConfig, Offering, UnifiedQueue
 
 
 class AgentIdentityDoesNotExistError(Exception):
@@ -238,3 +239,64 @@ class AgentIdentityManager:
         )
         logger.info("Registered new processor %s with UUID %s", processor.name, processor.uuid.hex)
         return processor
+
+
+def ensure_agent_telemetry(
+    offering: Offering,
+    waldur_rest_client: AuthenticatedClient,
+    agent_mode: str,
+    log_shipping: LogShippingConfig,
+) -> Optional[AgentService]:
+    """Register the agent's identity and service and start shipping its logs.
+
+    All three are telemetry: they make the agent visible in Waldur (version,
+    uptime, processors, logs), but a polling agent does its actual work through
+    the marketplace REST API and never reads them back. A Waldur that refuses
+    the registration must therefore not stop the offering from being processed,
+    so failures are logged and swallowed rather than raised.
+
+    Args:
+        offering: The Waldur offering configuration.
+        waldur_rest_client: Authenticated REST client for Waldur API.
+        agent_mode: Agent mode, used as both the service name and its mode.
+        log_shipping: Global log shipping configuration.
+
+    Returns:
+        AgentService: The registered service, or None if registration failed.
+    """
+    manager = AgentIdentityManager(offering, waldur_rest_client)
+    identity_name = f"agent-{offering.uuid}"
+
+    try:
+        identity = manager.register_identity(identity_name)
+    except Exception as e:
+        logger.warning(
+            "Unable to register the identity %s for the offering %s: %s. "
+            "Continuing without agent telemetry.",
+            identity_name,
+            offering.name,
+            e,
+        )
+        return None
+
+    try:
+        utils.ensure_log_shipper(offering, identity.uuid.hex, log_shipping)
+    except Exception as e:
+        logger.warning(
+            "Unable to start the log shipper for the offering %s: %s. "
+            "Continuing without agent telemetry.",
+            offering.name,
+            e,
+        )
+
+    try:
+        return manager.register_service(identity, agent_mode, agent_mode)
+    except Exception as e:
+        logger.warning(
+            "Unable to register the service %s for the offering %s: %s. "
+            "Continuing without agent telemetry.",
+            agent_mode,
+            offering.name,
+            e,
+        )
+        return None

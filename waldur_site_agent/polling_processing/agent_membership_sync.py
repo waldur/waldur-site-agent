@@ -2,8 +2,6 @@
 
 import time
 
-from waldur_api_client.models import AgentIdentity
-
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import (
     WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES,
@@ -18,10 +16,7 @@ SYNC_INTERVAL = WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES * 60
 TICK_INTERVAL = 60  # Wake up every minute to touch heartbeat
 
 
-def _process_offerings(
-    configuration: common_structures.WaldurAgentConfiguration,
-    agent_identities: dict[str, AgentIdentity],
-) -> None:
+def _process_offerings(configuration: common_structures.WaldurAgentConfiguration) -> None:
     """Run a single membership sync cycle for all offerings."""
     waldur_offerings = configuration.waldur_offerings
     user_agent = configuration.waldur_user_agent
@@ -51,26 +46,11 @@ def _process_offerings(
                 configuration.global_proxy,
             )
 
-            agent_identity_manager = agent_identity_management.AgentIdentityManager(
-                offering, waldur_rest_client
-            )
-
-            identity_name = f"agent-{offering.uuid}"
-
-            # Get an identity from the local cache
-            agent_identity = agent_identities.get(offering.uuid)
-            if agent_identity is None:
-                # If no identities found locally, registering one
-                agent_identity = agent_identity_manager.register_identity(identity_name)
-
-            common_utils.ensure_log_shipper(
-                offering, agent_identity.uuid.hex, configuration.log_shipping
-            )
-
-            agent_service = agent_identity_manager.register_service(
-                agent_identity,
+            agent_service = agent_identity_management.ensure_agent_telemetry(
+                offering,
+                waldur_rest_client,
                 configuration.waldur_site_agent_mode,
-                configuration.waldur_site_agent_mode,
+                configuration.log_shipping,
             )
 
             # Create backend instance for dependency injection
@@ -95,14 +75,13 @@ def _process_offerings(
 def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
     """Starts the tick-based main loop for offering processing."""
     last_sync = 0.0
-    agent_identities: dict[str, AgentIdentity] = {}
     common_utils.setup_log_shippers(configuration)
     try:
         while True:
             now = time.time()
 
             if now - last_sync >= SYNC_INTERVAL:
-                _process_offerings(configuration, agent_identities)
+                _process_offerings(configuration)
                 last_sync = time.time()
 
             touch_heartbeat()

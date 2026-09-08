@@ -93,6 +93,15 @@ Each offering in the `offerings` array represents a separate service offering.
 - **Required**: Yes
 - **Description**: UUID of the offering in Waldur
 - **Note**: Found in Waldur UI under Integration -> Credentials
+- **Supported offering types**: Waldur accepts an agent identity only for an offering whose type
+  is `Waldur site agent` (`Marketplace.Slurm`), `Script` (`Marketplace.Script`), `Basic`
+  (`Marketplace.Basic`) or `OpenStack tenant` (`OpenStack.Tenant`). Point an agent at any other
+  type — a service desk offering, say — and identity registration is refused with a misleading
+  `400 Object with uuid=... does not exist`, even though the offering is there. The agent logs a
+  warning and carries on syncing without agent telemetry; see
+  [Agent Identity Registration Is Refused](deployment.md#agent-identity-registration-is-refused).
+  The set of accepted types is a property of the Waldur server, so it can differ between Waldur
+  versions.
 
 ### Backend Configuration
 
