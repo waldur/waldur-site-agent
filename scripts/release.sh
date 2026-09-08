@@ -43,6 +43,39 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
     exit 1
 fi
 
+# Releasing from a stale branch silently cuts the release without whatever was
+# merged upstream, so refresh and compare before going any further. Fetching
+# tags first also lets the duplicate-tag check below see tags pushed elsewhere.
+REMOTE="${RELEASE_REMOTE:-origin}"
+if ! git fetch --quiet --tags "$REMOTE" 2>/dev/null; then
+    echo "Warning: could not fetch from '$REMOTE'; cannot tell whether"
+    echo "'$BRANCH' is up to date."
+    read -p "Continue anyway? [y/N] " choice
+    [ "$choice" = "y" ] || [ "$choice" = "Y" ] || exit 1
+elif git rev-parse --verify --quiet "$REMOTE/$BRANCH" >/dev/null; then
+    COUNTS=$(git rev-list --left-right --count "$REMOTE/$BRANCH...HEAD")
+    BEHIND=$(echo "$COUNTS" | cut -f1)
+    AHEAD=$(echo "$COUNTS" | cut -f2)
+    if [ "$BEHIND" -gt 0 ] && [ "$AHEAD" -gt 0 ]; then
+        echo "Error: '$BRANCH' has diverged from '$REMOTE/$BRANCH'"
+        echo "  ($AHEAD local commit(s), $BEHIND remote commit(s))."
+        echo "Reconcile them before releasing."
+        exit 1
+    elif [ "$BEHIND" -gt 0 ]; then
+        echo "Error: '$BRANCH' is $BEHIND commit(s) behind '$REMOTE/$BRANCH'."
+        echo "The release would be cut without them. Run:"
+        echo "  git pull --ff-only $REMOTE $BRANCH"
+        exit 1
+    elif [ "$AHEAD" -gt 0 ]; then
+        echo "Warning: '$BRANCH' is $AHEAD commit(s) ahead of"
+        echo "'$REMOTE/$BRANCH'; those commits are not pushed yet."
+        read -p "Continue anyway? [y/N] " choice
+        [ "$choice" = "y" ] || [ "$choice" = "Y" ] || exit 1
+    fi
+else
+    echo "Warning: '$REMOTE/$BRANCH' does not exist; skipping the up-to-date check."
+fi
+
 if git rev-parse "$VERSION" >/dev/null 2>&1; then
     echo "Error: tag '$VERSION' already exists."
     exit 1
