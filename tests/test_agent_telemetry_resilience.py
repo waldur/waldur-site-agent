@@ -14,13 +14,17 @@ from unittest import mock
 
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.errors import UnexpectedStatus
+from waldur_api_client.models import ObservableObjectTypeEnum
 
 from waldur_site_agent.common import structures
 from waldur_site_agent.common.agent_identity_management import (
+    AgentIdentityDoesNotExistError,
     AgentIdentityManager,
     ensure_agent_telemetry,
 )
 from waldur_site_agent.common.processors import OfferingMembershipProcessor
+from waldur_site_agent.event_processing import handlers
+from waldur_site_agent.event_processing import utils as event_utils
 
 OFFERING_UUID = "11111111-1111-1111-1111-111111111111"
 
@@ -205,3 +209,97 @@ class TestPollingAgentsSurviveRejectedIdentity(unittest.TestCase):
             "common_processors",
             "OfferingReportProcessor",
         )
+
+
+class TestEventPathSurvivesMissingIdentity(unittest.TestCase):
+    """The event path treats the identity as telemetry too.
+
+    A STOMP message is delivered with ``ack="auto"``, so a handler that raises
+    neither requeues nor retries — an identity lookup must never be able to
+    cost a real order or membership event.
+    """
+
+    def setUp(self) -> None:
+        """Set up test fixtures."""
+        self.offering = _make_offering()
+        self.client = _make_client()
+
+    @mock.patch.object(AgentIdentityManager, "register_service")
+    @mock.patch.object(AgentIdentityManager, "get_identity")
+    def test_missing_identity_yields_no_service(self, mock_get, mock_service):
+        """A handler gets None rather than an exception when the identity is gone."""
+        mock_get.side_effect = AgentIdentityDoesNotExistError(
+            f"Unable to get the identity agent-{OFFERING_UUID}"
+        )
+
+        result = handlers.register_event_process_service(
+            self.offering, self.client, ObservableObjectTypeEnum.ORDER
+        )
+
+        self.assertIsNone(result)
+        mock_service.assert_not_called()
+
+    @mock.patch.object(AgentIdentityManager, "register_service")
+    @mock.patch.object(AgentIdentityManager, "get_identity")
+    def test_transient_lookup_failure_yields_no_service(self, mock_get, mock_service):
+        """The everyday trigger is a transient API failure, not a deleted identity."""
+        mock_get.side_effect = _rejected_offering_error()
+
+        self.assertIsNone(
+            handlers.register_event_process_service(
+                self.offering, self.client, ObservableObjectTypeEnum.USER_ROLE
+            )
+        )
+        mock_service.assert_not_called()
+
+    @mock.patch.object(AgentIdentityManager, "register_service")
+    @mock.patch.object(AgentIdentityManager, "get_identity")
+    def test_refused_service_yields_no_service(self, mock_get, mock_service):
+        """A refused service registration does not escape either."""
+        mock_get.return_value = mock.Mock()
+        mock_service.side_effect = _rejected_offering_error()
+
+        self.assertIsNone(
+            handlers.register_event_process_service(
+                self.offering, self.client, ObservableObjectTypeEnum.RESOURCE
+            )
+        )
+
+    @mock.patch.object(AgentIdentityManager, "register_service")
+    @mock.patch.object(AgentIdentityManager, "get_identity")
+    def test_service_returned_when_lookup_succeeds(self, mock_get, mock_service):
+        """The happy path is unchanged: name carries the observable object."""
+        mock_get.return_value = mock.Mock()
+        mock_service.return_value = mock.Mock()
+
+        result = handlers.register_event_process_service(
+            self.offering, self.client, ObservableObjectTypeEnum.ORDER
+        )
+
+        self.assertIs(result, mock_service.return_value)
+        registered_name = mock_service.call_args[0][1]
+        self.assertIn(str(ObservableObjectTypeEnum.ORDER), registered_name)
+
+    @mock.patch("waldur_site_agent.event_processing.utils.common_processors")
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch.object(AgentIdentityManager, "register_identity")
+    def test_initial_pass_runs_without_an_identity(
+        self, mock_identity, mock_client, mock_processors
+    ):
+        """A refused identity costs telemetry, not the startup reconciliation."""
+        mock_identity.side_effect = _rejected_offering_error()
+        offering = mock.Mock()
+        offering.name = "test-offering"
+        offering.uuid = OFFERING_UUID
+        offering.order_processing_backend = "slurm"
+        offering.membership_sync_backend = "slurm"
+        offering.stomp_membership_sync_enabled = True
+
+        event_utils.process_offering(offering)
+
+        for processor_class in (
+            mock_processors.OfferingOrderProcessor,
+            mock_processors.OfferingMembershipProcessor,
+        ):
+            processor_class.return_value.register.assert_called_once_with(None)
+            processor_class.return_value.process_offering.assert_called_once()
