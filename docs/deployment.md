@@ -309,6 +309,48 @@ signal.
 
 2. Check permissions and PATH
 
+#### Agent Identity Registration Is Refused
+
+Symptom — every cycle, for the same offering:
+
+```text
+Registering a new identity for offering my-offering with name agent-<uuid>
+Unable to register the identity agent-<uuid> for the offering my-offering:
+Unexpected status code: 400 ... {"offering":["Object with uuid=<uuid> does not exist."]}
+Continuing without agent telemetry.
+```
+
+The offering does exist. Waldur registers an agent identity only for the offering types listed
+under [`waldur_offering_uuid`](configuration.md#waldur_offering_uuid), and reports any other type
+as a missing object rather than as an unsupported one.
+
+The agent keeps processing the offering: the identity, its service and its processors are
+telemetry, and the agent's actual work — orders, membership sync, usage reporting — goes through
+the marketplace API and does not touch them. What you lose until the offering type is accepted:
+
+- the agent does not appear in Waldur's agent monitoring view, so there is no version, uptime,
+  dependency or processor information for it;
+- log shipping never starts. A shipper is keyed by the agent identity's UUID, so without an
+  identity there is nothing to attach a batch to — and the endpoint that receives the batches
+  applies the same offering-type restriction, so it would refuse them anyway. Agent logs stay in
+  the service's own output (`journalctl -u waldur-agent-*.service`).
+
+What to do:
+
+1. Confirm the offering's type, using the agent's own token:
+
+   ```bash
+   curl -s -H "Authorization: Token your-token" \
+     https://waldur.example.com/api/marketplace-provider-offerings/<offering-uuid>/ \
+     | jq '{name, type, state}'
+   ```
+
+2. If it comes back `404`, the UUID in `waldur_offering_uuid` is wrong or belongs to another
+   Waldur instance — the offering name in the log line comes from your configuration file, not
+   from the API, so a stale UUID looks identical to this symptom.
+3. If the type is not one of the supported ones, either move the agent to an offering of a
+   supported type, or ask your Waldur operator to widen the accepted types on the server.
+
 #### Waldur API Issues
 
 1. Test API connectivity:

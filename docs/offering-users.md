@@ -123,6 +123,37 @@ class CustomUsernameBackend(AbstractUsernameManagementBackend):
         return username
 ```
 
+#### When Waldur owns the username
+
+A backend does not have to mint usernames. If the identity is Waldur's — the
+offering uses a `username_generation_policy` other than `service_provider`, and
+the backend's job is to *write* Waldur's values into an external system — set
+`is_username_authoritative = False`:
+
+```python
+class MirroringBackend(AbstractUsernameManagementBackend):
+    is_username_authoritative = False
+```
+
+Core then skips username generation for that offering entirely, and in particular
+never PATCHes a username back over the authoritative value. Backends that leave
+the default (`True`) are unaffected.
+
+Such a backend does its work in `sync_user_profiles(offering_users)` instead of
+`generate_username`. That hook is called with the **full** offering-user list on
+every membership cycle, including accounts already in `OK` — which the
+username-generation path never sees, since it only handles accounts still in
+`REQUESTED` or a pending state. It is therefore the right place for a reconcile
+loop: create what is missing, update what has drifted, leave the rest alone.
+
+The POSIX identity Waldur holds for an account is available on the offering user
+as `uidnumber`, `primarygroup`, `login_shell` and `home_directory`. These are
+always requested by the membership processor, and are not gated by the offering's
+`OfferingUserAttributeConfig` — they are account attributes, not personal data.
+
+`waldur-site-agent-ldap` is the reference implementation; see its
+`account_source: waldur` mode.
+
 #### Plugin Registration
 
 Register your backend via entry points in `pyproject.toml`:
