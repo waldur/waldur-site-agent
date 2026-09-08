@@ -245,21 +245,26 @@ def ensure_agent_telemetry(
     offering: Offering,
     waldur_rest_client: AuthenticatedClient,
     agent_mode: str,
-    log_shipping: LogShippingConfig,
+    log_shipping: Optional[LogShippingConfig] = None,
+    service_name: Optional[str] = None,
 ) -> Optional[AgentService]:
     """Register the agent's identity and service and start shipping its logs.
 
     All three are telemetry: they make the agent visible in Waldur (version,
-    uptime, processors, logs), but a polling agent does its actual work through
-    the marketplace REST API and never reads them back. A Waldur that refuses
-    the registration must therefore not stop the offering from being processed,
-    so failures are logged and swallowed rather than raised.
+    uptime, processors, logs), but the agent does its actual work through the
+    marketplace REST API and never reads them back. A Waldur that refuses the
+    registration must therefore not stop the offering from being processed, so
+    failures are logged and swallowed rather than raised.
 
     Args:
         offering: The Waldur offering configuration.
         waldur_rest_client: Authenticated REST client for Waldur API.
-        agent_mode: Agent mode, used as both the service name and its mode.
-        log_shipping: Global log shipping configuration.
+        agent_mode: Agent mode, recorded as the service's mode and, unless
+            service_name overrides it, as its name too.
+        log_shipping: Global log shipping configuration. Omit where the caller
+            manages its own shippers, and none is started here.
+        service_name: Name to register the service under, when it differs from
+            the mode.
 
     Returns:
         AgentService: The registered service, or None if registration failed.
@@ -280,7 +285,8 @@ def ensure_agent_telemetry(
         return None
 
     try:
-        utils.ensure_log_shipper(offering, identity.uuid.hex, log_shipping)
+        if log_shipping is not None:
+            utils.ensure_log_shipper(offering, identity.uuid.hex, log_shipping)
     except Exception as e:
         logger.warning(
             "Unable to start the log shipper for the offering %s: %s. "
@@ -289,13 +295,14 @@ def ensure_agent_telemetry(
             e,
         )
 
+    name = service_name or agent_mode
     try:
-        return manager.register_service(identity, agent_mode, agent_mode)
+        return manager.register_service(identity, name, agent_mode)
     except Exception as e:
         logger.warning(
             "Unable to register the service %s for the offering %s: %s. "
             "Continuing without agent telemetry.",
-            agent_mode,
+            name,
             offering.name,
             e,
         )

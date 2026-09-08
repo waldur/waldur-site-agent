@@ -53,8 +53,15 @@ def register_event_process_service(
     offering: structures.Offering,
     waldur_rest_client: AuthenticatedClient,
     observable_object: ObservableObjectTypeEnum,
-) -> AgentService:
+) -> Optional[AgentService]:
     """A shortcut for initialization of the event_process service.
+
+    Called at the top of every message handler, before the work the message
+    asks for. The service is telemetry, and the queue is subscribed with
+    ack="auto", so a message whose handler raises is neither requeued nor
+    retried - letting a failed lookup out of here would trade a real order or
+    membership event for a missing agent record. Failures are logged and the
+    handler proceeds without a service.
 
     Args:
         offering (structures.Offering): Waldur offering
@@ -62,19 +69,41 @@ def register_event_process_service(
         observable_object (ObservableObjectTypeEnum): Type of observable object
 
     Returns:
-        AgentService: Registered agent service
+        AgentService: Registered agent service, or None if it is unavailable
     """
     agent_identity_manager = agent_identity_management.AgentIdentityManager(
         offering, waldur_rest_client
     )
     agent_identity_name = f"agent-{offering.uuid}"
-    agent_identity = agent_identity_manager.get_identity(agent_identity_name)
     service_name = f"{structures.AgentMode.EVENT_PROCESS.value}-{observable_object}"
-    return agent_identity_manager.register_service(
-        agent_identity,
-        service_name,
-        structures.AgentMode.EVENT_PROCESS.value,
-    )
+
+    try:
+        agent_identity = agent_identity_manager.get_identity(agent_identity_name)
+    except Exception as e:
+        logger.warning(
+            "Unable to look up the identity %s for the offering %s: %s. "
+            "Handling the message without agent telemetry.",
+            agent_identity_name,
+            offering.name,
+            e,
+        )
+        return None
+
+    try:
+        return agent_identity_manager.register_service(
+            agent_identity,
+            service_name,
+            structures.AgentMode.EVENT_PROCESS.value,
+        )
+    except Exception as e:
+        logger.warning(
+            "Unable to register the service %s for the offering %s: %s. "
+            "Handling the message without agent telemetry.",
+            service_name,
+            offering.name,
+            e,
+        )
+        return None
 
 
 def process_account_message(

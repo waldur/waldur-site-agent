@@ -378,14 +378,11 @@ def process_offering(
     logger.info("Processing offering %s (%s)", offering.name, offering.uuid)
 
     waldur_rest_client = get_client_for_offering(offering, user_agent)
-    agent_identity_manager = agent_identity_management.AgentIdentityManager(
-        offering, waldur_rest_client
-    )
-    agent_identity = agent_identity_manager.register_identity(f"agent-{offering.uuid}")
-    agent_service = agent_identity_manager.register_service(
-        agent_identity,
-        "initial-offering-process",
+    agent_service = agent_identity_management.ensure_agent_telemetry(
+        offering,
+        waldur_rest_client,
         common_structures.AgentMode.EVENT_PROCESS.value,
+        service_name="initial-offering-process",
     )
 
     if offering.order_processing_backend:
