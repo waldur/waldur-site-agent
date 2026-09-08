@@ -675,20 +675,44 @@ class OfferingBaseProcessor(abc.ABC):
             self._invalidate_offering_users_cache()
         return result
 
-    def register(self, service: AgentService) -> AgentProcessor:
-        """Register this processor in Waldur."""
+    def register(self, service: Optional[AgentService]) -> Optional[AgentProcessor]:
+        """Register this processor in Waldur.
+
+        Registration is telemetry only, so a Waldur that has no service to
+        attach the processor to, or that refuses it, must not stop the
+        offering from being processed.
+        """
+        processor_name = self.__class__.__name__
+        if service is None:
+            logger.info(
+                "Skipping registration of the processor %s for the offering %s: "
+                "the agent has no registered service.",
+                processor_name,
+                self.offering.name,
+            )
+            return None
+
         agent_identity_manager = agent_identity_management.AgentIdentityManager(
             self.offering, self.waldur_rest_client
         )
-        processor_name = self.__class__.__name__
         backend_type = (
             self.resource_backend.__class__.__module__
             + "."
             + self.resource_backend.__class__.__name__
         )
-        return agent_identity_manager.register_processor(
-            service, processor_name, backend_type, self.resource_backend_version
-        )
+        try:
+            return agent_identity_manager.register_processor(
+                service, processor_name, backend_type, self.resource_backend_version
+            )
+        except Exception as e:
+            logger.warning(
+                "Unable to register the processor %s for the offering %s: %s. "
+                "Continuing without agent telemetry.",
+                processor_name,
+                self.offering.name,
+                e,
+            )
+            return None
 
     def _offering_project_service_accounts(self) -> list[ProjectServiceAccount]:
         """Every project's service accounts under the offering, cached per offering.
