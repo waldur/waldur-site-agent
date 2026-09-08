@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import email
 import functools
 import logging
@@ -40,7 +41,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from ldap3 import ALL, SUBTREE, Connection, Server
+from ldap3 import ALL, MODIFY_REPLACE, SUBTREE, Connection, Server
 from waldur_api_client.api.marketplace_component_usages import (
     marketplace_component_usages_list,
 )
@@ -75,6 +76,7 @@ logger = logging.getLogger(__name__)
 
 E2E_TESTS = os.environ.get("WALDUR_E2E_TESTS", "false").lower() == "true"
 E2E_LDAP_CONFIG_PATH = os.environ.get("WALDUR_E2E_LDAP_CONFIG", "")
+E2E_LDAP_INVERTED_CONFIG_PATH = os.environ.get("WALDUR_E2E_LDAP_INVERTED_CONFIG", "")
 E2E_PROJECT_A_UUID = os.environ.get("WALDUR_E2E_PROJECT_A_UUID", "")
 
 # UUID pattern for sanitising diagram labels
@@ -463,6 +465,7 @@ class LdapAssertions:
                     "cn",
                     "mail",
                     "loginShell",
+                    "homeDirectory",
                 ],
             )
             assert len(conn.entries) == 1, (
@@ -1879,3 +1882,167 @@ class TestLdapBackwardCompat:
         back = mapper.convert_usage_from_target({"cpu": 640, "gpu": 80})
         assert back == {"node_hours": 20.0}
         logger.info("Conversion mapper verified: node_hours <-> cpu+gpu")
+
+
+# ---------------------------------------------------------------------------
+# Waldur-authoritative mode (account_source: "waldur")
+# ---------------------------------------------------------------------------
+#
+# The fixture seeds two offerings of ONE service provider sharing its POSIX ID
+# pool, and gives user e2euser4 the same username and the same uidNumber on
+# both. That is the case this mode exists for: pointed at one directory, the two
+# offerings must converge on a single entry instead of each allocating its own
+# id, which is what the legacy allocator does.
+
+_INVERTED_UID = 9001
+_INVERTED_GID = 9001
+_INVERTED_USER = "wauser4"
+_SECOND_USER = "wauser5"
+_SECOND_UID = 9002
+_PROVIDER_OFFERINGS = 2
+
+
+@pytest.fixture(scope="module")
+def inverted_config():
+    if not E2E_LDAP_INVERTED_CONFIG_PATH:
+        pytest.skip("WALDUR_E2E_LDAP_INVERTED_CONFIG not set")
+    return load_configuration(
+        E2E_LDAP_INVERTED_CONFIG_PATH,
+        user_agent_suffix="e2e-ldap-inverted-test",
+    )
+
+
+@pytest.fixture(scope="module")
+def inverted_offerings(inverted_config):
+    if len(inverted_config.offerings) < _PROVIDER_OFFERINGS:
+        pytest.skip("Inverted config must declare both provider offerings")
+    return inverted_config.offerings[0], inverted_config.offerings[1]
+
+
+@pytest.fixture(scope="module")
+def inverted_ldap_settings(inverted_offerings):
+    settings = inverted_offerings[0].backend_settings.get("ldap", {})
+    if not settings:
+        pytest.skip("No LDAP settings in the inverted offering")
+    return settings
+
+
+@pytest.fixture(scope="module")
+def inverted_assertions(inverted_ldap_settings):
+    return LdapAssertions(inverted_ldap_settings)
+
+
+@pytest.fixture(scope="module")
+def inverted_client(inverted_offerings):
+    offering = inverted_offerings[0]
+    return get_client(offering.waldur_api_url, offering.waldur_api_token)
+
+
+def _inverted_connect(settings: dict) -> Connection:
+    server = Server(settings["uri"], get_info=ALL)
+    return Connection(server, settings["bind_dn"], settings["bind_password"], auto_bind=True)
+
+
+def _set_uid_number(settings: dict, username: str, value: int) -> None:
+    """Force a uidNumber straight into the directory, behind the agent's back."""
+    dn = f"uid={username},{settings.get('people_ou', 'ou=People')},{settings['base_dn']}"
+    conn = _inverted_connect(settings)
+    try:
+        assert conn.modify(dn, {"uidNumber": [(MODIFY_REPLACE, [str(value)])]}), (
+            f"Failed to set uidNumber on {dn}: {conn.result}"
+        )
+    finally:
+        conn.unbind()
+
+
+def _reconcile(offering, client, *, on_posix_mismatch: str | None = None) -> None:
+    """Drive one reconcile cycle through the public membership-sync path.
+
+    ``process_project_user_sync`` calls ``sync_user_profiles`` with the full
+    offering-user list unconditionally, so this needs no resource to exist.
+    """
+    if on_posix_mismatch is not None:
+        offering = copy.deepcopy(offering)
+        offering.backend_settings["ldap"]["on_posix_mismatch"] = on_posix_mismatch
+    backend = SlurmBackend(offering.backend_settings, offering.backend_components)
+    processor = OfferingMembershipProcessor(
+        offering=offering,
+        waldur_rest_client=client,
+        resource_backend=backend,
+    )
+    processor.process_project_user_sync(E2E_PROJECT_A_UUID)
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapWaldurAuthoritative:
+    """account_source: "waldur" — the directory follows Waldur, not the reverse."""
+
+    def test_01_entry_matches_waldur(
+        self, inverted_offerings, inverted_client, inverted_assertions
+    ):
+        """A reconcile writes Waldur's username and POSIX ids into the directory."""
+        offering_a, _ = inverted_offerings
+        _reconcile(offering_a, inverted_client)
+
+        entry = inverted_assertions.assert_user_exists(_INVERTED_USER)
+        assert int(entry["uidNumber"][0]) == _INVERTED_UID
+        assert int(entry["gidNumber"][0]) == _INVERTED_GID
+        assert entry["homeDirectory"][0] == f"/home/{_INVERTED_USER}"
+        assert entry["loginShell"][0] == "/bin/bash"
+
+        # The personal group carries the primary GID Waldur allocated, not one
+        # scanned out of the directory's own gid_range.
+        group = inverted_assertions.assert_group_exists(_INVERTED_USER)
+        assert int(group["gidNumber"][0]) == _INVERTED_GID
+
+        # The offering's second account is provisioned in the same pass.
+        second = inverted_assertions.assert_user_exists(_SECOND_USER)
+        assert int(second["uidNumber"][0]) == _SECOND_UID
+
+    def test_02_second_offering_converges(
+        self, inverted_offerings, inverted_client, inverted_assertions
+    ):
+        """The provider's other offering reuses the entry rather than making its own."""
+        _, offering_b = inverted_offerings
+        _reconcile(offering_b, inverted_client)
+
+        # assert_user_exists already fails on anything other than exactly one
+        # entry, which is the assertion that matters here.
+        entry = inverted_assertions.assert_user_exists(_INVERTED_USER)
+        assert int(entry["uidNumber"][0]) == _INVERTED_UID, (
+            "The second offering must not re-allocate a UID for a shared user"
+        )
+
+    def test_03_rerun_is_idempotent(self, inverted_offerings, inverted_client, inverted_assertions):
+        """A second pass over an already-correct directory changes nothing."""
+        offering_a, _ = inverted_offerings
+        before = inverted_assertions.assert_user_exists(_INVERTED_USER)
+        _reconcile(offering_a, inverted_client)
+        after = inverted_assertions.assert_user_exists(_INVERTED_USER)
+        assert before == after
+
+    def test_04_drift_in_report_mode_changes_nothing(
+        self, inverted_offerings, inverted_client, inverted_assertions, inverted_ldap_settings
+    ):
+        """`report` names the drift and leaves the account alone."""
+        offering_a, _ = inverted_offerings
+        drifted = 9500
+        _set_uid_number(inverted_ldap_settings, _INVERTED_USER, drifted)
+
+        _reconcile(offering_a, inverted_client, on_posix_mismatch="report")
+
+        entry = inverted_assertions.assert_user_exists(_INVERTED_USER)
+        assert int(entry["uidNumber"][0]) == drifted, (
+            "report mode must not rewrite a live uidNumber - doing so orphans "
+            "every file the user owns"
+        )
+
+    def test_05_drift_in_adopt_mode_is_repaired(
+        self, inverted_offerings, inverted_client, inverted_assertions
+    ):
+        """`adopt` brings the drifted account back to Waldur's value."""
+        offering_a, _ = inverted_offerings
+        _reconcile(offering_a, inverted_client, on_posix_mismatch="adopt")
+
+        entry = inverted_assertions.assert_user_exists(_INVERTED_USER)
+        assert int(entry["uidNumber"][0]) == _INVERTED_UID

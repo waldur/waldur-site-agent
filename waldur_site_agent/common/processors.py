@@ -402,6 +402,21 @@ class OfferingBaseProcessor(abc.ABC):
         OfferingUserFieldEnum.UUID,
     ]
 
+    # POSIX identity assigned by Waldur (from the offering's PosixIdPool, or from
+    # the user's uid_number/primary_gid when the offering sources them externally).
+    # Always requested: these are not personal data, so they are not gated by
+    # OfferingUserAttributeConfig, and a username management backend for which
+    # Waldur is the source of truth cannot provision an account without them.
+    # Safe to request unconditionally — RestrictedSerializerMixin keeps only the
+    # `field` values it recognises and silently drops the rest, so asking an older
+    # Mastermind for these yields UNSET rather than an error.
+    _POSIX_FIELDS: ClassVar[list[OfferingUserFieldEnum]] = [
+        OfferingUserFieldEnum.UIDNUMBER,
+        OfferingUserFieldEnum.PRIMARYGROUP,
+        OfferingUserFieldEnum.LOGIN_SHELL,
+        OfferingUserFieldEnum.HOME_DIRECTORY,
+    ]
+
     # Default exposed fields used when the attribute config API is unavailable.
     _DEFAULT_EXPOSED_FIELDS: ClassVar[list[str]] = ["username", "full_name", "email"]
 
@@ -421,7 +436,7 @@ class OfferingBaseProcessor(abc.ABC):
             if now - ts < _ATTRIBUTE_CONFIG_TTL:
                 return fields
 
-        fields = list(self._CORE_FIELDS)
+        fields = list(self._CORE_FIELDS) + list(self._POSIX_FIELDS)
         exposed_names: list[str] = []
 
         try:

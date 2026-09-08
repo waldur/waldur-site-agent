@@ -510,6 +510,9 @@ Run mypy (3.9):
     WALDUR_E2E_POLICY_CONFIG: ci/e2e-ci-config-policy.yaml
     WALDUR_E2E_STOMP_CONFIG: ci/e2e-ci-config-stomp.yaml
     WALDUR_E2E_LDAP_CONFIG: ci/e2e-ci-config-ldap.yaml
+    # Waldur-authoritative mode: two offerings of one provider against the same
+    # directory, so the suite can prove they converge on a single entry.
+    WALDUR_E2E_LDAP_INVERTED_CONFIG: ci/e2e-ci-config-ldap-inverted.yaml
     # Only this job needs the OpenLDAP container (compose profile "ldap").
     COMPOSE_PROFILES: ldap
   script:

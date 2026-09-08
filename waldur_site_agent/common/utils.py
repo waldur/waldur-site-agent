@@ -1257,6 +1257,24 @@ def update_offering_users(
         logger.debug("Skipping username processing - unknown username management backend")
         return False
 
+    # The backend does not own the login name — Waldur does. Never ask it to mint
+    # one, and never PATCH a name back over the authoritative value. Checked here
+    # rather than in _update_user_username so that both call sites are covered by
+    # one log line instead of one per user. Reaching this branch means the offering
+    # is misconfigured: _can_generate_usernames above returns False for every
+    # policy other than 'service_provider', so a correct setup never gets here.
+    if not username_management_backend.is_username_authoritative:
+        logger.error(
+            "Offering %s (%s) uses the '%s' username management backend, for which "
+            "Waldur is the source of truth, but its username_generation_policy is "
+            "'service_provider'. Skipping username generation - change the policy "
+            "in Waldur, or point the offering at a backend that assigns names.",
+            offering.name,
+            offering.uuid,
+            offering.username_management_backend,
+        )
+        return False
+
     # Group users by their current state for efficient processing
     requested_users, pending_users = _group_users_by_state(offering_users)
 

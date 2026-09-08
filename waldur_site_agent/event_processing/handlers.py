@@ -10,6 +10,7 @@ from stomp.constants import HDR_DESTINATION
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_offering_users import (
     marketplace_offering_users_list,
+    marketplace_offering_users_retrieve,
 )
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_list,
@@ -31,6 +32,7 @@ from waldur_api_client.models.slurm_command_result_request import (
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import logger
+from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
 from waldur_site_agent.common import agent_identity_management, structures
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import utils as common_utils
@@ -685,6 +687,7 @@ def _process_offering_user_message(
             attributes = message.get("attributes", {})
             logger.info("Offering user %s created with attributes: %s", username, list(attributes))
             _forward_user_attributes_to_backend(offering, username, attributes, user_agent)
+            _reconcile_offering_user(offering, offering_user_uuid, waldur_rest_client)
         elif action in ("update", "delete"):
             logger.info("Offering user %s action: %s (no attribute forwarding)", username, action)
         elif action == "username_set":
@@ -706,6 +709,7 @@ def _process_offering_user_message(
                 waldur_rest_client,
                 user_cuid=user_cuid,
             )
+            _reconcile_offering_user(offering, offering_user_uuid, waldur_rest_client)
         else:
             logger.warning("Unknown offering user action: %s", action)
     except Exception:
@@ -715,6 +719,47 @@ def _process_offering_user_message(
             username,
             offering_user_uuid,
         )
+
+
+def _reconcile_offering_user(
+    offering: structures.Offering,
+    offering_user_uuid: str,
+    waldur_rest_client: AuthenticatedClient,
+) -> None:
+    """Push one offering user through the username backend's reconcile hook.
+
+    On a STOMP-only offering nothing else does this between restarts: polling
+    membership sync skips such offerings entirely, and the periodic offering-user
+    reconciliation only looks at accounts stuck in a pre-OK state. Without this an
+    account created or renamed without an accompanying role change would not reach
+    the backend's directory until the agent restarted.
+
+    Only backends that actually implement the hook pay the extra round-trip - the
+    default on the abstract base is a no-op, so there is nothing to fetch for them.
+    """
+    if not offering_user_uuid:
+        return
+    try:
+        backend, _ = common_utils.get_username_management_backend(offering)
+    except Exception:
+        logger.exception("Could not resolve the username management backend for %s", offering.name)
+        return
+
+    if type(backend).sync_user_profiles is AbstractUsernameManagementBackend.sync_user_profiles:
+        return
+
+    try:
+        # Deliberately no `field=` filter: the reconciler needs the POSIX
+        # attributes, which the processor's curated field list does not imply here.
+        offering_user = marketplace_offering_users_retrieve.sync(
+            uuid=offering_user_uuid, client=waldur_rest_client
+        )
+        if offering_user is None:
+            logger.warning("Offering user %s not found for reconcile", offering_user_uuid)
+            return
+        backend.sync_user_profiles([offering_user])
+    except Exception:
+        logger.exception("Failed to reconcile offering user %s", offering_user_uuid)
 
 
 def _forward_user_attributes_to_backend(

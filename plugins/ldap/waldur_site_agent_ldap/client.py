@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 import string
-from typing import Optional
+from typing import Optional, Union
 
 from ldap3 import (
     ALL,
@@ -21,6 +21,19 @@ from ldap3.utils.dn import escape_rdn
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.exceptions import BackendError
+
+
+def _first(value: Union[list, tuple, str, int, None]) -> Union[str, int, None]:
+    """First element of an ldap3 attribute value, which may be a list or a scalar.
+
+    ``entry_attributes_as_dict`` returns a list for every attribute, but a
+    single-valued attribute that was never set comes back as an empty list, and
+    some strategies hand back a bare scalar. Normalising here keeps every caller
+    from repeating the same three-way check.
+    """
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else None
+    return value
 
 
 class LdapClient:
@@ -69,10 +82,30 @@ class LdapClient:
         )
         self.use_starttls = settings.get("use_starttls", False)
 
+    # Attributes every user search asks for. The reconciler diffs the POSIX
+    # projection as well as the profile, so homeDirectory/loginShell/givenName/sn
+    # have to come back too — without them a drift check cannot tell a match from
+    # a mismatch.
+    USER_ATTRIBUTES = (
+        "uid",
+        "uidNumber",
+        "gidNumber",
+        "cn",
+        "mail",
+        "homeDirectory",
+        "loginShell",
+        "givenName",
+        "sn",
+    )
+
+    def _build_server(self) -> Server:
+        """Construct the ldap3 Server. Overridden in tests to inject a strategy."""
+        return Server(self.uri, get_info=ALL)
+
     def _connect(self) -> Connection:
         """Create and return a bound LDAP connection."""
         try:
-            server = Server(self.uri, get_info=ALL)
+            server = self._build_server()
             conn = Connection(
                 server,
                 user=self.bind_dn,
@@ -118,7 +151,7 @@ class LdapClient:
                 self._people_dn,
                 f"(uid={escape_filter_chars(username)})",
                 search_scope=SUBTREE,
-                attributes=["uid", "uidNumber", "gidNumber", "cn", "mail"],
+                attributes=list(self.USER_ATTRIBUTES),
             )
             if conn.entries:
                 entry = conn.entries[0]
@@ -137,7 +170,7 @@ class LdapClient:
                 self._people_dn,
                 f"(mail={escape_filter_chars(email)})",
                 search_scope=SUBTREE,
-                attributes=["uid", "uidNumber", "gidNumber", "cn", "mail"],
+                attributes=list(self.USER_ATTRIBUTES),
             )
             if conn.entries:
                 entry = conn.entries[0]
@@ -151,6 +184,79 @@ class LdapClient:
     def user_exists(self, username: str) -> bool:
         """Check if a user exists in LDAP."""
         return self.search_user(username) is not None
+
+    def list_users(self) -> dict:
+        """Every user entry under people_ou, keyed by uid.
+
+        One search instead of one per account. Every other method on this class
+        opens its own connection and unbinds it, so a per-user reconcile over a
+        few hundred accounts would open well over a thousand binds each cycle.
+        The reconciler reads this once and diffs in memory.
+        """
+        conn = self._connect()
+        try:
+            conn.search(
+                self._people_dn,
+                "(uid=*)",
+                search_scope=SUBTREE,
+                attributes=list(self.USER_ATTRIBUTES),
+            )
+            users = {}
+            for entry in conn.entries:
+                attrs = entry.entry_attributes_as_dict
+                uid = _first(attrs.get("uid"))
+                if uid:
+                    users[uid] = attrs
+            return users
+        except LDAPException as e:
+            raise BackendError(f"Failed to list LDAP users: {e}") from e
+        finally:
+            conn.unbind()
+
+    def list_groups(self) -> dict:
+        """Every group under groups_ou as ``{cn: gidNumber}``. See list_users."""
+        conn = self._connect()
+        try:
+            conn.search(
+                self._groups_dn,
+                "(cn=*)",
+                search_scope=SUBTREE,
+                attributes=["cn", "gidNumber"],
+            )
+            groups = {}
+            for entry in conn.entries:
+                attrs = entry.entry_attributes_as_dict
+                cn = _first(attrs.get("cn"))
+                gid = _first(attrs.get("gidNumber"))
+                if cn is not None and gid is not None:
+                    groups[cn] = int(gid)
+            return groups
+        except LDAPException as e:
+            raise BackendError(f"Failed to list LDAP groups: {e}") from e
+        finally:
+            conn.unbind()
+
+    def search_user_by_uid_number(self, uid_number: int) -> Optional[dict]:
+        """Find the entry holding a given uidNumber, if any.
+
+        Used to detect a UID already taken by an unrelated account before
+        creating a new one with it.
+        """
+        conn = self._connect()
+        try:
+            conn.search(
+                self._people_dn,
+                f"(uidNumber={escape_filter_chars(str(uid_number))})",
+                search_scope=SUBTREE,
+                attributes=list(self.USER_ATTRIBUTES),
+            )
+            if conn.entries:
+                return conn.entries[0].entry_attributes_as_dict
+            return None
+        except LDAPException as e:
+            raise BackendError(f"LDAP search for uidNumber {uid_number} failed: {e}") from e
+        finally:
+            conn.unbind()
 
     def group_exists(self, group_name: str) -> bool:
         """Check if a group exists in LDAP."""
@@ -303,6 +409,122 @@ class LdapClient:
         finally:
             conn.unbind()
 
+    def create_user_with_ids(
+        self,
+        username: str,
+        first_name: str,
+        last_name: str,
+        email: str,
+        uid_number: int,
+        gid_number: int,
+        home_directory: str,
+        login_shell: str,
+        password: Optional[str] = None,
+        extra_attributes: Optional[dict] = None,
+    ) -> None:
+        """Create a POSIX user from externally-supplied ids.
+
+        The Waldur-authoritative counterpart of :meth:`create_user`: every value
+        is given rather than allocated, so ``get_next_uid``/``get_next_gid`` are
+        never consulted. Kept separate so the legacy allocator path is untouched.
+
+        The personal group has to exist before the user entry (``groupOfNames``
+        needs a member, and the account needs its primary group), so if the user
+        add then fails we delete a group we had just created rather than leaving
+        it orphaned — a failure the original create path leaves behind.
+        """
+        group_state = self.ensure_group(
+            group_name=username,
+            gid_number=gid_number,
+            object_classes=self.user_group_object_classes,
+            extra_attributes={"memberUid": username},
+            member_dn=self._user_dn(username),
+        )
+        if group_state == "conflict":
+            raise BackendError(
+                f"LDAP group {username} already exists with a different gidNumber than "
+                f"the {gid_number} Waldur assigned; refusing to create the account."
+            )
+
+        full_name = f"{first_name} {last_name}".strip() or username
+        attributes: dict = {
+            "objectClass": self.user_object_classes,
+            "uid": username,
+            "cn": full_name,
+            "givenName": first_name or username,
+            "sn": last_name or username,
+            "uidNumber": uid_number,
+            "gidNumber": gid_number,
+            "homeDirectory": home_directory,
+            "loginShell": login_shell,
+            "mail": email,
+        }
+        if password:
+            attributes["userPassword"] = password
+        if extra_attributes:
+            attributes.update(extra_attributes)
+
+        try:
+            self._add_user_entry(username, attributes)
+        except BackendError:
+            # The group had to exist before the user entry; if the entry could not
+            # be added, do not leave the group we just made behind as an orphan.
+            if group_state == "created":
+                self._rollback_group(username)
+            raise
+        logger.info(
+            "Created LDAP user %s with UID %d and GID %d from Waldur",
+            username,
+            uid_number,
+            gid_number,
+        )
+
+    def _add_user_entry(self, username: str, attributes: dict) -> None:
+        """Add one user entry, raising BackendError on any failure."""
+        conn = self._connect()
+        try:
+            success = conn.add(self._user_dn(username), attributes=attributes)
+            if not success:
+                msg = f"Failed to create LDAP user {username}: {conn.result}"
+                raise BackendError(msg)
+        except LDAPException as e:
+            raise BackendError(f"Failed to create LDAP user {username}: {e}") from e
+        finally:
+            conn.unbind()
+
+    def _rollback_group(self, group_name: str) -> None:
+        """Best-effort removal of a personal group whose user entry failed to add."""
+        try:
+            self.delete_group(group_name)
+            logger.info("Rolled back orphaned LDAP group %s", group_name)
+        except BackendError:
+            logger.exception(
+                "Failed to roll back LDAP group %s after the user entry could not be "
+                "created; it may need removing by hand",
+                group_name,
+            )
+
+    def set_user_posix_attributes(
+        self,
+        username: str,
+        uid_number: Optional[int] = None,
+        gid_number: Optional[int] = None,
+        home_directory: Optional[str] = None,
+        login_shell: Optional[str] = None,
+    ) -> None:
+        """Replace whichever POSIX attributes are supplied on an existing entry."""
+        attributes: dict = {}
+        if uid_number is not None:
+            attributes["uidNumber"] = uid_number
+        if gid_number is not None:
+            attributes["gidNumber"] = gid_number
+        if home_directory is not None:
+            attributes["homeDirectory"] = home_directory
+        if login_shell is not None:
+            attributes["loginShell"] = login_shell
+        if attributes:
+            self.update_user_attributes(username, attributes)
+
     def delete_user(self, username: str) -> None:
         """Delete a user and their personal group from LDAP."""
         conn = self._connect()
@@ -372,6 +594,50 @@ class LdapClient:
             logger.info("Created LDAP group %s with GID %d", group_name, gid_number)
         except LDAPException as e:
             raise BackendError(f"Failed to create LDAP group {group_name}: {e}") from e
+        finally:
+            conn.unbind()
+
+    def ensure_group(
+        self,
+        group_name: str,
+        gid_number: int,
+        object_classes: list,
+        extra_attributes: Optional[dict] = None,
+        member_dn: Optional[str] = None,
+    ) -> str:
+        """Create the group if absent; report what was found if it is already there.
+
+        Returns ``"created"``, ``"exists"`` when a group of that name already holds
+        the wanted GID, or ``"conflict"`` when it holds a different one. Unlike
+        :meth:`_create_group_entry` this is safe to call on every reconcile pass.
+        """
+        existing_gid = self.get_group_gid(group_name) if self.group_exists(group_name) else None
+        if existing_gid is not None:
+            return "exists" if existing_gid == gid_number else "conflict"
+        self._create_group_entry(
+            group_name=group_name,
+            gid_number=gid_number,
+            object_classes=object_classes,
+            extra_attributes=extra_attributes,
+            member_dn=member_dn,
+        )
+        return "created"
+
+    def set_group_gid(self, group_name: str, gid_number: int) -> None:
+        """Replace a group's gidNumber."""
+        conn = self._connect()
+        try:
+            success = conn.modify(
+                self._group_dn(group_name),
+                {"gidNumber": [(MODIFY_REPLACE, [gid_number])]},
+            )
+            if not success:
+                raise BackendError(
+                    f"Failed to set gidNumber on LDAP group {group_name}: {conn.result}"
+                )
+            logger.info("Set LDAP group %s gidNumber to %d", group_name, gid_number)
+        except LDAPException as e:
+            raise BackendError(f"Failed to set gidNumber on group {group_name}: {e}") from e
         finally:
             conn.unbind()
 
