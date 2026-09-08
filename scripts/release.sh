@@ -63,7 +63,16 @@ echo ""
 
 # ── Step 3: Generate changelog ────────────────────────────────────────────
 echo "[3/5] Generating changelog..."
+CHANGELOG_BEFORE=$(git hash-object CHANGELOG.md 2>/dev/null || echo "missing")
 "$SCRIPT_DIR/changelog.sh" "$VERSION"
+CHANGELOG_AFTER=$(git hash-object CHANGELOG.md 2>/dev/null || echo "missing")
+if [ "$CHANGELOG_BEFORE" = "$CHANGELOG_AFTER" ]; then
+    echo ""
+    echo "Error: CHANGELOG.md was not updated (changelog.sh found nothing to add)."
+    echo "The version bump and lockfile are left in the working tree; nothing was"
+    echo "committed or tagged. Fix the changelog step and re-run."
+    exit 1
+fi
 echo ""
 
 # ── Step 4: Commit ────────────────────────────────────────────────────────

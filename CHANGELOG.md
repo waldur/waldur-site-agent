@@ -1,48 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Features
-
-- **LDAP plugin: Waldur-authoritative accounts.** A new `account_source: "waldur"`
-  setting makes the plugin write the username, UID, GID, home directory and login
-  shell that Waldur already holds into the directory, instead of deriving a name
-  and allocating ids by scanning LDAP. This is what a shared directory needs:
-  with a POSIX ID pool on the service provider, every offering of that provider
-  now converges on one entry with one UID per user, rather than each allocating
-  its own. `account_source` defaults to `"ldap"`, so existing deployments are
-  unaffected. Conflicts are governed by `on_posix_mismatch`
-  (`report`/`adopt`/`fail`) and `on_missing_posix_ids` (`error`/`skip`); an
-  account whose UID is already held by an unrelated entry is always skipped.
-
-### Improvements
-
-- Username management backends may now declare `is_username_authoritative = False`
-  when Waldur owns the login name. Core then skips username generation for that
-  offering and, importantly, does not write a username back over the authoritative
-  value.
-- The membership processor now always requests `uidnumber`, `primarygroup`,
-  `login_shell` and `home_directory` for offering users. These are account
-  attributes rather than personal data, so they are not gated by the offering's
-  attribute config; older servers that do not know the fields simply omit them.
-- Offering-user `create` and `username_set` events, and the periodic
-  reconciliation pass, now drive the username backend's `sync_user_profiles` hook.
-  On a STOMP-only offering nothing else did this between restarts. Backends that
-  leave the hook at its default no-op pay no extra API call.
-
-### Bug fixes
-
-- `UsernameFormat` was a bare `Enum` compared against plain strings, so any path
-  that fed a validated settings model back into the config would have silently
-  dropped every user to the default naming format. It now derives from `str`.
-- Creating an LDAP user no longer leaves an orphaned personal group behind when
-  the user entry itself fails to be added.
-- The LDAP plugin now validates its own settings at construction. Core's schema
-  validation keys on `backend_type`, so under the usual `backend_type: slurm`
-  (whose schema permits unknown keys) the `ldap:` block was never checked.
-
----
-
 ## 1.0.8-rc.1 - 2026-09-07
 
 - **LiteLLM**: Add Open WebUI integration ([#15]).
