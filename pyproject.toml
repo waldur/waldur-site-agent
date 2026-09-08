@@ -148,6 +148,12 @@ convention = "google"
   "D102",
   "D103",
 ]
+# Standalone demo scripts, run by hand rather than imported: they are not a
+# package, and printing is how they report.
+"ci/**/*.py" = [
+  "INP001", # deliberately not a package
+  "T201",   # print() is the output channel here
+]
 
 [tool.ruff.lint.isort]
 known-first-party = []

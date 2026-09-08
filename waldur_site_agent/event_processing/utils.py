@@ -22,6 +22,7 @@ from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.resource_api_key_state import ResourceApiKeyState
 
 from waldur_site_agent.backend import logger
+from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
 from waldur_site_agent.common import agent_identity_management
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
@@ -490,6 +491,50 @@ def run_periodic_offering_user_reconciliation(
                 )
         except Exception:
             logger.exception("Offering user reconciliation failed for %s", offering.name)
+
+        _run_username_backend_reconciliation(offering, user_agent)
+
+
+def _run_username_backend_reconciliation(
+    offering: common_structures.Offering, user_agent: str = ""
+) -> None:
+    """Hand the offering's full user list to the username backend's reconcile hook.
+
+    The loop above only looks at accounts stuck in a pre-OK state, because that is
+    all username *generation* can help with. A backend for which Waldur is the
+    source of truth has the opposite problem: its work is on the accounts already
+    in OK, and it needs to notice a directory entry that was deleted or edited out
+    of band. Nothing else covers that on a STOMP offering — polling membership sync
+    skips them entirely.
+
+    Backends that leave sync_user_profiles as the inherited no-op pay nothing: the
+    identity check below short-circuits before any request is made.
+    """
+    try:
+        backend, _ = common_utils.get_username_management_backend(offering)
+    except Exception:
+        logger.exception(
+            "Could not resolve the username management backend for %s", offering.name
+        )
+        return
+
+    if type(backend).sync_user_profiles is AbstractUsernameManagementBackend.sync_user_profiles:
+        return
+
+    try:
+        waldur_rest_client = get_client_for_offering(offering, user_agent)
+        # No `field=` filter: the reconciler needs the POSIX attributes.
+        offering_users = marketplace_offering_users_list.sync_all(
+            client=waldur_rest_client,
+            offering_uuid=[offering.uuid],
+            is_restricted=False,
+        )
+        if offering_users:
+            backend.sync_user_profiles(offering_users)
+    except Exception:
+        logger.exception(
+            "Username backend reconciliation failed for offering %s", offering.name
+        )
 
 
 def run_periodic_order_reconciliation(

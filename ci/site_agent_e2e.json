@@ -352,6 +352,36 @@
         "supports_pausing": true,
         "supports_downscaling": true
       }
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000005",
+      "name": "E2E SLURM LDAP Waldur-authoritative A",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Waldur-authoritative LDAP offering. Its offering users carry the username and POSIX ids Waldur allocated; the agent writes them into the directory rather than inventing them.",
+      "plugin_options": {
+        "username_generation_policy": "waldur_username",
+        "enable_posix_account": true
+      }
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000006",
+      "name": "E2E SLURM LDAP Waldur-authoritative B",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Second offering of the same provider, sharing the provider POSIX ID pool. Exists so the suite can prove two offerings converge on one directory entry with one uidNumber.",
+      "plugin_options": {
+        "username_generation_policy": "waldur_username",
+        "enable_posix_account": true
+      }
     }
   ],
   "offering_components": [
@@ -889,6 +919,58 @@
       "offering_uuid": "e2ef0000000000000000000000000004",
       "user_uuid": "e2ea0000000000000000000000000004",
       "username": ""
+    },
+    {
+      "uuid": "e2e00000000000000000000000000051",
+      "offering_uuid": "e2ef0000000000000000000000000005",
+      "user_uuid": "e2ea0000000000000000000000000005",
+      "username": "wauser4",
+      "state": 5,
+      "backend_metadata": {
+        "uidnumber": 9001,
+        "primarygroup": 9001,
+        "loginShell": "/bin/bash",
+        "homeDir": "/home/wauser4"
+      }
+    },
+    {
+      "uuid": "e2e00000000000000000000000000052",
+      "offering_uuid": "e2ef0000000000000000000000000006",
+      "user_uuid": "e2ea0000000000000000000000000005",
+      "username": "wauser4",
+      "state": 5,
+      "backend_metadata": {
+        "uidnumber": 9001,
+        "primarygroup": 9001,
+        "loginShell": "/bin/bash",
+        "homeDir": "/home/wauser4"
+      }
+    },
+    {
+      "uuid": "e2e00000000000000000000000000053",
+      "offering_uuid": "e2ef0000000000000000000000000005",
+      "user_uuid": "e2ea0000000000000000000000000006",
+      "username": "wauser5",
+      "state": 5,
+      "backend_metadata": {
+        "uidnumber": 9002,
+        "primarygroup": 9002,
+        "loginShell": "/bin/bash",
+        "homeDir": "/home/wauser5"
+      }
+    }
+  ],
+  "posix_id_pools": [
+    {
+      "uuid": "e2eb0000000000000000000000000001",
+      "service_provider_uuid": "e2ee0000000000000000000000000001",
+      "min_uid": 9000,
+      "max_uid": 9999,
+      "next_uid": 9003,
+      "min_gid": 9000,
+      "max_gid": 9999,
+      "next_gid": 9003,
+      "description": "E2E provider-wide POSIX ID pool for the Waldur-authoritative LDAP offerings"
     }
   ]
 }

@@ -282,11 +282,105 @@ offerings:
 | `gid_range_end` | No | `65000` | End of GID allocation range |
 | `default_login_shell` | No | `/bin/bash` | Default login shell for new users |
 | `default_home_base` | No | `/home` | Base path for home directories |
-| `username_format` | No | `first_initial_lastname` | Username generation strategy (see below) |
+| `account_source` | No | `ldap` | Who owns username/UID/GID: `ldap` (this agent) or `waldur` (see below) |
+| `on_missing_posix_ids` | No | `error` | `error` or `skip` when Waldur holds no ids (waldur mode) |
+| `on_posix_mismatch` | No | `report` | `report`, `adopt` or `fail` on an id disagreement (waldur mode) |
+| `username_format` | No | `first_initial_lastname` | Username strategy (see below); rejected in waldur mode |
+| `waldur_username_attribute` | No | -- | LDAP attribute to store the Waldur username (e.g. a CUID) in |
 | `remove_user_on_deactivate` | No | `false` | Delete LDAP entry on deactivation |
 | `generate_vpn_password` | No | `false` | Generate random VPN password on creation |
 | `access_groups` | No | `[]` | LDAP groups to add new users to |
 | `welcome_email` | No | -- | SMTP settings for welcome email (disabled when absent) |
+
+## Waldur-authoritative mode
+
+By default this plugin owns the identity: it derives a username from the user's
+name and allocates a UID and GID by scanning the directory for free numbers.
+That breaks down as soon as **one directory serves several offerings of the same
+service provider** — each offering allocates independently, so the same person
+ends up with two UIDs behind one DN and one home directory, and two site agents
+fight over the entry.
+
+Waldur already solves this on its side: a `PosixIdPool` attached to the service
+provider gives each user one UID and one primary GID across every offering that
+resolves to it. Setting `account_source: waldur` makes the agent *write those
+values* rather than invent its own.
+
+```yaml
+backend_settings:
+  ldap:
+    uri: "ldap://ldap.example.com"
+    bind_dn: "cn=admin,dc=example,dc=com"
+    bind_password: "admin-password"
+    base_dn: "dc=example,dc=com"
+
+    account_source: "waldur"
+    on_posix_mismatch: "report"   # report | adopt | fail
+    on_missing_posix_ids: "error" # error | skip
+```
+
+In this mode the agent takes `username`, `uidnumber`, `primarygroup`,
+`home_directory` and `login_shell` from the offering user and writes them into
+the directory. `username_format` is rejected (Waldur names the accounts), and
+`uid_range_*` is ignored for user accounts. The offering's
+`username_generation_policy` must be anything **other** than `service_provider`
+— under that policy Waldur expects the agent to assign names, which is the
+opposite of what this mode does.
+
+Provisioning runs as a **reconcile loop** on every membership cycle, over the
+full account list rather than only newly-requested ones, so an entry that was
+deleted or edited out of band is repaired on the next pass.
+
+### What happens in each case
+
+| Directory state | Action |
+|---|---|
+| No entry, UID free | Create the entry, its personal group, and any access-group memberships |
+| Entry matches Waldur | Nothing |
+| Home directory, shell, name or mail differ | Rewritten to match Waldur |
+| `uidNumber` or `gidNumber` differ | Governed by `on_posix_mismatch` |
+| The wanted UID is held by a *different* entry | Error, the account is left alone — always |
+| Another entry shares the email address | Warning, and the account is created anyway |
+
+`on_posix_mismatch` decides only the id-disagreement row:
+
+- **`report`** (default) logs a before/after diff and changes nothing.
+  Renumbering a live account orphans every file it owns, so this is a human
+  decision.
+- **`adopt`** rewrites the entry and its personal group to Waldur's ids. Intended
+  for a one-shot migration. **Afterwards you must `chown -R` the affected files
+  from the old ids to the new ones** — nothing else will.
+- **`fail`** raises instead of logging.
+
+None of the three can move an account onto a UID another entry already holds.
+LDAP does not enforce `uidNumber` uniqueness, so such a write would succeed and
+leave two accounts owning the same files; that row is refused before policy is
+consulted.
+
+An account Waldur holds no ids for is never given a locally-invented one: that
+would reintroduce the double allocation this mode exists to remove. Attach a
+POSIX ID pool to the service provider, or turn POSIX accounts off for the
+offering.
+
+### Project group GIDs are still allocated locally
+
+Only *user* accounts and their personal groups come from Waldur. Project and role
+group GIDs are still allocated by the resource backend from
+`gid_range_start`..`gid_range_end`.
+
+> **These ranges must not overlap the offering's POSIX ID pool.** LDAP does not
+> enforce `gidNumber` uniqueness, so an overlap silently produces two groups
+> sharing a GID and files whose ownership is ambiguous. The agent cannot read the
+> pool's bounds, so it warns at startup with the range it is configured with, but
+> it cannot check this for you.
+
+### A note on settings validation
+
+`validate_backend_settings_with_plugin_schema` in the agent core keys on
+`backend_type`, and the usual deployment sets `backend_type: slurm`, whose schema
+allows unknown keys — so this plugin's schema is never applied by core. The
+plugin therefore validates its own `ldap:` block at construction, and a bad value
+fails the backend rather than being silently ignored.
 
 ### Username Formats
 

@@ -1311,6 +1311,13 @@ class AbstractUsernameManagementBackend(ABC):
     users with links to forms, documentation, or other resources.
     """
 
+    #: Whether this backend mints usernames itself and therefore owns the value
+    #: written back to Waldur. Backends for which Waldur is the source of truth
+    #: report False; core then skips username generation (and the write-back)
+    #: entirely rather than asking the backend for a name it does not own.
+    #: Override as a property when one backend class serves both directions.
+    is_username_authoritative: bool = True
+
     def __init__(
         self,
         backend_settings: dict | None = None,

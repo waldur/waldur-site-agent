@@ -1,0 +1,83 @@
+# E2E configuration for the Waldur-authoritative LDAP mode (account_source: "waldur").
+#
+# Both offerings belong to one service provider and share its POSIX ID pool, so the
+# same user carries the same username and the same uidNumber on each. Pointing both
+# at one directory is the whole point of the mode: they must converge on a single
+# entry rather than each allocating its own id.
+#
+# Uses the OpenLDAP container from docker-compose.e2e.yml. API host is "docker" --
+# the DinD service hostname in GitLab CI; override with WALDUR_E2E_API_HOST=localhost
+# for local runs.
+
+timezone: "UTC"
+
+# Shared by both offerings below. Note what is absent: no username_format (rejected in
+# this mode -- Waldur names the accounts) and no uid_range_* (unused; user UIDs come
+# from Waldur). gid_range_* remains, because project group GIDs are still allocated in
+# the directory by the SLURM backend, and it is deliberately disjoint from the
+# provider pool's 9000-9999 -- OpenLDAP does not enforce gidNumber uniqueness, so an
+# overlap would silently yield two groups sharing a GID.
+.ldap: &ldap_settings
+  uri: "ldap://docker:389"
+  bind_dn: "cn=admin,dc=sofiatech,dc=bg"
+  bind_password: "e2e-ldap-password"
+  base_dn: "dc=sofiatech,dc=bg"
+  people_ou: "ou=People"
+  groups_ou: "ou=Groups"
+  gid_range_start: 1200
+  gid_range_end: 1400
+  default_login_shell: "/bin/bash"
+  default_home_base: "/home"
+  account_source: "waldur"
+  on_missing_posix_ids: "error"
+  on_posix_mismatch: "report"
+  remove_user_on_deactivate: false
+  user_object_classes:
+    - "inetOrgPerson"
+    - "posixAccount"
+    - "top"
+  user_group_object_classes:
+    - "posixGroup"
+    - "top"
+  project_group_object_classes:
+    - "posixGroup"
+    - "top"
+
+.slurm: &slurm_settings
+  slurm_bin_path: ".venv/bin"
+  default_account: "root"
+  customer_prefix: ""
+  project_prefix: ""
+  allocation_prefix: ""
+  parent_account: "eurohpc"
+  default_partition: "cn"
+  enable_user_homedir_account_creation: false
+
+offerings:
+  - name: "E2E SLURM LDAP Waldur A"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000005"
+    stomp_enabled: false
+    backend_type: "slurm"
+    username_management_backend: "ldap"
+    order_processing_backend: "slurm"
+    reporting_backend: "slurm"
+    membership_sync_backend: "slurm"
+    backend_settings:
+      <<: *slurm_settings
+      ldap: *ldap_settings
+
+  - name: "E2E SLURM LDAP Waldur B"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000006"
+    stomp_enabled: false
+    backend_type: "slurm"
+    username_management_backend: "ldap"
+    order_processing_backend: "slurm"
+    reporting_backend: "slurm"
+    membership_sync_backend: "slurm"
+    backend_settings:
+      <<: *slurm_settings
+      ldap: *ldap_settings

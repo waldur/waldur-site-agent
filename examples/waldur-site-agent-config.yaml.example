@@ -148,6 +148,16 @@ offerings: # Settings for offerings
         default_login_shell: "/bin/bash"
         default_home_base: "/home"
         username_format: "first_initial_lastname" # e.g. jsmith from John Smith
+        # Who owns username/uidNumber/gidNumber/homeDirectory/loginShell.
+        # "ldap" (default) allocates locally, as configured above. Set "waldur"
+        # when several offerings of one service provider share this directory:
+        # the agent then writes the offering user's values instead of allocating,
+        # so the same person keeps one UID everywhere. Requires a POSIX ID pool on
+        # the provider, a username_generation_policy other than "service_provider",
+        # and username_format removed (Waldur names the accounts).
+        # account_source: "waldur"
+        # on_posix_mismatch: "report"   # report (default) | adopt | fail
+        # on_missing_posix_ids: "error" # error (default) | skip
         generate_vpn_password: false
         remove_user_on_deactivate: false # Keep users in LDAP when removed from offering
         access_groups: # Per-user access groups (configured per offering)
