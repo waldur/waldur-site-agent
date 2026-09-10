@@ -46,9 +46,32 @@ Everything after provisioning is therefore addressed by one of two handles:
 | `key_alias` | `<resource_backend_id>-<n>`, agent-chosen, stable across rotation | Waldur's `client_id`; key lookup |
 | `token` | LiteLLM's sha256 of the key | `/key/block`, `/key/unblock`, `/key/update`, `/key/delete` |
 
-The resource's `backend_id` is its UUID hex, and each key is a numbered slot beneath it. Keys are
-minted **non-expiring** (no `duration`): Waldur owns the resource lifecycle, and an expiry it does
-not know about would revoke access behind its back.
+Each key is a numbered slot beneath the resource's `backend_id`. Keys are minted
+**non-expiring** (no `duration`): Waldur owns the resource lifecycle, and an expiry it does not
+know about would revoke access behind its back.
+
+#### Where the `backend_id` comes from
+
+`resource_backend_id_source` picks what a new resource's `backend_id` is derived from:
+
+- **`slug`** (default): `allocation_prefix` + the resource slug, as the order processor derives
+  it for every plugin. The slug comes from a name the ordering user picks.
+- **`uuid`**: the resource UUID hex, e.g. `3f2c…9a1e-1`, `3f2c…9a1e-2`.
+
+**Use `uuid` on any proxy that also holds keys Waldur did not create.** Key aliases live in the
+proxy's single global namespace, and the plugin claims every key matching
+`^<backend_id>-\d+$` as a slot of the resource. Under `slug`, a resource whose slug happens to
+be `rkd43-opencode` adopts a hand-made key `rkd43-opencode-2`: the key is metered against the
+Waldur project, has its budget rewritten, is blocked when the resource pauses and is deleted
+with it. Any user with order rights can pick the name, so this can be done on purpose. The slug's
+own dedupe suffix (`test-alloc-2`) is also indistinguishable from a slot number. Under `uuid`,
+no alias outside the agent's own has that shape.
+
+**Migrating.** Switching to `uuid` affects only resources provisioned afterwards. Existing
+resources keep the slug-based `backend_id` they were created with, including when they are
+restored, so their keys stay reachable and nothing needs rewriting on the proxy. To move an
+existing resource to a UUID alias, terminate it and order it again. To find the resources that
+are still slug-based, list the aliases that aren't `<32 hex>-<n>`.
 
 ### Limit enforcement
 
@@ -447,6 +470,7 @@ block.
 | `rpm_limit` | no | — | Default requests-per-minute cap on each key |
 | `verify_ssl` | no | `true` | Verify the proxy's TLS certificate |
 | `timeout` | no | `30` | Per-request timeout in seconds |
+| `resource_backend_id_source` | no | `slug` | `slug` or `uuid`; see [below](#where-the-backend_id-comes-from) |
 | `openwebui` | no | — | Chat surface; see [The chat surface](#the-chat-surface-open-webui) |
 
 ### Usage reporting backend settings (`litellm-usage`)
@@ -476,6 +500,7 @@ offerings:
       tpm_limit: null
       rpm_limit: null
       verify_ssl: true
+      resource_backend_id_source: "uuid"    # key aliases <resource-uuid>-<n>; default "slug"
 
       # Optional chat surface. Omit the whole block for an API-only offering.
       openwebui:

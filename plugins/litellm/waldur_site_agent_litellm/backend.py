@@ -75,6 +75,20 @@ _USER_CACHE_TTL = WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES * 60 * 0.5
 PROVISIONING_SSO = "sso"
 PROVISIONING_MANAGED_PASSWORD = "managed_password"  # noqa: S105 - a mode name, not a secret
 
+# What a new resource's backend id -- and so every key alias beneath it -- is derived from.
+#
+# ``slug``: whatever the order processor passes in, i.e. ``allocation_prefix`` plus the
+# resource slug. The slug comes from a name the ordering user picks, and key aliases
+# share the proxy's one global namespace with every hand-made key, so a resource named
+# after an existing key's stem would adopt it as one of its slots. Kept as the default
+# only because it is what existing deployments already run.
+#
+# ``uuid``: the resource UUID hex. Nothing but the agent writes aliases of that shape, so
+# a hand-made key can never fall inside a resource's slot pattern.
+BACKEND_ID_SOURCE_SLUG = "slug"
+BACKEND_ID_SOURCE_UUID = "uuid"
+_BACKEND_ID_SOURCES = (BACKEND_ID_SOURCE_SLUG, BACKEND_ID_SOURCE_UUID)
+
 
 class LiteLLMBackend(backends.BaseBackend):
     """Provisions LiteLLM virtual keys from Waldur orders."""
@@ -105,6 +119,16 @@ class LiteLLMBackend(backends.BaseBackend):
         self.budget_duration = backend_settings.get("budget_duration")
         self.default_tpm_limit = backend_settings.get("tpm_limit")
         self.default_rpm_limit = backend_settings.get("rpm_limit")
+
+        self.backend_id_source = str(
+            backend_settings.get("resource_backend_id_source") or BACKEND_ID_SOURCE_SLUG
+        )
+        if self.backend_id_source not in _BACKEND_ID_SOURCES:
+            msg = (
+                f"Unknown resource_backend_id_source {self.backend_id_source!r}; "
+                f"expected one of {', '.join(_BACKEND_ID_SOURCES)}"
+            )
+            raise BackendError(msg)
 
         # The limits of the resource currently being provisioned, as
         # ``(backend_id, limits)``. The core mints the keys in a separate call
@@ -286,9 +310,26 @@ class LiteLLMBackend(backends.BaseBackend):
 
         This is the method the order processor actually calls (it derives the
         backend_id from the resource and passes it in), so provisioning lives here.
+
+        With ``resource_backend_id_source: uuid`` the slug-derived id the processor
+        passes is replaced by the resource UUID; the processor records whatever
+        comes back as the backend id. A restore passes the resource's existing
+        backend id, which is kept as it is: switching the setting on must not move a
+        resource that was already provisioned under its slug.
         """
         del user_context
-        return self._provision(resource_backend_id, waldur_resource)
+        backend_id = resource_backend_id
+        if (
+            self.backend_id_source == BACKEND_ID_SOURCE_UUID
+            and resource_backend_id != waldur_resource.backend_id
+        ):
+            backend_id = self._client_id(waldur_resource)
+            logger.info(
+                "Using resource UUID %s as backend id instead of %s",
+                backend_id,
+                resource_backend_id,
+            )
+        return self._provision(backend_id, waldur_resource)
 
     def create_resource(
         self, waldur_resource: WaldurResource, user_context: Optional[dict] = None

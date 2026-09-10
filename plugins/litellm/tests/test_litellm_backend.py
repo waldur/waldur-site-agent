@@ -114,6 +114,61 @@ def test_recreate_missing_resource_never_mints() -> None:
     backend.litellm_client.generate_key.assert_not_called()
 
 
+# --- backend id source --------------------------------------------------------
+
+
+def test_the_slug_derived_backend_id_is_kept_by_default() -> None:
+    backend = _make_backend()
+    info = backend.create_resource_with_id(_make_resource(), "inference")
+    assert info.backend_id == "inference"
+
+
+def test_uuid_source_provisions_under_the_resource_uuid() -> None:
+    backend = _make_backend({**SETTINGS, "resource_backend_id_source": "uuid"})
+    resource = _make_resource(limits={"input_tokens": 100})
+
+    info = backend.create_resource_with_id(resource, "inference")
+
+    assert info.backend_id == resource.uuid.hex
+    # The limits parked for the minting call follow the id that was actually used.
+    assert backend._take_pending_limits(resource.uuid.hex) == {"input_tokens": 100}
+
+
+def test_uuid_source_keeps_the_backend_id_a_restored_resource_already_has() -> None:
+    backend = _make_backend({**SETTINGS, "resource_backend_id_source": "uuid"})
+    resource = _make_resource(backend_id="inference")
+
+    info = backend.create_resource_with_id(resource, "inference")
+
+    assert info.backend_id == "inference"
+
+
+def test_an_unknown_backend_id_source_is_rejected() -> None:
+    with (
+        mock.patch("waldur_site_agent_litellm.backend.LiteLLMClient"),
+        pytest.raises(BackendError),
+    ):
+        LiteLLMBackend({**SETTINGS, "resource_backend_id_source": "name"}, dict(COMPONENTS))
+
+
+def test_uuid_source_never_adopts_a_hand_made_key_named_after_the_slug() -> None:
+    backend = _make_backend({**SETTINGS, "resource_backend_id_source": "uuid"})
+    resource = _make_resource()
+    resource.slug = "rkd43-opencode"
+
+    backend_id = backend.create_resource_with_id(resource, resource.slug).backend_id
+    # A pre-Waldur key sharing the slug's stem, returned alongside the resource's own
+    # slot however the proxy narrows the listing.
+    backend.litellm_client.list_keys.return_value = [
+        _key("rkd43-opencode-2", "someone-elses"),
+        _key(f"{backend_id}-1", "h1"),
+    ]
+
+    assert backend.list_resource_client_ids(backend_id) == [f"{backend_id}-1"]
+    backend.litellm_client.list_keys.return_value = [_key("rkd43-opencode-2", "someone-elses")]
+    assert backend._pull_backend_resource(backend_id) is None
+
+
 # --- alias matching -----------------------------------------------------------
 
 
