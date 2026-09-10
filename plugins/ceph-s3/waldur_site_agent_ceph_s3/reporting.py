@@ -1,11 +1,16 @@
-"""GB-day storage metering from croit's statistics subsystem.
+"""GB-day storage metering, and croit's route to the series it integrates.
 
-Split from the management backend because the series this integrates has no
-equivalent in RadosGW Admin Ops: /admin/usage carries bandwidth and operation
-counts, and bucket stats are a point-in-time size. A radosgw-flavoured offering
-can create users, keys and quotas but cannot be metered, so "this flavour cannot
-report" is a fact about which class is wired into ``reporting_backend`` rather
-than a check inside a method.
+Split from the management backend because a flavour either has a stored-bytes
+series or it does not, and that is a fact about which class is wired into
+``reporting_backend`` rather than a check inside a method.
+
+Everything above the series — the integration, the billing period, the refusal to
+report a zero — is the same either way and lives in ``_GbDayUsageBackend``. Only
+the source of the datapoints differs: croit holds the series already, so this
+module fetches it. RadosGW Admin Ops holds nothing to fetch (``/admin/usage`` is
+bandwidth and operation counts, and bucket stats are a point-in-time size), so
+that flavour reads a series collected into a time series database instead; see
+``reporting_prometheus``.
 
 Wire it up alongside the management backend::
 
@@ -35,32 +40,44 @@ from .clients.croit import CroitClient
 from .settings import CROIT
 
 
-class CroitUsageBackend(CephS3Backend):
-    """The management backend plus the GB-day metering only croit can do."""
+class _GbDayUsageBackend(CephS3Backend):
+    """The management backend plus GB-day metering, minus a source of readings.
+
+    Subclasses supply ``_get_storage_series``; everything that turns a series into
+    a billable figure is here, so the two flavours cannot drift on how a month is
+    bounded, how the area under the curve is computed, or what an unmeasurable
+    resource reports.
+    """
 
     def __init__(
         self, backend_settings: dict, backend_components: dict[str, dict]
     ) -> None:
-        """Build a management backend and refuse a flavour that cannot meter.
-
-        Failing here rather than at the first reporting pass: a reporting backend
-        that silently measures nothing looks exactly like a tenant that stored
-        nothing, and the difference only shows up on an invoice.
-        """
+        """Build a management backend that can also meter."""
         super().__init__(backend_settings, backend_components)
-        if self.flavour != CROIT:
-            raise ValueError(
-                "croit_usage reporting requires the croit flavour: vanilla Ceph "
-                "exposes no per-user stored-bytes series to integrate, so there "
-                "is nothing to compute GB-days from"
-            )
-        # The client is croit's by construction now, which is what makes
-        # get_user_storage_series available below.
-        self.croit_client: CroitClient = self.client  # type: ignore[assignment]
 
         # Usernames whose usage the last report actually measured. See
         # _pull_backend_resource: an unread series must not become a zero.
         self._reported_usernames: set = set()
+
+    def _get_storage_series(
+        self, username: str, period_start: int, period_end: int
+    ) -> list:
+        """The user's stored-bytes readings across a window.
+
+        Returns:
+            ``[{"t": unix seconds, "v": bytes}]`` ascending. An empty or all-null
+            series means "could not measure", which keeps the resource out of the
+            report rather than zeroing it.
+        """
+        raise NotImplementedError
+
+    def _before_current_period_report(self, resource_backend_ids: list) -> None:
+        """Hook for whatever has to happen before the live period can be read.
+
+        Nothing for either backend today: both read a series somebody else has
+        already recorded. It is the seam a source that needs preparing per pass
+        would use, and the reason ``_get_usage_report`` has somewhere to put it.
+        """
 
     def _apply_usage_policy(
         self, resource_backend_id: str, info: structures.BackendResourceInfo
@@ -150,7 +167,7 @@ class CroitUsageBackend(CephS3Backend):
 
         The closing rectangle is capped at one sampling interval. Running it all the
         way to ``period_end`` would bill the last known reading across an arbitrarily
-        long gap, so an outage of croit's statistics subsystem would silently inflate
+        long gap, so an outage of whatever produces the readings would silently inflate
         the invoice for the rest of the month rather than merely stop updating it.
 
         A null value *between* samples is missing telemetry, so the previous reading
@@ -191,7 +208,7 @@ class CroitUsageBackend(CephS3Backend):
 
         Recomputed from the period start on every pass rather than accumulated,
         which makes the figure absolute: idempotent, and self-healing after an
-        outage, with no state on the agent side.
+        outage, with no running total to keep straight.
 
         Args:
             resource_backend_ids: List of S3 usernames
@@ -206,6 +223,7 @@ class CroitUsageBackend(CephS3Backend):
             rather than present with a zero, which would overwrite the period's
             accrued total.
         """
+        self._before_current_period_report(resource_backend_ids)
         now = int(datetime.datetime.now(self._reporting_tz()).timestamp())
         return self._collect_usage(
             resource_backend_ids, self._billing_period_start(), now
@@ -222,8 +240,8 @@ class CroitUsageBackend(CephS3Backend):
 
         The current-period report is capped at the moment of the last pass before
         rollover, so the month's tail is otherwise never billed and an agent outage
-        across the boundary becomes a permanent under-bill. croit keeps the series,
-        so the period is simply integrated again.
+        across the boundary becomes a permanent under-bill. The series outlives the
+        period it covers, so that period is simply integrated again.
         """
         del waldur_resource
         period_start, period_end = self._period_bounds(year, month)
@@ -243,7 +261,7 @@ class CroitUsageBackend(CephS3Backend):
 
         for username in resource_backend_ids:
             try:
-                datapoints = self.croit_client.get_user_storage_series(
+                datapoints = self._get_storage_series(
                     username, period_start, period_end
                 )
                 if not _is_measurable(datapoints):
@@ -286,3 +304,39 @@ class CroitUsageBackend(CephS3Backend):
 
         logger.info("Collected usage report for %d users", len(report))
         return report
+
+
+class CroitUsageBackend(_GbDayUsageBackend):
+    """The management backend plus the GB-day metering only croit can do."""
+
+    def __init__(
+        self, backend_settings: dict, backend_components: dict[str, dict]
+    ) -> None:
+        """Build a management backend and refuse a flavour that cannot meter.
+
+        Failing here rather than at the first reporting pass: a reporting backend
+        that silently measures nothing looks exactly like a tenant that stored
+        nothing, and the difference only shows up on an invoice.
+        """
+        super().__init__(backend_settings, backend_components)
+        if self.flavour != CROIT:
+            raise ValueError(
+                "croit_usage reporting requires the croit flavour: vanilla Ceph "
+                "exposes no per-user stored-bytes series to integrate, so there "
+                "is nothing to compute GB-days from"
+            )
+        # The client is croit's by construction now, which is what makes
+        # get_user_storage_series available below.
+        self.croit_client: CroitClient = self.client  # type: ignore[assignment]
+
+    def _get_storage_series(
+        self, username: str, period_start: int, period_end: int
+    ) -> list:
+        """Read croit's per-user storage series straight from its statistics API.
+
+        ``GET /api/stats?graph=s3-user-data`` already holds the whole period at
+        180 s resolution, so there is nothing for the agent to record or retain.
+        """
+        return self.croit_client.get_user_storage_series(
+            username, period_start, period_end
+        )

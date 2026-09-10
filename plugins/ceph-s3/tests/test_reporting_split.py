@@ -1,8 +1,13 @@
-"""Metering is croit-only, and neither backend may ever report a zero.
+"""Metering lives outside the management backend, and never reports a zero.
 
-The management backend serves both flavours and cannot meter, because RadosGW
-exposes no stored-bytes series. GB-day reporting therefore lives in its own
-backend, wired through ``reporting_backend``.
+The management backend serves both flavours and meters neither: croit's series
+comes from its statistics subsystem, and RadosGW's has to be recorded before it
+can be integrated, so neither belongs on the path that also creates users and
+applies quotas. GB-day reporting therefore lives in its own backend, wired
+through ``reporting_backend``.
+
+This file covers the split itself and croit's half of it. The radosgw half is in
+``test_reporting_radosgw``.
 """
 
 import sys

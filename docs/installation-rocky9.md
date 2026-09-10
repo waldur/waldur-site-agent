@@ -298,19 +298,21 @@ reached through RadosGW Admin Ops.
 
 **No additional system requirements** - uses HTTP API calls only.
 
-**Configuration**: a croit-managed cluster, which is the flavour that can meter:
+**Configuration**: a croit-managed cluster:
 
 ```yaml
 backend_type: "ceph_s3"
 order_processing_backend: "ceph_s3"
 membership_sync_backend: "ceph_s3"
-reporting_backend: "croit_usage"  # GB-day metering; a separate backend, croit only
+reporting_backend: "croit_usage"  # GB-day metering; radosgw uses radosgw_usage
 ```
 
 Note the underscore: backend names are entry-point names and are matched exactly,
 so a hyphenated value resolves to no backend at all. A stock RadosGW cluster runs
-the same `ceph_s3` backend under `flavour: "radosgw"` with no `reporting_backend`
-— it exposes no equivalent series and cannot be metered.
+the same `ceph_s3` backend under `flavour: "radosgw"` with
+`reporting_backend: "prometheus_usage"` — it exposes no equivalent series, so
+that backend reads one out of a Prometheus-compatible database that a collector
+outside the agent keeps filled.
 
 #### CSCS DWDI Plugin (waldur-site-agent-cscs-dwdi)
 

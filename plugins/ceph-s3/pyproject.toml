@@ -21,9 +21,11 @@ waldur-site-agent = { workspace = true }
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]
 ceph_s3 = "waldur_site_agent_ceph_s3.backend:CephS3Backend"
-# Reporting only: GB-day metering reads croit's statistics subsystem, which
-# has no RadosGW equivalent.
+# Reporting only: GB-day metering, one backend per source of the series.
+# croit holds one already; RadosGW holds none, so that flavour reads a series
+# somebody else collected into a Prometheus-compatible database.
 croit_usage = "waldur_site_agent_ceph_s3.reporting:CroitUsageBackend"
+prometheus_usage = "waldur_site_agent_ceph_s3.reporting_prometheus:PrometheusUsageBackend"
 
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [
