@@ -69,6 +69,7 @@ def _make_federation_processor():
     processor.resource_backend.fetch_consented_users_only = True
     processor.resource_backend.user_resolve_method = "identity_bridge"
     processor.resource_backend.handled_resource_states = [ResourceState.OK]
+    processor.service_provider = None
     processor._team_cache = {}
     return processor
 

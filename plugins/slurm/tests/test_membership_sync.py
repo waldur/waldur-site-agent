@@ -727,6 +727,7 @@ class MembershipSyncTest(unittest.TestCase):
         processor._team_cache = {}
         processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
         processor.resource_backend = SimpleNamespace(user_resolve_method=None)
+        processor.service_provider = None
 
         waldur_resource = SimpleNamespace(
             uuid=SimpleNamespace(hex="r"),

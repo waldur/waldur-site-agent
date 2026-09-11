@@ -741,6 +741,30 @@ class OfferingBaseProcessor(abc.ABC):
             )
         return self._course_accounts_cache[self.offering.uuid]
 
+    def _resource_account_usernames(self, waldur_resource: WaldurResource) -> set[str]:
+        """Usernames of the resource project's service and course accounts that aren't CLOSED.
+
+        These accounts are owned by _sync_resource_service_accounts /
+        _sync_resource_course_accounts, which add OK accounts and remove CLOSED
+        ones. Accounts in any other state are left alone there, so they are
+        returned here too.
+        """
+        if self.service_provider is None:
+            return set()
+        project_uuid = waldur_resource.project_uuid.hex
+        accounts: list[Union[ProjectServiceAccount, CourseAccount]] = [
+            *self._offering_project_service_accounts(),
+            *self._offering_course_accounts(),
+        ]
+        return {
+            account.username
+            for account in accounts
+            if account.username
+            and account.project_uuid
+            and account.project_uuid.hex == project_uuid
+            and account.state != ServiceAccountState.CLOSED
+        }
+
     def _sync_resource_service_accounts(self, waldur_resource: WaldurResource) -> None:
         """Sync project service accounts between Waldur and the backend resource.
 
@@ -2612,6 +2636,26 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         # offering-wide) offering_users list, so they would never be flagged for removal
         # even though the backend still reports them.
         stale_usernames: set[str] = local_usernames - resource_usernames
+
+        # Service and course accounts are not project-team members, so the diff above
+        # always flags them. Their lifecycle belongs to the service/course account sync;
+        # removing them here would cancel their jobs every pass (full sync re-adds them
+        # right after; the event-driven paths never do).
+        if stale_usernames:
+            try:
+                account_usernames = self._resource_account_usernames(waldur_resource)
+            except Exception as exc:
+                # Without the account list, any stale user could be one of them. Skipping
+                # removals for one pass is harmless; cancelling an account's jobs is not.
+                logger.warning(
+                    "Unable to list service/course accounts for resource %s, "
+                    "skipping stale user removal this pass: %s",
+                    waldur_resource.backend_id,
+                    exc,
+                )
+                stale_usernames = set()
+            else:
+                stale_usernames -= account_usernames
         logger.info(
             "Resource stale usernames (%s): %s", len(stale_usernames), ", ".join(stale_usernames)
         )
