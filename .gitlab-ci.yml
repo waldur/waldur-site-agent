@@ -481,6 +481,7 @@ Run mypy (3.9):
   variables:
     WALDUR_E2E_CONFIG: ci/e2e-ci-config.yaml
     WALDUR_E2E_STOMP_CONFIG: ci/e2e-ci-config-stomp.yaml
+    WALDUR_E2E_MEMBERSHIP_CONFIG: ci/e2e-ci-config-membership.yaml
     WALDUR_E2E_BENCH_RESOURCES: "5"
   script:
     # REST suite (stomp_enabled=false), then STOMP (stomp_enabled=true) and the
@@ -494,6 +495,7 @@ Run mypy (3.9):
         plugins/slurm/tests/e2e/test_e2e_api_optimizations.py \
         plugins/slurm/tests/e2e/test_e2e_benchmark.py \
         plugins/slurm/tests/e2e/test_e2e_default_account_policy.py \
+        plugins/slurm/tests/e2e/test_e2e_membership_stale.py \
         plugins/slurm/tests/e2e/test_e2e_order_reconciliation.py \
         plugins/slurm/tests/e2e/test_e2e_partition_associations.py \
         plugins/slurm/tests/e2e/test_e2e_prepaid.py \

@@ -26,6 +26,36 @@ Required keys must be present or the agent will fail to start.
 
 Check the [CHANGELOG](../../../CHANGELOG.md) for any new required keys before upgrading.
 
+## `preserve_unmanaged_backend_users`
+
+Offering-level (not `backend_settings`). Default `false`: membership sync
+removes every backend user who is not on the Waldur resource team.
+
+Set to `true` if the service provider also adds users locally on a
+Waldur-managed allocation (for example people who cannot get an offering user
+because of identity-document policy). Then:
+
+- users Waldur has **ever** known as offering users of this offering (any
+  state, including `DELETED` / `REQUESTED_DELETION` and restricted) are
+  removed once they leave the team;
+- accounts Waldur has **never** seen are kept.
+
+Applies to every local-username backend (SLURM, MOAB, MUP, OKD, Harbor, …).
+Ignored for Waldur-to-Waldur federation (identity-bridge).
+
+Remaining gaps — all of which leave the user in place, not remove them:
+
+- an offering user hard-deleted in Waldur (API delete, deleting the user
+  account, remote-offering sync);
+- offering users hidden from the agent's token by
+  `ENFORCE_USER_CONSENT_FOR_OFFERINGS` consent filtering.
+
+```yaml
+offerings:
+  - name: "Example SLURM Offering"
+    preserve_unmanaged_backend_users: true
+```
+
 ## `default_account_policy`
 
 Controls which account is passed as `DefaultAccount=` when the agent creates a

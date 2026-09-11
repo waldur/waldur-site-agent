@@ -87,20 +87,14 @@ class BackendComponent(BaseModel):
     description: Optional[str] = Field(default=None, description="Description of the component")
     min_value: Optional[int] = Field(default=None, description="Minimum allowed value")
     max_value: Optional[int] = Field(default=None, description="Maximum allowed value")
-    max_available_limit: Optional[int] = Field(
-        default=None, description="Maximum available limit"
-    )
+    max_available_limit: Optional[int] = Field(default=None, description="Maximum available limit")
     default_limit: Optional[int] = Field(default=None, description="Default limit value")
     limit_period: Optional[str] = Field(
         default=None, description="Limit period: annual, month, quarterly, total"
     )
     article_code: Optional[str] = Field(default=None, description="Article code for billing")
-    is_boolean: Optional[bool] = Field(
-        default=None, description="Whether the component is boolean"
-    )
-    is_prepaid: Optional[bool] = Field(
-        default=None, description="Whether the component is prepaid"
-    )
+    is_boolean: Optional[bool] = Field(default=None, description="Whether the component is boolean")
+    is_prepaid: Optional[bool] = Field(default=None, description="Whether the component is prepaid")
     min_prepaid_duration: Optional[int] = Field(
         default=None, description="Minimum prepaid duration in months"
     )
@@ -168,6 +162,7 @@ class Offering(BaseModel):
         membership_sync_backend: Backend name for membership synchronization
         reporting_backend: Backend name for usage reporting
         username_management_backend: Backend name for username management
+        preserve_unmanaged_backend_users: Keep backend users who were never offering users
     """
 
     name: str = Field(..., description="Human-readable name for the offering")
@@ -221,6 +216,17 @@ class Offering(BaseModel):
     resource_import_enabled: bool = Field(default=False, description="Enable resource import")
     username_reconciliation_enabled: bool = Field(
         default=False, description="Enable periodic username reconciliation from target backend"
+    )
+    preserve_unmanaged_backend_users: bool = Field(
+        default=False,
+        description=(
+            "If False (default), membership sync removes any backend user who is not "
+            "on the Waldur resource team. If True, users Waldur has ever known as "
+            "offering users of this offering (any state, including DELETED and "
+            "restricted) are removed once they leave the team; accounts Waldur has "
+            "never seen are kept. Applies to local-username backends; ignored for "
+            "identity-bridge / federation."
+        ),
     )
     verify_ssl: bool = Field(default=True, description="Verify SSL certificates")
     omit_anomalous_usage_components: bool = Field(
