@@ -13,7 +13,8 @@
       "SLURM periodic usage policy evaluation (11 distinct configs)",
       "Policy downscaling and pausing at usage thresholds",
       "Policy grace ratio and carryover behaviour",
-      "Policy raw usage reset across period types (month, quarter, total)"
+      "Policy raw usage reset across period types (month, quarter, total)",
+      "Membership-sync stale users: departed, rejoined, restricted and hand-added backend users, and service/course accounts"
     ]
   },
   "users": [
@@ -71,6 +72,42 @@
       "last_name": "User 5",
       "is_active": true,
       "password": "e2e-user-password"
+    },
+    {
+      "uuid": "e2ea0000000000000000000000000007",
+      "username": "e2euser6",
+      "email": "e2euser6@site-agent.test",
+      "first_name": "E2E",
+      "last_name": "Member 6",
+      "is_active": true,
+      "password": "e2e-user-password"
+    },
+    {
+      "uuid": "e2ea0000000000000000000000000008",
+      "username": "e2euser7",
+      "email": "e2euser7@site-agent.test",
+      "first_name": "E2E",
+      "last_name": "Member 7",
+      "is_active": true,
+      "password": "e2e-user-password"
+    },
+    {
+      "uuid": "e2ea0000000000000000000000000009",
+      "username": "e2euser8",
+      "email": "e2euser8@site-agent.test",
+      "first_name": "E2E",
+      "last_name": "Restricted 8",
+      "is_active": true,
+      "password": "e2e-user-password"
+    },
+    {
+      "uuid": "e2ea000000000000000000000000000a",
+      "username": "e2e-course-01",
+      "email": "e2e-course-01@site-agent.test",
+      "first_name": "E2E",
+      "last_name": "Course Account 1",
+      "is_active": true,
+      "password": "e2e-user-password"
     }
   ],
   "auth_tokens": [
@@ -94,6 +131,12 @@
       "name": "E2E Test Project",
       "customer_uuid": "e2ec0000000000000000000000000001",
       "description": "Project for site-agent E2E test orders"
+    },
+    {
+      "uuid": "e2eb0000000000000000000000000002",
+      "name": "E2E Membership Project",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Project for membership-sync stale-user E2E tests (members leave and rejoin)"
     }
   ],
   "category_groups": [
@@ -382,6 +425,21 @@
         "username_generation_policy": "waldur_username",
         "enable_posix_account": true
       }
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000007",
+      "name": "E2E SLURM Membership",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "SLURM offering for membership-sync E2E tests. offering_user_auto_deletion moves the offering user of a member who leaves their last project to Requested deletion.",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true,
+        "offering_user_auto_deletion": true
+      }
     }
   ],
   "offering_components": [
@@ -575,6 +633,24 @@
       "billing_type": "limit",
       "measured_unit": "Hours",
       "limit_period": "total"
+    },
+    {
+      "uuid": "e2e10000000000000000000000000071",
+      "offering_uuid": "e2ef0000000000000000000000000007",
+      "type": "cpu",
+      "name": "CPU",
+      "description": "CPU time in k-Hours",
+      "billing_type": "limit",
+      "measured_unit": "k-Hours"
+    },
+    {
+      "uuid": "e2e10000000000000000000000000072",
+      "offering_uuid": "e2ef0000000000000000000000000007",
+      "type": "ram",
+      "name": "RAM",
+      "description": "RAM usage in gb-Hours",
+      "billing_type": "limit",
+      "measured_unit": "gb-Hours"
     }
   ],
   "plans": [
@@ -671,6 +747,13 @@
       "name": "E2E Policy t-g15-c15",
       "offering_uuid": "e2ef000000000000000000000000010b",
       "unit": "month"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000017",
+      "name": "E2E Membership Standard",
+      "offering_uuid": "e2ef0000000000000000000000000007",
+      "unit": "month",
+      "description": "Standard plan for the membership-sync offering"
     }
   ],
   "plan_components": [
@@ -813,6 +896,20 @@
       "component_type": "node",
       "price": "0.00",
       "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000017",
+      "component_uuid": "e2e10000000000000000000000000071",
+      "component_type": "cpu",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000017",
+      "component_uuid": "e2e10000000000000000000000000072",
+      "component_type": "ram",
+      "price": "0.00",
+      "amount": 0
     }
   ],
   "user_roles": [
@@ -868,6 +965,24 @@
       "role_name": "PROJECT.MEMBER",
       "scope_type": "structure.project",
       "scope_uuid": "e2eb0000000000000000000000000001",
+      "is_active": true
+    },
+    {
+      "uuid": "e2e00000000000000000000000000027",
+      "user_uuid": "e2ea0000000000000000000000000007",
+      "user_username": "e2euser6",
+      "role_name": "PROJECT.MEMBER",
+      "scope_type": "structure.project",
+      "scope_uuid": "e2eb0000000000000000000000000002",
+      "is_active": true
+    },
+    {
+      "uuid": "e2e00000000000000000000000000028",
+      "user_uuid": "e2ea0000000000000000000000000008",
+      "user_username": "e2euser7",
+      "role_name": "PROJECT.MEMBER",
+      "scope_type": "structure.project",
+      "scope_uuid": "e2eb0000000000000000000000000002",
       "is_active": true
     }
   ],
@@ -958,6 +1073,28 @@
         "loginShell": "/bin/bash",
         "homeDir": "/home/wauser5"
       }
+    },
+    {
+      "uuid": "e2e00000000000000000000000000061",
+      "offering_uuid": "e2ef0000000000000000000000000007",
+      "user_uuid": "e2ea0000000000000000000000000007",
+      "username": "e2emember6",
+      "state": 5
+    },
+    {
+      "uuid": "e2e00000000000000000000000000062",
+      "offering_uuid": "e2ef0000000000000000000000000007",
+      "user_uuid": "e2ea0000000000000000000000000008",
+      "username": "e2emember7",
+      "state": 5
+    },
+    {
+      "uuid": "e2e00000000000000000000000000063",
+      "offering_uuid": "e2ef0000000000000000000000000007",
+      "user_uuid": "e2ea0000000000000000000000000009",
+      "username": "e2erestricted8",
+      "state": 5,
+      "is_restricted": true
     }
   ],
   "posix_id_pools": [
@@ -971,6 +1108,31 @@
       "max_gid": 9999,
       "next_gid": 9003,
       "description": "E2E provider-wide POSIX ID pool for the Waldur-authoritative LDAP offerings"
+    }
+  ],
+  "project_service_accounts": [
+    {
+      "uuid": "e2e70000000000000000000000000001",
+      "project_uuid": "e2eb0000000000000000000000000002",
+      "username": "e2e-svc-ok",
+      "state": 1,
+      "description": "Active service account"
+    },
+    {
+      "uuid": "e2e70000000000000000000000000002",
+      "project_uuid": "e2eb0000000000000000000000000002",
+      "username": "e2e-svc-closed",
+      "state": 2,
+      "description": "Closed service account"
+    }
+  ],
+  "course_accounts": [
+    {
+      "uuid": "e2e80000000000000000000000000001",
+      "project_uuid": "e2eb0000000000000000000000000002",
+      "user_uuid": "e2ea000000000000000000000000000a",
+      "state": 1,
+      "description": "Active course account"
     }
   ]
 }

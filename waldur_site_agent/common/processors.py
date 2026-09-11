@@ -358,6 +358,8 @@ class OfferingBaseProcessor(abc.ABC):
 
         # Per-cycle cache for offering users (avoids redundant API calls)
         self._offering_users_cache: list[OfferingUser] | None = None
+        # Unfiltered username set used when preserve_unmanaged_backend_users is on.
+        self._known_offering_usernames_cache: Optional[set[str]] = None
 
     def _print_current_user(self) -> None:
         """Log information about the current authenticated Waldur user."""
@@ -539,6 +541,7 @@ class OfferingBaseProcessor(abc.ABC):
         to ensure fresh data on the next access.
         """
         self._offering_users_cache = None
+        self._known_offering_usernames_cache = None
 
     def _check_backend_id_uniqueness(self, backend_id: str) -> bool:
         """Check if backend_id is unique across offering history.
@@ -1373,7 +1376,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 if attempt < max_attempts - 1:
                     logger.info(
                         "No team members yet for resource %s, retrying in %.0fs (attempt %d/%d)",
-                        resource_uuid, retry_delay, attempt + 1, max_attempts,
+                        resource_uuid,
+                        retry_delay,
+                        attempt + 1,
+                        max_attempts,
                     )
                     sleep(retry_delay)
 
@@ -2357,6 +2363,28 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         logger.info("Fetched %d offering users", len(offering_users))
         return offering_users
 
+    def _get_known_offering_usernames(self) -> set[str]:
+        """Usernames of every offering user of this offering, in any state.
+
+        Deliberately unfiltered: a user who left their last project has an offering
+        user in REQUESTED_DELETION/DELETING/DELETED (username kept), which must still
+        count as Waldur-managed so it gets removed -- see gh-13. Restricted offering
+        users are included for the same reason.
+
+        Only called when preserve_unmanaged_backend_users is on. Fail closed: a
+        fetch error propagates so that resource skips removals this cycle.
+        """
+        if self._known_offering_usernames_cache is None:
+            offering_users = marketplace_offering_users_list.sync_all(
+                client=self.waldur_rest_client,
+                offering_uuid=[self.offering.uuid],
+                field=[OfferingUserFieldEnum.USERNAME],
+            )
+            self._known_offering_usernames_cache = {
+                ou.username for ou in offering_users if ou.username
+            }
+        return self._known_offering_usernames_cache
+
     def _get_waldur_resource_team(
         self, resource: WaldurResource, has_consent: Union[bool, Unset] = UNSET
     ) -> list[ProjectUser]:
@@ -2656,6 +2684,25 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 stale_usernames = set()
             else:
                 stale_usernames -= account_usernames
+
+        # Identity-bridge / federation keys the diff on CUIDs, not offering
+        # usernames, so the known-username intersection would be empty there.
+        # Leave that path on the default (remove-all-extras) behaviour.
+        if (
+            stale_usernames
+            and self.offering.preserve_unmanaged_backend_users
+            and not use_identity_bridge
+        ):
+            known_usernames = self._get_known_offering_usernames()
+            unmanaged = stale_usernames - known_usernames
+            stale_usernames &= known_usernames
+            if unmanaged:
+                logger.info(
+                    "Preserving %s backend user(s) unknown to Waldur on resource %s: %s",
+                    len(unmanaged),
+                    waldur_resource.backend_id,
+                    ", ".join(sorted(unmanaged)),
+                )
         logger.info(
             "Resource stale usernames (%s): %s", len(stale_usernames), ", ".join(stale_usernames)
         )
@@ -3455,9 +3502,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 # A backend may hand back Decimal while current_amount comes back
                 # from the API as float. Mixing the two raises, and a debug log must
                 # never be the thing that fails a usage report.
-                None
-                if current_amount is None
-                else round(float(new_amount) - current_amount, 2),
+                None if current_amount is None else round(float(new_amount) - current_amount, 2),
             )
 
         skipped_components: list[str] = []

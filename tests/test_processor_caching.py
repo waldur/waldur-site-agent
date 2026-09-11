@@ -10,6 +10,8 @@ import uuid
 from datetime import datetime, timezone
 from unittest import mock
 
+import pytest
+from waldur_api_client.models import OfferingUserFieldEnum
 from waldur_api_client.models.course_account import CourseAccount
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.offering_user_state import OfferingUserState
@@ -119,9 +121,11 @@ def _make_processor(cls):
     """Create a processor instance bypassing __init__ and setting minimal attributes."""
     processor = cls.__new__(cls)
     processor._offering_users_cache = None
+    processor._known_offering_usernames_cache = None
     processor.waldur_rest_client = mock.Mock()
     processor.offering = mock.Mock()
     processor.offering.uuid = uuid.uuid4().hex
+    processor.offering.preserve_unmanaged_backend_users = False
     processor.resource_backend = mock.Mock()
     processor.service_provider = ServiceProvider(uuid=uuid.uuid4())
     processor.timezone = ""
@@ -267,6 +271,103 @@ class TestOfferingUsersCacheFiltering:
         processor._get_waldur_offering_users()
 
         assert mock_api.sync_all.call_count == 1
+
+
+class TestKnownOfferingUsernames:
+    """Unfiltered username set used by preserve_unmanaged_backend_users."""
+
+    @mock.patch("waldur_site_agent.common.processors.marketplace_offering_users_list")
+    def test_fetch_has_no_state_or_restricted_filter(self, mock_api):
+        """The list call must not filter by state or is_restricted."""
+        mock_api.sync_all.return_value = []
+        processor = _make_membership_processor()
+
+        processor._get_known_offering_usernames()
+
+        mock_api.sync_all.assert_called_once()
+        kwargs = mock_api.sync_all.call_args.kwargs
+        assert "is_restricted" not in kwargs
+        assert "state" not in kwargs
+        assert kwargs["offering_uuid"] == [processor.offering.uuid]
+        assert kwargs["field"] == [OfferingUserFieldEnum.USERNAME]
+        assert kwargs["client"] is processor.waldur_rest_client
+
+    @mock.patch("waldur_site_agent.common.processors.marketplace_offering_users_list")
+    def test_includes_deleted_and_drops_empty_usernames(self, mock_api):
+        """DELETED rows stay in the known set; blank usernames are dropped."""
+        mock_api.sync_all.return_value = [
+            _make_offering_user("user-ok", OfferingUserState.OK),
+            _make_offering_user("user-deleted", OfferingUserState.DELETED),
+            _make_offering_user("user-deleting", OfferingUserState.DELETING),
+            _make_offering_user("user-deletion-requested", OfferingUserState.REQUESTED_DELETION),
+            _make_offering_user("", OfferingUserState.OK),
+        ]
+        processor = _make_membership_processor()
+
+        known = processor._get_known_offering_usernames()
+
+        assert known == {
+            "user-ok",
+            "user-deleted",
+            "user-deleting",
+            "user-deletion-requested",
+        }
+
+    @mock.patch("waldur_site_agent.common.processors.marketplace_offering_users_list")
+    def test_caches_per_cycle(self, mock_api):
+        """Second call returns the cached set without another API request."""
+        mock_api.sync_all.return_value = [_make_offering_user("user-ok")]
+        processor = _make_membership_processor()
+
+        first = processor._get_known_offering_usernames()
+        second = processor._get_known_offering_usernames()
+
+        assert first is second
+        assert first == {"user-ok"}
+        assert mock_api.sync_all.call_count == 1
+
+    @mock.patch("waldur_site_agent.common.processors.marketplace_offering_users_list")
+    def test_invalidation_clears_known_cache(self, mock_api):
+        """_invalidate_offering_users_cache also drops the known-username cache."""
+        mock_api.sync_all.side_effect = [
+            [_make_offering_user("user-01")],
+            [_make_offering_user("user-01"), _make_offering_user("user-02")],
+        ]
+        processor = _make_membership_processor()
+
+        assert processor._get_known_offering_usernames() == {"user-01"}
+        processor._invalidate_offering_users_cache()
+        assert processor._get_known_offering_usernames() == {"user-01", "user-02"}
+        assert mock_api.sync_all.call_count == 2
+
+    @mock.patch("waldur_site_agent.common.processors.marketplace_offering_users_list")
+    def test_does_not_reuse_filtered_offering_users_cache(self, mock_api):
+        """Known-username fetch is a separate API call from _get_cached_offering_users."""
+        mock_api.sync_all.side_effect = [
+            [_make_offering_user("filtered-ok")],
+            [_make_offering_user("filtered-ok"), _make_offering_user("deleted")],
+        ]
+        processor = _make_membership_processor()
+
+        processor._get_cached_offering_users()
+        known = processor._get_known_offering_usernames()
+
+        assert mock_api.sync_all.call_count == 2
+        assert known == {"filtered-ok", "deleted"}
+        first_kwargs = mock_api.sync_all.call_args_list[0].kwargs
+        second_kwargs = mock_api.sync_all.call_args_list[1].kwargs
+        assert first_kwargs.get("is_restricted") is False
+        assert "is_restricted" not in second_kwargs
+
+    @mock.patch("waldur_site_agent.common.processors.marketplace_offering_users_list")
+    def test_fetch_error_propagates(self, mock_api):
+        """A listing failure must not be swallowed (fail closed: no removals)."""
+        mock_api.sync_all.side_effect = RuntimeError("waldur down")
+        processor = _make_membership_processor()
+
+        with pytest.raises(RuntimeError, match="waldur down"):
+            processor._get_known_offering_usernames()
+        assert processor._known_offering_usernames_cache is None
 
 
 # ---------------------------------------------------------------------------

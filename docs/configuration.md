@@ -175,6 +175,20 @@ username_management_backend: "base"  # Backend for username management
 - **Default**: `false`
 - **Description**: Whether to expose importable resources to Waldur
 
+#### `preserve_unmanaged_backend_users`
+
+- **Type**: Boolean
+- **Default**: `false`
+- **Description**: Controls how membership sync treats backend users who are
+  not on the Waldur resource team. When `false` (default), any such user is
+  removed. When `true`, users Waldur has ever known as offering users of this
+  offering (any state, including `DELETED` and restricted) are removed once
+  they leave the team; accounts Waldur has never seen — for example people
+  the service provider added locally because Waldur validation blocked their
+  offering user — are kept. Applies to every local-username backend
+  (SLURM, MOAB, MUP, OKD, Harbor, …). Ignored for identity-bridge /
+  Waldur-to-Waldur federation.
+
 ## Common Backend Settings
 
 These settings can be used in `backend_settings` for any backend type.
