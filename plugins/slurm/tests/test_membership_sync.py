@@ -332,6 +332,9 @@ class MembershipSyncTest(unittest.TestCase):
         self.mock_downscale_resource = mock.patch.object(
             backend.SlurmBackend, "downscale_resource"
         ).start()
+        self.mock_pause_resource = mock.patch.object(
+            backend.SlurmBackend, "pause_resource", return_value=True
+        ).start()
         mock.patch.object(backend.SlurmBackend, "sync_resource_project").start()
 
     def test_association_create(
@@ -398,6 +401,75 @@ class MembershipSyncTest(unittest.TestCase):
 
         self.mock_downscale_resource.assert_called_once()
         self.mock_get_resource_metadata.assert_called_once()
+
+    def test_qos_pausing(
+        self,
+    ) -> None:
+        self.waldur_resource.paused = True
+        self.waldur_resource.downscaled = False
+
+        self._setup_common_mocks()
+        self._setup_team_mock()
+        self._setup_offering_users_mock()
+        self._setup_offering_details_mock()
+        self._setup_slurm_mock()
+
+        set_backend_metadata_response = respx.post(
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_backend_metadata/"
+        ).respond(200, json={"status": "OK"})
+
+        processor = OfferingMembershipProcessor(self.offering, self.mock_client)
+        processor.process_offering()
+
+        self.mock_pause_resource.assert_called_once()
+        self.mock_downscale_resource.assert_not_called()
+        self.mock_restore_resource.assert_not_called()
+        self.mock_get_resource_metadata.assert_called_once()
+        assert set_backend_metadata_response.call_count == 1
+
+    def test_qos_pausing_takes_precedence_over_downscaling(
+        self,
+    ) -> None:
+        self.waldur_resource.paused = True
+        self.waldur_resource.downscaled = True
+
+        self._setup_common_mocks()
+        self._setup_team_mock()
+        self._setup_offering_users_mock()
+        self._setup_offering_details_mock()
+        self._setup_slurm_mock()
+
+        processor = OfferingMembershipProcessor(self.offering, self.mock_client)
+        processor.process_offering()
+
+        self.mock_pause_resource.assert_called_once()
+        self.mock_downscale_resource.assert_not_called()
+        self.mock_restore_resource.assert_not_called()
+
+    def test_qos_restore_when_not_paused_or_downscaled(
+        self,
+    ) -> None:
+        self.waldur_resource.paused = False
+        self.waldur_resource.downscaled = False
+
+        self._setup_common_mocks()
+        self._setup_team_mock()
+        self._setup_offering_users_mock()
+        self._setup_offering_details_mock()
+        self._setup_slurm_mock()
+
+        set_backend_metadata_response = respx.post(
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_backend_metadata/"
+        ).respond(200, json={"status": "OK"})
+
+        processor = OfferingMembershipProcessor(self.offering, self.mock_client)
+        processor.process_offering()
+
+        self.mock_pause_resource.assert_not_called()
+        self.mock_downscale_resource.assert_not_called()
+        self.mock_restore_resource.assert_called_once()
+        self.mock_get_resource_metadata.assert_called_once()
+        assert set_backend_metadata_response.call_count == 1
 
     def test_limits_update(
         self,
