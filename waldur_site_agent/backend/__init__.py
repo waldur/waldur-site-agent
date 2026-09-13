@@ -23,6 +23,7 @@ class BackendType(Enum):
     MUP = "mup"
     CEPH_S3 = "ceph_s3"
     DIGITALOCEAN = "digitalocean"
+    AZURE = "azure"
     CUSTOM = "custom"
     UNKNOWN = "unknown"
 

@@ -468,6 +468,7 @@ Run mypy (3.9):
     changes:
       - plugins/slurm/**/*
       - plugins/ldap/**/*
+      - plugins/azure/**/*
       - waldur_site_agent/**/*
       - ci/**/*
       - pyproject.toml
@@ -544,6 +545,19 @@ Run mypy (3.9):
         plugins/slurm/tests/e2e/test_e2e_qos_polling.py \
         plugins/slurm/tests/e2e/test_e2e_qos_stomp.py \
         plugins/slurm/tests/e2e/test_e2e_ldap.py
+
+"E2E: Azure":
+  extends: .E2E base
+  rules: *e2e_mr_rules
+  variables:
+    WALDUR_E2E_CONFIG: ci/e2e-ci-config.yaml
+  script:
+    # The Azure SDK is faked in-process; everything from the order to the
+    # resource in Waldur is real.
+    - |
+      source .venv/bin/activate
+      $E2E_PYTEST --junitxml=e2e-report-azure.xml \
+        plugins/azure/tests/e2e/test_e2e_orders.py
 
 "E2E: QoS matrix":
   extends: .E2E base

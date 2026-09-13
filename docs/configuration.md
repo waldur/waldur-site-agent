@@ -131,6 +131,10 @@ username_management_backend: "base"  # Backend for username management
 - `"waldur"`: Waldur-to-Waldur federation
 - `"base"`: Basic username management
 - `"rancher"`: Direct Rancher REST API integration (single offering = one cluster)
+- `"ceph_s3"`: Ceph S3 storage (croit and RadosGW flavours)
+- `"digitalocean"`: DigitalOcean droplets
+- `"azure"`: Azure virtual machines. See
+  [`plugins/azure/README.md`](../plugins/azure/README.md).
 - `"rancher-kc-crd"`: CRD-driven Rancher + Keycloak management via the
   [`rancher-keycloak-operator`](https://github.com/waldur/rancher-keycloak-operator).
   Membership-sync only; targets multiple clusters per offering by reading
