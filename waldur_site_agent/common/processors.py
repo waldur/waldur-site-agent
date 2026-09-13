@@ -2932,6 +2932,21 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 logger.info("Restoring is skipped")
 
         resource_metadata = self.resource_backend.get_resource_metadata(waldur_resource.backend_id)
+        # Waldur saves the whole resource on every set_backend_metadata, so a
+        # steady-state cycle would rewrite each resource for nothing. The
+        # membership fetch always requests backend_metadata; a resource that
+        # arrives without it (Unset) is written rather than guessed about.
+        current_metadata = waldur_resource.backend_metadata
+        if (
+            not isinstance(current_metadata, Unset)
+            and current_metadata.to_dict() == resource_metadata
+        ):
+            logger.info(
+                "Backend metadata of resource %s (%s) is unchanged, skipping the update",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+            )
+            return
         marketplace_provider_resources_set_backend_metadata.sync(
             uuid=waldur_resource.uuid.hex,
             client=self.waldur_rest_client,
