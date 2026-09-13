@@ -23,6 +23,7 @@ PLUGINS_DIR = ROOT / "plugins"
 # though the regex itself is safe (requires >= or == immediately after the name).
 INTERNAL_PACKAGES = [
     "waldur-site-agent-keycloak-client",
+    "waldur-site-agent-ldap-client",
     "waldur-site-agent",
 ]
 

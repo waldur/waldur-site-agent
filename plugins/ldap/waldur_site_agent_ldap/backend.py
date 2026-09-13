@@ -8,13 +8,13 @@ from typing import Optional
 
 from pydantic import ValidationError as PydanticValidationError
 from waldur_api_client.models.offering_user import OfferingUser
+from waldur_site_agent_ldap_client import LdapClient
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common.structures import Offering
 from waldur_site_agent_ldap import reconcile
-from waldur_site_agent_ldap.client import LdapClient
 from waldur_site_agent_ldap.email_sender import WelcomeEmailSender
 from waldur_site_agent_ldap.schemas import (
     AccountSource,

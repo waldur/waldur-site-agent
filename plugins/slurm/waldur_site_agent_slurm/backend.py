@@ -35,16 +35,16 @@ _VALID_DEFAULT_ACCOUNT_POLICIES = frozenset({"common", "individual", "none"})
 def _get_ldap_client(ldap_settings: dict):  # type: ignore[no-untyped-def]  # noqa: ANN202
     """Lazily import and instantiate the LDAP client if configured.
 
-    Returns an LdapClient instance from waldur-site-agent-ldap.
-    The return type is not annotated because the ldap plugin is an optional dependency.
+    Returns an LdapClient instance from waldur-site-agent-ldap-client.
+    The return type is not annotated because the client is an optional dependency.
     """
     try:
-        from waldur_site_agent_ldap.client import LdapClient  # noqa: PLC0415
+        from waldur_site_agent_ldap_client import LdapClient  # noqa: PLC0415
     except ImportError as e:
         msg = (
             "LDAP settings are configured in SLURM backend_settings but the "
-            "waldur-site-agent-ldap package is not installed. "
-            "Install it with: pip install waldur-site-agent-ldap"
+            "waldur-site-agent-ldap-client package is not installed. "
+            "Install it with: pip install 'waldur-site-agent-slurm[ldap]'"
         )
         raise BackendError(msg) from e
     return LdapClient(ldap_settings)

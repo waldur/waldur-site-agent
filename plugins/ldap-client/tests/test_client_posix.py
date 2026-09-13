@@ -5,11 +5,14 @@ the behaviours that only show up against an actual directory — idempotency, th
 already-exists paths, and the orphan-group rollback — without a container.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from ldap3 import MOCK_SYNC, OFFLINE_SLAPD_2_4, Connection, Server
+from ldap3 import MOCK_SYNC, MODIFY_ADD, MODIFY_DELETE, OFFLINE_SLAPD_2_4, Connection, Server
+from waldur_site_agent_ldap_client import LdapClient
+from waldur_site_agent_ldap_client.client import _extract_uid_from_dn
 
 from waldur_site_agent.backend.exceptions import BackendError
-from waldur_site_agent_ldap.client import LdapClient
 
 BASE_DN = "dc=example,dc=com"
 BIND_DN = "cn=admin,dc=example,dc=com"
@@ -164,3 +167,112 @@ class TestPosixSetters:
         create(client)
         client.set_group_gid("jsmith", 29999)
         assert client.get_group_gid("jsmith") == 29999
+
+
+class TestGroupDescriptions:
+    MARKER = "managed_by=waldur-site-agent;resource=deadbeef"
+
+    def test_missing_group_has_no_descriptions(self, client):
+        assert client.get_group_descriptions("absent") is None
+
+    def test_group_without_description_reads_empty(self, client):
+        client.ensure_group("proj", 30001, ["posixGroup", "top"])
+        assert client.get_group_descriptions("proj") == []
+
+    def test_add_keeps_existing_values_and_is_idempotent(self, client):
+        client.ensure_group(
+            "proj", 30001, ["posixGroup", "top"], extra_attributes={"description": "by hand"}
+        )
+        client.add_group_description("proj", self.MARKER)
+        client.add_group_description("proj", self.MARKER)
+        assert sorted(client.get_group_descriptions("proj")) == sorted(["by hand", self.MARKER])
+
+    def test_find_by_description_matches_only_marked_groups(self, client):
+        client.ensure_group("mine", 30001, ["posixGroup", "top"])
+        client.ensure_group("theirs", 30002, ["posixGroup", "top"])
+        client.add_group_description("mine", self.MARKER)
+        client.add_group_description("theirs", "managed_by=waldur-site-agent;resource=other")
+        assert client.find_groups_by_description(self.MARKER) == ["mine"]
+
+
+SETTINGS = {"uri": "ldap://mock", "bind_dn": BIND_DN, "bind_password": BIND_PASSWORD, "base_dn": BASE_DN}
+
+
+@pytest.fixture
+def gon_client():
+    return MockLdapClient({**SETTINGS, "project_group_object_classes": ["groupOfNames", "top"]})
+
+
+class TestGroupOfNames:
+    """Schema rules themselves are covered against a real directory in test_client_live."""
+
+    def test_is_created_without_gid_and_with_the_stand_in(self, gon_client):
+        assert gon_client.create_project_group("g") is None
+        assert gon_client.get_group_gid("g") is None
+        conn = gon_client._connect()
+        conn.search(gon_client._groups_dn, "(cn=g)", attributes=["member"])
+        assert conn.entries[0].entry_attributes_as_dict["member"] == [
+            f"cn=nobody,{BASE_DN}"
+        ]
+
+    def test_members_that_are_not_users_are_not_listed(self, gon_client):
+        gon_client.create_project_group("g")
+        gon_client.add_user_to_group("g", "alice", "member")
+        assert gon_client.list_group_members("g", "member") == ["alice"]
+
+    def test_stand_in_must_not_be_a_uid_dn(self):
+        with pytest.raises(BackendError, match="must not be a uid= DN"):
+            LdapClient({**SETTINGS, "empty_group_member_dn": f"uid=nobody,{BASE_DN}"})
+
+    def test_last_member_is_swapped_for_the_stand_in_in_one_modify(self):
+        client = LdapClient(SETTINGS)
+        conn = MagicMock()
+        conn.modify.side_effect = [False, True]
+        conn.result = {"description": "objectClassViolation"}
+
+        with patch.object(client, "_connect", return_value=conn):
+            client.remove_user_from_group("g", "alice", "member")
+
+        assert conn.modify.call_args.args[1] == {
+            "member": [
+                (MODIFY_ADD, [f"cn=nobody,{BASE_DN}"]),
+                (MODIFY_DELETE, [client._user_dn("alice")]),
+            ]
+        }
+
+    def test_other_removal_failures_still_raise(self):
+        client = LdapClient(SETTINGS)
+        conn = MagicMock()
+        conn.modify.return_value = False
+        conn.result = {"description": "insufficientAccessRights"}
+
+        with patch.object(client, "_connect", return_value=conn), pytest.raises(BackendError):
+            client.remove_user_from_group("g", "alice", "member")
+        assert conn.modify.call_count == 1
+
+
+class TestDnValues:
+    @pytest.mark.parametrize(
+        "username",
+        ["alice", "o'brien", "a,b", "a+b", "x=y", "back\\slash", " lead", "trail ", "#hash"],
+    )
+    def test_member_dn_reads_back_as_the_username(self, username):
+        client = LdapClient(SETTINGS)
+        assert _extract_uid_from_dn(client._user_dn(username)) == username
+
+    def test_hex_escapes_are_decoded(self):
+        assert _extract_uid_from_dn(f"uid=a\\2Cb,ou=People,{BASE_DN}") == "a,b"
+        assert _extract_uid_from_dn(f"uid=j\\C3\\BCrgen,ou=People,{BASE_DN}") == "jürgen"
+
+    def test_non_user_and_malformed_dns_are_not_users(self):
+        assert _extract_uid_from_dn(f"cn=nobody,{BASE_DN}") == ""
+        assert _extract_uid_from_dn("not a dn") == ""
+
+    def test_escaped_member_is_listed_by_username(self, gon_client):
+        gon_client.create_project_group("g")
+        gon_client.add_user_to_group("g", "a,b", "member")
+        assert gon_client.list_group_members("g", "member") == ["a,b"]
+
+    def test_create_project_group_writes_extra_attributes_in_the_add(self, client):
+        client.create_project_group("proj", extra_attributes={"description": "marker"})
+        assert client.get_group_descriptions("proj") == ["marker"]

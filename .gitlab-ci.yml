@@ -468,6 +468,8 @@ Run mypy (3.9):
     changes:
       - plugins/slurm/**/*
       - plugins/ldap/**/*
+      - plugins/ldap-client/**/*
+      - plugins/ldap-roles/**/*
       - plugins/azure/**/*
       - waldur_site_agent/**/*
       - ci/**/*
@@ -516,6 +518,8 @@ Run mypy (3.9):
     # Waldur-authoritative mode: two offerings of one provider against the same
     # directory, so the suite can prove they converge on a single entry.
     WALDUR_E2E_LDAP_INVERTED_CONFIG: ci/e2e-ci-config-ldap-inverted.yaml
+    # ldap-roles: LDAP groups from Resource and ResourceProject roles.
+    WALDUR_E2E_LDAP_ROLES_CONFIG: ci/e2e-ci-config-ldap-roles.yaml
     # Only this job needs the OpenLDAP container (compose profile "ldap").
     COMPOSE_PROFILES: ldap
   script:
@@ -537,14 +541,16 @@ Run mypy (3.9):
         sleep 2
       done
     # Policy suite (11 SLURM policy configurations), QoS-flow polling path,
-    # QoS-flow STOMP path (RESOURCE event -> agent -> emulator), LDAP suite.
+    # QoS-flow STOMP path (RESOURCE event -> agent -> emulator), LDAP suite,
+    # ldap-roles suite.
     - |
       source .venv/bin/activate
       $E2E_PYTEST --junitxml=e2e-report-policy-qos-ldap.xml \
         plugins/slurm/tests/e2e/test_e2e_policy.py \
         plugins/slurm/tests/e2e/test_e2e_qos_polling.py \
         plugins/slurm/tests/e2e/test_e2e_qos_stomp.py \
-        plugins/slurm/tests/e2e/test_e2e_ldap.py
+        plugins/slurm/tests/e2e/test_e2e_ldap.py \
+        plugins/ldap-roles/tests/e2e/test_e2e_ldap_roles.py
 
 "E2E: Azure":
   extends: .E2E base
