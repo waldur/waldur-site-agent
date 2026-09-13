@@ -15,9 +15,9 @@ from ldap3 import (
     Connection,
     Server,
 )
-from ldap3.core.exceptions import LDAPException
+from ldap3.core.exceptions import LDAPException, LDAPInvalidDnError
 from ldap3.utils.conv import escape_filter_chars
-from ldap3.utils.dn import escape_rdn
+from ldap3.utils.dn import escape_rdn, parse_dn
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.exceptions import BackendError
@@ -81,6 +81,18 @@ class LdapClient:
             ["posixGroup", "top"],
         )
         self.use_starttls = settings.get("use_starttls", False)
+        # groupOfNames requires at least one member. Such groups are created with
+        # this DN as a stand-in, and it takes the last real member's place on
+        # removal, so revoking access never needs an empty group. It is never
+        # read back as a user, which is why it must not be a uid= DN.
+        self.empty_group_member_dn = (
+            settings.get("empty_group_member_dn") or f"cn=nobody,{self.base_dn}"
+        )
+        if _extract_uid_from_dn(self.empty_group_member_dn):
+            raise BackendError(
+                f"empty_group_member_dn {self.empty_group_member_dn!r} must not be a "
+                "uid= DN: it would be read back as a group member"
+            )
 
     # Attributes every user search asks for. The reconciler diffs the POSIX
     # projection as well as the profile, so homeDirectory/loginShell/givenName/sn
@@ -284,9 +296,11 @@ class LdapClient:
                 search_scope=SUBTREE,
                 attributes=["gidNumber"],
             )
-            if conn.entries:
-                return int(conn.entries[0].gidNumber.value)
-            return None
+            if not conn.entries:
+                return None
+            # A plain groupOfNames has no gidNumber.
+            gid = _first(conn.entries[0].entry_attributes_as_dict.get("gidNumber"))
+            return int(gid) if gid is not None else None
         except LDAPException as e:
             raise BackendError(f"Failed to get GID for group {group_name}: {e}") from e
         finally:
@@ -569,29 +583,30 @@ class LdapClient:
     def _create_group_entry(
         self,
         group_name: str,
-        gid_number: int,
+        gid_number: Optional[int],
         object_classes: list[str],
         extra_attributes: Optional[dict] = None,
         member_dn: Optional[str] = None,
     ) -> None:
-        """Create a POSIX group entry."""
+        """Create a group entry; ``gid_number`` is None for a group without posixGroup."""
         conn = self._connect()
         try:
             group_dn = self._group_dn(group_name)
-            attributes = {
+            attributes: dict = {
                 "objectClass": object_classes,
                 "cn": group_name,
-                "gidNumber": gid_number,
             }
+            if gid_number is not None:
+                attributes["gidNumber"] = gid_number
             if extra_attributes:
                 attributes.update(extra_attributes)
             # groupOfNames requires at least one member attribute
-            if "groupOfNames" in object_classes and member_dn:
+            if member_dn and "groupofnames" in {c.lower() for c in object_classes}:
                 attributes["member"] = member_dn
             success = conn.add(group_dn, attributes=attributes)
             if not success:
                 raise BackendError(f"Failed to create LDAP group {group_name}: {conn.result}")
-            logger.info("Created LDAP group %s with GID %d", group_name, gid_number)
+            logger.info("Created LDAP group %s (GID %s)", group_name, gid_number)
         except LDAPException as e:
             raise BackendError(f"Failed to create LDAP group {group_name}: {e}") from e
         finally:
@@ -641,21 +656,29 @@ class LdapClient:
         finally:
             conn.unbind()
 
-    def create_project_group(self, group_name: str) -> int:
-        """Create a project POSIX group.
+    def create_project_group(
+        self, group_name: str, extra_attributes: Optional[dict] = None
+    ) -> Optional[int]:
+        """Create a project group with ``project_group_object_classes``.
 
-        Returns the allocated GID.
+        Returns the GID, or None when the classes carry no gidNumber (a plain
+        groupOfNames). A groupOfNames is created with ``empty_group_member_dn``
+        as its member, since it cannot exist without one. ``extra_attributes``
+        are written in the same add, so a group never exists without them.
         """
         if self.group_exists(group_name):
             gid = self.get_group_gid(group_name)
             logger.info("LDAP project group %s already exists with GID %s", group_name, gid)
-            return gid or 0
+            return gid
 
-        gid_number = self.get_next_gid()
+        classes = {c.lower() for c in self.project_group_object_classes}
+        gid_number = self.get_next_gid() if "posixgroup" in classes else None
         self._create_group_entry(
             group_name=group_name,
             gid_number=gid_number,
             object_classes=self.project_group_object_classes,
+            extra_attributes=extra_attributes,
+            member_dn=self.empty_group_member_dn,
         )
         return gid_number
 
@@ -722,12 +745,25 @@ class LdapClient:
                 group_dn,
                 {membership_type: [(MODIFY_DELETE, [value])]},
             )
-            if not success:
-                result_desc = conn.result.get("description", "")
-                if "noSuchAttribute" not in result_desc:
-                    raise BackendError(
-                        f"Failed to remove {username} from group {group_name}: {conn.result}"
-                    )
+            result_desc = "" if success else conn.result.get("description", "")
+            if membership_type == "member" and result_desc == "objectClassViolation":
+                # The last member of a groupOfNames, in a group that lacks the
+                # stand-in (created by hand, or before it existed). Swap the
+                # stand-in in within one modify, so the group is never empty.
+                success = conn.modify(
+                    group_dn,
+                    {
+                        "member": [
+                            (MODIFY_ADD, [self.empty_group_member_dn]),
+                            (MODIFY_DELETE, [value]),
+                        ]
+                    },
+                )
+                result_desc = "" if success else conn.result.get("description", "")
+            if not success and "noSuchAttribute" not in result_desc:
+                raise BackendError(
+                    f"Failed to remove {username} from group {group_name}: {conn.result}"
+                )
             logger.info("Removed user %s from LDAP group %s", username, group_name)
         except LDAPException as e:
             raise BackendError(f"Failed to remove {username} from group {group_name}: {e}") from e
@@ -763,8 +799,160 @@ class LdapClient:
         finally:
             conn.unbind()
 
+    def list_group_members(
+        self,
+        group_name: str,
+        membership_type: str = "memberUid",
+    ) -> list[str]:
+        """List the members of a group as a list of usernames.
+
+        For ``member`` (DN-based) groups, the leading ``uid=`` RDN is
+        extracted so the returned list is comparable to ``memberUid``
+        groups in the calling code. Members that are not ``uid=`` DNs —
+        ``empty_group_member_dn``, nested groups — are not users and are
+        left out, so callers never try to remove them.
+        """
+        conn = self._connect()
+        try:
+            attr = "member" if membership_type == "member" else "memberUid"
+            conn.search(
+                self._groups_dn,
+                f"(cn={escape_filter_chars(group_name)})",
+                search_scope=SUBTREE,
+                attributes=[attr],
+            )
+            if not conn.entries:
+                return []
+            raw = getattr(conn.entries[0], attr).value
+            if raw is None:
+                return []
+            values = raw if isinstance(raw, list) else [raw]
+            if membership_type == "member":
+                return [uid for uid in (_extract_uid_from_dn(v) for v in values if v) if uid]
+            return [str(v) for v in values if v]
+        except LDAPException as e:
+            raise BackendError(
+                f"Failed to list members of group {group_name}: {e}"
+            ) from e
+        finally:
+            conn.unbind()
+
+    # ---- Group ownership markers ----
+    #
+    # A directory is often shared between writers: this agent's plugins, other
+    # provisioning, administrators. Plugins that reconcile a group's full member
+    # list record which groups are theirs in ``description`` so they never strip
+    # the members of a group someone else created.
+
+    def get_group_descriptions(self, group_name: str) -> Optional[list[str]]:
+        """Return a group's description values, or None if the group does not exist."""
+        conn = self._connect()
+        try:
+            conn.search(
+                self._groups_dn,
+                f"(cn={escape_filter_chars(group_name)})",
+                search_scope=SUBTREE,
+                attributes=["description"],
+            )
+            if not conn.entries:
+                return None
+            values = conn.entries[0].entry_attributes_as_dict.get("description") or []
+            return [str(v) for v in values]
+        except LDAPException as e:
+            raise BackendError(f"Failed to read description of group {group_name}: {e}") from e
+        finally:
+            conn.unbind()
+
+    def add_group_description(self, group_name: str, value: str) -> None:
+        """Add a description value to a group, keeping the values it already holds.
+
+        Idempotent without relying on the server: not every directory rejects
+        a duplicate value with ``attributeOrValueExists``.
+        """
+        if value in (self.get_group_descriptions(group_name) or []):
+            return
+        conn = self._connect()
+        try:
+            success = conn.modify(
+                self._group_dn(group_name),
+                {"description": [(MODIFY_ADD, [value])]},
+            )
+            if not success and "attributeOrValueExists" not in conn.result.get("description", ""):
+                raise BackendError(
+                    f"Failed to add description to LDAP group {group_name}: {conn.result}"
+                )
+        except LDAPException as e:
+            raise BackendError(f"Failed to add description to group {group_name}: {e}") from e
+        finally:
+            conn.unbind()
+
+    def find_groups_by_description(self, value: str) -> list[str]:
+        """Names of the groups holding ``value`` among their description values."""
+        conn = self._connect()
+        try:
+            conn.search(
+                self._groups_dn,
+                f"(description={escape_filter_chars(value)})",
+                search_scope=SUBTREE,
+                attributes=["cn"],
+            )
+            names = []
+            for entry in conn.entries:
+                cn = _first(entry.entry_attributes_as_dict.get("cn"))
+                if cn:
+                    names.append(str(cn))
+            return sorted(names)
+        except LDAPException as e:
+            raise BackendError(f"Failed to search groups by description: {e}") from e
+        finally:
+            conn.unbind()
+
     @staticmethod
     def generate_random_password(length: int = 16) -> str:
         """Generate a random password for VPN access."""
         alphabet = string.ascii_letters + string.digits + string.punctuation
         return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _extract_uid_from_dn(dn: str) -> str:
+    r"""Extract the unescaped uid RDN value from a DN string.
+
+    Returns the empty string if the DN doesn't start with a uid RDN or
+    cannot be parsed. Used by list_group_members so the result of a
+    DN-based group lookup is comparable to a memberUid lookup — which
+    needs the value unescaped: ``_user_dn`` escapes usernames with
+    ``escape_rdn``, so ``a,b`` is stored as ``uid=a\,b``.
+    """
+    try:
+        components = parse_dn(dn)
+    except LDAPInvalidDnError:
+        return ""
+    if not components:
+        return ""
+    attribute, value, _ = components[0]
+    if attribute.strip().lower() != "uid":
+        return ""
+    return _unescape_dn_value(value)
+
+
+def _unescape_dn_value(value: str) -> str:
+    """Undo RFC 4514 escaping, which ldap3's parse_dn leaves in place.
+
+    A backslash is followed either by the escaped character or by two hex
+    digits of a UTF-8 byte; directories may return either form.
+    """
+    out = bytearray()
+    i = 0
+    while i < len(value):
+        if value[i] == "\\" and i + 1 < len(value):
+            pair = value[i + 1 : i + 3]
+            if len(pair) == 2 and all(c in string.hexdigits for c in pair):  # noqa: PLR2004
+                out.append(int(pair, 16))
+                i += 3
+            else:
+                out.extend(value[i + 1].encode())
+                i += 2
+            continue
+        out.extend(value[i].encode())
+        i += 1
+    return out.decode("utf-8", errors="replace")

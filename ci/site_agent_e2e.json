@@ -14,7 +14,8 @@
       "Policy downscaling and pausing at usage thresholds",
       "Policy grace ratio and carryover behaviour",
       "Policy raw usage reset across period types (month, quarter, total)",
-      "Membership-sync stale users: departed, rejoined, restricted and hand-added backend users, and service/course accounts"
+      "Membership-sync stale users: departed, rejoined, restricted and hand-added backend users, and service/course accounts",
+      "LDAP group memberships from Resource and ResourceProject roles (ldap-roles)"
     ]
   },
   "users": [
@@ -454,6 +455,21 @@
       "plugin_options": {
         "service_provider_can_create_offering_user": true
       }
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000008",
+      "name": "E2E LDAP Roles",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Offering for the ldap-roles E2E suite: LDAP group memberships from Resource and ResourceProject roles. The suite creates its offering roles, resource projects and grants itself, and reads back the per-grant sync statuses the agent reports.",
+      "plugin_options": {
+        "enable_resource_projects": true,
+        "enable_membership_sync_status": true
+      }
     }
   ],
   "offering_components": [
@@ -692,6 +708,15 @@
       "description": "Disk allocated on Azure",
       "billing_type": "limit",
       "measured_unit": "MB"
+    },
+    {
+      "uuid": "e2e10000000000000000000000000081",
+      "offering_uuid": "e2ef0000000000000000000000000008",
+      "type": "cpu",
+      "name": "CPU",
+      "description": "CPU time in k-Hours",
+      "billing_type": "limit",
+      "measured_unit": "k-Hours"
     }
   ],
   "plans": [
@@ -802,6 +827,13 @@
       "offering_uuid": "e2ef0000000000000000000000000201",
       "unit": "month",
       "description": "Plan for E2E Azure VM Standard"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000018",
+      "name": "E2E LDAP Roles Standard",
+      "offering_uuid": "e2ef0000000000000000000000000008",
+      "unit": "month",
+      "description": "Standard plan for the ldap-roles offering"
     }
   ],
   "plan_components": [
@@ -977,6 +1009,13 @@
       "plan_uuid": "e2e00000000000000000000000000201",
       "component_uuid": "e2e20000000000000000000000000203",
       "component_type": "disk",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000018",
+      "component_uuid": "e2e10000000000000000000000000081",
+      "component_type": "cpu",
       "price": "0.00",
       "amount": 0
     }

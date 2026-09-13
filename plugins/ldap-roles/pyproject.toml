@@ -1,13 +1,13 @@
 [project]
-name = "waldur-site-agent-ldap"
+name = "waldur-site-agent-ldap-roles"
 version = "1.0.8rc2"
-description = "LDAP plugin for Waldur Site Agent"
+description = "LDAP role-driven group membership sync plugin for Waldur Site Agent"
+readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9.2, <4"
 dependencies = [
     "waldur-site-agent>=1.0.8rc2",
     "waldur-site-agent-ldap-client>=1.0.8rc2",
-    "jinja2>=3.0.0,<4.0",
 ]
 
 [build-system]
@@ -18,13 +18,14 @@ build-backend = "hatchling.build"
 waldur-site-agent = { workspace = true }
 waldur-site-agent-ldap-client = { workspace = true }
 
-# Entry points for exporting username management backend
-[project.entry-points."waldur_site_agent.username_management_backends"]
-ldap = "waldur_site_agent_ldap.backend:LdapUsernameBackend"
+# Maps Waldur Resource and ResourceProject roles to LDAP group
+# memberships. Offerings opt in by setting backend_type or
+# membership_sync_backend to "ldap-roles".
+[project.entry-points."waldur_site_agent.backends"]
+ldap-roles = "waldur_site_agent_ldap_roles.backend:LdapRolesBackend"
 
-# Entry points for plugin-specific schema validation
 [project.entry-points."waldur_site_agent.backend_settings_schemas"]
-ldap = "waldur_site_agent_ldap.schemas:LdapBackendSettingsSchema"
+ldap-roles = "waldur_site_agent_ldap_roles.schemas:LdapRolesBackendSettingsSchema"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

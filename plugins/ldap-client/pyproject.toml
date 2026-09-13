@@ -1,0 +1,27 @@
+[project]
+name = "waldur-site-agent-ldap-client"
+version = "1.0.8rc2"
+description = "Shared LDAP client for Waldur Site Agent plugins"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9.2, <4"
+dependencies = [
+    "waldur-site-agent>=1.0.8rc2",
+    "ldap3>=2.9.0,<3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+]

@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ldap = ["waldur-site-agent-ldap>=0.9.8"]
+ldap = ["waldur-site-agent-ldap-client>=1.0.8rc2"]
 rest = ["httpx>=0.27"]
 
 [dependency-groups]
@@ -30,7 +30,7 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 waldur-site-agent = { workspace = true }
-waldur-site-agent-ldap = { workspace = true }
+waldur-site-agent-ldap-client = { workspace = true }
 
 [project.scripts]
 waldur_site_diagnose_slurm_account = "waldur_site_agent_slurm.diagnostic_cli:main"
