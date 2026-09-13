@@ -440,6 +440,20 @@
         "service_provider_can_create_offering_user": true,
         "offering_user_auto_deletion": true
       }
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000201",
+      "name": "E2E Azure VM",
+      "type": "Marketplace.Slurm",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "Azure virtual machine offering for E2E tests. The Azure SDK is faked; the order pipeline is real.",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true
+      }
     }
   ],
   "offering_components": [
@@ -651,6 +665,33 @@
       "description": "RAM usage in gb-Hours",
       "billing_type": "limit",
       "measured_unit": "gb-Hours"
+    },
+    {
+      "uuid": "e2e20000000000000000000000000201",
+      "offering_uuid": "e2ef0000000000000000000000000201",
+      "type": "cpu",
+      "name": "CPU Cores",
+      "description": "CPU Cores allocated on Azure",
+      "billing_type": "limit",
+      "measured_unit": "cores"
+    },
+    {
+      "uuid": "e2e20000000000000000000000000202",
+      "offering_uuid": "e2ef0000000000000000000000000201",
+      "type": "ram",
+      "name": "RAM",
+      "description": "RAM allocated on Azure",
+      "billing_type": "limit",
+      "measured_unit": "MB"
+    },
+    {
+      "uuid": "e2e20000000000000000000000000203",
+      "offering_uuid": "e2ef0000000000000000000000000201",
+      "type": "disk",
+      "name": "Disk",
+      "description": "Disk allocated on Azure",
+      "billing_type": "limit",
+      "measured_unit": "MB"
     }
   ],
   "plans": [
@@ -754,6 +795,13 @@
       "offering_uuid": "e2ef0000000000000000000000000007",
       "unit": "month",
       "description": "Standard plan for the membership-sync offering"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000201",
+      "name": "E2E Azure VM Standard",
+      "offering_uuid": "e2ef0000000000000000000000000201",
+      "unit": "month",
+      "description": "Plan for E2E Azure VM Standard"
     }
   ],
   "plan_components": [
@@ -908,6 +956,27 @@
       "plan_uuid": "e2e00000000000000000000000000017",
       "component_uuid": "e2e10000000000000000000000000072",
       "component_type": "ram",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000201",
+      "component_uuid": "e2e20000000000000000000000000201",
+      "component_type": "cpu",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000201",
+      "component_uuid": "e2e20000000000000000000000000202",
+      "component_type": "ram",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000201",
+      "component_uuid": "e2e20000000000000000000000000203",
+      "component_type": "disk",
       "price": "0.00",
       "amount": 0
     }

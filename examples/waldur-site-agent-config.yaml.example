@@ -311,3 +311,35 @@ offerings: # Settings for offerings
         measured_unit: 'EUR'
         accounting_type: limit
         label: Deposit (EUR)
+  - name: "Example Azure Offering"
+    waldur_api_url: "http://localhost:8081/api/"
+    waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
+    waldur_offering_uuid: ""
+    backend_type: "azure"
+    order_processing_backend: "azure"
+    reporting_backend: "azure"
+    backend_settings:
+      subscription_id: "" # Azure subscription the machines are created in
+      tenant_id: "" # Azure AD tenant of the service principal
+      client_id: "" # Service principal client ID
+      client_secret: "" # Service principal client secret
+      default_location: "westeurope"
+      default_size: "Standard_B1s"
+      default_image: "Canonical:0001-com-ubuntu-server-jammy:22_04-lts:latest"
+      # Without any range a machine accepts no SSH connections; the whole
+      # internet is deliberately not the default.
+      allowed_ssh_ranges:
+        - "203.0.113.0/24"
+    backend_components: # Allocation, not consumption: the shape the machine runs at
+      cpu:
+        measured_unit: 'Cores'
+        accounting_type: limit
+        label: CPU
+      ram:
+        measured_unit: 'MiB'
+        accounting_type: limit
+        label: RAM
+      disk:
+        measured_unit: 'MiB'
+        accounting_type: limit
+        label: Disk

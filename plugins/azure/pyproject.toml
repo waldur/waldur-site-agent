@@ -1,0 +1,42 @@
+[project]
+name = "waldur-site-agent-azure"
+version = "1.0.6rc17"
+description = "Azure virtual machines plugin for Waldur Site Agent"
+readme = "README.md"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9.2, <4"
+dependencies = [
+    "waldur-site-agent>=1.0.6rc17",
+    "azure-identity>=1.25.1,<2.0.0",
+    "azure-mgmt-compute>=37.1.0,<38.0.0",
+    "azure-mgmt-network>=30.1.0,<31.0.0",
+    "azure-mgmt-resource>=24.0.0,<25.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+
+# Entry points for exporting backends
+[project.entry-points."waldur_site_agent.backends"]
+azure = "waldur_site_agent_azure.backend:AzureBackend"
+
+# Entry points for plugin-specific schema validation
+[project.entry-points."waldur_site_agent.component_schemas"]
+azure = "waldur_site_agent_azure.schemas:AzureComponentSchema"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+azure = "waldur_site_agent_azure.schemas:AzureBackendSettingsSchema"
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**/*.py" = [
+  "S101",   # we can (and MUST!) use 'assert' in test files.
+  "ANN001", # annotations for fixtures are sometimes a pain for test files
+  "PLR2004", # magic values are OK in tests
+  "PT011",   # pytest.raises can be broad in tests
+  "S106",    # hardcoded passwords are OK in test fixtures
+  "ARG002",  # unused arguments from mock decorators are OK
+]
