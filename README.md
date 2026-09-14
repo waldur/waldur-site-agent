@@ -122,9 +122,10 @@ For contributors:
 ## Plugins
 
 <!-- BEGIN PLUGIN TABLE -->
-<!-- pyml disable-num-lines 21 line-length -->
+<!-- pyml disable-num-lines 22 line-length -->
 | Plugin | PyPI package | Description |
 | ------ | ------------ | ----------- |
+| [azure](plugins/azure/README.md) | [`waldur-site-agent-azure`](https://pypi.org/project/waldur-site-agent-azure/) | Azure virtual machines plugin |
 | [basic_username_management](plugins/basic_username_management/README.md) | [`waldur-site-agent-basic-username-management`](https://pypi.org/project/waldur-site-agent-basic-username-management/) | Basic username management plugin |
 | [ceph-s3](plugins/ceph-s3/README.md) | [`waldur-site-agent-ceph-s3`](https://pypi.org/project/waldur-site-agent-ceph-s3/) | Ceph S3 storage plugin (croit and RadosGW flavours) |
 | [cscs-dwdi](plugins/cscs-dwdi/README.md) | [`waldur-site-agent-cscs-dwdi`](https://pypi.org/project/waldur-site-agent-cscs-dwdi/) | CSCS-DWDI reporting plugin |
