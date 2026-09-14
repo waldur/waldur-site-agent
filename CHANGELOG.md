@@ -1,17 +1,22 @@
 # Changelog
 
-## 1.0.8-rc.2 - 2026-09-08
+## 1.0.8-rc.3 - 2026-09-14
 
-- **LDAP**: Take usernames and POSIX ids (uid/gid) from Waldur instead of reading them back from the directory, so Waldur is the source of truth for account identity (#17).
-- **LiteLLM**: Add Open WebUI integration, covering user provisioning and usage reporting alongside the existing LiteLLM client (#15).
-- **SLURM**: Move the account `DefaultQOS` along with the QoS swap so accounts are not left pointing at the old QoS after a swap (#16).
-- **Core**: Keep polling agents running when the Waldur backend refuses agent identity registration, with documentation for the new behaviour (waldur/waldur-mastermind#385).
-- **Core**: Keep the event-processing path working when the agent identity is unavailable (#24).
-- **Core**: Upgrade `waldur-api-client` to 8.1.3rc10.
-- **Release tooling**: Stop the release script from tagging when the changelog generation found no commits.
-- **CI/Build**: Pull Docker base images through the registry mirror and run both linter jobs with prek from the shared template (waldur/waldur-mastermind#343).
+- **LDAP Roles**: Add a new `ldap-roles` backend plugin, and move the LDAP client code shared with the `ldap` and SLURM plugins into a new `ldap-client` package.
+- **Azure**: Move the Azure plugin into the agent repository, with compute, network and resource clients, metering, naming and an E2E order test suite (#8).
+- **LiteLLM**: Add Open WebUI integration (#15).
+- **LDAP**: Take LDAP usernames and POSIX IDs from Waldur instead of reading them from the directory (#17).
+- **Core**: Add the `preserve_unmanaged_backend_users` option to keep SLURM users that the provider added outside Waldur.
+- **Core**: Stop membership sync from removing service and course accounts.
+- **Core**: Skip backend metadata writes during membership sync when nothing has changed.
+- **Core**: Keep polling agents running when identity registration is refused, and keep the event path working when the agent identity is unavailable (#24, waldur/waldur-mastermind#385).
+- **SLURM**: Move the account DefaultQOS along with the QoS swap, and require slurm-emulator 0.9.5 so the DefaultQOS swap test runs (#16).
+- **SLURM**: Add tests for QoS pausing and restore [HPCMP-477].
+- **Rancher KC CRD**: Fix four inaccuracies in the example config.
+- **Core**: Upgrade waldur-api-client to 8.1.3rc10.
+- **Release tooling**: Refuse to cut a release from a branch that is behind the remote, and stop tagging when the changelog found no commits.
 
-> 11 commits, 81 files changed (+5969/-285)
+> 20 commits, 136 files changed (+15526/-916 lines)
 
 ---
 
