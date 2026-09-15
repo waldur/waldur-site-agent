@@ -81,6 +81,9 @@ class HarborBackend(backends.BaseBackend):
         self.default_storage_quota_gb = harbor_settings.get(
             "default_storage_quota_gb", 10
         )
+        self.allocation_prefix = harbor_settings.get("allocation_prefix")
+        if not isinstance(self.allocation_prefix, str) or not self.allocation_prefix:
+            raise ValueError("allocation_prefix must be a non-empty string")
         self.oidc_group_prefix = harbor_settings.get("oidc_group_prefix", "waldur-")
         self.project_role_id = harbor_settings.get(
             "project_role_id", 2
@@ -156,6 +159,20 @@ class HarborBackend(backends.BaseBackend):
         """
         return list(self.backend_components.keys())
 
+    def _managed_backend_id(self, resource_backend_id: str) -> str:
+        if not isinstance(
+            resource_backend_id, str
+        ) or not resource_backend_id.startswith(self.allocation_prefix):
+            raise BackendError("backend_id_not_managed")
+        return resource_backend_id
+
+    def _resource_backend_id(self, waldur_resource: WaldurResource) -> str:
+        expected = self._get_resource_backend_id(waldur_resource.slug)
+        current = waldur_resource.backend_id.strip()
+        if current and current != expected:
+            raise BackendError("backend_id_mismatch")
+        return expected
+
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
@@ -174,19 +191,16 @@ class HarborBackend(backends.BaseBackend):
         # Create OIDC group for the Waldur project
         oidc_group_name = f"{self.oidc_group_prefix}{waldur_resource.project_slug}"
 
-        try:
-            if not isinstance(self.client, HarborClient):
-                raise HarborOIDCError("Client is not a HarborClient")
-            group_id = self.client.create_user_group(oidc_group_name)
-            if group_id:
-                logger.info(
-                    "OIDC group %s ready for Waldur project %s",
-                    oidc_group_name,
-                    waldur_resource.project_slug,
-                )
-        except HarborOIDCError as e:
-            logger.error("Failed to create OIDC group: %s", e)
-            # Continue anyway - group might already exist
+        if not isinstance(self.client, HarborClient):
+            raise HarborOIDCError("Client is not a HarborClient")
+        group_id = self.client.create_user_group(oidc_group_name)
+        if not group_id:
+            raise HarborOIDCError("harbor_oidc_group_unavailable")
+        logger.info(
+            "OIDC group %s ready for Waldur project %s",
+            oidc_group_name,
+            waldur_resource.project_slug,
+        )
 
     def create_resource(
         self,
@@ -209,36 +223,42 @@ class HarborBackend(backends.BaseBackend):
             "Creating Harbor project for Waldur resource %s", waldur_resource.uuid
         )
 
-        # Prepare OIDC group
-        self._pre_create_resource(waldur_resource, user_context)
+        try:
+            self._pre_create_resource(waldur_resource, user_context)
+        except HarborOIDCError as e:
+            raise BackendError("harbor_oidc_group_unavailable") from e
 
         # Generate Harbor project name from Waldur resource
-        harbor_project_name = self._get_resource_backend_id(waldur_resource.slug)
+        harbor_project_name = self._resource_backend_id(waldur_resource)
 
         # Calculate storage quota from Waldur limits
         storage_quota_gb = self._calculate_storage_quota(waldur_resource)
 
+        created = False
         try:
             # Create Harbor project
             if not isinstance(self.client, HarborClient):
                 raise HarborProjectError("Client is not a HarborClient")
             created = self.client.create_project(harbor_project_name, storage_quota_gb)
-            if created:
-                logger.info(
-                    "Created Harbor project %s with %dGB quota",
-                    harbor_project_name,
-                    storage_quota_gb,
-                )
+            if not created:
+                raise BackendError("harbor_project_name_conflict")
+            logger.info(
+                "Created Harbor project %s with %dGB quota",
+                harbor_project_name,
+                storage_quota_gb,
+            )
 
             # Assign OIDC group to the project
             oidc_group_name = f"{self.oidc_group_prefix}{waldur_resource.project_slug}"
             if not isinstance(self.client, HarborClient):
                 raise HarborOIDCError("Client is not a HarborClient")
-            self.client.assign_group_to_project(
+            assigned = self.client.assign_group_to_project(
                 oidc_group_name,
                 harbor_project_name,
                 self.project_role_id,
             )
+            if not assigned:
+                raise HarborOIDCError("harbor_oidc_group_assignment_failed")
             logger.info(
                 "Assigned OIDC group %s to Harbor project %s",
                 oidc_group_name,
@@ -246,6 +266,14 @@ class HarborBackend(backends.BaseBackend):
             )
 
         except (HarborProjectError, HarborOIDCError) as e:
+            if created:
+                try:
+                    self.client.delete_project(harbor_project_name)
+                except HarborProjectError:
+                    logger.exception(
+                        "Failed to remove new Harbor project %s after group assignment failure",
+                        harbor_project_name,
+                    )
             raise BackendError(f"Failed to create Harbor project: {e}") from e
 
         return structures.BackendResourceInfo(
@@ -269,6 +297,7 @@ class HarborBackend(backends.BaseBackend):
         if not resource_backend_id.strip():
             logger.warning("Empty backend_id for resource, skipping deletion")
             return
+        resource_backend_id = self._resource_backend_id(waldur_resource)
 
         try:
             if not isinstance(self.client, HarborClient):
@@ -292,6 +321,7 @@ class HarborBackend(backends.BaseBackend):
         Returns:
             BackendResourceInfo with project details or None if not found
         """
+        resource_backend_id = self._managed_backend_id(resource_backend_id)
         logger.info("Pulling Harbor project %s", resource_backend_id)
 
         if not isinstance(self.client, HarborClient):
@@ -331,6 +361,7 @@ class HarborBackend(backends.BaseBackend):
         usage_report = {}
 
         for project_name in resource_backend_ids:
+            self._managed_backend_id(project_name)
             try:
                 if not isinstance(self.client, HarborClient):
                     continue
@@ -404,6 +435,7 @@ class HarborBackend(backends.BaseBackend):
             resource_backend_id: Harbor project name
             limits: Dictionary with 'storage' key containing quota in GB
         """
+        resource_backend_id = self._managed_backend_id(resource_backend_id)
         storage_gb = limits.get("storage", self.default_storage_quota_gb)
 
         try:
@@ -425,6 +457,7 @@ class HarborBackend(backends.BaseBackend):
         Returns:
             Dictionary with 'storage' key containing quota in GB
         """
+        resource_backend_id = self._managed_backend_id(resource_backend_id)
         if not isinstance(self.client, HarborClient):
             return {}
         return self.client.get_resource_limits(resource_backend_id)
@@ -482,6 +515,7 @@ class HarborBackend(backends.BaseBackend):
         Returns:
             True if downscaled successfully
         """
+        resource_backend_id = self._managed_backend_id(resource_backend_id)
         try:
             # Set quota to 1 GB (minimum)
             if not isinstance(self.client, HarborClient):
@@ -519,6 +553,7 @@ class HarborBackend(backends.BaseBackend):
         Returns:
             True if restored successfully
         """
+        resource_backend_id = self._managed_backend_id(resource_backend_id)
         try:
             # Restore to default quota
             if not isinstance(self.client, HarborClient):
@@ -545,6 +580,7 @@ class HarborBackend(backends.BaseBackend):
         Returns:
             Dictionary with Harbor project metadata
         """
+        resource_backend_id = self._managed_backend_id(resource_backend_id)
         if not isinstance(self.client, HarborClient):
             return {}
         project = self.client.get_project(resource_backend_id)
