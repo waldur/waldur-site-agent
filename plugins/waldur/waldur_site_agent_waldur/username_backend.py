@@ -119,7 +119,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
             return
         try:
             waldur_a_client = AuthenticatedClient(
-                base_url=self.offering.waldur_api_url.rstrip("/api"),
+                base_url=self.offering.waldur_api_url.rstrip("/").removesuffix("/api"),
                 token=self.offering.waldur_api_token,
             )
             response = waldur_a_client.get_httpx_client().get(

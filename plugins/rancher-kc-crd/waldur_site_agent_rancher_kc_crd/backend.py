@@ -189,16 +189,6 @@ class RancherKcCrdBackend(backends.BaseBackend):
         api_token = backend_settings.get("waldur_api_token")
         self.waldur_client: Optional[AuthenticatedClient] = None
         if api_url and api_token:
-            # SDK paths already start with "/api/" (see e.g.
-            # waldur_api_client/api/marketplace_provider_resource_projects/
-            # marketplace_provider_resource_projects_list.py:41), so the
-            # base_url must be the host root without "/api". Users
-            # configure the canonical "https://host/api/" URL; strip the
-            # trailing "/api" precisely. (The core helper in
-            # waldur_site_agent/common/utils.py:206 uses .rstrip("/api")
-            # which strips the *character set* — same end result for
-            # normal hosts, but a footgun for a host ending in any of
-            # /, a, p, i.)
             self.waldur_client = AuthenticatedClient(
                 base_url=api_url.rstrip("/").removesuffix("/api"),
                 token=api_token,

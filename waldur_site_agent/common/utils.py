@@ -230,7 +230,7 @@ def get_client(
         Configured AuthenticatedClient instance ready for API calls
     """
     headers = {"User-Agent": agent_header} if agent_header else {}
-    url = api_url.rstrip("/api")
+    url = api_url.rstrip("/").removesuffix("/api")
 
     # Configure httpx args with proxy if specified
     httpx_args = {}
