@@ -84,6 +84,14 @@ modes above and have an operational process to handle them. An invalid value
 (e.g. a typo) raises an error at agent startup rather than silently falling back
 to `common`.
 
+Whatever the policy, the agent moves a default out of the way before it drops
+the association carrying it: slurmdbd refuses to remove a user's *default*
+association while the user keeps others (`as_mysql_remove_assocs`), so the
+default is re-pointed at one of the remaining accounts first. This applies both
+when a single user leaves a resource and when a whole account is terminated and
+all of its users are removed. When the association being dropped is the user's
+last one, the user record goes with it, as `sacctmgr remove user` does.
+
 ## QoS configuration
 
 QoS state is driven by the `paused` and `downscaled` flags set by Waldur Mastermind

@@ -31,6 +31,14 @@ stateDiagram-v2
     PENDING_ACCOUNT_LINKING --> PENDING_ADDITIONAL_VALIDATION : Cross-transition
     PENDING_ADDITIONAL_VALIDATION --> PENDING_ACCOUNT_LINKING : Cross-transition
     OK --> [*] : User ready for resource access
+
+    %% Teardown, once Waldur asks for the account to go
+    OK --> DELETION_REQUESTED : last project role revoked
+    DELETION_REQUESTED --> DELETING : set_deleting (the agent's claim)
+    DELETING --> DELETED : set_deleted (associations dropped, account released)
+    DELETING --> ERROR_DELETING : a removal or the release failed
+    ERROR_DELETING --> DELETING : retried on the next sweep
+    DELETING --> OK : restore (the member came back)
 ```
 
 ### State Descriptions
@@ -41,6 +49,11 @@ stateDiagram-v2
 - **PENDING_ACCOUNT_LINKING**: Manual intervention required to link user accounts
 - **PENDING_ADDITIONAL_VALIDATION**: Additional validation steps needed before proceeding
 - **ERROR_CREATING**: Backend failure during username generation; retried on next sync cycle
+- **DELETION_REQUESTED**: Waldur has asked for the account to be torn down
+- **DELETING**: the agent has claimed the request and is dropping associations and releasing the account
+- **DELETED**: nothing on the provider side refers to the account any more, so Waldur can release the
+  provider-wide identity behind it
+- **ERROR_DELETING**: a removal or the release failed; the next sweep retries and the account stays put
 
 ## Core Components
 
@@ -173,7 +186,10 @@ the associations:
   from a resource — on a revoked project role, or as stale users on a full sync.
   Only names that resolve to an offering user of the offering are passed on;
   service, course and robot accounts, and directory entries the agent never
-  managed, are not. Failures here are logged and never abort the cycle.
+  managed, are not. A failed removal holds the release back: on a revoked role
+  the account is left alone and the periodic sweep retries, so an entry is
+  never parked or deleted while its association is still live. Failures of the
+  release itself are logged and do not abort the cycle.
 - **As part of the deletion flow** for every offering user Waldur has moved into
   `Requested deletion`, `Deleting` or `Error deleting`. `teardown_offering_user`
   in `common/processors.py` runs, in this order:
@@ -225,6 +241,14 @@ run on their own thread), so plugin overrides of `pull_resource` and
 `_pull_backend_resource` keep their signatures and are called exactly as before;
 only the default `_pull_backend_resource` honours it, and a backend instance
 reached from several threads never sees another thread's flag.
+
+The teardown asks for that same pull with `strict=True`. It decides by
+*absence* — a resource missing from the report means "the user holds no
+association there" — so a resource that could not be pulled must not be
+dropped quietly. With the flag the pull raises instead, and the sweep waits for
+the next cycle rather than acknowledging a deletion whose associations may
+still exist. Every other caller keeps the old behaviour, where a resource that
+fails to pull is logged and skipped.
 
 #### Plugin Registration
 
