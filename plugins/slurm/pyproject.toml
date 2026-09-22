@@ -18,8 +18,10 @@ rest = ["httpx>=0.27"]
 dev = [
     # >=0.8.0 folds account names to lower case like real Slurm, which the
     # account case-insensitivity integration tests depend on to reproduce
-    # the mixed-case mismatch.
-    "slurm-emulator>=0.9.5",
+    # the mixed-case mismatch. >=0.9.7 applies `sacctmgr modify user ... set
+    # DefaultAccount=` and honours `where` filters, which the E2E test that
+    # moves a user's default account before leaving it relies on.
+    "slurm-emulator>=0.9.7",
     "pytest>=7.1.0",
     "httpx>=0.27",
 ]

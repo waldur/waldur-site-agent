@@ -69,10 +69,14 @@ user's jobs charge when they submit without an explicit `-A`/`--account`.
   Keeps users off the org-wide root by default, **but** when that resource is
   terminated and its account deleted, the user's `DefaultAccount` dangles and
   SLURM rejects their job submissions until an operator repairs it.
-- **`none`** — `DefaultAccount=` omitted entirely; sacctmgr auto-assigns for new
-  users. Relies on the deployment's sacctmgr auto-assignment for brand-new users;
-  for an existing user whose prior default account was deleted, the stale default
-  is left unchanged (they may be unable to submit until repaired).
+- **`none`** — the agent does not manage the default: `DefaultAccount=` is
+  omitted entirely and slurmdbd's own rule applies. That rule makes a brand-new
+  user's **first association their default** (`as_mysql_assoc.c`), so with this
+  policy a new user's default is whichever resource the agent happened to add
+  first — an empty `DefaultAccount` is not a reachable state once any
+  association exists. For an existing user whose prior default account was
+  deleted, the stale default is left unchanged (they may be unable to submit
+  until repaired).
 
 `common` is the safe default and is what most deployments should use. Only switch
 to `individual` or `none` if you understand the dangling-`DefaultAccount` failure

@@ -327,14 +327,26 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
 class TestRunPeriodicOfferingUserReconciliation(unittest.TestCase):
     """Tests for run_periodic_offering_user_reconciliation function."""
 
-    def test_skips_offering_without_membership_sync_backend(self):
-        """Offerings without membership_sync_backend are skipped."""
+    @mock.patch("waldur_site_agent.event_processing.utils.common_utils.update_offering_users")
+    @mock.patch(
+        "waldur_site_agent.event_processing.utils.marketplace_offering_users_list"
+    )
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    def test_skips_username_retry_without_membership_sync_backend(
+        self, mock_get_client, mock_ou_list, mock_update
+    ):
+        """No usernames to mint without a membership backend; the deletion sweep still runs."""
         offering = _make_offering(stomp_enabled=True)
-        with mock.patch(
-            "waldur_site_agent.event_processing.utils.get_client_for_offering"
-        ) as mock_get_client:
-            utils.run_periodic_offering_user_reconciliation([offering], "agent")
-            mock_get_client.assert_not_called()
+        mock_ou_list.sync_all.return_value = []
+        utils.run_periodic_offering_user_reconciliation([offering], "agent")
+        mock_update.assert_not_called()
+        # Two list requests, both the sweep's: the profile-sync listing and the
+        # departed-states listing. Neither is the stuck-user retry.
+        self.assertEqual(mock_ou_list.sync_all.call_count, 2)
+        states = [c.kwargs.get("state") for c in mock_ou_list.sync_all.call_args_list]
+        self.assertNotIn(OfferingUserState.REQUESTED, states[0] or [])
+        self.assertIn(OfferingUserState.REQUESTED_DELETION, states[1])
+        mock_get_client.assert_called_once()
 
     @mock.patch("waldur_site_agent.event_processing.utils.common_utils.update_offering_users")
     @mock.patch(
@@ -347,14 +359,16 @@ class TestRunPeriodicOfferingUserReconciliation(unittest.TestCase):
         """Reconciliation fetches stuck offering users and calls update_offering_users."""
         offering = _make_offering(membership_sync_backend="slurm")
         stuck_user = mock.Mock()
-        mock_ou_list.sync_all.return_value = [stuck_user]
+        # The stuck-user retry gets the stuck user; the sweep's two listings get nothing.
+        mock_ou_list.sync_all.side_effect = [[stuck_user], [], []]
         mock_update.return_value = True
 
         utils.run_periodic_offering_user_reconciliation([offering], "agent")
 
-        mock_get_client.assert_called_once()
-        mock_ou_list.sync_all.assert_called_once()
-        call_kwargs = mock_ou_list.sync_all.call_args.kwargs
+        # The stuck-user retry, then the sweep's profile-sync and departed listings.
+        self.assertEqual(mock_get_client.call_count, 2)
+        self.assertEqual(mock_ou_list.sync_all.call_count, 3)
+        call_kwargs = mock_ou_list.sync_all.call_args_list[0].kwargs
         self.assertEqual(
             set(call_kwargs["state"]),
             {
@@ -401,7 +415,7 @@ class TestRunPeriodicOfferingUserReconciliation(unittest.TestCase):
             "waldur_site_agent.event_processing.utils.logger"
         ) as mock_logger:
             utils.run_periodic_offering_user_reconciliation([offering], "agent")
-            mock_logger.exception.assert_called_with(
+            mock_logger.exception.assert_any_call(
                 "Offering user reconciliation failed for %s", offering.name
             )
 

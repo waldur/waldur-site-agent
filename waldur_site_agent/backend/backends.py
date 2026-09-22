@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from enum import Enum
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING, ClassVar, Optional
 
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.offering_user import OfferingUser
+from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.order_details import OrderDetails
 from waldur_api_client.models.project import Project
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -26,6 +28,20 @@ from waldur_site_agent.backend.exceptions import (
 )
 
 UNKNOWN_BACKEND_TYPE = "unknown"
+
+# Per-thread state for the pull in progress. pull_resources sets include_usage
+# here for the duration of one call and the default _pull_backend_resource reads
+# it, so the flag never has to travel through pull_resource /
+# _pull_backend_resource -- whose many plugin overrides keep their signatures.
+# Thread-local rather than instance state: a STOMP subscription runs on its own
+# thread and a thread is synchronous through one pull, so a backend instance
+# reached from two threads can never see the other's flag.
+_PULL_STATE = threading.local()
+
+
+def _pull_include_usage() -> bool:
+    """Whether the pull running on this thread wants the usage report (True outside one)."""
+    return bool(getattr(_PULL_STATE, "include_usage", True))
 
 
 class PendingOrderDecision(Enum):
@@ -514,18 +530,46 @@ class BaseBackend(ABC):
         """
 
     def pull_resources(
-        self, waldur_resources: list[WaldurResource]
+        self,
+        waldur_resources: list[WaldurResource],
+        include_usage: bool = True,
+        strict: bool = False,
     ) -> dict[str, tuple[WaldurResource, structures.BackendResourceInfo]]:
-        """Pull data of resources available in the backend."""
+        """Pull data of resources available in the backend.
+
+        ``include_usage=False`` skips the usage report: membership sync never
+        reads it, and a failing report (an accounting query the execution mode
+        cannot serve, a slow slurmdbd) used to drop the resource from the report
+        and silently skip the membership change. The flag is thread-local for
+        the duration of this call (see ``_PULL_STATE``) rather than threaded
+        through ``pull_resource`` / ``_pull_backend_resource``, so the many
+        plugin overrides of those two keep their signatures and their own
+        behaviour; only the default ``_pull_backend_resource`` honours it.
+
+        ``strict=True`` raises instead of dropping a resource that could not be
+        pulled. A caller that decides something by *absence* -- the teardown
+        reads "not in the report" as "the user has no association there" --
+        cannot tell a failed pull from an empty one, and would acknowledge a
+        deletion while the association is still live. Such callers ask for the
+        whole report or none of it, and retry on the next cycle.
+        """
         report = {}
-        for waldur_resource in waldur_resources:
-            backend_id = waldur_resource.backend_id
-            try:
-                backend_resource_info = self.pull_resource(waldur_resource)
-                if backend_resource_info is not None:
-                    report[backend_id] = (waldur_resource, backend_resource_info)
-            except Exception as e:
-                logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
+        previous = _pull_include_usage()
+        _PULL_STATE.include_usage = include_usage
+        try:
+            for waldur_resource in waldur_resources:
+                backend_id = waldur_resource.backend_id
+                try:
+                    backend_resource_info = self.pull_resource(waldur_resource)
+                    if backend_resource_info is not None:
+                        report[backend_id] = (waldur_resource, backend_resource_info)
+                except Exception as e:
+                    if strict:
+                        msg = f"Unable to pull resource {backend_id}: {e}"
+                        raise BackendError(msg) from e
+                    logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
+        finally:
+            _PULL_STATE.include_usage = previous
         return report
 
     def get_membership_sync_report(
@@ -597,7 +641,11 @@ class BaseBackend(ABC):
     def _pull_backend_resource(
         self, resource_backend_id: str
     ) -> Optional[structures.BackendResourceInfo]:
-        """Pull resource data from the backend."""
+        """Pull resource data from the backend.
+
+        The usage report is skipped while ``pull_resources(..., include_usage=False)``
+        is running; see there.
+        """
         logger.info("Pulling resource %s", resource_backend_id)
         resource_backend_info = self.client.get_resource(resource_backend_id)
 
@@ -607,7 +655,7 @@ class BaseBackend(ABC):
 
         users = self.client.list_resource_users(resource_backend_id)
 
-        report = self._get_usage_report([resource_backend_id])
+        report = self._get_usage_report([resource_backend_id]) if _pull_include_usage() else {}
         usage = report.get(resource_backend_id)
 
         if usage is None:
@@ -1046,7 +1094,15 @@ class BaseBackend(ABC):
         del resource_backend_id, username
 
     def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
-        """Delete association between user and backend resource if it exists."""
+        """Delete association between user and backend resource if it exists.
+
+        Contract for overrides: return True when an association was removed and
+        False when there was nothing to remove (no association, user unknown to
+        the backend, nothing to re-sync). A removal that was attempted and
+        failed must **raise** BackendError -- callers treat False as benign, so
+        a failure folded into it would let core acknowledge a deletion while the
+        association still exists.
+        """
         del kwargs  # Used by subclass overrides (e.g. WaldurBackend for role_name)
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
@@ -1055,14 +1111,18 @@ class BaseBackend(ABC):
 
         logger.info("Removing user %s from resource %s", username, resource_backend_id)
 
-        if self.client.get_association(username, resource_backend_id):
-            logger.info("Deleting association between %s and %s", username, resource_backend_id)
-            try:
-                self._pre_delete_user_actions(resource_backend_id, username)
-                self.client.delete_association(username, resource_backend_id)
-            except BackendError as err:
-                logger.exception("Unable to delete association in the backend: %s", err)
-                return False
+        if not self.client.get_association(username, resource_backend_id):
+            return False
+        logger.info("Deleting association between %s and %s", username, resource_backend_id)
+        try:
+            self._pre_delete_user_actions(resource_backend_id, username)
+            self.client.delete_association(username, resource_backend_id)
+        except BackendError as err:
+            msg = (
+                f"Unable to delete association between {username} and "
+                f"{resource_backend_id}: {err}"
+            )
+            raise BackendError(msg) from err
         return True
 
     def update_user_attributes(self, username: str, attributes: dict) -> None:
@@ -1231,9 +1291,13 @@ class UnknownBackend(BaseBackend):
         """Placeholder."""
 
     def pull_resources(
-        self, _: list[WaldurResource]
+        self,
+        _: list[WaldurResource],
+        include_usage: bool = True,
+        strict: bool = False,
     ) -> dict[str, tuple[WaldurResource, structures.BackendResourceInfo]]:
         """Placeholder."""
+        del include_usage, strict
         return {}
 
     def delete_resource(
@@ -1293,6 +1357,30 @@ class UnknownBackend(BaseBackend):
 
     def _get_usage_report(self, _: list[str]) -> dict:
         return {}
+
+
+#: States in which Waldur is asking the provider to tear an account down. An
+#: offering user lands here when the person leaves their last project on the
+#: offering (with ``offering_user_auto_deletion`` on) or when deletion is
+#: requested by hand; DELETED itself is the provider's acknowledgement.
+DEPARTED_OFFERING_USER_STATES: tuple[OfferingUserState, ...] = (
+    OfferingUserState.REQUESTED_DELETION,
+    OfferingUserState.DELETING,
+    OfferingUserState.ERROR_DELETING,
+)
+
+#: States in which an offering user still holds, or is about to hold, an
+#: account: everything but the deletion states and DELETED. Mirrors the list
+#: Waldur itself uses to decide whether a provider-wide account is still read
+#: through by anything.
+LIVE_OFFERING_USER_STATES: tuple[OfferingUserState, ...] = (
+    OfferingUserState.OK,
+    OfferingUserState.REQUESTED,
+    OfferingUserState.CREATING,
+    OfferingUserState.ERROR_CREATING,
+    OfferingUserState.PENDING_ACCOUNT_LINKING,
+    OfferingUserState.PENDING_ADDITIONAL_VALIDATION,
+)
 
 
 class AbstractUsernameManagementBackend(ABC):
@@ -1372,6 +1460,27 @@ class AbstractUsernameManagementBackend(ABC):
         external systems. Default: no-op.
         """
         del usernames
+
+    def release_users(
+        self,
+        offering_users: list[OfferingUser],
+        waldur_rest_client: AuthenticatedClient,
+    ) -> None:
+        """Release the accounts behind offering users whose access has ended.
+
+        Core calls this in two situations, always *after* the resource backend
+        has dropped the users' associations: for the offering users whose
+        usernames it just removed from a resource, and on every membership cycle
+        for the offering users Waldur has moved into a deletion state
+        (requested deletion, deleting, error deleting).
+
+        Neither call means the person is gone from the *system*: they may still
+        hold another project on this offering, or an account on a sibling
+        offering that shares the same directory. The backend owns that decision
+        and is handed the client so it can ask Waldur. Default: no-op, and core
+        skips the Waldur round-trips entirely for backends that leave it so.
+        """
+        del offering_users, waldur_rest_client
 
 
 class UnknownUsernameManagementBackend(AbstractUsernameManagementBackend):

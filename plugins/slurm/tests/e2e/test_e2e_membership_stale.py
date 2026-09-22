@@ -38,6 +38,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import time
@@ -47,7 +48,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from unittest import mock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from waldur_api_client.api.marketplace_orders import marketplace_orders_retrieve
@@ -230,6 +231,21 @@ def _offering_user_state(waldur_client, offering_uuid: str, user_uuid: str) -> s
     return rows[0]["state"]
 
 
+def _confirm_offering_user(waldur_client, offering_uuid: str, user_uuid: str, username: str) -> None:
+    """Act as the provider: the re-requested account keeps its username and is confirmed."""
+    response = waldur_client.get_httpx_client().get(
+        "/api/marketplace-offering-users/",
+        params={"offering_uuid": offering_uuid, "user_uuid": user_uuid},
+    )
+    response.raise_for_status()
+    (row,) = response.json()
+    assert row["username"] == username, f"Rejoin must keep the username, got {row['username']}"
+    confirm = waldur_client.get_httpx_client().post(
+        f"/api/marketplace-offering-users/{row['uuid']}/set_ok/"
+    )
+    assert confirm.status_code == 200, f"set_ok failed: {confirm.status_code} {confirm.text}"
+
+
 def _wait_offering_user_state(
     waldur_client, offering_uuid: str, user_uuid: str, states: set[str]
 ) -> str:
@@ -364,12 +380,26 @@ class TestMembershipStaleUsers:
     def test_09_rejoined_member_is_restored(
         self, offering, waldur_client, slurm_backend, membership_resource
     ):
-        """Rejoining reuses the offering user and its username."""
+        """Rejoining reuses the offering user and its username.
+
+        The sync in test_08 acknowledged Waldur's deletion request, so the
+        offering user is Deleted and a rejoin asks for a *new* account
+        (Requested) on the same record -- the username is kept. This offering
+        cannot mint usernames (no service_provider_can_create_offering_user), so
+        the test plays the provider and confirms the account; had the deletion
+        not been acknowledged, Waldur would have restored it to OK directly, and
+        that path is accepted too.
+        """
         backend_id = membership_resource["backend_id"]
         _set_project_member(waldur_client, LEAVING_USER_UUID, member=True)
-        _wait_offering_user_state(
-            waldur_client, offering.uuid, LEAVING_USER_UUID, {OfferingUserState.OK.value}
+        state = _wait_offering_user_state(
+            waldur_client,
+            offering.uuid,
+            LEAVING_USER_UUID,
+            {OfferingUserState.OK.value, OfferingUserState.REQUESTED.value},
         )
+        if state == OfferingUserState.REQUESTED.value:
+            _confirm_offering_user(waldur_client, offering.uuid, LEAVING_USER_UUID, LEAVING_MEMBER)
 
         removed = _membership_sync(offering, waldur_client, slurm_backend, preserve=True)
 
@@ -391,6 +421,42 @@ class TestMembershipStaleUsers:
             SERVICE_ACCOUNT_OK,
             COURSE_ACCOUNT,
         }
+
+    def test_12_leaving_the_default_account_keeps_the_other_association(
+        self, slurm_backend, membership_resource
+    ):
+        """slurmdbd parity: dropping a user's default association re-points the default.
+
+        A user in two accounts leaves the one that is their default. Real
+        slurmdbd (and the emulator since 0.9.6) refuses that removal unless the
+        default moves first; the client does so and the other association
+        survives. Leaving the last account removes the user with it.
+        """
+        backend_id = membership_resource["backend_id"]
+        client = slurm_backend.client
+        user = "e2e-twoacc"
+        other = "e2e_twoacc_other"
+        client.create_resource(other, "second account", "e2e")
+        try:
+            client.create_association(user, backend_id, default_account=backend_id)
+            client.create_association(user, other)
+            assert client.get_user_default_account(user) == backend_id
+
+            resource = WaldurResource(uuid=uuid4(), backend_id=backend_id, name="membership")
+            assert slurm_backend.remove_user(resource, user) is True
+
+            assert client.get_association(user, backend_id) is None
+            assert client.get_association(user, other) is not None, "the other association survives"
+            assert client.get_user_default_account(user) == other
+
+            assert slurm_backend.remove_user(
+                WaldurResource(uuid=uuid4(), backend_id=other, name="other"), user
+            ) is True
+            assert client.get_association(user, other) is None
+            assert client.get_user_default_account(user) is None, "last association takes the user"
+        finally:
+            with contextlib.suppress(Exception):
+                client.delete_resource(other)
 
     @pytest.mark.xfail(
         strict=True,

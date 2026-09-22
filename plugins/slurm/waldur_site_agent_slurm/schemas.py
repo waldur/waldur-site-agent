@@ -242,8 +242,11 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
             "  common     — use the configured default_account (current behaviour).\n"
             "  individual — use the resource account itself; avoids implicit\n"
             "               associations with the org-level root account.\n"
-            "  none       — omit DefaultAccount= entirely; sacctmgr auto-assigns\n"
-            "               it for new users, existing users' default is unchanged."
+            "  none       — the agent does not manage the default: DefaultAccount= is\n"
+            "               omitted and slurmdbd's own rule applies, which makes a new\n"
+            "               user's first association their default and leaves an\n"
+            "               existing user's default unchanged. An empty DefaultAccount\n"
+            "               is not a reachable state once any association exists."
         ),
     )
     customer_prefix: str = Field(..., description="Prefix for customer account names")

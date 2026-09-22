@@ -2046,7 +2046,7 @@ wheels = [
 
 [[package]]
 name = "slurm-emulator"
-version = "0.9.5"
+version = "0.9.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -2061,9 +2061,9 @@ dependencies = [
     { name = "uvicorn", version = "0.39.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "uvicorn", version = "0.40.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/1a/2977c5d4ad1675f476417c028c93278152a9172716a59892408250b07054/slurm_emulator-0.9.5.tar.gz", hash = "sha256:e1d52ea24174b80187ba0e69c35c4a44b49a7b74af2170ae10bc3a23af7435e6", size = 191706, upload-time = "2026-09-03T11:09:42.757Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/11/fa56275b7d9e32615ea4725d7b2b2c4b862997daf71a0beb8821dd8a1e0f/slurm_emulator-0.9.7.tar.gz", hash = "sha256:29f17e71209602dde47f10b812512c99dd932bef235acdd9ff6bcd4c3aea7e5e", size = 208004, upload-time = "2026-09-14T18:32:45.05Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5e/35/e6fa14f5cbd7a6aa6035e8e62871e9b198cb8ff852570d6270d61a3fbc22/slurm_emulator-0.9.5-py3-none-any.whl", hash = "sha256:b05aebe4951f25f4f6fe0e15e89f4208e02ee8bc25750c3006f40dbe2fc8f7b7", size = 210176, upload-time = "2026-09-03T11:09:41.189Z" },
+    { url = "https://files.pythonhosted.org/packages/79/e2/2138be3ebd0f1d0a7c509b9f3b10e90ba3e6b5c87da40fcbca3a69dfa9a6/slurm_emulator-0.9.7-py3-none-any.whl", hash = "sha256:67969a85611411add25cd3ed62cdab776f7c4f779400785139fdfb31e3300e75", size = 225663, upload-time = "2026-09-14T18:32:43.412Z" },
 ]
 
 [[package]]
@@ -2701,7 +2701,7 @@ provides-extras = ["ldap", "rest"]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=7.1.0" },
-    { name = "slurm-emulator", specifier = ">=0.9.5" },
+    { name = "slurm-emulator", specifier = ">=0.9.7" },
 ]
 
 [[package]]

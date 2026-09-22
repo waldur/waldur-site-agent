@@ -201,7 +201,80 @@ class TestCommandPrefixByMethod:
         """delete_association uses sacctmgr with all standard flags."""
         c, _ = client
         c.delete_association("user1", "acct1")
-        assert self._get_command(c).startswith("sacctmgr --parsable2 --noheader --immediate")
+        # The user's associations are listed first; the removal is the last command.
+        assert self._get_command(c, -1).startswith("sacctmgr --parsable2 --noheader --immediate")
+        assert "remove user where name=user1 and account=acct1" in self._get_command(c, -1)
+
+    def test_delete_default_association_repoints_the_default_first(self, client):
+        """slurmdbd refuses to drop a default association while others remain."""
+        c, mock_exec = client
+        # The listing ignores `where` and carries other users; names come back folded.
+        mock_exec.side_effect = [
+            "root|root\nuser1|acct1\nuser1|acct2\nother|acct9\n",
+            "root|root\nuser1|acct1\n",
+            "",
+            "",
+        ]
+        c.delete_association("user1", "Acct1")
+        commands = c.executed_commands
+        assert "modify user where name=user1 set DefaultAccount=acct2" in commands[-2]
+        assert "remove user where name=user1 and account=Acct1" in commands[-1]
+
+    def test_delete_all_users_repoints_a_default_account_first(self, client):
+        """The whole-account teardown hits the same slurmdbd restriction."""
+        c, mock_exec = client
+        mock_exec.side_effect = [
+            # list_resource_users(acc1): the account row plus one user row.
+            "acc1|\nacc1|user1\n",
+            # get_user_default_account(user1)
+            "user1|acc1\n",
+            # list_user_accounts(user1): it holds another account as well.
+            "user1|acc1\nuser1|acc2\n",
+            # set_user_default_account(user1, acc2)
+            "",
+            # the bulk removal
+            "",
+        ]
+        c.delete_all_users_from_account("acc1")
+        commands = c.executed_commands
+        assert "modify user where name=user1 set DefaultAccount=acc2" in commands[-2]
+        assert "remove user where account=acc1" in commands[-1]
+
+    def test_delete_all_users_leaves_an_unrelated_default_alone(self, client):
+        c, mock_exec = client
+        mock_exec.side_effect = [
+            "acc1|\nacc1|user1\n",
+            # user1 defaults to another account, so nothing is re-pointed.
+            "user1|acc2\n",
+            "",
+        ]
+        c.delete_all_users_from_account("acc1")
+        assert not any("DefaultAccount=" in cmd for cmd in c.executed_commands)
+        assert "remove user where account=acc1" in c.executed_commands[-1]
+
+    def test_delete_non_default_association_leaves_the_default_alone(self, client):
+        c, mock_exec = client
+        mock_exec.side_effect = ["user1|acct1\nuser1|acct2\n", "user1|acct1\n", ""]
+        c.delete_association("user1", "acct2")
+        assert not any("DefaultAccount=" in cmd for cmd in c.executed_commands)
+        assert "remove user where name=user1 and account=acct2" in c.executed_commands[-1]
+
+    def test_get_user_default_account_matches_the_row_by_name(self, client):
+        """A listing seeded with other users (root first) must not hand back theirs."""
+        c, mock_exec = client
+        mock_exec.return_value = "root|root\nalice|acct9\nuser1|acct2\n"
+        assert c.get_user_default_account("user1") == "acct2"
+        assert c.get_user_default_account("nobody") is None
+        mock_exec.return_value = "user1|\n"
+        assert c.get_user_default_account("user1") is None
+
+    def test_delete_last_association_removes_the_user(self, client):
+        c, mock_exec = client
+        # Another user's rows in the listing must not count as "remaining".
+        mock_exec.side_effect = ["root|root\nuser1|acct1\nother|acct2\n", ""]
+        c.delete_association("user1", "acct1")
+        assert c.executed_commands[-1].endswith("remove user where name=user1")
+        assert not any("account=acct1" in cmd and "remove" in cmd for cmd in c.executed_commands)
 
     def test_list_resource_users(self, client):
         """list_resource_users uses sacctmgr with all standard flags."""
@@ -356,6 +429,22 @@ class TestCommandPrefixByMethod:
         assert "--noheader" not in cmd
         assert "--immediate" not in cmd
 
+    def test_check_user_exists_unknown_user_is_false(self, client):
+        from waldur_site_agent.backend.exceptions import BackendError
+
+        c, mock_exec = client
+        mock_exec.side_effect = BackendError("id: 'ghost': no such user")
+        assert c.check_user_exists("ghost") is False
+
+    def test_check_user_exists_missing_id_binary_is_a_clean_error(self, client):
+        """A host without ``id`` used to crash with UnboundLocalError; now a BackendError."""
+        from waldur_site_agent.backend.exceptions import BackendError
+
+        c, mock_exec = client
+        mock_exec.side_effect = BackendError("Command not found: ['/usr/bin/id', '-u', 'user1']")
+        with pytest.raises(BackendError, match="Cannot check whether user user1 exists"):
+            c.check_user_exists("user1")
+
 
 class TestModifyNothingChanged:
     """sacctmgr returns exit-code 1 with 'Nothing modified' when a modify
@@ -438,7 +527,7 @@ class TestClusterFiltering:
 
     def test_delete_association_includes_cluster(self, client_with_cluster):
         client_with_cluster.delete_association("user1", "acct1")
-        assert "cluster=mycluster" in client_with_cluster.executed_commands[0]
+        assert "cluster=mycluster" in client_with_cluster.executed_commands[-1]
 
     def test_show_association_includes_cluster(self, client_with_cluster):
         client_with_cluster.account_has_users("acct1")

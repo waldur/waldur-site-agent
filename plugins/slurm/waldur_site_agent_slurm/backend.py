@@ -863,12 +863,17 @@ class SlurmBackend(backends.BaseBackend):
         return added_users
 
     def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
-        """Remove user from SLURM account, with optional LDAP group cleanup."""
+        """Remove user from SLURM account, with optional LDAP group cleanup.
+
+        A failed association delete raises (see BaseBackend.remove_user); the
+        group cleanup runs whether or not an association was found, since the
+        group membership can outlive the association.
+        """
         del kwargs
         result = super().remove_user(waldur_resource, username)
 
         # Optional: remove user from LDAP project group
-        if result and self._ldap_client:
+        if self._ldap_client:
             resource_backend_id = waldur_resource.backend_id
             try:
                 self._ldap_client.remove_user_from_group(resource_backend_id, username)

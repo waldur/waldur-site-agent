@@ -7,17 +7,25 @@ import unicodedata
 from typing import Optional
 
 from pydantic import ValidationError as PydanticValidationError
+from waldur_api_client.api.marketplace_offering_users import marketplace_offering_users_list
+from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.offering_user import OfferingUser
+from waldur_api_client.models.offering_user_field_enum import OfferingUserFieldEnum
+from waldur_api_client.types import UNSET
 from waldur_site_agent_ldap_client import LdapClient
 
 from waldur_site_agent.backend import logger
-from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
+from waldur_site_agent.backend.backends import (
+    LIVE_OFFERING_USER_STATES,
+    AbstractUsernameManagementBackend,
+)
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common.structures import Offering
 from waldur_site_agent_ldap import reconcile
 from waldur_site_agent_ldap.email_sender import WelcomeEmailSender
 from waldur_site_agent_ldap.schemas import (
     AccountSource,
+    DeparturePolicy,
     LdapSettingsSchema,
     MissingPosixIdsPolicy,
     PosixMismatchPolicy,
@@ -66,7 +74,23 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
             "on_posix_mismatch", PosixMismatchPolicy.REPORT.value
         )
         self.username_format = ldap_settings.get("username_format", "first_initial_lastname")
-        self.remove_user_on_deactivate = ldap_settings.get("remove_user_on_deactivate", False)
+        # Unset follows the authority: a directory Waldur owns can be rebuilt from
+        # Waldur, so a departed user's entry goes; a directory that named and
+        # numbered its own accounts keeps them, as it always has.
+        remove_user_on_deactivate = ldap_settings.get("remove_user_on_deactivate")
+        self.remove_user_on_deactivate = (
+            self.waldur_authoritative
+            if remove_user_on_deactivate is None
+            else bool(remove_user_on_deactivate)
+        )
+        on_departure = ldap_settings.get("on_departure")
+        if on_departure is None:
+            on_departure = (
+                DeparturePolicy.DISABLE.value
+                if self.waldur_authoritative
+                else DeparturePolicy.DELETE.value
+            )
+        self.on_departure = str(on_departure)
         self.access_groups = ldap_settings.get("access_groups", [])
         self.generate_vpn_password = ldap_settings.get("generate_vpn_password", False)
         self.waldur_username_attr = ldap_settings.get("waldur_username_attribute", "")
@@ -258,6 +282,17 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         unset_accounts = 0
 
         for offering_user in offering_users:
+            state = getattr(offering_user, "state", UNSET)
+            if state is not UNSET and state not in LIVE_OFFERING_USER_STATES:
+                # An account Waldur is tearing down, or has already torn down,
+                # must not be converged back into existence by this loop; the
+                # deletion states are handed to release_users by core instead.
+                logger.debug(
+                    "Offering user %s is in state %s, not reconciling",
+                    getattr(offering_user, "username", "?"),
+                    state,
+                )
+                continue
             desired, reason = reconcile.build_desired(
                 offering_user,
                 default_home_base=self.client.default_home_base,
@@ -296,7 +331,7 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
                 # Keep the in-memory indexes honest so a second account in the
                 # same batch cannot be handed a UID this one just took.
                 uid_index.setdefault(desired.uid_number, desired.username)
-            elif outcome == reconcile.Outcome.UPDATE:
+            elif outcome in (reconcile.Outcome.UPDATE, reconcile.Outcome.REENABLE):
                 updated += 1
             elif outcome in (reconcile.Outcome.DRIFT, reconcile.Outcome.UID_TAKEN):
                 conflicts += 1
@@ -352,6 +387,22 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
 
         if decision.outcome == reconcile.Outcome.DRIFT:
             return self._apply_drift(decision, desired)
+
+        if decision.outcome == reconcile.Outcome.REENABLE:
+            # Same DN, same uid: the person is back on the identity Waldur kept
+            # reserved for them. Wake the entry rather than fail on "exists".
+            self.client.enable_user(desired.username, desired.login_shell)
+            self._add_to_access_groups(desired.username)
+            if decision.updates:
+                self.client.update_user_attributes(desired.username, decision.updates)
+            logger.info(
+                "Re-enabled LDAP user %s (uid %d): restored shell %s, dropped expiry and "
+                "marker, re-added access groups",
+                desired.username,
+                desired.uid_number,
+                desired.login_shell,
+            )
+            return decision.outcome
 
         if decision.outcome == reconcile.Outcome.CREATE:
             if decision.duplicate_mail_owner:
@@ -533,6 +584,173 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
                     "LDAP user %s deactivated from offering but retained in directory",
                     username,
                 )
+
+    def release_users(
+        self,
+        offering_users: list[OfferingUser],
+        waldur_rest_client: AuthenticatedClient,
+    ) -> None:
+        """Delete the entries of people who no longer hold any account on the directory.
+
+        Core hands over the offering users of *this* offering whose access ended.
+        That is not enough to act on: one directory serves every offering of the
+        provider, so the entry stays as long as the same person still holds a
+        live account under the same username on any of them -- a restricted
+        account included, since restriction is a suspension, not a departure.
+        The decision is made against Waldur, never against the directory, and
+        any doubt (a failed lookup, an account without a username) keeps the
+        entry. Keeping an entry that is still read elsewhere is a success;
+        failing to check, or failing to delete, raises after the whole batch so
+        core does not acknowledge the deletion to Waldur and retries next cycle.
+        """
+        if not self.remove_user_on_deactivate:
+            for offering_user in offering_users:
+                logger.info(
+                    "LDAP user %s left offering %s but is retained in the directory: "
+                    "remove_user_on_deactivate is off",
+                    getattr(offering_user, "username", "?"),
+                    self.offering.name if self.offering else "?",
+                )
+            return
+
+        failed: list[str] = []
+        for offering_user in offering_users:
+            username = getattr(offering_user, "username", None)
+            if not username:
+                continue
+            try:
+                holder = self._live_account_elsewhere(offering_user, waldur_rest_client)
+            except Exception:
+                logger.exception(
+                    "Could not check whether %s still holds an account on another "
+                    "offering; keeping the LDAP entry",
+                    username,
+                )
+                failed.append(username)
+                continue
+            if holder is not None:
+                logger.info(
+                    "Keeping LDAP user %s: still holds a %s account on offering %s",
+                    username,
+                    holder.state,
+                    holder.offering_name,
+                )
+                continue
+
+            entry = self.client.search_user(username)
+            if entry is None:
+                logger.info("LDAP user %s already absent, nothing to release", username)
+                continue
+            try:
+                if self.on_departure == DeparturePolicy.DELETE.value:
+                    self._delete_account(username)
+                    logger.info(
+                        "Deleted LDAP user %s and its personal group: no live account "
+                        "remains on any offering of the provider",
+                        username,
+                    )
+                elif LdapClient.is_disabled_by_agent(entry):
+                    logger.info("LDAP user %s is already disabled", username)
+                else:
+                    self._disable_account(username)
+                    logger.info(
+                        "Disabled LDAP user %s (no-login shell, shadowExpire=1, groups dropped): "
+                        "no live account remains on any offering of the provider; the entry "
+                        "and its ids stay reserved",
+                        username,
+                    )
+            except BackendError:
+                logger.exception("Failed to release LDAP user %s", username)
+                failed.append(username)
+                continue
+        if failed:
+            msg = f"Could not release LDAP accounts: {', '.join(sorted(failed))}"
+            raise BackendError(msg)
+
+    def _live_account_elsewhere(
+        self, offering_user: OfferingUser, waldur_rest_client: AuthenticatedClient
+    ) -> Optional[OfferingUser]:
+        """The offering user that still keeps this person's entry alive, if any.
+
+        Every offering of one provider that shares the directory reads the same
+        username through the provider-wide account, so "same person, same
+        provider, same username" is exactly the set of accounts behind this one
+        entry. A differently-named account on a sibling offering is a separate
+        entry and does not count. The offering user handed in is its own sibling:
+        if Waldur still lists *it* as live, the removal was for one project of
+        several and the entry stays.
+        """
+        user_uuid = getattr(offering_user, "user_uuid", UNSET)
+        provider_uuid = getattr(offering_user, "customer_uuid", UNSET)
+        if user_uuid is UNSET or provider_uuid is UNSET:
+            msg = (
+                f"Offering user {offering_user.username} carries no user_uuid/customer_uuid; "
+                "the provider-wide check cannot run"
+            )
+            raise BackendError(msg)
+        siblings = marketplace_offering_users_list.sync_all(
+            client=waldur_rest_client,
+            user_uuid=user_uuid,
+            provider_uuid=provider_uuid,
+            field=[
+                OfferingUserFieldEnum.UUID,
+                OfferingUserFieldEnum.USERNAME,
+                OfferingUserFieldEnum.STATE,
+                OfferingUserFieldEnum.IS_RESTRICTED,
+                OfferingUserFieldEnum.OFFERING_UUID,
+                OfferingUserFieldEnum.OFFERING_NAME,
+            ],
+        )
+        for sibling in siblings:
+            if sibling.username != offering_user.username:
+                continue
+            if sibling.state in LIVE_OFFERING_USER_STATES:
+                return sibling
+        return None
+
+    def _delete_account(self, username: str) -> None:
+        """Drop access-group memberships, then the entry and its personal group.
+
+        Project group memberships are not touched here: the resource backend
+        removes those as it removes the SLURM association, before core calls
+        release_users at all.
+        """
+        self._remove_from_access_groups(username)
+        self.client.delete_user(username)
+
+    def _disable_account(self, username: str) -> None:
+        """Park the entry: drop every group membership it still has, then disable it.
+
+        Unlike delete, this also sweeps project groups: the entry survives, so a
+        leftover memberUid would keep granting group access to a parked account.
+        """
+        self._remove_from_access_groups(username)
+        for group_name in self.client.find_groups_with_member(username):
+            if group_name == username:
+                continue  # the personal group stays with the entry
+            try:
+                self.client.remove_user_from_group(group_name, username)
+            except BackendError:
+                logger.exception("Failed to remove %s from group %s", username, group_name)
+        self.client.disable_user(username)
+
+    def _remove_from_access_groups(self, username: str) -> None:
+        for group_config in self.access_groups:
+            group_name = group_config["name"]
+            membership_type = group_config.get("attribute", "memberUid")
+            try:
+                self.client.remove_user_from_group(group_name, username, membership_type)
+            except BackendError:
+                logger.debug("User %s not in group %s, skipping removal", username, group_name)
+
+    def _add_to_access_groups(self, username: str) -> None:
+        for group_config in self.access_groups:
+            group_name = group_config["name"]
+            membership_type = group_config.get("attribute", "memberUid")
+            try:
+                self.client.add_user_to_group(group_name, username, membership_type)
+            except BackendError:
+                logger.exception("Failed to add user %s to access group %s", username, group_name)
 
     def _generate_username_string(
         self,

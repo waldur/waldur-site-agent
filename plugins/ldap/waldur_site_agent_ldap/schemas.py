@@ -55,6 +55,18 @@ class PosixMismatchPolicy(str, Enum):
     FAIL = "fail"  # raise and abort the cycle
 
 
+class DeparturePolicy(str, Enum):
+    """What happens to the directory entry when the person's last access ends."""
+
+    # Keep the entry and its ids, but make it unusable: no-login shell,
+    # shadowExpire in the past, group memberships dropped, marker set. The
+    # identity stays reserved while files owned by it exist, and a returning
+    # user gets the same DN and uid back.
+    DISABLE = "disable"
+    # Remove the entry and its personal group.
+    DELETE = "delete"
+
+
 class AccessGroupConfig(PluginBackendSettingsSchema):
     """Configuration for an LDAP access group that users can be added to."""
 
@@ -141,8 +153,20 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
 
     # User lifecycle
     remove_user_on_deactivate: Optional[bool] = Field(
-        default=False,
-        description="Delete user from LDAP on deactivation (default: keep user)",
+        default=None,
+        description="Delete the directory entry once the person holds no live account "
+        "on any of the provider's offerings that share it. Unset, this follows "
+        "account_source: off under 'ldap' (the entry is kept, as it always was), on "
+        "under 'waldur' (Waldur owns the identity and keeps the ids, so the entry "
+        "is reproducible and a departed user must not keep a resolvable login).",
+    )
+    on_departure: Optional[DeparturePolicy] = Field(
+        default=None,
+        description="What to do with the entry once it is released: 'disable' parks it "
+        "(no-login shell, shadowExpire=1, groups dropped, marker set; same DN and uid "
+        "come back on return) or 'delete' removes it. Unset, this follows "
+        "account_source: 'disable' under 'waldur', 'delete' under 'ldap' (the "
+        "historical meaning of remove_user_on_deactivate there).",
     )
     generate_vpn_password: Optional[bool] = Field(
         default=False,
