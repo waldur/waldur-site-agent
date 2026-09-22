@@ -389,7 +389,13 @@ backend_settings:
   dropping every group membership it still holds in access and project groups,
   `memberUid` and DN-style `member` alike. A membership that cannot be dropped
   fails the release instead: parking the entry while a group still lists it
-  would report a teardown that left the access in place. The agent records
+  would report a teardown that left the access in place. A group that does not
+  exist is not such a case — it grants nothing, and a typo'd or not-yet-created
+  access group must not block a departure. A missing groups *container* is,
+  though: a wrong `groups_ou` makes every lookup answer "no such object", so a
+  sweep would come back empty and the release would report success having
+  removed nothing. The agent checks the container before tolerating that answer.
+  The agent records
   `description: waldur-site-agent:disabled` so a later reconcile
   can tell its own parked entries from ones an operator disabled by hand.
   This is the default because a uid must never be reused while files owned by

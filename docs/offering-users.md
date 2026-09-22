@@ -182,14 +182,25 @@ class MirroringBackend(AbstractUsernameManagementBackend):
 Core calls it in two situations, always after the resource backend has dropped
 the associations:
 
-- **At removal time**, with the offering users whose usernames were just removed
-  from a resource — on a revoked project role, or as stale users on a full sync.
-  Only names that resolve to an offering user of the offering are passed on;
-  service, course and robot accounts, and directory entries the agent never
-  managed, are not. A failed removal holds the release back: on a revoked role
-  the account is left alone and the periodic sweep retries, so an entry is
-  never parked or deleted while its association is still live. Failures of the
-  release itself are logged and do not abort the cycle.
+- **At removal time**, with the offering users the resource backend confirms are
+  no longer associated — on a revoked project role, or as stale users on a full
+  sync. Only names that resolve to an offering user of the offering are passed
+  on; service, course and robot accounts, and directory entries the agent never
+  managed, are not.
+
+  *Confirms* is the operative word, and it is why
+  `remove_users_from_resource` returns a list: it logs a per-user failure and
+  leaves that name out, so the names asked for are no evidence that anything was
+  removed. Core releases only what comes back. A backend that removes nothing
+  because there is nothing to remove — Harbor manages access through OIDC groups
+  and holds no per-user association — returns the names anyway, or their
+  accounts would wait forever on a membership that cannot exist. One that
+  predates the return value is trusted as before, with a warning.
+
+  A failed removal therefore holds the release back on both paths, and a pull
+  that failed does too: the account is left alone and the periodic sweep
+  retries, so an entry is never parked or deleted while its association is still
+  live. Failures of the release itself are logged and do not abort the cycle.
 - **As part of the deletion flow** for every offering user Waldur has moved into
   `Requested deletion`, `Deleting` or `Error deleting`. `teardown_offering_user`
   in `common/processors.py` runs, in this order:
