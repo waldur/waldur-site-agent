@@ -97,3 +97,13 @@ ignoreUntil = 2027-01-07T00:00:00Z
 id = "PYSEC-2026-2132"
 reason = "click is upgraded to 8.4.2 (>= the 8.3.3 fix) on Python >= 3.10. Only the Python 3.9 path remains on 8.1.8 because click 8.2+ dropped Python 3.9 support, which this project still targets. Revisit and drop this entry once Python 3.9 support is removed."
 ignoreUntil = 2027-01-07T00:00:00Z
+
+[[IgnoredVulns]]
+id = "GHSA-82r6-8w77-94w6"
+reason = "anyio is upgraded to 4.15.1 (>= the 4.14.2 fix) on Python >= 3.10. Only the Python 3.9 path remains on 4.12.1 because anyio 4.13+ dropped Python 3.9 support, which this project still targets. The IDNA 2003 TLS host-name flaw is in anyio's own connect_tcp()/TLSStream.wrap(); anyio is pulled in transitively via httpx and starlette, and no first-party code uses httpx.AsyncClient, so that code path is never exercised. Revisit and drop this entry once Python 3.9 support is removed."
+ignoreUntil = 2027-01-07T00:00:00Z
+
+[[IgnoredVulns]]
+id = "GHSA-5p39-cfhj-2xmp"
+reason = "anyio is upgraded to 4.15.1 (>= the 4.14.2 fix) on Python >= 3.10. Only the Python 3.9 path remains on 4.12.1 because anyio 4.13+ dropped Python 3.9 support, which this project still targets. The undrained-stderr deadlock affects anyio process-pool workers, which this project never uses. Revisit and drop this entry once Python 3.9 support is removed."
+ignoreUntil = 2027-01-07T00:00:00Z
