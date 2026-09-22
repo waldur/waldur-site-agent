@@ -2141,8 +2141,84 @@ class TestLdapWaldurAuthoritative:
         group = inverted_assertions.assert_group_exists(_SECOND_USER)
         assert int(group["gidNumber"][0]) == int(before["gidNumber"][0])
 
+    def test_08_a_teardown_that_cannot_finish_is_not_acknowledged(
+        self, inverted_offerings, inverted_client, inverted_assertions
+    ):
+        """Two ways a release fails, then the retry that finally completes it.
+
+        A release that could not finish must not end as Deleted. Whichever half
+        broke, telling Waldur the account is gone would leave the person's
+        access standing under a name nothing tracks any more -- and nothing
+        would look again, because the sweep only revisits accounts Waldur still
+        lists as departing.
+
+        Both faults share one departure on purpose. Waldur does not walk a
+        Deleted offering user back to a live state when the member returns, so
+        a second test could never obtain its own "Requested deletion" after
+        this one completes the teardown.
+
+        The subject is the account held on ONE offering: were it the shared
+        one, a live sibling on the other offering would keep the entry for its
+        own reasons and every assertion here would pass without the injected
+        fault mattering at all.
+        """
+        from unittest import mock  # noqa: PLC0415
+
+        from waldur_site_agent.backend.exceptions import BackendError  # noqa: PLC0415
+
+        offering_a, _ = inverted_offerings
+        before = inverted_assertions.assert_user_exists(_SECOND_USER)
+        assert before["loginShell"][0] == "/bin/bash", "precondition: the entry is live"
+
+        def assert_not_torn_down(why: str) -> None:
+            state = _inverted_offering_user_state(
+                inverted_client, offering_a.uuid, _SECOND_USER_UUID
+            )
+            assert state != "Deleted", f"{why}: acknowledged anyway (state {state})"
+            kept = inverted_assertions.assert_user_exists(_SECOND_USER)
+            assert kept["loginShell"][0] == "/bin/bash", f"{why}: the entry was parked"
+
+        _set_inverted_project_member(inverted_client, _SECOND_USER_UUID, member=False)
+        try:
+            _wait_inverted_offering_user_state(
+                inverted_client, offering_a.uuid, _SECOND_USER_UUID, "Requested deletion"
+            )
+
+            # A resource that could not be pulled is not a resource with no
+            # users: a failed pull yields the same empty report as an empty one.
+            with mock.patch.object(
+                SlurmBackend,
+                "pull_resources",
+                side_effect=BackendError("slurmdbd did not answer"),
+            ):
+                _release_sweep(offering_a)
+            assert_not_torn_down("the teardown ran on a report it could not trust")
+
+            # A directory whose groups cannot be read -- a wrong groups_ou, or a
+            # bind that lost its rights -- cannot know what still grants access.
+            with mock.patch.object(
+                LdapClient,
+                "find_group_memberships",
+                side_effect=BackendError("ou=Groups,dc=sofiatech,dc=bg does not exist"),
+            ):
+                _release_sweep(offering_a)
+            assert_not_torn_down("the groups could not be read")
+
+            # The retry: the same sweep, with both answering normally.
+            _release_sweep(offering_a)
+            _assert_parked(inverted_assertions, _SECOND_USER, _SECOND_UID)
+            assert (
+                _inverted_offering_user_state(inverted_client, offering_a.uuid, _SECOND_USER_UUID)
+                == "Deleted"
+            )
+        finally:
+            _set_inverted_project_member(inverted_client, _SECOND_USER_UUID, member=True)
+
 
 _INVERTED_USER_UUID = "e2ea0000000000000000000000000005"
+# The account held on offering A only: one sweep decides its fate, with no live
+# sibling to keep the entry for unrelated reasons.
+_SECOND_USER_UUID = "e2ea0000000000000000000000000006"
 _DISABLED_MARKER = "waldur-site-agent:disabled"
 
 

@@ -341,6 +341,33 @@ class TestDisableEnable:
         create(client)
         client.remove_user_from_group("no-such-group", "jsmith")
 
+    def test_removing_a_group_member_raises_when_the_container_is_missing(self):
+        """A wrong groups_ou answers noSuchObject for every group, not just one.
+
+        Tolerating it there would let a release sweep report success having
+        removed nothing, and the account would be parked or deleted with every
+        membership it holds still granting access.
+        """
+        client = MockLdapClient({**SETTINGS, "groups_ou": "ou=NoSuchGroups"})
+        with pytest.raises(BackendError, match="does not exist"):
+            client.remove_user_from_group("hpc_proj1", "jsmith")
+
+    def test_listing_memberships_raises_when_the_container_is_missing(self):
+        """An empty sweep under a base that does not exist is not "no groups".
+
+        The connection does not raise on results, so the search simply returns
+        nothing -- indistinguishable from a user in no groups unless the
+        container is checked.
+        """
+        client = MockLdapClient({**SETTINGS, "groups_ou": "ou=NoSuchGroups"})
+        with pytest.raises(BackendError, match="does not exist"):
+            client.find_group_memberships("jsmith")
+
+    def test_a_user_in_no_groups_is_not_mistaken_for_a_missing_container(self, client):
+        """The check only fires when the container really is absent."""
+        create(client)
+        assert client.find_group_memberships("nobody") == []
+
     def test_find_group_memberships_reports_the_uid_style(self, client):
         create(client)
         client.create_project_group("hpc_proj1")
