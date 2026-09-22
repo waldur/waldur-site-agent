@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from waldur_api_client.models.offering_user_state import OfferingUserState
 
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_ldap.backend import LdapUsernameBackend
@@ -40,6 +41,9 @@ def make_backend(**ldap_overrides):
 
 def offering_user(**overrides):
     attrs = {
+        # A real OfferingUser always carries a state; the double does too, so a
+        # reconcile that reads it is exercised rather than skipped.
+        "state": OfferingUserState.OK,
         "uuid": "ou-1",
         "username": "jsmith",
         "uidnumber": 10001,

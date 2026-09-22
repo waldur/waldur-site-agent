@@ -747,6 +747,10 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 backend_metadata={"status": ready_info},
             )
         except Exception as e:
+            if self.strict_pull_requested():
+                # Returning None would tell a strict caller this namespace has
+                # no users, which the teardown reads as "safe to release".
+                raise
             logger.exception("Error pulling resource %s: %s", ns_name, e)
             return None
 

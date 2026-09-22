@@ -331,3 +331,33 @@ class TestDisableEnable:
         # The personal group lists its owner too; callers decide whether to keep it.
         assert set(client.find_groups_with_member("jsmith")) == {"hpc_proj1", "jsmith"}
         assert client.find_groups_with_member("nobody") == []
+
+    def test_removing_from_a_group_that_does_not_exist_is_tolerated(self, client):
+        """A typo'd or not-yet-created access group must not block a release.
+
+        The directory answers noSuchObject rather than noSuchAttribute, and the
+        membership this call exists to remove is absent either way.
+        """
+        create(client)
+        client.remove_user_from_group("no-such-group", "jsmith")
+
+    def test_find_group_memberships_reports_the_uid_style(self, client):
+        create(client)
+        client.create_project_group("hpc_proj1")
+        client.add_user_to_group("hpc_proj1", "jsmith")
+        assert set(client.find_group_memberships("jsmith")) == {
+            ("hpc_proj1", "memberUid"),
+            ("jsmith", "memberUid"),
+        }
+
+    def test_find_group_memberships_finds_dn_style_groups(self, gon_client):
+        """A groupOfNames lists the DN, which the memberUid-only lookup never matches.
+
+        Sweeping an account out of its groups on the uid-style lookup alone
+        would leave it in every DN-style group and still report the release done.
+        """
+        gon_client.create_project_group("g")
+        gon_client.add_user_to_group("g", "alice", "member")
+
+        assert gon_client.find_group_memberships("alice") == [("g", "member")]
+        assert gon_client.find_groups_with_member("alice") == []

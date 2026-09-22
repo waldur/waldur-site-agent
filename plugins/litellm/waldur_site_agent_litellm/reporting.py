@@ -368,6 +368,10 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         try:
             return self._pull_backend_resource(waldur_resource.backend_id)
         except Exception:
+            if self.strict_pull_requested():
+                # Returning None would tell a strict caller this resource has no
+                # users, which the teardown reads as "safe to release".
+                raise
             logger.exception("Error while pulling resource [%s]", waldur_resource.backend_id)
             return None
 

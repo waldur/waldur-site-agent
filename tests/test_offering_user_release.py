@@ -621,8 +621,10 @@ class TestHookCallSites:
             )
 
         assert order == ["remove", ("release", {DEPARTED})]
+        # strict: on a revocation the pull decides absence, so a resource it
+        # could not read must not pass for one with no association.
         processor.resource_backend.pull_resources.assert_called_once_with(
-            [resource], include_usage=False
+            [resource], include_usage=False, strict=True
         )
 
     def test_a_failed_removal_keeps_the_account(self):
@@ -728,9 +730,12 @@ class TestHookCallSites:
             backend_id=resource.backend_id, users=[MEMBER, DEPARTED]
         )
         order: list = []
-        processor.resource_backend.remove_users_from_resource.side_effect = (
-            lambda _r, names, **_k: order.append(("remove", set(names)))
-        )
+
+        def _remove(_resource, names, **_kwargs):
+            order.append(("remove", set(names)))
+            return sorted(names)
+
+        processor.resource_backend.remove_users_from_resource.side_effect = _remove
 
         with (
             mock.patch.object(
@@ -744,6 +749,69 @@ class TestHookCallSites:
 
         assert order == [("remove", {DEPARTED}), ("release", {DEPARTED})]
 
+    @staticmethod
+    def _ready_for_sync(backend_users):
+        """A processor whose team is MEMBER, against a backend listing ``backend_users``."""
+        processor = _make_membership_processor()
+        processor.offering.backend_settings = {}
+        processor.resource_backend.skip_resource_team_diff = False
+        processor.resource_backend.user_resolve_method = None
+        processor.resource_backend.fetch_consented_users_only = False
+        processor.resource_backend.add_users_to_resource.return_value = set()
+        resource = _make_waldur_resource()
+        resource.restrict_member_access = False
+        processor._team_cache = {resource.project_uuid.hex: [_make_project_user(MEMBER)]}
+        processor._service_accounts_cache = {processor.offering.uuid: []}
+        processor._course_accounts_cache = {processor.offering.uuid: []}
+        backend_info = BackendResourceInfo(backend_id=resource.backend_id, users=backend_users)
+        return processor, resource, backend_info
+
+    def test_only_confirmed_removals_are_released(self):
+        """A name the backend could not remove keeps its account.
+
+        remove_users_from_resource logs a per-user failure and leaves that name
+        out of what it returns. Releasing against the requested set instead
+        would disable or delete the directory entry of someone the cluster still
+        lists, and nothing would put it back.
+        """
+        processor, resource, backend_info = self._ready_for_sync([MEMBER, DEPARTED, UNMANAGED])
+        # DEPARTED went; the removal of UNMANAGED failed and was swallowed.
+        processor.resource_backend.remove_users_from_resource.return_value = [DEPARTED]
+
+        with (
+            mock.patch.object(processor, "_release_departed_users") as release,
+            mock.patch.object(processor, "_report_membership_sync_statuses"),
+        ):
+            processor._sync_resource_users(resource, backend_info, [_make_offering_user(MEMBER)])
+
+        release.assert_called_once_with({DEPARTED})
+
+    def test_a_backend_that_returns_nothing_releases_as_before(self):
+        """An override predating the return value is trusted, not read as "none removed"."""
+        processor, resource, backend_info = self._ready_for_sync([MEMBER, DEPARTED])
+        processor.resource_backend.remove_users_from_resource.return_value = None
+
+        with (
+            mock.patch.object(processor, "_release_departed_users") as release,
+            mock.patch.object(processor, "_report_membership_sync_statuses"),
+        ):
+            processor._sync_resource_users(resource, backend_info, [_make_offering_user(MEMBER)])
+
+        release.assert_called_once_with({DEPARTED})
+
+    def test_a_backend_that_returns_a_bare_flag_releases_as_before(self):
+        """True is not a collection of names, and must not abort the sync."""
+        processor, resource, backend_info = self._ready_for_sync([MEMBER, DEPARTED])
+        processor.resource_backend.remove_users_from_resource.return_value = True
+
+        with (
+            mock.patch.object(processor, "_release_departed_users") as release,
+            mock.patch.object(processor, "_report_membership_sync_statuses"),
+        ):
+            processor._sync_resource_users(resource, backend_info, [_make_offering_user(MEMBER)])
+
+        release.assert_called_once_with({DEPARTED})
+
     def test_restricted_resource_does_not_release(self):
         """Restriction suspends access; the offering user is still live in Waldur."""
         processor = _make_membership_processor()
@@ -755,6 +823,235 @@ class TestHookCallSites:
         with mock.patch.object(processor, "_release_departed_users") as release:
             processor._sync_resource_users(resource, backend_info, [])
         release.assert_not_called()
+
+
+class TestRoleChangePullStrictness:
+    """The revocation half of the role-change path decides absence; the grant half does not."""
+
+    def test_a_failed_pull_on_revocation_keeps_the_account(self):
+        from waldur_site_agent.backend.exceptions import BackendError
+
+        processor = _make_membership_processor()
+        departed = _make_offering_user(DEPARTED)
+        resource = _make_waldur_resource()
+        processor.resource_backend.pull_resources.side_effect = BackendError("sacct is down")
+
+        with (
+            mock.patch.object(processor, "_get_user_offering_users", return_value=[departed]),
+            mock.patch.object(processor, "_update_offering_users", return_value=False),
+            mock.patch.object(processor, "_get_waldur_resources", return_value=[resource]),
+            mock.patch.object(processor, "_release_departed_users") as release,
+        ):
+            processor.process_user_role_changed(
+                departed.user_uuid.hex, resource.project_uuid.hex, granted=False
+            )
+
+        release.assert_not_called()
+
+    def test_a_failed_strict_pull_still_removes_from_what_answered(self):
+        """Skipping the removals would keep the access the revocation just took away.
+
+        The release is the only thing withheld: the pull was incomplete, so the
+        account may still be referred to by a resource that did not answer.
+        """
+        from waldur_site_agent.backend.exceptions import BackendError
+
+        processor = _make_membership_processor()
+        departed = _make_offering_user(DEPARTED)
+        resource = _make_waldur_resource()
+        resource.restrict_member_access = False
+        processor.resource_backend.pull_resources.side_effect = BackendError(
+            "one resource could not be read"
+        )
+        removed: list = []
+
+        with (
+            mock.patch.object(processor, "_get_user_offering_users", return_value=[departed]),
+            mock.patch.object(processor, "_update_offering_users", return_value=False),
+            mock.patch.object(processor, "_get_waldur_resources", return_value=[resource]),
+            mock.patch.object(
+                processors,
+                "remove_user_from_resource",
+                side_effect=lambda *_a, **_k: removed.append(DEPARTED),
+            ),
+            mock.patch.object(processor, "_release_departed_users") as release,
+        ):
+            processor.process_user_role_changed(
+                departed.user_uuid.hex, resource.project_uuid.hex, granted=False
+            )
+
+        assert removed == [DEPARTED]
+        release.assert_not_called()
+        # The removals run against the Waldur resources already in hand: a
+        # second pull would repeat whatever writes the first one made.
+        assert processor.resource_backend.pull_resources.call_count == 1
+
+    def test_a_grant_does_not_ask_for_strict(self):
+        """Nothing is released on a grant, and the next cycle adds what this pull missed."""
+        processor = _make_membership_processor()
+        processor.resource_backend.pull_resources.return_value = {}
+        member = _make_offering_user(MEMBER)
+        resource = _make_waldur_resource()
+
+        with (
+            mock.patch.object(processor, "_get_user_offering_users", return_value=[member]),
+            mock.patch.object(processor, "_update_offering_users", return_value=False),
+            mock.patch.object(processor, "_get_waldur_resources", return_value=[resource]),
+        ):
+            processor.process_user_role_changed(
+                member.user_uuid.hex, resource.project_uuid.hex, granted=True
+            )
+
+        processor.resource_backend.pull_resources.assert_called_once_with(
+            [resource], include_usage=False, strict=False
+        )
+
+
+class TestStrictReachesTheDefaultPull:
+    """The default pull_resource swallows everything; strict has to survive that.
+
+    Written against a real BaseBackend rather than a mocked ``pull_resources``:
+    mocking the very method under test is how the first, inert version of
+    strict passed its tests while protecting nothing.
+    """
+
+    @staticmethod
+    def _failing_backend():
+        from waldur_site_agent.backend.backends import BaseBackend
+        from waldur_site_agent.backend.exceptions import BackendError
+
+        class _Backend(BaseBackend):
+            def __init__(self):
+                self.client = mock.Mock()
+                self.client.get_resource.side_effect = BackendError("slurmdbd is down")
+                self.timezone = ""
+                self.backend_components = {}
+
+        _Backend.__abstractmethods__ = frozenset()
+        return _Backend()
+
+    def test_a_failed_pull_raises_for_a_strict_caller(self):
+        from waldur_site_agent.backend.exceptions import BackendError
+
+        with pytest.raises(BackendError, match="Unable to pull resource"):
+            self._failing_backend().pull_resources(
+                [_make_waldur_resource()], include_usage=False, strict=True
+            )
+
+    def test_the_same_failure_is_still_swallowed_for_a_lenient_caller(self):
+        assert (
+            self._failing_backend().pull_resources(
+                [_make_waldur_resource()], include_usage=False
+            )
+            == {}
+        )
+
+    def test_an_override_that_swallows_must_consult_the_flag(self):
+        """The contract for a plugin that catches its own pull errors.
+
+        The re-raise lives in the base ``pull_resource``, so an override that
+        replaces it wholesale bypasses strict entirely unless it asks.
+        """
+        from waldur_site_agent.backend.backends import BaseBackend
+        from waldur_site_agent.backend.exceptions import BackendError
+
+        class _Plugin(BaseBackend):
+            def __init__(self):
+                self.client = mock.Mock()
+                self.timezone = ""
+                self.backend_components = {}
+
+            def pull_resource(self, waldur_resource):
+                del waldur_resource
+                try:
+                    msg = "the plugin's own API is down"
+                    raise BackendError(msg)
+                except BackendError:
+                    if self.strict_pull_requested():
+                        raise
+                    return None
+
+        _Plugin.__abstractmethods__ = frozenset()
+        plugin = _Plugin()
+
+        assert plugin.pull_resources([_make_waldur_resource()], include_usage=False) == {}
+        with pytest.raises(BackendError, match="Unable to pull resource"):
+            plugin.pull_resources([_make_waldur_resource()], include_usage=False, strict=True)
+
+    def test_a_resource_the_backend_does_not_have_is_not_an_error(self):
+        """Real absence still drops out quietly -- it is what strict asks about.
+
+        The backend answered: there is no such resource, so there is no
+        association on it either. Only a backend that could not answer is an
+        error worth stopping a teardown for.
+        """
+        from waldur_site_agent.backend.backends import BaseBackend
+
+        class _Backend(BaseBackend):
+            def __init__(self):
+                self.client = mock.Mock()
+                self.client.get_resource.return_value = None
+                self.timezone = ""
+                self.backend_components = {}
+
+        _Backend.__abstractmethods__ = frozenset()
+        assert (
+            _Backend().pull_resources(
+                [_make_waldur_resource()], include_usage=False, strict=True
+            )
+            == {}
+        )
+
+    def test_the_flag_is_restored_after_a_raising_pull(self):
+        """The raise leaves the thread-local as it found it.
+
+        Asserting the next pull returns {} would prove nothing: every pull
+        assigns the flag on entry, so a leak could never be observed that way.
+        """
+        from waldur_site_agent.backend.exceptions import BackendError
+
+        backend = self._failing_backend()
+        assert backends_module._pull_strict() is False
+        with pytest.raises(BackendError):
+            backend.pull_resources([_make_waldur_resource()], include_usage=False, strict=True)
+        assert backends_module._pull_strict() is False
+
+
+class TestUnknownBackendStrictness:
+    """A plugin that should have loaded must not answer "no associations here"."""
+
+    @staticmethod
+    def _backend(requested_backend_type="slurm"):
+        from waldur_site_agent.backend.backends import UnknownBackend
+
+        return UnknownBackend(requested_backend_type)
+
+    def test_a_strict_pull_of_resources_raises(self):
+        from waldur_site_agent.backend.exceptions import BackendError
+
+        with pytest.raises(BackendError, match="did not load"):
+            self._backend().pull_resources(
+                [_make_waldur_resource()], include_usage=False, strict=True
+            )
+
+    def test_an_offering_that_asked_for_no_backend_still_gets_a_report(self):
+        """No membership backend is a supported configuration, not a broken one.
+
+        Refusing here would strand every teardown on such an offering: the
+        polling sweep pulls strictly each cycle and would never get past it.
+        """
+        assert (
+            self._backend("").pull_resources(
+                [_make_waldur_resource()], include_usage=False, strict=True
+            )
+            == {}
+        )
+
+    def test_a_strict_pull_of_nothing_is_still_empty(self):
+        assert self._backend().pull_resources([], include_usage=False, strict=True) == {}
+
+    def test_a_lenient_caller_still_gets_an_empty_report(self):
+        assert self._backend().pull_resources([_make_waldur_resource()]) == {}
 
 
 class TestIncludeUsageThreading:

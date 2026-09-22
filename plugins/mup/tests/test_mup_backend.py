@@ -860,6 +860,23 @@ class MUPBackendTest(unittest.TestCase):
         mock_client.get_allocation_by_identifier.assert_called_once_with(account_id)
 
     @patch("waldur_site_agent_mup.backend.MUPClient")
+    def test_remove_reports_a_user_who_is_not_a_member(self, mock_client_class) -> None:
+        """Not in the project: nothing holds the account, so it is no longer associated."""
+        mock_client = mock_client_class.return_value
+        mock_client.get_project.return_value = self.sample_mup_project
+        mock_client.get_project_members.return_value = []
+
+        backend = MUPBackend(self.mup_settings, self.mup_components)
+        self.sample_waldur_resource.backend_id = "1_1"
+
+        removed_users = backend.remove_users_from_resource(
+            self.sample_waldur_resource, {"user1"}
+        )
+
+        assert removed_users == ["user1"]
+        mock_client.toggle_member_status.assert_not_called()
+
+    @patch("waldur_site_agent_mup.backend.MUPClient")
     def test_remove_users_from_account(self, mock_client_class) -> None:
         """Test removing users from account."""
         mock_client = mock_client_class.return_value

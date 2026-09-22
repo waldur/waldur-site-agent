@@ -1096,6 +1096,13 @@ class WaldurBackend(backends.BaseBackend):
                 identity = user_cuids.get(username, username)
                 remote_user_uuid = self._resolve_remote_user(identity)
                 if not remote_user_uuid:
+                    # Deliberately not reported as removed. None here means
+                    # either "no such person on Waldur B" or "the lookup
+                    # failed": every resolver swallows its errors and returns
+                    # None, and the default user_not_found_action only warns.
+                    # Releasing an account because a remote call timed out is
+                    # exactly what the caller's confirmation rule exists to
+                    # prevent, so the account waits for a cycle that can tell.
                     continue
 
                 source_role = user_roles.get(username)

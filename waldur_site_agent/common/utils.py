@@ -617,8 +617,9 @@ def get_backend_for_offering(
     backend_type = getattr(offering, backend_type_key, "")
     backend_info = BACKENDS.get(backend_type)
     if not backend_info:
-        logger.error("Unsupported backend type for %s: %s", backend_type_key, backend_type)
-        return UnknownBackend(), "unknown"
+        if backend_type:
+            logger.error("Unsupported backend type for %s: %s", backend_type_key, backend_type)
+        return UnknownBackend(backend_type), "unknown"
 
     backend_class, dist_name, dist_version = backend_info
 

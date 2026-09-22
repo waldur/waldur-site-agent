@@ -79,7 +79,7 @@ def waldur_backend(**overrides):
     backend, client = make_backend(account_source="waldur", **overrides)
     client.user_exists.return_value = True
     client.search_user.return_value = ENTRY
-    client.find_groups_with_member.return_value = []
+    client.find_group_memberships.return_value = []
     return backend, client
 
 
@@ -122,18 +122,49 @@ class TestDefaultOfOnDeparture:
 class TestDisable:
     def test_default_waldur_mode_parks_the_entry(self, listing):
         backend, client = waldur_backend(on_departure="disable", access_groups=[{"name": "vpn"}])
-        client.find_groups_with_member.return_value = ["vpn", "hpc_proj1", "jsmith"]
+        client.find_group_memberships.return_value = [
+            ("vpn", "memberUid"),
+            ("hpc_proj1", "memberUid"),
+            ("jsmith", "memberUid"),
+        ]
 
         backend.release_users([departed()], mock.Mock())
 
         client.delete_user.assert_not_called()
         client.disable_user.assert_called_once_with("jsmith")
-        removed = {c.args[:2] for c in client.remove_user_from_group.call_args_list}
+        removed = {c.args[:3] for c in client.remove_user_from_group.call_args_list}
         # Access groups, then every project group still listing the user; the
-        # personal group stays with the entry.
-        assert ("vpn", "jsmith") in removed
-        assert ("hpc_proj1", "jsmith") in removed
-        assert ("jsmith", "jsmith") not in removed
+        # personal group stays with the entry. The membership type travels with
+        # each call -- dropping it would silently sweep DN-style groups as uid.
+        assert ("vpn", "jsmith", "memberUid") in removed
+        assert ("hpc_proj1", "jsmith", "memberUid") in removed
+        assert not any(call[0] == "jsmith" for call in removed)
+
+    def test_a_group_that_cannot_be_dropped_fails_the_release(self, listing):
+        """Parking an entry a group still lists would acknowledge a half-done teardown.
+
+        The membership is what grants the access; leaving it in place while
+        Waldur is told the account is gone is the one outcome the sweep can
+        never correct, because it stops looking.
+        """
+        backend, client = waldur_backend(on_departure="disable")
+        client.find_group_memberships.return_value = [("hpc_proj1", "memberUid")]
+        client.remove_user_from_group.side_effect = BackendError("insufficientAccessRights")
+
+        with pytest.raises(BackendError, match="Could not release LDAP accounts"):
+            backend.release_users([departed()], mock.Mock())
+
+        client.disable_user.assert_not_called()
+
+    def test_an_access_group_that_cannot_be_dropped_fails_the_release(self, listing):
+        """A membership the user never had returns normally, so a raise is a real failure."""
+        backend, client = waldur_backend(on_departure="delete", access_groups=[{"name": "vpn"}])
+        client.remove_user_from_group.side_effect = BackendError("insufficientAccessRights")
+
+        with pytest.raises(BackendError, match="Could not release LDAP accounts"):
+            backend.release_users([departed()], mock.Mock())
+
+        client.delete_user.assert_not_called()
 
     def test_already_disabled_entry_is_left_alone(self, listing):
         backend, client = waldur_backend(on_departure="disable")
@@ -271,9 +302,13 @@ class TestRelease:
         backend.release_users([departed()], mock.Mock())
         client.delete_user.assert_called_once_with("jsmith")
 
-    def test_access_group_miss_does_not_stop_deletion(self, listing):
+    def test_every_access_group_is_dropped_before_deletion(self, listing):
+        """A group the user was never in is not a failure: the client returns normally.
+
+        Only a directory that still grants access raises, and that stops the
+        deletion (see the release-failure cases above).
+        """
         backend, client = waldur_backend(access_groups=[{"name": "vpn"}, {"name": "gpu"}])
-        client.remove_user_from_group.side_effect = [BackendError("not a member"), None]
         backend.release_users([departed()], mock.Mock())
         assert client.remove_user_from_group.call_count == 2
         client.delete_user.assert_called_once_with("jsmith")
@@ -310,8 +345,8 @@ class TestReconcileIgnoresDepartedAccounts:
         client.create_user_with_ids.assert_not_called()
         client.update_user_attributes.assert_not_called()
 
-    def test_account_without_state_is_still_reconciled(self):
-        """Fixtures and older servers may omit the field; that is not a departure."""
+    def test_account_with_an_unset_state_is_still_reconciled(self):
+        """A field that was never requested comes back UNSET; that is not a departure."""
         backend, client = make_backend(account_source="waldur")
         offering_user = SimpleNamespace(
             uuid="ou-1",
@@ -324,6 +359,7 @@ class TestReconcileIgnoresDepartedAccounts:
             user_last_name="Smith",
             user_email="john@example.com",
             user_username="cuid-123",
+            state=UNSET,
         )
         backend.sync_user_profiles([offering_user])
         client.create_user_with_ids.assert_called_once()

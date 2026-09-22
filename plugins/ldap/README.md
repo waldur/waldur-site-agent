@@ -386,8 +386,11 @@ backend_settings:
   `gidNumber` and personal group stay exactly as they are; the account is made
   unusable by setting `loginShell` to `/usr/sbin/nologin`, adding the
   `shadowAccount` class with `shadowExpire: 1` (an expiry in the past), and
-  dropping every `memberUid` it still holds in access and project groups. The
-  agent records `description: waldur-site-agent:disabled` so a later reconcile
+  dropping every group membership it still holds in access and project groups,
+  `memberUid` and DN-style `member` alike. A membership that cannot be dropped
+  fails the release instead: parking the entry while a group still lists it
+  would report a teardown that left the access in place. The agent records
+  `description: waldur-site-agent:disabled` so a later reconcile
   can tell its own parked entries from ones an operator disabled by hand.
   This is the default because a uid must never be reused while files owned by
   it exist: keeping the entry keeps `ls -l` honest and keeps the pool's
