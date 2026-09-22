@@ -287,7 +287,8 @@ offerings:
 | `on_posix_mismatch` | No | `report` | `report`, `adopt` or `fail` on an id disagreement (waldur mode) |
 | `username_format` | No | `first_initial_lastname` | Username strategy (see below); rejected in waldur mode |
 | `waldur_username_attribute` | No | -- | LDAP attribute to store the Waldur username (e.g. a CUID) in |
-| `remove_user_on_deactivate` | No | `false` | Delete LDAP entry on deactivation |
+| `remove_user_on_deactivate` | No | per `account_source` | Release the entry once no live account remains; see below |
+| `on_departure` | No | per `account_source` | `disable` (park, keep ids) or `delete`; see below |
 | `generate_vpn_password` | No | `false` | Generate random VPN password on creation |
 | `access_groups` | No | `[]` | LDAP groups to add new users to |
 | `welcome_email` | No | -- | SMTP settings for welcome email (disabled when absent) |
@@ -361,6 +362,194 @@ An account Waldur holds no ids for is never given a locally-invented one: that
 would reintroduce the double allocation this mode exists to remove. Attach a
 POSIX ID pool to the service provider, or turn POSIX accounts off for the
 offering.
+
+### When a user leaves
+
+Dropping the SLURM association is the resource backend's job. Releasing the
+directory entry is this plugin's, and in this mode it is **on by default**:
+`remove_user_on_deactivate` follows `account_source`, so under `waldur` an
+unset value means *release*. A departed user who keeps a working POSIX login
+on the cluster is exactly the gap this exists to close. Set
+`remove_user_on_deactivate: false` explicitly to leave entries untouched (the
+account is then logged as retained and Waldur is left waiting).
+
+What *release* does is `on_departure`:
+
+```yaml
+backend_settings:
+  ldap:
+    account_source: "waldur"
+    on_departure: "disable"   # disable (default here) | delete
+```
+
+- **`disable`** (default under `waldur`) parks the entry. The DN, `uidNumber`,
+  `gidNumber` and personal group stay exactly as they are; the account is made
+  unusable by setting `loginShell` to `/usr/sbin/nologin`, adding the
+  `shadowAccount` class with `shadowExpire: 1` (an expiry in the past), and
+  dropping every `memberUid` it still holds in access and project groups. The
+  agent records `description: waldur-site-agent:disabled` so a later reconcile
+  can tell its own parked entries from ones an operator disabled by hand.
+  This is the default because a uid must never be reused while files owned by
+  it exist: keeping the entry keeps `ls -l` honest and keeps the pool's
+  reservation and the directory in agreement.
+- **`delete`** (default under `ldap`, the historical meaning of
+  `remove_user_on_deactivate`) removes the entry, its personal group and its
+  access-group memberships.
+
+For `disable` to lock the account out, sssd on the nodes must honour the shadow
+expiry — add to the `[domain/...]` section of `sssd.conf`:
+
+```ini
+ldap_account_expire_policy = shadow
+```
+
+**Coming back.** Waldur re-mints the same username for a returning person (it
+derives from the pool uid, which the provider-wide account keeps), so the
+reconcile sees a live offering user whose entry exists but is parked. It
+re-enables it in place — restores `loginShell` from Waldur, drops `shadowExpire`
+and the marker, re-adds the configured `access_groups` — rather than failing on
+`UID_TAKEN` or "entry exists". Project group membership comes back with the
+SLURM association. An entry an operator disabled by hand (no marker) is treated
+as an ordinary profile update, as before.
+
+Because one directory serves every offering of the provider, "the user left
+this offering" is not enough to act on. Before releasing, the plugin asks
+Waldur for the person's other accounts on the same provider and keeps the
+entry enabled if any account **with the same username** is still live — `OK`,
+requested, creating or pending, restricted or not. A differently-named account
+on a sibling offering is a separate entry and does not count. The check runs
+against Waldur, never against the directory; a failed lookup keeps the entry.
+
+The trigger is Waldur's own deletion request: the offering user must be in
+`Requested deletion`, which Waldur sets when the person leaves their last
+project on an offering that has `offering_user_auto_deletion` enabled. Without
+that option the offering user stays `OK` and the entry is kept. The agent
+notices the state on the next membership cycle (and immediately on the
+offering-user `update` event under STOMP) and runs the deletion flow: SLURM
+associations first, then this plugin's release, then core walks the offering
+user through `Deleting` to `Deleted` so Waldur can release the provider-wide
+identity behind it.
+
+| Waldur says | Directory action |
+|---|---|
+| Same-named account still live on any offering of the provider | Kept, enabled |
+| Only accounts in deletion states (or none) remain | Parked (`disable`) or removed (`delete`) |
+| Entry already parked / absent (another offering's agent got there first) | Nothing to do |
+| Lookup fails, or the offering user carries no `user_uuid` | Kept; raises, retried next cycle |
+
+In the first three rows the offering user is then marked `Deleted` in Waldur; in
+the last, core marks it `Error deleting` so the failure is visible until it goes.
+
+Under `account_source: ldap` nothing changes unless `remove_user_on_deactivate`
+is set to `true`, in which case the same provider-wide check applies and
+`on_departure` defaults to `delete`.
+
+### Step-by-step setup
+
+The Waldur side — creating the POSIX ID pool, choosing the username policy and
+prefix, enabling POSIX accounts and offering-user auto-deletion, and reading an
+offering user's uid and username back — is documented with screenshots in the
+Waldur user guide under *Managing POSIX ID pools* and *Waldur-authoritative
+accounts in OpenLDAP*. What follows is the agent and cluster side.
+
+1. **Prepare the directory.** The agent creates user entries, personal groups
+   and project groups; it does not create OUs or its own bind account. Create
+   `ou=People` and `ou=Groups` under the base DN and a bind DN with write access
+   to both. Make sure the `nis` schema is loaded (`posixAccount`, `posixGroup`,
+   `shadowAccount`). If access groups are `groupOfNames`, also create the
+   stand-in member (`cn=nobody,<base_dn>` by default, `empty_group_member_dn`).
+
+2. **Pick a project-group GID range** that does not overlap the pool's GID range
+   (see below). The pool numbers people; `gid_range_*` numbers project groups.
+
+3. **Configure one `ldap` block and share it** between every offering of the
+   provider that uses the directory:
+
+    ```yaml
+    .ldap: &ldap_settings
+      uri: "ldaps://ldap.example.org"
+      bind_dn: "cn=waldur-agent,dc=example,dc=org"
+      bind_password: "<secret>"
+      base_dn: "dc=example,dc=org"
+      people_ou: "ou=People"
+      groups_ou: "ou=Groups"
+      account_source: "waldur"
+      on_missing_posix_ids: "error"   # error | skip
+      on_posix_mismatch: "report"     # report | adopt | fail
+      on_departure: "disable"         # disable (default here) | delete
+      gid_range_start: 20000          # project groups only; keep clear of the pool
+      gid_range_end: 29999
+      access_groups:
+        - name: "cluster-users"
+
+    offerings:
+      - name: "Cluster A"
+        waldur_api_url: "https://waldur.example.org/api/"
+        waldur_api_token: "<token>"
+        waldur_offering_uuid: "<offering A uuid>"
+        backend_type: "slurm"
+        username_management_backend: "ldap"
+        order_processing_backend: "slurm"
+        reporting_backend: "slurm"
+        membership_sync_backend: "slurm"
+        backend_settings:
+          default_account: "root"
+          customer_prefix: "c_"
+          project_prefix: "p_"
+          allocation_prefix: "a_"
+          ldap: *ldap_settings
+      - name: "Cluster B"
+        # identical apart from the offering uuid
+        backend_settings:
+          ldap: *ldap_settings
+    ```
+
+    Leave out `username_format` (rejected in this mode) and `uid_range_*`
+    (ignored for user accounts).
+
+4. **Point SSSD on the nodes at the directory**, and let it honour the shadow
+   expiry the `disable` departure mode relies on:
+
+    ```ini
+    [domain/ldap]
+    id_provider = ldap
+    ldap_uri = ldaps://ldap.example.org
+    ldap_search_base = dc=example,dc=org
+    ldap_user_search_base = ou=People,dc=example,dc=org
+    ldap_group_search_base = ou=Groups,dc=example,dc=org
+    ldap_schema = rfc2307
+    ldap_account_expire_policy = shadow
+    ```
+
+5. **Run a membership-sync cycle and verify each layer.** The first cycle logs
+   `LDAP reconcile: N created, ...`; then:
+
+    ```bash
+    # Directory: one entry, ids as allocated in Waldur
+    ldapsearch -x -H ldaps://ldap.example.org -b ou=People,dc=example,dc=org \
+      '(uid=hpc_100001)' uidNumber gidNumber homeDirectory loginShell
+    # Node: SSSD resolves it
+    getent passwd hpc_100001 && id hpc_100001
+    # Cluster: the association exists
+    sacctmgr -P show association where user=hpc_100001 format=account,user
+    ```
+
+    Run the same checks after the second cluster's agent has had a cycle: the
+    entry must be unchanged, with the same uid — that is what the shared pool
+    buys.
+
+6. **Watch a departure and a return** (see the section above for what happens).
+   The log lines to expect are `Processing deletion of offering user ...`,
+   `Disabled LDAP user ...` (or `Deleted LDAP user ...`), `Marked offering user
+   ... DELETED in Waldur`, and on return `Re-enabled LDAP user ... (uid N)`.
+
+| Symptom | Fix |
+|---|---|
+| `Waldur returned no POSIX attributes ...` | Enable **Manage POSIX/LDAP account**; attach a pool to the provider |
+| `Offering user X has no UID/primary GID in Waldur` | Predates the pool: re-save it, or `on_missing_posix_ids: skip` |
+| `UID N is already held by LDAP user Y` | Pool overlaps existing entries: move the range, or `adopt` once |
+| Departed user can still log in | SSSD needs `ldap_account_expire_policy = shadow` |
+| Account stays *Requested deletion* | A teardown step keeps failing (see `Teardown of offering user ... failed`) |
 
 ### Project group GIDs are still allocated locally
 

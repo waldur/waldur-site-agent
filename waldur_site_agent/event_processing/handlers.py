@@ -32,7 +32,10 @@ from waldur_api_client.models.slurm_command_result_request import (
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import logger
-from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
+from waldur_site_agent.backend.backends import (
+    DEPARTED_OFFERING_USER_STATES,
+    AbstractUsernameManagementBackend,
+)
 from waldur_site_agent.common import agent_identity_management, structures
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import utils as common_utils
@@ -717,7 +720,19 @@ def _process_offering_user_message(
             logger.info("Offering user %s created with attributes: %s", username, list(attributes))
             _forward_user_attributes_to_backend(offering, username, attributes, user_agent)
             _reconcile_offering_user(offering, offering_user_uuid, waldur_rest_client)
-        elif action in ("update", "delete"):
+        elif action == "update":
+            # A state change (Waldur requesting deletion, or restoring an
+            # account) arrives as an update. The payload carries the new state,
+            # so a deletion request is recognised without a round-trip and runs
+            # for every offering, username backend or not.
+            logger.info("Offering user %s action: %s (no attribute forwarding)", username, action)
+            if message.get("state") in _DEPARTED_STATE_NAMES:
+                _process_offering_user_deletion_event(
+                    offering, offering_user_uuid, waldur_rest_client
+                )
+            else:
+                _reconcile_offering_user(offering, offering_user_uuid, waldur_rest_client)
+        elif action == "delete":
             logger.info("Offering user %s action: %s (no attribute forwarding)", username, action)
         elif action == "username_set":
             resource_backend_ids = message.get("resource_backend_ids", [])
@@ -763,8 +778,12 @@ def _reconcile_offering_user(
     account created or renamed without an accompanying role change would not reach
     the backend's directory until the agent restarted.
 
-    Only backends that actually implement the hook pay the extra round-trip - the
-    default on the abstract base is a no-op, so there is nothing to fetch for them.
+    An account Waldur has moved into a deletion state goes to the backend's
+    release hook instead of its profile sync: there is nothing to converge on
+    for an account that is meant to disappear.
+
+    Only backends that actually implement a hook pay the extra round-trip - the
+    defaults on the abstract base are no-ops, so there is nothing to fetch for them.
     """
     if not offering_user_uuid:
         return
@@ -786,9 +805,96 @@ def _reconcile_offering_user(
         if offering_user is None:
             logger.warning("Offering user %s not found for reconcile", offering_user_uuid)
             return
-        backend.sync_user_profiles([offering_user])
+        if offering_user.state in DEPARTED_OFFERING_USER_STATES:
+            # A payload without the state field, or a stale one; still the
+            # teardown's business, never the profile sync's.
+            process_offering_user_deletions(offering, waldur_rest_client, [offering_user])
+        else:
+            backend.sync_user_profiles([offering_user])
     except Exception:
         logger.exception("Failed to reconcile offering user %s", offering_user_uuid)
+
+
+_DEPARTED_STATE_NAMES = frozenset(state.value for state in DEPARTED_OFFERING_USER_STATES)
+
+
+def _process_offering_user_deletion_event(
+    offering: structures.Offering,
+    offering_user_uuid: str,
+    waldur_rest_client: AuthenticatedClient,
+) -> None:
+    """Fetch the offering user named by a deletion-state update and tear it down."""
+    if not offering_user_uuid:
+        return
+    try:
+        offering_user = marketplace_offering_users_retrieve.sync(
+            uuid=offering_user_uuid, client=waldur_rest_client
+        )
+        if offering_user is None:
+            logger.warning("Offering user %s not found for deletion", offering_user_uuid)
+            return
+        if offering_user.state not in DEPARTED_OFFERING_USER_STATES:
+            # Restored between the event and now; nothing to tear down.
+            logger.info(
+                "Offering user %s is %s again, not tearing it down",
+                offering_user_uuid,
+                offering_user.state,
+            )
+            return
+        process_offering_user_deletions(offering, waldur_rest_client, [offering_user])
+    except Exception:
+        logger.exception("Failed to process deletion of offering user %s", offering_user_uuid)
+
+
+def process_offering_user_deletions(
+    offering: structures.Offering,
+    waldur_rest_client: AuthenticatedClient,
+    offering_users: list,
+) -> None:
+    """Tear down offering users Waldur wants gone, in the polling sweep's order.
+
+    Associations first, then the username backend's release, then the
+    acknowledgement. An offering without a membership backend has no
+    agent-managed associations and skips straight to the release; one without
+    a username backend skips the release. Neither configuration blocks the
+    acknowledgement. Resources are listed and pulled once for the whole batch,
+    without the usage report.
+    """
+    if not offering_users:
+        return
+    resource_backend = None
+    resource_report: Optional[dict] = None
+    if offering.membership_sync_backend:
+        try:
+            resource_backend, _ = common_utils.get_backend_for_offering(
+                offering, "membership_sync_backend"
+            )
+            resources = common_processors.fetch_offering_resources(
+                offering, waldur_rest_client, resource_backend
+            )
+            # strict: see OfferingMembershipProcessor._process_requested_deletions --
+            # a dropped resource would be read as "no association here".
+            resource_report = resource_backend.pull_resources(
+                resources, include_usage=False, strict=True
+            )
+        except Exception:
+            # Without the association step the acknowledgement would be wrong,
+            # so the whole batch waits rather than skipping ahead.
+            logger.exception(
+                "Could not pull the resources of %s; deletions wait for the next cycle",
+                offering.name,
+            )
+            return
+    username_backend = common_utils.get_release_capable_username_backend(offering)
+    for offering_user in offering_users:
+        common_processors.teardown_offering_user(
+            offering,
+            offering_user,
+            waldur_rest_client,
+            resource_backend,
+            username_backend,
+            resource_report,
+        )
 
 
 def _forward_user_attributes_to_backend(

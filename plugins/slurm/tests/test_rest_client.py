@@ -213,6 +213,51 @@ class TestAccounts:
             "cluster": "testcluster",
         }
 
+    def test_delete_all_users_repoints_a_default_account_first(self, client, handler):
+        """slurmdbd refuses to drop a default association while others remain."""
+        handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
+            associations=[
+                {"account": "acc1", "user": "user1"},
+                {"account": "acc2", "user": "user1"},
+            ]
+        )
+        handler.responses[f"GET /slurmdb/{API}/user/user1"] = envelope(
+            users=[{"name": "user1", "default": {"account": "acc1"}}]
+        )
+
+        client.delete_all_users_from_account("acc1")
+
+        posts = [
+            r
+            for r in handler.requests
+            if r.method == "POST" and r.url.path == f"/slurmdb/{API}/users/"
+        ]
+        assert len(posts) == 1, "the default account should be re-pointed exactly once"
+        assert json.loads(posts[0].content) == {
+            "users": [{"name": "user1", "default": {"account": "acc2"}}]
+        }
+        # ...and the re-pointing happens before the associations are dropped.
+        assert handler.requests[-1].method == "DELETE"
+
+    def test_delete_all_users_leaves_an_unrelated_default_alone(self, client, handler):
+        handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
+            associations=[
+                {"account": "acc1", "user": "user1"},
+                {"account": "acc2", "user": "user1"},
+            ]
+        )
+        handler.responses[f"GET /slurmdb/{API}/user/user1"] = envelope(
+            users=[{"name": "user1", "default": {"account": "acc2"}}]
+        )
+
+        client.delete_all_users_from_account("acc1")
+
+        assert not [
+            r
+            for r in handler.requests
+            if r.method == "POST" and r.url.path == f"/slurmdb/{API}/users/"
+        ]
+
 
 class TestLimits:
     def test_set_resource_limits_builds_grp_tres_mins_payload(self, client, handler):
@@ -409,7 +454,8 @@ class TestAssociations:
 
     def test_delete_association(self, client, handler):
         client.delete_association("user1", "acc1")
-        request = handler.requests[0]
+        # The user's associations are listed first; the delete is the last request.
+        request = handler.requests[-1]
         assert request.method == "DELETE"
         assert request.url.path == f"/slurmdb/{API}/associations/"
         assert dict(request.url.params) == {
@@ -418,6 +464,40 @@ class TestAssociations:
             "cluster": "testcluster",
         }
 
+
+    def _user_with(self, handler, accounts, default):
+        handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
+            associations=[{"account": a, "user": "user1"} for a in accounts]
+            + [{"account": "root", "user": "root"}, {"account": accounts[0], "user": ""}]
+        )
+        handler.responses[f"GET /slurmdb/{API}/user/user1"] = envelope(
+            users=[{"name": "user1", "default": {"account": default}}]
+        )
+
+    def test_delete_default_association_repoints_the_default_first(self, client, handler):
+        """slurmdbd refuses to drop a default association while others remain."""
+        self._user_with(handler, ["acc1", "acc2"], default="acc1")
+        client.delete_association("user1", "acc1")
+        methods = [(r.method, r.url.path) for r in handler.requests]
+        assert methods[-2] == ("POST", f"/slurmdb/{API}/users/")
+        assert methods[-1] == ("DELETE", f"/slurmdb/{API}/associations/")
+        repoint = json.loads(handler.requests[-2].content)
+        assert repoint == {"users": [{"name": "user1", "default": {"account": "acc2"}}]}
+
+    def test_delete_non_default_association_leaves_the_default_alone(self, client, handler):
+        self._user_with(handler, ["acc1", "acc2"], default="acc1")
+        client.delete_association("user1", "acc2")
+        assert all(r.method != "POST" for r in handler.requests)
+        assert handler.requests[-1].method == "DELETE"
+        assert handler.requests[-1].url.path == f"/slurmdb/{API}/associations/"
+
+    def test_delete_last_association_removes_the_user(self, client, handler):
+        self._user_with(handler, ["acc1"], default="acc1")
+        client.delete_association("user1", "acc1")
+        last = handler.requests[-1]
+        assert (last.method, last.url.path) == ("DELETE", f"/slurmdb/{API}/user/user1")
+        assert all(r.url.path != f"/slurmdb/{API}/associations/" or r.method == "GET"
+                   for r in handler.requests)
     def test_get_association(self, client, handler):
         handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
             associations=[
@@ -812,17 +892,248 @@ class TestJobs:
         assert calls == {"filtered": 1, "unfiltered": 1}
 
 
-class TestCliDelegation:
-    def test_usage_reports_and_raw_usage_delegate_to_cli_client(self, client):
-        client._cli = mock.Mock(spec=SlurmClient)
-        client.get_usage_report(["acc1"], "UTC")
-        client._cli.get_usage_report.assert_called_once_with(["acc1"], "UTC")
+def _job(account, user, elapsed, tres, cluster="testcluster", start=None, end=None):
+    times = {"elapsed": elapsed}
+    if start is not None:
+        times["start"] = start
+    if end is not None:
+        times["end"] = end
+    return {
+        "account": account,
+        "user": user,
+        "cluster": cluster,
+        "time": times,
+        "tres": {"allocated": tres, "requested": tres},
+    }
+
+
+class TestUsageReport:
+    """Usage reports come from slurmdb job records, not from sacct."""
+
+    TRES = {"cpu": {}, "mem": {}, "gres/gpu": {}}
+
+    def _client(self, handler, monkeypatch):
+        monkeypatch.setenv("SLURM_JWT", "test-token")
+        return SlurmRestClient(
+            slurm_tres=self.TRES,
+            rest_settings={
+                "url": "http://localhost:6820",
+                "api_version": API,
+                "username": "waldur-agent",
+                "token_env": "SLURM_JWT",
+            },
+            cluster_name="testcluster",
+            transport=httpx.MockTransport(handler),
+        )
+
+    def test_queries_slurmdb_jobs_for_the_month(self, handler, monkeypatch):
+        client = self._client(handler, monkeypatch)
+        client.get_usage_report(["acc1", "acc2"], "UTC")
+        request = handler.requests[0]
+        assert request.url.path == f"/slurmdb/{API}/jobs/"
+        params = dict(request.url.params)
+        assert params["account"] == "acc1,acc2"
+        assert params["cluster"] == "testcluster"
+        assert params["start_time"].endswith("T00:00:00")
+        assert params["end_time"].endswith("T23:59:59")
+
+    def test_jobs_become_sacct_shaped_lines(self, handler, monkeypatch):
+        handler.responses[f"GET /slurmdb/{API}/jobs/"] = envelope(
+            jobs=[
+                _job(
+                    "acc1",
+                    "alice",
+                    3600,
+                    [
+                        {"type": "cpu", "count": 4},
+                        {"type": "mem", "count": 8192},
+                        {"type": "gres", "name": "gpu", "count": 1},
+                        {"type": "node", "count": 1},
+                    ],
+                ),
+                # 25 hours: the elapsed field must not wrap at a day.
+                _job("acc1", "bob", 90000, [{"type": "cpu", "count": 2}]),
+            ]
+        )
+        client = self._client(handler, monkeypatch)
+        lines = client.get_usage_report(["acc1"])
+        assert [(line.account, line.user) for line in lines] == [
+            ("acc1", "alice"),
+            ("acc1", "bob"),
+        ]
+        alice, bob = lines
+        assert alice.duration == 60.0
+        assert alice.tres_usage == {"cpu": 240.0, "mem": 8192 * 60 // 1, "gres/gpu": 60.0}
+        assert bob.duration == 1500.0
+        assert bob.tres_usage == {"cpu": 3000.0}
+
+    def test_foreign_accounts_and_clusters_are_dropped(self, handler, monkeypatch):
+        handler.responses[f"GET /slurmdb/{API}/jobs/"] = envelope(
+            jobs=[
+                _job("other", "alice", 60, [{"type": "cpu", "count": 1}]),
+                _job("acc1", "alice", 60, [{"type": "cpu", "count": 1}], cluster="elsewhere"),
+                _job("acc1", "alice", 60, [{"type": "cpu", "count": 1}]),
+            ]
+        )
+        client = self._client(handler, monkeypatch)
+        assert len(client.get_usage_report(["acc1"])) == 1
+
+    def test_tri_state_elapsed_and_missing_user_are_tolerated(self, handler, monkeypatch):
+        handler.responses[f"GET /slurmdb/{API}/jobs/"] = envelope(
+            jobs=[
+                {
+                    "account": "acc1",
+                    "user": "alice",
+                    "time": {"elapsed": {"set": True, "infinite": False, "number": 120}},
+                    "tres": {"allocated": [{"type": "cpu", "count": 1}]},
+                },
+                {"account": "acc1", "time": {"elapsed": 5}, "tres": {}},
+            ]
+        )
+        client = self._client(handler, monkeypatch)
+        lines = client.get_usage_report(["acc1"])
+        assert len(lines) == 1
+        assert lines[0].duration == 2.0
+
+    def test_job_straddling_the_window_is_truncated_like_sacct(self, handler, monkeypatch):
+        """A 56h job across the month boundary bills 52h to May and 4h to June."""
+        import datetime as dt
+
+        boundary = int(dt.datetime(2026, 6, 1, 0, 0, 0, tzinfo=dt.timezone.utc).timestamp())
+        job = _job(
+            "acc1",
+            "alice",
+            elapsed=56 * 3600,
+            tres=[{"type": "cpu", "count": 1}],
+            start=boundary - 52 * 3600,
+            end=boundary + 4 * 3600,
+        )
+        handler.responses[f"GET /slurmdb/{API}/jobs/"] = envelope(jobs=[job])
+        client = self._client(handler, monkeypatch)
+
+        # historical reports use naive local time; pin the process to UTC so
+        # the window edges line up with the epoch boundary above.
+        monkeypatch.setenv("TZ", "UTC")
+        import time
+
+        time.tzset()
+        (may,) = client.get_historical_usage_report(["acc1"], 2026, 5)
+        (june,) = client.get_historical_usage_report(["acc1"], 2026, 6)
+        # The May window closes at 23:59:59 (the same edge sacct is given), so
+        # its share is 52h less the final second; June opens at 00:00:00 and
+        # gets its 4h exactly. Nothing is counted twice.
+        assert may.duration == pytest.approx(52 * 60 - 1 / 60)
+        assert june.duration == 4 * 60
+        assert may.duration + june.duration == pytest.approx(56 * 60 - 1 / 60)
+
+    def test_running_job_is_billed_to_the_window_end(self, handler, monkeypatch):
+        import datetime as dt
+
+        window_start = int(dt.datetime(2026, 5, 1, tzinfo=dt.timezone.utc).timestamp())
+        job = _job(
+            "acc1",
+            "alice",
+            elapsed=10 * 3600,
+            tres=[{"type": "cpu", "count": 1}],
+            start=window_start + 3600,
+            end=0,  # still running per slurmdb
+        )
+        handler.responses[f"GET /slurmdb/{API}/jobs/"] = envelope(jobs=[job])
+        client = self._client(handler, monkeypatch)
+        monkeypatch.setenv("TZ", "UTC")
+        import time
+
+        time.tzset()
+        (line,) = client.get_historical_usage_report(["acc1"], 2026, 5)
+        # From start to the window's close: 31 days minus 1h (+ the 23:59:59 edge).
+        assert line.duration == (31 * 24 * 60 - 60) - 1 / 60
+
+    def test_job_without_start_keeps_raw_elapsed(self, handler, monkeypatch):
+        handler.responses[f"GET /slurmdb/{API}/jobs/"] = envelope(
+            jobs=[_job("acc1", "alice", 3600, [{"type": "cpu", "count": 1}])]
+        )
+        client = self._client(handler, monkeypatch)
+        (line,) = client.get_usage_report(["acc1"])
+        assert line.duration == 60.0
+
+    def test_window_is_read_in_the_offering_timezone(self, handler, monkeypatch):
+        client = self._client(handler, monkeypatch)
+        start, end = client._window_epochs("2026-05-01T00:00:00", "2026-05-31T23:59:59", "UTC")
+        import datetime as dt
+
+        assert start == int(dt.datetime(2026, 5, 1, tzinfo=dt.timezone.utc).timestamp())
+        assert end - start == 31 * 24 * 3600 - 1
+        shifted, _ = client._window_epochs(
+            "2026-05-01T00:00:00", "2026-05-31T23:59:59", "Europe/Tallinn"
+        )
+        assert start - shifted == 3 * 3600  # EEST is UTC+3 in May
+
+    def test_historical_report_uses_the_given_month(self, handler, monkeypatch):
+        client = self._client(handler, monkeypatch)
         client.get_historical_usage_report(["acc1"], 2026, 5)
-        client._cli.get_historical_usage_report.assert_called_once_with(["acc1"], 2026, 5)
-        client.reset_raw_usage("acc1")
+        params = dict(handler.requests[0].url.params)
+        assert params["start_time"].startswith("2026-05-01")
+        assert params["end_time"].startswith("2026-05-31")
+
+    def test_empty_account_list_makes_no_request(self, handler, monkeypatch):
+        client = self._client(handler, monkeypatch)
+        assert client.get_usage_report([]) == []
+        assert handler.requests == []
+
+    def test_no_sacct_is_run(self, handler, monkeypatch):
+        client = self._client(handler, monkeypatch)
+        client._cli = mock.Mock(spec=SlurmClient)
+        client.get_usage_report(["acc1"])
+        client._cli.get_usage_report.assert_not_called()
+
+
+class TestUserExists:
+    """check_user_exists asks slurmdbd, never the local id command."""
+
+    def test_known_user(self, client, handler):
+        handler.responses[f"GET /slurmdb/{API}/user/alice"] = envelope(
+            users=[{"name": "alice", "associations": []}]
+        )
+        client._cli = mock.Mock(spec=SlurmClient)
+        assert client.check_user_exists("alice") is True
+        assert handler.requests[0].url.path == f"/slurmdb/{API}/user/alice"
+        client._cli.check_user_exists.assert_not_called()
+
+    def test_unknown_user_as_error_envelope(self, client, handler):
+        """Real slurmrestd reports a missing user as an error, not an empty list."""
+        handler.responses[f"GET /slurmdb/{API}/user/nobody"] = envelope(
+            errors=[{"description": "Unable to find user nobody", "error_number": 2017}]
+        )
+        assert client.check_user_exists("nobody") is False
+
+    def test_unknown_user_as_empty_list(self, client, handler):
+        handler.responses[f"GET /slurmdb/{API}/user/nobody"] = envelope(users=[])
+        assert client.check_user_exists("nobody") is False
+
+    def test_username_is_url_quoted(self, client, handler):
+        # The mock handler keys on the decoded path; the wire carries a%20b.
+        handler.responses[f"GET /slurmdb/{API}/user/a b"] = envelope(users=[{"name": "a b"}])
+        assert client.check_user_exists("a b") is True
+        assert handler.requests[0].url.raw_path.endswith(b"/user/a%20b")
+
+
+class TestCliDelegation:
+    def test_raw_usage_resets_refuse_cleanly_without_sacctmgr(self, client):
+        client._cli = mock.Mock(spec=SlurmClient)
+        client._cli.slurm_bin_path = "/nonexistent/bin"
+        with pytest.raises(BackendError, match="sacctmgr"):
+            client.reset_raw_usage("acc1")
+        with pytest.raises(BackendError, match="sacctmgr"):
+            client.reset_qos_raw_usage("qos1")
+        client._cli.reset_raw_usage.assert_not_called()
+        client._cli.reset_qos_raw_usage.assert_not_called()
+
+    def test_raw_usage_and_user_lookup_delegate_to_cli_client(self, client):
+        client._cli = mock.Mock(spec=SlurmClient)
+        client._cli.slurm_bin_path = ""
+        with mock.patch("waldur_site_agent_slurm.rest_client.which", return_value="/usr/bin/x"):
+            client.reset_raw_usage("acc1")
         client._cli.reset_raw_usage.assert_called_once_with("acc1")
-        client.check_user_exists("user1")
-        client._cli.check_user_exists.assert_called_once_with("user1")
 
     def test_executed_commands_includes_delegated_cli_commands(self, client, handler):
         # reset_raw_usage runs on the CLI client; its command must still show

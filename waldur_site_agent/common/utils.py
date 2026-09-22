@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 import traceback
+from http import HTTPStatus
 from pathlib import Path
 from typing import Optional, Union, cast
 from uuid import UUID
@@ -30,7 +31,10 @@ from waldur_api_client.api.marketplace_offering_users import (
     marketplace_offering_users_begin_creating,
     marketplace_offering_users_list,
     marketplace_offering_users_partial_update,
+    marketplace_offering_users_set_deleted,
+    marketplace_offering_users_set_deleting,
     marketplace_offering_users_set_error_creating,
+    marketplace_offering_users_set_error_deleting,
     marketplace_offering_users_set_pending_account_linking,
     marketplace_offering_users_set_pending_additional_validation,
     marketplace_offering_users_set_validation_complete,
@@ -105,6 +109,7 @@ from waldur_site_agent.backend import (
 )
 from waldur_site_agent.backend import exceptions as backend_exceptions
 from waldur_site_agent.backend.backends import (
+    DEPARTED_OFFERING_USER_STATES,
     AbstractUsernameManagementBackend,
     BaseBackend,
     UnknownBackend,
@@ -1223,6 +1228,153 @@ def get_username_management_backend(
         backend_class(backend_settings=offering.backend_settings, offering=offering),
         dist_version,
     )
+
+
+#: What a username backend's ``release_users`` needs about each offering user:
+#: enough to name the account, to tell what Waldur thinks of it, and to look
+#: for the same person's other accounts on the same provider.
+RELEASE_OFFERING_USER_FIELDS: list[OfferingUserFieldEnum] = [
+    OfferingUserFieldEnum.UUID,
+    OfferingUserFieldEnum.USERNAME,
+    OfferingUserFieldEnum.USER_UUID,
+    OfferingUserFieldEnum.USER_USERNAME,
+    OfferingUserFieldEnum.USER_EMAIL,
+    OfferingUserFieldEnum.STATE,
+    OfferingUserFieldEnum.IS_RESTRICTED,
+    OfferingUserFieldEnum.OFFERING_UUID,
+    OfferingUserFieldEnum.OFFERING_NAME,
+    OfferingUserFieldEnum.CUSTOMER_UUID,
+]
+
+
+def get_release_capable_username_backend(
+    offering: structures.Offering,
+) -> Optional[AbstractUsernameManagementBackend]:
+    """The offering's username backend, if it implements ``release_users``.
+
+    The default on the abstract base is a no-op, so for a backend that leaves it
+    alone there is nothing to fetch and nothing to call; callers skip the Waldur
+    round-trips on ``None``.
+    """
+    try:
+        backend, _ = get_username_management_backend(offering)
+    except Exception:
+        logger.exception(
+            "Could not resolve the username management backend for %s", offering.name
+        )
+        return None
+    if type(backend).release_users is AbstractUsernameManagementBackend.release_users:
+        return None
+    return backend
+
+
+def _check_transition(response: object, target: str) -> None:
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and status_code >= HTTPStatus.BAD_REQUEST:
+        msg = f"Transition to {target} rejected with HTTP {status_code}"
+        raise BackendError(msg)
+
+
+def claim_offering_user_deletion(
+    offering_user: OfferingUser, waldur_rest_client: AuthenticatedClient
+) -> bool:
+    """Move the offering user to DELETING *before* touching the provider side.
+
+    This is the compare-and-swap that protects a person who was restored in the
+    meantime: Waldur's transition validator refuses ``set_deleting`` for a row
+    that is live again (only REQUESTED_DELETION / ERROR_DELETING may become
+    DELETING), so a refusal here means "do not tear this account down" rather
+    than an error. Returns whether the claim holds; a row already in DELETING
+    is ours from an earlier, interrupted attempt.
+    """
+    state = getattr(offering_user, "state", UNSET)
+    if state == OfferingUserState.DELETING:
+        return True
+    if state not in DEPARTED_OFFERING_USER_STATES:
+        return False
+    response = marketplace_offering_users_set_deleting.sync_detailed(
+        uuid=offering_user.uuid, client=waldur_rest_client
+    )
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and status_code >= HTTPStatus.BAD_REQUEST:
+        logger.info(
+            "Waldur refused to move offering user %s (%s) to DELETING (HTTP %s); it was "
+            "restored in the meantime, leaving the account alone",
+            offering_user.username,
+            offering_user.uuid,
+            status_code,
+        )
+        return False
+    return True
+
+
+def complete_offering_user_deletion(
+    offering_user: OfferingUser, waldur_rest_client: AuthenticatedClient
+) -> None:
+    """Mark a claimed (DELETING) offering user DELETED.
+
+    Only DELETING may become DELETED. This is what lets Waldur release the
+    provider-wide identity behind the account, so it runs only once the
+    provider side is torn down.
+    """
+    _check_transition(
+        marketplace_offering_users_set_deleted.sync_detailed(
+            uuid=offering_user.uuid, client=waldur_rest_client
+        ),
+        "DELETED",
+    )
+    logger.info(
+        "Marked offering user %s (%s) DELETED in Waldur", offering_user.username, offering_user.uuid
+    )
+
+
+def mark_offering_user_error_deleting(
+    offering_user: OfferingUser, waldur_rest_client: AuthenticatedClient
+) -> None:
+    """Best-effort: make a failed teardown visible in Waldur; the sweep retries it."""
+    state = getattr(offering_user, "state", UNSET)
+    if state not in (OfferingUserState.REQUESTED_DELETION, OfferingUserState.DELETING):
+        return
+    try:
+        _check_transition(
+            marketplace_offering_users_set_error_deleting.sync_detailed(
+                uuid=offering_user.uuid, client=waldur_rest_client
+            ),
+            "ERROR_DELETING",
+        )
+    except Exception:
+        logger.exception(
+            "Could not mark offering user %s (%s) as error deleting",
+            offering_user.username,
+            offering_user.uuid,
+        )
+
+
+def release_offering_users(
+    backend: AbstractUsernameManagementBackend,
+    offering: structures.Offering,
+    offering_users: list[OfferingUser],
+    waldur_rest_client: AuthenticatedClient,
+) -> None:
+    """Hand departed offering users to the username backend, never raising.
+
+    A failure here must not abort the membership cycle that triggered it: the
+    associations are already gone, and the backend gets the same accounts again
+    on the next cycle for as long as Waldur keeps them in a deletion state.
+    """
+    if not offering_users:
+        return
+    logger.info(
+        "Releasing %d departed offering user(s) of %s through the %s backend: %s",
+        len(offering_users),
+        offering.name,
+        offering.username_management_backend,
+        ", ".join(sorted(ou.username for ou in offering_users if ou.username)),
+    )
+    try:
+        backend.release_users(offering_users, waldur_rest_client)
+    except Exception:
+        logger.exception("Failed to release departed offering users of %s", offering.name)
 
 
 def update_offering_users(

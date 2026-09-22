@@ -22,6 +22,11 @@ from ldap3.utils.dn import escape_rdn, parse_dn
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.exceptions import BackendError
 
+#: Written into ``description`` by disable_user, so a reconcile can tell an
+#: account the agent parked from one an operator disabled by hand.
+DISABLED_MARKER = "waldur-site-agent:disabled"
+NOLOGIN_SHELL = "/usr/sbin/nologin"
+
 
 def _first(value: Union[list, tuple, str, int, None]) -> Union[str, int, None]:
     """First element of an ldap3 attribute value, which may be a list or a scalar.
@@ -108,6 +113,11 @@ class LdapClient:
         "loginShell",
         "givenName",
         "sn",
+        # Departure bookkeeping: an account parked by disable_user carries the
+        # marker in description, shadowExpire=1 and the shadowAccount class.
+        "description",
+        "shadowExpire",
+        "objectClass",
     )
 
     def _build_server(self) -> Server:
@@ -575,6 +585,92 @@ class LdapClient:
                 )
         except LDAPException as e:
             raise BackendError(f"Failed to update LDAP user {username}: {e}") from e
+        finally:
+            conn.unbind()
+
+    def disable_user(self, username: str, login_shell: str = NOLOGIN_SHELL) -> None:
+        """Park an account: keep the entry and its ids, make it unusable.
+
+        Sets ``loginShell`` to a no-login shell, adds the ``shadowAccount`` class
+        with ``shadowExpire: 1`` (an expiry in the past, which sssd honours with
+        ``ldap_account_expire_policy = shadow``), and records the marker in
+        ``description`` so a later reconcile can tell an account the agent parked
+        from one an operator disabled by hand. Idempotent.
+        """
+        entry = self.search_user(username)
+        if entry is None:
+            raise BackendError(f"Cannot disable LDAP user {username}: entry not found")
+        changes: dict = {
+            "loginShell": [(MODIFY_REPLACE, [login_shell])],
+            "shadowExpire": [(MODIFY_REPLACE, ["1"])],
+        }
+        classes = {str(c) for c in entry.get("objectClass") or []}
+        if "shadowAccount" not in classes:
+            changes["objectClass"] = [(MODIFY_ADD, ["shadowAccount"])]
+        descriptions = {str(d) for d in entry.get("description") or []}
+        if DISABLED_MARKER not in descriptions:
+            changes["description"] = [(MODIFY_ADD, [DISABLED_MARKER])]
+        conn = self._connect()
+        try:
+            if not conn.modify(self._user_dn(username), changes):
+                raise BackendError(f"Failed to disable LDAP user {username}: {conn.result}")
+            logger.info("Disabled LDAP user %s", username)
+        except LDAPException as e:
+            raise BackendError(f"Failed to disable LDAP user {username}: {e}") from e
+        finally:
+            conn.unbind()
+
+    def enable_user(self, username: str, login_shell: str) -> None:
+        """Undo disable_user: restore the shell, drop the expiry and the marker.
+
+        The ``shadowAccount`` class is left in place; it is harmless without
+        ``shadowExpire`` and removing an auxiliary class is a schema-sensitive
+        write for no gain.
+        """
+        entry = self.search_user(username)
+        if entry is None:
+            raise BackendError(f"Cannot enable LDAP user {username}: entry not found")
+        changes: dict = {"loginShell": [(MODIFY_REPLACE, [login_shell])]}
+        if entry.get("shadowExpire"):
+            changes["shadowExpire"] = [(MODIFY_DELETE, [])]
+        descriptions = {str(d) for d in entry.get("description") or []}
+        if DISABLED_MARKER in descriptions:
+            changes["description"] = [(MODIFY_DELETE, [DISABLED_MARKER])]
+        conn = self._connect()
+        try:
+            if not conn.modify(self._user_dn(username), changes):
+                raise BackendError(f"Failed to enable LDAP user {username}: {conn.result}")
+            logger.info("Re-enabled LDAP user %s", username)
+        except LDAPException as e:
+            raise BackendError(f"Failed to enable LDAP user {username}: {e}") from e
+        finally:
+            conn.unbind()
+
+    @staticmethod
+    def is_disabled_by_agent(entry: Optional[dict]) -> bool:
+        """Whether a user entry (as returned by search_user/list_users) was parked by the agent."""
+        if not entry:
+            return False
+        return DISABLED_MARKER in {str(d) for d in entry.get("description") or []}
+
+    def find_groups_with_member(self, username: str) -> list[str]:
+        """Names of every group under groups_ou listing ``username`` as memberUid."""
+        conn = self._connect()
+        try:
+            conn.search(
+                self._groups_dn,
+                f"(memberUid={escape_filter_chars(username)})",
+                search_scope=SUBTREE,
+                attributes=["cn"],
+            )
+            names = []
+            for entry in conn.entries:
+                cn = _first(entry.entry_attributes_as_dict.get("cn"))
+                if cn:
+                    names.append(str(cn))
+            return names
+        except LDAPException as e:
+            raise BackendError(f"Failed to list groups of {username}: {e}") from e
         finally:
             conn.unbind()
 

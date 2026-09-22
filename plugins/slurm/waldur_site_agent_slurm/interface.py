@@ -64,6 +64,25 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
     def account_has_users(self, account: str) -> bool:
         """Check if the account has associated users."""
 
+    # The three below are what ``delete_association`` and
+    # ``delete_all_users_from_account`` need to move a user's DefaultAccount out
+    # of the way before dropping an association: slurmdbd refuses to remove a
+    # default association while the user keeps others. Deliberately *not*
+    # abstract -- both shipped clients override them, and making them abstract
+    # would stop an existing out-of-tree client from instantiating at all.
+
+    def list_user_accounts(self, username: str) -> list[str]:
+        """Accounts the user holds an association with, lower-cased and sorted."""
+        raise NotImplementedError(type(self).__name__)
+
+    def get_user_default_account(self, username: str) -> Optional[str]:
+        """The user's DefaultAccount, lower-cased, or None when the user is unknown."""
+        raise NotImplementedError(type(self).__name__)
+
+    def set_user_default_account(self, username: str, account: str) -> None:
+        """Re-point the user's DefaultAccount."""
+        raise NotImplementedError(type(self).__name__)
+
     @abc.abstractmethod
     def get_historical_usage_report(
         self, resource_ids: list[str], year: int, month: int

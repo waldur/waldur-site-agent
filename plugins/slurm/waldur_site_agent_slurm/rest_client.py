@@ -18,16 +18,20 @@ plain numbers are accepted by the server on input.
 
 from __future__ import annotations
 
+import contextlib
+import datetime
 import os
 from collections.abc import Sequence
 from pathlib import Path
 from shutil import which
 from typing import Any, Optional
 from urllib.parse import quote, urlencode
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from waldur_site_agent.backend import logger
+from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import Association, ClientResource
 from waldur_site_agent_slurm.client import (
@@ -36,6 +40,7 @@ from waldur_site_agent_slurm.client import (
     SlurmClient,
 )
 from waldur_site_agent_slurm.interface import SlurmClientInterface
+from waldur_site_agent_slurm.parser import SlurmReportLine
 
 # SLURMDB_FS_USE_PARENT in slurm/slurmdb.h — the shares_raw sentinel
 # equivalent to ``sacctmgr ... Share=parent``.
@@ -528,15 +533,44 @@ class SlurmRestClient(SlurmClientInterface):
         return any(assoc.get("user") for assoc in self._list_associations(account=account))
 
     def delete_all_users_from_account(self, name: str) -> str:
-        """Remove all user associations from the account."""
+        """Remove all user associations from the account.
+
+        A user whose DefaultAccount is this account is re-pointed first, for
+        the same reason ``delete_association`` does it: slurmdbd refuses to
+        drop a default association while the user keeps others.
+        """
         users = self.list_resource_users(name)
         if not users:
             return ""
+        self._repoint_defaults_away_from(name, users)
         query = {"account": name, "user": ",".join(users)}
         if self.cluster_name:
             query["cluster"] = self.cluster_name
         self._request("DELETE", self._db("associations/"), query=query)
         return ""
+
+    def _repoint_defaults_away_from(self, account: str, users: list[str]) -> None:
+        """Move the DefaultAccount of every user defaulting to this account.
+
+        The listing can name the same user more than once (one row per
+        association), so each name is handled once.
+        """
+        target = account.lower()
+        for username in dict.fromkeys(users):
+            if self.get_user_default_account(username) != target:
+                continue
+            remaining = [item for item in self.list_user_accounts(username) if item != target]
+            if not remaining:
+                # This account is the user's last one: removing it takes the
+                # user record with it, which slurmdbd allows.
+                continue
+            logger.info(
+                "Moving default account of %s from %s to %s before removing the account's users",
+                username,
+                account,
+                remaining[0],
+            )
+            self.set_user_default_account(username, remaining[0])
 
     # ===== LIMITS =====
 
@@ -786,8 +820,56 @@ class SlurmRestClient(SlurmClientInterface):
         """
         self._post_association(account, self._nested(("max", "jobs", "per", "submitted"), value))
 
+    def list_user_accounts(self, username: str) -> list[str]:
+        """Accounts the user holds an association with on this cluster."""
+        return sorted(
+            {
+                str(assoc["account"]).lower()
+                for assoc in self._list_associations(user=username)
+                if assoc.get("account") and assoc.get("user") == username
+            }
+        )
+
+    def get_user_default_account(self, username: str) -> Optional[str]:
+        """The user's default account from ``GET /slurmdb/{v}/user/{name}``, if known."""
+        payload = self._request("GET", self._db(f"user/{quote(username)}"), allow_errors=True)
+        users = payload.get("users") or []
+        if not users:
+            return None
+        default_account = self._dig(users[0], "default", "account")
+        return str(default_account).lower() if default_account else None
+
+    def set_user_default_account(self, username: str, account: str) -> None:
+        """Re-point the user's default account (``POST /slurmdb/{v}/users/`` upsert)."""
+        body = {"users": [{"name": username, "default": {"account": account}}]}
+        self._request("POST", self._db("users/"), body=body)
+
+    def delete_user(self, username: str) -> str:
+        """Remove the user record together with every association it holds."""
+        self._request("DELETE", self._db(f"user/{quote(username)}"))
+        return ""
+
     def delete_association(self, username: str, resource_id: str) -> str:
-        """Delete the association between the account and the user."""
+        """Delete the association between the account and the user, slurmdbd-style.
+
+        slurmdbd refuses to remove a user's *default* association while the
+        user keeps others, so the default is moved to one of the remaining
+        accounts first. When this is the user's last association the user
+        record goes with it (``sacctmgr remove user`` semantics).
+        """
+        accounts = self.list_user_accounts(username)
+        remaining = [account for account in accounts if account != resource_id.lower()]
+        if accounts and not remaining:
+            logger.info("Removing user %s: %s was its last association", username, resource_id)
+            return self.delete_user(username)
+        if remaining and self.get_user_default_account(username) == resource_id.lower():
+            logger.info(
+                "Moving default account of %s from %s to %s before removing the association",
+                username,
+                resource_id,
+                remaining[0],
+            )
+            self.set_user_default_account(username, remaining[0])
         query = {"account": resource_id, "user": username}
         if self.cluster_name:
             query["cluster"] = self.cluster_name
@@ -941,6 +1023,7 @@ class SlurmRestClient(SlurmClientInterface):
 
     def reset_qos_raw_usage(self, qos_name: str) -> None:
         """Reset QoS RawUsage — delegated to sacctmgr (no REST equivalent)."""
+        self._require_cli("QoS RawUsage reset")
         self._cli.reset_qos_raw_usage(qos_name)
 
     # ===== FAIRSHARE =====
@@ -1064,22 +1147,166 @@ class SlurmRestClient(SlurmClientInterface):
                 continue
             self._request("DELETE", self._ctld(f"job/{job_id}"))
 
-    # ===== DELEGATED TO CLI (no direct REST equivalent) =====
+    # ===== USAGE REPORTS (slurmdb job records) =====
 
-    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
-        """Per-user usage report — delegated to sacct (no sreport REST equivalent)."""
-        return self._cli.get_usage_report(resource_ids, timezone)
+    def get_usage_report(
+        self, resource_ids: list[str], timezone: Optional[str] = None
+    ) -> list[SlurmReportLine]:
+        """Per-user usage for the current month, from ``GET /slurmdb/{v}/jobs/``.
+
+        The sacct equivalent is ``--allocations --allusers --accounts=...
+        --format=Account,ReqTRES,Elapsed,User`` over the month. Each job record
+        is rendered into the same ``Account|TRES|Elapsed|User`` line so the
+        parser and everything downstream stay shared with the CLI client.
+        """
+        month_start, month_end = backend_utils.format_current_month(timezone or "")
+        return self._usage_lines(resource_ids, month_start, month_end, timezone)
 
     def get_historical_usage_report(
         self, resource_ids: list[str], year: int, month: int
-    ) -> list:
-        """Historical usage report — delegated to sacct (no sreport REST equivalent)."""
-        return self._cli.get_historical_usage_report(resource_ids, year, month)
+    ) -> list[SlurmReportLine]:
+        """Per-user usage for a past month, from ``GET /slurmdb/{v}/jobs/``."""
+        month_start, month_end = backend_utils.format_month_period(year, month)
+        return self._usage_lines(resource_ids, month_start, month_end, None)
+
+    @staticmethod
+    def _window_epochs(start_time: str, end_time: str, timezone: Optional[str]) -> tuple[int, int]:
+        """The report window as epoch seconds.
+
+        The window strings are naive, in the offering's timezone (system-local
+        when none is set) -- the same reading sacct gives them. slurmdb job
+        times are epoch seconds, so the clip below needs both on one scale.
+        """
+        tz: Optional[datetime.tzinfo] = None
+        if timezone:
+            with contextlib.suppress(Exception):
+                tz = ZoneInfo(timezone)
+        start = datetime.datetime.fromisoformat(start_time)
+        end = datetime.datetime.fromisoformat(end_time)
+        if tz is not None:
+            start = start.replace(tzinfo=tz)
+            end = end.replace(tzinfo=tz)
+        return int(start.timestamp()), int(end.timestamp())
+
+    def _usage_lines(
+        self,
+        resource_ids: list[str],
+        start_time: str,
+        end_time: str,
+        timezone: Optional[str],
+    ) -> list[SlurmReportLine]:
+        if not resource_ids:
+            return []
+        window = self._window_epochs(start_time, end_time, timezone)
+        query: dict[str, str] = {
+            "account": ",".join(resource_ids),
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+        if self.cluster_name:
+            query["cluster"] = self.cluster_name
+        payload = self._request("GET", self._db("jobs/"), query=query)
+        wanted = set(resource_ids)
+        lines = []
+        for job in payload.get("jobs") or []:
+            account = job.get("account") or ""
+            # Re-filter client-side: older slurmrestd ignore unknown query params.
+            if account not in wanted:
+                continue
+            if self.cluster_name and job.get("cluster") not in (None, "", self.cluster_name):
+                continue
+            line = self._job_to_report_line(job, window)
+            if line is not None:
+                lines.append(line)
+        return lines
+
+    @staticmethod
+    def _time_field(value: object) -> Optional[int]:
+        """A slurmdb time value as int seconds; tolerates the tri-state struct."""
+        if isinstance(value, dict):
+            value = value.get("number") if value.get("set") and not value.get("infinite") else None
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
+    @classmethod
+    def _truncated_elapsed(cls, job: dict, window: tuple[int, int]) -> Optional[int]:
+        """Seconds of the job that fall inside the window -- what sacct --truncate reports.
+
+        A job that spans a month boundary is billed to each month only for the
+        part inside it; without this a 56h job crossing the boundary would be
+        charged 56h in both months. A running job has no end yet and is taken
+        as running until the window closes, like sacct does. Jobs without a
+        start time cannot be placed and keep their raw elapsed.
+        """
+        times = job.get("time") or {}
+        elapsed = cls._time_field(times.get("elapsed"))
+        if elapsed is None:
+            return None
+        start = cls._time_field(times.get("start"))
+        if not start:
+            return elapsed
+        end = cls._time_field(times.get("end"))
+        if not end:
+            end = max(start + elapsed, window[1])
+        window_start, window_end = window
+        return max(0, min(end, window_end) - max(start, window_start))
+
+    def _job_to_report_line(
+        self, job: dict, window: tuple[int, int]
+    ) -> Optional[SlurmReportLine]:
+        """Render one slurmdb job record as a sacct ``Account|ReqTRES|Elapsed|User`` line.
+
+        ``tres.allocated`` is what the job actually held (``requested`` is the
+        fallback for jobs that never started). Memory is in MB on the wire and
+        sacct prints it with an ``M`` suffix, which the parser expects.
+        """
+        user = job.get("user") or job.get("user_name") or ""
+        elapsed = self._truncated_elapsed(job, window)
+        if not user or elapsed is None:
+            return None
+        tres_section = job.get("tres") or {}
+        tres_list = tres_section.get("allocated") or tres_section.get("requested")
+        tres = self._tres_list_to_dict(tres_list)
+        pairs = []
+        for key in sorted(tres):
+            value = tres[key]
+            pairs.append(f"{key}={value}M" if key == "mem" else f"{key}={value}")
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        elapsed_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        line = f"{job.get('account')}|{','.join(pairs)}|{elapsed_str}|{user}"
+        return SlurmReportLine(line, self.slurm_tres)
+
+    def check_user_exists(self, username: str) -> bool:
+        """Whether slurmdbd knows the user, from ``GET /slurmdb/{v}/user/{name}``.
+
+        The CLI client answers this with a local ``id`` lookup, which is the
+        wrong question for a REST-driven cluster: the agent host is not a
+        cluster node and need not resolve cluster accounts at all. What the
+        caller (job cancellation before an association is dropped) actually
+        needs is whether the accounting database has the user, and that is
+        exactly what this endpoint answers. Real slurmrestd reports a missing
+        user as an error rather than an empty list, hence ``allow_errors``.
+        """
+        payload = self._request("GET", self._db(f"user/{quote(username)}"), allow_errors=True)
+        return bool(payload.get("users"))
+
+    # ===== DELEGATED TO CLI (no REST equivalent) =====
+    #
+    # RawUsage reset has no slurmrestd counterpart, so these still shell out to
+    # sacctmgr. In a REST-only deployment the binary is usually absent; say so
+    # up front rather than surfacing a "command not found" from deep inside.
+
+    def _require_cli(self, operation: str) -> None:
+        if not self._cli_binaries_present():
+            msg = (
+                f"{operation} has no slurmrestd equivalent and needs sacctmgr, which is "
+                f"not available on this host (slurm_bin_path={self.slurm_bin_path!r})"
+            )
+            raise BackendError(msg)
 
     def reset_raw_usage(self, account: str) -> bool:
         """Reset raw usage — delegated to sacctmgr (no REST equivalent)."""
+        self._require_cli("RawUsage reset")
         return self._cli.reset_raw_usage(account)
-
-    def check_user_exists(self, username: str) -> bool:
-        """Check if the user exists in the local system (local ``id`` lookup)."""
-        return self._cli.check_user_exists(username)

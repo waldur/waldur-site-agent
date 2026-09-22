@@ -19,6 +19,7 @@ from typing import Optional
 
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.types import Unset
+from waldur_site_agent_ldap_client import LdapClient
 
 # Attributes carrying the account's POSIX identity, as opposed to its profile.
 # A disagreement here is a drift; a disagreement anywhere else is just stale data.
@@ -48,6 +49,9 @@ class Outcome(str, Enum):
     UPDATE = "update"  # profile / home / shell differ; safe to rewrite
     DRIFT = "drift"  # uidNumber or gidNumber differ; policy decides
     UID_TAKEN = "uid_taken"  # a different entry already holds this UID
+    # The entry exists with the right ids but was parked by the agent when the
+    # person left (see LdapClient.disable_user); they are back, so wake it up.
+    REENABLE = "reenable"
 
 
 @dataclass
@@ -188,7 +192,7 @@ def build_desired(
     )
 
 
-def classify(
+def classify(  # noqa: PLR0911
     desired: DesiredEntry,
     actual: Optional[dict],
     *,
@@ -251,6 +255,15 @@ def classify(
     if waldur_username_attribute and desired.waldur_username:
         wanted.append((waldur_username_attribute, desired.waldur_username))
     updates = {name: value for name, value in wanted if value and _attr_text(actual, name) != value}
+
+    # Case 7: same DN, same ids, but the agent parked this entry when the person
+    # left. Waldur lists them live again, so it is re-enabled -- not created (the
+    # entry exists), not merely updated (the no-login shell was ours, and so are
+    # the expiry and the marker). The shell is restored by the enable step, so it
+    # is not also written as a profile update.
+    if LdapClient.is_disabled_by_agent(actual):
+        updates.pop("loginShell", None)
+        return Decision(outcome=Outcome.REENABLE, updates=updates)
 
     if updates:
         return Decision(outcome=Outcome.UPDATE, updates=updates)

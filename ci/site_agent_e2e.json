@@ -406,10 +406,11 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Waldur-authoritative LDAP offering. Its offering users carry the username and POSIX ids Waldur allocated; the agent writes them into the directory rather than inventing them.",
+      "description": "Waldur-authoritative LDAP offering. Its offering users carry the username and POSIX ids Waldur allocated; the agent writes them into the directory rather than inventing them. offering_user_auto_deletion lets the release E2E test move a departed member to Requested deletion.",
       "plugin_options": {
         "username_generation_policy": "waldur_username",
-        "enable_posix_account": true
+        "enable_posix_account": true,
+        "offering_user_auto_deletion": true
       }
     },
     {
@@ -421,10 +422,11 @@
       "billable": true,
       "category_uuid": "e2ed0000000000000000000000000002",
       "customer_uuid": "e2ec0000000000000000000000000001",
-      "description": "Second offering of the same provider, sharing the provider POSIX ID pool. Exists so the suite can prove two offerings converge on one directory entry with one uidNumber.",
+      "description": "Second offering of the same provider, sharing the provider POSIX ID pool. Exists so the suite can prove two offerings converge on one directory entry with one uidNumber. offering_user_auto_deletion lets the release E2E test move a departed member to Requested deletion.",
       "plugin_options": {
         "username_generation_policy": "waldur_username",
-        "enable_posix_account": true
+        "enable_posix_account": true,
+        "offering_user_auto_deletion": true
       }
     },
     {

@@ -105,9 +105,13 @@ class MockBackend(BaseBackend):
         return self._created_resources.get(backend_id)
 
     def pull_resources(
-        self, waldur_resources: list[WaldurResource]
+        self,
+        waldur_resources: list[WaldurResource],
+        include_usage: bool = True,
+        strict: bool = False,
     ) -> dict[str, tuple[WaldurResource, BackendResourceInfo]]:
         """Pull multiple resources from the mock backend."""
+        del include_usage, strict
         result = {}
         for resource in waldur_resources:
             backend_info = self.pull_resource(resource)

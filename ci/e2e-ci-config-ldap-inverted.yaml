@@ -31,7 +31,8 @@ timezone: "UTC"
   account_source: "waldur"
   on_missing_posix_ids: "error"
   on_posix_mismatch: "report"
-  remove_user_on_deactivate: false
+  # remove_user_on_deactivate is deliberately unset: under account_source "waldur"
+  # it defaults to on, and the release test relies on that default.
   user_object_classes:
     - "inetOrgPerson"
     - "posixAccount"

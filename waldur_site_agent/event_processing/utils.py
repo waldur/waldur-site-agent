@@ -22,7 +22,10 @@ from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.resource_api_key_state import ResourceApiKeyState
 
 from waldur_site_agent.backend import logger
-from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
+from waldur_site_agent.backend.backends import (
+    DEPARTED_OFFERING_USER_STATES,
+    AbstractUsernameManagementBackend,
+)
 from waldur_site_agent.common import agent_identity_management
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import structures as common_structures
@@ -32,6 +35,7 @@ from waldur_site_agent.common.utils import (
     get_backend_for_offering,
     get_client_for_offering,
 )
+from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.event_subscription_manager import EventSubscriptionManager
 from waldur_site_agent.event_processing.structures import (
     StompConsumer,
@@ -454,6 +458,9 @@ def run_periodic_offering_user_reconciliation(
     for offering in waldur_offerings:
         touch_heartbeat()
         if not offering.membership_sync_backend:
+            # No usernames to mint here, but the username backend's own
+            # reconcile and the deletion sweep still apply.
+            _run_username_backend_reconciliation(offering, user_agent)
             continue
         try:
             waldur_rest_client = get_client_for_offering(offering, user_agent)
@@ -504,8 +511,15 @@ def _run_username_backend_reconciliation(
     of band. Nothing else covers that on a STOMP offering — polling membership sync
     skips them entirely.
 
-    Backends that leave sync_user_profiles as the inherited no-op pay nothing: the
-    identity check below short-circuits before any request is made.
+    The same pass hands the accounts Waldur has flagged for deletion to the
+    backend's release hook: on a STOMP offering the role-change event usually
+    arrives before Waldur's deletion request does, so the removal-time hook in
+    the membership processor sees an account that still looks live and leaves
+    it. This sweep is what eventually lets it go.
+
+    Backends that leave both sync_user_profiles and release_users as the
+    inherited no-ops pay nothing: the identity checks below short-circuit
+    before any request is made.
     """
     try:
         backend, _ = common_utils.get_username_management_backend(offering)
@@ -515,8 +529,10 @@ def _run_username_backend_reconciliation(
         )
         return
 
-    if type(backend).sync_user_profiles is AbstractUsernameManagementBackend.sync_user_profiles:
-        return
+    syncs_profiles = (
+        type(backend).sync_user_profiles
+        is not AbstractUsernameManagementBackend.sync_user_profiles
+    )
 
     try:
         waldur_rest_client = get_client_for_offering(offering, user_agent)
@@ -526,8 +542,19 @@ def _run_username_backend_reconciliation(
             offering_uuid=[offering.uuid],
             is_restricted=False,
         )
-        if offering_users:
+        if offering_users and syncs_profiles:
             backend.sync_user_profiles(offering_users)
+        # The teardown runs for every offering: associations and the
+        # acknowledgement need no username backend at all. Its own query, by
+        # state and without the restricted filter above: a restricted user whose
+        # deletion was requested while the agent was disconnected must still go.
+        departed = marketplace_offering_users_list.sync_all(
+            client=waldur_rest_client,
+            offering_uuid=[offering.uuid],
+            state=list(DEPARTED_OFFERING_USER_STATES),
+            field=common_utils.RELEASE_OFFERING_USER_FIELDS,
+        )
+        handlers.process_offering_user_deletions(offering, waldur_rest_client, departed)
     except Exception:
         logger.exception(
             "Username backend reconciliation failed for offering %s", offering.name
