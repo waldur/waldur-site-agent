@@ -654,23 +654,72 @@ class LdapClient:
         return DISABLED_MARKER in {str(d) for d in entry.get("description") or []}
 
     def find_groups_with_member(self, username: str) -> list[str]:
-        """Names of every group under groups_ou listing ``username`` as memberUid."""
+        """Names of every group under groups_ou listing ``username`` as memberUid.
+
+        Only the posixGroup style. Use ``find_group_memberships`` to sweep an
+        account out of every group it is in, whichever way it is listed.
+        """
+        return [
+            group_name
+            for group_name, membership_type in self.find_group_memberships(username)
+            if membership_type == "memberUid"
+        ]
+
+    def find_group_memberships(self, username: str) -> list[tuple[str, str]]:
+        """Every group under groups_ou listing ``username``, and how it lists them.
+
+        Both styles are swept: ``memberUid`` (posixGroup, a bare name) and
+        ``member`` (groupOfNames, the full DN). A sweep that knew only the first
+        would leave a departing account inside every DN-style group it belongs
+        to while reporting the release as done. The membership type travels with
+        the name because it is what ``remove_user_from_group`` needs to drop it.
+        A group listing the user both ways is returned once per style, so both
+        are removed.
+        """
+        conn = self._connect()
+        try:
+            memberships = []
+            for membership_type, value in (
+                ("memberUid", username),
+                ("member", self._user_dn(username)),
+            ):
+                conn.search(
+                    self._groups_dn,
+                    f"({membership_type}={escape_filter_chars(value)})",
+                    search_scope=SUBTREE,
+                    attributes=["cn"],
+                )
+                for entry in conn.entries:
+                    cn = _first(entry.entry_attributes_as_dict.get("cn"))
+                    if cn:
+                        memberships.append((str(cn), membership_type))
+        except LDAPException as e:
+            raise BackendError(f"Failed to list groups of {username}: {e}") from e
+        finally:
+            conn.unbind()
+        # A search under a base that does not exist returns nothing rather than
+        # failing -- the connection does not raise on results. "No groups" and
+        # "wrong groups_ou" would then look identical to a caller sweeping an
+        # account out of its groups, and it would report success having looked
+        # at nothing. Only pay for the check when the answer was empty.
+        if not memberships and not self._groups_container_exists():
+            msg = f"Cannot list the groups of {username}: {self._groups_dn} does not exist"
+            raise BackendError(msg)
+        return memberships
+
+    def _groups_container_exists(self) -> bool:
+        """Whether the groups container itself is present."""
         conn = self._connect()
         try:
             conn.search(
                 self._groups_dn,
-                f"(memberUid={escape_filter_chars(username)})",
+                "(objectClass=*)",
                 search_scope=SUBTREE,
                 attributes=["cn"],
             )
-            names = []
-            for entry in conn.entries:
-                cn = _first(entry.entry_attributes_as_dict.get("cn"))
-                if cn:
-                    names.append(str(cn))
-            return names
-        except LDAPException as e:
-            raise BackendError(f"Failed to list groups of {username}: {e}") from e
+            return bool(conn.entries)
+        except LDAPException:
+            return False
         finally:
             conn.unbind()
 
@@ -856,7 +905,27 @@ class LdapClient:
                     },
                 )
                 result_desc = "" if success else conn.result.get("description", "")
-            if not success and "noSuchAttribute" not in result_desc:
+            # noSuchAttribute: the user is not a member. noSuchObject: the group
+            # itself is absent -- a typo in the config, or one an operator has
+            # not created yet. Either way the membership this call exists to
+            # remove does not exist, and an account being released must not be
+            # held back by it.
+            #
+            # Unless the whole container is missing: then every group answers
+            # noSuchObject, every sweep comes back empty, and tolerating it
+            # would let a release report success having removed nothing.
+            if (
+                not success
+                and "noSuchObject" in result_desc
+                and not self._groups_container_exists()
+            ):
+                msg = (
+                    f"Failed to remove {username} from group {group_name}: the groups "
+                    f"container {self._groups_dn} does not exist"
+                )
+                raise BackendError(msg)
+            tolerated = ("noSuchAttribute", "noSuchObject")
+            if not success and not any(desc in result_desc for desc in tolerated):
                 raise BackendError(
                     f"Failed to remove {username} from group {group_name}: {conn.result}"
                 )

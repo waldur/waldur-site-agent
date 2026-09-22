@@ -2365,11 +2365,44 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
 
         resources: list[WaldurResource] = self._get_waldur_resources(project_uuid=project_uuid)
         # A users-only pull: the usage report is irrelevant to a role change, and
-        # a failing one must not swallow the membership change.
-        resource_report = self.resource_backend.pull_resources(resources, include_usage=False)
+        # a failing one must not swallow the membership change. On a revocation
+        # the pull also decides absence -- a resource missing from the report
+        # reads as "no association there", and the account would be released
+        # while that association survives -- so there it has to fail loudly.
+        pull_failed = False
+        try:
+            resource_report = self.resource_backend.pull_resources(
+                resources, include_usage=False, strict=not granted
+            )
+            resources_to_process = [resource for resource, _ in resource_report.values()]
+        except Exception:
+            if granted:
+                logger.exception(
+                    "Unable to pull the resources of %s; the new role for %s waits "
+                    "for the next cycle",
+                    self.offering.name,
+                    username,
+                )
+                return
+            # The removals still have to run. Skipping them would leave the user
+            # on every resource that did answer, keeping the access the role
+            # change just took away -- and that is the worse direction to fail
+            # in. Only the release is withheld, which the flag does below.
+            logger.exception(
+                "Could not pull every resource of %s; removing %s from the ones "
+                "that answered and keeping their account",
+                self.offering.name,
+                username,
+            )
+            pull_failed = True
+            # Not a second pull: only the Waldur resource is used below, never
+            # the pulled report, and for a membership backend a pull is not a
+            # read -- ldap-roles reconciles groups inside pull_resource -- so
+            # repeating it would double those writes on the failure path.
+            resources_to_process = resources
 
-        removal_failed = False
-        for waldur_resource, _ in resource_report.values():
+        removal_failed = pull_failed
+        for waldur_resource in resources_to_process:
             try:
                 if granted:
                     if waldur_resource.restrict_member_access:
@@ -2405,7 +2438,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 # removal and releases the account once it succeeds.
                 logger.warning(
                     "Not releasing the account of %s: at least one association on %s "
-                    "could not be removed",
+                    "could not be removed, or could not be read to begin with",
                     username,
                     self.offering.name,
                 )
@@ -2460,6 +2493,57 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 ", ".join(sorted(unresolved)),
             )
         utils.release_offering_users(backend, self.offering, departed, self.waldur_rest_client)
+
+    def _confirmed_removals(
+        self,
+        requested: set[str],
+        returned: Optional[list[str]],
+        waldur_resource: WaldurResource,
+    ) -> set[str]:
+        """The names the resource backend confirms are no longer associated.
+
+        ``remove_users_from_resource`` logs a per-user failure and leaves that
+        name out of what it returns, so the requested set is no evidence that
+        anything was removed. Releasing on it would disable or delete the
+        directory entry of someone the cluster still refers to; only the names
+        handed back are released, and the rest wait for a cycle that removes
+        them for real.
+
+        A backend that returns None -- or anything else that cannot be read as a
+        collection of names -- predates the return value and cannot be asked, so
+        its names are released as they were before this check existed: an
+        out-of-tree backend keeps working instead of silently never releasing.
+        Anything iterable is taken at its word, so a backend handing back a
+        frozenset or a dict's keys is held to the same rule as one returning a
+        list. A bare string is not a collection of names; iterating one would
+        release its individual characters.
+        """
+        if returned is None or isinstance(returned, (str, bytes)):
+            confirmed = None
+        else:
+            try:
+                confirmed = requested & set(returned)
+            except TypeError:
+                confirmed = None
+        if confirmed is None:
+            logger.warning(
+                "%s.remove_users_from_resource returned %s rather than the names it "
+                "removed; releasing the accounts of %s on trust",
+                type(self.resource_backend).__name__,
+                type(returned).__name__,
+                waldur_resource.backend_id,
+            )
+            return set(requested)
+        kept = requested - confirmed
+        if kept:
+            logger.warning(
+                "Not releasing %d account(s) whose association on %s could not be "
+                "removed: %s",
+                len(kept),
+                waldur_resource.backend_id,
+                ", ".join(sorted(kept)),
+            )
+        return confirmed
 
     def _process_requested_deletions(self) -> None:
         """Tear down the accounts Waldur has flagged for deletion, every cycle.
@@ -3115,13 +3199,15 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             offering_user_states=offering_user_states,
         )
 
-        self.resource_backend.remove_users_from_resource(
+        removed_usernames = self.resource_backend.remove_users_from_resource(
             waldur_resource,
             stale_usernames,
             user_cuids=user_cuids,
             user_roles=user_roles,
         )
-        self._release_departed_users(stale_usernames)
+        self._release_departed_users(
+            self._confirmed_removals(stale_usernames, removed_usernames, waldur_resource)
+        )
 
         self.resource_backend.process_existing_users(existing_usernames)
 

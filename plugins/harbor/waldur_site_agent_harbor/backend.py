@@ -465,13 +465,15 @@ class HarborBackend(backends.BaseBackend):
             usernames: Set of usernames to remove
 
         Returns:
-            Empty list (no users removed individually)
+            Every requested username. Harbor holds no per-user association, so
+            none of them is left attached to the project for the caller to keep
+            waiting on.
         """
         logger.info(
             "User management is handled through OIDC groups for Harbor project %s",
             waldur_resource.backend_id,
         )
-        return []
+        return sorted(usernames)
 
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale Harbor project by reducing quota to minimum.

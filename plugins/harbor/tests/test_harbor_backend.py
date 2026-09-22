@@ -318,8 +318,12 @@ class TestHarborBackend:
         assert result == set()
 
     def test_remove_users_from_resource_noop(self, harbor_backend, waldur_resource):
-        """Test removing users (no-op for Harbor)."""
+        """Every name comes back: Harbor holds no per-user association to remove.
+
+        The caller releases a departed account only against this list, so an
+        empty one would read as "still attached" and park the account forever.
+        """
         result = harbor_backend.remove_users_from_resource(
             waldur_resource, {"user1", "user2"}
         )
-        assert result == []
+        assert result == ["user1", "user2"]

@@ -1401,18 +1401,12 @@ class MUPBackend(backends.BaseBackend):
             return None
 
         # Collect current project members as the user list for this resource.
-        try:
-            members = self.client.get_project_members(project["id"])
-            users = [
-                member.get("username")
-                for member in members
-                if member.get("username")
-            ]
-        except Exception:
-            logger.exception(
-                "Failed to fetch project members for resource %s", resource_backend_id
-            )
-            users = []
+        # A failure here is not an empty project: reporting one would tell the
+        # caller that nobody is associated, and the teardown reads that as
+        # permission to release the account. Let it travel -- pull_resource
+        # drops the resource from the report, or raises for a strict caller.
+        members = self.client.get_project_members(project["id"])
+        users = [member.get("username") for member in members if member.get("username")]
 
         report = self._get_usage_report([resource_backend_id])
         usage = report.get(resource_backend_id)
@@ -1624,6 +1618,11 @@ class MUPBackend(backends.BaseBackend):
                         )
                         break
                 else:
+                    # Not a member of the project: nothing holds the account
+                    # here, so it counts as no longer associated. Leaving it out
+                    # would keep the caller waiting on a membership that is
+                    # already gone.
+                    removed_users.append(username)
                     logger.warning(
                         "User %s not found in MUP project %s",
                         username,

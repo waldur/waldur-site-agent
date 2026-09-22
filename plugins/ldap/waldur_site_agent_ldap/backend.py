@@ -282,14 +282,16 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         unset_accounts = 0
 
         for offering_user in offering_users:
-            state = getattr(offering_user, "state", UNSET)
-            if state is not UNSET and state not in LIVE_OFFERING_USER_STATES:
+            state = offering_user.state
+            if state and state not in LIVE_OFFERING_USER_STATES:
                 # An account Waldur is tearing down, or has already torn down,
                 # must not be converged back into existence by this loop; the
                 # deletion states are handed to release_users by core instead.
+                # An unset state means the field was never requested, which says
+                # nothing about the account, so it is reconciled as before.
                 logger.debug(
                     "Offering user %s is in state %s, not reconciling",
-                    getattr(offering_user, "username", "?"),
+                    offering_user.username,
                     state,
                 )
                 continue
@@ -722,26 +724,29 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         """Park the entry: drop every group membership it still has, then disable it.
 
         Unlike delete, this also sweeps project groups: the entry survives, so a
-        leftover memberUid would keep granting group access to a parked account.
+        leftover membership would keep granting group access to a parked
+        account. A membership that cannot be dropped fails the release rather
+        than being logged past: disabling the entry while a group still lists it
+        would acknowledge a teardown that left the person's access in place.
         """
         self._remove_from_access_groups(username)
-        for group_name in self.client.find_groups_with_member(username):
+        for group_name, membership_type in self.client.find_group_memberships(username):
             if group_name == username:
                 continue  # the personal group stays with the entry
-            try:
-                self.client.remove_user_from_group(group_name, username)
-            except BackendError:
-                logger.exception("Failed to remove %s from group %s", username, group_name)
+            self.client.remove_user_from_group(group_name, username, membership_type)
         self.client.disable_user(username)
 
     def _remove_from_access_groups(self, username: str) -> None:
+        """Drop the configured access-group memberships, failing if one survives.
+
+        A membership the user never had is not a failure: the client returns
+        normally when the attribute is already absent, so anything raised here
+        is a group that still grants access to an account being released.
+        """
         for group_config in self.access_groups:
             group_name = group_config["name"]
             membership_type = group_config.get("attribute", "memberUid")
-            try:
-                self.client.remove_user_from_group(group_name, username, membership_type)
-            except BackendError:
-                logger.debug("User %s not in group %s, skipping removal", username, group_name)
+            self.client.remove_user_from_group(group_name, username, membership_type)
 
     def _add_to_access_groups(self, username: str) -> None:
         for group_config in self.access_groups:

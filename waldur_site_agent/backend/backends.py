@@ -44,6 +44,11 @@ def _pull_include_usage() -> bool:
     return bool(getattr(_PULL_STATE, "include_usage", True))
 
 
+def _pull_strict() -> bool:
+    """Whether the pull running on this thread must fail loudly (False outside one)."""
+    return bool(getattr(_PULL_STATE, "strict", False))
+
+
 class PendingOrderDecision(Enum):
     """Decision for an order in PENDING_PROVIDER state."""
 
@@ -552,10 +557,19 @@ class BaseBackend(ABC):
         cannot tell a failed pull from an empty one, and would acknowledge a
         deletion while the association is still live. Such callers ask for the
         whole report or none of it, and retry on the next cycle.
+
+        Like ``include_usage`` it is thread-local rather than a parameter of
+        ``pull_resource``: the default ``pull_resource`` catches everything and
+        returns None, so a failure never reaches the loop below and the flag has
+        to be readable from inside that except. A resource the backend simply
+        does not have still drops out quietly -- that is a real absence, and the
+        only thing a strict caller wanted distinguished from it is a failure.
         """
         report = {}
         previous = _pull_include_usage()
+        previous_strict = _pull_strict()
         _PULL_STATE.include_usage = include_usage
+        _PULL_STATE.strict = strict
         try:
             for waldur_resource in waldur_resources:
                 backend_id = waldur_resource.backend_id
@@ -570,6 +584,7 @@ class BaseBackend(ABC):
                     logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
         finally:
             _PULL_STATE.include_usage = previous
+            _PULL_STATE.strict = previous_strict
         return report
 
     def get_membership_sync_report(
@@ -590,6 +605,17 @@ class BaseBackend(ABC):
         """
         return None
 
+    def strict_pull_requested(self) -> bool:
+        """Whether the pull running right now asked to fail loudly.
+
+        An override of ``pull_resource`` that catches its own errors has to
+        consult this and re-raise. Returning None instead tells a strict caller
+        "this resource has no users", which is the ambiguity the flag exists to
+        remove -- and for the teardown path it means releasing an account whose
+        association is still live.
+        """
+        return _pull_strict()
+
     def pull_resource(
         self, waldur_resource: WaldurResource
     ) -> Optional[structures.BackendResourceInfo]:
@@ -602,8 +628,14 @@ class BaseBackend(ABC):
             backend_resource_info = self._pull_backend_resource(backend_id)
             if backend_resource_info is None:
                 return None
-        except Exception as e:
-            logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
+        except Exception:
+            if _pull_strict():
+                # This except is what made absence ambiguous: the resource left
+                # the report whether the backend said "no such resource" or
+                # "I could not answer". Only the second is an error, and for a
+                # caller deciding by absence it has to travel.
+                raise
+            logger.exception("Error while pulling resource [%s]", backend_id)
             return None
         else:
             return backend_resource_info
@@ -1053,7 +1085,15 @@ class BaseBackend(ABC):
     def remove_users_from_resource(
         self, waldur_resource: WaldurResource, usernames: set[str], **kwargs: dict
     ) -> list[str]:
-        """Remove specified users from the resource on the backend."""
+        """Remove specified users from the resource on the backend.
+
+        Returns the usernames that are no longer associated with the resource:
+        those removed here, plus any a backend knows were never associated at
+        all. A name left out is one the caller must treat as still associated --
+        core releases a departed account only against this list, so the per-user
+        failure swallowed below (deliberately: one bad user must not stop the
+        rest) keeps that account until a later cycle removes it for real.
+        """
         del kwargs
         resource_backend_id = waldur_resource.backend_id
         if len(usernames) < 1:
@@ -1266,10 +1306,18 @@ class BaseBackend(ABC):
 class UnknownBackend(BaseBackend):
     """Common class for unknown backends."""
 
-    def __init__(self) -> None:
-        """Placeholder."""
+    def __init__(self, requested_backend_type: str = "") -> None:
+        """Placeholder.
+
+        ``requested_backend_type`` is the backend the offering asked for, when
+        it asked for one at all. An offering with no membership backend
+        configured is a supported configuration -- Waldur mints the usernames
+        and there are no associations to manage -- not a misconfiguration, and
+        the difference decides whether this backend may refuse to answer.
+        """
         super().__init__({}, {})
         self.backend_type = UNKNOWN_BACKEND_TYPE
+        self.requested_backend_type = requested_backend_type
 
     def ping(self, _: bool = False) -> bool:
         """Placeholder."""
@@ -1292,12 +1340,29 @@ class UnknownBackend(BaseBackend):
 
     def pull_resources(
         self,
-        _: list[WaldurResource],
+        waldur_resources: list[WaldurResource],
         include_usage: bool = True,
         strict: bool = False,
     ) -> dict[str, tuple[WaldurResource, structures.BackendResourceInfo]]:
-        """Placeholder."""
-        del include_usage, strict
+        """Placeholder that refuses to answer for a plugin that should have loaded.
+
+        An empty report reads as "none of these resources lists any user", and
+        that is what the teardown path uses to decide an account is safe to
+        release. A backend the offering asked for but that did not load must not
+        be able to produce that answer, so a strict caller gets an error.
+
+        An offering that asked for no membership backend is the opposite case:
+        there are no agent-managed associations, the empty report is the honest
+        answer, and refusing it would strand every teardown on that offering
+        forever. Nothing to pull is likewise nothing to be wrong about.
+        """
+        del include_usage
+        if strict and waldur_resources and self.requested_backend_type:
+            msg = (
+                f"Unable to pull {len(waldur_resources)} resource(s): the "
+                f"{self.requested_backend_type} backend of this offering did not load"
+            )
+            raise BackendError(msg)
         return {}
 
     def delete_resource(
