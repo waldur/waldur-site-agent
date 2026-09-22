@@ -213,6 +213,12 @@ def log_versions(configuration: structures.WaldurAgentConfiguration) -> None:
                     )
 
 
+# Long-running agent calls (paginated listings, bulk syncs) need a generous
+# timeout. Short-lived callers such as the readiness probe pass their own.
+DEFAULT_CLIENT_TIMEOUT = 600
+DEFAULT_OIDC_TIMEOUT = 30
+
+
 def get_client(
     api_url: str,
     access_token: str,
@@ -220,6 +226,7 @@ def get_client(
     verify_ssl: bool = True,
     proxy: Optional[str] = None,
     token_prefix: str = "Token",  # noqa: S107
+    timeout: float = DEFAULT_CLIENT_TIMEOUT,
 ) -> AuthenticatedClient:
     """Create an authenticated Waldur API client.
 
@@ -230,6 +237,7 @@ def get_client(
         verify_ssl: Whether or not to verify SSL certificates
         proxy: Optional proxy URL (e.g., 'socks5://localhost:12345')
         token_prefix: Authorization header prefix ('Token' for static tokens, 'Bearer' for JWTs)
+        timeout: HTTP timeout in seconds for requests made with this client
 
     Returns:
         Configured AuthenticatedClient instance ready for API calls
@@ -246,7 +254,7 @@ def get_client(
         base_url=url,
         token=access_token,
         prefix=token_prefix,
-        timeout=600,
+        timeout=timeout,
         headers=headers,
         verify_ssl=verify_ssl,
         httpx_args=httpx_args,
@@ -275,6 +283,7 @@ def fetch_oidc_token(
     client_secret: str,
     verify_ssl: bool = True,
     proxy: Optional[str] = None,
+    timeout: float = DEFAULT_OIDC_TIMEOUT,
 ) -> str:
     """Fetch (and cache) a JWT access token via the OIDC client_credentials grant.
 
@@ -288,6 +297,7 @@ def fetch_oidc_token(
         client_secret: OIDC client secret
         verify_ssl: Whether to verify the provider's TLS certificate
         proxy: Optional proxy URL used to reach the provider
+        timeout: HTTP timeout in seconds for the token request
 
     Returns:
         Access token string from the OIDC provider response
@@ -304,7 +314,7 @@ def fetch_oidc_token(
                 return token
 
     # Fetch outside the lock to avoid blocking other offerings during network I/O.
-    with httpx.Client(verify=verify_ssl, proxy=proxy, timeout=30) as client:
+    with httpx.Client(verify=verify_ssl, proxy=proxy, timeout=timeout) as client:
         response = client.post(
             oidc_token_url,
             data={
@@ -334,6 +344,7 @@ def get_client_for_offering(
     offering: structures.Offering,
     agent_header: Optional[str] = None,
     proxy: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> AuthenticatedClient:
     """Create an authenticated Waldur API client from an Offering configuration.
 
@@ -345,6 +356,8 @@ def get_client_for_offering(
         offering: Offering configuration containing API URL and auth settings
         agent_header: Optional User-Agent string for HTTP requests
         proxy: Optional proxy URL (e.g., 'socks5://localhost:12345')
+        timeout: HTTP timeout in seconds applied to both the OIDC token request
+            and the returned client. Defaults to the long agent timeouts.
 
     Returns:
         Configured AuthenticatedClient instance ready for API calls
@@ -359,10 +372,17 @@ def get_client_for_offering(
             offering.oidc_client_secret,  # type: ignore[arg-type]
             offering.verify_ssl,
             proxy,
+            timeout=DEFAULT_OIDC_TIMEOUT if timeout is None else timeout,
         )
         token_prefix = "Bearer"  # noqa: S105
     return get_client(
-        offering.waldur_api_url, token, agent_header, offering.verify_ssl, proxy, token_prefix
+        offering.waldur_api_url,
+        token,
+        agent_header,
+        offering.verify_ssl,
+        proxy,
+        token_prefix,
+        timeout=DEFAULT_CLIENT_TIMEOUT if timeout is None else timeout,
     )
 
 

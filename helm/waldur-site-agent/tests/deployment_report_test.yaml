@@ -116,3 +116,34 @@ tests:
       - equal:
           path: spec.template.spec.serviceAccountName
           value: waldur-site-agent
+
+  - it: should include a startup probe so cold starts do not count against liveness
+    template: templates/deployment-report.yaml
+    set:
+      healthCheck.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.exec.command
+          value:
+            - waldur_site_healthz
+            - --liveness-only
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+          value: 10
+
+  - it: should omit the startup probe when disabled
+    template: templates/deployment-report.yaml
+    set:
+      healthCheck.enabled: true
+      healthCheck.startupProbe.enabled: false
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].startupProbe
+      - isNotEmpty:
+          path: spec.template.spec.containers[0].livenessProbe

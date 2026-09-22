@@ -139,7 +139,31 @@ class TestGetClientForOffering:
             "secret",
             False,
             "http://proxy:3128",
+            timeout=utils.DEFAULT_OIDC_TIMEOUT,
         )
-        args, _ = mock_get_client.call_args
+        args, kwargs = mock_get_client.call_args
         assert args[1] == "jwt"
         assert args[5] == "Bearer"
+        assert kwargs["timeout"] == utils.DEFAULT_CLIENT_TIMEOUT
+
+    def test_explicit_timeout_applies_to_both_token_fetch_and_client(self):
+        """A caller with its own deadline (the readiness probe) must bound both hops.
+
+        The probe is killed by the kubelet after timeoutSeconds; a client left
+        on the 600s default simply blocks until then, with no diagnostics.
+        """
+        offering = Offering(
+            **self.BASE,
+            waldur_api_token="",
+            oidc_token_url="https://idp.example.com/token",  # noqa: S106
+            oidc_client_id="cid",
+            oidc_client_secret="secret",  # noqa: S106
+        )
+        with (
+            mock.patch.object(utils, "fetch_oidc_token", return_value="jwt") as mock_fetch,
+            mock.patch.object(utils, "get_client") as mock_get_client,
+        ):
+            utils.get_client_for_offering(offering, "agent", timeout=5)
+
+        assert mock_fetch.call_args.kwargs["timeout"] == 5
+        assert mock_get_client.call_args.kwargs["timeout"] == 5

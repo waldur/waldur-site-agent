@@ -26,8 +26,14 @@ COPY . .
 ARG VERSION=
 RUN if [ -n "$VERSION" ]; then python3 scripts/bump_versions.py "$VERSION"; fi
 
-# Install dependencies and build workspace
-RUN uv sync --all-packages --no-dev
+# Install dependencies and build workspace.
+# --compile-bytecode is not optional here: the deployment runs with
+# readOnlyRootFilesystem, so without .pyc in the image Python recompiles every
+# module on every process start -- including the ~3000-module generated API
+# client, on every kubelet probe tick. compileall covers /app itself, which is
+# on PYTHONPATH and so shadows the installed copy.
+RUN uv sync --all-packages --no-dev --compile-bytecode \
+    && python3 -m compileall -q /app/waldur_site_agent /app/plugins
 
 # Create non-root user
 RUN adduser -D -s /bin/sh waldur
@@ -43,8 +49,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app"
 
 # Add healthcheck
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD waldur_site_diagnostics || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD waldur_site_healthz --liveness-only || exit 1
 
 # Set entrypoint and default command
 ENTRYPOINT ["waldur_site_agent"]

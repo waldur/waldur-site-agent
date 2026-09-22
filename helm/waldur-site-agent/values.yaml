@@ -145,3 +145,11 @@ healthCheck:
   timeoutSeconds: 10
   failureThreshold: 3
   successThreshold: 1
+  # Cold start has to load the agent config and reach Waldur once before the
+  # main loop writes its first heartbeat. Without a startup probe that time
+  # counts against liveness, and a slow Waldur restarts the pod before it ever
+  # runs. Allows failureThreshold * periodSeconds for the first heartbeat.
+  startupProbe:
+    enabled: true
+    periodSeconds: 10
+    failureThreshold: 30

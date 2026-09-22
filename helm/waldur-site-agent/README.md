@@ -131,12 +131,23 @@ and bind the required Role to it.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `healthCheck.enabled` | Enable health checks using diagnostics | `true` |
-| `healthCheck.initialDelaySeconds` | Initial delay for health checks | `30` |
-| `healthCheck.periodSeconds` | Health check interval | `60` |
-| `healthCheck.timeoutSeconds` | Health check timeout | `10` |
-| `healthCheck.failureThreshold` | Failed checks before restart | `3` |
+| `healthCheck.enabled` | Enable liveness, readiness and startup probes | `true` |
+| `healthCheck.initialDelaySeconds` | Initial delay for liveness and readiness | `30` |
+| `healthCheck.periodSeconds` | Liveness and readiness interval | `60` |
+| `healthCheck.timeoutSeconds` | Probe timeout, shared by all three probes | `10` |
+| `healthCheck.failureThreshold` | Failed liveness checks before restart | `3` |
 | `healthCheck.successThreshold` | Successful checks to be considered healthy | `1` |
+| `healthCheck.startupProbe.enabled` | Give the agent a startup grace period | `true` |
+| `healthCheck.startupProbe.periodSeconds` | Startup probe interval | `10` |
+| `healthCheck.startupProbe.failureThreshold` | Startup attempts before giving up | `30` |
+
+Liveness only reads the heartbeat file the agent's main loop writes; readiness
+additionally calls `GET /api/users/me/` on Waldur. The startup probe covers the
+cold start, during which the agent loads its config and contacts Waldur once
+before the first heartbeat is written -- without it that time counts against
+liveness and a slow Waldur restarts the pod before it ever runs. Raise
+`startupProbe.failureThreshold` (attempts, `periodSeconds` apart) for a site
+whose Waldur is slow to answer.
 
 ## Usage Examples
 
