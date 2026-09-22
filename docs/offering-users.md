@@ -31,6 +31,14 @@ stateDiagram-v2
     PENDING_ACCOUNT_LINKING --> PENDING_ADDITIONAL_VALIDATION : Cross-transition
     PENDING_ADDITIONAL_VALIDATION --> PENDING_ACCOUNT_LINKING : Cross-transition
     OK --> [*] : User ready for resource access
+
+    %% Teardown, once Waldur asks for the account to go
+    OK --> DELETION_REQUESTED : last project role revoked
+    DELETION_REQUESTED --> DELETING : set_deleting (the agent's claim)
+    DELETING --> DELETED : set_deleted (associations dropped, account released)
+    DELETING --> ERROR_DELETING : a removal or the release failed
+    ERROR_DELETING --> DELETING : retried on the next sweep
+    DELETING --> OK : restore (the member came back)
 ```
 
 ### State Descriptions
@@ -41,6 +49,11 @@ stateDiagram-v2
 - **PENDING_ACCOUNT_LINKING**: Manual intervention required to link user accounts
 - **PENDING_ADDITIONAL_VALIDATION**: Additional validation steps needed before proceeding
 - **ERROR_CREATING**: Backend failure during username generation; retried on next sync cycle
+- **DELETION_REQUESTED**: Waldur has asked for the account to be torn down
+- **DELETING**: the agent has claimed the request and is dropping associations and releasing the account
+- **DELETED**: nothing on the provider side refers to the account any more, so Waldur can release the
+  provider-wide identity behind it
+- **ERROR_DELETING**: a removal or the release failed; the next sweep retries and the account stays put
 
 ## Core Components
 
@@ -153,6 +166,100 @@ always requested by the membership processor, and are not gated by the offering'
 
 `waldur-site-agent-ldap` is the reference implementation; see its
 `account_source: waldur` mode.
+
+#### When a user leaves
+
+Removing a user's resource associations is the resource backend's job and
+happens in every mode. Tearing down the *account* behind them is the username
+backend's, through a second optional hook:
+
+```python
+class MirroringBackend(AbstractUsernameManagementBackend):
+    def release_users(self, offering_users, waldur_rest_client) -> None:
+        ...
+```
+
+Core calls it in two situations, always after the resource backend has dropped
+the associations:
+
+- **At removal time**, with the offering users the resource backend confirms are
+  no longer associated — on a revoked project role, or as stale users on a full
+  sync. Only names that resolve to an offering user of the offering are passed
+  on; service, course and robot accounts, and directory entries the agent never
+  managed, are not.
+
+  *Confirms* is the operative word, and it is why
+  `remove_users_from_resource` returns a list: it logs a per-user failure and
+  leaves that name out, so the names asked for are no evidence that anything was
+  removed. Core releases only what comes back. A backend that removes nothing
+  because there is nothing to remove — Harbor manages access through OIDC groups
+  and holds no per-user association — returns the names anyway, or their
+  accounts would wait forever on a membership that cannot exist. One that
+  predates the return value is trusted as before, with a warning.
+
+  A failed removal therefore holds the release back on both paths, and a pull
+  that failed does too: the account is left alone and the periodic sweep
+  retries, so an entry is never parked or deleted while its association is still
+  live. Failures of the release itself are logged and do not abort the cycle.
+- **As part of the deletion flow** for every offering user Waldur has moved into
+  `Requested deletion`, `Deleting` or `Error deleting`. `teardown_offering_user`
+  in `common/processors.py` runs, in this order:
+
+  1. `set_deleting` first, as the claim: Waldur refuses it for a row that was
+     restored to a live state since the list was taken (a re-grant landed
+     meanwhile), and that refusal means "leave this account alone" — nothing on
+     the provider side is touched before the claim holds;
+  2. `remove_user` on every resource of the offering whose pulled report lists
+     the user (one users-only pull per sweep, shared by the whole batch), through
+     the same `remove_user_from_resource` helper the role-revoke path uses;
+  3. `release_users` on the username backend;
+  4. `set_deleted`, so Waldur can release the provider-wide identity behind it.
+
+  A failure in step 2 or 3 stops before step 4 and marks the offering user
+  `Error deleting`, so the next cycle retries and nothing is ever marked
+  `Deleted` while something on the cluster still refers to it.
+  `BaseBackend.remove_user` returns `False` for "nothing to remove" and raises
+  on a failed removal — plugins must never fold a failure into `False`. The flow runs for **every** offering: one without
+  a membership backend skips step 1, one without a username backend skips
+  step 2, neither skips the acknowledgement. It runs as a per-cycle sweep in
+  polling mode (one filtered list request), in the periodic username-backend
+  reconciliation in event-processing mode, and immediately on the offering-user
+  `update` event whose payload carries a deletion state. The sweep is what
+  makes the teardown converge: Waldur's deletion request is asynchronous and
+  usually lands *after* the role-change event that removed the association.
+
+Neither call means the person is gone from the system: they may hold another
+project on the same offering, or an account on a sibling offering that shares
+the same directory. The backend is handed the API client so it can ask Waldur
+before acting. Keeping an entry that is still read elsewhere is a success;
+a failed check or a failed release must **raise** so core does not acknowledge.
+The default implementation is a no-op — core skips the release step for
+backends that leave it so.
+
+Waldur only moves an offering user into `Requested deletion` when the offering
+has `offering_user_auto_deletion` enabled (or an operator requests it by hand).
+Without it the offering user stays `OK` after the person leaves, and the
+account is kept — by design, not by omission. Once the last offering user
+reading through a provider-wide account is `Deleted`, Waldur moves that account
+to `Requested deletion` itself.
+
+Membership sync pulls resources with `pull_resources(..., include_usage=False)`:
+the usage report is irrelevant to a membership change, and a failing one (an
+accounting query the execution mode cannot serve) must not drop the resource
+and silently skip the change. The flag is thread-local for the duration of the
+call (a thread is synchronous through one pull, and STOMP subscriptions each
+run on their own thread), so plugin overrides of `pull_resource` and
+`_pull_backend_resource` keep their signatures and are called exactly as before;
+only the default `_pull_backend_resource` honours it, and a backend instance
+reached from several threads never sees another thread's flag.
+
+The teardown asks for that same pull with `strict=True`. It decides by
+*absence* — a resource missing from the report means "the user holds no
+association there" — so a resource that could not be pulled must not be
+dropped quietly. With the flag the pull raises instead, and the sweep waits for
+the next cycle rather than acknowledging a deletion whose associations may
+still exist. Every other caller keeps the old behaviour, where a resource that
+fails to pull is logged and skipped.
 
 #### Plugin Registration
 
