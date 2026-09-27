@@ -6,14 +6,14 @@ recently (within ``max_age`` seconds).
 Readiness: verifies connectivity to Waldur A with an authenticated
 ``GET /api/users/me/?field=uuid`` call.
 
-Nothing outside the standard library is imported at module level. The kubelet
-runs this as a fresh process on every probe tick, and importing
-``waldur_api_client`` (~3000 generated model modules) together with every
-installed backend plugin cost ~2.3 s per invocation -- more on a CPU-capped
-pod whose read-only root filesystem forces Python to recompile the sources
-each time. That overran ``timeoutSeconds`` and got containers killed by the
-liveness probe. Liveness needs one ``stat()``; readiness imports the client
-lazily, where the cost is paid against a network call anyway.
+The kubelet runs this as a fresh process on every probe tick, so import cost
+is paid on every probe. ``waldur_api_client`` (~3000 generated model modules)
+and ``common.utils`` (which loads every installed backend plugin) together
+took ~12 s on a CPU-capped pod whose read-only root filesystem forces Python
+to recompile the sources each time -- well past ``timeoutSeconds``. Neither
+probe touches them: liveness needs one ``stat()``, and readiness reads the
+offerings straight from the YAML and makes a single plain ``httpx`` request.
+Nothing outside the standard library is imported at module level.
 """
 
 from __future__ import annotations
@@ -23,6 +23,10 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import httpx
 
 HEARTBEAT_PATH = "/tmp/waldur-site-agent-heartbeat"  # noqa: S108
 DEFAULT_MAX_AGE = 300  # seconds
@@ -48,32 +52,58 @@ def check_liveness(max_age: int = DEFAULT_MAX_AGE, path: str = HEARTBEAT_PATH) -
         return False
 
 
+def _offering_auth_header(offering: dict, client: httpx.Client) -> str:
+    """Return the Authorization header value for *offering*, fetching a JWT if needed."""
+    token = offering.get("waldur_api_token")
+    if token:
+        return f"Token {token}"
+    response = client.post(
+        offering["oidc_token_url"],
+        data={
+            "grant_type": "client_credentials",
+            "client_id": offering["oidc_client_id"],
+            "client_secret": offering["oidc_client_secret"],
+        },
+    )
+    response.raise_for_status()
+    return f"Bearer {response.json()['access_token']}"
+
+
 def check_readiness(config_file: str, timeout: float = DEFAULT_READINESS_TIMEOUT) -> bool:
     """Return True if Waldur A responds to GET /api/users/me/?field=uuid."""
-    # Deliberately not at module level: see the module docstring. PLC0415 is
-    # the rule this whole change exists to break.
-    from waldur_api_client.api.users import users_me_retrieve  # noqa: PLC0415
-    from waldur_api_client.models.user_me_field_enum import UserMeFieldEnum  # noqa: PLC0415
-
-    from waldur_site_agent.common.utils import (  # noqa: PLC0415
-        get_client_for_offering,
-        init_configuration_from_file,
-    )
+    # Deliberately not at module level, and deliberately not the agent's own
+    # config loader or API client: see the module docstring.
+    import httpx  # noqa: PLC0415
+    import yaml  # noqa: PLC0415
 
     try:
-        configuration = init_configuration_from_file(config_file)
-    except Exception:
+        with Path(config_file).open(encoding="UTF-8") as stream:
+            config = yaml.safe_load(stream)
+        offerings = config["offerings"]
+        proxy = config.get("global_proxy") or None
+    except Exception as exc:
+        logger.debug("Cannot read config %s, details: %s", config_file, exc)
         return False
 
-    for offering in configuration.waldur_offerings:
+    for offering in offerings:
+        api_url = offering.get("waldur_api_url", "")
         try:
-            client = get_client_for_offering(
-                offering, configuration.waldur_user_agent, timeout=timeout
-            )
-            users_me_retrieve.sync(client=client, field=[UserMeFieldEnum.UUID])
+            base_url = api_url.rstrip("/").removesuffix("/api")
+            with httpx.Client(
+                verify=offering.get("verify_ssl", True), proxy=proxy, timeout=timeout
+            ) as client:
+                response = client.get(
+                    f"{base_url}/api/users/me/",
+                    params={"field": "uuid"},
+                    headers={
+                        "Authorization": _offering_auth_header(offering, client),
+                        "User-Agent": "waldur-site-agent-healthz",
+                    },
+                )
+            response.raise_for_status()
             return True
         except Exception as exc:
-            logger.debug("Readiness check failed for %s, details: %s", offering.api_url, exc)
+            logger.debug("Readiness check failed for %s, details: %s", api_url, exc)
     return False
 
 
