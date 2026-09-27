@@ -82,7 +82,7 @@ Pushing the tag to origin triggers GitLab CI, which:
 | **Publish python module** | Bumps versions, builds, publishes to PyPI |
 | **Publish Helm chart** | Packages chart, pushes to GitHub Pages, refreshes `artifacthub-repo.yml` |
 | **Publish Docker image** | Builds and pushes multiarch images |
-| **Generate SBOM** | Creates CycloneDX SBOM, uploads to docs |
+| **Generate SBOMs** | Creates CycloneDX SBOMs of the image and `uv.lock`, attaches them to the GitHub release |
 | **Announce release on Slack** | Posts the tag's `CHANGELOG.md` entry to Slack, after the jobs above succeed |
 
 ## Running Individual Scripts
