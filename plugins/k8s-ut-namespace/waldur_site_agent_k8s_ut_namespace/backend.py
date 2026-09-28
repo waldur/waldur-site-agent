@@ -1,18 +1,20 @@
 """K8s UT ManagedNamespace backend for Waldur Site Agent."""
 
+import copy
 import datetime
 import json
 import pprint
 import re
 from typing import Optional
 
+from kubernetes.client.rest import ApiException
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_site_agent_keycloak_client import KeycloakClient
 
 from waldur_site_agent.backend import backends, logger
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
-from waldur_site_agent_k8s_ut_namespace.k8s_client import K8sUtNamespaceClient
+from waldur_site_agent_k8s_ut_namespace.k8s_client import HTTP_CONFLICT, K8sUtNamespaceClient
 
 # Default Waldur role -> namespace access level mapping
 DEFAULT_ROLE_MAPPING = {
@@ -379,23 +381,56 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         the site-agent config (see README) -- Waldur bills accounting_type:
         "limit" components from their allocated limit directly and never
         looks at what this method returns, regardless of its contents.
+
+        Confirmed live against a real cluster (a real waldur-site-agent's
+        `report` and `membership_sync` modes both call this, independently
+        and uncoordinated -- both call pull_resource(), which calls this) --
+        a naive read-modify-write on the annotation loses updates under that
+        real concurrency: whichever call's write lands last silently
+        clobbers the other's. See _sample_and_accumulate_usage for the fix
+        (optimistic concurrency via the CR's own resourceVersion, retried on
+        conflict).
         """
         report: dict[str, dict[str, dict[str, float]]] = {}
         now = datetime.datetime.now(datetime.timezone.utc)
         current_period = now.strftime("%Y-%m")
 
         for ns_name in resource_backend_ids:
+            accumulated = self._sample_and_accumulate_usage(ns_name, now, current_period)
+            if accumulated is not None:
+                report[ns_name] = {"TOTAL_ACCOUNT_USAGE": accumulated}
+
+        return report
+
+    #: Retries for _sample_and_accumulate_usage's optimistic-concurrency loop --
+    #: report and membership_sync mode both call it, uncoordinated, so a
+    #: conflict is an expected, routine outcome, not a rare edge case.
+    _USAGE_ACCUMULATOR_RETRIES = 5
+
+    def _sample_and_accumulate_usage(
+        self, ns_name: str, now: datetime.datetime, current_period: str
+    ) -> Optional[dict[str, float]]:
+        """Read-modify-write the usage accumulator for one namespace, safely.
+
+        Re-reads the CR fresh on every attempt (not just once) and writes
+        back via replace_managed_namespace, which -- unlike a merge patch --
+        the API server rejects with 409 if the CR changed since this
+        attempt's read. On conflict: re-read the now-current state (which
+        may include another caller's own accumulation) and recompute from
+        there, rather than retrying the same stale delta.
+        """
+        for attempt in range(self._USAGE_ACCUMULATOR_RETRIES):
             try:
                 cr = self.k8s_client.get_managed_namespace(ns_name)
             except BackendError as e:
                 logger.warning("Could not read ManagedNamespace %s for usage: %s", ns_name, e)
-                continue
+                return None
             if cr is None:
-                continue
+                return None
 
             quota = self._current_quota_in_waldur_units(cr)
             if not quota:
-                continue
+                return None
 
             annotations = (cr.get("metadata") or {}).get("annotations") or {}
             state = self._load_usage_state(annotations)
@@ -415,29 +450,36 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 "last_sample_at": now.isoformat(),
                 "accumulated": {c: round(v, 6) for c, v in accumulated.items()},
             }
+            updated_cr = copy.deepcopy(cr)
+            updated_cr.setdefault("metadata", {}).setdefault("annotations", {})[
+                USAGE_ACCUMULATOR_ANNOTATION
+            ] = json.dumps(new_state)
+
             try:
-                self.k8s_client.patch_managed_namespace(
-                    ns_name,
-                    {
-                        "metadata": {
-                            "annotations": {
-                                USAGE_ACCUMULATOR_ANNOTATION: json.dumps(new_state)
-                            }
-                        }
-                    },
+                self.k8s_client.replace_managed_namespace(ns_name, updated_cr)
+                return accumulated
+            except ApiException as e:
+                if e.status != HTTP_CONFLICT:
+                    raise
+                logger.info(
+                    "Usage accumulator for %s changed concurrently (attempt %d/%d), retrying",
+                    ns_name, attempt + 1, self._USAGE_ACCUMULATOR_RETRIES,
                 )
+                continue
             except BackendError as e:
                 # Still report this sample's figures: an occasional missed
                 # persist (the next call re-derives from an older
                 # last_sample_at and slightly over-counts one interval) is a
                 # smaller error than silently reporting nothing.
-                logger.warning(
-                    "Could not persist usage accumulator for %s: %s", ns_name, e
-                )
+                logger.warning("Could not persist usage accumulator for %s: %s", ns_name, e)
+                return accumulated
 
-            report[ns_name] = {"TOTAL_ACCOUNT_USAGE": accumulated}
-
-        return report
+        logger.warning(
+            "Giving up on the usage accumulator for %s after %d concurrent conflicts; "
+            "reporting this attempt's figures unpersisted",
+            ns_name, self._USAGE_ACCUMULATOR_RETRIES,
+        )
+        return accumulated
 
     @staticmethod
     def _parse_k8s_quantity(value: str) -> int:
@@ -903,9 +945,18 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
     # ── Status operations ──────────────────────────────────────────────────
 
     def downscale_resource(self, resource_backend_id: str) -> bool:
-        """Downscale by patching CR quota to minimal values."""
+        """Downscale by patching CR quota to minimal values (1 unit per configured component).
+
+        Derived from backend_components rather than a hardcoded cpu/memory/storage
+        literal: the old literal silently omitted any component beyond those three
+        (found live -- gpu kept its full quota through a pause, confirmed against a
+        real cluster with a real over-budget resource: cpu/ram/storage correctly
+        went to 0, gpu never did, because it wasn't in the hardcoded dict at all).
+        """
         try:
-            minimal_quota = {"cpu": "1", "memory": "1Gi", "storage": "1Gi"}
+            minimal_quota = self._waldur_limits_to_quota(
+                dict.fromkeys(self.backend_components, 1)
+            )
             self.k8s_client.patch_managed_namespace(
                 resource_backend_id,
                 {"spec": {"quota": minimal_quota}},
@@ -917,9 +968,14 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             return False
 
     def pause_resource(self, resource_backend_id: str) -> bool:
-        """Pause by patching CR quota to zero."""
+        """Pause by patching CR quota to zero, for every configured component.
+
+        See downscale_resource's docstring -- same fix, same live-confirmed bug.
+        """
         try:
-            zero_quota = {"cpu": "0", "memory": "0Gi", "storage": "0Gi"}
+            zero_quota = self._waldur_limits_to_quota(
+                dict.fromkeys(self.backend_components, 0)
+            )
             self.k8s_client.patch_managed_namespace(
                 resource_backend_id,
                 {"spec": {"quota": zero_quota}},
