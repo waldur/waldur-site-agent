@@ -24,6 +24,16 @@ reason = "Affects urllib3 1.26.20 (Python 3.9 path only); fix is in 2.7.0. urlli
 ignoreUntil = 2027-01-07T00:00:00Z
 
 [[IgnoredVulns]]
+id = "GHSA-8988-9cw3-xx77"
+reason = "Affects urllib3 1.26.20 (Python 3.9 path only); fix is in 2.8.0, which requires Python>=3.10. urllib3 v1→v2 is a breaking change and requests 2.32.x pins urllib3<2 on Python <3.10. The Python ≥3.10 path is already on 2.8.0. Revisit and drop this entry once Python 3.9 support is removed."
+ignoreUntil = 2027-01-07T00:00:00Z
+
+[[IgnoredVulns]]
+id = "GHSA-vxq7-64xx-v4gw"
+reason = "Affects urllib3 1.26.20 (Python 3.9 path only); fix is in 2.8.0, which requires Python>=3.10. urllib3 v1→v2 is a breaking change and requests 2.32.x pins urllib3<2 on Python <3.10. The Python ≥3.10 path is already on 2.8.0. Revisit and drop this entry once Python 3.9 support is removed."
+ignoreUntil = 2027-01-07T00:00:00Z
+
+[[IgnoredVulns]]
 id = "GHSA-gc5v-m9x4-r6x2"
 reason = "requests 2.33.0 requires urllib3>=2, which is a breaking change for this project."
 ignoreUntil = 2027-01-07T00:00:00Z
