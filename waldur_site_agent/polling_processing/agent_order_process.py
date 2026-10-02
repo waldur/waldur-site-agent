@@ -7,6 +7,7 @@ from waldur_site_agent.common import (
     WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES,
     agent_identity_management,
     processors,
+    resource_api_keys,
     utils,
 )
 from waldur_site_agent.common import structures as common_structures
@@ -69,7 +70,19 @@ def _process_offerings(configuration: common_structures.WaldurAgentConfiguration
             )
             processor.register(agent_service)
 
-            processor.process_offering()
+            # Key commands are not orders, and without STOMP nothing else delivers
+            # them: take every pending one, however recent, as orders are taken. A
+            # failing order pass must not hold them back.
+            try:
+                processor.process_offering()
+            except Exception as e:
+                logger.exception("Unable to process the orders of the offering: %s", e)
+            resource_api_keys.process_pending_api_key_commands(
+                waldur_rest_client,
+                resource_backend,
+                offering,
+                expose_backend_error_details=configuration.expose_backend_error_details,
+            )
         except Exception as e:
             logger.exception("Unable to process the offering due to the error: %s", e)
 

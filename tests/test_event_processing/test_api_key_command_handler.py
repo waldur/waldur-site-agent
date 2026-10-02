@@ -14,7 +14,7 @@ from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.common.processors import OfferingOrderProcessor
 from waldur_site_agent.event_processing import utils
 from waldur_site_agent.event_processing.handlers import (
-    on_resource_api_key_rotation_stomp,
+    on_resource_api_key_command_stomp,
 )
 
 HANDLERS = "waldur_site_agent.event_processing.handlers"
@@ -172,7 +172,7 @@ class TestPushHelpers(unittest.TestCase):
 class TestApiKeyHandlerDispatch(unittest.TestCase):
     def test_rotate_dispatch(self, mock_backend, mock_client, mock_prov, mock_rot):
         mock_backend.return_value = (_supporting_backend(), "1.0")
-        on_resource_api_key_rotation_stomp(_make_frame(action="rotate"), _make_offering(), "ua")
+        on_resource_api_key_command_stomp(_make_frame(action="rotate"), _make_offering(), "ua")
         mock_rot.assert_called_once_with(
             mock_client.return_value,
             "key-uuid-1",
@@ -185,26 +185,26 @@ class TestApiKeyHandlerDispatch(unittest.TestCase):
             expose_backend_error_details=True,
         )
 
-    def test_revoke_is_no_longer_dispatched(
+    def test_revoke_is_not_dispatched(
         self, mock_backend, mock_client, mock_prov, mock_rot
     ):
-        # The key count is fixed at provisioning; a stale revoke command from an
-        # older Waldur must be ignored, not guessed at.
+        # Not in the command vocabulary (per-key removal is "delete"); a stale
+        # revoke from an older Waldur must be ignored, not guessed at.
         mock_backend.return_value = (_supporting_backend(), "1.0")
-        on_resource_api_key_rotation_stomp(_make_frame(action="revoke"), _make_offering(), "ua")
+        on_resource_api_key_command_stomp(_make_frame(action="revoke"), _make_offering(), "ua")
         mock_rot.assert_not_called()
 
     def test_skips_when_backend_lacks_support(
         self, mock_backend, mock_client, mock_prov, mock_rot
     ):
         mock_backend.return_value = (mock.Mock(spec=[]), "1.0")
-        on_resource_api_key_rotation_stomp(_make_frame(), _make_offering(), "ua")
+        on_resource_api_key_command_stomp(_make_frame(), _make_offering(), "ua")
         mock_rot.assert_not_called()
 
     def test_invalid_message_ignored(
         self, mock_backend, mock_client, mock_prov, mock_rot
     ):
-        on_resource_api_key_rotation_stomp(
+        on_resource_api_key_command_stomp(
             _make_frame(resource_backend_id=""), _make_offering(), "ua"
         )
         mock_backend.assert_not_called()
@@ -214,7 +214,7 @@ class TestApiKeyHandlerDispatch(unittest.TestCase):
     ):
         mock_backend.return_value = (_supporting_backend(), "1.0")
         mock_rot.side_effect = Exception("api down")
-        on_resource_api_key_rotation_stomp(_make_frame(), _make_offering(), "ua")
+        on_resource_api_key_command_stomp(_make_frame(), _make_offering(), "ua")
 
 
 @mock.patch(f"{PROCESSORS}.utils.provision_resource_api_keys")

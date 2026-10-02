@@ -570,6 +570,14 @@ The created Waldur offering will have:
 - **Options**: `max_storage_limit` and `max_object_limit` for user input (safety limits)
 - **Pricing**: €0.0010 per GB-day for storage; objects are not billed
 
+Leave `plugin_options.enable_api_key_provisioning` **off** on a Ceph S3
+offering. It turns on per-key governance — request, assign, per-key limits,
+pause, resume, delete — which this plugin does not support: it does not set
+`supports_resource_api_key_lifecycle`, so the agent answers every such command
+with `set_erred` and the key ends up Erred in the portal. Waldur cannot check
+the option against the backend, so nothing stops it being turned on. Reveal and
+rotate work without it.
+
 ### Order Payload Example
 
 ```json
