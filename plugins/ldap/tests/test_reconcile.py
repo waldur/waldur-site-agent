@@ -242,3 +242,150 @@ class TestIndexes:
     def test_index_by_mail_is_case_insensitive(self):
         users = {"a": ldap_entry(mail=["John@Example.com"])}
         assert index_by_mail(users) == {"john@example.com": "a"}
+
+
+class TestRenameOrCollision:
+    """A taken UID is a rename only through the Waldur-username key, with the uidNumber."""
+
+    ATTR = "employeeNumber"
+
+    def desired(self, **overrides):
+        entry, _ = build_desired(
+            offering_user(username="jsmith2", home_directory="/home/jsmith2", **overrides),
+            **DEFAULTS,
+            waldur_username_attribute=self.ATTR,
+        )
+        return entry
+
+    def classify(self, desired, directory, key_owners, uid_owner="jsmith"):
+        return classify(
+            desired,
+            directory.get(desired.username),
+            uid_owner=uid_owner,
+            waldur_username_attribute=self.ATTR,
+            key_owners=key_owners,
+            directory=directory,
+        )
+
+    def test_the_key_under_another_name_with_the_same_uid_is_a_rename(self):
+        directory = {"jsmith": ldap_entry(employeeNumber=["cuid-123"])}
+        decision = self.classify(self.desired(), directory, ["jsmith"])
+        assert decision.outcome == Outcome.RENAME
+        assert decision.uid_taken_by == "jsmith"
+
+    def test_mail_alone_is_not_evidence(self):
+        directory = {"jsmith": ldap_entry()}  # same mail, no key
+        decision = self.classify(self.desired(), directory, [])
+        assert decision.outcome == Outcome.UID_TAKEN
+        assert "no entry carries" in decision.reason
+
+    def test_another_key_on_the_holder_is_a_collision(self):
+        directory = {"jsmith": ldap_entry(employeeNumber=["someone-else"])}
+        assert self.classify(self.desired(), directory, []).outcome == Outcome.UID_TAKEN
+
+    def test_two_entries_with_the_key_is_a_collision(self):
+        directory = {
+            "jsmith": ldap_entry(employeeNumber=["cuid-123"]),
+            "other": ldap_entry(uid=["other"], uidNumber=[777], employeeNumber=["cuid-123"]),
+        }
+        decision = self.classify(self.desired(), directory, ["jsmith", "other"])
+        assert decision.outcome == Outcome.UID_TAKEN
+        assert "all carry" in decision.reason
+
+    def test_the_key_on_an_entry_with_another_uid_is_a_collision(self):
+        directory = {
+            "jsmith": ldap_entry(),
+            "old": ldap_entry(uid=["old"], uidNumber=[555], employeeNumber=["cuid-123"]),
+        }
+        decision = self.classify(self.desired(), directory, ["old"])
+        assert decision.outcome == Outcome.UID_TAKEN
+        assert "uidNumber" in decision.reason
+
+    def test_the_key_elsewhere_with_the_uid_free_still_refuses(self):
+        directory = {"old": ldap_entry(uid=["old"], uidNumber=[555], employeeNumber=["cuid-123"])}
+        decision = self.classify(self.desired(), directory, ["old"], uid_owner=None)
+        assert decision.outcome == Outcome.UID_TAKEN
+
+    def test_without_the_attribute_it_is_a_collision(self):
+        entry, _ = build_desired(offering_user(username="jsmith2"), **DEFAULTS)
+        decision = classify(entry, None, uid_owner="jsmith", key_owners=None, directory={})
+        assert decision.outcome == Outcome.UID_TAKEN
+        assert "not configured" in decision.reason
+
+    def test_a_matching_entry_is_stamped(self):
+        directory = {"jsmith2": ldap_entry(uid=["jsmith2"], homeDirectory=["/home/jsmith2"])}
+        decision = self.classify(self.desired(), directory, [], uid_owner="jsmith2")
+        assert decision.outcome == Outcome.UPDATE
+        assert decision.updates == {"employeeNumber": "cuid-123"}
+
+    def test_a_changed_waldur_username_is_restamped_on_an_id_match(self):
+        directory = {
+            "jsmith2": ldap_entry(
+                uid=["jsmith2"], homeDirectory=["/home/jsmith2"], employeeNumber=["old-cuid"]
+            )
+        }
+        decision = self.classify(self.desired(), directory, [], uid_owner="jsmith2")
+        assert decision.outcome == Outcome.UPDATE
+        assert decision.updates == {"employeeNumber": "cuid-123"}
+        assert decision.restamped_from == "old-cuid"
+
+    def test_an_old_value_that_is_another_current_accounts_key_is_a_conflict(self):
+        directory = {
+            "jsmith2": ldap_entry(
+                uid=["jsmith2"], homeDirectory=["/home/jsmith2"], employeeNumber=["old-cuid"]
+            )
+        }
+        decision = classify(
+            self.desired(),
+            directory["jsmith2"],
+            uid_owner="jsmith2",
+            waldur_username_attribute=self.ATTR,
+            key_owners=[],
+            directory=directory,
+            current_keys={"cuid-123", "old-cuid"},
+        )
+        assert decision.outcome == Outcome.KEY_CONFLICT
+        assert "old-cuid" in decision.reason
+
+    def test_another_key_on_a_drifted_entry_is_a_conflict(self):
+        directory = {
+            "jsmith2": ldap_entry(uid=["jsmith2"], uidNumber=[999], employeeNumber=["other"])
+        }
+        decision = self.classify(self.desired(), directory, [], uid_owner=None)
+        assert decision.outcome == Outcome.KEY_CONFLICT
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"description": ["waldur-site-agent:disabled"]},  # would be re-enabled
+            {"cn": ["Someone Else"]},  # would be updated
+        ],
+        ids=["reenable", "update"],
+    )
+    def test_another_current_accounts_key_blocks_every_write(self, entry):
+        directory = {
+            "jsmith2": ldap_entry(uid=["jsmith2"], employeeNumber=["other-cuid"], **entry)
+        }
+        decision = classify(
+            self.desired(),
+            directory["jsmith2"],
+            uid_owner="jsmith2",
+            waldur_username_attribute=self.ATTR,
+            key_owners=[],
+            directory=directory,
+            current_keys={"cuid-123", "other-cuid"},
+        )
+        assert decision.outcome == Outcome.KEY_CONFLICT
+
+    def test_the_key_is_not_copied_onto_a_second_entry(self):
+        directory = {
+            "jsmith2": ldap_entry(uid=["jsmith2"], homeDirectory=["/home/jsmith2"]),
+            "jsmith": ldap_entry(uidNumber=[555], employeeNumber=["cuid-123"]),
+        }
+        decision = self.classify(self.desired(), directory, ["jsmith"], uid_owner="jsmith2")
+        assert decision.outcome == Outcome.NOOP
+
+    def test_a_drifted_entry_is_not_stamped(self):
+        directory = {"jsmith2": ldap_entry(uid=["jsmith2"], uidNumber=[999])}
+        decision = self.classify(self.desired(), directory, [], uid_owner=None)
+        assert decision.outcome == Outcome.DRIFT

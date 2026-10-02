@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from enum import Enum
 from typing import Optional
 
@@ -89,6 +90,123 @@ class AccessGroupConfig(PluginBackendSettingsSchema):
         return v
 
 
+class ProjectGroupMemberAttribute(str, Enum):
+    """How a project group lists its members."""
+
+    MEMBER_UID = "memberUid"  # bare usernames (RFC 2307 posixGroup)
+    MEMBER = "member"  # user DNs (rfc2307bis, groupOfNames)
+
+
+class ProjectGroupMembership(str, Enum):
+    """How far the agent goes in making a project group's members match Waldur."""
+
+    SYNC = "sync"  # add missing members and remove the ones Waldur does not list
+    ADD_ONLY = "add_only"  # only add; a member Waldur does not list stays
+
+
+class GidMismatchPolicy(str, Enum):
+    """What to do with an existing group of the same name but another GID."""
+
+    # Log it and leave the entry alone: renumbering a group orphans every file
+    # its old GID owns.
+    REPORT = "report"
+    # Rewrite the entry's gidNumber to Waldur's, unless another entry holds it.
+    ADOPT = "adopt"
+
+
+class ParentGroupConfig(PluginBackendSettingsSchema):
+    """An entry that lists the DNs of project groups (a cluster's groupOfNames)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dn: str = Field(..., description="Full DN of the entry, e.g. 'cn=alps,ou=clusters,dc=...'")
+    attribute: str = Field(
+        default="member",
+        description="Attribute that holds the project group DNs ('member', 'uniqueMember')",
+    )
+    offering_uuids: Optional[list[str]] = Field(
+        default=None,
+        description="Offerings whose projects this entry lists. Unset, only this "
+        "agent's offering. Set it when several offerings share one entry, or each "
+        "agent would remove the groups the others add.",
+    )
+
+    @field_validator("offering_uuids")
+    @classmethod
+    def validate_offering_uuids(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        """Each must be a UUID, with or without dashes."""
+        for value in v or []:
+            try:
+                uuid.UUID(str(value))
+            except ValueError as e:
+                msg = f"offering_uuids: {value!r} is not a UUID"
+                raise ValueError(msg) from e
+        return v
+
+
+class ProjectGroupsConfig(PluginBackendSettingsSchema):
+    """Provider project groups written from Waldur, one entry per project."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False, description="Write Waldur's project groups")
+    ou: str = Field(
+        default="ou=projects",
+        description="OU, relative to base_dn, the project groups are written under",
+    )
+    object_classes: list[str] = Field(
+        default_factory=lambda: ["top", "posixGroup"],
+        description="Object classes of a newly created project group",
+    )
+    member_attribute: ProjectGroupMemberAttribute = Field(
+        default=ProjectGroupMemberAttribute.MEMBER_UID,
+        description="'memberUid' writes usernames, 'member' writes user DNs "
+        "(uid=<name>,<people_ou>,<base_dn>)",
+    )
+    membership: ProjectGroupMembership = Field(
+        default=ProjectGroupMembership.SYNC,
+        description="'sync' adds and removes members to match Waldur; 'add_only' "
+        "never removes one",
+    )
+    on_gid_mismatch: GidMismatchPolicy = Field(
+        default=GidMismatchPolicy.REPORT,
+        description="An existing group of the same name with another gidNumber: "
+        "'report' leaves it alone, 'adopt' renumbers it to Waldur's GID unless "
+        "another entry holds that GID",
+    )
+    managed_marker: str = Field(
+        default="waldur-managed",
+        min_length=1,
+        description="Extra description value written on every project group the agent "
+        "creates or adopts. Only marked groups are taken out of a parent once Waldur "
+        "no longer lists them; unmarked groups under the OU are the operator's",
+    )
+    parents: list[ParentGroupConfig] = Field(
+        default_factory=list,
+        description="Entries that list the DN of each project group whose project "
+        "has a resource on the offering",
+    )
+
+
+    @model_validator(mode="after")
+    def validate_member_attribute(self) -> ProjectGroupsConfig:
+        """``member`` holds DNs, which an RFC 2307 posixGroup does not allow.
+
+        groupOfNames or groupOfMembers (the rfc2307bis structural classes) has
+        to be among the object classes for the directory to accept the members.
+        """
+        if self.member_attribute != ProjectGroupMemberAttribute.MEMBER:
+            return self
+        classes = {c.lower() for c in self.object_classes}
+        if not classes & {"groupofnames", "groupofmembers"}:
+            msg = (
+                "member_attribute 'member' needs groupOfNames or groupOfMembers in "
+                "object_classes; an RFC 2307 posixGroup allows memberUid only"
+            )
+            raise ValueError(msg)
+        return self
+
+
 class LdapSettingsSchema(PluginBackendSettingsSchema):
     """LDAP connection and provisioning settings.
 
@@ -173,6 +291,19 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         description="Generate a random password for VPN access on user creation",
     )
 
+    # Groups
+    personal_groups: bool = Field(
+        default=True,
+        description="Create a personal group (cn=<username> in groups_ou) with each "
+        "account. Off, accounts carry the primary GID from Waldur and no group entry "
+        "is written, so groups_ou is only needed for access_groups. Requires "
+        "account_source 'waldur': without it there is no primary GID to write.",
+    )
+    project_groups: Optional[ProjectGroupsConfig] = Field(
+        default=None,
+        description="Write the service provider's project groups from Waldur",
+    )
+
     # Access groups
     access_groups: Optional[list[AccessGroupConfig]] = Field(
         default=None,
@@ -218,8 +349,18 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         The uid/gid ranges stay legal — the same ``ldap:`` block is shared verbatim
         with the SLURM backend's client, which keeps allocating *project* group
         GIDs from ``gid_range_*``. The backend warns about both at construction.
+
+        The converse: ``personal_groups: false`` is rejected *without* Waldur
+        authority, since only Waldur can supply a primary GID that no group holds.
         """
         if self.account_source != AccountSource.WALDUR:
+            if not self.personal_groups:
+                msg = (
+                    "personal_groups: false requires account_source 'waldur': the "
+                    "agent allocates primary GIDs from groups_ou otherwise, and an "
+                    "account without its group would leave its GID free for reuse."
+                )
+                raise ValueError(msg)
             return self
         if "username_format" in self.model_fields_set:
             msg = (

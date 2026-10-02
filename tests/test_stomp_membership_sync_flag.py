@@ -112,3 +112,47 @@ class TestOrphanedMembershipSyncWarning:
         with caplog.at_level(logging.WARNING, logger=self.CAPLOG_LEVELS["logger"]):
             _offering(stomp_enabled=False)
         assert "MISCONFIGURATION" not in caplog.text
+
+
+class TestUsernameOnlyOfferingSubscribes:
+    """No membership backend, but a username backend that acts on account changes."""
+
+    @staticmethod
+    def _backend(with_hooks: bool):
+        from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
+
+        class Backend(AbstractUsernameManagementBackend):
+            def generate_username(self, offering_user):
+                return ""
+
+            def get_username(self, offering_user):
+                return None
+
+        if with_hooks:
+            Backend.sync_user_profiles = lambda self, offering_users: None  # type: ignore[method-assign]
+        return Backend()
+
+    def _types(self, with_hooks: bool, **overrides) -> set:
+        from unittest import mock
+
+        offering = _offering(
+            stomp_enabled=True,
+            membership_sync_backend="",
+            order_processing_backend="",
+            username_management_backend="ldap",
+            **overrides,
+        )
+        with mock.patch(
+            "waldur_site_agent.common.utils.get_username_management_backend",
+            return_value=(self._backend(with_hooks), "1.0"),
+        ):
+            return set(_determine_observable_object_types(offering))
+
+    def test_subscribes_to_offering_user_events(self):
+        assert self._types(with_hooks=True) == {ObservableObjectTypeEnum.OFFERING_USER}
+
+    def test_a_backend_without_hooks_gets_no_subscription(self):
+        assert self._types(with_hooks=False) == set()
+
+    def test_the_membership_opt_out_applies(self):
+        assert self._types(with_hooks=True, stomp_membership_sync_enabled=False) == set()

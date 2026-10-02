@@ -43,6 +43,22 @@ from waldur_site_agent.event_processing.structures import (
 )
 
 
+def _username_backend_has_hooks(offering: common_structures.Offering) -> bool:
+    """Whether the offering's username backend acts on offering-user changes."""
+    try:
+        backend, _ = common_utils.get_username_management_backend(offering)
+    except Exception:
+        logger.exception(
+            "Could not resolve the username management backend for %s", offering.name
+        )
+        return False
+    backend_type = type(backend)
+    return any(
+        getattr(backend_type, hook) is not getattr(AbstractUsernameManagementBackend, hook)
+        for hook in ("sync_user_profiles", "release_users")
+    )
+
+
 def _determine_observable_object_types(
     offering: common_structures.Offering,
 ) -> list[ObservableObjectTypeEnum]:
@@ -81,6 +97,17 @@ def _determine_observable_object_types(
                 ObservableObjectTypeEnum.OFFERING_RESOURCES_SYNC,
             ]
         )
+    elif stomp_membership and _username_backend_has_hooks(offering):
+        # No membership backend, but a username backend that keeps a directory
+        # in line (LDAP, say): its accounts arrive as offering-user events, and
+        # without this subscription they would only reach it on the periodic
+        # reconcile.
+        logger.info(
+            "Membership sync is disabled for offering %s; subscribing to offering-user "
+            "events for its username management backend",
+            offering.name,
+        )
+        object_types.append(ObservableObjectTypeEnum.OFFERING_USER)
     else:
         logger.info(
             "Membership sync is disabled for offering %s, skipping start of STOMP connections",
@@ -478,21 +505,23 @@ def run_periodic_offering_user_reconciliation(
                 is_restricted=False,
             )
 
-            if not stuck_users:
-                continue
-
-            logger.info(
-                "Offering user reconciliation: found %d stuck user(s) for %s",
-                len(stuck_users),
-                offering.name,
-            )
-
-            updated = common_utils.update_offering_users(offering, waldur_rest_client, stuck_users)
-            if updated:
+            # No early exit when nothing is stuck: the username backend's own
+            # reconcile below is the periodic pass that keeps the directory in
+            # line, and it must run on a quiet cycle too.
+            if stuck_users:
                 logger.info(
-                    "Offering user reconciliation: usernames updated for %s",
+                    "Offering user reconciliation: found %d stuck user(s) for %s",
+                    len(stuck_users),
                     offering.name,
                 )
+                updated = common_utils.update_offering_users(
+                    offering, waldur_rest_client, stuck_users
+                )
+                if updated:
+                    logger.info(
+                        "Offering user reconciliation: usernames updated for %s",
+                        offering.name,
+                    )
         except Exception:
             logger.exception("Offering user reconciliation failed for %s", offering.name)
 
@@ -517,9 +546,14 @@ def _run_username_backend_reconciliation(
     the membership processor sees an account that still looks live and leaves
     it. This sweep is what eventually lets it go.
 
-    Backends that leave both sync_user_profiles and release_users as the
-    inherited no-ops pay nothing: the identity checks below short-circuit
-    before any request is made.
+    It runs on every periodic cycle for every offering, membership backend or
+    not. The live-account listing is fetched only for a backend that syncs
+    profiles; the departed listing and its teardown always run, because
+    associations and the acknowledgement to Waldur need no username backend.
+    So on an offering with a membership backend (SLURM, say) this sweep also
+    runs every period, and on its first run after an upgrade it tears down
+    every deletion Waldur has queued up while it did not -- its log line says
+    how many.
     """
     try:
         backend, _ = common_utils.get_username_management_backend(offering)
@@ -533,17 +567,28 @@ def _run_username_backend_reconciliation(
         type(backend).sync_user_profiles
         is not AbstractUsernameManagementBackend.sync_user_profiles
     )
+    reconciles_offering = (
+        type(backend).reconcile_offering
+        is not AbstractUsernameManagementBackend.reconcile_offering
+    )
 
     try:
         waldur_rest_client = get_client_for_offering(offering, user_agent)
-        # No `field=` filter: the reconciler needs the POSIX attributes.
-        offering_users = marketplace_offering_users_list.sync_all(
-            client=waldur_rest_client,
-            offering_uuid=[offering.uuid],
-            is_restricted=False,
-        )
-        if offering_users and syncs_profiles:
-            backend.sync_user_profiles(offering_users)
+        if syncs_profiles:
+            # No `field=` filter: the reconciler needs the POSIX attributes.
+            offering_users = marketplace_offering_users_list.sync_all(
+                client=waldur_rest_client,
+                offering_uuid=[offering.uuid],
+                is_restricted=False,
+            )
+            if offering_users:
+                backend.sync_user_profiles(offering_users)
+        if reconciles_offering:
+            # Its own guard: a failure here must not hold back the teardown.
+            try:
+                backend.reconcile_offering(waldur_rest_client)
+            except Exception:
+                logger.exception("Offering reconcile failed for %s", offering.name)
         # The teardown runs for every offering: associations and the
         # acknowledgement need no username backend at all. Its own query, by
         # state and without the restricted filter above: a restricted user whose
@@ -554,6 +599,12 @@ def _run_username_backend_reconciliation(
             state=list(DEPARTED_OFFERING_USER_STATES),
             field=common_utils.RELEASE_OFFERING_USER_FIELDS,
         )
+        if departed:
+            logger.info(
+                "Departure sweep for %s: %d offering user(s) in a deletion state",
+                offering.name,
+                len(departed),
+            )
         handlers.process_offering_user_deletions(offering, waldur_rest_client, departed)
     except Exception:
         logger.exception(
@@ -744,10 +795,13 @@ def send_agent_health_checks(offerings: list[common_structures.Offering], user_a
     for offering in offerings:
         try:
             waldur_rest_client = get_client_for_offering(offering, user_agent)
-            processor = common_processors.OfferingOrderProcessor(offering, waldur_rest_client)
-            marketplace_orders_list.sync(
-                client=processor.waldur_rest_client, offering_uuid=offering.uuid
-            )
+            if offering.order_processing_backend:
+                # Building the processor also proves the resource backend loads.
+                common_processors.OfferingOrderProcessor(offering, waldur_rest_client)
+            # An offering without a resource backend (a username backend such as
+            # LDAP on its own) has nothing for the processor to build; the API
+            # round-trip is the health signal Waldur records either way.
+            marketplace_orders_list.sync(client=waldur_rest_client, offering_uuid=offering.uuid)
         except Exception as e:
             logger.error(
                 "Failed to send agent health check for the offering %s: %s", offering.name, e

@@ -57,6 +57,18 @@ class _BothHooks(AbstractUsernameManagementBackend):
         self.released.append(list(offering_users))
 
 
+class _OfferingReconcile(_BothHooks):
+    def __init__(self, fail=False):
+        super().__init__()
+        self.reconciled: list = []
+        self.fail = fail
+
+    def reconcile_offering(self, waldur_rest_client):
+        self.reconciled.append(waldur_rest_client)
+        if self.fail:
+            raise RuntimeError("directory down")
+
+
 class _ReleaseOnly(AbstractUsernameManagementBackend):
     def __init__(self):
         super().__init__()
@@ -121,7 +133,8 @@ class TestPeriodicSweep:
     @mock.patch("waldur_site_agent.event_processing.utils.marketplace_offering_users_list")
     def test_release_only_backend_still_gets_the_sweep(self, mock_list, _client):
         departed = _offering_user("gone", OfferingUserState.DELETING)
-        mock_list.sync_all.side_effect = [[_offering_user("alive", OfferingUserState.OK)], [departed]]
+        # No live listing: the backend does not sync profiles.
+        mock_list.sync_all.side_effect = [[departed]]
 
         with _patch_backend(_ReleaseOnly()), _patch_deletions() as teardown:
             utils._run_username_backend_reconciliation(_make_offering())
@@ -133,17 +146,59 @@ class TestPeriodicSweep:
     def test_backend_without_hooks_still_runs_the_deletion_sweep(self, mock_list, _client):
         """A plain SLURM offering must process Requested deletion too."""
         departed = _offering_user("gone", OfferingUserState.REQUESTED_DELETION)
-        mock_list.sync_all.side_effect = [[_offering_user("alive", OfferingUserState.OK)], [departed]]
+        # No live listing: the backend does not sync profiles.
+        mock_list.sync_all.side_effect = [[departed]]
         with _patch_backend(_NoHooks()), _patch_deletions() as teardown:
             utils._run_username_backend_reconciliation(_make_offering())
         assert teardown.call_args.args[2] == [departed]
 
     @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
     @mock.patch("waldur_site_agent.event_processing.utils.marketplace_offering_users_list")
+    def test_offering_reconcile_runs_without_any_offering_user(self, mock_list, get_client):
+        """Profile sync needs users; the offering-wide reconcile does not."""
+        mock_list.sync_all.side_effect = [[], []]
+        backend = _OfferingReconcile()
+        offering = _make_offering(membership_sync_backend=None, stomp_enabled=False)
+        with _patch_backend(backend), _patch_deletions():
+            utils.run_periodic_offering_user_reconciliation([offering], "agent")
+        assert backend.synced == []
+        assert backend.reconciled == [get_client.return_value]
+
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_offering_users_list")
+    def test_a_failed_offering_reconcile_does_not_hold_back_the_teardown(self, mock_list, _c):
+        departed = _offering_user("gone", OfferingUserState.REQUESTED_DELETION)
+        mock_list.sync_all.side_effect = [[], [departed]]
+        backend = _OfferingReconcile(fail=True)
+        offering = _make_offering(membership_sync_backend=None, stomp_enabled=False)
+        with _patch_backend(backend), _patch_deletions() as teardown:
+            utils.run_periodic_offering_user_reconciliation([offering], "agent")
+        assert teardown.call_args.args[2] == [departed]
+
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_offering_users_list")
+    def test_periodic_loop_reconciles_on_a_cycle_with_nothing_stuck(self, mock_list, _c):
+        """The username backend's reconcile is the periodic pass, not a stuck-user follow-up.
+
+        With a membership backend configured, a cycle with no stuck offering
+        users used to skip it, so the directory was only reconciled on cycles
+        that also had a username to retry.
+        """
+        live = _offering_user("alive", OfferingUserState.OK)
+        # Stuck-user retry finds nothing; then the sweep's live and departed listings.
+        mock_list.sync_all.side_effect = [[], [live], []]
+        backend = _BothHooks()
+        offering = _make_offering(membership_sync_backend="slurm", stomp_enabled=False)
+        with _patch_backend(backend), _patch_deletions():
+            utils.run_periodic_offering_user_reconciliation([offering], "agent")
+        assert backend.synced == [[live]]
+
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_offering_users_list")
     def test_periodic_loop_sweeps_offerings_without_membership_backend(self, mock_list, _c):
         """Username-backend-only offerings were skipped by the loop before."""
         departed = _offering_user("gone", OfferingUserState.REQUESTED_DELETION)
-        mock_list.sync_all.side_effect = [[], [departed]]
+        mock_list.sync_all.side_effect = [[departed]]
         offering = _make_offering(membership_sync_backend=None)
         with _patch_backend(_NoHooks()), _patch_deletions() as teardown:
             utils.run_periodic_offering_user_reconciliation([offering], "agent")
@@ -322,3 +377,74 @@ class TestStompReconcile:
         ):
             handlers._process_offering_user_message(message, offering, "agent")
         reconcile.assert_not_called()
+
+
+class TestMembershipPassOfferingReconcile:
+    """The polling membership pass runs the offering-wide reconcile once, users or not."""
+
+    def _processor(self):
+        from waldur_site_agent.common.processors import OfferingMembershipProcessor
+
+        processor = OfferingMembershipProcessor.__new__(OfferingMembershipProcessor)
+        processor.offering = _make_offering(stomp_enabled=False)
+        processor.waldur_rest_client = mock.Mock()
+        return processor
+
+    def test_calls_the_hook_with_the_processor_client(self):
+        processor = self._processor()
+        backend = _OfferingReconcile()
+        with _patch_backend(backend):
+            processor._reconcile_offering_in_username_backend()
+        assert backend.reconciled == [processor.waldur_rest_client]
+
+    def test_a_failure_is_logged_not_raised(self):
+        processor = self._processor()
+        with _patch_backend(_OfferingReconcile(fail=True)):
+            processor._reconcile_offering_in_username_backend()
+
+    def test_backends_without_the_hook_are_left_alone(self):
+        processor = self._processor()
+        with _patch_backend(_BothHooks()):
+            processor._reconcile_offering_in_username_backend()
+
+
+class TestPeriodicSweepListings:
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_offering_users_list")
+    def test_no_live_listing_without_a_profile_hook(self, mock_list, _client):
+        mock_list.sync_all.side_effect = [[]]
+        offering = _make_offering(membership_sync_backend=None, stomp_enabled=False)
+        with _patch_backend(_NoHooks()), _patch_deletions():
+            utils.run_periodic_offering_user_reconciliation([offering], "agent")
+        assert mock_list.sync_all.call_count == 1
+        assert "state" in mock_list.sync_all.call_args.kwargs
+
+    @mock.patch("waldur_site_agent.event_processing.utils.get_client_for_offering")
+    @mock.patch("waldur_site_agent.event_processing.utils.marketplace_offering_users_list")
+    def test_the_sweep_says_how_many_departures_it_takes(self, mock_list, _client):
+        departed = [
+            _offering_user(f"gone{i}", OfferingUserState.REQUESTED_DELETION) for i in range(3)
+        ]
+        mock_list.sync_all.side_effect = [departed]
+        offering = _make_offering(membership_sync_backend=None, stomp_enabled=False)
+        with _patch_backend(_NoHooks()), _patch_deletions(), mock.patch.object(
+            utils, "logger"
+        ) as logger:
+            utils.run_periodic_offering_user_reconciliation([offering], "agent")
+        assert any(
+            "Departure sweep" in c.args[0] and 3 in c.args for c in logger.info.call_args_list
+        )
+
+
+class TestOfferingReconcileResolvesTheBackendSafely:
+    def test_a_backend_that_cannot_be_resolved_is_logged_not_raised(self):
+        from waldur_site_agent.common.processors import OfferingMembershipProcessor
+
+        processor = OfferingMembershipProcessor.__new__(OfferingMembershipProcessor)
+        processor.offering = _make_offering(stomp_enabled=False)
+        processor.waldur_rest_client = mock.Mock()
+        with mock.patch(
+            "waldur_site_agent.common.utils.get_username_management_backend",
+            side_effect=RuntimeError("plugin broken"),
+        ):
+            processor._reconcile_offering_in_username_backend()
