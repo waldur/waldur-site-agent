@@ -2183,6 +2183,25 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         )
 
         self._process_resources(resource_report)
+        self._reconcile_offering_in_username_backend()
+
+    def _reconcile_offering_in_username_backend(self) -> None:
+        """Run the username backend's offering-wide reconcile, once per pass.
+
+        Separate from the profile sync, which only runs with a non-empty
+        offering-user list: an offering whose last account is gone still has
+        directory state to clean up.
+        """
+        try:
+            username_management_backend, _ = utils.get_username_management_backend(self.offering)
+            if (
+                type(username_management_backend).reconcile_offering
+                is AbstractUsernameManagementBackend.reconcile_offering
+            ):
+                return
+            username_management_backend.reconcile_offering(self.waldur_rest_client)
+        except Exception:
+            logger.exception("Offering reconcile failed for %s", self.offering.name)
 
     def _fetch_source_project(self, waldur_resource: WaldurResource) -> Optional[Project]:
         """Pre-fetch the source project for backends that mirror project metadata.

@@ -340,12 +340,12 @@ class TestRunPeriodicOfferingUserReconciliation(unittest.TestCase):
         mock_ou_list.sync_all.return_value = []
         utils.run_periodic_offering_user_reconciliation([offering], "agent")
         mock_update.assert_not_called()
-        # Two list requests, both the sweep's: the profile-sync listing and the
-        # departed-states listing. Neither is the stuck-user retry.
-        self.assertEqual(mock_ou_list.sync_all.call_count, 2)
+        # One list request, the sweep's departed-states listing: not the
+        # stuck-user retry, and no profile-sync listing for a backend that does
+        # not sync profiles.
+        self.assertEqual(mock_ou_list.sync_all.call_count, 1)
         states = [c.kwargs.get("state") for c in mock_ou_list.sync_all.call_args_list]
-        self.assertNotIn(OfferingUserState.REQUESTED, states[0] or [])
-        self.assertIn(OfferingUserState.REQUESTED_DELETION, states[1])
+        self.assertIn(OfferingUserState.REQUESTED_DELETION, states[0])
         mock_get_client.assert_called_once()
 
     @mock.patch("waldur_site_agent.event_processing.utils.common_utils.update_offering_users")
@@ -359,15 +359,15 @@ class TestRunPeriodicOfferingUserReconciliation(unittest.TestCase):
         """Reconciliation fetches stuck offering users and calls update_offering_users."""
         offering = _make_offering(membership_sync_backend="slurm")
         stuck_user = mock.Mock()
-        # The stuck-user retry gets the stuck user; the sweep's two listings get nothing.
-        mock_ou_list.sync_all.side_effect = [[stuck_user], [], []]
+        # The stuck-user retry gets the stuck user; the sweep's listing gets nothing.
+        mock_ou_list.sync_all.side_effect = [[stuck_user], []]
         mock_update.return_value = True
 
         utils.run_periodic_offering_user_reconciliation([offering], "agent")
 
-        # The stuck-user retry, then the sweep's profile-sync and departed listings.
+        # The stuck-user retry, then the sweep's departed listing.
         self.assertEqual(mock_get_client.call_count, 2)
-        self.assertEqual(mock_ou_list.sync_all.call_count, 3)
+        self.assertEqual(mock_ou_list.sync_all.call_count, 2)
         call_kwargs = mock_ou_list.sync_all.call_args_list[0].kwargs
         self.assertEqual(
             set(call_kwargs["state"]),

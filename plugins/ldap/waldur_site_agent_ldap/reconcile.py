@@ -49,6 +49,12 @@ class Outcome(str, Enum):
     UPDATE = "update"  # profile / home / shell differ; safe to rewrite
     DRIFT = "drift"  # uidNumber or gidNumber differ; policy decides
     UID_TAKEN = "uid_taken"  # a different entry already holds this UID
+    # The entry holding this UID is this same account under the name Waldur
+    # used before: rename it rather than refuse the new name.
+    RENAME = "rename"
+    # The entry under this name carries another person's Waldur username in
+    # waldur_username_attribute: it is not this account's, whatever its ids say.
+    KEY_CONFLICT = "key_conflict"
     # The entry exists with the right ids but was parked by the agent when the
     # person left (see LdapClient.disable_user); they are back, so wake it up.
     REENABLE = "reenable"
@@ -66,6 +72,9 @@ class DesiredEntry:
     first_name: str = ""
     last_name: str = ""
     email: str = ""
+    # The person's Waldur username, written to waldur_username_attribute: the
+    # stable key a renamed account's entry is found by. None when the
+    # attribute is not configured.
     waldur_username: Optional[str] = None
 
     @property
@@ -83,8 +92,13 @@ class Decision:
     updates: dict = field(default_factory=dict)
     # Attribute -> (actual, desired), for Outcome.DRIFT. Reporting only.
     diff: dict = field(default_factory=dict)
-    # uid of the entry already holding the wanted uidNumber, for Outcome.UID_TAKEN.
+    # uid of the entry already holding the wanted uidNumber, for Outcome.UID_TAKEN
+    # and Outcome.RENAME (the old name).
     uid_taken_by: Optional[str] = None
+    # For Outcome.UID_TAKEN and Outcome.KEY_CONFLICT: why nothing was written.
+    reason: Optional[str] = None
+    # For an update that rewrites the key: the value it replaces.
+    restamped_from: Optional[str] = None
     # uid of another entry carrying the same email. A warning, never a blocker:
     # one person legitimately holds several accounts in a shared directory.
     duplicate_mail_owner: Optional[str] = None
@@ -192,6 +206,42 @@ def build_desired(
     )
 
 
+def rename_refusal(
+    desired: DesiredEntry,
+    key_owners: Optional[list[str]],
+    directory: dict,
+) -> tuple[Optional[str], Optional[str]]:
+    """Find the entry this account had under another name, by the Waldur-username key.
+
+    Returns ``(old_name, None)`` for a rename, or ``(None, reason)`` when there
+    is none to make. The key is the person's Waldur username, written on every
+    entry the agent creates or matches; it survives a change of POSIX name, so
+    the entry carrying it under another uid is this account's, provided it also
+    carries this account's uidNumber. Anything ambiguous refuses.
+    """
+    if key_owners is None:
+        return None, "waldur_username_attribute is not configured, so renames are not followed"
+    if not desired.waldur_username:
+        return None, "the account has no Waldur username to find its entry by"
+    if len(key_owners) > 1:
+        return None, (
+            f"entries {', '.join(sorted(key_owners))} all carry the Waldur username "
+            f"{desired.waldur_username}"
+        )
+    if not key_owners:
+        return None, (
+            f"no entry carries the Waldur username {desired.waldur_username} (the "
+            "holder is another person, or the POSIX and Waldur usernames changed at once)"
+        )
+    owner = key_owners[0]
+    if _attr_number(directory.get(owner), "uidNumber") != desired.uid_number:
+        return None, (
+            f"{owner} carries the Waldur username {desired.waldur_username} but not "
+            "this account's uidNumber"
+        )
+    return owner, None
+
+
 def classify(  # noqa: PLR0911
     desired: DesiredEntry,
     actual: Optional[dict],
@@ -199,6 +249,9 @@ def classify(  # noqa: PLR0911
     uid_owner: Optional[str] = None,
     mail_owner: Optional[str] = None,
     waldur_username_attribute: str = "",
+    key_owners: Optional[list[str]] = None,
+    directory: Optional[dict] = None,
+    current_keys: Optional[set[str]] = None,
 ) -> Decision:
     """Compare the wanted entry against the directory and decide what to do.
 
@@ -209,12 +262,30 @@ def classify(  # noqa: PLR0911
 
     ``uid_owner`` blocks two distinct cases: creating an account on a taken UID,
     and renumbering a drifted account onto one.
+
+    ``key_owners`` are the uids of the entries whose ``waldur_username_attribute``
+    holds ``desired.waldur_username`` (None when the attribute is not
+    configured), and ``directory`` the bulk read they come from. With no entry
+    under the wanted name, the one key owner under another name with this
+    account's uidNumber is the same account renamed (see :func:`rename_refusal`).
     """
+    key_others = [o for o in key_owners or [] if o != desired.username]
     if actual is None:
-        # Case 5 outranks creation: taking a UID that belongs to somebody else
-        # would break that account, and no policy makes that acceptable.
-        if uid_owner is not None and uid_owner != desired.username:
-            return Decision(outcome=Outcome.UID_TAKEN, uid_taken_by=uid_owner)
+        if key_others or (uid_owner is not None and uid_owner != desired.username):
+            old_name, reason = rename_refusal(desired, key_owners, directory or {})
+            if old_name is not None:
+                return Decision(outcome=Outcome.RENAME, uid_taken_by=old_name)
+            if uid_owner is not None and uid_owner != desired.username:
+                # Case 5 outranks creation: taking a UID that belongs to somebody
+                # else would break that account, and no policy makes that acceptable.
+                return Decision(
+                    outcome=Outcome.UID_TAKEN, uid_taken_by=uid_owner, reason=reason
+                )
+            # The UID is free but the key sits elsewhere; refuse rather than
+            # create a second entry for one person.
+            return Decision(
+                outcome=Outcome.UID_TAKEN, uid_taken_by=", ".join(key_others), reason=reason
+            )
         # Case 6 does not block — a shared directory legitimately holds more than
         # one account per person — but it is worth saying out loud.
         return Decision(
@@ -223,6 +294,31 @@ def classify(  # noqa: PLR0911
                 mail_owner if mail_owner and mail_owner != desired.username else None
             ),
         )
+
+    # The key gates every write to an existing entry: one carrying another
+    # person's Waldur username is never updated, re-enabled, adopted or
+    # renumbered for this account, and its key is never overwritten.
+    held_key = _attr_text(actual, waldur_username_attribute) if waldur_username_attribute else ""
+    restamp_from = None
+    if held_key and desired.waldur_username and held_key != desired.waldur_username:
+        # The one case a different key is rewritten: the entry is this
+        # account's by its ids (its uid is the wanted name, and here its
+        # uidNumber matches too), and the old value is no current account's
+        # Waldur username -- the person's Waldur username changed. The
+        # attribute is reserved for the agent by configuration.
+        if (
+            _attr_number(actual, "uidNumber") == desired.uid_number
+            and held_key not in (current_keys or set())
+        ):
+            restamp_from = held_key
+        else:
+            return Decision(
+                outcome=Outcome.KEY_CONFLICT,
+                reason=(
+                    f"its {waldur_username_attribute} is {held_key}, this account's Waldur "
+                    f"username is {desired.waldur_username}"
+                ),
+            )
 
     # Case 4: the POSIX identity itself disagrees. Reported as a diff and left to
     # policy — rewriting a live uidNumber orphans every file the account owns.
@@ -252,7 +348,15 @@ def classify(  # noqa: PLR0911
         ("givenName", desired.first_name or desired.username),
         ("sn", desired.last_name or desired.username),
     ]
-    if waldur_username_attribute and desired.waldur_username:
+    if (
+        waldur_username_attribute
+        and desired.waldur_username
+        and (not held_key or restamp_from)
+        and not key_others
+    ):
+        # Stamped only on an entry whose uid and ids match Waldur's -- that is
+        # the only way here -- only where none is set yet, and never as a second
+        # copy of a key another entry carries.
         wanted.append((waldur_username_attribute, desired.waldur_username))
     updates = {name: value for name, value in wanted if value and _attr_text(actual, name) != value}
 
@@ -261,12 +365,13 @@ def classify(  # noqa: PLR0911
     # entry exists), not merely updated (the no-login shell was ours, and so are
     # the expiry and the marker). The shell is restored by the enable step, so it
     # is not also written as a profile update.
+    restamped_from = restamp_from if waldur_username_attribute in updates else None
     if LdapClient.is_disabled_by_agent(actual):
         updates.pop("loginShell", None)
-        return Decision(outcome=Outcome.REENABLE, updates=updates)
+        return Decision(outcome=Outcome.REENABLE, updates=updates, restamped_from=restamped_from)
 
     if updates:
-        return Decision(outcome=Outcome.UPDATE, updates=updates)
+        return Decision(outcome=Outcome.UPDATE, updates=updates, restamped_from=restamped_from)
     return Decision(outcome=Outcome.NOOP)
 
 
@@ -287,4 +392,16 @@ def index_by_mail(users: dict) -> dict[str, str]:
         mail = _attr_text(entry, "mail")
         if mail:
             index.setdefault(mail.lower(), uid)
+    return index
+
+
+def index_by_attribute(users: dict, attribute: str) -> dict[str, list[str]]:
+    """``{value: [uid, ...]}`` of one attribute over a bulk read; empty without one."""
+    index: dict[str, list[str]] = {}
+    if not attribute:
+        return index
+    for uid, entry in users.items():
+        value = _attr_text(entry, attribute)
+        if value:
+            index.setdefault(value, []).append(uid)
     return index

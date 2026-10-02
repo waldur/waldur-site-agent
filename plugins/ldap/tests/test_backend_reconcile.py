@@ -178,6 +178,16 @@ class TestPosixMismatch:
         )
         client.set_group_gid.assert_called_once_with("jsmith", 20001)
 
+    def test_adopt_without_personal_groups_leaves_groups_alone(self):
+        backend, client = make_backend(
+            account_source="waldur", on_posix_mismatch="adopt", personal_groups=False
+        )
+        client.list_users.return_value = {"jsmith": ldap_entry(gidNumber=[999])}
+        backend.sync_user_profiles([offering_user()])
+
+        client.set_user_posix_attributes.assert_called_once()
+        client.set_group_gid.assert_not_called()
+
     def test_adopt_refuses_to_renumber_onto_another_entrys_uid(self):
         # jsmith drifted to 999, and the UID Waldur wants (10001) is already on
         # somebody else. adopt must not take it: LDAP allows duplicate uidNumbers,

@@ -420,3 +420,35 @@ class TestReenableOnReturn:
 def test_base_settings_are_unchanged_by_the_fixture():
     assert "remove_user_on_deactivate" not in BASE_SETTINGS
     assert "on_departure" not in BASE_SETTINGS
+
+
+class TestWithoutPersonalGroups:
+    """personal_groups: false -- no group entry is written, so none can be missed."""
+
+    def test_disable_without_a_groups_ou_parks_the_entry(self, listing):
+        backend, client = waldur_backend(on_departure="disable", personal_groups=False)
+        client.groups_container_exists.return_value = False
+        client.find_group_memberships.side_effect = BackendError("does not exist")
+
+        backend.release_users([departed()], mock.Mock())
+
+        client.find_group_memberships.assert_not_called()
+        client.disable_user.assert_called_once_with("jsmith")
+
+    def test_disable_still_sweeps_an_existing_groups_ou(self, listing):
+        backend, client = waldur_backend(on_departure="disable", personal_groups=False)
+        client.groups_container_exists.return_value = True
+        client.find_group_memberships.return_value = [("hpc_proj1", "memberUid")]
+
+        backend.release_users([departed()], mock.Mock())
+
+        client.remove_user_from_group.assert_called_once_with("hpc_proj1", "jsmith", "memberUid")
+
+    def test_a_missing_groups_ou_still_fails_with_personal_groups(self, listing):
+        backend, client = waldur_backend(on_departure="disable")
+        client.find_group_memberships.side_effect = BackendError("does not exist")
+
+        with pytest.raises(BackendError, match="Could not release LDAP accounts"):
+            backend.release_users([departed()], mock.Mock())
+
+        client.groups_container_exists.assert_not_called()

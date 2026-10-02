@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import secrets
 import string
 from typing import Optional, Union
 
 from ldap3 import (
     ALL,
+    BASE,
     MODIFY_ADD,
     MODIFY_DELETE,
     MODIFY_REPLACE,
@@ -26,6 +28,26 @@ from waldur_site_agent.backend.exceptions import BackendError
 #: account the agent parked from one an operator disabled by hand.
 DISABLED_MARKER = "waldur-site-agent:disabled"
 NOLOGIN_SHELL = "/usr/sbin/nologin"
+
+
+class EntryExistsError(BackendError):
+    """An add found the entry already there -- usually another writer got there first."""
+
+
+class EntryMissingError(BackendError):
+    """The entry to change is gone -- usually another writer moved or removed it first."""
+
+
+class ContainerMissingError(BackendError):
+    """The base of a search does not exist."""
+
+
+class ValueConflictError(BackendError):
+    """A modify added a value already present, or deleted one already gone."""
+
+
+def _result_description(conn: Connection) -> str:
+    return str((conn.result or {}).get("description", ""))
 
 
 def _first(value: Union[list, tuple, str, int, None]) -> Union[str, int, None]:
@@ -86,6 +108,12 @@ class LdapClient:
             ["posixGroup", "top"],
         )
         self.use_starttls = settings.get("use_starttls", False)
+        # Off: accounts carry the primary GID they are given and no group entry
+        # is written for them, so groups_ou is only needed for access groups.
+        self.personal_groups = settings.get("personal_groups", True) is not False
+        # Read back with every user search: it is compared on every cycle (a
+        # profile diff) and it is the key a rename is found by.
+        self.waldur_username_attribute = settings.get("waldur_username_attribute") or ""
         # groupOfNames requires at least one member. Such groups are created with
         # this DN as a stand-in, and it takes the last real member's place on
         # removal, so revoking access never needs an empty group. It is never
@@ -119,6 +147,56 @@ class LdapClient:
         "shadowExpire",
         "objectClass",
     )
+
+    #: Page size for bulk searches. A server's size limit then caps a page, not
+    #: the whole read.
+    SEARCH_PAGE_SIZE = 500
+
+    def _search_all(
+        self, conn: Connection, search_base: str, search_filter: str, attributes: list[str]
+    ) -> list[tuple[str, dict]]:
+        """Every entry under ``search_base`` matching the filter, paged, or an error.
+
+        A bulk read that stopped early -- a size, time or administrative limit,
+        an ACL that hid part of the tree -- must abort the caller, not hand it a
+        shorter list: a reconcile acting on a partial read would treat what it
+        did not see as absent. Only a final ``success`` result counts. Every
+        attribute comes back as a list, as ``entry_attributes_as_dict`` gives it.
+        """
+        response = conn.extend.standard.paged_search(
+            search_base,
+            search_filter,
+            search_scope=SUBTREE,
+            attributes=attributes,
+            paged_size=self.SEARCH_PAGE_SIZE,
+            generator=False,
+        )
+        description = _result_description(conn)
+        if description == "noSuchObject":
+            msg = f"{search_base} does not exist"
+            raise ContainerMissingError(msg)
+        if description != "success":
+            msg = (
+                f"Search under {search_base} for {search_filter} did not complete "
+                f"({description or conn.result}); nothing was acted on"
+            )
+            raise BackendError(msg)
+        entries = []
+        for item in response or []:
+            if item.get("type") != "searchResEntry":
+                continue
+            attrs = {
+                name: value if isinstance(value, list) else [value]
+                for name, value in (item.get("attributes") or {}).items()
+            }
+            entries.append((item["dn"], attrs))
+        return entries
+
+    def _user_attributes(self) -> list[str]:
+        attributes = list(self.USER_ATTRIBUTES)
+        if self.waldur_username_attribute and self.waldur_username_attribute not in attributes:
+            attributes.append(self.waldur_username_attribute)
+        return attributes
 
     def _build_server(self) -> Server:
         """Construct the ldap3 Server. Overridden in tests to inject a strategy."""
@@ -173,7 +251,7 @@ class LdapClient:
                 self._people_dn,
                 f"(uid={escape_filter_chars(username)})",
                 search_scope=SUBTREE,
-                attributes=list(self.USER_ATTRIBUTES),
+                attributes=self._user_attributes(),
             )
             if conn.entries:
                 entry = conn.entries[0]
@@ -192,7 +270,7 @@ class LdapClient:
                 self._people_dn,
                 f"(mail={escape_filter_chars(email)})",
                 search_scope=SUBTREE,
-                attributes=list(self.USER_ATTRIBUTES),
+                attributes=self._user_attributes(),
             )
             if conn.entries:
                 entry = conn.entries[0]
@@ -217,15 +295,10 @@ class LdapClient:
         """
         conn = self._connect()
         try:
-            conn.search(
-                self._people_dn,
-                "(uid=*)",
-                search_scope=SUBTREE,
-                attributes=list(self.USER_ATTRIBUTES),
-            )
             users = {}
-            for entry in conn.entries:
-                attrs = entry.entry_attributes_as_dict
+            for _, attrs in self._search_all(
+                conn, self._people_dn, "(uid=*)", self._user_attributes()
+            ):
                 uid = _first(attrs.get("uid"))
                 if uid:
                     users[uid] = attrs
@@ -239,15 +312,8 @@ class LdapClient:
         """Every group under groups_ou as ``{cn: gidNumber}``. See list_users."""
         conn = self._connect()
         try:
-            conn.search(
-                self._groups_dn,
-                "(cn=*)",
-                search_scope=SUBTREE,
-                attributes=["cn", "gidNumber"],
-            )
             groups = {}
-            for entry in conn.entries:
-                attrs = entry.entry_attributes_as_dict
+            for _, attrs in self._search_all(conn, self._groups_dn, "(cn=*)", ["cn", "gidNumber"]):
                 cn = _first(attrs.get("cn"))
                 gid = _first(attrs.get("gidNumber"))
                 if cn is not None and gid is not None:
@@ -270,7 +336,7 @@ class LdapClient:
                 self._people_dn,
                 f"(uidNumber={escape_filter_chars(str(uid_number))})",
                 search_scope=SUBTREE,
-                attributes=list(self.USER_ATTRIBUTES),
+                attributes=self._user_attributes(),
             )
             if conn.entries:
                 return conn.entries[0].entry_attributes_as_dict
@@ -322,16 +388,9 @@ class LdapClient:
         """Collect all used IDs of a given attribute type."""
         conn = self._connect()
         try:
-            conn.search(
-                search_base,
-                f"({attribute}=*)",
-                search_scope=SUBTREE,
-                attributes=[attribute],
-            )
             used = set()
-            for entry in conn.entries:
-                val = getattr(entry, attribute).value
-                if val is not None:
+            for _, attrs in self._search_all(conn, search_base, f"({attribute}=*)", [attribute]):
+                for val in attrs.get(attribute) or []:
                     used.add(int(val))
             return used
         except LDAPException as e:
@@ -456,14 +515,19 @@ class LdapClient:
         needs a member, and the account needs its primary group), so if the user
         add then fails we delete a group we had just created rather than leaving
         it orphaned — a failure the original create path leaves behind.
+
+        With ``personal_groups`` off no group is looked at or written: the
+        account carries ``gid_number`` as its primary GID and nothing else.
         """
-        group_state = self.ensure_group(
-            group_name=username,
-            gid_number=gid_number,
-            object_classes=self.user_group_object_classes,
-            extra_attributes={"memberUid": username},
-            member_dn=self._user_dn(username),
-        )
+        group_state = "skipped"
+        if self.personal_groups:
+            group_state = self.ensure_group(
+                group_name=username,
+                gid_number=gid_number,
+                object_classes=self.user_group_object_classes,
+                extra_attributes={"memberUid": username},
+                member_dn=self._user_dn(username),
+            )
         if group_state == "conflict":
             raise BackendError(
                 f"LDAP group {username} already exists with a different gidNumber than "
@@ -490,6 +554,10 @@ class LdapClient:
 
         try:
             self._add_user_entry(username, attributes)
+        except EntryExistsError:
+            # Another writer created the account between our read and our add,
+            # and it may rely on the group we made: keep it.
+            raise
         except BackendError:
             # The group had to exist before the user entry; if the entry could not
             # be added, do not leave the group we just made behind as an orphan.
@@ -510,6 +578,8 @@ class LdapClient:
             success = conn.add(self._user_dn(username), attributes=attributes)
             if not success:
                 msg = f"Failed to create LDAP user {username}: {conn.result}"
+                if _result_description(conn) == "entryAlreadyExists":
+                    raise EntryExistsError(msg)
                 raise BackendError(msg)
         except LDAPException as e:
             raise BackendError(f"Failed to create LDAP user {username}: {e}") from e
@@ -550,13 +620,17 @@ class LdapClient:
             self.update_user_attributes(username, attributes)
 
     def delete_user(self, username: str) -> None:
-        """Delete a user and their personal group from LDAP."""
+        """Delete a user and, when personal groups are kept, their personal group."""
         conn = self._connect()
         try:
             # Delete user entry
             user_dn = self._user_dn(username)
             conn.delete(user_dn)
             logger.info("Deleted LDAP user entry %s", username)
+
+            if not self.personal_groups:
+                # A group named after the user is not this account's to remove.
+                return
 
             # Delete personal group
             group_dn = self._group_dn(username)
@@ -566,6 +640,32 @@ class LdapClient:
             raise BackendError(f"Failed to delete LDAP user {username}: {e}") from e
         finally:
             conn.unbind()
+
+    def _rename_entry(self, dn: str, new_rdn: str) -> None:
+        conn = self._connect()
+        try:
+            if not conn.modify_dn(dn, new_rdn, delete_old_dn=True):
+                msg = f"Failed to rename LDAP entry {dn}: {conn.result}"
+                description = _result_description(conn)
+                if description == "noSuchObject":
+                    raise EntryMissingError(msg)
+                if description == "entryAlreadyExists":
+                    raise EntryExistsError(msg)
+                raise BackendError(msg)
+        except LDAPException as e:
+            raise BackendError(f"Failed to rename LDAP entry {dn}: {e}") from e
+        finally:
+            conn.unbind()
+
+    def rename_user(self, old_username: str, new_username: str) -> None:
+        """Rename an account's entry (modrdn); uidNumber and everything else stay."""
+        self._rename_entry(self._user_dn(old_username), f"uid={escape_rdn(new_username)}")
+        logger.info("Renamed LDAP user %s to %s", old_username, new_username)
+
+    def rename_group(self, old_name: str, new_name: str) -> None:
+        """Rename a group in groups_ou (modrdn); gidNumber and members stay."""
+        self._rename_entry(self._group_dn(old_name), f"cn={escape_rdn(new_name)}")
+        logger.info("Renamed LDAP group %s to %s", old_name, new_name)
 
     def update_user_attributes(self, username: str, attributes: dict) -> None:
         """Update attributes of an existing LDAP user."""
@@ -587,6 +687,16 @@ class LdapClient:
             raise BackendError(f"Failed to update LDAP user {username}: {e}") from e
         finally:
             conn.unbind()
+
+    def add_user_attribute_value(self, username: str, attribute: str, value: str) -> None:
+        """Add one value to a multi-valued attribute of an account; present already is fine."""
+        with contextlib.suppress(ValueConflictError):
+            self.modify_entry(self._user_dn(username), {attribute: [(MODIFY_ADD, [value])]})
+
+    def remove_user_attribute_value(self, username: str, attribute: str, value: str) -> None:
+        """Remove one value from an attribute of an account; absent already is fine."""
+        with contextlib.suppress(ValueConflictError):
+            self.modify_entry(self._user_dn(username), {attribute: [(MODIFY_DELETE, [value])]})
 
     def disable_user(self, username: str, login_shell: str = NOLOGIN_SHELL) -> None:
         """Park an account: keep the entry and its ids, make it unusable.
@@ -683,28 +793,24 @@ class LdapClient:
                 ("memberUid", username),
                 ("member", self._user_dn(username)),
             ):
-                conn.search(
+                # A wrong groups_ou raises here rather than reading as "no
+                # groups": a sweep that looked at nothing must not report success.
+                for _, attrs in self._search_all(
+                    conn,
                     self._groups_dn,
                     f"({membership_type}={escape_filter_chars(value)})",
-                    search_scope=SUBTREE,
-                    attributes=["cn"],
-                )
-                for entry in conn.entries:
-                    cn = _first(entry.entry_attributes_as_dict.get("cn"))
+                    ["cn"],
+                ):
+                    cn = _first(attrs.get("cn"))
                     if cn:
                         memberships.append((str(cn), membership_type))
+        except ContainerMissingError as e:
+            msg = f"Cannot list the groups of {username}: {self._groups_dn} does not exist"
+            raise BackendError(msg) from e
         except LDAPException as e:
             raise BackendError(f"Failed to list groups of {username}: {e}") from e
         finally:
             conn.unbind()
-        # A search under a base that does not exist returns nothing rather than
-        # failing -- the connection does not raise on results. "No groups" and
-        # "wrong groups_ou" would then look identical to a caller sweeping an
-        # account out of its groups, and it would report success having looked
-        # at nothing. Only pay for the check when the answer was empty.
-        if not memberships and not self._groups_container_exists():
-            msg = f"Cannot list the groups of {username}: {self._groups_dn} does not exist"
-            raise BackendError(msg)
         return memberships
 
     def _groups_container_exists(self) -> bool:
@@ -722,6 +828,10 @@ class LdapClient:
             return False
         finally:
             conn.unbind()
+
+    def groups_container_exists(self) -> bool:
+        """Whether groups_ou exists; it is optional without personal groups."""
+        return self._groups_container_exists()
 
     # ---- Group operations ----
 
@@ -750,7 +860,10 @@ class LdapClient:
                 attributes["member"] = member_dn
             success = conn.add(group_dn, attributes=attributes)
             if not success:
-                raise BackendError(f"Failed to create LDAP group {group_name}: {conn.result}")
+                msg = f"Failed to create LDAP group {group_name}: {conn.result}"
+                if _result_description(conn) == "entryAlreadyExists":
+                    raise EntryExistsError(msg)
+                raise BackendError(msg)
             logger.info("Created LDAP group %s (GID %s)", group_name, gid_number)
         except LDAPException as e:
             raise BackendError(f"Failed to create LDAP group {group_name}: {e}") from e
@@ -774,13 +887,19 @@ class LdapClient:
         existing_gid = self.get_group_gid(group_name) if self.group_exists(group_name) else None
         if existing_gid is not None:
             return "exists" if existing_gid == gid_number else "conflict"
-        self._create_group_entry(
-            group_name=group_name,
-            gid_number=gid_number,
-            object_classes=object_classes,
-            extra_attributes=extra_attributes,
-            member_dn=member_dn,
-        )
+        try:
+            self._create_group_entry(
+                group_name=group_name,
+                gid_number=gid_number,
+                object_classes=object_classes,
+                extra_attributes=extra_attributes,
+                member_dn=member_dn,
+            )
+        except EntryExistsError:
+            # Created between the check and the add, by another writer.
+            existing_gid = self.get_group_gid(group_name)
+            logger.info("LDAP group %s was created concurrently; using it", group_name)
+            return "exists" if existing_gid == gid_number else "conflict"
         return "created"
 
     def set_group_gid(self, group_name: str, gid_number: int) -> None:
@@ -836,6 +955,98 @@ class LdapClient:
             logger.info("Deleted LDAP group %s", group_name)
         except LDAPException as e:
             raise BackendError(f"Failed to delete LDAP group {group_name}: {e}") from e
+        finally:
+            conn.unbind()
+
+    # ---- Entries addressed by DN ----
+    #
+    # Project groups and the entries that list them (a cluster's groupOfNames,
+    # say) live outside groups_ou, wherever the operator's layout puts them, so
+    # they are read and written by full DN rather than by name.
+
+    def user_dn(self, username: str) -> str:
+        """The DN an account of this name has under people_ou."""
+        return self._user_dn(username)
+
+    def dn_under(self, rdn_value: str, ou: str, rdn_attribute: str = "cn") -> str:
+        """The DN of ``<rdn_attribute>=<rdn_value>`` in ``ou`` under the base DN."""
+        return f"{rdn_attribute}={escape_rdn(rdn_value)},{ou},{self.base_dn}"
+
+    def read_entry(self, dn: str, attributes: list[str]) -> Optional[dict]:
+        """One entry's attributes, or None when it does not exist."""
+        conn = self._connect()
+        try:
+            conn.search(dn, "(objectClass=*)", search_scope=BASE, attributes=attributes)
+            if conn.entries:
+                return conn.entries[0].entry_attributes_as_dict
+            return None
+        except LDAPException as e:
+            raise BackendError(f"Failed to read LDAP entry {dn}: {e}") from e
+        finally:
+            conn.unbind()
+
+    def list_entries(self, ou: str, search_filter: str, attributes: list[str]) -> dict:
+        """Every entry under ``ou`` matching the filter, as ``{dn: attributes}``.
+
+        One search for the whole container, so a reconcile reads it once per
+        cycle. Raises when ``ou`` itself is missing: an empty answer from a
+        container that does not exist would otherwise look like "nothing there
+        yet" and every write that follows would fail one at a time. An empty
+        ``ou`` searches the whole base DN.
+        """
+        search_base = f"{ou},{self.base_dn}" if ou else self.base_dn
+        conn = self._connect()
+        try:
+            return dict(self._search_all(conn, search_base, search_filter, attributes))
+        except LDAPException as e:
+            raise BackendError(f"Failed to list entries under {search_base}: {e}") from e
+        finally:
+            conn.unbind()
+
+    def gid_holders(self) -> dict[int, list[str]]:
+        """Every gidNumber anywhere under the base DN, with the DNs holding it.
+
+        Users' primary GIDs included. LDAP does not enforce gidNumber
+        uniqueness, so this is what a writer checks before giving a GID out.
+        """
+        conn = self._connect()
+        try:
+            holders: dict[int, list[str]] = {}
+            for dn, attrs in self._search_all(conn, self.base_dn, "(gidNumber=*)", ["gidNumber"]):
+                gid = _first(attrs.get("gidNumber"))
+                if gid is not None:
+                    holders.setdefault(int(gid), []).append(dn)
+            return holders
+        except LDAPException as e:
+            raise BackendError(f"Failed to enumerate gidNumber values: {e}") from e
+        finally:
+            conn.unbind()
+
+    def add_entry(self, dn: str, attributes: dict) -> None:
+        """Add one entry, raising BackendError on any failure."""
+        conn = self._connect()
+        try:
+            if not conn.add(dn, attributes=attributes):
+                msg = f"Failed to create LDAP entry {dn}: {conn.result}"
+                if _result_description(conn) == "entryAlreadyExists":
+                    raise EntryExistsError(msg)
+                raise BackendError(msg)
+        except LDAPException as e:
+            raise BackendError(f"Failed to create LDAP entry {dn}: {e}") from e
+        finally:
+            conn.unbind()
+
+    def modify_entry(self, dn: str, changes: dict) -> None:
+        """Apply an ldap3 changes dict to one entry in a single modify."""
+        conn = self._connect()
+        try:
+            if not conn.modify(dn, changes):
+                msg = f"Failed to modify LDAP entry {dn}: {conn.result}"
+                if _result_description(conn) in ("attributeOrValueExists", "noSuchAttribute"):
+                    raise ValueConflictError(msg)
+                raise BackendError(msg)
+        except LDAPException as e:
+            raise BackendError(f"Failed to modify LDAP entry {dn}: {e}") from e
         finally:
             conn.unbind()
 
@@ -1055,15 +1266,11 @@ class LdapClient:
         """Names of the groups holding ``value`` among their description values."""
         conn = self._connect()
         try:
-            conn.search(
-                self._groups_dn,
-                f"(description={escape_filter_chars(value)})",
-                search_scope=SUBTREE,
-                attributes=["cn"],
-            )
             names = []
-            for entry in conn.entries:
-                cn = _first(entry.entry_attributes_as_dict.get("cn"))
+            for _, attrs in self._search_all(
+                conn, self._groups_dn, f"(description={escape_filter_chars(value)})", ["cn"]
+            ):
+                cn = _first(attrs.get("cn"))
                 if cn:
                     names.append(str(cn))
             return sorted(names)
@@ -1121,3 +1328,25 @@ def _unescape_dn_value(value: str) -> str:
         out.extend(value[i].encode())
         i += 1
     return out.decode("utf-8", errors="replace")
+
+
+def uid_from_dn(dn: str) -> str:
+    """The username a ``uid=`` DN names, or the empty string for any other DN."""
+    return _extract_uid_from_dn(dn)
+
+
+def normalize_dn(dn: str) -> str:
+    """A DN in a form two spellings of the same entry compare equal in.
+
+    Attribute names and values are lowercased and escapes undone, so
+    ``CN=Proj,OU=projects`` and ``cn=proj, ou=projects`` match: directories
+    hand back DNs in whatever case they were written with.
+    """
+    try:
+        components = parse_dn(dn, strip=True)
+    except LDAPInvalidDnError:
+        return dn.strip().lower()
+    return ",".join(
+        f"{attribute.strip().lower()}={_unescape_dn_value(value).strip().lower()}"
+        for attribute, value, _ in components
+    )

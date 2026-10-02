@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from ldap3 import MOCK_SYNC, MODIFY_ADD, MODIFY_DELETE, OFFLINE_SLAPD_2_4, Connection, Server
 from waldur_site_agent_ldap_client import LdapClient
-from waldur_site_agent_ldap_client.client import _extract_uid_from_dn
+from waldur_site_agent_ldap_client.client import _extract_uid_from_dn, normalize_dn, uid_from_dn
 
 from waldur_site_agent.backend.exceptions import BackendError
 
@@ -388,3 +388,154 @@ class TestDisableEnable:
 
         assert gon_client.find_group_memberships("alice") == [("g", "member")]
         assert gon_client.find_groups_with_member("alice") == []
+
+
+class TestWithoutPersonalGroups:
+    """personal_groups: false -- the account carries its GID and nothing else."""
+
+    @pytest.fixture
+    def bare_client(self):
+        # groups_ou deliberately points nowhere: without personal groups it is
+        # only needed for access groups.
+        return MockLdapClient(
+            {**SETTINGS, "personal_groups": False, "groups_ou": "ou=NoSuchGroups"}
+        )
+
+    def test_creates_the_account_without_any_group(self, bare_client):
+        create(bare_client)
+        entry = bare_client.search_user("jsmith")
+        assert int(entry["gidNumber"][0]) == 20001
+        assert bare_client.gid_holders() == {20001: [bare_client.user_dn("jsmith")]}
+
+    def test_a_group_of_the_same_name_is_not_consulted(self):
+        client = MockLdapClient({**SETTINGS, "personal_groups": False})
+        client.ensure_group("jsmith", 39999, ["posixGroup", "top"])
+        create(client)
+        assert client.search_user("jsmith") is not None
+
+    def test_delete_leaves_a_group_of_the_same_name_alone(self):
+        client = MockLdapClient({**SETTINGS, "personal_groups": False})
+        client.ensure_group("jsmith", 39999, ["posixGroup", "top"])
+        create(client)
+        client.delete_user("jsmith")
+        assert client.search_user("jsmith") is None
+        assert client.get_group_gid("jsmith") == 39999
+
+    def test_default_keeps_personal_groups(self, client):
+        assert client.personal_groups is True
+
+
+class TestEntriesByDn:
+    def test_dn_under_escapes_the_value(self, client):
+        assert client.dn_under("a,b", "ou=projects") == f"cn=a\\,b,ou=projects,{BASE_DN}"
+
+    def test_add_read_modify(self, client):
+        dn = client.dn_under("proj", "ou=Groups")
+        client.add_entry(dn, {"objectClass": ["top", "posixGroup"], "cn": "proj", "gidNumber": 1})
+        client.modify_entry(dn, {"memberUid": [(MODIFY_ADD, ["alice", "bob"])]})
+        entry = client.read_entry(dn, ["memberUid", "gidNumber"])
+        assert sorted(entry["memberUid"]) == ["alice", "bob"]
+
+    def test_read_missing_entry_is_none(self, client):
+        assert client.read_entry(f"cn=nope,ou=Groups,{BASE_DN}", ["cn"]) is None
+
+    def test_add_existing_entry_raises(self, client):
+        dn = client.dn_under("proj", "ou=Groups")
+        attrs = {"objectClass": ["top", "posixGroup"], "cn": "proj", "gidNumber": 1}
+        client.add_entry(dn, attrs)
+        with pytest.raises(BackendError):
+            client.add_entry(dn, attrs)
+
+    def test_list_entries_keys_by_dn(self, client):
+        client.ensure_group("proj", 30001, ["posixGroup", "top"])
+        entries = client.list_entries("ou=Groups", "(cn=*)", ["gidNumber"])
+        assert list(entries) == [f"cn=proj,ou=Groups,{BASE_DN}"]
+
+    def test_list_entries_of_a_missing_container_raises(self, client):
+        with pytest.raises(BackendError, match="does not exist"):
+            client.list_entries("ou=nowhere", "(cn=*)", ["cn"])
+
+    def test_list_entries_of_an_empty_container_is_empty(self, client):
+        assert client.list_entries("ou=Groups", "(cn=*)", ["cn"]) == {}
+
+    def test_gid_holders_covers_users_and_groups(self, client):
+        create(client, "jsmith", 10001, 20001)
+        holders = client.gid_holders()
+        assert sorted(holders[20001]) == sorted(
+            [client.user_dn("jsmith"), f"cn=jsmith,ou=Groups,{BASE_DN}"]
+        )
+
+
+class TestNormalizeDn:
+    def test_case_and_spacing_do_not_matter(self):
+        assert normalize_dn("CN=Proj, OU=Projects,DC=Example") == normalize_dn(
+            "cn=proj,ou=projects,dc=example"
+        )
+
+    def test_escapes_are_undone(self):
+        assert normalize_dn("cn=a\\2cb,dc=x") == normalize_dn("cn=a\\,b,dc=x")
+
+    def test_uid_from_dn(self):
+        assert uid_from_dn(f"uid=alice,ou=People,{BASE_DN}") == "alice"
+        assert uid_from_dn(f"cn=nobody,{BASE_DN}") == ""
+
+
+class TestWaldurUsernameAttribute:
+    def test_user_reads_return_it_when_configured(self):
+        client = MockLdapClient(
+            {
+                **SETTINGS,
+                "user_group_object_classes": ["posixGroup", "top"],
+                "waldur_username_attribute": "employeeNumber",
+            }
+        )
+        create(client)
+        client.update_user_attributes("jsmith", {"employeeNumber": "cuid-1"})
+        assert client.list_users()["jsmith"]["employeeNumber"] == ["cuid-1"]
+        assert client.search_user("jsmith")["employeeNumber"] == ["cuid-1"]
+
+    def test_not_requested_without_it(self, client):
+        assert "employeeNumber" not in client._user_attributes()
+
+
+class TestBulkReadsAreComplete:
+    """A partial bulk read aborts the caller instead of looking like a short list."""
+
+    def _partial(self, client, description="sizeLimitExceeded"):
+        conn = MagicMock()
+        conn.extend.standard.paged_search.return_value = [
+            {"type": "searchResEntry", "dn": f"uid=a,ou=People,{BASE_DN}", "attributes": {"uid": "a"}}
+        ]
+        conn.result = {"result": 4, "description": description}
+        return patch.object(client, "_connect", return_value=conn)
+
+    @pytest.mark.parametrize(
+        "read",
+        [
+            lambda c: c.list_users(),
+            lambda c: c.list_groups(),
+            lambda c: c.gid_holders(),
+            lambda c: c.list_entries("ou=People", "(uid=*)", ["uid"]),
+            lambda c: c.find_group_memberships("a"),
+            lambda c: c.find_groups_by_description("x"),
+            lambda c: c.get_next_uid(),
+        ],
+        ids=["users", "groups", "gids", "entries", "memberships", "descriptions", "next-uid"],
+    )
+    def test_a_size_limit_raises(self, client, read):
+        with self._partial(client), pytest.raises(BackendError, match="did not complete"):
+            read(client)
+
+    def test_an_admin_limit_raises_too(self, client):
+        with self._partial(client, "adminLimitExceeded"), pytest.raises(BackendError):
+            client.list_users()
+
+    def test_reads_are_paged(self, client):
+        for i in range(7):
+            create(client, f"user{i}", 10001 + i, 20001 + i)
+        with patch.object(client, "SEARCH_PAGE_SIZE", 2):
+            assert len(client.list_users()) == 7
+
+    def test_single_valued_attributes_come_back_as_lists(self, client):
+        create(client)
+        assert client.list_users()["jsmith"]["uidNumber"] == [10001]

@@ -275,7 +275,7 @@ offerings:
 | `base_dn` | Yes | -- | Base DN for the directory |
 | `use_starttls` | No | `false` | Use STARTTLS for connection security |
 | `people_ou` | No | `ou=People` | OU for user entries |
-| `groups_ou` | No | `ou=Groups` | OU for group entries |
+| `groups_ou` | No | `ou=Groups` | OU for personal and access groups; unused without either |
 | `uid_range_start` | No | `10000` | Start of UID allocation range |
 | `uid_range_end` | No | `65000` | End of UID allocation range |
 | `gid_range_start` | No | `10000` | Start of GID allocation range |
@@ -286,11 +286,13 @@ offerings:
 | `on_missing_posix_ids` | No | `error` | `error` or `skip` when Waldur holds no ids (waldur mode) |
 | `on_posix_mismatch` | No | `report` | `report`, `adopt` or `fail` on an id disagreement (waldur mode) |
 | `username_format` | No | `first_initial_lastname` | Username strategy (see below); rejected in waldur mode |
-| `waldur_username_attribute` | No | -- | LDAP attribute to store the Waldur username (e.g. a CUID) in |
+| `waldur_username_attribute` | No | -- | Attribute for the Waldur username; the rename key (`employeeNumber`) |
 | `remove_user_on_deactivate` | No | per `account_source` | Release the entry once no live account remains; see below |
 | `on_departure` | No | per `account_source` | `disable` (park, keep ids) or `delete`; see below |
 | `generate_vpn_password` | No | `false` | Generate random VPN password on creation |
 | `access_groups` | No | `[]` | LDAP groups to add new users to |
+| `personal_groups` | No | `true` | Personal group per account; `false` needs waldur mode |
+| `project_groups` | No | -- | Write Waldur's project groups ([below](#project-groups-from-waldur)) |
 | `welcome_email` | No | -- | SMTP settings for welcome email (disabled when absent) |
 
 ## Waldur-authoritative mode
@@ -340,8 +342,78 @@ deleted or edited out of band is repaired on the next pass.
 | Entry matches Waldur | Nothing |
 | Home directory, shell, name or mail differ | Rewritten to match Waldur |
 | `uidNumber` or `gidNumber` differ | Governed by `on_posix_mismatch` |
+| The entry carries another person's key (see below) | Error, the entry is left alone — always |
+| The wanted UID is held by the same account under its old name | Renamed (see below) |
 | The wanted UID is held by a *different* entry | Error, the account is left alone — always |
 | Another entry shares the email address | Warning, and the account is created anyway |
+
+**The key.** The agent ties an entry to its Waldur account by a stable key: the
+person's Waldur username, written to `waldur_username_attribute`.
+
+> **The attribute is reserved for the agent.** It writes and rewrites it, so it
+> must hold nothing else. `employeeNumber` (an `inetOrgPerson` attribute, no
+> schema change) is the usual choice; a site that keeps HR data in
+> `employeeNumber` must pick another attribute.
+
+The key comes from the offering user's `user_username`, which Waldur returns
+only when the offering exposes usernames (its user attribute configuration; on
+by default). If it does not, the agent writes no keys, recognises no renames,
+and says so once per offering.
+
+- **Stamping.** The key is written when the agent creates an entry, and onto an
+  existing entry only when its `uid` and `uidNumber` match the account (so a
+  directory adopted from before gets its keys on the first cycle). On that same
+  id match a different value is **rewritten** -- the person's Waldur username
+  changed -- unless the old value is another current account's Waldur username;
+  each rewrite is logged with the old and new value. On every other path (drift,
+  a held UID, a name match without the `uidNumber`, the rename lookup) a
+  different value is a collision: logged, nothing written. The key is never
+  written as a second copy of a key another entry carries.
+- **Gating.** An entry carrying a key that is not this account's is never
+  updated, re-enabled, adopted or renumbered for it, whatever its ids say.
+
+**Renames.** When Waldur's POSIX username for an account has no entry yet, the
+agent looks for the entry carrying the account's key. If there is exactly one,
+under another `uid`, with this account's `uidNumber`, it is moved in place
+(`modrdn uid=<old>` to `uid=<new>`): `uidNumber` stays, `homeDirectory` and the
+profile follow Waldur, the personal group is renamed with it, access-group
+memberships move, and project groups follow from Waldur's member lists, all in
+the same cycle. Renames run before the other accounts of the batch, and the old
+entry is re-read just before the move.
+
+The steps are ordered so that a failure at any point is finished by a later
+cycle and leaves nothing behind:
+
+1. the old name is recorded on the entry (a `description` value
+   `waldur-site-agent:renamed-from=<old>`), the new name is added to every
+   group in `groups_ou` that lists the old one, and the personal group is
+   renamed -- nobody has lost access yet;
+2. `modrdn uid=<old>` to `uid=<new>`;
+3. the old name's memberships are removed, then the record.
+
+A failure before step 2 is retried as a rename next cycle (the entry still
+carries the key under the old name); a failure in step 3 leaves the record,
+and the next cycle finishes the cleanup from it. If the old name has meanwhile
+been given to another entry, its memberships are left to that entry.
+
+**Refusals** (reported as a collision with the reason, nothing written): two
+entries carry the key; the key's entry has another `uidNumber`; the UID is held
+by an entry with a missing or different key (another person, even one with the
+same mail); the POSIX name and the Waldur username changed at once, so nothing
+ties the old entry to the account.
+
+Without `waldur_username_attribute`, renames are never followed: the agent says
+so once, and a renamed account is reported as a collision until its entry is
+renamed by hand. The decision is the same on the periodic pass and on a single
+STOMP account event; when both race, the one that loses accepts the other's
+rename only if the new entry carries the account's `uidNumber` and key.
+
+The agent does not move files: a home directory path that embeds the old name
+needs moving by the site.
+
+With `stomp_enabled: true` and no membership backend (an LDAP-only offering),
+the agent subscribes to offering-user events for the LDAP backend, so account
+changes reach the directory without waiting for the periodic reconcile.
 
 `on_posix_mismatch` decides only the id-disagreement row:
 
@@ -364,6 +436,16 @@ POSIX ID pool to the service provider, or turn POSIX accounts off for the
 offering.
 
 ### When a user leaves
+
+> **Upgrading: the departure sweep now runs every period, for every offering.**
+> In `event_process` mode the periodic reconcile hands every offering user Waldur
+> has put in a deletion state to the teardown on each cycle -- also on
+> offerings with a membership backend (SLURM, say), where it previously ran
+> only on cycles that also retried a stuck username. On the first cycle after
+> the upgrade it therefore tears down, at once, every deletion Waldur queued up
+> in the meantime; the log line `Departure sweep for <offering>: N offering
+> user(s) in a deletion state` says how many. Review the pending deletions in
+> Waldur before upgrading if that matters.
 
 Dropping the SLURM association is the resource backend's job. Releasing the
 directory entry is this plugin's, and in this mode it is **on by default**:
@@ -563,8 +645,10 @@ accounts in OpenLDAP*. What follows is the agent and cluster side.
 ### Project group GIDs are still allocated locally
 
 Only *user* accounts and their personal groups come from Waldur. Project and role
-group GIDs are still allocated by the resource backend from
-`gid_range_start`..`gid_range_end`.
+group GIDs written by the resource backend (the SLURM plugin's per-resource
+groups) are still allocated from `gid_range_start`..`gid_range_end`. Project
+groups kept per project, with GIDs Waldur allocates, are a separate feature:
+see [Project groups from Waldur](#project-groups-from-waldur).
 
 > **These ranges must not overlap the offering's POSIX ID pool.** LDAP does not
 > enforce `gidNumber` uniqueness, so an overlap silently produces two groups
@@ -653,6 +737,168 @@ Defaults:
   `organizationalPerson`, `person`, `posixAccount`, `top`
 - **user_group_object_classes**: `groupOfNames`, `nsMemberOf`,
   `organizationalUnit`, `posixGroup`, `top`
+
+`nsMemberOf` is a 389 Directory Server class. On OpenLDAP, set
+`user_group_object_classes` (for example `["top", "posixGroup"]`), or turn
+`personal_groups` off: with the default, every personal group, and so every new
+account, is rejected.
+
+## Project groups from Waldur
+
+Waldur keeps one group per project at each service provider: a name (the
+project slug at creation, never renamed), a GID from the provider's POSIX ID
+pools, and the usernames of the project's members who hold an account at the
+provider. With `project_groups.enabled` the agent writes those groups into the
+directory and lists them in the entries that grant cluster access, so a new
+project's members can use a cluster without anyone editing the directory.
+
+### Example layout
+
+A classic RFC 2307 (nis schema) directory, where `posixGroup` is structural and
+allows `memberUid` only:
+
+```text
+dc=example,dc=org
+  ou=users       uid=<name>     inetOrgPerson + posixAccount, gidNumber = primary GID
+  ou=projects    cn=<group>     top + posixGroup, gidNumber = Waldur's GID, memberUid = members
+  ou=clusters    cn=<cluster>   groupOfNames, member = DN of each project group in use on the offering
+  ou=bind_users  service binds
+```
+
+```yaml
+backend_settings:
+  ldap:
+    uri: "ldaps://ldap.example.org"
+    bind_dn: "cn=waldur-agent,ou=bind_users,dc=example,dc=org"
+    bind_password: "secret"
+    base_dn: "dc=example,dc=org"
+    people_ou: "ou=users"
+    account_source: "waldur"
+    personal_groups: false          # primary GIDs come from Waldur, no ou=Groups needed
+    project_groups:
+      enabled: true
+      ou: "ou=projects"
+      object_classes: ["top", "posixGroup"]
+      member_attribute: "memberUid"   # or "member": user DNs, for rfc2307bis directories
+      membership: "sync"              # or "add_only"
+      on_gid_mismatch: "report"       # or "adopt"
+      parents:
+        - dn: "cn=alps,ou=clusters,dc=example,dc=org"
+          attribute: "member"
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `false` | Write the project groups |
+| `ou` | `ou=projects` | OU, relative to `base_dn`, the groups are written under; it must exist |
+| `object_classes` | `["top", "posixGroup"]` | Classes of a new group; a memberless `groupOfNames` gets the stand-in |
+| `member_attribute` | `memberUid` | `memberUid` writes usernames; `member` writes `uid=<name>,<people_ou>,<base_dn>` |
+| `membership` | `sync` | `sync` adds and removes members to match Waldur; `add_only` never removes one |
+| `on_gid_mismatch` | `report` | Same-named entry with another GID: `report` keeps the GID, `adopt` renumbers |
+| `managed_marker` | `waldur-managed` | Extra `description` value on every group the agent creates or adopts |
+| `parents` | `[]` | Entries that list the DN of each group whose project has a resource on the offering |
+| `parents[].dn` | -- | Full DN of the entry |
+| `parents[].attribute` | `member` | Attribute that holds the group DNs |
+| `parents[].offering_uuids` | this offering | Offerings whose projects the entry lists (for a shared entry) |
+
+### What one cycle does
+
+The pass runs on the agent's periodic cycle, after the account reconcile: the
+periodic reconcile of `event_process` mode (every
+`WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES`, also with STOMP off) and each
+`membership_sync` pass. It runs even when the offering has no offering users
+left, so parent entries are still cleaned up. Single-user events do not run it.
+
+It reads the provider's groups from Waldur
+(`GET /api/marketplace-service-provider-project-groups/?provider_offering_uuid=<offering>`,
+all pages, oldest first, following next-page links only to the configured
+Waldur server). From the directory it reads, in one paged search each, the
+project OU, every `gidNumber` under `base_dn`, every `posixGroup` under
+`base_dn`, and the people OU (with `account_source: waldur`, or with
+`member_attribute: member`). A search that ends in anything but success -- a
+size, time or administrative limit -- aborts the pass rather than shrinking it.
+Then, for each group:
+
+| Directory state | Action |
+|-----------------|--------|
+| No entry, GID and name free | Create it with Waldur's name, GID, members and the marker |
+| No entry, GID or name held (see below) | Report every cycle; nothing written, not added to parents |
+| Entry with the same name and GID | Adopt it: add the marker, reconcile members and parents |
+| Same name, another GID, `report` | Report every cycle; the GID stays, members and parents are reconciled |
+| Same name, another GID, `adopt` | Rewrite `gidNumber` to Waldur's, unless it is held (then as `report`) |
+| Waldur has no GID for the group | Skip it and log; its DN in a parent is left as it is |
+
+A GID is **held** when any entry under `base_dn` carries it as `gidNumber`,
+users' primary GIDs included. A name is **held** when a `posixGroup` of that
+`cn` exists outside the project OU (a personal group, say), since NSS would
+then see two groups of one name. The fix for either is in Waldur: `set_gid` to
+a free value, or adopt the directory's GID -- adopting works only when the
+group's name in Waldur equals the directory entry's `cn`, since that is what the
+agent matches on.
+
+`adopt` is for one moment only: after the files owned by the old GID have been
+`chgrp`-ed to Waldur's. Renumbering a group any earlier orphans them, which is
+why `report` is the default.
+
+Every group the agent creates or adopts gets one extra `description` value,
+`managed_marker` (`waldur-managed` by default). The operator's own description
+values stay; `description` is multi-valued and allowed on `posixGroup`.
+
+Each parent is made to list the DNs of the groups whose project has a resource
+on the parent's offerings. A DN is only ever removed when it lies under the
+project OU, and then:
+
+- for a group Waldur lists, when its project has no resource on the parent's
+  offerings, or the group could not be written because its GID or name is held
+  (a write that fails for any other reason this cycle leaves the DN as it is);
+- for a group Waldur no longer lists (an offering moved to another provider,
+  say), only when its entry carries the marker.
+
+An unmarked group under the project OU that Waldur does not list (a hand-made
+`benchmarking` group, say) is never removed, nor is any DN from outside the
+project OU. A `groupOfNames` that would lose its
+last member gets `empty_group_member_dn` in the same modify.
+
+Group entries are never deleted: their GIDs stay reserved in Waldur.
+
+The directory is left untouched for the cycle when Waldur cannot be read (an
+HTTP error, an unreachable server, a failure on any page), when it lists no
+groups at all (the endpoint lists every group the provider ever had, so an
+empty answer is treated as broken), or when the listing changed while it was
+being paged through.
+
+Members:
+
+- With `account_source: waldur`, a member is listed only once their account has
+  an entry under `people_ou` that the account pass matched to it: with
+  `waldur_username_attribute` set, the entry must carry a key, and an account
+  that pass could not reconcile cleanly (a UID or key collision, drift left
+  under `report`, a failed write) is not named in any group. Without the key
+  attribute, only the last part applies.
+- With `membership: add_only`, a user who is renamed in Waldur keeps the old
+  username in the group alongside the new one; only `sync` swaps them.
+- With `member_attribute: member`, the same holds in either mode: a DN must name
+  an entry.
+
+Two offerings of one provider on one directory see the same groups with the
+same GIDs and members: the first agent creates a group, the second adopts it.
+If they share a parent entry, list both offerings in `parents[].offering_uuids`
+on both; otherwise each would take out the groups the other adds, and the
+entry flaps every cycle. The agent warns once when offerings in its
+configuration point at one parent DN with different effective sets (both
+unset, or only one of them set).
+
+The agent never allocates a project group GID; to pin or move one, use Waldur's
+adopt and `set_gid` actions on the provider project group.
+
+### Personal groups
+
+`personal_groups: true` (the default) keeps the historical layout: every account
+gets `cn=<username>` in `groups_ou` with the account's primary GID. With `false`,
+accounts are created and renumbered with the primary GID from Waldur and no
+group entry, deletion leaves any group of the same name alone, and `groups_ou`
+is only consulted for `access_groups` and the departure sweep, which skips it
+when the OU does not exist. It requires `account_source: waldur`.
 
 ## Plugin Structure
 

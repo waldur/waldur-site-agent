@@ -1518,6 +1518,17 @@ class AbstractUsernameManagementBackend(ABC):
         """
         del offering_users
 
+    def reconcile_offering(self, waldur_rest_client: AuthenticatedClient) -> None:
+        """Offering-wide reconcile that does not hang off the offering-user list.
+
+        Core calls this once per periodic cycle (the membership-sync pass, and
+        the periodic reconcile of event_process mode), after
+        ``sync_user_profiles``, whether or not the offering has any offering
+        users -- so state that must also be cleaned up when the last account is
+        gone has a place to be. Default: no-op.
+        """
+        del waldur_rest_client
+
     def deactivate_users(self, usernames: set[str]) -> None:
         """Deactivate users no longer in the offering.
 
