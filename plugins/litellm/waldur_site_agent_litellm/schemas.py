@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -100,6 +100,16 @@ class LiteLLMBackendSettingsSchema(PluginBackendSettingsSchema):
     )
     timeout: Optional[float] = Field(
         default=None, description="Per-request timeout in seconds (default 30)"
+    )
+    resource_backend_id_source: Literal["slug", "uuid"] = Field(
+        default="slug",
+        description=(
+            "What a new resource's backend id, and so its key aliases "
+            "'<backend_id>-<n>', derive from. 'slug' (default): allocation_prefix plus "
+            "the user-chosen resource slug, which can collide with hand-made keys on a "
+            "shared proxy. 'uuid': the resource UUID hex, which cannot. Existing "
+            "resources keep the backend id they were provisioned with"
+        ),
     )
     openwebui: Optional[OpenWebUISettingsSchema] = Field(
         default=None,
