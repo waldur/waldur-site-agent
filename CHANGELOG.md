@@ -1,25 +1,29 @@
 # Changelog
 
-## 1.0.8-rc.5 - 2026-09-27
+## 1.0.8-rc.6 - 2026-10-02
 
-- **LDAP**: Take usernames and POSIX IDs from Waldur instead of the directory (#17).
-- **LDAP**: Release LDAP accounts when a user loses their last offering access. Across backends, an account is released only after its removal is confirmed. The offering-user docs now describe this teardown lifecycle (waldur/waldur-mastermind#413).
-- **LDAP roles**: Add the new `ldap-roles` backend. Move the shared LDAP code into a new `ldap-client` package.
-- **Azure**: Move the Azure plugin into the agent repository (#8).
-- **LiteLLM**: Add Open WebUI integration (#15).
-- **SLURM**: Move the account's DefaultQOS along with the QoS swap. The slurm-emulator requirement is now 0.9.5 (#16).
-- **SLURM**: Add QoS pausing and restore tests (HPCMP-477).
-- **Core**: Add `preserve_unmanaged_backend_users` to keep SLURM users that the provider added outside Waldur.
+- **Core / Envoy AI Gateway**: Manage resource API keys one at a time. Keys can now be requested, assigned, capped, paused, resumed and deleted, through both event processing and polling. (#30)
+- **LDAP**: Write Waldur's project groups to the directory, and make personal groups optional. (#41)
+- **LDAP**: Take usernames and POSIX IDs from Waldur instead of the directory. (#17)
+- **LDAP / Core**: Release a user's account when they lose their last offering access, but only after the backend confirms the removal. This rule now applies across all backends, and the teardown half of the offering-user lifecycle is documented. (waldur/waldur-mastermind#413)
+- **LDAP Roles**: Add a new `ldap-roles` backend, and move the LDAP client into a shared `ldap-client` package.
+- **Azure**: Move the Azure plugin into the agent repository. (#8)
+- **LiteLLM**: Add Open WebUI integration. (#15)
+- **LiteLLM**: Add an option to derive a key's `backend_id` from the Waldur resource UUID instead of its slug. (#22)
+- **SLURM**: Move the account's DefaultQOS along with the QoS swap. The test suite now requires slurm-emulator 0.9.5. (#16)
+- **Core**: Add `preserve_unmanaged_backend_users` so that SLURM users added by the provider are kept during membership sync.
 - **Core**: Stop membership sync from removing service and course accounts.
-- **Core**: Skip backend metadata writes during membership sync when nothing changed.
-- **Core**: Keep polling agents running when identity registration is refused (waldur/waldur-mastermind#385). Keep the event path running when the agent identity is unavailable (#24).
-- **Core**: The health and readiness probes no longer import the full API client or plugins. The Helm deployments are updated to match (#31).
+- **Core**: Skip backend metadata writes in membership sync when nothing has changed.
+- **Core**: Keep polling and event-based agents working when agent identity registration is refused or unavailable. (#24, waldur/waldur-mastermind#385)
+- **Core / Helm**: Make the health and readiness probes lighter by keeping them from importing the full API client and plugins. (#31)
 - **Core**: Fix `get_client` stripping characters from the hostname instead of removing the `/api` suffix.
-- **Core**: Upgrade waldur-api-client to 8.1.3rc10. Upgrade anyio to fix CVE-2026-63374 and CVE-2026-64847.
-- **Rancher KC CRD**: Fix four inaccuracies in the example config.
+- **Rancher KC CRD**: Fix four mistakes in the example config.
+- **Security**: Upgrade anyio (CVE-2026-63374, CVE-2026-64847), oauthlib, pyjwt and urllib3.
+- **Dependencies**: Upgrade waldur-api-client to 8.1.3rc10.
+- **Release**: Publish release SBOMs as GitHub release assets. The release script now refuses to run from a branch that is behind the remote, and stops before tagging if the changelog finds no commits. (waldur/waldur-mastermind#233)
 - **Docs**: Add developer quick-start steps to the plugin development guide.
 
-> 32 commits, 171 files changed (+21210/-1159 lines)
+> 38 commits, 193 files changed (+29312/-1653 lines)
 
 ---
 
