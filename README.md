@@ -13,7 +13,8 @@ The agent uses a **uv workspace architecture** with pluggable backends:
 
 ### Agent Modes
 
-- `order_process`: Fetches orders from Waldur and manages backend resources
+- `order_process`: Fetches orders and pending resource API key commands from Waldur and manages
+  backend resources
 - `report`: Reports usage data from backend to Waldur
 - `membership_sync`: Synchronizes user memberships
 - `event_process`: Event-based processing using STOMP
