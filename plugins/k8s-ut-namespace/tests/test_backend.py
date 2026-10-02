@@ -1,6 +1,11 @@
 """Tests for K8s UT namespace backend."""
 
+import json
+from typing import ClassVar
+
 import pytest
+from freezegun import freeze_time
+from kubernetes.client.rest import ApiException
 from unittest.mock import MagicMock, patch, call
 from uuid import uuid4
 
@@ -9,6 +14,7 @@ from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_site_agent_k8s_ut_namespace.backend import (
     K8sUtNamespaceBackend,
     NS_ROLES,
+    USAGE_ACCUMULATOR_ANNOTATION,
 )
 from waldur_site_agent.backend.exceptions import BackendError
 
@@ -574,12 +580,16 @@ class TestK8sUtNamespaceBackendStatusOps:
     """Tests for downscale, pause, restore operations."""
 
     def test_downscale(self, backend_settings, backend_components):
+        # backend_components (conftest.py) declares cpu/ram/storage/gpu -- all four
+        # must appear here. The old hardcoded cpu/memory/storage literal silently
+        # left gpu at its full quota through a downscale/pause; confirmed live
+        # against a real cluster with a real over-budget resource.
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
 
         assert backend.downscale_resource("waldur-test-ns") is True
         mock_k8s.patch_managed_namespace.assert_called_once_with(
             "waldur-test-ns",
-            {"spec": {"quota": {"cpu": "1", "memory": "1Gi", "storage": "1Gi"}}},
+            {"spec": {"quota": {"cpu": "1", "memory": "1Gi", "storage": "1Gi", "gpu": "1"}}},
         )
 
     def test_pause(self, backend_settings, backend_components):
@@ -588,8 +598,35 @@ class TestK8sUtNamespaceBackendStatusOps:
         assert backend.pause_resource("waldur-test-ns") is True
         mock_k8s.patch_managed_namespace.assert_called_once_with(
             "waldur-test-ns",
-            {"spec": {"quota": {"cpu": "0", "memory": "0Gi", "storage": "0Gi"}}},
+            {"spec": {"quota": {"cpu": "0", "memory": "0Gi", "storage": "0Gi", "gpu": "0"}}},
         )
+
+    def test_pause_covers_every_configured_component_generically(self, backend_settings):
+        # Regression test for the live-confirmed bug: pause/downscale must derive
+        # their quota from whatever components *this* offering actually declares,
+        # not a hardcoded cpu/memory/storage literal that silently leaves any other
+        # configured component (gpu, or anything else) untouched. Proven here with a
+        # 5th, made-up component type the old hardcoded dict could never anticipate.
+        settings_with_mapping = {
+            **backend_settings,
+            "component_quota_mapping": {"widgets": "widgetLimit"},
+        }
+        components = {
+            "cpu": {"type": "cpu", "unit_factor": 1},
+            "ram": {"type": "ram", "unit_factor": 1},
+            "storage": {"type": "storage", "unit_factor": 1},
+            "gpu": {"type": "gpu", "unit_factor": 1},
+            "extra": {"type": "widgets", "unit_factor": 1},
+        }
+        backend, mock_k8s, _ = _make_backend(settings_with_mapping, components)
+
+        backend.pause_resource("waldur-test-ns")
+
+        _, patch = mock_k8s.patch_managed_namespace.call_args[0]
+        assert set(patch["spec"]["quota"].keys()) == {
+            "cpu", "memory", "storage", "gpu", "widgetLimit",
+        }
+        assert all(v in ("0", "0Gi") for v in patch["spec"]["quota"].values())
 
     def test_restore(self, backend_settings, backend_components):
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
@@ -605,14 +642,270 @@ class TestK8sUtNamespaceBackendStatusOps:
 
 
 class TestK8sUtNamespaceBackendUsageReport:
-    """Tests for usage report generation."""
+    """Tests for usage report generation.
 
-    def test_usage_report_returns_empty(self, backend_settings, backend_components):
-        backend, _, _ = _make_backend(backend_settings, backend_components)
+    Quota x elapsed time, accumulated month-to-date via a JSON-encoded
+    annotation on the CR (see backend.py's _get_usage_report docstring for
+    why: a ManagedNamespace's quota is only ever a point-in-time snapshot,
+    so the backend has to persist its own running total between calls, the
+    same way sacct's own historical log lets SLURM recompute month-to-date
+    freshly on every call without needing to persist anything itself).
+    """
+
+    CR_QUOTA: ClassVar[dict[str, str]] = {
+        "cpu": "4", "memory": "8Gi", "storage": "100Gi", "gpu": "1",
+    }
+
+    def _cr(self, annotations=None):
+        return {
+            "metadata": {"name": "waldur-test-ns", "annotations": annotations or {}},
+            "spec": {"quota": dict(self.CR_QUOTA)},
+        }
+
+    @freeze_time("2026-09-15 12:00:00")
+    def test_first_sample_accumulates_nothing_yet(self, backend_settings, backend_components):
+        # No prior state to diff against -- the first sample can only start
+        # the clock, not report any elapsed usage yet.
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
+
+        report = backend._get_usage_report(["waldur-test-ns"])
+
+        assert report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"] == {
+            "cpu": 0.0, "ram": 0.0, "storage": 0.0, "gpu": 0.0,
+        }
+
+    @freeze_time("2026-09-15 12:00:00")
+    def test_first_sample_persists_state(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
+
+        backend._get_usage_report(["waldur-test-ns"])
+
+        # replace_managed_namespace, not patch_managed_namespace: a full read-modify-write
+        # (with optimistic concurrency via resourceVersion) is what makes this safe against
+        # report and membership_sync both calling this independently -- see
+        # TestK8sUtNamespaceBackendUsageReportConcurrency below.
+        mock_k8s.replace_managed_namespace.assert_called_once()
+        name, updated_cr = mock_k8s.replace_managed_namespace.call_args[0]
+        assert name == "waldur-test-ns"
+        state = json.loads(updated_cr["metadata"]["annotations"][USAGE_ACCUMULATOR_ANNOTATION])
+        assert state["period"] == "2026-09"
+        assert state["last_sample_at"] == "2026-09-15T12:00:00+00:00"
+        assert state["accumulated"] == {"cpu": 0.0, "ram": 0.0, "storage": 0.0, "gpu": 0.0}
+
+    def test_second_sample_accumulates_quota_times_elapsed_minutes(
+        self, backend_settings, backend_components
+    ):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        prior_state = {
+            "period": "2026-09",
+            "last_sample_at": "2026-09-15T12:00:00+00:00",
+            "accumulated": {"cpu": 0.0, "ram": 0.0, "storage": 0.0, "gpu": 0.0},
+        }
+        mock_k8s.get_managed_namespace.return_value = self._cr(
+            {USAGE_ACCUMULATOR_ANNOTATION: json.dumps(prior_state)}
+        )
+
+        with freeze_time("2026-09-15 12:30:00"):  # 30 minutes later
+            report = backend._get_usage_report(["waldur-test-ns"])
+
+        # quota (cpu=4, ram=8, storage=100, gpu=1) x 30 minutes elapsed
+        assert report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"] == {
+            "cpu": 120.0, "ram": 240.0, "storage": 3000.0, "gpu": 30.0,
+        }
+
+    def test_accumulation_compounds_across_multiple_samples(
+        self, backend_settings, backend_components
+    ):
+        # Two real _get_usage_report() calls in sequence, each reading back
+        # whatever the previous call persisted -- proves the annotation
+        # round-trip, not just one call's arithmetic.
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        persisted = {}
+
+        def fake_replace(name, updated_cr):
+            persisted[name] = updated_cr["metadata"]["annotations"][USAGE_ACCUMULATOR_ANNOTATION]
+            return {}
+
+        mock_k8s.replace_managed_namespace.side_effect = fake_replace
+
+        with freeze_time("2026-09-15 12:00:00"):
+            mock_k8s.get_managed_namespace.return_value = self._cr()
+            backend._get_usage_report(["waldur-test-ns"])
+
+        with freeze_time("2026-09-15 12:10:00"):  # +10 min
+            mock_k8s.get_managed_namespace.return_value = self._cr(
+                {USAGE_ACCUMULATOR_ANNOTATION: persisted["waldur-test-ns"]}
+            )
+            backend._get_usage_report(["waldur-test-ns"])
+
+        with freeze_time("2026-09-15 12:25:00"):  # +15 min more (25 min total)
+            mock_k8s.get_managed_namespace.return_value = self._cr(
+                {USAGE_ACCUMULATOR_ANNOTATION: persisted["waldur-test-ns"]}
+            )
+            report = backend._get_usage_report(["waldur-test-ns"])
+
+        # 4 cpu x 25 elapsed minutes total, accumulated across both hops
+        assert report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 100.0
+
+    def test_month_boundary_resets_accumulator(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        prior_state = {
+            "period": "2026-08",  # last sample was in August
+            "last_sample_at": "2026-08-31T23:00:00+00:00",
+            "accumulated": {"cpu": 999.0, "ram": 999.0, "storage": 999.0, "gpu": 999.0},
+        }
+        mock_k8s.get_managed_namespace.return_value = self._cr(
+            {USAGE_ACCUMULATOR_ANNOTATION: json.dumps(prior_state)}
+        )
+
+        with freeze_time("2026-09-01 01:00:00"):  # now September
+            report = backend._get_usage_report(["waldur-test-ns"])
+
+        assert report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"] == {
+            "cpu": 0.0, "ram": 0.0, "storage": 0.0, "gpu": 0.0,
+        }
+
+    def test_malformed_annotation_treated_as_no_prior_state(
+        self, backend_settings, backend_components
+    ):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr(
+            {USAGE_ACCUMULATOR_ANNOTATION: "not valid json{{{"}
+        )
+
+        report = backend._get_usage_report(["waldur-test-ns"])
+
+        assert report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"] == {
+            "cpu": 0.0, "ram": 0.0, "storage": 0.0, "gpu": 0.0,
+        }
+
+    def test_missing_namespace_skipped_not_errored(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = None
+
+        report = backend._get_usage_report(["waldur-gone"])
+
+        assert report == {}
+
+    def test_get_managed_namespace_error_skips_resource(
+        self, backend_settings, backend_components
+    ):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.side_effect = BackendError("API down")
 
         report = backend._get_usage_report(["waldur-test-ns"])
 
         assert report == {}
+
+    def test_patch_failure_still_reports_this_samples_usage(
+        self, backend_settings, backend_components
+    ):
+        # A failed persist shouldn't drop the whole report -- worst case is
+        # slightly over-counting one interval on the *next* call, not losing
+        # this one's figures now.
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        prior_state = {
+            "period": "2026-09",
+            "last_sample_at": "2026-09-15T12:00:00+00:00",
+            "accumulated": {"cpu": 0.0, "ram": 0.0, "storage": 0.0, "gpu": 0.0},
+        }
+        mock_k8s.get_managed_namespace.return_value = self._cr(
+            {USAGE_ACCUMULATOR_ANNOTATION: json.dumps(prior_state)}
+        )
+        mock_k8s.replace_managed_namespace.side_effect = BackendError("write conflict")
+
+        with freeze_time("2026-09-15 12:30:00"):
+            report = backend._get_usage_report(["waldur-test-ns"])
+
+        assert report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 120.0
+
+    def test_multiple_resources_handled_independently(
+        self, backend_settings, backend_components
+    ):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.side_effect = lambda _name: self._cr()
+
+        report = backend._get_usage_report(["waldur-ns-a", "waldur-ns-b"])
+
+        assert set(report.keys()) == {"waldur-ns-a", "waldur-ns-b"}
+
+    def test_only_declared_components_reported(self, backend_settings):
+        # A component absent from backend_components (here: no "gpu" entry)
+        # must not appear in the usage report either.
+        components_without_gpu = {
+            "cpu": {"type": "cpu", "unit_factor": 1, "accounting_type": "usage"},
+            "ram": {"type": "ram", "unit_factor": 1, "accounting_type": "usage"},
+        }
+        backend, mock_k8s, _ = _make_backend(backend_settings, components_without_gpu)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
+
+        report = backend._get_usage_report(["waldur-test-ns"])
+
+        assert set(report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"].keys()) == {"cpu", "ram"}
+
+
+class TestK8sUtNamespaceBackendUsageReportConcurrency:
+    """report and membership_sync mode both call _get_usage_report() (via pull_resource())
+    independently, with no coordination -- confirmed live against a real cluster, where a
+    naive read-modify-write silently lost one side's update. These tests cover the fix:
+    optimistic concurrency (replace_managed_namespace, rejected with 409 on a stale
+    resourceVersion) with retry, re-reading fresh on every attempt."""
+
+    def _cr(self, annotations=None, resource_version="1"):
+        return {
+            "metadata": {
+                "name": "waldur-test-ns",
+                "annotations": annotations or {},
+                "resourceVersion": resource_version,
+            },
+            "spec": {"quota": {"cpu": "4", "memory": "8Gi", "storage": "100Gi", "gpu": "1"}},
+        }
+
+    def test_conflict_once_then_succeeds_by_rereading(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        # Second read reflects a concurrent writer's own update (a higher resourceVersion and
+        # an already-larger accumulated total) -- the retry must recompute from *this*, not
+        # blindly resubmit its first attempt's now-stale numbers.
+        concurrent_state = {
+            "period": "2026-09", "last_sample_at": "2026-09-15T12:00:00+00:00",
+            "accumulated": {"cpu": 999.0, "ram": 0.0, "storage": 0.0, "gpu": 0.0},
+        }
+        mock_k8s.get_managed_namespace.side_effect = [
+            self._cr(resource_version="1"),
+            self._cr({USAGE_ACCUMULATOR_ANNOTATION: json.dumps(concurrent_state)}, resource_version="2"),
+        ]
+        mock_k8s.replace_managed_namespace.side_effect = [
+            ApiException(status=409, reason="Conflict"),
+            {},
+        ]
+
+        with freeze_time("2026-09-15 12:00:00"):
+            report = backend._get_usage_report(["waldur-test-ns"])
+
+        assert mock_k8s.get_managed_namespace.call_count == 2
+        assert mock_k8s.replace_managed_namespace.call_count == 2
+        # Built on the second (concurrent) read's 999.0 base, not the first attempt's 0.0.
+        assert report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"]["cpu"] == 999.0
+
+    def test_gives_up_after_max_retries_but_still_reports(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
+        mock_k8s.replace_managed_namespace.side_effect = ApiException(status=409, reason="Conflict")
+
+        report = backend._get_usage_report(["waldur-test-ns"])
+
+        assert mock_k8s.replace_managed_namespace.call_count == backend._USAGE_ACCUMULATOR_RETRIES
+        assert "waldur-test-ns" in report  # still reports this attempt's figures, unpersisted
+
+    def test_non_conflict_api_error_propagates(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
+        mock_k8s.replace_managed_namespace.side_effect = ApiException(status=500, reason="Internal Server Error")
+
+        with pytest.raises(ApiException):
+            backend._get_usage_report(["waldur-test-ns"])
 
 
 class TestK8sUtNamespaceBackendNameValidation:

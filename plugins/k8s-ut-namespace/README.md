@@ -147,19 +147,19 @@ offerings:
       cpu:
         type: "cpu"
         measured_unit: "cores"
-        accounting_type: "limit"
+        accounting_type: "usage"
         label: "CPU Cores"
         unit_factor: 1
       ram:
         type: "ram"
         measured_unit: "GB"
-        accounting_type: "limit"
+        accounting_type: "usage"
         label: "Memory (GB)"
         unit_factor: 1
       storage:
         type: "storage"
         measured_unit: "GB"
-        accounting_type: "limit"
+        accounting_type: "usage"
         label: "Storage (GB)"
         unit_factor: 1
 ```
@@ -198,25 +198,25 @@ offerings:
       cpu:
         type: "cpu"
         measured_unit: "cores"
-        accounting_type: "limit"
+        accounting_type: "usage"
         label: "CPU Cores"
         unit_factor: 1
       ram:
         type: "ram"
         measured_unit: "GB"
-        accounting_type: "limit"
+        accounting_type: "usage"
         label: "Memory (GB)"
         unit_factor: 1
       storage:
         type: "storage"
         measured_unit: "GB"
-        accounting_type: "limit"
+        accounting_type: "usage"
         label: "Storage (GB)"
         unit_factor: 1
       gpu:
         type: "gpu"
         measured_unit: "units"
-        accounting_type: "limit"
+        accounting_type: "usage"
         label: "GPU"
         unit_factor: 1
 ```
@@ -364,13 +364,26 @@ When users are removed:
 
 ### Usage Reporting
 
-The plugin reports actual resource consumption by reading `ResourceQuota.status.used`
-from the managed namespace. The K8s service account needs `get` permission on
-`resourcequotas` in the target namespaces for this to work. If the ResourceQuota is
-not accessible, usage is reported as zeros.
+A `ManagedNamespace`'s quota is only ever a point-in-time snapshot (what's allocated
+right now), with no history of what it was a moment ago — there is no per-namespace
+consumption log to read the way `sacct` provides one for SLURM. So instead of reading
+`ResourceQuota.status.used`, this plugin **meters quota × elapsed time**, the same
+convention SLURM's own `ReqTRES × Elapsed` already uses in this system: it samples
+the namespace's current quota on every report call and accumulates
+`quota × (time since the last sample)` into a running month-to-date total per
+component. Usage values are in Waldur component units, using the reverse of the
+component quota mapping (e.g., K8s `limits.memory: 4Gi` → Waldur `ram: 4`).
 
-Usage values are converted back to Waldur component units using the reverse of
-the component quota mapping (e.g., K8s `limits.memory: 4Gi` → Waldur `ram: 4`).
+The running total is persisted as a JSON-encoded annotation on the CR itself
+(`provisioning.hpc.ut.ee/usage-accumulator`), not in local site-agent state, so it
+survives an agent restart or reschedule. It resets to zero at the start of each
+calendar month, matching `sacct`'s own month-to-date convention.
+
+**Requires `accounting_type: "usage"`** on the components you want metered this way
+(see the example configs below) — Waldur bills `accounting_type: "limit"` components
+from their allocated limit directly and never looks at what this method reports,
+regardless of its contents. Use `"limit"` instead for a component you want billed by
+allocation size rather than measured usage.
 
 ### Namespace Labels & Annotations
 
