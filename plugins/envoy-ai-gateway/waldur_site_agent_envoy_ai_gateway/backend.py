@@ -18,7 +18,7 @@ from waldur_site_agent.backend import DEFAULT_RESOURCE_KEY_COUNT, backends
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
-from .client import EnvoyAIGatewayBackendError, EnvoyAIGatewayClient
+from .client import KEY_ACTIVE, KEY_PAUSED, EnvoyAIGatewayBackendError, EnvoyAIGatewayClient
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,10 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
     # Waldur (encrypted) via the provider endpoints. A resource has many keys,
     # each a "<backend_id>-<n>" Secret entry.
     supports_resource_api_keys = True
+    # One Secret entry is one key, so each can be minted, paused, resumed and
+    # deleted on its own. Limits are Waldur's to enforce (report -> pause), exactly as
+    # for the resource, so applying them stores nothing here.
+    supports_resource_api_key_lifecycle = True
 
     def __init__(
         self, backend_settings: dict[str, object], backend_components: dict[str, dict]
@@ -123,15 +127,36 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         """Return the client-ids of every key a resource owns (active or blocked)."""
         return self.gateway_client.list_client_ids(resource_backend_id)
 
-    def _resource_is_paused(self, existing_client_ids: list[str]) -> bool:
-        """A resource is paused when it owns keys and none of them are active.
+    def _resource_is_paused(
+        self, resource_backend_id: str, key_states: dict[str, str], exclude: str = ""
+    ) -> bool:
+        """Whether the resource itself is paused.
 
-        Used so provisioning or a rotate-fallback on a paused resource lands the new
-        key in the blocked Secret rather than silently un-pausing the resource.
+        ``pause_resource`` records it with a marker. A resource paused before the
+        marker existed is still recognised the old way: it owns keys and none of them
+        are active. Keys paused on their own account are left out of that: they say
+        nothing about the resource. Used so a key added or re-applied on a paused
+        resource lands in the blocked Secret rather than silently un-pausing it.
         """
-        if not existing_client_ids:
+        if self.gateway_client.is_resource_marked_paused(resource_backend_id):
+            return True
+        states = [
+            state
+            for client_id, state in key_states.items()
+            if client_id != exclude and state != KEY_PAUSED
+        ]
+        if not states:
             return False
-        return not any(self.gateway_client.is_active(cid) for cid in existing_client_ids)
+        return KEY_ACTIVE not in states
+
+    def _free_client_ids(self, resource_backend_id: str, taken: set[str]) -> Iterator[str]:
+        prefix = self._key_prefix(resource_backend_id)
+        n = 1
+        while True:
+            client_id = f"{prefix}{n}"
+            n += 1
+            if client_id not in taken:
+                yield client_id
 
     def generate_resource_keys(
         self, resource_backend_id: str, count: int = _DEFAULT_KEY_COUNT
@@ -147,20 +172,13 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         applied; applying all of them first strands any key minted before a failure,
         live in the Secret with no row in Waldur.
         """
-        existing = list(self.list_resource_client_ids(resource_backend_id))
-        blocked = self._resource_is_paused(existing)
-        existing_set = set(existing)
-        prefix = self._key_prefix(resource_backend_id)
-        produced = 0
-        n = 1
-        while produced < count:
-            client_id = f"{prefix}{n}"
-            n += 1
-            if client_id in existing_set:
-                continue
+        key_states = self.gateway_client.key_states(resource_backend_id)
+        blocked = self._resource_is_paused(resource_backend_id, key_states)
+        free = self._free_client_ids(resource_backend_id, set(key_states))
+        for _ in range(count):
+            client_id = next(free)
             api_key = _generate_key()
             self.gateway_client.provision_key(client_id, api_key, blocked=blocked)
-            produced += 1
             logger.info(
                 "Generated Envoy AI Gateway key %s (blocked=%s)", client_id, blocked
             )
@@ -184,20 +202,148 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         """
         del known_client_ids
         api_key = _generate_key()
-        if not self.gateway_client.rotate_key(client_id, api_key):
+        key_states = self.gateway_client.key_states(resource_backend_id)
+        if key_states.get(client_id) == KEY_PAUSED:
+            # Waldur rotates only an OK or Erred key and settles it OK. A key still
+            # paused here is the residue of a pause whose acknowledgement failed, and
+            # must serve again once Waldur shows it OK.
+            self.gateway_client.rotate_key(client_id, api_key)
+            self._lift_key_pause(client_id, resource_backend_id, key_states)
+        elif not self.gateway_client.rotate_key(client_id, api_key):
             # The key had no entry in either Secret (lost / never applied). Re-apply
             # it, but honour the resource's pause state: blind-provisioning to the
             # active Secret would resurrect a paused resource's key.
-            siblings = [
-                cid
-                for cid in self.list_resource_client_ids(resource_backend_id)
-                if cid != client_id
-            ]
             self.gateway_client.provision_key(
-                client_id, api_key, blocked=self._resource_is_paused(siblings)
+                client_id,
+                api_key,
+                blocked=self._resource_is_paused(
+                    resource_backend_id, key_states, exclude=client_id
+                ),
             )
         logger.info("Rotated Envoy AI Gateway key %s", client_id)
         return api_key
+
+    # --- per-key lifecycle ------------------------------------------------------
+
+    @staticmethod
+    def _refuse_model_allowlist(allowed_models: Optional[list[str]]) -> None:
+        """Fail a command that would restrict a key to some models.
+
+        The gateway authenticates a key but routes every model to it alike; there is
+        no per-key model rule to write. Accepting the list would show the key in
+        Waldur as restricted while it can call every model.
+        """
+        if allowed_models:
+            msg = (
+                "The Envoy AI Gateway cannot restrict a single key to some models; "
+                "clear the key's model list"
+            )
+            raise BackendError(msg)
+
+    def mint_resource_key(
+        self,
+        resource_backend_id: str,
+        reserved_client_ids: list[str],
+        limits: Optional[dict] = None,
+        allowed_models: Optional[list[str]] = None,
+    ) -> dict:
+        """Add one key to the resource, as its next free ``<backend_id>-<n>`` slot.
+
+        A slot Waldur still holds — a deleted key's included — is skipped even though
+        its Secret entry is gone, because usage is attributed by client_id. Like
+        ``generate_resource_keys``, the key lands blocked on a paused resource.
+        ``limits`` is not stored: Waldur enforces limits from reported usage.
+        """
+        del limits
+        self._refuse_model_allowlist(allowed_models)
+        key_states = self.gateway_client.key_states(resource_backend_id)
+        blocked = self._resource_is_paused(resource_backend_id, key_states)
+        taken = set(key_states) | set(reserved_client_ids)
+        client_id = next(self._free_client_ids(resource_backend_id, taken))
+        api_key = _generate_key()
+        self.gateway_client.provision_key(client_id, api_key, blocked=blocked)
+        logger.info("Minted Envoy AI Gateway key %s (blocked=%s)", client_id, blocked)
+        return {"client_id": client_id, "api_key": api_key}
+
+    def pause_resource_key(self, client_id: str, resource_backend_id: str) -> None:
+        """Hold one key back in the blocked Secret, under its own pause.
+
+        The resource's other keys keep serving, and a resource restore leaves this one
+        paused. A key with no entry at all already cannot authenticate, so there is
+        nothing to hold back; resuming it later fails and a rotation re-applies it.
+        """
+        del resource_backend_id
+        if not self.gateway_client.pause_key(client_id):
+            logger.warning(
+                "Envoy AI Gateway key %s has no Secret entry; it cannot serve, "
+                "so it counts as paused",
+                client_id,
+            )
+            return
+        logger.info("Paused Envoy AI Gateway key %s", client_id)
+
+    def resume_resource_key(
+        self,
+        client_id: str,
+        resource_backend_id: str,
+        limits: Optional[dict] = None,
+        allowed_models: Optional[list[str]] = None,
+    ) -> None:
+        """Lift a key's own pause; on a paused resource it stays blocked with its siblings."""
+        del limits
+        self._refuse_model_allowlist(allowed_models)
+        key_states = self.gateway_client.key_states(resource_backend_id)
+        state = key_states.get(client_id)
+        if state is None:
+            msg = (
+                f"Envoy AI Gateway key {client_id} has no Secret entry to resume; "
+                "rotate it to apply a new value"
+            )
+            raise BackendError(msg)
+        if state != KEY_PAUSED:
+            # Resumed already: a replay of a resume whose acknowledgement was lost.
+            logger.info("Envoy AI Gateway key %s is not paused; nothing to resume", client_id)
+            return
+        self._lift_key_pause(client_id, resource_backend_id, key_states)
+        logger.info("Resumed Envoy AI Gateway key %s", client_id)
+
+    def _lift_key_pause(
+        self, client_id: str, resource_backend_id: str, key_states: dict[str, str]
+    ) -> None:
+        blocked = self._resource_is_paused(resource_backend_id, key_states, exclude=client_id)
+        self.gateway_client.resume_key(client_id, blocked=blocked)
+
+    def delete_resource_key(self, client_id: str, resource_backend_id: str) -> None:
+        """Remove one key's entry from both Secrets, whichever state it was in."""
+        del resource_backend_id
+        self.gateway_client.deprovision_key(client_id, strict=True)
+        logger.info("Deleted Envoy AI Gateway key %s", client_id)
+
+    def update_resource_key(
+        self,
+        client_id: str,
+        resource_backend_id: str,
+        limits: Optional[dict] = None,
+        allowed_models: Optional[list[str]] = None,
+    ) -> None:
+        """Accept a key's limits; there is nothing to push, since Waldur enforces them.
+
+        An update settles the key OK in Waldur, so the key must serve afterwards: one
+        left paused by a pause whose acknowledgement failed has its pause lifted, and
+        one with no entry at all is an error rather than an OK key that cannot work.
+        """
+        del limits
+        self._refuse_model_allowlist(allowed_models)
+        key_states = self.gateway_client.key_states(resource_backend_id)
+        state = key_states.get(client_id)
+        if state is None:
+            msg = (
+                f"Envoy AI Gateway key {client_id} has no Secret entry; "
+                "rotate it to apply a new value"
+            )
+            raise BackendError(msg)
+        if state == KEY_PAUSED:
+            self._lift_key_pause(client_id, resource_backend_id, key_states)
 
     def create_resource_with_id(
         self,
@@ -259,12 +405,19 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
             return
         for client_id in self.list_resource_client_ids(backend_id):
             self.gateway_client.deprovision_key(client_id)
+        self.gateway_client.mark_resource_paused(backend_id, False)
         logger.info("Deprovisioned Envoy AI Gateway keys for resource %s", waldur_resource.uuid)
 
     # --- state transitions ------------------------------------------------------
 
     def pause_resource(self, resource_backend_id: str) -> bool:
-        """Block every key of the resource (move active -> blocked)."""
+        """Block every key of the resource (move active -> blocked) and record the pause."""
+        try:
+            self.gateway_client.mark_resource_paused(resource_backend_id, True)
+        except EnvoyAIGatewayBackendError:
+            # Blocking the keys below still enforces the pause; the marker only
+            # keeps keys added later from going live.
+            logger.exception("Unable to record the pause of resource %s", resource_backend_id)
         blocked_any = False
         for client_id in self.list_resource_client_ids(resource_backend_id):
             try:
@@ -283,6 +436,10 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
                 restored_any = self.gateway_client.unblock(client_id) or restored_any
             except EnvoyAIGatewayBackendError as exc:
                 logger.warning("Unable to restore (unblock) key %s: %s", client_id, exc)
+        try:
+            self.gateway_client.mark_resource_paused(resource_backend_id, False)
+        except EnvoyAIGatewayBackendError as exc:
+            logger.warning("Unable to clear the pause of resource %s: %s", resource_backend_id, exc)
         return restored_any
 
     def downscale_resource(self, resource_backend_id: str) -> bool:

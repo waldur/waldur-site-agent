@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+from unittest import mock
 from uuid import UUID
 
+from waldur_api_client.models.resource_api_key_status import ResourceApiKeyStatus
 from waldur_api_client.models.user_me import UserMe
 
 from waldur_site_agent.backend.backends import BaseBackend
@@ -125,3 +127,38 @@ class ConcreteBackend(BaseBackend):
 
     def restore_resource(self, *args, **kwargs):
         pass
+
+
+def api_key_row(**overrides: Any) -> ResourceApiKeyStatus:
+    """A key as the provider listing returns it; ``overrides`` are its JSON fields."""
+    payload: dict[str, Any] = {
+        "uuid": str(uuid.uuid4()),
+        "resource_uuid": str(uuid.uuid4()),
+        "resource_backend_id": "res-1",
+        "client_id": "",
+        "state": "OK",
+        "pending_action": "",
+        "error_message": "",
+        "modified": datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat(),
+        "user_uuid": None,
+        "user_full_name": None,
+        "limits": None,
+        "allowed_models": None,
+        "current_usages": None,
+        "usage_period": None,
+        "paused_by_limit": None,
+    }
+    payload.update(overrides)
+    return ResourceApiKeyStatus.from_dict(payload)
+
+
+def key_listing(rows: list[ResourceApiKeyStatus]) -> Any:
+    """A stand-in for the key listing endpoint, serving ``rows`` by the state filter."""
+
+    def _sync_all(**filters: Any) -> list[ResourceApiKeyStatus]:
+        states = filters.get("state") or []
+        return [row for row in rows if row.state in states]
+
+    listing = mock.Mock()
+    listing.sync_all.side_effect = _sync_all
+    return listing

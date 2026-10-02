@@ -36,12 +36,12 @@ from waldur_site_agent.backend.backends import (
     DEPARTED_OFFERING_USER_STATES,
     AbstractUsernameManagementBackend,
 )
-from waldur_site_agent.common import agent_identity_management, structures
+from waldur_site_agent.common import agent_identity_management, resource_api_keys, structures
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.event_processing.structures import (
     AccountMessage,
-    ApiKeyRotationMessage,
+    ApiKeyCommandMessage,
     BackendResourceRequestMessage,
     OfferingResourcesSyncMessage,
     OfferingUserMessage,
@@ -624,28 +624,26 @@ def on_resource_periodic_limits_update_stomp(
         logger.error("Error processing periodic limits update: %s", e)
 
 
-def on_resource_api_key_rotation_stomp(
+def on_resource_api_key_command_stomp(
     frame: stomp.utils.Frame,
     offering: structures.Offering,
     user_agent: str,
     expose_backend_error_details: bool = True,
 ) -> None:
-    """Handle a resource API key rotation command.
+    """Handle a command about one resource API key.
 
-    The agent generates the key and applies it to the backend, then reports the
-    outcome to Waldur via the provider endpoints. Rotation is the only command:
-    the key count is fixed at provisioning.
+    The payload's ``action`` names the command — create, rotate, pause, resume,
+    update or delete. The agent carries it out on the backend, then acknowledges it
+    through the provider endpoint that answers it; see ``resource_api_keys``.
     """
     try:
-        message: ApiKeyRotationMessage = json.loads(frame.body)
-        action = message.get("action")
-        resource_uuid = message.get("resource_uuid")
-        backend_id = message.get("resource_backend_id")
-        api_key_uuid = message.get("api_key_uuid")
-        client_id = message.get("client_id")
-        logger.info("Processing API key %s for resource %s", action, resource_uuid)
+        message: ApiKeyCommandMessage = json.loads(frame.body)
+        command = resource_api_keys.ApiKeyCommand.from_message(dict(message))
+        logger.info(
+            "Processing API key %s for resource %s", command.action, command.resource_uuid
+        )
 
-        if not resource_uuid or not backend_id:
+        if not command.resource_uuid or not command.resource_backend_id:
             logger.error("Invalid API key message: missing resource_uuid/backend_id")
             return
 
@@ -655,20 +653,10 @@ def on_resource_api_key_rotation_stomp(
             return
 
         waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
-
-        if action != "rotate":
-            logger.error("Unknown API key action: %s", action)
-            return
-        if not api_key_uuid or not client_id:
-            logger.error("rotate command missing api_key_uuid/client_id")
-            return
-        common_utils.rotate_resource_api_key(
+        resource_api_keys.execute_api_key_command(
             waldur_rest_client,
-            api_key_uuid,
-            client_id,
             backend,
-            backend_id,
-            resource_uuid,
+            command,
             expose_backend_error_details=expose_backend_error_details,
         )
 

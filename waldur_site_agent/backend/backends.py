@@ -84,9 +84,29 @@ class BaseBackend(ABC):
     # such as the residue of a rotation whose reply was lost; None means unknown, so
     # nothing is pruned — reading it as empty would delete every live credential.
     #
-    # There is no revoke: the key count is fixed at provisioning and a rotation
-    # replaces a value in place.
+    # Those two methods are the whole contract unless the backend also sets
+    # supports_resource_api_key_lifecycle.
     supports_resource_api_keys: bool = False
+
+    # Whether the backend governs its keys one by one, beyond generation and
+    # rotation: mint a single key on demand, pause and resume one key, delete one
+    # key, and apply one key's limits and model allowlist. Each is a command from
+    # Waldur that the agent carries out on the backend first and acknowledges to
+    # Waldur second, as with rotation. Only meaningful with
+    # supports_resource_api_keys, and gated separately because not every backend
+    # with keys can honour it: ceph-s3's access key rotates with its secret and
+    # pausing it is a no-op, so it keeps the two-method contract.
+    #
+    # A per-key pause is a separate verb from pause_resource, not a variant of it:
+    # a key can be paused while its resource is serving, and restoring the resource
+    # must leave that key paused. See the *_resource_key methods below.
+    supports_resource_api_key_lifecycle: bool = False
+
+    # Whether this (reporting) backend can attribute usage to individual API keys,
+    # through get_resource_key_usage_report. Waldur holds a key's limits and pauses it
+    # once its reported usage reaches one, so this is what makes per-key limits work
+    # on a backend that has no budget primitive of its own.
+    supports_resource_api_key_usage: bool = False
 
     # Capability flag: Set to True for backends that depend on a remote API during
     # order processing. The processor calls run_preflight() once per offering
@@ -1291,6 +1311,97 @@ class BaseBackend(ABC):
         implementing it is the exception, not the contract.
         """
         del resource_backend_id, keep
+
+    # --- per-key API key lifecycle (supports_resource_api_key_lifecycle) --------
+    #
+    # Not abstract: only backends that set the flag implement them, and the agent
+    # never calls them otherwise. Each one applies the change to the backend and
+    # returns; the caller reports the result to Waldur. Each must be safe to run
+    # again after it already succeeded, because the reconciliation sweep replays a
+    # command whose acknowledgement never reached Waldur.
+    #
+    # ``limits`` maps a component type to a limit in Waldur units (0 = no limit);
+    # ``allowed_models`` is a list of model names, or None for every model. A backend
+    # that cannot honour a setting it is given must raise rather than accept it
+    # silently: the key would otherwise be reported as restricted when it is not.
+
+    def mint_resource_key(
+        self,
+        resource_backend_id: str,
+        reserved_client_ids: list[str],
+        limits: Optional[dict] = None,
+        allowed_models: Optional[list[str]] = None,
+    ) -> dict:
+        """Create one more key for the resource and apply it, leaving the others alone.
+
+        Returns ``{"client_id": ..., "api_key": ...}``. ``reserved_client_ids`` are
+        identifiers Waldur already holds for the resource, deleted keys included; the
+        new key must not take one of them, since Waldur attributes usage by client_id
+        and refuses a reused one. A key minted onto a paused resource must not serve
+        until the resource is restored.
+        """
+        del resource_backend_id, reserved_client_ids, limits, allowed_models
+        msg = f"{type(self).__name__} does not mint individual API keys"
+        raise NotImplementedError(msg)
+
+    def pause_resource_key(self, client_id: str, resource_backend_id: str) -> None:
+        """Stop one key from serving; the resource and its other keys are untouched.
+
+        The key keeps its value, and stays paused when the resource is paused and
+        restored around it.
+        """
+        del client_id, resource_backend_id
+        msg = f"{type(self).__name__} does not pause individual API keys"
+        raise NotImplementedError(msg)
+
+    def resume_resource_key(
+        self,
+        client_id: str,
+        resource_backend_id: str,
+        limits: Optional[dict] = None,
+        allowed_models: Optional[list[str]] = None,
+    ) -> None:
+        """Lift a key's own pause and apply the settings it carries.
+
+        The settings travel with the resume because they may have been edited while
+        the key was paused. A key of a paused resource stays held until the resource
+        is restored.
+        """
+        del client_id, resource_backend_id, limits, allowed_models
+        msg = f"{type(self).__name__} does not resume individual API keys"
+        raise NotImplementedError(msg)
+
+    def delete_resource_key(self, client_id: str, resource_backend_id: str) -> None:
+        """Revoke one key for good. Deleting a key that is already gone succeeds."""
+        del client_id, resource_backend_id
+        msg = f"{type(self).__name__} does not delete individual API keys"
+        raise NotImplementedError(msg)
+
+    def update_resource_key(
+        self,
+        client_id: str,
+        resource_backend_id: str,
+        limits: Optional[dict] = None,
+        allowed_models: Optional[list[str]] = None,
+    ) -> None:
+        """Apply a key's limits and model allowlist."""
+        del client_id, resource_backend_id, limits, allowed_models
+        msg = f"{type(self).__name__} does not configure individual API keys"
+        raise NotImplementedError(msg)
+
+    def get_resource_key_usage_report(
+        self, resource_backend_ids: list[str]
+    ) -> dict[str, Optional[dict[str, dict[str, float]]]]:
+        """Return the current month's usage per API key (supports_resource_api_key_usage).
+
+        Maps a resource backend id to ``{client_id: {component: usage}}``, in Waldur
+        units, with the same components ``_get_usage_report`` reports for the resource.
+        Summed over the keys, the figures equal the resource total that report holds.
+        A resource whose usage the backend cannot attribute to keys maps to None,
+        which is different from ``{}`` — no usage at all this month.
+        """
+        del resource_backend_ids
+        return {}
 
     def _get_resource_backend_id(self, resource_slug: str, prefix: str = "") -> str:
         prefix = self.backend_settings.get("allocation_prefix", "")

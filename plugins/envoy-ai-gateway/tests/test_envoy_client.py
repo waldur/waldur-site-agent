@@ -78,7 +78,7 @@ def test_deprovision_removes_from_both_secrets() -> None:
     client.deprovision_key("cid-1")
     core_api.patch_namespaced_secret.assert_any_call("keys", "llm-test", {"data": {"cid-1": None}})
     core_api.patch_namespaced_secret.assert_any_call(
-        "keys-blocked", "llm-test", {"data": {"cid-1": None}}
+        "keys-blocked", "llm-test", {"data": {"cid-1": None, "cid-1.paused": None}}
     )
 
 

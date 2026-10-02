@@ -584,6 +584,56 @@ class MyAsyncBackend(BaseBackend):
     supports_async_orders = True
 ```
 
+### Resource API keys
+
+Three flags cover API keys that a resource hands to its consumers, such as
+gateway keys or S3 access keys. The agent mints every key. It applies the key
+to the backend first and reports it to Waldur second, so Waldur only stores a
+key the backend already accepts.
+
+| Flag | What the backend implements |
+|------|-----------------------------|
+| `supports_resource_api_keys` | `generate_resource_keys` at provisioning, and `rotate_resource_key` |
+| `supports_resource_api_key_lifecycle` | Single keys: `mint_`, `pause_`, `resume_`, `delete_`, `update_resource_key` |
+| `supports_resource_api_key_usage` | Reporting backend: `get_resource_key_usage_report` |
+
+Each per-key method changes the backend and returns. The core then sends
+Waldur the acknowledgement for that command: `set_key`, `set_paused`,
+`set_ok` or `set_deleted`. If the method raises, the core reports
+`set_erred` instead. The methods must be safe to call again after they
+succeeded, because the agent replays a command whose acknowledgement never
+reached Waldur.
+
+Key commands are not orders, but the agent picks them up alongside orders,
+and a plugin does not choose how. `order_process` mode applies every pending
+command on each cycle, after the orders. `event_process` mode applies each
+command as its STOMP message arrives. Its reconciliation sweep replays a
+command left pending for 30 minutes, in case the message was lost.
+
+- **Pausing a key is not pausing the resource.** A key paused on its own
+  must stay paused when `pause_resource` and `restore_resource` run around
+  it. The membership sync calls `restore_resource` on every cycle for a
+  resource that is not paused.
+- **Never reuse a client_id.** `mint_resource_key` receives every client_id
+  Waldur holds for the resource, including those of deleted keys. Waldur
+  attributes usage by client_id and refuses one that was already used.
+- **Refuse what you cannot enforce.** If a backend is given a setting it
+  cannot apply, such as a model allowlist on a gateway with no per-key model
+  rule, it must raise. Accepting the setting silently would show the key in
+  Waldur as restricted when it is not.
+
+A backend without `supports_resource_api_key_lifecycle` keeps generation and
+rotation only. The core answers any other command for its keys with
+`set_erred`. ceph-s3 is such a backend: its access key rotates together with
+the secret, and pausing a key there is a no-op.
+
+Per-key usage is reported only when the offering sets the Waldur plugin
+option `enable_api_key_provisioning`. The report maps each resource to
+`{client_id: {component: usage}}`, and those figures must add up to the
+resource total. Map a resource to `None` when its usage cannot be attributed
+to keys; the core then skips per-key reporting for that resource. Waldur
+pauses a key once its reported usage reaches the key's limit.
+
 ### `supports_user_homedirs: bool = False`
 
 Set to `True` for backends that can create POSIX home directories for

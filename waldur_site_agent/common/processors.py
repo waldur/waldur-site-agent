@@ -176,7 +176,12 @@ from waldur_site_agent.backend.backends import (
 )
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
-from waldur_site_agent.common import agent_identity_management, structures, utils
+from waldur_site_agent.common import (
+    agent_identity_management,
+    resource_api_keys,
+    structures,
+    utils,
+)
 from waldur_site_agent.common.healthz import touch_heartbeat
 from waldur_site_agent.common.structures import AccountType
 
@@ -4291,6 +4296,40 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                     resource_backend_id,
                     exc_info=True,
                 )
+
+        self._report_api_key_usages(waldur_resource, waldur_offering)
+
+    def _report_api_key_usages(
+        self, waldur_resource: WaldurResource, waldur_offering: ProviderOfferingDetails
+    ) -> None:
+        """Report the current month's usage per API key, where both sides support it.
+
+        Waldur enforces a key's limits against this. Best-effort: the resource's own
+        usage is already reported, and a failure here must not re-run it.
+        """
+        if not getattr(self.resource_backend, "supports_resource_api_key_usage", False):
+            return
+        if not resource_api_keys.manages_api_keys(waldur_resource):
+            return
+        component_types = [
+            component.type_
+            for component in waldur_offering.components or []
+            if component.type_ and component.type_ in self.resource_backend.backend_components
+        ]
+        if not component_types:
+            return
+        try:
+            resource_api_keys.report_api_key_usages(
+                self.waldur_rest_client,
+                self.resource_backend,
+                waldur_resource.uuid.hex,
+                waldur_resource.backend_id,
+                component_types,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to report per-key usage for resource %s", waldur_resource.backend_id
+            )
 
     def _process_resource_period(
         self,
