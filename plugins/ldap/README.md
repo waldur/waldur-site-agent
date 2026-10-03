@@ -809,6 +809,17 @@ periodic reconcile of `event_process` mode (every
 `membership_sync` pass. It runs even when the offering has no offering users
 left, so parent entries are still cleaned up. Single-user events do not run it.
 
+With STOMP on, the offering also subscribes to Waldur's
+`service_provider_project_group` events: a group numbered, renumbered or
+deleted, or project groups switched on or off for the provider. An event runs
+the same pass a few seconds later, so a project's new group reaches the
+directory without waiting for the periodic cycle. Events arriving close
+together -- an import, a backfill numbering every group -- share one pass. The
+pass always covers every group, never just the one an event names, since which
+groups a parent lists is decided across all of them; and it never overlaps the
+periodic pass on the same offering. Opting out with
+`stomp_membership_sync_enabled: false` also drops this subscription.
+
 It reads the provider's groups from Waldur
 (`GET /api/marketplace-service-provider-project-groups/?provider_offering_uuid=<offering>`,
 all pages, oldest first, following next-page links only to the configured

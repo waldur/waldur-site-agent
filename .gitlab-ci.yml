@@ -517,6 +517,8 @@ Run mypy (3.9):
     # Waldur-authoritative mode: two offerings of one provider against the same
     # directory, so the suite can prove they converge on a single entry.
     WALDUR_E2E_LDAP_INVERTED_CONFIG: ci/e2e-ci-config-ldap-inverted.yaml
+    # Provider project groups written from Waldur (periodic and event path).
+    WALDUR_E2E_LDAP_PROJECT_GROUPS_CONFIG: ci/e2e-ci-config-ldap-project-groups.yaml
     # ldap-roles: LDAP groups from Resource and ResourceProject roles.
     WALDUR_E2E_LDAP_ROLES_CONFIG: ci/e2e-ci-config-ldap-roles.yaml
     # Only this job needs the OpenLDAP container (compose profile "ldap").
