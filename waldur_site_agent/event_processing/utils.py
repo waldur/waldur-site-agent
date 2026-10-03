@@ -8,11 +8,13 @@ import sys
 import types
 from collections.abc import Generator
 from contextlib import contextmanager
+from http import HTTPStatus
 from typing import Callable, Optional
 
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_offering_users import marketplace_offering_users_list
 from waldur_api_client.api.marketplace_orders import marketplace_orders_list
+from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
 from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.order_state import OrderState
@@ -53,6 +55,18 @@ def _username_backend_has_hooks(offering: common_structures.Offering) -> bool:
         getattr(backend_type, hook) is not getattr(AbstractUsernameManagementBackend, hook)
         for hook in ("sync_user_profiles", "release_users")
     )
+
+
+def _username_backend_reconciles_project_groups(offering: common_structures.Offering) -> bool:
+    """Whether the offering's username backend writes the provider's project groups."""
+    try:
+        backend, _ = common_utils.get_username_management_backend(offering)
+    except Exception:
+        logger.exception(
+            "Could not resolve the username management backend for %s", offering.name
+        )
+        return False
+    return backend.reconciles_project_groups()
 
 
 def _determine_observable_object_types(
@@ -111,6 +125,15 @@ def _determine_observable_object_types(
             offering.name,
         )
 
+    # Independent of membership sync: a directory holding project groups wants
+    # to hear about a new or renumbered group whichever backend runs membership.
+    if stomp_membership and _username_backend_reconciles_project_groups(offering):
+        logger.info(
+            "Project groups are written for offering %s; subscribing to project-group events",
+            offering.name,
+        )
+        object_types.append(ObservableObjectTypeEnum.SERVICE_PROVIDER_PROJECT_GROUP)
+
     if offering.resource_import_enabled:
         object_types.append(ObservableObjectTypeEnum.IMPORTABLE_RESOURCES)
     else:
@@ -165,6 +188,35 @@ def _register_agent_identity(
         return None
 
 
+def _register_queue(
+    agent_identity_manager: agent_identity_management.AgentIdentityManager,
+    agent_identity: agent_identity_management.AgentIdentity,
+    object_types: list[ObservableObjectTypeEnum],
+) -> common_structures.UnifiedQueue:
+    """Register the queue; without project-group events if the server refuses them.
+
+    A Mastermind older than the agent rejects an object type it does not know,
+    and losing the whole queue over it would stop orders and membership events
+    too. Project groups then reach the directory on the periodic pass only.
+    """
+    try:
+        return agent_identity_manager.register_queue(agent_identity, object_types)
+    except UnexpectedStatus as exc:
+        # Only a validation error says the server does not know the type; a
+        # timeout or a 5xx must not cost the agent these events until restart.
+        optional = ObservableObjectTypeEnum.SERVICE_PROVIDER_PROJECT_GROUP
+        if exc.status_code != HTTPStatus.BAD_REQUEST or optional not in object_types:
+            raise
+        logger.warning(
+            "Queue registration with project-group events failed; retrying without them "
+            "(the server may predate them)",
+            exc_info=True,
+        )
+        return agent_identity_manager.register_queue(
+            agent_identity, [t for t in object_types if t is not optional]
+        )
+
+
 def _setup_unified_stomp_connection(
     offering: common_structures.Offering,
     agent_identity: agent_identity_management.AgentIdentity,
@@ -197,7 +249,7 @@ def _setup_unified_stomp_connection(
         Tuple of (connection, unified_queue, offering) if successful, else None.
     """
     try:
-        unified_queue = agent_identity_manager.register_queue(agent_identity, object_types)
+        unified_queue = _register_queue(agent_identity_manager, agent_identity, object_types)
 
         event_subscription_manager = EventSubscriptionManager(
             offering,

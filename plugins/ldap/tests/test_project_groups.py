@@ -5,6 +5,7 @@ project groups in ou=projects, and a cluster groupOfNames in ou=clusters that
 lists the DN of every project group with a resource on the offering.
 """
 
+import threading
 from types import SimpleNamespace
 from unittest import mock
 
@@ -17,6 +18,7 @@ from waldur_site_agent_ldap_client import LdapClient
 from waldur_site_agent.common import structures
 from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing import utils as event_utils
+from waldur_site_agent_ldap import backend as backend_module
 from waldur_site_agent_ldap import project_groups
 from waldur_site_agent_ldap.backend import LdapUsernameBackend
 from waldur_site_agent_ldap.project_groups import (
@@ -494,6 +496,124 @@ class TestBackendWiring:
         ), mock.patch.object(project_groups.ProjectGroupReconciler, "run") as run:
             backend.reconcile_offering(mock.Mock())
         run.assert_not_called()
+
+    def test_writes_project_groups_only_when_enabled(self):
+        assert self.make_backend().reconciles_project_groups() is False
+        assert self.make_backend(project_groups={"enabled": True}).reconciles_project_groups()
+
+    def test_event_pass_reads_waldur_like_the_periodic_one(self):
+        backend = self.make_backend(project_groups={"enabled": True})
+        backend_module._FULL_ACCOUNT_PASS_DONE.add(OFFERING)
+        rest = mock.Mock()
+        with mock.patch.object(
+            project_groups, "fetch_provider_project_groups", return_value=[{"name": "p", "gid": 1}]
+        ) as fetch, mock.patch.object(project_groups.ProjectGroupReconciler, "run") as run:
+            run.return_value = project_groups.ReconcileReport()
+            backend.reconcile_project_groups(rest)
+        assert fetch.call_args.args == (rest, OFFERING)
+
+    def test_passes_on_one_offering_never_overlap(self):
+        """The periodic and the event-triggered pass take turns on an offering."""
+        backend = self.make_backend(project_groups={"enabled": True})
+        other = self.make_backend(project_groups={"enabled": True})
+        backend_module._FULL_ACCOUNT_PASS_DONE.add(OFFERING)
+        inside = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def slow_fetch(rest, offering_uuid):
+            calls.append(rest)
+            if len(calls) == 1:
+                inside.set()
+                release.wait(5)
+            return []
+
+        with mock.patch.object(
+            project_groups, "fetch_provider_project_groups", side_effect=slow_fetch
+        ):
+            first = threading.Thread(target=backend.reconcile_project_groups, args=("first",))
+            first.start()
+            assert inside.wait(5)
+            second = threading.Thread(target=other.reconcile_project_groups, args=("second",))
+            second.start()
+            second.join(0.2)
+            assert second.is_alive(), "the second pass must wait for the first"
+            release.set()
+            first.join(5)
+            second.join(5)
+        assert calls == ["first", "second"]
+
+    def test_event_pass_waits_for_the_first_full_account_pass(self):
+        """Until a full account pass has run, the conflict record is incomplete."""
+        backend = self.make_backend(offering_uuid="33333333333333333333333333333333",
+                                    project_groups={"enabled": True})
+        with mock.patch.object(
+            project_groups, "fetch_provider_project_groups", return_value=[]
+        ) as fetch:
+            backend.reconcile_project_groups(mock.Mock())
+            fetch.assert_not_called()
+            backend.reconcile_offering(mock.Mock())  # the periodic pass
+            backend.reconcile_project_groups(mock.Mock())
+        assert fetch.call_count == 2
+
+    def test_a_one_account_pass_keeps_the_other_accounts_conflicts(self):
+        backend = self.make_backend(offering_uuid="44444444444444444444444444444444")
+        key = "44444444444444444444444444444444"
+        backend_module._CONFLICTED_ACCOUNTS[key] = {"alice", "bob"}
+        bob = SimpleNamespace(username="bob")
+        with mock.patch.object(backend, "_reconcile_accounts"):
+            backend._reconcile_from_waldur([bob])
+        assert backend_module._CONFLICTED_ACCOUNTS[key] == {"alice"}
+
+    def test_the_conflict_record_changes_only_when_the_pass_is_over(self):
+        backend = self.make_backend(offering_uuid="55555555555555555555555555555555")
+        key = "55555555555555555555555555555555"
+        backend_module._CONFLICTED_ACCOUNTS[key] = {"alice"}
+        seen_during_pass = []
+
+        def reconcile(offering_users, conflicted):
+            conflicted.add("carol")
+            seen_during_pass.append(set(backend_module._CONFLICTED_ACCOUNTS[key]))
+
+        with mock.patch.object(backend, "_reconcile_accounts", side_effect=reconcile):
+            backend._reconcile_from_waldur([SimpleNamespace(username="alice"),
+                                            SimpleNamespace(username="carol")])
+        assert seen_during_pass == [{"alice"}]
+        assert backend_module._CONFLICTED_ACCOUNTS[key] == {"carol"}
+
+    def test_a_failed_account_pass_keeps_every_recorded_conflict(self):
+        backend = self.make_backend(offering_uuid="66666666666666666666666666666666")
+        key = "66666666666666666666666666666666"
+        backend_module._CONFLICTED_ACCOUNTS[key] = {"alice", "bob"}
+        backend_module._FULL_ACCOUNT_PASS_DONE.add(key)
+
+        def fail_part_way(offering_users, conflicted):
+            conflicted.add("carol")
+            raise RuntimeError("directory went away")
+
+        with mock.patch.object(backend, "_reconcile_accounts", side_effect=fail_part_way):
+            with pytest.raises(RuntimeError):
+                backend._reconcile_from_waldur(
+                    [SimpleNamespace(username=n) for n in ("alice", "bob", "carol")]
+                )
+        assert backend_module._CONFLICTED_ACCOUNTS[key] == {"alice", "bob", "carol"}
+        assert key not in backend_module._FULL_ACCOUNT_PASS_DONE
+
+    def test_a_cycle_whose_account_pass_failed_keeps_event_passes_waiting(self):
+        backend = self.make_backend(offering_uuid="77777777777777777777777777777777",
+                                    project_groups={"enabled": True})
+        key = "77777777777777777777777777777777"
+        with mock.patch.object(backend, "_reconcile_accounts", side_effect=RuntimeError("down")):
+            with pytest.raises(RuntimeError):
+                backend._reconcile_from_waldur([SimpleNamespace(username="alice")])
+        with mock.patch.object(project_groups, "fetch_provider_project_groups", return_value=[]):
+            backend.reconcile_offering(mock.Mock())
+        assert key not in backend_module._FULL_ACCOUNT_PASS_DONE
+        with mock.patch.object(backend, "_reconcile_accounts"):
+            backend._reconcile_from_waldur([SimpleNamespace(username="alice")])
+        with mock.patch.object(project_groups, "fetch_provider_project_groups", return_value=[]):
+            backend.reconcile_offering(mock.Mock())
+        assert key in backend_module._FULL_ACCOUNT_PASS_DONE
 
     def test_two_offerings_sharing_a_parent_without_offering_uuids_warn(self):
         from waldur_site_agent_ldap import backend as backend_module

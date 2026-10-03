@@ -148,6 +148,34 @@ class ApiKeyCommandMessage(TypedDict, total=False):
     allowed_models: Optional[list]
 
 
+class ProjectGroupMessage(TypedDict, total=False):
+    """Represents a message for provider project group events.
+
+    Attributes:
+        action (str): "create" (the group got its first GID), "update" (its name
+            or GID changed), "delete", or "switch" (project groups switched on or
+            off for the provider)
+        service_provider_uuid (str): UUID of the service provider
+        customer_uuid (str): UUID of the provider's organization
+        project_group_uuid (str): UUID of the group (not on "switch")
+        project_uuid (Optional[str]): UUID of the group's project, if it still exists
+        name (str): Group name
+        gid (Optional[int]): Group GID
+        changed_fields (list[str]): Fields that changed ("update" only)
+        project_groups_enabled (bool): The new setting ("switch" only)
+    """
+
+    action: str
+    service_provider_uuid: str
+    customer_uuid: str
+    project_group_uuid: str
+    project_uuid: Optional[str]
+    name: str
+    gid: Optional[int]
+    changed_fields: list[str]
+    project_groups_enabled: bool
+
+
 class OfferingUserMessage(TypedDict):
     """Represents a message for offering user events.
 

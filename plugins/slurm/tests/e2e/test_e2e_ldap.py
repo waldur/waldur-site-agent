@@ -13,6 +13,8 @@ Requires:
 Environment variables:
     WALDUR_E2E_TESTS=true
     WALDUR_E2E_LDAP_CONFIG=<path-to-ldap-config.yaml>
+    WALDUR_E2E_LDAP_INVERTED_CONFIG=<path>          (Waldur-authoritative mode)
+    WALDUR_E2E_LDAP_PROJECT_GROUPS_CONFIG=<path>    (provider project groups)
     WALDUR_E2E_PROJECT_A_UUID=<project-uuid-on-waldur>
 
 Usage:
@@ -58,6 +60,7 @@ from waldur_api_client.api.marketplace_provider_resources import (
 from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.types import UNSET
+from waldur_site_agent_ldap import backend as ldap_backend_module
 from waldur_site_agent_ldap_client import LdapClient
 from waldur_site_agent_slurm.backend import SlurmBackend
 
@@ -72,12 +75,17 @@ from waldur_site_agent.common.processors import (
     OfferingReportProcessor,
 )
 from waldur_site_agent.common.utils import get_client, load_configuration
+from waldur_site_agent.event_processing.utils import (
+    setup_stomp_offering_subscriptions,
+    stop_stomp_consumers,
+)
 
 logger = logging.getLogger(__name__)
 
 E2E_TESTS = os.environ.get("WALDUR_E2E_TESTS", "false").lower() == "true"
 E2E_LDAP_CONFIG_PATH = os.environ.get("WALDUR_E2E_LDAP_CONFIG", "")
 E2E_LDAP_INVERTED_CONFIG_PATH = os.environ.get("WALDUR_E2E_LDAP_INVERTED_CONFIG", "")
+E2E_LDAP_PROJECT_GROUPS_CONFIG_PATH = os.environ.get("WALDUR_E2E_LDAP_PROJECT_GROUPS_CONFIG", "")
 E2E_PROJECT_A_UUID = os.environ.get("WALDUR_E2E_PROJECT_A_UUID", "")
 
 # UUID pattern for sanitising diagram labels
@@ -2296,3 +2304,272 @@ def _wait_inverted_offering_user_state(
             return
         time.sleep(2)
     pytest.fail(f"Offering user of {user_uuid} still '{state}', expected '{expected}'")
+
+
+# --- Provider project groups -------------------------------------------------
+#
+# Waldur gives each project using the provider one POSIX group with a GID from
+# the pool's group range; the agent writes them under the project OU and lists
+# the groups of projects using the LDAP offering in a cluster entry. The
+# provider and pool are the ones the Waldur-authoritative suite uses.
+
+_PG_PROVIDER_UUID = "e2ee0000000000000000000000000001"
+_PG_POOL_UUID = "e2eb0000000000000000000000000001"
+# Disjoint from the pool's user range (9000-9999) and from the gid_range the
+# SLURM backend allocates its own groups from (1200-1400).
+_PG_GID_RANGE = (1500, 1599)
+_PG_RENUMBERED = 1590
+_PG_OU = "ou=WaldurProjects"
+_PG_CLUSTER_DN = "cn=e2e-cluster,ou=Clusters,dc=sofiatech,dc=bg"
+_PG_STAND_IN = "cn=nobody,dc=sofiatech,dc=bg"
+_PG_MARKER = "waldur-managed"
+_PG_EVENT_TIMEOUT = 45
+_pg_state: dict = {}
+
+
+@pytest.fixture(scope="module")
+def pg_offering():
+    if not E2E_LDAP_PROJECT_GROUPS_CONFIG_PATH:
+        pytest.skip("WALDUR_E2E_LDAP_PROJECT_GROUPS_CONFIG not set")
+    config = load_configuration(
+        E2E_LDAP_PROJECT_GROUPS_CONFIG_PATH, user_agent_suffix="e2e-ldap-project-groups"
+    )
+    return config.offerings[0]
+
+
+@pytest.fixture(scope="module")
+def pg_client(pg_offering):
+    client = get_client(pg_offering.waldur_api_url, pg_offering.waldur_api_token)
+    pool = client.get_httpx_client().get(f"/api/marketplace-posix-id-pools/{_PG_POOL_UUID}/")
+    pool.raise_for_status()
+    if "min_group_gid" not in pool.json():
+        pytest.skip("Mastermind predates provider project groups")
+    return client
+
+
+@pytest.fixture(scope="module")
+def pg_ldap_settings(pg_offering):
+    return pg_offering.backend_settings["ldap"]
+
+
+@pytest.fixture(scope="module")
+def pg_directory(pg_ldap_settings):
+    """The project OU and a cluster entry listing project groups (operator-made)."""
+    base = pg_ldap_settings["base_dn"]
+    conn = _inverted_connect(pg_ldap_settings)
+    try:
+        for dn in (f"{_PG_OU},{base}", f"ou=Clusters,{base}"):
+            conn.add(dn, ["top", "organizationalUnit"])
+        conn.add(
+            _PG_CLUSTER_DN,
+            ["top", "groupOfNames"],
+            {"cn": "e2e-cluster", "member": [_PG_STAND_IN]},
+        )
+    finally:
+        conn.unbind()
+    return pg_ldap_settings
+
+
+def _pg_api(client, method: str, path: str, **kwargs):
+    response = client.get_httpx_client().request(method, path, **kwargs)
+    assert response.status_code < 400, f"{method} {path}: {response.status_code} {response.text}"
+    return response.json() if response.content else None
+
+
+def _pg_group_of(client, project_uuid: str) -> dict | None:
+    groups = _pg_api(
+        client,
+        "GET",
+        "/api/marketplace-service-provider-project-groups/",
+        params={"service_provider_uuid": _PG_PROVIDER_UUID, "project_uuid": project_uuid},
+    )
+    return groups[0] if groups else None
+
+
+def _pg_entry(settings: dict, name: str) -> dict | None:
+    conn = _inverted_connect(settings)
+    try:
+        conn.search(
+            f"{_PG_OU},{settings['base_dn']}",
+            f"(cn={name})",
+            search_scope=SUBTREE,
+            attributes=["cn", "gidNumber", "memberUid", "description", "modifyTimestamp"],
+        )
+        return conn.entries[0].entry_attributes_as_dict if conn.entries else None
+    finally:
+        conn.unbind()
+
+
+def _pg_cluster_members(settings: dict) -> list[str]:
+    conn = _inverted_connect(settings)
+    try:
+        conn.search(_PG_CLUSTER_DN, "(objectClass=*)", search_scope="BASE", attributes=["member"])
+        return [m.lower() for m in conn.entries[0].entry_attributes_as_dict.get("member", [])]
+    finally:
+        conn.unbind()
+
+
+def _pg_periodic_pass(offering, client) -> None:
+    """The membership-sync pass; its offering-wide reconcile writes project groups."""
+    backend = SlurmBackend(offering.backend_settings, offering.backend_components)
+    OfferingMembershipProcessor(
+        offering=offering, waldur_rest_client=client, resource_backend=backend
+    ).process_offering()
+
+
+@pytest.fixture(scope="module")
+def pg_switched_on(request, pg_client, ldap_offering, ldap_waldur_client, ldap_slurm_backend):
+    """Project groups on for the shared provider, and off again however the class ends."""
+    low, high = _PG_GID_RANGE
+    _pg_api(
+        pg_client,
+        "PATCH",
+        f"/api/marketplace-posix-id-pools/{_PG_POOL_UUID}/",
+        json={"min_group_gid": low, "max_group_gid": high},
+    )
+    provider = _pg_api(
+        pg_client,
+        "PATCH",
+        f"/api/marketplace-service-providers/{_PG_PROVIDER_UUID}/",
+        json={"account_options": {"project_groups_enabled": True}},
+    )
+
+    def finalizer():
+        resource_uuid = _pg_state.get("resource_uuid")
+        try:
+            if resource_uuid:
+                order = _pg_api(
+                    ldap_waldur_client,
+                    "POST",
+                    f"/api/marketplace-resources/{resource_uuid}/terminate/",
+                )
+                run_processor_until_order_terminal(
+                    ldap_offering, ldap_waldur_client, ldap_slurm_backend, order["order_uuid"]
+                )
+        finally:
+            # The suites after this one share the provider.
+            _pg_api(
+                pg_client,
+                "PATCH",
+                f"/api/marketplace-service-providers/{_PG_PROVIDER_UUID}/",
+                json={"account_options": {"project_groups_enabled": False}},
+            )
+
+    request.addfinalizer(finalizer)
+    return provider
+
+
+@pytest.fixture(scope="module")
+def pg_stomp_consumers(request, pg_offering, pg_client):
+    """The offering's real STOMP subscription, drained by the agent's own router."""
+    consumers = setup_stomp_offering_subscriptions(pg_offering, "e2e-ldap-project-groups")
+
+    def finalizer():
+        stop_stomp_consumers({(pg_offering.name, pg_offering.uuid): consumers})
+
+    request.addfinalizer(finalizer)
+    return consumers
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+class TestLdapProviderProjectGroups:
+    """One POSIX group per project at the provider, written from Waldur."""
+
+    def test_01_switch_on(self, pg_switched_on):
+        """A group GID range on the pool, then project groups on for the provider."""
+        assert pg_switched_on["account_options"]["project_groups_enabled"] is True
+
+    def test_02_a_resource_gives_the_project_its_group(
+        self,
+        pg_client,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_project_uuid,
+    ):
+        """A project's first resource at the provider gives it a group and a GID."""
+        offering_url, plan_url = get_offering_info(
+            ldap_waldur_client, ldap_offering.waldur_offering_uuid
+        )
+        order_uuid = create_source_order(
+            client=ldap_waldur_client,
+            offering_url=offering_url,
+            project_url=get_project_url(ldap_waldur_client, ldap_project_uuid),
+            plan_url=plan_url,
+            limits={"node_hours": 10},
+            name=f"e2e-pg-{uuid.uuid4().hex[:6]}",
+        )
+        state = run_processor_until_order_terminal(
+            ldap_offering, ldap_waldur_client, ldap_slurm_backend, order_uuid
+        )
+        assert state == OrderState.DONE, f"Expected DONE, got {state}"
+        order = marketplace_orders_retrieve.sync(client=ldap_waldur_client, uuid=order_uuid)
+        _pg_state["resource_uuid"] = order.marketplace_resource_uuid.hex
+
+        group = _pg_group_of(pg_client, ldap_project_uuid)
+        assert group is not None, "Waldur gave the project no group"
+        assert _PG_GID_RANGE[0] <= group["gid"] <= _PG_GID_RANGE[1], group
+        assert group["in_use"] is True
+        _pg_state["group"] = group
+
+    def test_03_the_periodic_pass_writes_it(self, pg_offering, pg_client, pg_directory):
+        """Name, GID, members and marker as Waldur says; listed in the cluster."""
+        group = _pg_group_of(pg_client, _pg_state["group"]["project_uuid"])
+        _pg_periodic_pass(pg_offering, pg_client)
+
+        entry = _pg_entry(pg_directory, group["name"])
+        assert entry is not None, f"cn={group['name']} not under {_PG_OU}"
+        assert int(entry["gidNumber"][0]) == group["gid"]
+        assert _PG_MARKER in entry.get("description", [])
+        # Waldur lists every provider username of the project's members; the
+        # directory gets those it holds an entry for (accounts of offerings that
+        # do not write to it are left out, so NSS never sees a dangling name).
+        conflicted = ldap_backend_module._CONFLICTED_ACCOUNTS.get(str(pg_offering.uuid), set())
+        expected = (
+            set(group["members"]) & set(LdapAssertions(pg_directory).list_usernames())
+        ) - conflicted
+        assert expected, "no member of the project has a directory entry"
+        assert sorted(entry.get("memberUid", [])) == sorted(expected)
+        dn = f"cn={group['name']},{_PG_OU},{pg_directory['base_dn']}".lower()
+        assert dn in _pg_cluster_members(pg_directory)
+
+    def test_04_a_second_pass_writes_nothing(self, pg_offering, pg_client, pg_directory):
+        name = _pg_state["group"]["name"]
+        before = (_pg_entry(pg_directory, name), _pg_cluster_members(pg_directory))
+        _pg_periodic_pass(pg_offering, pg_client)
+        after = (_pg_entry(pg_directory, name), _pg_cluster_members(pg_directory))
+        assert before == after
+
+    def test_05_a_new_gid_reaches_the_directory_by_event(
+        self, pg_offering, pg_client, pg_directory, pg_stomp_consumers
+    ):
+        """set_gid in Waldur; the agent rewrites gidNumber with no periodic pass."""
+        if not pg_stomp_consumers:
+            pytest.fail("No STOMP consumer for the project-groups offering")
+        queue = pg_stomp_consumers[0][1]
+        if "service_provider_project_group" not in [
+            str(t) for t in queue.observable_object_types
+        ]:
+            pytest.skip("Mastermind predates project-group events")
+        if str(pg_offering.uuid) not in ldap_backend_module._FULL_ACCOUNT_PASS_DONE:
+            pytest.fail(
+                "No completed periodic pass in this process (test_03): the agent "
+                "defers event-triggered group passes until one has run"
+            )
+        group = _pg_state["group"]
+        _pg_api(
+            pg_client,
+            "POST",
+            f"/api/marketplace-service-provider-project-groups/{group['uuid']}/set_gid/",
+            json={"gid": _PG_RENUMBERED},
+        )
+        deadline = time.monotonic() + _PG_EVENT_TIMEOUT
+        entry = None
+        while time.monotonic() < deadline:
+            entry = _pg_entry(pg_directory, group["name"])
+            if entry and int(entry["gidNumber"][0]) == _PG_RENUMBERED:
+                break
+            time.sleep(1)
+        assert entry and int(entry["gidNumber"][0]) == _PG_RENUMBERED, (
+            f"gidNumber not rewritten by the event path within {_PG_EVENT_TIMEOUT}s: {entry}"
+        )

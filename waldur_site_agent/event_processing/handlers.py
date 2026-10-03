@@ -1,6 +1,7 @@
 """Handlers for different events and protocols."""
 
 import json
+import threading
 from typing import Optional
 from uuid import UUID
 
@@ -47,6 +48,7 @@ from waldur_site_agent.event_processing.structures import (
     OfferingUserMessage,
     OrderMessage,
     PeriodicLimitsMessage,
+    ProjectGroupMessage,
     ResourceMessage,
     UserRoleMessage,
 )
@@ -1007,3 +1009,82 @@ def _add_user_to_resources(
                 )
     except Exception:
         logger.exception("Failed to create associations for user %s", username)
+
+
+# A burst of project-group events -- an import, a backfill numbering every
+# group of a provider -- becomes one pass: the first event schedules it, and
+# the ones arriving before it starts ride along. Every pass reads the whole
+# listing, so nothing an event said is lost by coalescing.
+PROJECT_GROUP_RECONCILE_DELAY_SECONDS = 3.0
+_project_group_timers: dict[str, threading.Timer] = {}
+_project_group_timers_lock = threading.Lock()
+
+
+def on_project_group_message_stomp(
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,  # noqa: ARG001
+) -> None:
+    """Provider project group event handler for STOMP."""
+    message: ProjectGroupMessage = json.loads(frame.body)
+    logger.info(
+        "Received project group message: %s %s (GID %s)",
+        message.get("action"),
+        message.get("name", ""),
+        message.get("gid"),
+    )
+    schedule_project_group_reconcile(offering, user_agent)
+
+
+def schedule_project_group_reconcile(
+    offering: structures.Offering,
+    user_agent: str,
+    delay: Optional[float] = None,
+) -> bool:
+    """Schedule one project-group pass for the offering; False if one is pending."""
+    key = str(offering.uuid)
+    with _project_group_timers_lock:
+        if key in _project_group_timers:
+            return False
+        timer = threading.Timer(
+            PROJECT_GROUP_RECONCILE_DELAY_SECONDS if delay is None else delay,
+            run_project_group_reconcile,
+            args=(offering, user_agent),
+        )
+        # A pass cut short by shutdown is harmless: the next one converges.
+        timer.daemon = True
+        _project_group_timers[key] = timer
+    timer.start()
+    return True
+
+
+def run_project_group_reconcile(offering: structures.Offering, user_agent: str) -> None:
+    """Run the username backend's project-group pass for the offering.
+
+    The pending marker is cleared before the pass starts, so an event arriving
+    while it runs schedules the next one rather than being absorbed by a pass
+    that may already have read the listing.
+    """
+    with _project_group_timers_lock:
+        pending = _project_group_timers.pop(str(offering.uuid), None)
+    if pending is not None and pending is not threading.current_thread():
+        # Called directly while a pass was scheduled: this one covers it.
+        pending.cancel()
+    try:
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
+        register_event_process_service(
+            offering,
+            waldur_rest_client,
+            ObservableObjectTypeEnum.SERVICE_PROVIDER_PROJECT_GROUP,
+        )
+        backend, _ = common_utils.get_username_management_backend(offering)
+        if not backend.reconciles_project_groups():
+            logger.info(
+                "Offering %s does not write project groups; event ignored", offering.name
+            )
+            return
+        logger.info("Running the project group pass for offering %s on events", offering.name)
+        backend.reconcile_project_groups(waldur_rest_client)
+    except Exception:
+        logger.exception("Project group reconcile failed for offering %s", offering.name)

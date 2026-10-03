@@ -1640,6 +1640,26 @@ class AbstractUsernameManagementBackend(ABC):
         """
         del waldur_rest_client
 
+    def reconciles_project_groups(self) -> bool:
+        """Whether this backend writes the provider's project groups.
+
+        When it does, the event-process mode subscribes the offering to
+        project-group events and calls ``reconcile_project_groups`` on them, so
+        a group Waldur creates or renumbers reaches the directory without
+        waiting for the next periodic cycle. Default: False.
+        """
+        return False
+
+    def reconcile_project_groups(self, waldur_rest_client: AuthenticatedClient) -> None:
+        """Write the provider's project groups, outside the periodic cycle.
+
+        Called on project-group events, at most once per short burst of them,
+        and from the same process that runs the periodic cycle: an
+        implementation must tolerate running concurrently with
+        ``reconcile_offering``. Default: no-op.
+        """
+        del waldur_rest_client
+
     def deactivate_users(self, usernames: set[str]) -> None:
         """Deactivate users no longer in the offering.
 

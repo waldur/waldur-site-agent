@@ -39,6 +39,9 @@ OBJECT_TYPE_TO_HANDLER_STOMP: dict[ObservableObjectTypeEnum, Callable] = {
     ObservableObjectTypeEnum.RESOURCE_API_KEY_ROTATION: (
         handlers.on_resource_api_key_command_stomp
     ),
+    ObservableObjectTypeEnum.SERVICE_PROVIDER_PROJECT_GROUP: (
+        handlers.on_project_group_message_stomp
+    ),
 }
 
 

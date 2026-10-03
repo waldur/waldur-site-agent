@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
@@ -40,6 +41,15 @@ _PARENT_CLAIMS: dict[str, dict[str, frozenset[str]]] = {}
 _WARNED_SETTINGS: set[str] = set()
 _WARNED_PARENTS: set[tuple[str, frozenset[frozenset[str]]]] = set()
 _WARNED_NO_RENAME_KEY: list[bool] = []
+# One project-group pass at a time per offering: the periodic cycle and an
+# event-triggered pass would otherwise race to create the same entries.
+_PROJECT_GROUP_LOCKS: dict[str, threading.Lock] = {}
+_PROJECT_GROUP_LOCKS_GUARD = threading.Lock()
+
+
+def _project_group_lock(offering_key: str) -> threading.Lock:
+    with _PROJECT_GROUP_LOCKS_GUARD:
+        return _PROJECT_GROUP_LOCKS.setdefault(offering_key, threading.Lock())
 
 
 _WARNED_HIDDEN_USERNAMES: set[str] = set()
@@ -110,6 +120,12 @@ PENDING_RENAME_PREFIX = "waldur-site-agent:renamed-from="
 # (a UID or key conflict, unadopted drift, a failure). Per process, because core
 # builds a fresh backend for the profile sync and for the offering reconcile.
 _CONFLICTED_ACCOUNTS: dict[str, set[str]] = {}
+_CONFLICTED_ACCOUNTS_GUARD = threading.Lock()
+# Offerings whose full account pass has run in this process: until then the
+# conflict record is incomplete, and an event-triggered group pass waits.
+_FULL_ACCOUNT_PASS_DONE: set[str] = set()
+# Offerings whose latest account pass failed part-way.
+_FAILED_ACCOUNT_PASS: set[str] = set()
 
 
 def _pending_token(old_username: str) -> str:
@@ -402,12 +418,43 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         Core calls this once per periodic cycle, after sync_user_profiles (so a
         group's new members already have entries), and also when the offering
         has no offering users left -- the parents still need cleaning then.
+        Event-triggered group passes are unlocked once a cycle's account pass
+        has completed (or there were no accounts to pass over).
+        """
+        key = self._offering_key()
+        with _CONFLICTED_ACCOUNTS_GUARD:
+            if key not in _FAILED_ACCOUNT_PASS:
+                _FULL_ACCOUNT_PASS_DONE.add(key)
+        self.reconcile_project_groups(waldur_rest_client)
+
+    def reconciles_project_groups(self) -> bool:
+        """Project groups are written when the offering's settings enable them."""
+        return bool(self.project_groups.get("enabled"))
+
+    def reconcile_project_groups(self, waldur_rest_client: AuthenticatedClient) -> None:
+        """One full project-group pass, serialised per offering.
+
+        Always every group, never just the one an event names: which groups a
+        parent lists is decided across all of them, so a pass over one group
+        would strip the others from their parents.
 
         A failure to read Waldur leaves the directory untouched, and so does an
         empty answer (see ProjectGroupReconciler.run).
         """
-        if not self.project_groups.get("enabled"):
+        if not self.reconciles_project_groups():
             return
+        if self.waldur_authoritative and self._offering_key() not in _FULL_ACCOUNT_PASS_DONE:
+            # Which accounts to leave out of groups is known only after a full
+            # account pass; the first periodic pass writes the groups instead.
+            logger.info(
+                "Project group pass for %s deferred to the first periodic pass",
+                getattr(self.offering, "name", self._offering_key()),
+            )
+            return
+        with _project_group_lock(self._offering_key()):
+            self._reconcile_project_groups(waldur_rest_client)
+
+    def _reconcile_project_groups(self, waldur_rest_client: AuthenticatedClient) -> None:
         offering_uuid = getattr(self.offering, "uuid", None)
         if not offering_uuid:
             logger.error("project_groups is enabled, but the offering UUID is unknown")
@@ -450,6 +497,37 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         )
 
     def _reconcile_from_waldur(self, offering_users: list[OfferingUser]) -> None:
+        """Reconcile the accounts, then record which of them are conflicted.
+
+        The record is what the project-group pass leaves out of groups, and that
+        pass can now run at any moment (on project-group events), not only right
+        after a full account pass. So the record is merged, not replaced: a pass
+        over one account (an offering-user event) re-decides that account only,
+        and the record changes once the pass is over, never half-way through.
+
+        A pass that fails part-way clears nothing: accounts it never reached keep
+        their recorded conflict, and the offering's next event-triggered group
+        pass waits for a periodic cycle whose account pass completes.
+        """
+        key = self._offering_key()
+        conflicted: set[str] = set()
+        batch = {ou.username for ou in offering_users if isinstance(ou.username, str)}
+        completed = False
+        try:
+            self._reconcile_accounts(offering_users, conflicted)
+            completed = True
+        finally:
+            with _CONFLICTED_ACCOUNTS_GUARD:
+                previous = _CONFLICTED_ACCOUNTS.get(key, set())
+                cleared = batch if completed else set()
+                _CONFLICTED_ACCOUNTS[key] = (previous - cleared) | conflicted
+                if completed:
+                    _FAILED_ACCOUNT_PASS.discard(key)
+                else:
+                    _FAILED_ACCOUNT_PASS.add(key)
+                    _FULL_ACCOUNT_PASS_DONE.discard(key)
+
+    def _reconcile_accounts(self, offering_users: list[OfferingUser], conflicted: set[str]) -> None:
         """Converge the directory on Waldur's usernames and POSIX ids.
 
         Reads the directory once in total, not once per user: every LdapClient
@@ -461,8 +539,6 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
         pass could not reconcile cleanly (a conflict, a failure) are remembered,
         so the project-group pass does not name them.
         """
-        conflicted: set[str] = set()
-        _CONFLICTED_ACCOUNTS[self._offering_key()] = conflicted
         if not offering_users:
             return
 
