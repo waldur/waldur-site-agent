@@ -155,6 +155,11 @@ offerings:
     offering_uuid: "harbor-offering-uuid"
 ```
 
+`allocation_prefix` is required and must be reserved for Site Agent-managed
+Harbor projects. The backend rejects a conflicting resource backend ID, fails
+closed when initial creation finds a project with the derived name, and refuses
+to read, update, or delete IDs outside the configured prefix.
+
 ### Robot Account Permissions
 
 **Critical**: The Harbor robot account must have the following permissions:
