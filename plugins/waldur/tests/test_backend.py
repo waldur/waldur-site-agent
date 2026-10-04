@@ -57,6 +57,13 @@ def backend_with_conversion(backend_settings, backend_components_with_conversion
 
 
 class TestInitialization:
+    def test_declares_target_waldur_as_remote(
+        self, backend_settings, backend_components_passthrough
+    ):
+        """Waldur B's errors are backend errors even when B shares Waldur A's origin."""
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        assert backend.remote_waldur_base_urls() == ["https://waldur-b.example.com"]
+
     def test_init_with_valid_settings(self, backend_settings, backend_components_passthrough):
         backend = WaldurBackend(backend_settings, backend_components_passthrough)
         assert backend.backend_type == "waldur"
