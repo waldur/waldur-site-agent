@@ -109,6 +109,25 @@ systemctl start waldur-agent-report.service
 systemctl enable waldur-agent-report.service
 ```
 
+### Heartbeat file per service
+
+Each agent process writes a liveness heartbeat file, checked by
+`waldur_site_healthz --liveness-only`. The default path is
+`/tmp/waldur-site-agent-heartbeat`; several services on one host must not share
+it, or any of them touching it keeps a stalled one looking alive. Give each unit
+its own path with `WALDUR_SITE_AGENT_HEARTBEAT_PATH` (a drop-in, e.g.
+`systemctl edit waldur-agent-event-process.service`):
+
+```ini
+[Service]
+Environment=WALDUR_SITE_AGENT_HEARTBEAT_PATH=/run/waldur-agent/event-process.heartbeat
+RuntimeDirectory=waldur-agent
+```
+
+and point the check at the same file:
+`waldur_site_healthz --liveness-only --heartbeat-path /run/waldur-agent/event-process.heartbeat`
+(the flag overrides the variable).
+
 ## Service Management
 
 ### Check Service Status

@@ -48,7 +48,8 @@ import json
 import random
 import threading
 import time
-from typing import Callable
+from contextlib import suppress
+from typing import Callable, Optional
 
 import stomp.utils
 from stomp.exception import ConnectFailedException, StompException
@@ -62,6 +63,13 @@ BACKOFF_MAX = 120.0
 BACKOFF_JITTER = 0.25
 WARN_THRESHOLD = 3
 RECONNECT_MAX_RETRIES = 10
+# Upper bound for one attempt: the WebSocket handshake (socket timeout on the
+# connection) and the wait for the broker's CONNECTED frame.
+CONNECT_TIMEOUT = 30.0
+# Connect attempts made at startup and per watchdog setup retry before giving
+# the connection to the watchdog; never unbounded, so the main loop always starts.
+STARTUP_CONNECT_ATTEMPTS = 3
+_CONNECTED_POLL_INTERVAL = 0.1
 
 
 def _calculate_backoff(attempt: int) -> float:
@@ -83,6 +91,7 @@ def connect_to_stomp_server(
     username: str,
     password: str,
     max_retries: int = 0,
+    connect_timeout: Optional[float] = None,
 ) -> None:
     """Connects the existing connection to the STOMP server with retry logic.
 
@@ -99,6 +108,8 @@ def connect_to_stomp_server(
         username: STOMP username.
         password: STOMP password.
         max_retries: Maximum number of retry attempts. 0 means infinite retries.
+        connect_timeout: Seconds to wait for the CONNECTED frame per attempt.
+            None waits indefinitely (stomp.py's own ``wait=True``).
 
     Raises:
         ConnectFailedException: When max_retries is exceeded without connecting.
@@ -119,11 +130,13 @@ def connect_to_stomp_server(
             connection.connect(
                 username,
                 password,
-                wait=True,
+                wait=connect_timeout is None,
                 headers={
                     "accept-version": "1.2",
                 },
             )
+            if connect_timeout is not None:
+                _wait_until_connected(connection, connect_timeout)
         except (StompException, OSError) as e:
             backoff = _calculate_backoff(attempt)
             log_fn = logger.warning if attempt < WARN_THRESHOLD else logger.error
@@ -140,6 +153,26 @@ def connect_to_stomp_server(
             time.sleep(backoff)
 
 
+def _wait_until_connected(connection: stomp.StompConnection12, timeout: float) -> None:
+    """Wait for CONNECTED, giving up after ``timeout`` seconds.
+
+    stomp.py's ``wait_for_connection(timeout)`` only changes how often it re-checks
+    and never gives up, so a broker that accepts the socket but never answers
+    would block the caller forever.
+    """
+    deadline = time.monotonic() + timeout
+    while not connection.is_connected():
+        if getattr(connection.transport, "connection_error", False):
+            msg = "Broker rejected the STOMP CONNECT"
+            raise ConnectFailedException(msg)
+        if time.monotonic() >= deadline:
+            with suppress(Exception):
+                connection.transport.disconnect_socket()
+            msg = f"No CONNECTED frame within {timeout:.0f}s"
+            raise ConnectFailedException(msg)
+        time.sleep(_CONNECTED_POLL_INTERVAL)
+
+
 class WaldurListener(stomp.ConnectionListener):
     """Message listener class for the STOMP plugin."""
 
@@ -153,8 +186,14 @@ class WaldurListener(stomp.ConnectionListener):
         offering: structures.Offering,
         user_agent: str,
         expose_backend_error_details: bool = True,
+        on_queue_missing: Optional[Callable[[], None]] = None,
     ) -> None:
-        """Constructor method."""
+        """Constructor method.
+
+        ``on_queue_missing`` re-registers the consumer queue; it is called (off the
+        receiver thread) when the broker reports the queue is gone, so the next
+        reconnect can subscribe again instead of being closed after CONNECTED.
+        """
         self.queue = queue
         self.username = username
         self.password = password
@@ -164,14 +203,45 @@ class WaldurListener(stomp.ConnectionListener):
         self.user_agent = user_agent
         self.expose_backend_error_details = expose_backend_error_details
         self._reconnect_lock = threading.Lock()
+        self.on_queue_missing = on_queue_missing
+        self._reregister_lock = threading.Lock()
 
     def on_error(self, frame: stomp.utils.Frame) -> None:
         """Error handler method."""
-        logger.error("Received an error %s", frame.body)
+        message = (frame.headers or {}).get("message", "")
+        logger.error("Received an error %s %s on queue %s", message, frame.body, self.queue)
+        if self.on_queue_missing is not None and "NOT_FOUND" in message:
+            threading.Thread(
+                target=self._reregister_queue,
+                name=f"waldur-{self.queue}-reregister",
+                daemon=True,
+            ).start()
+
+    def _reregister_queue(self) -> None:
+        if not self._reregister_lock.acquire(blocking=False):
+            return
+        try:
+            logger.warning("Queue %s is missing on the broker, registering it again", self.queue)
+            self.on_queue_missing()  # type: ignore[misc]
+        except Exception:
+            logger.exception("Unable to register queue %s again", self.queue)
+        finally:
+            self._reregister_lock.release()
+
+    def reconnect_in_progress(self) -> bool:
+        """True while ``on_disconnected`` or the watchdog is reconnecting."""
+        return self._reconnect_lock.locked()
 
     def on_message(self, frame: stomp.utils.Frame) -> None:
-        """Message handler method."""
-        logger.info("Received a message %s on queue %s", json.loads(frame.body), self.queue)
+        """Message handler method.
+
+        Runs in stomp.py's receiver thread: anything raised here ends the receiver
+        loop and forces a reconnect, so nothing may escape.
+        """
+        try:
+            logger.info("Received a message %s on queue %s", json.loads(frame.body), self.queue)
+        except ValueError:
+            logger.warning("Received a non-JSON message on queue %s: %r", self.queue, frame.body)
         try:
             self.on_message_callback(
                 frame, self.offering, self.user_agent, self.expose_backend_error_details
@@ -220,16 +290,28 @@ class WaldurListener(stomp.ConnectionListener):
         held for the duration of the retry loop (bounded by RECONNECT_MAX_RETRIES
         with exponential backoff), after which it is released regardless of outcome.
         """
+        logger.warning("Disconnected from queue %s, attempting reconnection", self.queue)
+        self.reconnect(max_retries=RECONNECT_MAX_RETRIES)
+
+    def reconnect(self, max_retries: int, connect_timeout: float = CONNECT_TIMEOUT) -> bool:
+        """Reconnect unless a reconnection is already in progress.
+
+        Shared by ``on_disconnected`` and the event-mode watchdog, which retries a
+        connection this listener gave up on. Returns True when the connection is up.
+        """
         if not self._reconnect_lock.acquire(blocking=False):
             logger.debug(
                 "Reconnection already in progress for queue %s, skipping", self.queue
             )
-            return
+            return False
 
         try:
-            logger.warning("Disconnected from queue %s, attempting reconnection", self.queue)
             connect_to_stomp_server(
-                self.conn, self.username, self.password, max_retries=RECONNECT_MAX_RETRIES
+                self.conn,
+                self.username,
+                self.password,
+                max_retries=max_retries,
+                connect_timeout=connect_timeout,
             )
         except Exception as e:
             logger.error(
@@ -238,5 +320,8 @@ class WaldurListener(stomp.ConnectionListener):
                 e.__class__.__name__,
                 e,
             )
+            return False
+        else:
+            return True
         finally:
             self._reconnect_lock.release()

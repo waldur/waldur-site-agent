@@ -35,6 +35,7 @@ from waldur_site_agent.common.utils import (
 )
 from waldur_site_agent.event_processing import handlers
 from waldur_site_agent.event_processing.event_subscription_manager import EventSubscriptionManager
+from waldur_site_agent.event_processing.listener import STARTUP_CONNECT_ATTEMPTS
 from waldur_site_agent.event_processing.structures import (
     StompConsumer,
     StompConsumersMap,
@@ -217,6 +218,57 @@ def _register_queue(
         )
 
 
+def _open_unified_consumer(
+    offering: common_structures.Offering,
+    agent_identity: agent_identity_management.AgentIdentity,
+    agent_identity_manager: agent_identity_management.AgentIdentityManager,
+    waldur_user_agent: str,
+    object_types: list[ObservableObjectTypeEnum],
+    global_proxy: str = "",
+    expose_backend_error_details: bool = True,
+    on_message_callback: Optional[Callable] = None,
+    connect_max_retries: int = STARTUP_CONNECT_ATTEMPTS,
+) -> StompConsumer:
+    """Register the unified queue and open its STOMP connection.
+
+    Raises on a queue-registration error. A broker that cannot be reached within
+    ``connect_max_retries`` does not fail the call: the consumer is returned
+    disconnected, so its listener and the event-mode watchdog only need to
+    reconnect it rather than register again.
+    """
+    unified_queue = _register_queue(agent_identity_manager, agent_identity, object_types)
+
+    def register_queue_again() -> None:
+        _register_queue(agent_identity_manager, agent_identity, object_types)
+
+    event_subscription_manager = EventSubscriptionManager(
+        offering,
+        None,
+        on_message_callback,
+        waldur_user_agent,
+        global_proxy,
+        expose_backend_error_details=expose_backend_error_details,
+    )
+    connection = event_subscription_manager.setup_stomp_connection(
+        unified_queue,
+        offering.stomp_ws_host,
+        offering.stomp_ws_port,
+        offering.stomp_ws_path,
+        on_queue_missing=register_queue_again,
+    )
+    connected = event_subscription_manager.start_stomp_connection(
+        unified_queue, connection, max_retries=connect_max_retries
+    )
+    if not connected:
+        logger.error(
+            "STOMP broker unreachable for offering %s (%s), queue %s; will keep retrying",
+            offering.name,
+            offering.uuid,
+            unified_queue.queue_name,
+        )
+    return (connection, unified_queue, offering)
+
+
 def _setup_unified_stomp_connection(
     offering: common_structures.Offering,
     agent_identity: agent_identity_management.AgentIdentity,
@@ -226,12 +278,13 @@ def _setup_unified_stomp_connection(
     global_proxy: str = "",
     expose_backend_error_details: bool = True,
     on_message_callback: Optional[Callable] = None,
+    connect_max_retries: int = STARTUP_CONNECT_ATTEMPTS,
 ) -> StompConsumer | None:
     """Register the single unified consumer queue and open ONE STOMP connection.
 
-    Replaces the legacy per-object-type setup: one register_queue call binds all
-    requested object types to a single ``consumer_{uuid}`` queue, and one STOMP
-    connection drains it with payload-based routing (see route_message).
+    One register_queue call binds all requested object types to a single
+    ``consumer_{uuid}`` queue, and one STOMP connection drains it with
+    payload-based routing (see route_message).
 
     Args:
         offering: The Waldur offering configuration.
@@ -244,37 +297,25 @@ def _setup_unified_stomp_connection(
         on_message_callback: Optional custom router (used by the federation target
             path to dispatch the unified queue to per-type target handlers).
             Defaults to the standard payload router.
+        connect_max_retries: Connect attempts before handing the (still
+            disconnected) connection to the reconnect logic.
 
     Returns:
-        Tuple of (connection, unified_queue, offering) if successful, else None.
+        (connection, unified_queue, offering) once the queue is registered, even if
+        the broker could not be reached yet; None if registration failed.
     """
     try:
-        unified_queue = _register_queue(agent_identity_manager, agent_identity, object_types)
-
-        event_subscription_manager = EventSubscriptionManager(
+        return _open_unified_consumer(
             offering,
-            None,
-            on_message_callback,
+            agent_identity,
+            agent_identity_manager,
             waldur_user_agent,
+            object_types,
             global_proxy,
             expose_backend_error_details=expose_backend_error_details,
+            on_message_callback=on_message_callback,
+            connect_max_retries=connect_max_retries,
         )
-        connection = event_subscription_manager.setup_stomp_connection(
-            unified_queue,
-            offering.stomp_ws_host,
-            offering.stomp_ws_port,
-            offering.stomp_ws_path,
-        )
-        connected = event_subscription_manager.start_stomp_connection(unified_queue, connection)
-        if not connected:
-            logger.error(
-                "Failed to start unified STOMP connection for the offering %s (%s)",
-                offering.name,
-                offering.uuid,
-            )
-            return None
-
-        return (connection, unified_queue, offering)
     except Exception as e:
         logger.exception(
             "Unable to register unified event queue for offering %s: %s",
@@ -284,13 +325,87 @@ def _setup_unified_stomp_connection(
         return None
 
 
+def open_offering_consumer(
+    waldur_offering: common_structures.Offering,
+    waldur_user_agent: str,
+    global_proxy: str = "",
+    expose_backend_error_details: bool = True,
+    object_types: Optional[list[ObservableObjectTypeEnum]] = None,
+    connect_max_retries: int = STARTUP_CONNECT_ATTEMPTS,
+) -> StompConsumer | None:
+    """Set up the offering's own consumer, raising on identity or queue registration errors.
+
+    Used by the event-mode watchdog, which needs the error to tell a refusal a
+    restart cannot fix (4xx) from a transient one. Returns None when the offering
+    has nothing to subscribe to.
+    """
+    if object_types is None:
+        object_types = _determine_observable_object_types(waldur_offering)
+    if not object_types:
+        return None
+    waldur_rest_client = get_client_for_offering(waldur_offering, waldur_user_agent, global_proxy)
+    agent_identity_manager = agent_identity_management.AgentIdentityManager(
+        waldur_offering, waldur_rest_client
+    )
+    agent_identity = agent_identity_manager.register_identity(f"agent-{waldur_offering.uuid}")
+    return _open_unified_consumer(
+        waldur_offering,
+        agent_identity,
+        agent_identity_manager,
+        waldur_user_agent,
+        object_types,
+        global_proxy,
+        expose_backend_error_details=expose_backend_error_details,
+        connect_max_retries=connect_max_retries,
+    )
+
+
+def offering_expects_target_consumers(waldur_offering: common_structures.Offering) -> bool:
+    """Whether the offering's order backend subscribes to events on a target system."""
+    if not waldur_offering.order_processing_backend:
+        return False
+    backend, _ = get_backend_for_offering(waldur_offering, "order_processing_backend")
+    return bool(backend.expects_target_event_subscriptions())
+
+
+def setup_offering_target_consumers(
+    waldur_offering: common_structures.Offering,
+    waldur_user_agent: str,
+    global_proxy: str = "",
+) -> list[StompConsumer]:
+    """Set up subscriptions on target systems (e.g. Waldur B for federation).
+
+    BaseBackend.setup_target_event_subscriptions returns [] by default.
+    """
+    if not waldur_offering.order_processing_backend:
+        return []
+    try:
+        backend, _ = get_backend_for_offering(waldur_offering, "order_processing_backend")
+        return list(
+            backend.setup_target_event_subscriptions(
+                waldur_offering, waldur_user_agent, global_proxy
+            )
+        )
+    except Exception:
+        logger.exception(
+            "Failed to set up target event subscriptions for %s",
+            waldur_offering.name,
+        )
+        return []
+
+
 def setup_stomp_offering_subscriptions(
     waldur_offering: common_structures.Offering,
     waldur_user_agent: str,
     global_proxy: str = "",
     expose_backend_error_details: bool = True,
 ) -> list[StompConsumer]:
-    """Set up STOMP subscriptions for the specified offering."""
+    """Set up STOMP subscriptions for the specified offering.
+
+    Every connect is bounded, so a down broker never keeps the agent from reaching
+    its main loop; consumers that could not connect are returned anyway and
+    reconnected later.
+    """
     stomp_connections: list[StompConsumer] = []
 
     # Determine which object types to subscribe to
@@ -309,40 +424,26 @@ def setup_stomp_offering_subscriptions(
 
     # Register agent identity
     result = _register_agent_identity(waldur_offering, waldur_rest_client)
-    if result is None:
-        return stomp_connections
+    if result is not None:
+        agent_identity, agent_identity_manager = result
+        # One unified queue + one STOMP connection for ALL object types.
+        consumer = _setup_unified_stomp_connection(
+            waldur_offering,
+            agent_identity,
+            agent_identity_manager,
+            waldur_user_agent,
+            object_types,
+            global_proxy,
+            expose_backend_error_details=expose_backend_error_details,
+        )
+        if consumer is not None:
+            stomp_connections.append(consumer)
 
-    agent_identity, agent_identity_manager = result
-
-    # One unified queue + one STOMP connection for ALL object types.
-    consumer = _setup_unified_stomp_connection(
-        waldur_offering,
-        agent_identity,
-        agent_identity_manager,
-        waldur_user_agent,
-        object_types,
-        global_proxy,
-        expose_backend_error_details=expose_backend_error_details,
+    # Target event subscriptions are independent of the offering's own queue
+    # (e.g. Waldur federation subscribes to ORDER events on Waldur B).
+    stomp_connections.extend(
+        setup_offering_target_consumers(waldur_offering, waldur_user_agent, global_proxy)
     )
-    if consumer is not None:
-        stomp_connections.append(consumer)
-
-    # Set up target event subscriptions for backends that support them
-    # (e.g., Waldur federation backend subscribes to ORDER events on Waldur B).
-    # BaseBackend.setup_target_event_subscriptions returns [] by default.
-    if waldur_offering.order_processing_backend:
-        try:
-            backend, _ = get_backend_for_offering(waldur_offering, "order_processing_backend")
-            target_consumers = backend.setup_target_event_subscriptions(
-                waldur_offering, waldur_user_agent, global_proxy
-            )
-            stomp_connections.extend(target_consumers)
-        except Exception:
-            logger.exception(
-                "Failed to set up target event subscriptions for %s",
-                waldur_offering.name,
-            )
-
     return stomp_connections
 
 

@@ -1013,10 +1013,12 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 break
             except (UnexpectedStatus, httpx.TransportError) as e:
                 self.log_order_processing_error(order, e)
-                logger.info("Retrying order %s processing in %s seconds", order_info.uuid, delay)
-                sleep(delay)
-
-        if attempt_number == retry_count - 1:
+                if attempt_number < retry_count - 1:
+                    logger.info(
+                        "Retrying order %s processing in %s seconds", order_info.uuid, delay
+                    )
+                    sleep(delay)
+        else:
             logger.error(
                 "Failed to process order %s after %s retries, skipping to the next one",
                 order_info.uuid,

@@ -365,6 +365,14 @@ class BaseBackend(ABC):
             Return an empty dict ``{}`` if no metadata is available.
         """
 
+    def expects_target_event_subscriptions(self) -> bool:
+        """Whether this backend opens event subscriptions on a target system.
+
+        The event-mode watchdog retries a missing target subscription only when
+        this is True. Override together with ``setup_target_event_subscriptions``.
+        """
+        return False
+
     def setup_target_event_subscriptions(
         self,
         source_offering: Offering,

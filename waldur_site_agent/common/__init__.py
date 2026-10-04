@@ -33,6 +33,13 @@ WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES = int(
 WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES = int(
     os.environ.get("WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES", "60")
 )
+# Event mode: how long a STOMP consumer may stay disconnected (or an offering's
+# STOMP setup keep failing transiently) before the agent stops touching its
+# liveness heartbeat. Above the listener's own reconnect window (~10 min), so the
+# watchdog only acts once the listener has given up.
+WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES = float(
+    os.environ.get("WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES", "15")
+)
 waldur_verify_ssl = os.getenv("WALDUR_VERIFY_SSL", "true").lower() in ("true", "yes")
 
 WALDUR_SITE_AGENT_VERSION = version("waldur-site-agent")

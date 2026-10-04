@@ -235,6 +235,10 @@ def on_user_role_message_stomp(
     message: UserRoleMessage = json.loads(frame.body)
     logger.info("Received message: %s on topic %s", message, frame.headers.get("destination"))
     user_uuid = message.get("user_uuid")
+    # Bound before the try: the except block logs them, and a failure earlier in
+    # the try must surface as itself rather than as an UnboundLocalError.
+    user_username = message.get("user_username")
+    role_granted = message.get("granted")
     project_name = message["project_name"]
     project_uuid = message["project_uuid"]
 
@@ -258,8 +262,9 @@ def on_user_role_message_stomp(
         )
         processor.register(agent_service)
         if user_uuid:
-            user_username = message["user_username"]
-            role_granted = message["granted"]
+            if not user_username:
+                logger.error("Missing required field 'user_username' for user role change")
+                return
             if role_granted is None:
                 logger.error("Missing required field 'granted' for user role change")
                 return
@@ -292,7 +297,7 @@ def on_user_role_message_stomp(
                 processor.process_project_user_sync(project_uuid)
     except Exception as e:
         if user_uuid:
-            logger.error(
+            logger.exception(
                 "Failed to process user %s (%s) role change in project %s (%s) (granted: %s): %s",
                 user_username,
                 user_uuid,
@@ -302,7 +307,7 @@ def on_user_role_message_stomp(
                 e,
             )
         else:
-            logger.error(
+            logger.exception(
                 "Failed to process full project all users sync event for project %s: %s",
                 project_uuid,
                 e,

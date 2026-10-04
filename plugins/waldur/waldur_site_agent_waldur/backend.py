@@ -1551,6 +1551,10 @@ class WaldurBackend(backends.BaseBackend):
 
     # --- Target Event Subscriptions ---
 
+    def expects_target_event_subscriptions(self) -> bool:
+        """Target STOMP on Waldur B is opened only when ``target_stomp_enabled``."""
+        return bool(self.backend_settings.get("target_stomp_enabled"))
+
     def setup_target_event_subscriptions(
         self,
         source_offering,

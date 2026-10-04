@@ -20,15 +20,20 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     import httpx
 
 HEARTBEAT_PATH = "/tmp/waldur-site-agent-heartbeat"  # noqa: S108
+# Agents sharing a host (several systemd units, or a test run next to a live
+# agent) must not share one heartbeat file: any of them touching it keeps a
+# stalled one looking alive. Set a distinct path per process.
+HEARTBEAT_PATH_ENV = "WALDUR_SITE_AGENT_HEARTBEAT_PATH"
 DEFAULT_MAX_AGE = 300  # seconds
 # Kept below the probe's own timeoutSeconds: the API client otherwise defaults
 # to a 600s timeout, so a stalled Waldur blocks the probe process until the
@@ -38,15 +43,20 @@ DEFAULT_READINESS_TIMEOUT = 5  # seconds
 logger = logging.getLogger(__name__)
 
 
-def touch_heartbeat(path: str = HEARTBEAT_PATH) -> None:
+def heartbeat_path() -> str:
+    """The heartbeat file: ``$WALDUR_SITE_AGENT_HEARTBEAT_PATH`` or the default."""
+    return os.environ.get(HEARTBEAT_PATH_ENV) or HEARTBEAT_PATH
+
+
+def touch_heartbeat(path: Optional[str] = None) -> None:
     """Update the heartbeat file mtime. Called from main loops."""
-    Path(path).write_text(str(time.time()))
+    Path(path or heartbeat_path()).write_text(str(time.time()))
 
 
-def check_liveness(max_age: int = DEFAULT_MAX_AGE, path: str = HEARTBEAT_PATH) -> bool:
+def check_liveness(max_age: int = DEFAULT_MAX_AGE, path: Optional[str] = None) -> bool:
     """Return True if heartbeat file exists and was updated within *max_age* seconds."""
     try:
-        mtime = Path(path).stat().st_mtime
+        mtime = Path(path or heartbeat_path()).stat().st_mtime
         return (time.time() - mtime) < max_age
     except FileNotFoundError:
         return False
@@ -127,13 +137,18 @@ def main() -> int:
         help="HTTP timeout in seconds for the readiness call to Waldur",
     )
     parser.add_argument(
+        "--heartbeat-path",
+        default=None,
+        help=f"Heartbeat file to check (default: ${HEARTBEAT_PATH_ENV} or {HEARTBEAT_PATH})",
+    )
+    parser.add_argument(
         "--liveness-only",
         action="store_true",
         help="Only check liveness (heartbeat), skip readiness",
     )
     args = parser.parse_args()
 
-    if not check_liveness(max_age=args.max_age):
+    if not check_liveness(max_age=args.max_age, path=args.heartbeat_path):
         logger.warning("Heartbeat stale or missing")
         return 1
 
