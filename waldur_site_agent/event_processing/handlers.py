@@ -358,9 +358,7 @@ def on_offering_resources_sync_message_stomp(
         message.get("requested_by_user_uuid"),
     )
     try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
     except Exception as e:
         logger.exception(
             "Failed to create Waldur client for offering resources sync of %s: %s",

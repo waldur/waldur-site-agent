@@ -74,12 +74,41 @@ Each offering in the `offerings` array represents a separate service offering.
 #### `waldur_api_token`
 
 - **Type**: String
-- **Required**: Yes
+- **Required**: Yes, unless OIDC client credentials are configured (see below)
 - **Description**: Token for Waldur API authentication
 - **Permissions**: The token user must have **OFFERING.MANAGER** role on the offering specified by
   `waldur_offering_uuid`. This grants the permissions needed for order processing, usage reporting,
   membership sync, and event subscriptions.
 - **Security**: Keep this secret and secure
+
+#### OIDC client credentials: `oidc_token_url`, `oidc_client_id`, `oidc_client_secret`
+
+- **Type**: String (all three)
+- **Required**: Only as an alternative to `waldur_api_token`. Set all three or none; a partial set
+  fails configuration validation. When `waldur_api_token` is also set, it takes precedence.
+- **Description**: Instead of a static token, the agent can obtain a short-lived JWT from an OIDC
+  provider with the client-credentials grant and send it as `Authorization: Bearer <jwt>`. Tokens
+  are cached per `(oidc_token_url, oidc_client_id)` and refreshed shortly before they expire; the
+  header is resolved on every request, so long polling cycles, CLI runs and log shipping keep
+  working after the token they started with has expired. Waldur
+  validates the JWT through token introspection (`OIDC_INTROSPECTION_URL`, `OIDC_CLIENT_ID`,
+  `OIDC_CLIENT_SECRET` and `OIDC_USER_FIELD` in Waldur's settings); the user it resolves to needs
+  the same role as a token user. `global_proxy` and `verify_ssl` also apply to the token request.
+- **Limitation**: OIDC-only offerings cannot use STOMP event processing. RabbitMQ authenticates the
+  STOMP session with the static API token, so `stomp_enabled: true` without `waldur_api_token`
+  fails configuration validation. Use polling mode, or keep a static token for event processing.
+
+```yaml
+offerings:
+  - name: "OIDC-authenticated offering"
+    waldur_api_url: "https://waldur.example.com/api/"
+    oidc_token_url: "https://idp.example.com/realms/waldur/protocol/openid-connect/token"
+    oidc_client_id: "site-agent"
+    oidc_client_secret: "change-me"
+    waldur_offering_uuid: "<offering UUID>"
+    backend_type: "slurm"
+    order_processing_backend: "slurm"
+```
 
 #### `verify_ssl`
 
@@ -151,6 +180,7 @@ username_management_backend: "base"  # Backend for username management
 - **Type**: Boolean
 - **Default**: `false`
 - **Description**: Enable STOMP-based event processing
+- **Requires**: `waldur_api_token` (OIDC-only offerings cannot authenticate the STOMP session)
 
 #### `stomp_membership_sync_enabled`
 

@@ -42,12 +42,8 @@ def _process_offerings(configuration: common_structures.WaldurAgentConfiguration
                 )
                 continue
 
-            waldur_rest_client = utils.get_client(
-                offering.api_url,
-                offering.api_token,
-                user_agent,
-                offering.verify_ssl,
-                configuration.global_proxy,
+            waldur_rest_client = utils.get_client_for_offering(
+                offering, user_agent, configuration.global_proxy
             )
             agent_service = agent_identity_management.ensure_agent_telemetry(
                 offering,

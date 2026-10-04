@@ -243,11 +243,35 @@ class Offering(BaseModel):
     def validate_auth_config(self) -> Offering:
         """Validate that either a static token or full OIDC config is provided."""
         has_token = bool(self.waldur_api_token)
-        has_oidc = all([self.oidc_token_url, self.oidc_client_id, self.oidc_client_secret])
+        oidc_values = [self.oidc_token_url, self.oidc_client_id, self.oidc_client_secret]
+        has_oidc = all(oidc_values)
+        if any(oidc_values) and not has_oidc:
+            msg = (
+                "oidc_token_url, oidc_client_id and oidc_client_secret must be set "
+                "together; only some of them are set"
+            )
+            raise ValueError(msg)
         if not has_token and not has_oidc:
             msg = (
                 "Either waldur_api_token or all of oidc_token_url, "
                 "oidc_client_id, oidc_client_secret must be set"
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_stomp_auth(self) -> Offering:
+        """Reject STOMP event processing for offerings without a static token.
+
+        RabbitMQ authenticates the STOMP session with the agent's static API
+        token as the passcode. An OIDC-only offering has no such token, so the
+        broker refuses the login and the offering would receive no events.
+        """
+        if self.stomp_enabled and not self.waldur_api_token:
+            msg = (
+                "stomp_enabled requires waldur_api_token: the STOMP session is "
+                "authenticated with the static API token, which an OIDC-only offering "
+                "does not have. Use polling mode or configure waldur_api_token."
             )
             raise ValueError(msg)
         return self
