@@ -2,7 +2,8 @@
 """Generate the plugin table in README.md from plugins/ metadata.
 
 Usage:
-    python3 scripts/generate_plugin_table.py
+    python3 scripts/generate_plugin_table.py          # rewrite the table
+    python3 scripts/generate_plugin_table.py --check  # exit 1 if README.md is stale
 
 Reads each plugin's pyproject.toml for its distribution name and
 description and checks for a README.md.  Replaces content between marker
@@ -10,6 +11,7 @@ comments in README.md.
 """
 
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,24 +70,30 @@ def generate_table() -> str:
     return pragma + "\n" + table
 
 
-def main() -> None:
-    readme = README_PATH.read_text()
-
+def render(readme: str) -> str:
+    """Return ``readme`` with the plugin table between the markers regenerated."""
     pattern = re.compile(
         rf"({re.escape(BEGIN_MARKER)})\n(.*?\n)?({re.escape(END_MARKER)})",
         re.DOTALL,
     )
-
     if not pattern.search(readme):
         print(f"ERROR: markers not found in {README_PATH}")
         print(f"Add {BEGIN_MARKER} and {END_MARKER} to README.md")
         raise SystemExit(1)
-
     table = generate_table()
-    new_readme = pattern.sub(rf"\1\n{table}\n\3", readme)
+    return pattern.sub(lambda m: f"{m.group(1)}\n{table}\n{m.group(3)}", readme)
+
+
+def main() -> None:
+    check = "--check" in sys.argv[1:]
+    readme = README_PATH.read_text()
+    new_readme = render(readme)
 
     if new_readme == readme:
         print("README.md is already up to date.")
+    elif check:
+        print("README.md plugin table is stale; run scripts/generate_plugin_table.py")
+        raise SystemExit(1)
     else:
         README_PATH.write_text(new_readme)
         print("README.md updated.")

@@ -41,6 +41,24 @@ offerings:
 
 ## Global Settings
 
+Top-level keys of the configuration file.
+Generated from the code by `scripts/generate_reference_docs.py`; each key has its own
+section below.
+
+<!-- BEGIN GENERATED: global-settings -->
+<!-- pyml disable-num-lines 10 line-length -->
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| [`sentry_dsn`](#sentry_dsn) | `str` | no | — | Sentry DSN for error reporting (URL) |
+| [`elastic_apm_server_url`](#elastic_apm_server_url) | `str` | no | — | Elastic APM server URL (enables APM when set) |
+| [`timezone`](#timezone) | `str` | no | `UTC` | Timezone for billing calculations |
+| [`global_proxy`](#global_proxy) | `str` | no | `""` | Global proxy URL for API connections |
+| [`log_level`](#log_level) | `str` | no | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
+| [`reporting_periods`](#reporting_periods) | `int` | no | `2` | Number of billing periods to report (1=current, 2=current+previous) |
+| [`expose_backend_error_details`](#expose_backend_error_details) | `bool` | no | `true` | If True (default), the agent forwards exception messages and tracebacks to Waldur error details when marking objects as ERRED (current behaviour). If False, only BackendError messages are exposed and tracebacks are kept in site-agent logs. |
+| [`log_shipping`](#log_shipping) | `LogShippingConfig` | no | see below | Configuration for shipping agent logs to Waldur |
+<!-- END GENERATED: global-settings -->
+
 ### `sentry_dsn`
 
 - **Type**: String
@@ -104,6 +122,18 @@ log_shipping:
   log_level: "WARNING"       # minimum level shipped
 ```
 
+Keys of `log_shipping` (generated from the code):
+
+<!-- BEGIN GENERATED: log-shipping-settings -->
+<!-- pyml disable-num-lines 6 line-length -->
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `enabled` | `bool` | no | `false` | Enable log shipping to Waldur |
+| `ship_interval_seconds` | `int` | no | `60` | Interval between shipments in seconds |
+| `buffer_size_mb` | `int` | no | `1` | Maximum in-memory buffer size in megabytes |
+| `log_level` | `str` | no | `WARNING` | Minimum log level to ship (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
+<!-- END GENERATED: log-shipping-settings -->
+
 Entries below `log_level` are not shipped, so with the default `WARNING` a quiet agent ships
 nothing. Shipping uses the same credentials as the offering (static token or OIDC).
 
@@ -128,6 +158,41 @@ as before.
 ## Offering Configuration
 
 Each offering in the `offerings` array represents a separate service offering.
+
+Keys of an offering.
+Generated from the code by `scripts/generate_reference_docs.py`; each key has its own
+section below.
+
+<!-- BEGIN GENERATED: offering-settings -->
+<!-- pyml disable-num-lines 27 line-length -->
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| [`name`](#name) | `str` | yes | — | Human-readable name for the offering |
+| [`waldur_api_url`](#waldur_api_url) | `str` | yes | — | Base URL for the Waldur API endpoint |
+| [`waldur_api_token`](#waldur_api_token) | `str` | no | `""` | Authentication token for Waldur API |
+| [`waldur_offering_uuid`](#waldur_offering_uuid) | `str` | yes | — | UUID of the offering in Waldur |
+| [`oidc_token_url`](#oidc-client-credentials-oidc_token_url-oidc_client_id-oidc_client_secret) | `str` | no | — | OIDC token endpoint URL |
+| [`oidc_client_id`](#oidc-client-credentials-oidc_token_url-oidc_client_id-oidc_client_secret) | `str` | no | — | OIDC client ID for token requests |
+| [`oidc_client_secret`](#oidc-client-credentials-oidc_token_url-oidc_client_id-oidc_client_secret) | `str` | no | — | OIDC client secret for obtaining access tokens |
+| [`backend_type`](#backend_type) | `str` | yes | — | Backend type identifier |
+| [`backend_settings`](#backend-specific-settings) | `dict[str, Any]` | no | `{}` | Backend-specific settings |
+| [`backend_components`](#backend-components) | `dict[str, BackendComponent]` | no | `{}` | Component definitions |
+| [`websocket_use_tls`](#websocket_use_tls) | `bool` | no | `true` | Use TLS for websocket connections |
+| [`stomp_enabled`](#stomp_enabled) | `bool` | no | `false` | Enable STOMP event processing |
+| [`stomp_membership_sync_enabled`](#stomp_membership_sync_enabled) | `bool` | no | — | Use STOMP for membership sync; defaults to stomp_enabled. Set to false to keep HTTP polling for membership sync even when stomp_enabled=true. |
+| [`stomp_ws_host`](#stomp_ws_host-stomp_ws_port-stomp_ws_path) | `str` | no | — | STOMP WebSocket host |
+| [`stomp_ws_port`](#stomp_ws_host-stomp_ws_port-stomp_ws_path) | `int` | no | — | STOMP WebSocket port |
+| [`stomp_ws_path`](#stomp_ws_host-stomp_ws_port-stomp_ws_path) | `str` | no | — | STOMP WebSocket path |
+| [`order_processing_backend`](#backend-selection) | `str` | no | `""` | Backend for order processing |
+| [`membership_sync_backend`](#backend-selection) | `str` | no | `""` | Backend for membership sync |
+| [`reporting_backend`](#backend-selection) | `str` | no | `""` | Backend for usage reporting |
+| [`username_management_backend`](#backend-selection) | `str` | no | `base` | Backend for username management |
+| [`resource_import_enabled`](#resource_import_enabled) | `bool` | no | `false` | Enable resource import |
+| [`username_reconciliation_enabled`](#username_reconciliation_enabled) | `bool` | no | `false` | Enable periodic username reconciliation from target backend |
+| [`preserve_unmanaged_backend_users`](#preserve_unmanaged_backend_users) | `bool` | no | `false` | If False (default), membership sync removes any backend user who is not on the Waldur resource team. If True, users Waldur has ever known as offering users of this offering (any state, including DELETED and restricted) are removed once they leave the team; accounts Waldur has never seen are kept. Applies to local-username backends; ignored for identity-bridge / federation. |
+| [`verify_ssl`](#verify_ssl) | `bool` | no | `true` | Verify SSL certificates |
+| [`omit_anomalous_usage_components`](#omit_anomalous_usage_components) | `bool` | no | `false` | If False (default), a decreasing component blocks the whole set_usage payload. If True, only the decreasing components are omitted and the rest are still reported. Use True for backends whose meters are independent (e.g. Waldur-to-Waldur). |
+<!-- END GENERATED: offering-settings -->
 
 ### Basic Settings
 
@@ -518,6 +583,37 @@ backend_components:
 
 ### Component Settings
 
+Keys of a component under `backend_components`.
+Generated from the code by `scripts/generate_reference_docs.py`; each key has its own
+section below.
+
+<!-- BEGIN GENERATED: component-settings -->
+<!-- pyml disable-num-lines 23 line-length -->
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| [`measured_unit`](#measured_unit) | `str` | yes | — | Unit of measurement (e.g., 'Hours', 'GB') |
+| [`unit_factor`](#unit_factor) | `float` | no | `1.0` | Factor for conversion to backend units |
+| [`unit_factor_reporting`](#unit_factor_reporting) | `float` | no | — | Factor for unit conversion in reporting mode. Falls back to unit_factor if not set. |
+| [`accounting_type`](#accounting_type) | `usage \| limit \| one` | yes | — | Component accounting type |
+| [`label`](#label) | `str` | yes | — | Human-readable label for display |
+| [`limit`](#limit) | `float` | no | — | Component limit value |
+| [`description`](#description) | `str` | no | — | Description of the component |
+| [`min_value`](#min_value) | `int` | no | — | Minimum allowed value |
+| [`max_value`](#max_value) | `int` | no | — | Maximum allowed value |
+| [`max_available_limit`](#max_available_limit) | `int` | no | — | Maximum available limit |
+| [`default_limit`](#default_limit) | `int` | no | — | Default limit value |
+| [`limit_period`](#limit_period) | `str` | no | — | Limit period: annual, month, quarterly, total |
+| [`article_code`](#article_code) | `str` | no | — | Article code for billing |
+| [`is_boolean`](#is_boolean) | `bool` | no | — | Whether the component is boolean |
+| [`is_prepaid`](#is_prepaid) | `bool` | no | — | Whether the component is prepaid |
+| [`min_prepaid_duration`](#min_prepaid_duration) | `int` | no | — | Minimum prepaid duration in months |
+| [`max_prepaid_duration`](#max_prepaid_duration) | `int` | no | — | Maximum prepaid duration in months |
+| [`prepaid_duration_step`](#prepaid_duration_step) | `int` | no | — | Step size in months for initial prepaid duration |
+| [`min_renewal_duration`](#min_renewal_duration) | `int` | no | — | Minimum renewal duration in months |
+| [`max_renewal_duration`](#max_renewal_duration) | `int` | no | — | Maximum renewal duration in months |
+| [`renewal_duration_step`](#renewal_duration_step) | `int` | no | — | Step size in months for renewal duration |
+<!-- END GENERATED: component-settings -->
+
 #### `measured_unit`
 
 - **Type**: String
@@ -708,7 +804,7 @@ backend_components:
 
 These are read from the environment, not from the configuration file. All are optional.
 
-<!-- pyml disable-num-lines 9 line-length -->
+<!-- pyml disable-num-lines 11 line-length -->
 | Variable | Default | Used by | Meaning |
 | -------- | ------- | ------- | ------- |
 | `WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES` | `5` | `order_process` | Minutes between order-processing cycles. Accepts a fraction (`0.5`). |
@@ -716,6 +812,8 @@ These are read from the environment, not from the configuration file. All are op
 | `WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES` | `30` | `report` | Minutes between reporting cycles. Whole number. |
 | `WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES` | `60` | `event_process` | Minutes between the periodic reconciliation passes (see [Architecture](architecture.md#periodic-reconciliation)). Whole number. |
 | `WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES` | `15` | `event_process` | How long a STOMP consumer may stay down before the agent stops touching its liveness heartbeat (see [Architecture](architecture.md#stomp-connection-watchdog-and-liveness)). Accepts a fraction. |
+| `WALDUR_SITE_AGENT_STOMP_HANDLER_STUCK_AFTER_MINUTES` | `30` | `event_process` | A message handler running longer than this counts as a stuck queue and, past the STOMP unhealthy threshold, withholds the liveness heartbeat (see [Architecture](architecture.md#message-handling-and-acknowledgement)). Accepts a fraction. |
+| `WALDUR_SITE_AGENT_RESOURCE_STATUS_RECONCILIATION_MINUTES` | `60` | `event_process` | Minutes between passes that re-apply every resource's paused/downscaled status (see [Architecture](architecture.md#resource-status-reconciliation)). `0` disables it. Accepts a fraction. |
 | `WALDUR_SITE_AGENT_HEARTBEAT_PATH` | `/tmp/waldur-site-agent-heartbeat` | all modes, `waldur_site_healthz` | File the agent touches as its liveness heartbeat and the probe reads. Give each agent process sharing a `/tmp` its own path. |
 | `SENTRY_ENVIRONMENT` | — | Sentry SDK | Environment tag on Sentry events; read by the Sentry SDK itself when `sentry_dsn` is set. |
 
