@@ -16,7 +16,7 @@ from typing import Optional
 from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend import backends, structures
-from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.exceptions import BackendError, DuplicateResourceError
 from waldur_site_agent_harbor.client import HarborClient
 from waldur_site_agent_harbor.exceptions import (
     HarborError,
@@ -188,22 +188,31 @@ class HarborBackend(backends.BaseBackend):
             logger.error("Failed to create OIDC group: %s", e)
             # Continue anyway - group might already exist
 
-    def create_resource(
+    def create_resource_with_id(
         self,
         waldur_resource: WaldurResource,
+        resource_backend_id: str,
         user_context: Optional[dict] = None,
     ) -> structures.BackendResourceInfo:
-        """Create Harbor project for Waldur resource.
+        """Create a Harbor project named ``resource_backend_id``.
 
-        Creates a new Harbor project with storage quota and assigns the
-        appropriate OIDC group for access control.
+        Creates the project with its storage quota and assigns the Waldur
+        project's OIDC group to it. This is the method the order processor
+        calls (the base ``create_resource`` delegates here too); the base
+        implementation would create a bare project and never grant the group
+        access.
 
         Args:
             waldur_resource: Waldur resource to create
+            resource_backend_id: Harbor project name chosen by the processor
             user_context: Optional user context
 
         Returns:
             BackendResourceInfo with created project details
+
+        Raises:
+            DuplicateResourceError: A project with this name already exists, so
+                the processor can try its next candidate name.
         """
         logger.info(
             "Creating Harbor project for Waldur resource %s", waldur_resource.uuid
@@ -212,8 +221,7 @@ class HarborBackend(backends.BaseBackend):
         # Prepare OIDC group
         self._pre_create_resource(waldur_resource, user_context)
 
-        # Generate Harbor project name from Waldur resource
-        harbor_project_name = self._get_resource_backend_id(waldur_resource.slug)
+        harbor_project_name = resource_backend_id
 
         # Calculate storage quota from Waldur limits
         storage_quota_gb = self._calculate_storage_quota(waldur_resource)
@@ -223,12 +231,13 @@ class HarborBackend(backends.BaseBackend):
             if not isinstance(self.client, HarborClient):
                 raise HarborProjectError("Client is not a HarborClient")
             created = self.client.create_project(harbor_project_name, storage_quota_gb)
-            if created:
-                logger.info(
-                    "Created Harbor project %s with %dGB quota",
-                    harbor_project_name,
-                    storage_quota_gb,
-                )
+            if not created:
+                raise DuplicateResourceError(harbor_project_name)
+            logger.info(
+                "Created Harbor project %s with %dGB quota",
+                harbor_project_name,
+                storage_quota_gb,
+            )
 
             # Assign OIDC group to the project
             oidc_group_name = f"{self.oidc_group_prefix}{waldur_resource.project_slug}"

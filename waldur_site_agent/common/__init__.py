@@ -40,6 +40,5 @@ WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES = int(
 WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES = float(
     os.environ.get("WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES", "15")
 )
-waldur_verify_ssl = os.getenv("WALDUR_VERIFY_SSL", "true").lower() in ("true", "yes")
 
 WALDUR_SITE_AGENT_VERSION = version("waldur-site-agent")

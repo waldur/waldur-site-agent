@@ -84,7 +84,9 @@ class RancherBackend(backends.BaseBackend):
         logger.info("=" * 60)
 
         logger.info(
-            format_string.format("Rancher API URL", self.backend_settings.get("api_url", "Not set"))
+            format_string.format(
+                "Rancher URL", self.backend_settings.get("backend_url", "Not set")
+            )
         )
         logger.info(format_string.format("Cluster ID", self.cluster_id))
         logger.info(format_string.format("Project prefix", self.project_prefix))
@@ -99,7 +101,7 @@ class RancherBackend(backends.BaseBackend):
             logger.info(
                 format_string.format(
                     "Keycloak URL",
-                    self.backend_settings.get("keycloak", {}).get("server_url", "Not set"),
+                    self.backend_settings.get("keycloak", {}).get("keycloak_url", "Not set"),
                 )
             )
         else:
