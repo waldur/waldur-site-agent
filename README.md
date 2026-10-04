@@ -165,7 +165,7 @@ For contributors:
 | [envoy-ai-gateway](plugins/envoy-ai-gateway/README.md) | [`waldur-site-agent-envoy-ai-gateway`](https://pypi.org/project/waldur-site-agent-envoy-ai-gateway/) | Envoy AI Gateway (API keys + usage reporting) plugin |
 | [harbor](plugins/harbor/README.md) | [`waldur-site-agent-harbor`](https://pypi.org/project/waldur-site-agent-harbor/) | Harbor container registry plugin |
 | [k8s-ut-namespace](plugins/k8s-ut-namespace/README.md) | [`waldur-site-agent-k8s-ut-namespace`](https://pypi.org/project/waldur-site-agent-k8s-ut-namespace/) | Kubernetes UT ManagedNamespace plugin |
-| [keycloak-client](plugins/keycloak-client/) | [`waldur-site-agent-keycloak-client`](https://pypi.org/project/waldur-site-agent-keycloak-client/) | Shared Keycloak client for Waldur Site Agent plugins |
+| [keycloak-client](plugins/keycloak-client/README.md) | [`waldur-site-agent-keycloak-client`](https://pypi.org/project/waldur-site-agent-keycloak-client/) | Shared Keycloak client for Waldur Site Agent plugins |
 | [ldap](plugins/ldap/README.md) | [`waldur-site-agent-ldap`](https://pypi.org/project/waldur-site-agent-ldap/) | LDAP plugin |
 | [ldap-client](plugins/ldap-client/README.md) | [`waldur-site-agent-ldap-client`](https://pypi.org/project/waldur-site-agent-ldap-client/) | Shared LDAP client for Waldur Site Agent plugins |
 | [ldap-roles](plugins/ldap-roles/README.md) | [`waldur-site-agent-ldap-roles`](https://pypi.org/project/waldur-site-agent-ldap-roles/) | LDAP role-driven group membership sync plugin |
