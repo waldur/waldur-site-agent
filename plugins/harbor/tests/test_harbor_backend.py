@@ -44,6 +44,7 @@ def harbor_backend(harbor_settings, harbor_components):
     with patch("waldur_site_agent_harbor.backend.HarborClient"):
         backend = HarborBackend(harbor_settings, harbor_components)
         backend.client = Mock(spec=HarborClient)
+        backend.client.list_project_label_names.return_value = []
         return backend
 
 

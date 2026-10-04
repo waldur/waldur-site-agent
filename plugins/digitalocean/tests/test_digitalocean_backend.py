@@ -54,6 +54,7 @@ def _build_backend(settings: dict, components: dict) -> DigitalOceanBackend:
     with patch("waldur_site_agent_digitalocean.backend.DigitalOceanClient"):
         backend = DigitalOceanBackend(settings, components)
     backend.client = Mock()
+    backend.client.list_droplets_by_tag.return_value = []
     return backend
 
 
@@ -83,7 +84,7 @@ def test_create_resource_uses_defaults(
         size_slug="s-1vcpu-1gb",
         user_data=backend_settings["default_user_data"],
         ssh_key_ids=[],
-        tags=["waldur"],
+        tags=["waldur", f"waldur-resource:{waldur_resource.uuid.hex}"],
     )
 
 
@@ -165,7 +166,7 @@ def test_create_resource_with_id_reads_sdk_resource_attributes(backend_settings,
         "debian-12-x64",
         "s-2vcpu-4gb",
     )
-    assert kwargs["tags"] == ["from-options"]
+    assert kwargs["tags"] == ["from-options", f"waldur-resource:{waldur_resource.uuid.hex}"]
 
 
 def test_recreate_missing_resource_does_not_create_a_droplet(

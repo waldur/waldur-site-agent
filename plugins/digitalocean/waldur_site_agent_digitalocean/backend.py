@@ -16,6 +16,10 @@ from .client import DigitalOceanBackendError, DigitalOceanClient
 
 logger = logging.getLogger(__name__)
 
+# Tag on every droplet the agent creates, followed by the Waldur resource uuid.
+# DigitalOcean tags allow letters, digits, colons, dashes and underscores.
+RESOURCE_TAG_PREFIX = "waldur-resource:"
+
 
 class DigitalOceanBackend(backends.BaseBackend):
     """DigitalOcean backend implementation for Waldur Site Agent."""
@@ -194,8 +198,44 @@ class DigitalOceanBackend(backends.BaseBackend):
         waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
     ) -> BackendResourceInfo:
-        """Provision a droplet for the given Waldur resource."""
+        """Provision a droplet for the given Waldur resource.
+
+        Every droplet is tagged with the resource it belongs to. If an earlier
+        attempt already created one -- the order is retried because recording
+        the backend id in Waldur failed -- that droplet is adopted instead of
+        provisioning a second one.
+
+        Raises:
+            BackendError: Required settings are missing, or more than one
+                droplet carries this resource's tag.
+        """
         del user_context
+        waldur_limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
+        resource_tag = self._resource_tag(waldur_resource)
+        # Only a droplet whose sole adoption tag is ours was created for this
+        # resource; one carrying a second waldur-resource tag was tampered with.
+        existing = [
+            droplet
+            for droplet in self.client.list_droplets_by_tag(resource_tag)
+            if [t for t in (droplet.tags or []) if t.startswith(RESOURCE_TAG_PREFIX)]
+            == [resource_tag]
+        ]
+        if len(existing) > 1:
+            ids = ", ".join(str(droplet.id) for droplet in existing)
+            msg = (
+                f"{len(existing)} droplets carry tag {resource_tag} ({ids}); "
+                "remove the extra ones before retrying"
+            )
+            raise BackendError(msg)
+        if existing:
+            backend_id = str(existing[0].id)
+            logger.info(
+                "Adopting DigitalOcean droplet %s already created for resource %s",
+                backend_id,
+                waldur_resource.uuid,
+            )
+            return BackendResourceInfo(backend_id=backend_id, limits=waldur_limits)
+
         attrs = self._get_resource_attributes(waldur_resource)
 
         region = (
@@ -232,6 +272,17 @@ class DigitalOceanBackend(backends.BaseBackend):
             tags = []
         if not isinstance(tags, list):
             tags = [str(tags)]
+        # Ordered and default tags come from users; an adoption tag among them
+        # would let one resource's order hijack another resource's droplet.
+        foreign = [str(tag) for tag in tags if str(tag).startswith(RESOURCE_TAG_PREFIX)]
+        if foreign:
+            logger.warning(
+                "Dropping reserved tags %s from droplet for resource %s",
+                ", ".join(foreign),
+                waldur_resource.uuid,
+            )
+        tags = [str(tag) for tag in tags if not str(tag).startswith(RESOURCE_TAG_PREFIX)]
+        tags.append(resource_tag)
 
         ssh_key_ids = self._resolve_ssh_key_ids(attrs)
 
@@ -255,8 +306,14 @@ class DigitalOceanBackend(backends.BaseBackend):
         backend_id = str(droplet.id)
         logger.info("DigitalOcean droplet created with ID %s", backend_id)
 
-        waldur_limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
         return BackendResourceInfo(backend_id=backend_id, limits=waldur_limits)
+
+    @staticmethod
+    def _resource_tag(waldur_resource: WaldurResource) -> str:
+        """Tag that ties a droplet to its Waldur resource."""
+        resource_uuid = waldur_resource.uuid
+        uuid_hex = getattr(resource_uuid, "hex", None) or str(resource_uuid).replace("-", "")
+        return f"{RESOURCE_TAG_PREFIX}{uuid_hex}"
 
     def create_resource_with_id(
         self,

@@ -198,6 +198,11 @@ class DigitalOceanClient(BaseClient):
         droplet.create()
         return droplet
 
+    @digitalocean_error_handler
+    def list_droplets_by_tag(self, tag: str) -> list[digitalocean.Droplet]:
+        """Return all droplets carrying ``tag``."""
+        return self.manager.get_all_droplets(tag_name=tag)
+
     def get_droplet(self, droplet_id: str) -> Optional[digitalocean.Droplet]:
         """Fetch droplet by ID."""
         try:

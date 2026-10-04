@@ -91,6 +91,14 @@ graph TB
    - Each Waldur resource creates a separate Harbor project
    - Provides complete isolation between different registry resources
    - Project names: `{allocation_prefix}{resource_slug}`
+   - Each new project gets a project-scoped label `waldur-resource-<resource uuid, 32 hex
+     digits without dashes>`. If an order is retried after the project was created but
+     before Waldur recorded it, the agent adopts the labelled project instead of treating
+     the name as taken. A project without this resource's label is never adopted.
+   - If the label could not be written (it is retried once), a retried order sees the
+     name as taken; delete the unlabelled project by hand. If the labels of an existing
+     project cannot be read, the order fails and is retried rather than moving on to a
+     new project name.
 
 2. **Waldur Project** → **OIDC Group** (1:1)
    - One OIDC group per Waldur project for access control
@@ -164,6 +172,8 @@ offerings:
 - ✅ **Quota management** (`GET/PUT /api/v2.0/quotas`)
 - ✅ **User group management** (`GET/POST /api/v2.0/usergroups`)
 - ✅ **Project member management** (`GET/POST/DELETE /api/v2.0/projects/{id}/members`)
+- ✅ **Project labels** (`GET/POST /api/v2.0/labels`, project scope) - optional; without
+  it projects are still created, but a retried order cannot adopt its project
 
 **✅ Verified**: All operations including project deletion are working with proper system-level robot account permissions.
 
@@ -180,6 +190,7 @@ offerings:
      - Resource: Create, Read, Update
      - Member: Create, Read, Update, Delete
      - Quota: Read, Update
+     - Label: Create, List (lets a retried order adopt the project it already created)
 4. Save the credentials for configuration
 
 **Note**: The robot account needs **system-level** permissions to delete projects.
