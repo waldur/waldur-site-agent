@@ -1,14 +1,14 @@
 """Tests for Harbor backend."""
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from waldur_api_client.models.resource import Resource as WaldurResource
-from waldur_site_agent.backend import structures
+from waldur_site_agent.backend.exceptions import BackendError
 
 from waldur_site_agent_harbor.backend import HarborBackend
 from waldur_site_agent_harbor.client import HarborClient
-from waldur_site_agent_harbor.exceptions import HarborProjectError, HarborOIDCError
+from waldur_site_agent_harbor.exceptions import HarborOIDCError
 
 
 @pytest.fixture
@@ -83,6 +83,14 @@ class TestHarborBackend:
 
         with pytest.raises(ValueError, match="Missing required setting"):
             HarborBackend(incomplete_settings, harbor_components)
+
+    def test_backend_requires_a_nonempty_allocation_prefix(
+        self, harbor_settings, harbor_components
+    ):
+        harbor_settings.pop("allocation_prefix")
+
+        with pytest.raises(ValueError, match="allocation_prefix"):
+            HarborBackend(harbor_settings, harbor_components)
 
     def test_backend_initialization_invalid_component(self, harbor_settings):
         """Test backend initialization with invalid component configuration."""
@@ -165,6 +173,43 @@ class TestHarborBackend:
             "waldur-test-registry", 10
         )
 
+    def test_create_resource_rejects_an_existing_project_name(
+        self, harbor_backend, waldur_resource
+    ):
+        harbor_backend.client.create_user_group.return_value = 1
+        harbor_backend.client.create_project.return_value = False
+
+        with pytest.raises(BackendError, match="name_conflict"):
+            harbor_backend.create_resource(waldur_resource)
+
+        harbor_backend.client.assign_group_to_project.assert_not_called()
+
+    def test_create_resource_does_not_create_a_project_without_an_oidc_group(
+        self, harbor_backend, waldur_resource
+    ):
+        harbor_backend.client.create_user_group.side_effect = HarborOIDCError(
+            "group unavailable"
+        )
+
+        with pytest.raises(BackendError, match="oidc_group"):
+            harbor_backend.create_resource(waldur_resource)
+
+        harbor_backend.client.create_project.assert_not_called()
+
+    def test_create_resource_removes_a_new_project_when_group_assignment_fails(
+        self, harbor_backend, waldur_resource
+    ):
+        harbor_backend.client.create_user_group.return_value = 1
+        harbor_backend.client.create_project.return_value = True
+        harbor_backend.client.assign_group_to_project.return_value = False
+
+        with pytest.raises(BackendError, match="oidc_group_assignment"):
+            harbor_backend.create_resource(waldur_resource)
+
+        harbor_backend.client.delete_project.assert_called_once_with(
+            "waldur-test-registry"
+        )
+
     def test_delete_resource_success(self, harbor_backend, waldur_resource):
         """Test successful resource deletion."""
         harbor_backend.client.delete_project.return_value = True
@@ -180,6 +225,16 @@ class TestHarborBackend:
         waldur_resource.backend_id = ""
 
         harbor_backend.delete_resource(waldur_resource)
+
+        harbor_backend.client.delete_project.assert_not_called()
+
+    def test_delete_resource_rejects_a_foreign_backend_id(
+        self, harbor_backend, waldur_resource
+    ):
+        waldur_resource.backend_id = "platform"
+
+        with pytest.raises(BackendError, match="backend_id_mismatch"):
+            harbor_backend.delete_resource(waldur_resource)
 
         harbor_backend.client.delete_project.assert_not_called()
 
@@ -218,10 +273,12 @@ class TestHarborBackend:
             usage_data_2,
         ]
 
-        result = harbor_backend._get_usage_report(["project1", "project2"])
+        result = harbor_backend._get_usage_report(
+            ["waldur-project1", "waldur-project2"]
+        )
 
-        assert result["project1"]["TOTAL_ACCOUNT_USAGE"]["storage"] == 5
-        assert result["project2"]["TOTAL_ACCOUNT_USAGE"]["storage"] == 10
+        assert result["waldur-project1"]["TOTAL_ACCOUNT_USAGE"]["storage"] == 5
+        assert result["waldur-project2"]["TOTAL_ACCOUNT_USAGE"]["storage"] == 10
 
     def test_collect_resource_limits_with_waldur_limits(
         self, harbor_backend, waldur_resource
@@ -249,17 +306,17 @@ class TestHarborBackend:
         """Test setting resource limits."""
         harbor_backend.client.update_project_quota.return_value = True
 
-        harbor_backend.set_resource_limits("test-project", {"storage": 30})
+        harbor_backend.set_resource_limits("waldur-test-project", {"storage": 30})
 
         harbor_backend.client.update_project_quota.assert_called_once_with(
-            "test-project", 30
+            "waldur-test-project", 30
         )
 
     def test_get_resource_limits(self, harbor_backend):
         """Test getting resource limits."""
         harbor_backend.client.get_resource_limits.return_value = {"storage": 25}
 
-        result = harbor_backend.get_resource_limits("test-project")
+        result = harbor_backend.get_resource_limits("waldur-test-project")
 
         assert result == {"storage": 25}
 
@@ -267,22 +324,22 @@ class TestHarborBackend:
         """Test downscaling resource."""
         harbor_backend.client.update_project_quota.return_value = True
 
-        result = harbor_backend.downscale_resource("test-project")
+        result = harbor_backend.downscale_resource("waldur-test-project")
 
         assert result is True
         harbor_backend.client.update_project_quota.assert_called_once_with(
-            "test-project", 1
+            "waldur-test-project", 1
         )
 
     def test_restore_resource(self, harbor_backend):
         """Test restoring resource."""
         harbor_backend.client.update_project_quota.return_value = True
 
-        result = harbor_backend.restore_resource("test-project")
+        result = harbor_backend.restore_resource("waldur-test-project")
 
         assert result is True
         harbor_backend.client.update_project_quota.assert_called_once_with(
-            "test-project", 10
+            "waldur-test-project", 10
         )
 
     def test_pause_resource_not_supported(self, harbor_backend):
@@ -293,7 +350,7 @@ class TestHarborBackend:
     def test_get_resource_metadata(self, harbor_backend):
         """Test getting resource metadata."""
         project = {
-            "name": "test-project",
+            "name": "waldur-test-project",
             "project_id": 123,
             "creation_time": "2024-01-01T00:00:00Z",
         }
@@ -302,10 +359,10 @@ class TestHarborBackend:
         harbor_backend.client.get_project.return_value = project
         harbor_backend.client.get_project_usage.return_value = usage_data
 
-        metadata = harbor_backend.get_resource_metadata("test-project")
+        metadata = harbor_backend.get_resource_metadata("waldur-test-project")
 
         assert metadata["harbor_project_id"] == 123
-        assert metadata["harbor_project_name"] == "test-project"
+        assert metadata["harbor_project_name"] == "waldur-test-project"
         assert metadata["repository_count"] == 3
         assert metadata["storage_used_bytes"] == 5368709120
         assert "harbor_url" in metadata
