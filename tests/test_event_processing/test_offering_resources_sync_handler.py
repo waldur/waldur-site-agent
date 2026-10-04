@@ -44,7 +44,7 @@ def _make_frame():
     "waldur_site_agent.event_processing.handlers.common_processors.OfferingMembershipProcessor"
 )
 @mock.patch("waldur_site_agent.event_processing.handlers.common_utils.get_backend_for_offering")
-@mock.patch("waldur_site_agent.event_processing.handlers.common_utils.get_client")
+@mock.patch("waldur_site_agent.event_processing.handlers.common_utils.get_client_for_offering")
 @mock.patch("waldur_site_agent.event_processing.handlers.register_event_process_service")
 class TestOfferingResourcesSyncHandler(unittest.TestCase):
     """Tests for on_offering_resources_sync_message_stomp."""

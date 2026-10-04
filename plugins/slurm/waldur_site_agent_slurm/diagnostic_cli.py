@@ -344,11 +344,8 @@ def main() -> int:
 
     # Create clients
     try:
-        waldur_client = common_utils.get_client(
-            api_url=offering.waldur_api_url,
-            access_token=offering.waldur_api_token,
-            agent_header="waldur-site-agent-diagnostics",
-            verify_ssl=offering.verify_ssl,
+        waldur_client = common_utils.get_client_for_offering(
+            offering, "waldur-site-agent-diagnostics", configuration.global_proxy
         )
     except Exception:
         logger.exception("Failed to create Waldur client")

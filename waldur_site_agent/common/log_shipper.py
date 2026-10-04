@@ -43,6 +43,7 @@ class LogShipper:
         batch_size: int = 100,
         max_retries: int = 3,
         retry_delay: int = 5,
+        auth: Optional[httpx.Auth] = None,
     ) -> None:
         """Initialize the log shipper.
 
@@ -55,6 +56,9 @@ class LogShipper:
             batch_size: Maximum number of log entries per batch
             max_retries: Maximum number of retry attempts for failed shipments
             retry_delay: Base delay between retry attempts in seconds (uses exponential backoff)
+            auth: Optional httpx auth resolving the Authorization header per request
+                (e.g. a refreshed OIDC bearer token); when unset, api_token is sent
+                as a static ``Token`` header
         """
         self.buffer = buffer
         self.api_url = api_url.rstrip("/") + "/"
@@ -64,6 +68,7 @@ class LogShipper:
         self.batch_size = batch_size
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.auth = auth
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -75,19 +80,20 @@ class LogShipper:
             "last_shipment": None,
         }
 
+    def _headers(self) -> dict[str, str]:
+        """Static request headers; Authorization comes from ``auth`` when set."""
+        headers = {"Content-Type": "application/json"}
+        if self.auth is None:
+            headers["Authorization"] = f"Token {self.api_token}"
+        return headers
+
     def start(self) -> None:
         """Start the log shipping service in a background thread."""
         if self._thread and self._thread.is_alive():
             logger.warning("Log shipper already running for agent %s", self.agent_identity_uuid)
             return
 
-        self._client = httpx.Client(
-            timeout=30,
-            headers={
-                "Authorization": f"Token {self.api_token}",
-                "Content-Type": "application/json",
-            },
-        )
+        self._client = httpx.Client(timeout=30, headers=self._headers(), auth=self.auth)
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._ship_loop,
@@ -170,12 +176,10 @@ class LogShipper:
                 if self._client:
                     response = self._client.post(url, json=payload)
                 else:
-                    headers = {
-                        "Authorization": f"Token {self.api_token}",
-                        "Content-Type": "application/json",
-                    }
-                    with httpx.Client(timeout=30) as client:
-                        response = client.post(url, json=payload, headers=headers)
+                    with httpx.Client(
+                        timeout=30, headers=self._headers(), auth=self.auth
+                    ) as client:
+                        response = client.post(url, json=payload)
                 response.raise_for_status()
 
                 self._stats["logs_shipped"] = (self._stats["logs_shipped"] or 0) + len(entries)

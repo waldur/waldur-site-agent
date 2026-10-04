@@ -227,6 +227,7 @@ def get_client(
     proxy: Optional[str] = None,
     token_prefix: str = "Token",  # noqa: S107
     timeout: float = DEFAULT_CLIENT_TIMEOUT,
+    auth: Optional[httpx.Auth] = None,
 ) -> AuthenticatedClient:
     """Create an authenticated Waldur API client.
 
@@ -238,6 +239,8 @@ def get_client(
         proxy: Optional proxy URL (e.g., 'socks5://localhost:12345')
         token_prefix: Authorization header prefix ('Token' for static tokens, 'Bearer' for JWTs)
         timeout: HTTP timeout in seconds for requests made with this client
+        auth: Optional httpx auth that sets the Authorization header per request,
+            overriding the static one built from access_token
 
     Returns:
         Configured AuthenticatedClient instance ready for API calls
@@ -246,9 +249,11 @@ def get_client(
     url = api_url.rstrip("/").removesuffix("/api")
 
     # Configure httpx args with proxy if specified
-    httpx_args = {}
+    httpx_args: dict[str, object] = {}
     if proxy:
         httpx_args["proxy"] = proxy
+    if auth is not None:
+        httpx_args["auth"] = auth
 
     return AuthenticatedClient(
         base_url=url,
@@ -314,7 +319,8 @@ def fetch_oidc_token(
                 return token
 
     # Fetch outside the lock to avoid blocking other offerings during network I/O.
-    with httpx.Client(verify=verify_ssl, proxy=proxy, timeout=timeout) as client:
+    # An empty proxy (the global_proxy default) means none; httpx rejects "".
+    with httpx.Client(verify=verify_ssl, proxy=proxy or None, timeout=timeout) as client:
         response = client.post(
             oidc_token_url,
             data={
@@ -340,6 +346,46 @@ def fetch_oidc_token(
     return token
 
 
+class OfferingAuth(httpx.Auth):
+    """Authorization header for an offering, resolved on every request.
+
+    Static tokens are sent as ``Token <token>``. For OIDC-only offerings the
+    bearer JWT is looked up per request through ``fetch_oidc_token``, so a
+    long-lived client keeps working after the token it started with expires;
+    a cache hit costs only a dictionary lookup.
+    """
+
+    def __init__(
+        self,
+        offering: structures.Offering,
+        proxy: Optional[str] = None,
+        timeout: float = DEFAULT_OIDC_TIMEOUT,
+    ) -> None:
+        """Remember the offering whose credentials authorize requests."""
+        self.offering = offering
+        self.proxy = proxy
+        self.timeout = timeout
+
+    def authorization(self) -> str:
+        """Return the current Authorization header value."""
+        if self.offering.waldur_api_token:
+            return f"Token {self.offering.waldur_api_token}"
+        token = fetch_oidc_token(
+            self.offering.oidc_token_url,  # type: ignore[arg-type]
+            self.offering.oidc_client_id,  # type: ignore[arg-type]
+            self.offering.oidc_client_secret,  # type: ignore[arg-type]
+            self.offering.verify_ssl,
+            self.proxy,
+            timeout=self.timeout,
+        )
+        return f"Bearer {token}"
+
+    def auth_flow(self, request: httpx.Request):  # noqa: ANN201
+        """Set the Authorization header on each outgoing request."""
+        request.headers["Authorization"] = self.authorization()
+        yield request
+
+
 def get_client_for_offering(
     offering: structures.Offering,
     agent_header: Optional[str] = None,
@@ -362,10 +408,16 @@ def get_client_for_offering(
     Returns:
         Configured AuthenticatedClient instance ready for API calls
     """
+    auth: Optional[OfferingAuth] = None
     if offering.waldur_api_token:
         token = offering.waldur_api_token
         token_prefix = "Token"  # noqa: S105
     else:
+        # Fetch once up front so a misconfigured provider fails here, then let
+        # OfferingAuth refresh the JWT per request for long-lived clients.
+        auth = OfferingAuth(
+            offering, proxy, DEFAULT_OIDC_TIMEOUT if timeout is None else timeout
+        )
         token = fetch_oidc_token(
             offering.oidc_token_url,  # type: ignore[arg-type]
             offering.oidc_client_id,  # type: ignore[arg-type]
@@ -383,6 +435,7 @@ def get_client_for_offering(
         proxy,
         token_prefix,
         timeout=DEFAULT_CLIENT_TIMEOUT if timeout is None else timeout,
+        auth=auth,
     )
 
 
@@ -720,12 +773,8 @@ def load_offering_components() -> None:
     configuration = init_configuration()
     for offering in configuration.waldur_offerings:
         logger.info("Processing %s offering", offering.name)
-        waldur_rest_client = get_client(
-            offering.api_url,
-            offering.api_token,
-            configuration.waldur_user_agent,
-            offering.verify_ssl,
-            configuration.global_proxy,
+        waldur_rest_client = get_client_for_offering(
+            offering, configuration.waldur_user_agent, configuration.global_proxy
         )
 
         load_components_to_waldur(
@@ -1003,7 +1052,6 @@ def diagnostics() -> int:
         offering_uuid = offering.uuid
         offering_name = offering.name
         offering_api_url = offering.api_url
-        offering_api_token = offering.api_token
 
         logger.info(format_string.format("Offering name", offering_name))
         logger.info(format_string.format("Offering UUID", offering_uuid))
@@ -1015,11 +1063,8 @@ def diagnostics() -> int:
             )
         )
 
-        waldur_rest_client = get_client(
-            offering_api_url,
-            offering_api_token,
-            configuration.waldur_user_agent,
-            offering.verify_ssl,
+        waldur_rest_client = get_client_for_offering(
+            offering, configuration.waldur_user_agent, configuration.global_proxy
         )
 
         try:
@@ -1149,12 +1194,8 @@ def create_homedirs_for_offering_users() -> None:
         # One offering's unreachable backend or API must not cost the remaining
         # offerings their homedirs — this command sweeps all of them in one run.
         try:
-            waldur_rest_client = get_client(
-                offering.api_url,
-                offering.api_token,
-                configuration.waldur_user_agent,
-                offering.verify_ssl,
-                configuration.global_proxy,
+            waldur_rest_client = get_client_for_offering(
+                offering, configuration.waldur_user_agent, configuration.global_proxy
             )
             offering_users = marketplace_offering_users_list.sync_all(
                 client=waldur_rest_client,
@@ -1736,12 +1777,8 @@ def sync_offering_users() -> None:
     for offering in configuration.waldur_offerings:
         logger.info("Processing offering users for %s", offering.name)
 
-        waldur_rest_client = get_client(
-            offering.api_url,
-            offering.api_token,
-            configuration.waldur_user_agent,
-            offering.verify_ssl,
-            configuration.global_proxy,
+        waldur_rest_client = get_client_for_offering(
+            offering, configuration.waldur_user_agent, configuration.global_proxy
         )
         offering_users = marketplace_offering_users_list.sync_all(
             client=waldur_rest_client,
@@ -1799,12 +1836,8 @@ def sync_resource_limits() -> None:
         )
         backend, _ = get_backend_for_offering(offering, "membership_sync_backend")
         logger.info("Using class %s as a backend", backend.__class__.__name__)
-        waldur_rest_client = get_client(
-            offering.api_url,
-            offering.api_token,
-            configuration.waldur_user_agent,
-            offering.verify_ssl,
-            configuration.global_proxy,
+        waldur_rest_client = get_client_for_offering(
+            offering, configuration.waldur_user_agent, configuration.global_proxy
         )
         resources = marketplace_resources_list.sync_all(
             client=waldur_rest_client,
@@ -1858,7 +1891,7 @@ def ensure_log_shipper(
     Subsequent calls with the same agent_identity_uuid are no-ops.
 
     Args:
-        offering: offering configuration (provides api_url and api_token)
+        offering: offering configuration (provides api_url and credentials)
         agent_identity_uuid: UUID of the registered AgentIdentity
         log_shipping_config: global log shipping configuration
     """
@@ -1880,6 +1913,7 @@ def ensure_log_shipper(
         api_url=offering.api_url,
         api_token=offering.api_token,
         agent_identity_uuid=agent_identity_uuid,
+        auth=OfferingAuth(offering),
         ship_interval=ls_cfg.ship_interval_seconds,
     )
     shipper.start()
