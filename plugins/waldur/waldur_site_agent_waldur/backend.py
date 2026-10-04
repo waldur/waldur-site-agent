@@ -1670,7 +1670,7 @@ class WaldurBackend(backends.BaseBackend):
                     return
                 handler = target_handlers.get(payload.get("object_type"))
                 if handler is None:
-                    # ack=auto: an unrouted message is gone, so say so loudly.
+                    # An unrouted message is acked and gone, so say so loudly.
                     logger.warning(
                         "No target handler for object_type %s, dropping",
                         payload.get("object_type"),

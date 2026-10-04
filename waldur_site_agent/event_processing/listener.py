@@ -42,6 +42,24 @@ Key stomp.py corner cases (validated against RabbitMQ + rabbitmq_web_stomp):
    do NOT immediately tear down the WebSocket layer — detection can take up to
    two heartbeat intervals (~20s).  Actual network drops or WebSocket close
    frames are detected immediately by the receiver thread.
+
+Message handling design
+-----------------------
+Handlers do not run on the receiver thread. While a handler runs there, the
+receiver reads neither frames nor heartbeats, so a handler that outlives the
+heartbeat window gets the connection dropped. ``on_message`` only queues the
+frame; one worker thread per listener (that is, per queue) runs the handlers in
+arrival order, so per-queue ordering is kept.
+
+The queue is subscribed with ``ack="client-individual"`` and a bounded
+``prefetch-count``. The worker acks a message after its handler returns, and also
+after the handler raised (the error is logged; a failing message is not retried).
+A message the broker delivered but the agent has not acked is requeued by
+RabbitMQ when the connection drops, so it is redelivered after the reconnect.
+
+Every frame is tagged with the connection it arrived on. When that connection is
+gone, the worker skips frames it has not started — the broker redelivers them on
+the new connection — and never acks with an id from the old connection.
 """
 
 import json
@@ -49,6 +67,7 @@ import random
 import threading
 import time
 from contextlib import suppress
+from queue import Empty, Queue
 from typing import Callable, Optional
 
 import stomp.utils
@@ -70,6 +89,11 @@ CONNECT_TIMEOUT = 30.0
 # the connection to the watchdog; never unbounded, so the main loop always starts.
 STARTUP_CONNECT_ATTEMPTS = 3
 _CONNECTED_POLL_INTERVAL = 0.1
+# Unacknowledged messages the broker may hand one consumer at a time. Messages
+# beyond it wait in the durable queue instead of in this process.
+STOMP_PREFETCH_COUNT = 1
+STOMP_ACK_MODE = "client-individual"
+_WORKER_POLL_INTERVAL = 1.0
 
 
 def _calculate_backoff(attempt: int) -> float:
@@ -205,6 +229,15 @@ class WaldurListener(stomp.ConnectionListener):
         self._reconnect_lock = threading.Lock()
         self.on_queue_missing = on_queue_missing
         self._reregister_lock = threading.Lock()
+        # Frames waiting for the worker, each tagged with the connection it came on.
+        self._messages: Queue[Optional[tuple[int, stomp.utils.Frame]]] = Queue()
+        self._connection_generation = 0
+        self._generation_lock = threading.Lock()
+        self._worker: Optional[threading.Thread] = None
+        self._worker_start_lock = threading.Lock()
+        self._closed = threading.Event()
+        # time.time() when the running handler started; None while idle.
+        self._handler_started_at: Optional[float] = None
 
     def on_error(self, frame: stomp.utils.Frame) -> None:
         """Error handler method."""
@@ -233,23 +266,114 @@ class WaldurListener(stomp.ConnectionListener):
         return self._reconnect_lock.locked()
 
     def on_message(self, frame: stomp.utils.Frame) -> None:
-        """Message handler method.
+        """Queue the message for the worker thread.
 
-        Runs in stomp.py's receiver thread: anything raised here ends the receiver
-        loop and forces a reconnect, so nothing may escape.
+        Runs in stomp.py's receiver thread, which must keep reading frames and
+        heartbeats, so no handler runs here and nothing may escape.
         """
+        try:
+            with self._generation_lock:
+                generation = self._connection_generation
+            self._messages.put((generation, frame))
+            self.ensure_worker()
+        except Exception:
+            logger.exception("Unable to queue a message on queue %s", self.queue)
+
+    def ensure_worker(self) -> None:
+        """Start the worker thread unless it is running (or the listener is closed)."""
+        with self._worker_start_lock:
+            if self._closed.is_set() or (self._worker is not None and self._worker.is_alive()):
+                return
+            self._worker = threading.Thread(
+                target=self._work, name=f"waldur-{self.queue}-worker", daemon=True
+            )
+            self._worker.start()
+
+    def _work(self) -> None:
+        while not self._closed.is_set():
+            try:
+                item = self._messages.get(timeout=_WORKER_POLL_INTERVAL)
+            except Empty:
+                continue
+            if item is None:
+                return
+            generation, frame = item
+            try:
+                if not self._is_current(generation):
+                    logger.info(
+                        "Skipping a message from a dropped connection on queue %s; "
+                        "the broker redelivers it",
+                        self.queue,
+                    )
+                    continue
+                self._handle(frame)
+                self._ack(generation, frame)
+            except BaseException as e:
+                if self._closed.is_set() and isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    raise
+                logger.exception("Unexpected error in the worker of queue %s", self.queue)
+
+    def handler_running_since(self) -> Optional[float]:
+        """When the handler now running started (``time.time()``), or None while idle."""
+        return self._handler_started_at
+
+    def _is_current(self, generation: int) -> bool:
+        with self._generation_lock:
+            return generation == self._connection_generation
+
+    def _handle(self, frame: stomp.utils.Frame) -> None:
         try:
             logger.info("Received a message %s on queue %s", json.loads(frame.body), self.queue)
         except ValueError:
             logger.warning("Received a non-JSON message on queue %s: %r", self.queue, frame.body)
+        self._handler_started_at = time.time()
         try:
             self.on_message_callback(
                 frame, self.offering, self.user_agent, self.expose_backend_error_details
             )
-        except Exception as e:
+        except BaseException as e:
+            # Anything a handler raises is logged and the message still acked; only
+            # an interpreter exit during shutdown is let through.
+            if self._closed.is_set() and isinstance(e, (KeyboardInterrupt, SystemExit)):
+                raise
             logger.exception(
                 "Error processing message %s on queue %s: %s", frame.body, self.queue, e
             )
+        finally:
+            self._handler_started_at = None
+
+    def _ack(self, generation: int, frame: stomp.utils.Frame) -> None:
+        """Ack on the connection the message came on; a replaced one redelivers it.
+
+        The generation lock is held across the check and the ack, so a reconnect
+        cannot slip in between and get an id from the old connection.
+        """
+        ack_id = (frame.headers or {}).get("ack")
+        if not ack_id:
+            # STOMP 1.2 acks by the ``ack`` header; ``message-id`` is not valid here.
+            logger.warning("Message on queue %s has no ack header, cannot ack it", self.queue)
+            return
+        with self._generation_lock:
+            if generation != self._connection_generation:
+                logger.info(
+                    "Connection of queue %s was replaced while handling a message; "
+                    "the broker redelivers it",
+                    self.queue,
+                )
+                return
+            try:
+                self.conn.ack(ack_id)
+            except Exception as e:
+                logger.warning("Unable to ack a message on queue %s: %s", self.queue, e)
+
+    def close(self) -> None:
+        """Stop the worker; frames it has not handled are redelivered by the broker."""
+        self._closed.set()
+        self._messages.put(None)
+
+    def _drop_connection_generation(self) -> None:
+        with self._generation_lock:
+            self._connection_generation += 1
 
     def on_connected(self, _: stomp.utils.Frame) -> None:
         """Connection handler method."""
@@ -257,18 +381,23 @@ class WaldurListener(stomp.ConnectionListener):
         # declaration. The /queue/ prefix would redeclare and cause PRECONDITION_FAILED
         # errors when queue parameters (x-message-ttl, x-overflow, etc.) don't match.
         destination = f"/amq/queue/{self.queue}"
+        # A new connection: frames still queued from the previous one are stale.
+        self._drop_connection_generation()
         logger.debug("Subscribing to %s", destination)
         self.conn.subscribe(
             destination=destination,
             id=self.queue,
-            ack="auto",
+            ack=STOMP_ACK_MODE,
+            headers={"prefetch-count": str(STOMP_PREFETCH_COUNT)},
         )
 
         logger.debug(
             "Successfully subscribed to queue: %s "
-            "(subscription_id: %s, ack_mode: auto)",
+            "(subscription_id: %s, ack_mode: %s, prefetch: %s)",
             destination,
             self.queue,
+            STOMP_ACK_MODE,
+            STOMP_PREFETCH_COUNT,
         )
         logger.debug(
             "Connection info - host: %s, vhost: %s, ws_path: %s, connected: %s",
@@ -291,6 +420,8 @@ class WaldurListener(stomp.ConnectionListener):
         with exponential backoff), after which it is released regardless of outcome.
         """
         logger.warning("Disconnected from queue %s, attempting reconnection", self.queue)
+        # Unacked messages of the dropped connection are requeued by the broker.
+        self._drop_connection_generation()
         self.reconnect(max_retries=RECONNECT_MAX_RETRIES)
 
     def reconnect(self, max_retries: int, connect_timeout: float = CONNECT_TIMEOUT) -> bool:

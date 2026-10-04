@@ -7,6 +7,7 @@ from typing import Optional
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import (
     WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES,
+    WALDUR_SITE_AGENT_RESOURCE_STATUS_RECONCILIATION_MINUTES,
     WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES,
 )
 from waldur_site_agent.common import (
@@ -21,6 +22,32 @@ HEALTH_CHECK_INTERVAL = 30 * 60  # 30 minutes
 RECONCILIATION_INTERVAL = WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES * 60
 TICK_INTERVAL = 60  # Wake up every minute to check timers
 STOMP_UNHEALTHY_AFTER = WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES * 60
+# 0 disables the resource status pass.
+RESOURCE_STATUS_RECONCILIATION_INTERVAL = (
+    WALDUR_SITE_AGENT_RESOURCE_STATUS_RECONCILIATION_MINUTES * 60
+)
+
+
+def _maybe_reconcile_resource_statuses(
+    configuration: common_structures.WaldurAgentConfiguration,
+    now: float,
+    last_run: Optional[float],
+) -> Optional[float]:
+    """Run the resource status pass when its interval elapsed; return its last run time.
+
+    The first tick only starts the timer: initial offering processing has just
+    applied every resource's status.
+    """
+    if RESOURCE_STATUS_RECONCILIATION_INTERVAL <= 0:
+        return last_run
+    if last_run is None:
+        return now
+    if now - last_run < RESOURCE_STATUS_RECONCILIATION_INTERVAL:
+        return last_run
+    utils.run_periodic_resource_status_reconciliation(
+        configuration.waldur_offerings, configuration.waldur_user_agent
+    )
+    return now
 
 
 def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
@@ -73,6 +100,7 @@ def _run_without_username_reconciliation(
     """Tick-based main loop: health checks, order and offering user reconciliation."""
     last_health_check = 0.0
     last_reconciliation = 0.0
+    last_status_reconciliation: Optional[float] = None
 
     while True:
         now = time.time()
@@ -103,6 +131,10 @@ def _run_without_username_reconciliation(
             )
             last_reconciliation = now
 
+        last_status_reconciliation = _maybe_reconcile_resource_statuses(
+            configuration, now, last_status_reconciliation
+        )
+
         time.sleep(TICK_INTERVAL)
 
 
@@ -113,6 +145,7 @@ def _run_with_reconciliation(
     """Tick-based main loop: health checks + periodic username and order reconciliation."""
     last_health_check = 0.0
     last_reconciliation = 0.0
+    last_status_reconciliation: Optional[float] = None
 
     while True:
         now = time.time()
@@ -145,5 +178,9 @@ def _run_with_reconciliation(
                 configuration.waldur_offerings, configuration.waldur_user_agent
             )
             last_reconciliation = now
+
+        last_status_reconciliation = _maybe_reconcile_resource_statuses(
+            configuration, now, last_status_reconciliation
+        )
 
         time.sleep(TICK_INTERVAL)
