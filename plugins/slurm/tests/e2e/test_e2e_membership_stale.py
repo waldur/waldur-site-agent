@@ -458,14 +458,7 @@ class TestMembershipStaleUsers:
             with contextlib.suppress(Exception):
                 client.delete_resource(other)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "!569: a failed known-username fetch propagates and marks the resource "
-            "ERRED; it should skip removals for the pass instead"
-        ),
-    )
-    def test_11_known_username_fetch_failure_skips_removals(
+    def test_11_known_username_fetch_failure_keeps_unconfirmed_users(
         self, offering, waldur_client, slurm_backend, membership_resource
     ):
         backend_id = membership_resource["backend_id"]
