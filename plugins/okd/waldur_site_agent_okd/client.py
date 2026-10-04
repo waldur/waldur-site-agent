@@ -45,7 +45,13 @@ class OkdClient(TokenRefreshMixin, BaseClient):
         # Initialize Kubernetes client for advanced operations
         configuration = k8s_client.Configuration()
         configuration.host = self.api_url
-        configuration.verify_ssl = self.verify_cert
+        # verify_cert is a bool or a CA bundle path (httpx takes either); the
+        # Kubernetes client wants the two separately.
+        if isinstance(self.verify_cert, str):
+            configuration.verify_ssl = True
+            configuration.ssl_ca_cert = self.verify_cert
+        else:
+            configuration.verify_ssl = bool(self.verify_cert)
         configuration.api_key = {"authorization": f"Bearer {self.token}"}
         configuration.api_key_prefix = {"authorization": "Bearer"}
 
