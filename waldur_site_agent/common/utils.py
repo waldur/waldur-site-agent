@@ -702,7 +702,9 @@ def mark_waldur_resources_as_erred(
             marketplace_provider_resources_set_as_erred.sync_detailed(
                 uuid=resource.uuid.hex, client=waldur_rest_client, body=request_body
             )
-        except UnexpectedStatus as e:
+        except (UnexpectedStatus, httpx.TransportError) as e:
+            # One resource that cannot be marked must not stop the others: the
+            # caller is usually walking every resource of the offering.
             logger.exception(
                 "Waldur REST client error while setting resource state to Erred %s: %s",
                 resource.backend_id,

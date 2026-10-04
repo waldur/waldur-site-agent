@@ -22,7 +22,7 @@ import time as _time
 from enum import Enum
 from http import HTTPStatus
 from time import sleep
-from typing import Any, ClassVar, Optional, Union
+from typing import Any, Callable, ClassVar, Optional, Union
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -209,6 +209,19 @@ def _is_transient_waldur_api_error(e: Exception) -> bool:
         e.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR
         or e.status_code == HTTPStatus.TOO_MANY_REQUESTS
     )
+
+
+_TERMINAL_ORDER_STATES = frozenset(
+    {OrderState.DONE, OrderState.CANCELED, OrderState.REJECTED, OrderState.ERRED}
+)
+
+
+def _url_is_under(url: httpx.URL, base: httpx.URL) -> bool:
+    """Whether url is base or below it, comparing normalised scheme, host, port and path."""
+    if (url.scheme, url.host, url.port) != (base.scheme, base.host, base.port):
+        return False
+    base_path = base.path.rstrip("/")
+    return url.path == base_path or url.path.startswith(base_path + "/")
 
 
 def _serialize_attr_value(val: object) -> object:
@@ -1023,6 +1036,28 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 retry_count,
             )
 
+    def _current_order_state(self, order: OrderDetails) -> Optional[OrderState]:
+        """Waldur's current state of the order, or the local one if it cannot be read.
+
+        The order object passed to process_order is fetched before provisioning
+        and goes stale once the agent sets it done.
+        """
+        try:
+            refreshed = marketplace_orders_retrieve.sync(
+                client=self.waldur_rest_client,
+                uuid=order.uuid.hex,
+                field=[OrderDetailsFieldEnum.UUID, OrderDetailsFieldEnum.STATE],
+            )
+        except Exception as e:
+            logger.warning(
+                "Unable to refresh order %s state, using the local one (%s): %s",
+                order.uuid,
+                order.state,
+                e,
+            )
+            return order.state
+        return refreshed.state if refreshed is not None else order.state
+
     def process_order(self, order: OrderDetails) -> None:
         """Process a single order through its complete lifecycle.
 
@@ -1155,7 +1190,18 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
                 logger.info("The order %s has been successfully processed", order.uuid)
 
-                self._post_process_order(order)
+                try:
+                    self._post_process_order(order)
+                except Exception as e:
+                    # The backend did its part and the order is done; erring it
+                    # now would misreport a working resource. Users and accounts
+                    # left unsynced here are picked up by membership sync.
+                    logger.exception(
+                        "Post-processing of done order %s failed, leaving the order done; "
+                        "membership sync will retry: %s",
+                        order.uuid,
+                        e,
+                    )
             else:
                 logger.warning(
                     "Order %s processing was not finished (order_is_done=False), "
@@ -1200,7 +1246,10 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 order.state,
                 e,
             )
-            if order.state != OrderState.DONE:
+            current_state = self._current_order_state(order)
+            # Re-read: the local order is stale. An order Waldur already finished
+            # (done, canceled, rejected, erred) must not be overwritten with ERRED.
+            if current_state not in _TERMINAL_ORDER_STATES:
                 error_message, error_traceback = utils.format_waldur_error_details(
                     e, self.expose_backend_error_details
                 )
@@ -1223,8 +1272,9 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     )
             else:
                 logger.warning(
-                    "Order %s is already in DONE state, not setting to erred",
+                    "Order %s is already in terminal state %s, not setting it to erred",
                     order.uuid,
+                    current_state,
                 )
 
     def _create_resource(
@@ -3480,6 +3530,151 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     exc,
                 )
 
+    def _is_own_waldur_api_error(self, e: Exception) -> bool:
+        """Whether this is a client error (4xx) from this agent's own Waldur API.
+
+        Waldur-to-Waldur backends talk to a remote Waldur with the same client
+        library, so the status alone is not enough: the response must come from
+        this client's base URL, and not from a remote Waldur the backend declares
+        (which may share the origin, e.g. served under a path or on loopback).
+        3xx (e.g. an http->https redirect) and transient errors are not "own".
+        """
+        if not isinstance(e, UnexpectedStatus):
+            return False
+        if not HTTPStatus.BAD_REQUEST <= e.status_code < HTTPStatus.INTERNAL_SERVER_ERROR:
+            return False
+        if e.status_code == HTTPStatus.TOO_MANY_REQUESTS:
+            return False
+        try:
+            own_base = self.waldur_rest_client.get_httpx_client().base_url
+        except Exception:
+            return False
+        error_url = httpx.URL(str(e.url))
+        remote_bases = []
+        remote_base_urls = getattr(self.resource_backend, "remote_waldur_base_urls", None)
+        if callable(remote_base_urls):
+            remote_bases = [httpx.URL(url) for url in remote_base_urls()]
+        if any(_url_is_under(error_url, remote) for remote in remote_bases):
+            return False
+        return _url_is_under(error_url, own_base)
+
+    def _sync_resource(
+        self,
+        waldur_resource: WaldurResource,
+        backend_resource_info: BackendResourceInfo,
+        offering_users: list[OfferingUser],
+    ) -> None:
+        """Run every sync step for one resource.
+
+        ERRED is reserved for backend failures. A step that fails because this
+        Waldur's own API refused a request (a 4xx on reading per-user limits,
+        listing service accounts, syncing end dates, ...) is skipped and logged;
+        the remaining steps still run and the resource state is left alone. Any
+        other exception — a backend error, or a remote Waldur's error for
+        Waldur-to-Waldur backends — propagates and marks the resource ERRED.
+
+        An ERRED resource is set back to OK once every backend step ran, even
+        if bookkeeping was skipped. last_sync is refreshed only when every step
+        ran, so it does not claim a sync that was partial.
+        """
+        skipped_steps: list[str] = []
+
+        def run_step(step_name: str, func: Callable[..., Any], *args: Any) -> tuple[bool, Any]:  # noqa: ANN401
+            try:
+                return True, func(*args)
+            except UnexpectedStatus as e:
+                if not self._is_own_waldur_api_error(e):
+                    raise
+                skipped_steps.append(step_name)
+                logger.error(
+                    "Waldur API error during %s for resource %s (%s), skipping the step "
+                    "and keeping the resource state: %s",
+                    step_name,
+                    waldur_resource.name,
+                    waldur_resource.backend_id,
+                    e,
+                )
+                return False, None
+
+        project_fetched, source_project = run_step(
+            "source project fetch", self._fetch_source_project, waldur_resource
+        )
+        if project_fetched:
+            run_step(
+                "project sync",
+                self.resource_backend.sync_resource_project,
+                waldur_resource,
+                source_project,
+            )
+            run_step(
+                "project end date sync",
+                self.resource_backend.sync_project_end_date,
+                waldur_resource,
+                self.waldur_rest_client,
+                source_project,
+            )
+        users_synced, resource_usernames = run_step(
+            "user sync",
+            self._sync_resource_users,
+            waldur_resource,
+            backend_resource_info,
+            offering_users,
+        )
+        run_step("service account sync", self._sync_resource_service_accounts, waldur_resource)
+        run_step("course account sync", self._sync_resource_course_accounts, waldur_resource)
+        run_step("status sync", self._sync_resource_status, waldur_resource)
+        run_step(
+            "resource end date sync",
+            self.resource_backend.sync_resource_end_date,
+            waldur_resource,
+            self.waldur_rest_client,
+        )
+        run_step(
+            "effective id sync",
+            self.resource_backend.sync_resource_effective_id,
+            waldur_resource,
+            self.waldur_rest_client,
+        )
+        run_step("limits sync", self._sync_resource_limits, waldur_resource)
+        if users_synced:
+            run_step(
+                "user limits sync",
+                self._sync_resource_user_limits,
+                waldur_resource,
+                resource_usernames,
+            )
+
+        if skipped_steps:
+            logger.warning(
+                "Resource %s (%s) synced partially, skipped: %s; not refreshing last sync",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+                ", ".join(skipped_steps),
+            )
+        else:
+            logger.info(
+                "Refreshing resource %s (%s) last sync",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+            )
+            marketplace_provider_resources_refresh_last_sync.sync_detailed(
+                uuid=waldur_resource.uuid.hex,
+                client=self.waldur_rest_client,
+            )
+        # Every backend step ran (a backend failure would have raised), so a
+        # resource erred by an earlier cycle is healthy again even if some
+        # Waldur-side bookkeeping was skipped.
+        if waldur_resource.state == ResourceState.ERRED:
+            logger.info(
+                "Setting resource %s (%s) state to OK",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+            )
+            marketplace_provider_resources_set_as_ok.sync_detailed(
+                uuid=waldur_resource.uuid.hex,
+                client=self.waldur_rest_client,
+            )
+
     def _process_resources(
         self,
         resource_report: dict[str, tuple[WaldurResource, BackendResourceInfo]],
@@ -3502,51 +3697,20 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             if index % _HEARTBEAT_BATCH_SIZE == 0:
                 touch_heartbeat()
             try:
-                source_project = self._fetch_source_project(waldur_resource)
-                self.resource_backend.sync_resource_project(waldur_resource, source_project)
-                self.resource_backend.sync_project_end_date(
-                    waldur_resource, self.waldur_rest_client, source_project
-                )
-                resource_usernames = self._sync_resource_users(
-                    waldur_resource, backend_resource_info, offering_users
-                )
-                self._sync_resource_service_accounts(waldur_resource)
-                self._sync_resource_course_accounts(waldur_resource)
-                self._sync_resource_status(waldur_resource)
-                self.resource_backend.sync_resource_end_date(
-                    waldur_resource, self.waldur_rest_client
-                )
-                self.resource_backend.sync_resource_effective_id(
-                    waldur_resource, self.waldur_rest_client
-                )
-                self._sync_resource_limits(waldur_resource)
-                self._sync_resource_user_limits(waldur_resource, resource_usernames)
-
-                logger.info(
-                    "Refreshing resource %s (%s) last sync",
-                    waldur_resource.name,
-                    waldur_resource.backend_id,
-                )
-
-                marketplace_provider_resources_refresh_last_sync.sync_detailed(
-                    uuid=waldur_resource.uuid.hex,
-                    client=self.waldur_rest_client,
-                )
-                if waldur_resource.state == ResourceState.ERRED:
-                    logger.info(
-                        "Setting resource %s (%s) state to OK",
-                        waldur_resource.name,
-                        waldur_resource.backend_id,
-                    )
-                    marketplace_provider_resources_set_as_ok.sync_detailed(
-                        uuid=waldur_resource.uuid.hex,
-                        client=self.waldur_rest_client,
-                    )
+                self._sync_resource(waldur_resource, backend_resource_info, offering_users)
             except Exception as e:
                 if _is_transient_waldur_api_error(e):
                     # Handle transient Waldur API errors.
                     logger.warning(
                         "Transient Waldur API error while processing allocation %s, "
+                        "keeping resource state unchanged: %s",
+                        waldur_resource.backend_id,
+                        e,
+                    )
+                    continue
+                if self._is_own_waldur_api_error(e):
+                    logger.error(
+                        "Waldur API error while processing allocation %s, "
                         "keeping resource state unchanged: %s",
                         waldur_resource.backend_id,
                         e,

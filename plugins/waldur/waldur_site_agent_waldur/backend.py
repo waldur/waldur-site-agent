@@ -105,6 +105,10 @@ class WaldurBackend(backends.BaseBackend):
 
     # --- Abstract Method Implementations ---
 
+    def remote_waldur_base_urls(self) -> list[str]:
+        """Waldur B is this backend's target, so its errors are backend errors."""
+        return [self.client.base_url]
+
     def ping(self, raise_exception: bool = False) -> bool:
         """Check connectivity to Waldur B."""
         try:

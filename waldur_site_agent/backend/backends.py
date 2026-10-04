@@ -173,6 +173,16 @@ class BaseBackend(ABC):
         # the offering is not configured to produce usernames.
         self.partition_enforcement_enabled: bool = False
 
+    def remote_waldur_base_urls(self) -> list[str]:
+        """Base URLs of any remote Waldur this backend calls with the Waldur API client.
+
+        The processor treats a 4xx from its own Waldur as a bookkeeping problem
+        rather than a backend failure. A Waldur-to-Waldur backend returns its
+        target here so the target's errors stay backend errors even when it
+        shares the agent's origin (served under a path, or on loopback).
+        """
+        return []
+
     @abstractmethod
     def ping(self, raise_exception: bool = False) -> bool:
         """Check if the backend system is reachable and operational.
