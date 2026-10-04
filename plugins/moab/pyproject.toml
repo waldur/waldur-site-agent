@@ -19,3 +19,6 @@ waldur-site-agent = { workspace = true }
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]
 moab = "waldur_site_agent_moab.backend:MoabBackend"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+moab = "waldur_site_agent_moab.schemas:MoabBackendSettingsSchema"

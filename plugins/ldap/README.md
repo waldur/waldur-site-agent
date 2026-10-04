@@ -5,6 +5,18 @@ members need local accounts on an HPC site. Handles the full user lifecycle:
 account creation, access group membership, optional VPN password generation,
 and welcome email delivery.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `ldap` | `waldur_site_agent.username_management_backends` | username management |
+| `ldap` | `waldur_site_agent.backend_settings_schemas` | schema of the `ldap:` block (see below) |
+
+Select it with `username_management_backend: "ldap"` on an offering whose processing
+backend (usually `slurm`) needs POSIX accounts. It generates and looks up usernames,
+creates and updates LDAP accounts and groups, syncs profiles, and releases accounts on
+departure; it does not process orders or report usage itself.
+
 ## Overview
 
 ```mermaid
@@ -152,6 +164,9 @@ graph TB
         GEN[generate_username<br/>Create POSIX user + groups]
         SYNC[sync_user_profiles<br/>Update LDAP attributes]
         DEACT[deactivate_users<br/>Remove or retain users]
+        REL[release_users<br/>Release accounts on departure]
+        RECON[reconcile_offering<br/>Periodic offering-wide pass]
+        RPG[reconcile_project_groups<br/>Write Waldur's project groups]
     end
 
     subgraph "LdapClient"
@@ -175,12 +190,16 @@ graph TB
     SYNC --> USEROP
     DEACT --> USEROP
     DEACT --> GROUPOP
+    REL --> USEROP
+    RECON --> USEROP
+    RECON --> GROUPOP
+    RPG --> GROUPOP
 
     classDef backend fill:#e3f2fd
     classDef client fill:#e8f5e9
     classDef email fill:#fff3e0
 
-    class GET,GEN,SYNC,DEACT backend
+    class GET,GEN,SYNC,DEACT,REL,RECON,RPG backend
     class SEARCH,IDALLOC,USEROP,GROUPOP client
     class RENDER,SEND email
 ```
@@ -197,7 +216,14 @@ offerings:
     waldur_offering_uuid: "offering-uuid"
     username_management_backend: "ldap"
     backend_type: "slurm"
+    order_processing_backend: "slurm"
+    membership_sync_backend: "slurm"
+    reporting_backend: "slurm"
     backend_settings:
+      default_account: "root"
+      customer_prefix: "c_"
+      project_prefix: "p_"
+      allocation_prefix: "a_"
       ldap:
         uri: "ldap://ldap.example.com"
         bind_dn: "cn=admin,dc=example,dc=com"
@@ -215,7 +241,14 @@ offerings:
     waldur_offering_uuid: "offering-uuid"
     username_management_backend: "ldap"
     backend_type: "slurm"
+    order_processing_backend: "slurm"
+    membership_sync_backend: "slurm"
+    reporting_backend: "slurm"
     backend_settings:
+      default_account: "root"
+      customer_prefix: "c_"
+      project_prefix: "p_"
+      allocation_prefix: "a_"
       ldap:
         # Connection
         uri: "ldap://ldap.example.com"
@@ -590,8 +623,20 @@ accounts in OpenLDAP*. What follows is the agent and cluster side.
           allocation_prefix: "a_"
           ldap: *ldap_settings
       - name: "Cluster B"
-        # identical apart from the offering uuid
+        # identical apart from the name and the offering uuid
+        waldur_api_url: "https://waldur.example.org/api/"
+        waldur_api_token: "<token>"
+        waldur_offering_uuid: "<offering B uuid>"
+        backend_type: "slurm"
+        username_management_backend: "ldap"
+        order_processing_backend: "slurm"
+        reporting_backend: "slurm"
+        membership_sync_backend: "slurm"
         backend_settings:
+          default_account: "root"
+          customer_prefix: "c_"
+          project_prefix: "p_"
+          allocation_prefix: "a_"
           ldap: *ldap_settings
     ```
 
@@ -658,11 +703,12 @@ see [Project groups from Waldur](#project-groups-from-waldur).
 
 ### A note on settings validation
 
-`validate_backend_settings_with_plugin_schema` in the agent core keys on
-`backend_type`, and the usual deployment sets `backend_type: slurm`, whose schema
-allows unknown keys — so this plugin's schema is never applied by core. The
-plugin therefore validates its own `ldap:` block at construction, and a bad value
-fails the backend rather than being silently ignored.
+The agent core validates `backend_settings` against the schemas of the offering's
+`backend_type` and its `*_backend` roles — not its `username_management_backend`.
+The usual deployment pairs this plugin with `slurm`, whose schema allows unknown
+keys, so this plugin's schema is never applied by core. The plugin therefore
+validates its own `ldap:` block at construction, and a bad value fails the
+backend rather than being silently ignored.
 
 ### Username Formats
 
@@ -913,23 +959,11 @@ when the OU does not exist. It requires `account_source: waldur`.
 
 ## Plugin Structure
 
-```text
-plugins/ldap/
-├── pyproject.toml                        # Package metadata + entry points
-├── README.md
-├── examples/
-│   ├── welcome-email.txt.j2             # Plain text email template
-│   └── welcome-email.html.j2            # HTML email template
-├── waldur_site_agent_ldap/
-│   ├── __init__.py
-│   ├── backend.py                       # LdapUsernameBackend
-│   ├── client.py                        # LdapClient (ldap3-based)
-│   ├── email_sender.py                  # WelcomeEmailSender (SMTP + Jinja2)
-│   └── schemas.py                       # Pydantic validation schemas
-└── tests/
-    ├── __init__.py
-    └── test_email_sender.py             # Email sender unit tests (9 tests)
-```
+`waldur_site_agent_ldap/` holds the username backend (`backend.py`), the welcome email
+sender (`email_sender.py`), the Waldur-authoritative reconcile pass (`reconcile.py`),
+project-group writing (`project_groups.py`) and the settings schema (`schemas.py`); the
+LDAP connection itself comes from the shared [ldap-client](../ldap-client/README.md)
+package. Welcome email templates are in `examples/`, unit tests in `tests/`.
 
 ### Entry Points
 
@@ -944,24 +978,26 @@ ldap = "waldur_site_agent_ldap.schemas:LdapBackendSettingsSchema"
 ## Testing
 
 ```bash
-# Run unit tests
-.venv/bin/python -m pytest plugins/ldap/tests/ -v
+# Run unit tests (from the plugin directory, so its entry points resolve)
+cd plugins/ldap && uv run pytest tests/ -v
 
 # Run LDAP E2E tests (requires running LDAP + SLURM emulator + Waldur)
 WALDUR_E2E_TESTS=true \
 WALDUR_E2E_LDAP_CONFIG=ci/e2e-ci-config-ldap.yaml \
 WALDUR_E2E_PROJECT_A_UUID=<uuid> \
-.venv/bin/python -m pytest plugins/slurm/tests/e2e/test_e2e_ldap.py -v
+uv run pytest tests/e2e/test_e2e_ldap.py -v   # from plugins/slurm
 ```
 
 ### E2E Test Coverage
 
 The LDAP E2E tests (`plugins/slurm/tests/e2e/test_e2e_ldap.py`) cover:
 
-| Test Class | Tests | Focus |
-|------------|-------|-------|
-| `TestLdapResourceLifecycle` | 3 | Create, update limits, terminate SLURM resource with LDAP integration |
-| `TestLdapMembershipSync` | 7 | User provisioning, project groups, access groups, SLURM associations |
-| `TestLdapUsageReporting` | 4 | Usage injection and verification with component mapper |
-| `TestLdapBackwardCompat` | 3 | Passthrough vs conversion component mapping |
-| `TestLdapWelcomeEmail` | 5 | Email sending, credential delivery, recipient validation |
+| Test Class | Focus |
+|------------|-------|
+| `TestLdapResourceLifecycle` | Create, update limits, terminate SLURM resource with LDAP integration |
+| `TestLdapMembershipSync` | User provisioning, project groups, access groups, SLURM associations |
+| `TestLdapUsageReporting` | Usage injection and verification with component mapper |
+| `TestLdapBackwardCompat` | Passthrough vs conversion component mapping |
+| `TestLdapWelcomeEmail` | Email sending, credential delivery, recipient validation |
+| `TestLdapWaldurAuthoritative` | `account_source: waldur` — accounts and ids from Waldur, reconcile, departure |
+| `TestLdapProviderProjectGroups` | Project groups written from Waldur's provider project groups |

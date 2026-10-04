@@ -5,6 +5,25 @@ Nextcloud plugin for [Waldur Site Agent](https://github.com/waldur/waldur-site-a
 Users purchase storage plans in Waldur and automatically receive access to a shared
 Nextcloud Group Folder. Login is via Keycloak OIDC.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `nextcloud` | `waldur_site_agent.backends` | order processing, membership sync, reporting |
+
+**Modes:** `order_process`, `membership_sync`, `report`, `event_process` (recommended).
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | Nextcloud group and Group Folder with the ordered quota |
+| Terminate resource | Deletes the Group Folder and the group |
+| Update limits | Sets the Group Folder quota |
+| Add / remove members | Adds / removes users in the Nextcloud group |
+| Pause | Sets the folder quota to 0 |
+| Downscale | Sets the folder quota to 1 GiB |
+| Restore | **No-op** — returns `False`; the quota comes back with the next limit update |
+| Usage reporting | Group Folder bytes used |
+
 ## How it works
 
 - Each Waldur resource → a Nextcloud **Group** + **Group Folder** (with quota from the plan)
@@ -25,9 +44,9 @@ In the OIDC provider settings, set the user ID attribute to `preferred_username`
 ```yaml
 offerings:
   - name: "Nextcloud Storage"
-    waldur_api_url: "https://sky.sigma2.no/api/"
-    waldur_api_token: "${SITE_AGENT_API_TOKEN}"
-    waldur_offering_uuid: "${OFFERING_UUID}"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<site agent api token>"
+    waldur_offering_uuid: "<offering uuid>"
     backend_type: "nextcloud"
     order_processing_backend: "nextcloud"
     membership_sync_backend: "nextcloud"
@@ -41,7 +60,7 @@ offerings:
     backend_settings:
       nextcloud_url: "https://nextcloud.example.com"
       admin_username: "admin"
-      admin_password: "${NEXTCLOUD_ADMIN_PASSWORD}"
+      admin_password: "<nextcloud admin or app password>"
       group_prefix: "waldur-"          # prefix for auto-created groups
       default_storage_quota_gb: 25     # fallback if plan has no storage limit (GiB)
       allow_resharing: false           # allow users to reshare folder contents
@@ -61,10 +80,17 @@ offerings:
 |-----|---------|-------------|
 | `nextcloud_url` | *(required)* | Base URL of the Nextcloud instance |
 | `admin_username` | *(required)* | Admin account for OCS API calls |
-| `admin_password` | *(required)* | Admin password (use env var substitution) |
+| `admin_password` | *(required)* | Admin password or app password |
 | `group_prefix` | `"waldur-"` | Prefix prepended to every auto-created group name |
 | `default_storage_quota_gb` | `25` | Fallback quota (GiB) when the Waldur plan has no storage limit |
 | `allow_resharing` | `false` | If `false`, group members cannot reshare folder contents |
+
+The agent does not expand `${VAR}` references in its configuration file; write the values
+in, or generate the file from a template at deploy time. The settings are validated by
+`waldur_site_agent_nextcloud.schemas.NextcloudBackendSettingsSchema`; a misspelt or missing
+required key is logged as a warning when the agent loads its configuration, and the backend
+refuses to start without the required ones. The backend also requires a `storage` component
+with `accounting_type: limit`.
 
 ### STOMP settings reference
 
@@ -84,3 +110,9 @@ retry); this higher value is specific to Nextcloud's create-order path.
 
 Note: the retry only helps when the team is entirely absent.  A non-empty
 but stale team (new member not yet committed) breaks on the first attempt.
+
+## Tests
+
+```bash
+cd plugins/nextcloud && uv run pytest tests/
+```

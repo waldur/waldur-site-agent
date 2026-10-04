@@ -619,14 +619,14 @@ class RootConfiguration(BaseModel):
             # Convert backend_components dict to BackendComponent instances
             if "backend_components" in offering_data:
                 components = {}
-                backend_type = offering_data.get("backend_type", "")
+                from waldur_site_agent.common import plugin_schemas  # noqa: PLC0415
+
+                backend_names = plugin_schemas.offering_backend_names(offering_data)
 
                 for name, component_data in offering_data["backend_components"].items():
-                    # Apply plugin-specific validation if available
-                    from waldur_site_agent.common import plugin_schemas  # noqa: PLC0415
-
-                    validated_data = plugin_schemas.validate_component_with_plugin_schema(
-                        backend_type, name, component_data
+                    # Apply the schemas of every backend the offering uses
+                    validated_data = plugin_schemas.validate_component_for_backends(
+                        backend_names, name, component_data
                     )
                     components[name] = BackendComponent(**validated_data)
                 offering_data["backend_components"] = components
@@ -635,9 +635,9 @@ class RootConfiguration(BaseModel):
             if "backend_settings" in offering_data:
                 from waldur_site_agent.common import plugin_schemas  # noqa: PLC0415
 
-                backend_type = offering_data.get("backend_type", "")
-                validated_settings = plugin_schemas.validate_backend_settings_with_plugin_schema(
-                    backend_type, offering_data["backend_settings"]
+                validated_settings = plugin_schemas.validate_backend_settings_for_backends(
+                    plugin_schemas.offering_backend_names(offering_data),
+                    offering_data["backend_settings"],
                 )
                 offering_data["backend_settings"] = validated_settings
 

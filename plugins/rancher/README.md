@@ -3,6 +3,23 @@
 This plugin enables integration between Waldur Site Agent and Rancher for Kubernetes project management with optional
 Keycloak user group integration.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `rancher` | `waldur_site_agent.backends` | order processing, membership sync, reporting |
+
+**Modes:** `order_process`, `membership_sync`, `report`, `event_process`.
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | Project `{project_prefix}{resource slug}`, namespace, ResourceQuota; Keycloak groups if enabled |
+| Terminate resource | Deletes the Rancher project |
+| Update limits | Updates the namespace ResourceQuota |
+| Add / remove members | Project role binding, and Keycloak group membership when enabled |
+| Pause / downscale / restore | **No-op** — returns `False`, quotas are not changed |
+| Usage reporting | `status.used` of the project's ResourceQuotas |
+
 ## Features
 
 - **Rancher Project Management**: Creates and manages Rancher projects with resource-specific naming
@@ -189,52 +206,57 @@ uv run waldur_site_diagnostics -c rancher-offering-config.yaml
 
 ## Configuration
 
-### Basic Configuration (Rancher only)
+### Basic configuration (Rancher only)
 
 ```yaml
-waldur:
-  api_url: "https://waldur.example.com/api/"
-  token: "your-waldur-api-token-here"
-
 offerings:
   - name: "rancher-projects"
-    uuid: "12345678-1234-5678-9abc-123456789012"
-    backend_type: "rancher"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<rancher offering uuid>"
 
-    backend:
+    backend_type: "rancher"
+    order_processing_backend: "rancher"
+    membership_sync_backend: "rancher"
+    reporting_backend: "rancher"
+
+    backend_settings:
       backend_url: "https://rancher.example.com"
-      username: "your-rancher-access-key"
-      password: "your-rancher-secret-key"
+      username: "<rancher access key>"
+      password: "<rancher secret key>"
       cluster_id: "c-m-1234abcd"
       verify_cert: true
       project_prefix: "waldur-"
       default_role: "workloads-manage"
       keycloak_enabled: false
 
-    components:
+    backend_components:
       cpu:
         type: "cpu"
-        name: "CPU"
         measured_unit: "cores"
-        billing_type: "fixed"
+        accounting_type: "limit"
+        label: "CPU"
+        unit_factor: 1
 ```
 
-### Full Configuration (with Keycloak)
+### Full configuration (with Keycloak)
 
 ```yaml
-waldur:
-  api_url: "https://waldur.example.com/api/"
-  token: "your-waldur-api-token-here"
-
 offerings:
   - name: "rancher-kubernetes"
-    uuid: "12345678-1234-5678-9abc-123456789012"
-    backend_type: "rancher"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<rancher offering uuid>"
 
-    backend:
+    backend_type: "rancher"
+    order_processing_backend: "rancher"
+    membership_sync_backend: "rancher"
+    reporting_backend: "rancher"
+
+    backend_settings:
       backend_url: "https://rancher.example.com"
-      username: "your-rancher-access-key"
-      password: "your-rancher-secret-key"
+      username: "<rancher access key>"
+      password: "<rancher secret key>"
       cluster_id: "c-m-1234abcd"
       verify_cert: true
       project_prefix: "waldur-"
@@ -246,60 +268,74 @@ offerings:
         keycloak_realm: "waldur"
         keycloak_user_realm: "master"
         keycloak_username: "keycloak-admin"
-        keycloak_password: "your-keycloak-admin-password"
+        keycloak_password: "<keycloak admin password>"
         keycloak_ssl_verify: true
-        keycloak_sync_frequency: 15
 
-    components:
+    backend_components:
       cpu:
         type: "cpu"
-        name: "CPU"
         measured_unit: "cores"
-        billing_type: "fixed"
+        accounting_type: "limit"
+        label: "CPU"
+        unit_factor: 1
       memory:
         type: "ram"
-        name: "RAM"
         measured_unit: "GB"
-        billing_type: "fixed"
+        accounting_type: "limit"
+        label: "RAM"
+        unit_factor: 1
       storage:
         type: "storage"
-        name: "Storage"
         measured_unit: "GB"
-        billing_type: "fixed"
-      pods:
-        type: "pods"
-        name: "Pods"
-        measured_unit: "pods"
-        billing_type: "fixed"
+        accounting_type: "limit"
+        label: "Storage"
+        unit_factor: 1
 ```
 
 ## Configuration Reference
 
-### Rancher Settings (matching waldur-mastermind format)
+The settings are validated by `waldur_site_agent_rancher.schemas.RancherBackendSettingsSchema`
+(the `keycloak:` block by the [keycloak-client](../keycloak-client/README.md) schema); a misspelt
+key is logged as a warning when the agent loads its configuration.
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `backend_url` | string | Yes | - | Rancher server URL (e.g., <https://rancher.example.com>) |
-| `username` | string | Yes | - | Rancher access key (called username in waldur-mastermind) |
-| `password` | string | Yes | - | Rancher secret key |
-| `cluster_id` | string | Yes | - | Rancher cluster ID (e.g., c-m-1234abcd, not c-m-1234abcd:p-xxxxx) |
-| `verify_cert` | boolean | No | true | Whether to verify SSL certificates |
-| `project_prefix` | string | No | "waldur-" | Prefix for created Rancher project names |
-| `default_role` | string | No | "workloads-manage" | Default role assigned to users in Rancher |
-| `keycloak_use_user_id` | boolean | No | true | Use Keycloak user ID for lookup (false = use username) |
-| `namespace_labels` | map | No | {} | Extra labels applied to namespaces (e.g., `gpu-pool: h100-2x`) |
+### Rancher settings (matching waldur-mastermind format)
 
-### Keycloak Settings (optional, matching waldur-mastermind format)
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `backend_url` | string | `https://localhost` | Rancher server URL; the API is `<backend_url>/v3` |
+| `username` | string | empty | Rancher access key (called username in waldur-mastermind) |
+| `password` | string | empty | Rancher secret key |
+| `cluster_id` | string | empty | Rancher cluster ID (e.g. `c-m-1234abcd`, not `c-m-1234abcd:p-xxxxx`) |
+| `verify_cert` | boolean or path | `true` | Verify TLS; a path names a CA bundle |
+| `project_prefix` | string | `waldur-` | Prefix for created Rancher project names |
+| `default_role` | string | `workloads-manage` | Default role assigned to users in Rancher |
+| `keycloak_use_user_id` | boolean | `true` | Use Keycloak user ID for lookup (false = use username) |
+| `namespace_labels` | map | `{}` | Extra labels applied to namespaces (e.g., `gpu-pool: h100-2x`) |
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `keycloak_enabled` | boolean | No | false | Enable Keycloak integration |
-| `keycloak.keycloak_url` | string | Conditional | - | Keycloak server URL |
-| `keycloak.keycloak_realm` | string | Conditional | "waldur" | Keycloak realm name |
-| `keycloak.keycloak_user_realm` | string | Conditional | "master" | Keycloak user realm for auth |
-| `keycloak.keycloak_username` | string | Conditional | - | Keycloak admin username |
-| `keycloak.keycloak_password` | string | Conditional | - | Keycloak admin password |
-| `keycloak.keycloak_ssl_verify` | boolean | No | true | Whether to verify SSL certificates |
+Nothing is enforced as required, but without `backend_url`, `username`, `password` and
+`cluster_id` the agent cannot reach Rancher.
+
+### Keycloak settings (optional)
+
+`keycloak_enabled: true` turns the integration on; the `keycloak:` block takes the keys
+described in the [keycloak-client README](../keycloak-client/README.md): `keycloak_url`,
+`keycloak_realm`, `keycloak_user_realm`, `client_id`, `keycloak_username`,
+`keycloak_password`, `keycloak_ssl_verify`.
+
+### Component settings
+
+Each component's `type` decides which ResourceQuota key it sets:
+
+| `type` | Quota key |
+|---|---|
+| `cpu` | `limits.cpu` |
+| `ram` | `limits.memory` |
+| `storage` | `requests.storage` |
+| `gpu` | `requests.nvidia.com/gpu` |
+
+A component may name its quota key explicitly with `k8s_resource` (it becomes
+`requests.<k8s_resource>`); a component with neither a known `type` nor
+`k8s_resource` — for example `pods` — sets no quota.
 
 ## Usage
 
@@ -331,7 +367,7 @@ uv run waldur_site_diagnostics -c rancher-config.yaml
 
 When a Waldur resource (representing project access) is created:
 
-1. A Rancher project is created with the name `{project_prefix}{waldur_project_slug}`
+1. A Rancher project is created with the name `{project_prefix}{waldur_resource_slug}`
 2. If Keycloak is enabled, hierarchical groups are created:
    - **Parent Group**: `c_{cluster_uuid_hex}` (cluster-level access)
    - **Child Group**: `project_{project_uuid_hex}_{role_name}` (project + role access)
@@ -369,7 +405,7 @@ Where:
 
 ## Supported Components and Accounting Model
 
-The plugin supports the following resource components (all with `billing_type: "limit"`):
+The plugin supports the following resource components (all with `accounting_type: "limit"`):
 
 - **CPU**: Measured in cores
 - **Memory**: Measured in GB
@@ -378,23 +414,17 @@ The plugin supports the following resource components (all with `billing_type: "
 
 ### Accounting Model
 
-**Project Limits (Quotas)**:
+**Project limits (quotas)**: every component whose `type` or `k8s_resource` maps to a
+ResourceQuota key (see [Component settings](#component-settings)) is set on the project
+namespace — CPU, memory, storage and GPU by default.
 
-- Only **CPU and memory limits** are set as Rancher project quotas
-- Storage is not enforced as quotas (reported only)
-
-**Usage Reporting** (for all components):
-
-All components report **actual allocated resources**:
-
-- **CPU**: Sum of all container CPU requests in the project
-- **Memory**: Sum of all container memory requests in the project
-- **Storage**: Sum of all persistent volume claims in the project
+**Usage reporting**: the reported usage is the `status.used` of the ResourceQuotas in the
+project's namespaces, summed per component; a component without a quota key reports `0`.
 
 ### Accounting Flow
 
-1. **Project Creation**: CPU and memory limits → Rancher project quotas
-2. **Usage Reporting**: All components → actual allocated resources from Kubernetes
+1. **Project creation**: component limits → namespace ResourceQuota
+2. **Usage reporting**: ResourceQuota `status.used` → Waldur usage
 
 ## GPU Scheduling
 
@@ -420,53 +450,42 @@ specifies the GPU pool label:
 offerings:
   # Offering for H100 GPU pool
   - name: "k8s-gpu-h100"
-    uuid: "..."
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<h100 offering uuid>"
     backend_type: "rancher"
-    backend:
+    order_processing_backend: "rancher"
+    membership_sync_backend: "rancher"
+    reporting_backend: "rancher"
+    backend_settings:
       backend_url: "https://rancher.example.com"
-      username: "..."
-      password: "..."
+      username: "<rancher access key>"
+      password: "<rancher secret key>"
       cluster_id: "c-m-1234abcd"
       namespace_labels:
         gpu-pool: "h100-2x"
-    components:
+    backend_components:
       cpu:
         type: "cpu"
-        name: "CPU"
         measured_unit: "cores"
+        accounting_type: "limit"
+        label: "CPU"
+        unit_factor: 1
       memory:
         type: "ram"
-        name: "RAM"
         measured_unit: "GB"
+        accounting_type: "limit"
+        label: "RAM"
+        unit_factor: 1
       gpu:
         type: "gpu"
-        name: "GPU"
         measured_unit: "units"
+        accounting_type: "limit"
+        label: "GPU"
+        unit_factor: 1
 
-  # Offering for H200 GPU pool
-  - name: "k8s-gpu-h200"
-    uuid: "..."
-    backend_type: "rancher"
-    backend:
-      backend_url: "https://rancher.example.com"
-      username: "..."
-      password: "..."
-      cluster_id: "c-m-1234abcd"
-      namespace_labels:
-        gpu-pool: "h200-8x"
-    components:
-      cpu:
-        type: "cpu"
-        name: "CPU"
-        measured_unit: "cores"
-      memory:
-        type: "ram"
-        name: "RAM"
-        measured_unit: "GB"
-      gpu:
-        type: "gpu"
-        name: "GPU"
-        measured_unit: "units"
+  # Offering for H200 GPU pool: the same, with its own offering UUID and
+  # namespace_labels: {gpu-pool: "h200-8x"}
 ```
 
 ### Required Kubernetes Setup
@@ -607,7 +626,8 @@ The plugin provides end-to-end automation for Rancher project and user managemen
 ### Running Tests
 
 ```bash
-uv run pytest plugins/rancher/tests/
+# From the plugin directory, so its entry points resolve
+cd plugins/rancher && uv run pytest tests/
 ```
 
 ### Code Quality

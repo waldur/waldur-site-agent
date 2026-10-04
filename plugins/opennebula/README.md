@@ -11,6 +11,24 @@ It supports two independent offering modes:
 Each mode is configured as a separate Waldur offering with its own
 `resource_type` setting.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `opennebula` | `waldur_site_agent.backends` | order processing, membership sync (Keycloak), reporting |
+
+**Modes:** `order_process`, `report`, and `membership_sync` / `event_process` when the
+Keycloak integration manages VDC members.
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | VDC: group, VDC, quotas, optional networking and user. VM: from the template, sized by the plan |
+| Terminate resource | Deletes the VDC (with its networking and user) or terminates the VM |
+| Update limits | VDC: group quotas. VM: resize (power off, resize, power on) |
+| Add / remove members | Keycloak group membership when `keycloak_enabled`; otherwise nothing |
+| Pause / downscale / restore | **No-op** — returns `True` without changing anything |
+| Usage reporting | VDC: group quota usage counters. VM: current allocation |
+
 ## Features
 
 ### VDC Management
@@ -84,7 +102,13 @@ at startup via `extend_backend_components()`.
 ```yaml
 offerings:
   - name: "OpenNebula VDC"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<offering uuid>"
     backend_type: "opennebula"
+    order_processing_backend: "opennebula"
+    membership_sync_backend: "opennebula"   # only does something with keycloak_enabled
+    reporting_backend: "opennebula"
     backend_settings:
       api_url: "http://opennebula-host:2633/RPC2"
       credentials: "oneadmin:password"
@@ -100,7 +124,12 @@ defined by Waldur plan quotas (FIXED components), not by resource limits.
 ```yaml
 offerings:
   - name: "OpenNebula VM"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<offering uuid>"
     backend_type: "opennebula"
+    order_processing_backend: "opennebula"
+    reporting_backend: "opennebula"
     backend_settings:
       api_url: "http://opennebula-host:2633/RPC2"
       credentials: "oneadmin:password"
@@ -143,7 +172,12 @@ Agent config is the same as any VM offering:
 ```yaml
 offerings:
   - name: "vLLM Inference (OpenNebula)"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<offering uuid>"
     backend_type: "opennebula"
+    order_processing_backend: "opennebula"
+    reporting_backend: "opennebula"
     backend_settings:
       api_url: "http://opennebula-host:2633/RPC2"
       credentials: "oneadmin:password"
@@ -224,6 +258,19 @@ curl {backend_metadata_endpoint}/v1/models
 | `parent_vdc_backend_id` | No | - | Parent VDC name (VM mode only) |
 | `template_id` | No | - | VM template ID (VM mode only) |
 | `sched_requirements` | No | - | OpenNebula scheduling expression |
+| `keycloak_enabled` | No | `false` | Manage VDC members through Keycloak groups |
+| `keycloak` | No | - | Keycloak connection, see the [keycloak-client README](../keycloak-client/README.md) |
+| `saml_mapping_file` | No | `/var/lib/one/keycloak_groups.yaml` | SAML group mapping file written for OpenNebula |
+| `default_user_role` | No | `user` | VDC role for members without a mapped role |
+| `vdc_roles` | No | admin, user, cloud | VDC role definitions, see [the SAML setup guide](docs/saml-setup/index.md) |
+
+The networking keys (`external_network_id`, `virtual_router_template_id`, `vn_mad`,
+`vxlan_phydev`, `default_dns`, `internal_network_base`, `internal_network_prefix`,
+`subnet_prefix_length`, `security_group_defaults`) normally live in the offering's
+`plugin_options` (below); the agent falls back to `backend_settings` for any that are
+not set there. The settings are validated by
+`waldur_site_agent_opennebula.schemas.OpenNebulaBackendSettingsSchema`; a misspelt or
+missing required key is logged as a warning when the agent loads its configuration.
 
 Settings can also be provided via the Waldur offering's `plugin_options`,
 which take precedence over `backend_settings` for `parent_vdc_backend_id`,
@@ -547,17 +594,9 @@ decrease when VMs are stopped or deleted.
 
 ### Component Overview
 
-```text
-plugins/opennebula/
-+-- waldur_site_agent_opennebula/
-|   +-- backend.py          # OpenNebulaBackend (BaseBackend subclass)
-|   +-- client.py           # OpenNebulaClient (BaseClient subclass)
-+-- tests/
-|   +-- conftest.py          # Shared fixtures
-|   +-- test_backend.py      # 233 unit tests
-|   +-- test_integration.py  # 20 integration tests (real OpenNebula)
-+-- pyproject.toml           # Package config + entry point
-```
+`waldur_site_agent_opennebula/` holds the backend (`backend.py`), the pyone client
+(`client.py`) and the settings schema (`schemas.py`); unit tests, the gated
+integration tests and the SAML/Keycloak tests are in `tests/`.
 
 ### Backend (backend.py)
 
@@ -605,6 +644,9 @@ uv run waldur_site_agent -m order_process -c config.yaml
 
 # Usage reporting (quota counters / VM allocation to Waldur)
 uv run waldur_site_agent -m report -c config.yaml
+
+# Keycloak group membership for VDC members (keycloak_enabled: true)
+uv run waldur_site_agent -m membership_sync -c config.yaml
 ```
 
 ## Testing
@@ -612,14 +654,17 @@ uv run waldur_site_agent -m report -c config.yaml
 ### Running Unit Tests
 
 ```bash
-# All unit tests (239 tests)
-uv run pytest plugins/opennebula/tests/test_backend.py -v
+# From the plugin directory, so its entry points resolve
+cd plugins/opennebula
+
+# All unit tests
+uv run pytest tests/ -v
 
 # With coverage
-uv run pytest plugins/opennebula/tests/ --cov=waldur_site_agent_opennebula
+uv run pytest tests/ --cov=waldur_site_agent_opennebula
 
 # Specific test class
-uv run pytest plugins/opennebula/tests/test_backend.py::TestVDCCreateWithNetworking -v
+uv run pytest tests/test_backend.py::TestVDCCreateWithNetworking -v
 ```
 
 ### Running Integration Tests
@@ -633,7 +678,7 @@ OPENNEBULA_API_URL="http://opennebula-host:2633/RPC2" \
 OPENNEBULA_CREDENTIALS="oneadmin:password" \
 OPENNEBULA_CLUSTER_IDS="0,100" \
 OPENNEBULA_VM_TEMPLATE_ID="0" \
-uv run pytest plugins/opennebula/tests/test_integration.py -v
+uv run pytest tests/test_integration.py -v   # from plugins/opennebula
 ```
 
 | Variable | Required | Description |
@@ -650,50 +695,10 @@ reset password, and clean up.
 
 ### Test Structure
 
-```text
-tests/test_backend.py (233 unit tests)
-+-- TestOpenNebulaClientQuotaTemplate      # Quota template building
-+-- TestOpenNebulaClientParseQuotaUsage    # Usage parsing from group info
-+-- TestOpenNebulaClientParseQuotaLimits   # Limits parsing from group info
-+-- TestOpenNebulaClientOperations         # VDC/group CRUD + rollback
-+-- TestOpenNebulaBackendInit              # Constructor + empty components
-+-- TestOpenNebulaBackendMethods           # ping, limits, usage, no-ops
-+-- TestOpenNebulaClientSubnetAllocation   # Next-available subnet logic
-+-- TestOpenNebulaClientNetworkOps         # VNet, VR, SG CRUD
-+-- TestVDCCreateWithNetworking            # Full orchestration + rollback
-+-- TestVDCDeleteWithNetworking            # Reverse teardown
-+-- TestOpenNebulaBackendNetworkConfig     # plugin_options parsing
-+-- TestQuotaTemplateWithFloatingIP        # Network quota section
-+-- TestOpenNebulaClientVMOperations       # VM create, terminate, get
-+-- TestOpenNebulaBackendVMInit            # VM backend constructor
-+-- TestOpenNebulaBackendVMCreation        # VM create from plan quotas
-+-- TestOpenNebulaBackendVMDeletion        # VM terminate
-+-- TestOpenNebulaBackendVMUsage           # VM usage reporting
-+-- TestOpenNebulaBackendVMMetadata        # VM metadata (IP, template)
-+-- TestOpenNebulaClientUserManagement     # User CRUD (create, delete, creds)
-+-- TestOpenNebulaVDCUserCreation          # VDC user creation integration
-+-- TestPasswordResetScaffold              # Password reset backend method
-+-- TestIdempotencyRetryPaths              # Connection reset retry handling
-+-- TestVDCCreationEdgeCases               # VDC edge cases
-+-- TestNetworkingEdgeCases                # Networking edge cases
-+-- TestVDCDeletionEdgeCases               # Deletion edge cases
-+-- TestVDCLimitUpdateEdgeCases            # Quota update edge cases
-+-- TestVDCUsageReportEdgeCases            # Usage report edge cases
-+-- TestVMCreationEdgeCases                # VM creation edge cases
-+-- TestVMDeletionEdgeCases                # VM deletion edge cases
-+-- TestVMUsageReportEdgeCases             # VM usage edge cases
-+-- TestVMMetadataEdgeCases                # VM metadata edge cases
-+-- TestPingAndConfigEdgeCases             # Connectivity edge cases
-+-- TestSSHKeyResolution                   # SSH key from attributes/UUID
-+-- TestWaitForVMRunning                   # VM state polling
-+-- TestSchedRequirements                  # SCHED_REQUIREMENTS injection
-+-- TestOpenNebulaClientVMResize           # VM resize (poweroff/resize/resume)
-+-- TestOpenNebulaBackendVMResize          # Backend resize dispatch
-
-tests/test_integration.py (20 integration tests, gated)
-+-- TestVDCLifecycle                       # Full lifecycle: create -> VM -> cleanup
-+-- TestIdempotentCreate                   # Idempotent VDC and user creation
-```
+`tests/test_backend.py` covers the client and backend with mocked pyone calls,
+`tests/test_saml_integration*.py` the Keycloak/SAML membership path,
+`tests/test_settings_schema.py` the settings schema, and
+`tests/test_integration.py` the full lifecycle against a real OpenNebula (gated as above).
 
 ### Code Quality
 

@@ -479,11 +479,12 @@ intermittently returns HTTP 500. The flow:
 2. `_process_create_order()` returns `True`
 3. Processor calls `marketplace_orders_set_state_done.sync_detailed()`
 4. Server returns HTTP 500 -> `UnexpectedStatus` exception
-5. Generic exception handler at `processors.py:573` catches it
-6. Handler calls `set_state_erred` -> order marked ERRED despite success
+5. A 5xx is a transient Waldur API error: `process_order` re-raises it and
+   `process_order_with_retries` tries the order again, so it is not marked
+   ERRED. A failure after the order is already DONE never marks it ERRED.
 
-**Impact:** Tests must tolerate ERRED state and verify actual
-resource state.
+**Impact:** older agents marked the order ERRED here despite success; tests
+still tolerate ERRED and verify the actual resource state.
 
 **Mitigation:** `_run_processor_until_order_terminal()` returns the
 final `OrderState` without failing. Tests verify resource state
@@ -505,9 +506,9 @@ The original resource retains its `backend_id` and is in `OK` state.
   when calling `UUID("")`
 - Terminate: `Empty backend_id for resource, skipping deletion`
 
-**Planned fix:** `_resolve_resource_backend_id()` helper in
-`processors.py` that falls back to listing resources in the same
-offering+project when `backend_id` is empty.
+**Not fixed yet.** A proposed fix — falling back to listing resources in
+the same offering and project when `backend_id` is empty — has not been
+implemented; no such helper exists in `processors.py`.
 
 ### 3. Target STOMP WebSocket Not Configured
 
@@ -539,6 +540,22 @@ caused by heartbeat timeout mismatch between client (10s) and server.
 
 **Impact:** Functional but generates log noise. May miss events during
 reconnection window.
+
+## Test Scenarios: Other Suites
+
+Each module's docstring is the authoritative description; in short:
+
+- **`test_e2e_usage_sync.py`** — submits total and per-user component usage on
+  Waldur B, runs `OfferingReportProcessor`, and verifies the usages on Waldur A
+  with the reverse component conversion applied.
+- **`test_e2e_username_sync.py`** — creates matching offering users on both
+  sides, sets a username on Waldur B, runs `sync_offering_user_usernames`, and
+  verifies Waldur A carries the Waldur B username.
+- **`test_e2e_offering_user_pubsub.py`** — subscribes to `OFFERING_USER` over
+  STOMP and verifies that attribute updates and offering-user create/update on
+  Waldur A reach the agent's handler.
+- **`test_e2e_order_rejection.py`** — rejects the target order on Waldur B and
+  verifies the source order on Waldur A ends ERRED.
 
 ## Test Infrastructure
 

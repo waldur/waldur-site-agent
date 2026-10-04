@@ -16,6 +16,25 @@ Two **flavours** reach the same RGW concepts by different routes:
 The flavours differ only inside the client. Everything above it — key lifecycle,
 quota mapping, metadata, Waldur plumbing — is shared.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `ceph_s3` | `waldur_site_agent.backends` | order processing, membership sync |
+| `croit_usage` | `waldur_site_agent.backends` | reporting (croit flavour only) |
+
+**Modes:** `order_process`, `membership_sync`, `event_process`, and `report` with
+`reporting_backend: croit_usage`.
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | S3 user under `{allocation_prefix}{resource slug}`, user and bucket quotas |
+| Terminate resource | Deletes the S3 user |
+| Update limits | Updates the quotas |
+| Add / remove members | **No-op** — returns `True`; one S3 user per resource, no per-member access |
+| Pause / downscale / restore | **No-op** — returns `True` without changing quotas |
+| Usage reporting | `ceph_s3`: **No-op** (reports nothing). `croit_usage`: GB-days from croit statistics |
+
 ## Features
 
 - **Automatic S3 User Creation**: One S3 user per marketplace resource with slug-based naming
@@ -123,6 +142,11 @@ operator did not intend.
 
 #### Backend Settings
 
+Both entry points validate these with
+`waldur_site_agent_ceph_s3.schemas.CephS3BackendSettingsSchema`; a misspelt key is logged
+as a warning when the agent loads its configuration. Which keys are required depends on
+the flavour and is checked when the backend starts.
+
 - **`flavour`** (optional, default: `"croit"`): `croit` or `radosgw`
 - **`api_url`** (croit only, required): croit **management** API base URL (/api is appended)
 - **`s3_endpoint`** (required): the S3 data endpoint tenants connect to. This is a
@@ -203,13 +227,14 @@ roughly double-counts. Leave it unset unless you want the log noise.
 
 ## Username Generation
 
-**Provisioned resources are named by the order processor, not by this plugin.**
-`_get_resource_backend_id()` in the core produces
-`f"{allocation_prefix}{resource_slug}".lower()`, and Waldur caps every slug at 10
-characters (`SLUG_NAME_LIMIT`), appending `-2`, `-3`, … on collision. So a resource
-named `cust-0-proj-0-ceph-s3-of` becomes the uid `cust-0-pro`.
+**Provisioned resources are named when the order is processed.** The plugin's
+`_get_resource_backend_id()` builds `f"{allocation_prefix}{resource_slug}".lower()`,
+with `allocation_prefix` defaulting to `waldur-` (not to the core's empty string), and
+Waldur caps every slug at 10 characters (`SLUG_NAME_LIMIT`), appending `-2`, `-3`, … on
+collision. So a resource named `cust-0-proj-0-ceph-s3-of` becomes the uid
+`waldur-cust-0-pro`.
 
-**Format**: `{allocation_prefix}{resource_slug}` — **Example**: `cust-0-pro`
+**Format**: `{allocation_prefix}{resource_slug}` — **Example**: `waldur-cust-0-pro`
 
 This is the only naming scheme the plugin has. A second one — `user_prefix`,
 `slug_separator`, `max_username_length` and a `create_resource()` that read them —
@@ -627,12 +652,12 @@ my_custom_component:
 
 The plugin includes comprehensive error handling:
 
-- **`CroitS3AuthenticationError`**: API authentication failures
-- **`CroitS3UserNotFoundError`**: User doesn't exist
-- **`CroitS3UserExistsError`**: User already exists
-- **`CroitS3GraphNotFoundError`**: the statistics graph behind usage reporting is missing
-- **`CroitS3APIError`**: General API errors
-- **`CroitS3Error`**: Base exception class
+- **`CephS3AuthenticationError`**: API authentication failures
+- **`CephS3UserNotFoundError`**: User doesn't exist
+- **`CephS3UserExistsError`**: User already exists
+- **`CroitS3GraphNotFoundError`**: the croit statistics graph behind usage reporting is missing
+- **`CephS3APIError`**: General API errors
+- **`CephS3Error`**: Base exception class
 
 ## Troubleshooting
 
@@ -660,8 +685,11 @@ Generation.
 
 Use standard Python logging configuration or waldur-site-agent logging settings to enable debug output for the plugin modules:
 
-- `waldur_site_agent_ceph_s3.client` - HTTP API interactions
+- `waldur_site_agent_ceph_s3.clients.croit` - croit API interactions
+- `waldur_site_agent_ceph_s3.clients.radosgw` - RadosGW admin API interactions
 - `waldur_site_agent_ceph_s3.backend` - Backend operations
+
+Set the top-level `log_level: DEBUG` in the agent configuration.
 
 ## Resource Lifecycle
 

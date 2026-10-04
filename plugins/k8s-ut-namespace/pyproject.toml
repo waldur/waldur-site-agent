@@ -22,6 +22,9 @@ waldur-site-agent-keycloak-client = { workspace = true }
 [project.entry-points."waldur_site_agent.backends"]
 k8s-ut-namespace = "waldur_site_agent_k8s_ut_namespace.backend:K8sUtNamespaceBackend"
 
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+k8s-ut-namespace = "waldur_site_agent_k8s_ut_namespace.schemas:K8sUtNamespaceBackendSettingsSchema"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

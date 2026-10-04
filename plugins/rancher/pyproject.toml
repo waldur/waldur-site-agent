@@ -23,6 +23,9 @@ waldur-site-agent-keycloak-client = { workspace = true }
 [project.entry-points."waldur_site_agent.backends"]
 rancher = "waldur_site_agent_rancher.backend:RancherBackend"
 
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+rancher = "waldur_site_agent_rancher.schemas:RancherBackendSettingsSchema"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

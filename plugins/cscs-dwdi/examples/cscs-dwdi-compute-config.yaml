@@ -1,0 +1,27 @@
+# Compute usage from CSCS-DWDI. Run with: waldur_site_agent -m report -c <file>
+
+offerings:
+  - name: "CSCS compute usage"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<offering uuid>"
+    backend_type: "cscs-dwdi-compute"
+    reporting_backend: "cscs-dwdi-compute"
+    backend_settings:
+      cscs_dwdi_api_url: "https://dwdi.example.com"
+      cscs_dwdi_client_id: "<oidc client id>"
+      cscs_dwdi_client_secret: "<oidc client secret>"
+      cscs_dwdi_oidc_token_url: "https://auth.example.com/realms/example/protocol/openid-connect/token"
+      cscs_dwdi_oidc_scope: "openid"
+      # socks_proxy: "socks5://localhost:12345"   # when the API is only reachable through a tunnel
+    backend_components:
+      nodeHours:
+        measured_unit: "node-hours"
+        unit_factor: 1
+        accounting_type: "usage"
+        label: "Node Hours"
+      cpuHours:
+        measured_unit: "cpu-hours"
+        unit_factor: 1
+        accounting_type: "usage"
+        label: "CPU Hours"

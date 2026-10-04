@@ -22,3 +22,8 @@ waldur-site-agent = { workspace = true }
 cscs-dwdi-compute = "waldur_site_agent_cscs_dwdi.backend:CSCSDWDIComputeBackend"
 cscs-dwdi-storage = "waldur_site_agent_cscs_dwdi.backend:CSCSDWDIStorageBackend"
 cscs-dwdi-inference = "waldur_site_agent_cscs_dwdi.backend:CSCSDWDIInferenceBackend"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+cscs-dwdi-compute = "waldur_site_agent_cscs_dwdi.schemas:CSCSDWDIBackendSettingsSchema"
+cscs-dwdi-inference = "waldur_site_agent_cscs_dwdi.schemas:CSCSDWDIBackendSettingsSchema"
+cscs-dwdi-storage = "waldur_site_agent_cscs_dwdi.schemas:CSCSDWDIStorageBackendSettingsSchema"

@@ -23,6 +23,9 @@ waldur-site-agent = { workspace = true }
 [project.entry-points."waldur_site_agent.backends"]
 rancher-kc-crd = "waldur_site_agent_rancher_kc_crd.backend:RancherKcCrdBackend"
 
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+rancher-kc-crd = "waldur_site_agent_rancher_kc_crd.schemas:RancherKcCrdBackendSettingsSchema"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

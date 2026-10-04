@@ -23,6 +23,9 @@ waldur-site-agent-keycloak-client = { workspace = true }
 [project.entry-points."waldur_site_agent.backends"]
 opennebula = "waldur_site_agent_opennebula.backend:OpenNebulaBackend"
 
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+opennebula = "waldur_site_agent_opennebula.schemas:OpenNebulaBackendSettingsSchema"
+
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [
   "S101",   # we can (and MUST!) use 'assert' in test files.

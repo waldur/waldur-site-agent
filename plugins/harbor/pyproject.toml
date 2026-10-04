@@ -21,6 +21,9 @@ waldur-site-agent = { workspace = true }
 [project.entry-points."waldur_site_agent.backends"]
 harbor = "waldur_site_agent_harbor.backend:HarborBackend"
 
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+harbor = "waldur_site_agent_harbor.schemas:HarborBackendSettingsSchema"
+
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [
   "S101",   # we can (and MUST!) use 'assert' in test files.

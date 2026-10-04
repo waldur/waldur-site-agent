@@ -3,6 +3,25 @@
 This plugin enables Waldur Site Agent to manage OKD/OpenShift projects and resources, providing integration between
 Waldur and OKD/OpenShift clusters.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `okd` | `waldur_site_agent.backends` | order processing, membership sync, reporting |
+
+**Modes:** `order_process`, `membership_sync`, `report`, `event_process`.
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | Creates an OpenShift project (`ProjectRequest`) and a ResourceQuota from the ordered limits |
+| Terminate resource | Deletes the project |
+| Update limits | Updates the ResourceQuota |
+| Add / remove members | Creates / deletes a RoleBinding with `default_role` |
+| Pause | Sets every quota to zero |
+| Downscale | Sets the quota to 1 core, 1 GB memory, 1 GB storage, 1 pod |
+| Restore | Sets fixed default quotas (10 cores, 32 GB, 100 GB, 50 pods), not the ordered limits |
+| Usage reporting | Current usage read from the ResourceQuota |
+
 ## Features
 
 - Automatic project/namespace creation for Waldur resources
@@ -16,40 +35,75 @@ Waldur and OKD/OpenShift clusters.
 Install the plugin alongside the core waldur-site-agent package:
 
 ```bash
-# Using uv (recommended)
-uv sync --extra okd
+# From a checkout of this repository: install the core and every plugin
+uv sync --all-packages
 
-# Or using pip
-pip install -e plugins/okd
+# Or from PyPI, into the same environment as the agent
+pip install waldur-site-agent waldur-site-agent-okd
 ```
 
 ## Configuration
 
-Create a configuration file (see `examples/okd-config.yaml` for a complete example):
+Add an offering to the agent configuration (see `examples/okd-config.yaml` for a complete file):
 
 ```yaml
-backend_type: okd
-backend_settings:
-  api_url: https://api.okd.example.com:8443
-  token: your-service-account-token
-  verify_cert: true
-  namespace_prefix: waldur-
-  default_role: edit
+offerings:
+  - name: "OKD projects"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<okd offering uuid>"
 
-backend_components:
-  cpu:
-    measured_unit: Core
-    accounting_type: limit
-  memory:
-    measured_unit: GB
-    accounting_type: limit
-  storage:
-    measured_unit: GB
-    accounting_type: limit
-  pods:
-    measured_unit: Count
-    accounting_type: limit
+    backend_type: "okd"
+    order_processing_backend: "okd"
+    membership_sync_backend: "okd"
+    reporting_backend: "okd"
+
+    backend_settings:
+      api_url: "https://api.okd.example.com:6443"
+      token: "<service account token>"
+      verify_cert: true
+      namespace_prefix: "waldur-"
+      default_role: "edit"
+
+    backend_components:
+      cpu:
+        measured_unit: "Core"
+        accounting_type: "limit"
+        label: "CPU cores"
+        unit_factor: 1
+      memory:
+        measured_unit: "GB"
+        accounting_type: "limit"
+        label: "Memory"
+        unit_factor: 1
+      storage:
+        measured_unit: "GB"
+        accounting_type: "limit"
+        label: "Storage"
+        unit_factor: 1
+      pods:
+        measured_unit: "Count"
+        accounting_type: "limit"
+        label: "Pods"
+        unit_factor: 1
 ```
+
+### Backend settings
+
+Validated by `waldur_site_agent_okd.schemas.OkdBackendSettingsSchema`; a
+misspelt key is logged as a warning when the agent loads its configuration.
+
+| Setting | Required | Default | Description |
+|---|---|---|---|
+| `api_url` | no | `https://localhost:8443` | OpenShift/OKD API URL |
+| `token` | no | empty | Static bearer token (ignored when `token_config` is set) |
+| `token_config` | no | — | Token refresh, see below |
+| `verify_cert` | no | `true` | Verify the API's TLS certificate; a path names a CA bundle |
+| `namespace_prefix` | no | `waldur-` | Prefix of managed namespaces |
+| `customer_prefix` | no | `org-` | Prefix of customer-level ids |
+| `project_prefix` | no | `proj-` | Prefix of project-level ids |
+| `allocation_prefix` | no | `alloc-` | Prefix of allocation namespaces |
+| `default_role` | no | `edit` | ClusterRole bound to members |
 
 ### Authentication Token Management
 
@@ -366,24 +420,11 @@ waldur_site_agent -m event_process -c okd-config.yaml
 - `membership_sync`: Synchronize user memberships between Waldur and OKD
 - `event_process`: Process events via STOMP (if configured)
 
-### Event Processing Configuration
+### Event processing
 
-For real-time event processing, configure STOMP settings in your configuration file:
-
-```yaml
-# Event processing mode configuration
-agent_mode: event_process
-
-# STOMP configuration for event processing
-event_processing:
-  stomp_host: your-stomp-broker.example.com
-  stomp_port: 61613
-  stomp_username: waldur-agent
-  stomp_password: your-secure-password
-  stomp_destination: /queue/waldur.events
-  stomp_ssl: true
-  stomp_heartbeat: 10000  # milliseconds
-```
+Event mode needs nothing OKD-specific: enable STOMP on the offering
+(`stomp_enabled: true`, see [Configuration](../../docs/configuration.md)) and run
+the agent with `-m event_process`.
 
 ## Resource Management
 
@@ -421,11 +462,8 @@ maps Waldur roles to OpenShift ClusterRoles for fine-grained access control.
 Run the plugin tests:
 
 ```bash
-# Run all OKD plugin tests
-uv run pytest plugins/okd/tests/
-
-# Run specific test
-uv run pytest plugins/okd/tests/test_okd_backend.py::TestOkdBackend::test_create_resource
+# From the plugin directory, so its entry points resolve
+cd plugins/okd && uv run pytest tests/
 ```
 
 ## Troubleshooting
@@ -507,13 +545,7 @@ If automatic token refresh fails:
 
 Enable debug logging for detailed token management information:
 
-```bash
-# Set log level to DEBUG in configuration
-log_level: DEBUG
-
-# Or use environment variable
-WALDUR_LOG_LEVEL=DEBUG waldur_site_agent -m order_process -c okd-config.yaml
-```
+Set the top-level `log_level: DEBUG` in the agent configuration.
 
 ### Diagnostics
 
@@ -528,21 +560,10 @@ waldur_site_diagnostics -c okd-config.yaml
 
 ### Plugin Structure
 
-```text
-plugins/okd/
-├── waldur_site_agent_okd/
-│   ├── __init__.py
-│   ├── backend.py       # Main backend implementation
-│   ├── client.py        # OKD API client with SSL handling
-│   └── token_manager.py # Authentication token management
-├── tests/
-│   └── test_okd_backend.py
-├── examples/
-│   ├── okd-config.yaml
-│   └── okd-config-with-token-refresh.yaml
-├── pyproject.toml
-└── README.md
-```
+`waldur_site_agent_okd/` holds the backend, the API client, the token manager
+and the settings schema; tests are in `tests/`, example configurations in
+`examples/` (cluster RBAC for the agent's service account in
+`examples/kubernetes/`).
 
 #### Key Components
 
@@ -553,7 +574,6 @@ plugins/okd/
   - File-based token refresh
   - Service account token mounting
   - OAuth refresh framework (future)
-- **Test scripts**: Validation and testing utilities for development
 
 ### Adding New Features
 
