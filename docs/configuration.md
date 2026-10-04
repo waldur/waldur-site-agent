@@ -191,7 +191,11 @@ username_management_backend: "base"  # Backend for username management
   the service provider added locally because Waldur validation blocked their
   offering user — are kept. Applies to every local-username backend
   (SLURM, MOAB, MUP, OKD, Harbor, …). Ignored for identity-bridge /
-  Waldur-to-Waldur federation.
+  Waldur-to-Waldur federation. If the unfiltered offering-user list cannot
+  be fetched, sync falls back to removing only users still present in the
+  filtered offering-user list for that pass; departed or restricted users
+  stay on the backend until the unfiltered list is reachable again, and the
+  agent logs which removals were deferred.
 
 ## Common Backend Settings
 

@@ -367,6 +367,8 @@ class OfferingBaseProcessor(abc.ABC):
         self._offering_users_cache: list[OfferingUser] | None = None
         # Unfiltered username set used when preserve_unmanaged_backend_users is on.
         self._known_offering_usernames_cache: Optional[set[str]] = None
+        # Set when the unfiltered fetch fails; remaining resources skip the retry.
+        self._known_offering_usernames_fetch_failed: bool = False
 
     def _print_current_user(self) -> None:
         """Log information about the current authenticated Waldur user."""
@@ -549,6 +551,7 @@ class OfferingBaseProcessor(abc.ABC):
         """
         self._offering_users_cache = None
         self._known_offering_usernames_cache = None
+        self._known_offering_usernames_fetch_failed = False
 
     def _check_backend_id_uniqueness(self, backend_id: str) -> bool:
         """Check if backend_id is unique across offering history.
@@ -2798,8 +2801,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         count as Waldur-managed so it gets removed -- see gh-13. Restricted offering
         users are included for the same reason.
 
-        Only called when preserve_unmanaged_backend_users is on. Fail closed: a
-        fetch error propagates so that resource skips removals this cycle.
+        Only called from _group_resource_usernames when preserve_unmanaged_backend_users
+        is on. Raises on failure; the caller applies a confirmed-managed fallback.
         """
         if self._known_offering_usernames_cache is None:
             offering_users = marketplace_offering_users_list.sync_all(
@@ -3120,16 +3123,46 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             and self.offering.preserve_unmanaged_backend_users
             and not use_identity_bridge
         ):
-            known_usernames = self._get_known_offering_usernames()
-            unmanaged = stale_usernames - known_usernames
-            stale_usernames &= known_usernames
-            if unmanaged:
-                logger.info(
-                    "Preserving %s backend user(s) unknown to Waldur on resource %s: %s",
-                    len(unmanaged),
-                    waldur_resource.backend_id,
-                    ", ".join(sorted(unmanaged)),
-                )
+            candidates = set(stale_usernames)
+            used_known_fetch_fallback = False
+            if self._known_offering_usernames_fetch_failed:
+                stale_usernames &= offering_user_usernames
+                used_known_fetch_fallback = True
+            else:
+                try:
+                    known_usernames = self._get_known_offering_usernames()
+                except Exception as exc:
+                    self._known_offering_usernames_fetch_failed = True
+                    stale_usernames &= offering_user_usernames
+                    used_known_fetch_fallback = True
+                    logger.error(
+                        "Unable to fetch unfiltered offering-user list for offering %s, "
+                        "using confirmed-managed removals only for resource %s this cycle: %s",
+                        self.offering.uuid,
+                        waldur_resource.backend_id,
+                        exc,
+                        exc_info=True,
+                    )
+                else:
+                    unmanaged = stale_usernames - known_usernames
+                    stale_usernames &= known_usernames
+                    if unmanaged:
+                        logger.info(
+                            "Preserving %s backend user(s) unknown to Waldur on resource %s: %s",
+                            len(unmanaged),
+                            waldur_resource.backend_id,
+                            ", ".join(sorted(unmanaged)),
+                        )
+            if used_known_fetch_fallback:
+                deferred = candidates - stale_usernames
+                if deferred:
+                    logger.error(
+                        "Deferring removal of %d backend user(s) on resource %s "
+                        "(unfiltered offering-user list unavailable): %s",
+                        len(deferred),
+                        waldur_resource.backend_id,
+                        ", ".join(sorted(deferred)),
+                    )
         logger.info(
             "Resource stale usernames (%s): %s", len(stale_usernames), ", ".join(stale_usernames)
         )

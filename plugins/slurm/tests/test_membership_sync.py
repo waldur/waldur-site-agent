@@ -53,16 +53,28 @@ def _grouping_processor(
     resource_backend: Optional[SimpleNamespace] = None,
     preserve_unmanaged: bool = False,
     known_usernames: Optional[set[str]] = None,
+    known_fetch_raises: bool = False,
+    known_fetch_failed: bool = False,
 ) -> tuple[OfferingMembershipProcessor, SimpleNamespace, SimpleNamespace]:
     """Minimal membership processor for _group_resource_usernames unit tests."""
     processor = object.__new__(OfferingMembershipProcessor)
     processor._team_cache = {}
     processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
     processor.resource_backend = resource_backend or SimpleNamespace(user_resolve_method=None)
-    processor.offering = SimpleNamespace(preserve_unmanaged_backend_users=preserve_unmanaged)
+    processor.offering = SimpleNamespace(
+        preserve_unmanaged_backend_users=preserve_unmanaged,
+        uuid="test-offering-uuid",
+    )
     processor.service_provider = None
+    processor._known_offering_usernames_fetch_failed = known_fetch_failed
     processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
-    if known_usernames is not None:
+    if known_fetch_raises:
+
+        def _raise_known_fetch() -> set[str]:
+            raise RuntimeError("offering-user listing failed")
+
+        processor._get_known_offering_usernames = _raise_known_fetch  # type: ignore[method-assign]
+    elif known_usernames is not None:
         processor._get_known_offering_usernames = (  # type: ignore[method-assign]
             lambda: set(known_usernames)
         )
@@ -866,6 +878,136 @@ class MembershipSyncTest(unittest.TestCase):
         )
 
         assert stale_usernames == {"restricted-user-01"}
+
+    def test_preserve_unmanaged_known_fetch_failure_uses_confirmed_managed_fallback(self) -> None:
+        """When the unfiltered list is unavailable, remove only offering_users seen this pass."""
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+        filtered_stale_ou = SimpleNamespace(
+            username="filtered-stale-user-01",
+            user_username="cuid:carol",
+            user_email=None,
+            state=None,
+        )
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            [
+                "sp-manual-user",
+                "departed-user-01",
+                "filtered-stale-user-01",
+                "remaining-user-01",
+            ],
+            preserve_unmanaged=True,
+            known_fetch_raises=True,
+        )
+
+        (
+            existing_usernames,
+            stale_usernames,
+            new_usernames,
+            _user_roles,
+            _user_emails,
+            _user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource,
+            backend_resource_info,
+            offering_users=[remaining_ou, filtered_stale_ou],
+        )
+
+        assert processor._known_offering_usernames_fetch_failed is True
+        assert stale_usernames == {"filtered-stale-user-01"}
+        assert "sp-manual-user" not in stale_usernames
+        assert "departed-user-01" not in stale_usernames
+        assert existing_usernames == {"remaining-user-01"}
+        assert new_usernames == set()
+
+    def test_preserve_unmanaged_known_fetch_failure_logs_deferred_removals(self) -> None:
+        """Departed users deferred by the fallback are logged at error level."""
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+        filtered_stale_ou = SimpleNamespace(
+            username="filtered-stale-user-01",
+            user_username="cuid:carol",
+            user_email=None,
+            state=None,
+        )
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            [
+                "sp-manual-user",
+                "departed-user-01",
+                "filtered-stale-user-01",
+                "remaining-user-01",
+            ],
+            preserve_unmanaged=True,
+            known_fetch_raises=True,
+        )
+
+        with self.assertLogs(level="ERROR") as log:
+            processor._group_resource_usernames(
+                waldur_resource,
+                backend_resource_info,
+                offering_users=[remaining_ou, filtered_stale_ou],
+            )
+
+        deferred_msgs = [
+            msg
+            for msg in log.output
+            if "Deferring removal of" in msg and "unfiltered offering-user list unavailable" in msg
+        ]
+        assert len(deferred_msgs) == 1
+        assert "departed-user-01" in deferred_msgs[0]
+        assert "filtered-stale-user-01" not in deferred_msgs[0]
+
+    def test_preserve_unmanaged_known_fetch_failure_sets_cycle_flag(self) -> None:
+        """After the first failure, later resources skip the unfiltered fetch."""
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            ["sp-manual-user", "remaining-user-01"],
+            preserve_unmanaged=True,
+            known_fetch_raises=True,
+        )
+        fetch_mock = mock.Mock(side_effect=RuntimeError("offering-user listing failed"))
+        processor._get_known_offering_usernames = fetch_mock  # type: ignore[method-assign]
+
+        processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[remaining_ou]
+        )
+        other_backend = SimpleNamespace(users=["sp-manual-user-02", "remaining-user-01"])
+        processor._group_resource_usernames(
+            waldur_resource, other_backend, offering_users=[remaining_ou]
+        )
+
+        assert fetch_mock.call_count == 1
+        assert processor._known_offering_usernames_fetch_failed is True
 
     def test_preserve_unmanaged_keeps_hand_added_user(self) -> None:
         """Username Waldur has never seen is kept on the backend."""

@@ -122,6 +122,7 @@ def _make_processor(cls):
     processor = cls.__new__(cls)
     processor._offering_users_cache = None
     processor._known_offering_usernames_cache = None
+    processor._known_offering_usernames_fetch_failed = False
     processor.waldur_rest_client = mock.Mock()
     processor.offering = mock.Mock()
     processor.offering.uuid = uuid.uuid4().hex
@@ -361,13 +362,22 @@ class TestKnownOfferingUsernames:
 
     @mock.patch("waldur_site_agent.common.processors.marketplace_offering_users_list")
     def test_fetch_error_propagates(self, mock_api):
-        """A listing failure must not be swallowed (fail closed: no removals)."""
+        """A listing failure must not be swallowed inside the fetcher."""
         mock_api.sync_all.side_effect = RuntimeError("waldur down")
         processor = _make_membership_processor()
 
         with pytest.raises(RuntimeError, match="waldur down"):
             processor._get_known_offering_usernames()
         assert processor._known_offering_usernames_cache is None
+
+    def test_invalidation_clears_fetch_failed_flag(self):
+        """_invalidate_offering_users_cache also resets the fetch-failed flag."""
+        processor = _make_membership_processor()
+        processor._known_offering_usernames_fetch_failed = True
+
+        processor._invalidate_offering_users_cache()
+
+        assert processor._known_offering_usernames_fetch_failed is False
 
 
 # ---------------------------------------------------------------------------
