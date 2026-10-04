@@ -5,26 +5,21 @@ Read the [general upgrade guide](../../../docs/upgrading.md) first.
 
 ## Required `backend_settings` keys
 
-The SLURM backend reads the following keys from `backend_settings`.
-Required keys must be present or the agent will fail to start.
+The full list of keys, with defaults, is the
+[`backend_settings` reference](../README.md#backend_settings-reference) in the
+plugin README. Four keys are required: `default_account`, `customer_prefix`,
+`project_prefix` and `allocation_prefix`.
 
-| Key | Required | Notes |
-|---|---|---|
-| `default_account` | **Yes** | `DefaultAccount=` set on user associations; must exist in the cluster |
-| `default_account_policy` | No | `common` (default), `individual`, or `none` — see below |
-| `root_account` | No | Parent of the top-tier customer account. Defaults to `default_account`, then `root` |
-| `customer_prefix` | **Yes** | Prefix for customer-level SLURM accounts |
-| `project_prefix` | **Yes** | Prefix for project-level SLURM accounts |
-| `allocation_prefix` | **Yes** | Prefix for allocation accounts |
-| `cluster_name` | No | Must match the offering's `backend_id` in Waldur; required in multi-cluster setups |
-| `slurm_bin_path` | No | Default `/usr/bin` |
-| `parent_account` | No | Set for flat hierarchies (no customer tier); omit for nested hierarchy |
-| `default_partition` | No | Fallback SLURM partition |
-| `enforce_offering_partitions` | No | Default `false` |
-| `enable_user_homedir_account_creation` | No | Default `true` |
-| `default_homedir_umask` | No | Default `0077` |
+A missing required key does **not** stop the agent from starting: plugin schema
+validation only logs `Plugin schema validation failed for slurm settings: …`
+and continues. The agent then fails later, when it first needs the key — for
+example when creating an account or running `waldur_site_diagnostics`. Check
+the agent log for that warning after upgrading, and read the
+[CHANGELOG](../../../CHANGELOG.md) for new keys before upgrading.
 
-Check the [CHANGELOG](../../../CHANGELOG.md) for any new required keys before upgrading.
+`cluster_name` is optional in CLI mode and required in REST mode. It must be a
+cluster SLURM knows (`sacctmgr list cluster`); `waldur_site_diagnostics` fails
+when it is not. By convention it matches the offering's `backend_id` in Waldur.
 
 ## `preserve_unmanaged_backend_users`
 
@@ -49,6 +44,13 @@ Remaining gaps — all of which leave the user in place, not remove them:
   account, remote-offering sync);
 - offering users hidden from the agent's token by
   `ENFORCE_USER_CONSENT_FOR_OFFERINGS` consent filtering.
+
+If the agent cannot fetch the unfiltered offering-user list in a cycle, it only
+removes users still present in the regular offering-user list for that cycle and
+logs the deferred removals at ERROR; departed and restricted users stay on the
+cluster until the list can be fetched again.
+
+<!-- docs-check: skip -->
 
 ```yaml
 offerings:
@@ -208,10 +210,11 @@ If any project was moved between customers while the agent was not running or
 was on an older version, the SLURM account parent may be stale. Trigger a sync
 by restarting the agent or waiting for one reconciliation interval.
 
-To check a specific account's parent directly:
+To check a specific account's parent directly (the account row is the one with
+an empty `User`; `sacctmgr show account` does not report `ParentName`):
 
 ```bash
-sacctmgr show account <allocation_account> format=Account,ParentName -P
+sacctmgr show assoc where account=<allocation_account> format=Account,ParentName,User -P
 ```
 
 ### Confirm QoS names exist in SLURM

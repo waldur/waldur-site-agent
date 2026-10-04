@@ -277,8 +277,8 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
         default=ExecutionMode.CLI,
         description=(
             "How to talk to SLURM: 'cli' (sacctmgr/sacct binaries, default) or "
-            "'rest' (slurmrestd REST API; usage reporting still uses sacct — "
-            "see docs/slurm-rest-api-design.md)"
+            "'rest' (slurmrestd REST API, including usage reporting; only RawUsage "
+            "resets still run sacctmgr — see docs/slurm-rest-api-design.md)"
         ),
     )
     rest_api: Optional[SlurmRestApiConfig] = Field(

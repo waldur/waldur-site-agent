@@ -2,10 +2,9 @@
 
 Implements ``SlurmClientInterface`` against the slurmrestd
 ``/slurmdb/<version>`` and ``/slurm/<version>`` endpoints instead of
-shelling out to sacctmgr/sacct/scancel. Operations without a direct
-REST equivalent (sacct usage reports, RawUsage reset, local ``id``
-lookups) are delegated to an internal CLI ``SlurmClient`` — see
-docs/slurm-rest-api-design.md.
+shelling out to sacctmgr/sacct/scancel. RawUsage resets (account and
+QoS) have no REST equivalent and are delegated to an internal CLI
+``SlurmClient`` — see docs/slurm-rest-api-design.md.
 
 JSON field paths follow the data_parser plugin conventions: a path like
 ``max/tres/group/minutes`` denotes nested objects
@@ -444,13 +443,12 @@ class SlurmRestClient(SlurmClientInterface):
     def validate_slurm_binary(self) -> bool:
         """Verify slurmrestd responds to ping, and guard the delegated CLI.
 
-        REST mode still shells out to sacct/sacctmgr via the internal CLI
-        client for usage reporting and RawUsage reset. When those binaries are
-        present, run the emulator-shadow guard — an emulator (or wrong-path
-        sacct) shadowing the real binary would feed fabricated or zero usage
-        straight to billing while ping happily succeeds. When they're absent,
-        skip the guard: there is nothing to shadow, and execute_command now
-        raises a clear BackendError at usage time rather than fabricating data.
+        REST mode still shells out to sacctmgr via the internal CLI client for
+        RawUsage resets. When the binary is present, run the emulator-shadow
+        guard — an emulator (or wrong-path sacctmgr) shadowing the real binary
+        would silently fake the reset while ping happily succeeds. When it is
+        absent, skip the guard: there is nothing to shadow, and the reset raises
+        a clear BackendError instead.
         """
         try:
             self._request("GET", self._ctld("ping/"))
