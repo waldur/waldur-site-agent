@@ -29,25 +29,30 @@ Templates are organized by order type:
 
 ## Template Variables
 
-Templates use Jinja2 syntax with custom filters:
+Templates use Jinja2 syntax with custom **filters** (not functions — `{{ uuid4() }}`
+fails with `'uuid4' is undefined`). Undefined variables are errors
+(`StrictUndefined`).
 
 - `{{ variable_name }}` - Required variable
 - `{{ variable_name | default('value') }}` - Optional variable with default
-- `{{ uuid4() }}` - Generate random UUID
-- `{{ timestamp() }}` - Current timestamp
-- `{{ from_json }}` - Parse JSON string
-- `{{ to_json }}` - Convert to JSON string
+- `{{ '' | uuid4 }}` - Generate a random UUID (the filter ignores its input)
+- `{{ '' | timestamp }}` - Current timestamp (ISO 8601; ignores its input)
+- `{{ value | from_json }}` - Parse a JSON string
+- `{{ value | to_json }}` - Serialize to a JSON string
 
 ## Common Variables
 
 All templates support these common variables:
 
-- `order_uuid` - Order UUID (auto-generated if not provided)
+- `order_uuid` - Order UUID. `create/basic.json` uses it when provided and
+  generates one otherwise; `create/slurm-full.json` and `create/with-limits.json`
+  currently pipe it through `uuid4`, which **replaces** a provided value with a
+  random UUID
 - `offering_uuid` - Target offering UUID (required)
 - `resource_name` - Name of the resource
 - `project_slug` - Project slug
 - `customer_slug` - Customer slug
-- `state` - Order state (defaults to 'EXECUTING')
+- `state` - Order state (defaults to `executing`)
 
 ## Usage Examples
 
