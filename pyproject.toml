@@ -71,13 +71,13 @@ build-backend = "hatchling.build"
 [tool.poe.tasks]
 pre.cmd = "uvx prek run --all-files"
 pre.help = "Run pre-commit checks"
-mypy.cmd = "mypy py_maker/**/*.py tests/**/*.py --strict"
+mypy.cmd = "uvx prek run mypy --all-files"
 mypy.help = "Run mypy checks"
 format.cmd = "ruff format ."
 format.help = "Format code with Ruff"
 ruff.cmd = "ruff check waldur_site_agent --fix"
 ruff.help = "Run Ruff checks"
-markdown.cmd = "pymarkdown scan -r py_maker/**/[!CHANGELOG,!.github/]*.md docs/**/*.md"
+markdown.cmd = "uvx prek run pymarkdown --all-files"
 markdown.help = "Run markdown checks"
 
 [tool.ruff]

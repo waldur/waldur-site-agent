@@ -90,12 +90,26 @@ class DigitalOceanBackend(backends.BaseBackend):
             sanitized = "waldur-droplet"
         return sanitized.lower()
 
+    @staticmethod
+    def _as_dict(value: object) -> dict[str, object]:
+        """Return SDK models (``ResourceAttributes``, ``ResourceOptionsType0``) as a dict.
+
+        Resources fetched from Waldur carry these as generated models, not dicts;
+        UNSET and None become an empty dict.
+        """
+        if isinstance(value, dict):
+            return value
+        to_dict = getattr(value, "to_dict", None)
+        if callable(to_dict):
+            result = to_dict()
+            if isinstance(result, dict):
+                return result
+        return {}
+
     def _get_resource_attributes(self, resource: WaldurResource) -> dict[str, object]:
-        attributes = getattr(resource, "attributes", None) or {}
-        options = getattr(resource, "options", None) or {}
-        if isinstance(options, dict):
-            attributes = {**options, **attributes}
-        return attributes
+        attributes = self._as_dict(getattr(resource, "attributes", None))
+        options = self._as_dict(getattr(resource, "options", None))
+        return {**options, **attributes}
 
     def _resolve_attribute(self, attrs: dict[str, object], *keys: str) -> Optional[object]:
         for key in keys:
@@ -243,6 +257,55 @@ class DigitalOceanBackend(backends.BaseBackend):
 
         waldur_limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
         return BackendResourceInfo(backend_id=backend_id, limits=waldur_limits)
+
+    def create_resource_with_id(
+        self,
+        waldur_resource: WaldurResource,
+        resource_backend_id: str,
+        user_context: Optional[dict] = None,
+    ) -> BackendResourceInfo:
+        """Create the droplet, ignoring the backend id the core suggested.
+
+        This is the method the order processor calls. The base implementation
+        hands the suggested id to ``client.create_resource``, which creates a
+        droplet with a name and nothing else -- no region, image or size.
+        DigitalOcean assigns the droplet id, so the suggestion is dropped and
+        the real id is returned for the processor to store.
+
+        The one exception is a call with the resource's own ``backend_id``: the
+        processor makes it when that droplet is gone and expects the resource to
+        come back under the same id. A new droplet would get a new id that the
+        processor never stores, so Waldur would keep the dead id while the new
+        droplet runs unreferenced. Refuse instead.
+
+        Raises:
+            BackendError: Asked to re-create a droplet under its existing id.
+        """
+        if waldur_resource.backend_id and resource_backend_id == waldur_resource.backend_id:
+            msg = (
+                f"DigitalOcean droplet {resource_backend_id} no longer exists and cannot be "
+                "re-created under the same id; terminate the resource and order a new one"
+            )
+            raise BackendError(msg)
+        logger.debug(
+            "Ignoring suggested backend id %s: DigitalOcean assigns the droplet id",
+            resource_backend_id,
+        )
+        return self.create_resource(waldur_resource, user_context)
+
+    def recreate_missing_resource(self, waldur_resource: WaldurResource) -> bool:
+        """Refuse to recreate a droplet under its old id.
+
+        A new droplet gets a new id, so "recreating" one would leave Waldur
+        pointing at the dead id while a second, unreferenced droplet runs up a
+        bill -- on every forced resource sync.
+        """
+        logger.warning(
+            "Not recreating DigitalOcean droplet %s: a new droplet would get a new id, "
+            "leaving Waldur pointing at the old one",
+            waldur_resource.backend_id,
+        )
+        return False
 
     def delete_resource(
         self,

@@ -327,3 +327,60 @@ class TestHarborBackend:
             waldur_resource, {"user1", "user2"}
         )
         assert result == ["user1", "user2"]
+
+
+class TestHarborOrderCreatePath:
+    """``create_resource_with_id`` is what the order processor calls."""
+
+    def test_create_resource_with_id_grants_project_access(self, harbor_backend, waldur_resource):
+        harbor_backend.client.create_user_group.return_value = 1
+        harbor_backend.client.create_project.return_value = True
+        harbor_backend.client.assign_group_to_project.return_value = True
+
+        result = harbor_backend.create_resource_with_id(waldur_resource, "waldur-test-registry-1")
+
+        assert result.backend_id == "waldur-test-registry-1"
+        assert result.limits == {"storage": 20}
+        harbor_backend.client.create_project.assert_called_once_with("waldur-test-registry-1", 20)
+        harbor_backend.client.assign_group_to_project.assert_called_once_with(
+            "waldur-test-project", "waldur-test-registry-1", 2
+        )
+
+    def test_create_resource_with_id_existing_project_is_a_duplicate(
+        self, harbor_backend, waldur_resource
+    ):
+        """An existing project with the suggested name lets the processor try the next id."""
+        from waldur_site_agent.backend.exceptions import DuplicateResourceError
+
+        harbor_backend.client.create_user_group.return_value = 1
+        harbor_backend.client.create_project.return_value = False
+
+        with pytest.raises(DuplicateResourceError):
+            harbor_backend.create_resource_with_id(waldur_resource, "waldur-test-registry")
+        # The plugin path ran: it tried this exact name with the ordered quota,
+        # and did not grant access to a project it does not own.
+        harbor_backend.client.create_project.assert_called_once_with("waldur-test-registry", 20)
+        harbor_backend.client.create_user_group.assert_called_once_with("waldur-test-project")
+        harbor_backend.client.assign_group_to_project.assert_not_called()
+
+    def test_create_resource_with_id_reads_sdk_resource(self, harbor_backend):
+        """On the order path the resource and its limits are SDK models, not dicts."""
+        resource = WaldurResource.from_dict(
+            {
+                "uuid": "0" * 32,
+                "name": "Registry",
+                "slug": "registry",
+                "project_slug": "test-project",
+                "limits": {"storage": 25},
+            }
+        )
+        harbor_backend.client.create_user_group.return_value = 1
+        harbor_backend.client.create_project.return_value = True
+
+        result = harbor_backend.create_resource_with_id(resource, "waldur-registry")
+
+        harbor_backend.client.create_project.assert_called_once_with("waldur-registry", 25)
+        harbor_backend.client.assign_group_to_project.assert_called_once_with(
+            "waldur-test-project", "waldur-registry", 2
+        )
+        assert result.limits == {"storage": 25}
