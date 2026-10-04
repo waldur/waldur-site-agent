@@ -8,7 +8,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound, meta
+from jinja2 import (
+    Environment,
+    FileSystemLoader,
+    StrictUndefined,
+    TemplateNotFound,
+    Undefined,
+    meta,
+    pass_context,
+)
+from jinja2.runtime import Context
 from pydantic import BaseModel
 from waldur_api_client.models.order_details import OrderDetails
 
@@ -29,6 +38,24 @@ class ValidationResult(BaseModel):
     is_valid: bool
     errors: list[str]
     warnings: list[str]
+
+
+@pass_context
+def _uuid4_filter(_context: Context, value: Any = None) -> str:  # noqa: ANN401
+    """Return ``value`` when the caller supplied one, otherwise a fresh UUID.
+
+    ``pass_context`` keeps Jinja from constant-folding ``'' | uuid4`` at compile
+    time, which would hand every render of a cached template the same UUID.
+    """
+    if value is None or isinstance(value, Undefined) or value == "":
+        return str(uuid_module.uuid4())
+    return str(value)
+
+
+@pass_context
+def _timestamp_filter(_context: Context, _value: Any = None) -> str:  # noqa: ANN401
+    """Return the current time; ``pass_context`` stops compile-time folding."""
+    return datetime.now().isoformat()
 
 
 class OrderTemplateEngine:
@@ -55,8 +82,8 @@ class OrderTemplateEngine:
         # Add custom filters
         self.jinja_env.filters.update(
             {
-                "uuid4": lambda _: str(uuid_module.uuid4()),
-                "timestamp": lambda _: datetime.now().isoformat(),
+                "uuid4": _uuid4_filter,
+                "timestamp": _timestamp_filter,
                 "from_json": json.loads,
                 "to_json": json.dumps,
             }
