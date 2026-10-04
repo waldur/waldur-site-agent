@@ -6,6 +6,10 @@ whose queue registration fails at startup is never set up at all. Without this
 watchdog both stay dead for the life of the process while the main loop keeps
 touching the liveness heartbeat, so the agent looks healthy and receives nothing.
 
+Handlers run on a worker thread per queue and the queue has a prefetch of one, so a
+handler that hangs keeps the connection healthy while every later message waits. A
+handler running longer than ``handler_stuck_after`` counts as the queue being down.
+
 On every tick the watchdog retries what is down, with every connect bounded so a
 tick never blocks for long, and reports unhealthy once something a restart could
 fix has stayed down longer than ``unhealthy_after`` seconds. The main loop then
@@ -28,6 +32,7 @@ from typing import Optional
 from waldur_api_client.errors import UnexpectedStatus
 
 from waldur_site_agent.backend import logger
+from waldur_site_agent.common import WALDUR_SITE_AGENT_STOMP_HANDLER_STUCK_AFTER_MINUTES
 from waldur_site_agent.common import structures as common_structures
 from waldur_site_agent.event_processing import utils
 from waldur_site_agent.event_processing.event_subscription_manager import (
@@ -73,8 +78,10 @@ class StompWatchdog:
         unhealthy_after: float,
         global_proxy: str = "",
         expose_backend_error_details: bool = True,
+        handler_stuck_after: float = WALDUR_SITE_AGENT_STOMP_HANDLER_STUCK_AFTER_MINUTES * 60,
     ) -> None:
         """Watch ``consumers_map`` in place; recovered consumers are added to it."""
+        self.handler_stuck_after = handler_stuck_after
         self.consumers_map = consumers_map
         self.offerings = offerings
         self.user_agent = user_agent
@@ -226,6 +233,12 @@ class StompWatchdog:
         key = ("consumer", id(connection))
         down_since = self._down_since if critical else self._reported_down_since
 
+        listener = connection.get_listener(WALDUR_LISTENER_NAME)
+        if listener is not None:
+            # Restart the worker if anything ended it, so the queue keeps draining.
+            listener.ensure_worker()
+            self._check_handler(listener, unified_queue.queue_name, key, down_since, now)
+
         if connection.is_connected():
             ticks = self._connected_ticks.get(key, 0) + 1
             self._connected_ticks[key] = ticks
@@ -236,7 +249,6 @@ class StompWatchdog:
 
         self._connected_ticks[key] = 0
         down_since.setdefault(key, now)
-        listener = connection.get_listener(WALDUR_LISTENER_NAME)
         if listener is None:
             return
         if listener.reconnect_in_progress():
@@ -252,6 +264,30 @@ class StompWatchdog:
         )
         if listener.reconnect(max_retries=WATCHDOG_CONNECT_ATTEMPTS):
             self._connected_ticks[key] = 1
+
+    def _check_handler(
+        self,
+        listener: object,
+        queue_name: str,
+        key: object,
+        down_since: dict[object, float],
+        now: float,
+    ) -> None:
+        """Count a handler running past ``handler_stuck_after`` as its queue being down."""
+        handler_key = ("handler", key)
+        started = listener.handler_running_since()  # type: ignore[attr-defined]
+        if started is None or now - started < self.handler_stuck_after:
+            if down_since.pop(handler_key, None) is not None:
+                logger.info("Handler of queue %s is no longer stuck", queue_name)
+            return
+        if handler_key not in down_since:
+            logger.error(
+                "A message handler on queue %s has been running for %.0f s; "
+                "later messages on the queue wait behind it",
+                queue_name,
+                now - started,
+            )
+        down_since.setdefault(handler_key, started + self.handler_stuck_after)
 
     # -- health ----------------------------------------------------------------
 

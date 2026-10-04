@@ -216,7 +216,11 @@ class EventSubscriptionManager:
         """Stop the STOMP connection.
 
         The unified queue itself is left in place so it is reused on the next
-        start (register_queue is idempotent).
+        start (register_queue is idempotent). Messages the worker has not handled
+        yet stay unacked, so the broker keeps them for the next start.
         """
+        listener = connection.get_listener(WALDUR_LISTENER_NAME)
+        if listener is not None:
+            listener.close()
         connection.remove_listener(WALDUR_LISTENER_NAME)
         connection.disconnect()

@@ -268,15 +268,20 @@ class TestWaldurListenerOnMessage(unittest.TestCase):
     def test_non_json_body_does_not_raise(self):
         """An exception here kills the receiver loop and forces a reconnect."""
         listener = self._make_listener()
+        self.addCleanup(listener.close)
         frame = mock.Mock(body="not json at all", headers={})
 
         listener.on_message(frame)
 
     def test_json_body_reaches_callback(self):
-        callback = mock.Mock()
+        """The handler runs on the listener's worker thread, not inside on_message."""
+        delivered = threading.Event()
+        callback = mock.Mock(side_effect=lambda *_a, **_kw: delivered.set())
         listener = self._make_listener(callback)
+        self.addCleanup(listener.close)
         frame = mock.Mock(body='{"object_type": "order"}', headers={})
 
         listener.on_message(frame)
 
+        self.assertTrue(delivered.wait(5))
         callback.assert_called_once()

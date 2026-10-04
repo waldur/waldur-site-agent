@@ -214,8 +214,8 @@ class TestPollingAgentsSurviveRejectedIdentity(unittest.TestCase):
 class TestEventPathSurvivesMissingIdentity(unittest.TestCase):
     """The event path treats the identity as telemetry too.
 
-    A STOMP message is delivered with ``ack="auto"``, so a handler that raises
-    neither requeues nor retries — an identity lookup must never be able to
+    A STOMP message whose handler raises is acked without a retry, so it is
+    neither requeued nor retried — an identity lookup must never be able to
     cost a real order or membership event.
     """
 
