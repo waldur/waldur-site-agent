@@ -25,6 +25,7 @@ from waldur_site_agent.event_processing.listener import (
     WaldurListener,
     connect_to_stomp_server,
 )
+from waldur_site_agent.event_processing.ws_proxy import ws_stomp_connection
 
 WALDUR_LISTENER_NAME = "waldur-listener"
 OBJECT_TYPE_TO_HANDLER_STOMP: dict[ObservableObjectTypeEnum, Callable] = {
@@ -95,6 +96,9 @@ class EventSubscriptionManager:
         """Constructor."""
         self.waldur_rest_client = utils.get_client_for_offering(offering, user_agent, global_proxy)
         self.offering = offering
+        # The broker WebSocket uses the same proxy as the REST client: the explicit
+        # argument (federation target consumers) or the offering's global_proxy.
+        self.global_proxy = global_proxy or offering.global_proxy
         self.user_agent = user_agent
         self.on_connect_callback = on_connect_callback
         # A custom router may be injected (tests); default is payload routing.
@@ -143,7 +147,8 @@ class EventSubscriptionManager:
         logger.info("Using %s:%s/%s%s broker", stomp_host, stomp_port, vhost_name, ws_path)
         # reconnect_attempts_max=1: transport does a single attempt; app-level
         # retries with backoff live in connect_to_stomp_server() (listener.py).
-        connection = stomp.WSStompConnection(
+        connection = ws_stomp_connection(
+            proxy_url=self.global_proxy,
             host_and_ports=[(stomp_host, stomp_port)],
             ws_path=ws_path,
             vhost=vhost_name,

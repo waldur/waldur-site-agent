@@ -56,15 +56,19 @@ mismatches at month boundaries.
 
 - **Type**: String
 - **Description**: Proxy for every Waldur API connection the agent makes — polling and event
-  mode, the OIDC token request, and Waldur-to-Waldur federation calls. Supports `http://`,
-  `https://` and `socks5://` proxies.
+  mode, the OIDC token request, Waldur-to-Waldur federation calls and the event-mode STOMP
+  WebSocket. Supports `http://`, `https://`, `socks5://` and `socks5h://` proxies, with optional
+  `user:password@`; any other scheme is a configuration error.
 - **Default**: Empty (no proxy)
 - **Example**: `"socks5://localhost:12345"`
 
-**Note**: The STOMP WebSocket used in event mode does **not** go through `global_proxy`. Its client
-only honours the `http_proxy` / `https_proxy` environment variables, so a site whose only egress is
-a proxy must also set those for the event-mode agent. Proxy support for the WebSocket is tracked in
-[waldur-site-agent#57](https://code.opennodecloud.com/waldur/waldur-site-agent/-/work_items/57).
+**STOMP WebSocket**: in event mode the broker WebSocket uses the same proxy for `http://`
+(HTTP CONNECT) and `socks5://` / `socks5h://` proxies. As for REST calls, the proxy resolves the
+broker's host name and `NO_PROXY` does not bypass it. websocket-client cannot use an `https://`
+proxy: with one, REST calls go through it, the agent logs a warning at start-up, and the
+WebSocket connects as without `global_proxy` (the `http_proxy` / `https_proxy` environment
+variables still apply). Without `global_proxy` the WebSocket honours those environment variables
+as before.
 
 ## Offering Configuration
 

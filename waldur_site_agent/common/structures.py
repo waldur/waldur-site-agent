@@ -507,6 +507,10 @@ class RootConfiguration(BaseModel):
     and handles the transformation to WaldurAgentConfiguration.
     """
 
+    # Root-level values can carry credentials (a proxy URL with user:password@);
+    # keep them out of validation errors, which end up in logs and Sentry.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     offerings: list[dict[str, Any]] = Field(..., description="Raw offering configurations")
     sentry_dsn: Optional[str] = Field(
         default=None, description="Sentry DSN for error reporting (URL)"
@@ -539,6 +543,35 @@ class RootConfiguration(BaseModel):
         default_factory=LogShippingConfig,
         description="Configuration for shipping agent logs to Waldur",
     )
+
+    @field_validator("global_proxy")
+    @classmethod
+    def validate_global_proxy(cls, v: str) -> str:
+        """Accept only proxy schemes httpx can use; warn about https and the WebSocket."""
+        if not v:
+            return v
+        # Imported here: the event-processing package imports stomp/websocket.
+        from waldur_site_agent.event_processing.ws_proxy import (  # noqa: PLC0415
+            SUPPORTED_PROXY_SCHEMES,
+            redacted_proxy,
+        )
+
+        scheme = v.split("://", 1)[0].lower() if "://" in v else ""
+        if scheme not in SUPPORTED_PROXY_SCHEMES:
+            msg = (
+                f"global_proxy {redacted_proxy(v) if scheme else '(no scheme)'} is not supported; "
+                f"use one of: {', '.join(sorted(SUPPORTED_PROXY_SCHEMES))}"
+            )
+            raise ValueError(msg)
+        if scheme == "https":
+            logger.warning(
+                "global_proxy %s is an https proxy: REST calls use it, but the event-mode "
+                "STOMP WebSocket cannot and connects without it (http_proxy/https_proxy "
+                "environment variables still apply). Use an http:// or socks5:// proxy "
+                "to route the WebSocket too.",
+                redacted_proxy(v),
+            )
+        return v
 
     @field_validator("sentry_dsn")
     @classmethod

@@ -18,6 +18,8 @@ dependencies = [
     "elastic-apm>=6.0.0,<7",
 
     "stomp-py>=8.2.0,<9",
+    # SOCKS proxies for the STOMP WebSocket (websocket-client uses python-socks).
+    "python-socks>=2.4,<3",
     "importlib-metadata>=8.7.0 ; python_full_version == '3.9.*'",
     "pydantic>=2.0.0",
     "structlog>=25.4.0",
