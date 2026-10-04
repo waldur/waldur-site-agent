@@ -8,12 +8,16 @@ import logging
 import sys
 from typing import Optional
 
+from waldur_api_client.client import AuthenticatedClient
+
 from waldur_site_agent.backend import configure_logger
+from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.common.structures import Offering
-from waldur_site_agent_slurm.client import SlurmClient
+from waldur_site_agent_slurm.backend import create_slurm_client
 from waldur_site_agent_slurm.diagnostic_service import SlurmAccountDiagnosticService
 from waldur_site_agent_slurm.diagnostics import AccountDiagnostic, DiagnosticStatus
+from waldur_site_agent_slurm.interface import SlurmClientInterface
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +303,31 @@ def format_json(diagnostic: AccountDiagnostic) -> str:
     return json.dumps(diagnostic.to_dict(), indent=2)
 
 
+def _create_clients(
+    offering: Offering, global_proxy: str
+) -> Optional[tuple[AuthenticatedClient, SlurmClientInterface]]:
+    """The Waldur and SLURM clients for the offering, or None when either fails.
+
+    The SLURM client is built exactly as the offering's backend builds it
+    (binary path, cluster, CLI or REST), so diagnostics inspect the same SLURM.
+    """
+    try:
+        waldur_client = common_utils.get_client_for_offering(
+            offering, "waldur-site-agent-diagnostics", global_proxy
+        )
+    except Exception:
+        logger.exception("Failed to create Waldur client")
+        return None
+    try:
+        slurm_client = create_slurm_client(
+            offering.backend_settings, offering.backend_components_dict
+        )
+    except BackendError:
+        logger.exception("Failed to create SLURM client from the offering's backend_settings")
+        return None
+    return waldur_client, slurm_client
+
+
 def main() -> int:
     """Main entry point for SLURM account diagnostics.
 
@@ -342,18 +371,10 @@ def main() -> int:
 
     logger.info("Using offering: %s (%s)", offering.name, offering.waldur_offering_uuid)
 
-    # Create clients
-    try:
-        waldur_client = common_utils.get_client_for_offering(
-            offering, "waldur-site-agent-diagnostics", configuration.global_proxy
-        )
-    except Exception:
-        logger.exception("Failed to create Waldur client")
+    clients = _create_clients(offering, configuration.global_proxy)
+    if clients is None:
         return 1
-
-    # Create SLURM client
-    slurm_tres = offering.backend_components_dict
-    slurm_client = SlurmClient(slurm_tres)
+    waldur_client, slurm_client = clients
 
     # Create diagnostic service and run diagnosis
     service = SlurmAccountDiagnosticService(
