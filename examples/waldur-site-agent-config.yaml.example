@@ -91,8 +91,8 @@ offerings: # Settings for offerings
           # to SLURM units (60 * 1024)
         accounting_type: "usage" # Can be usage or limit
         label: RAM # A label for a component in Waldur
-  # Example: EFP Discoverer CPU cluster with LDAP user management
-  - name: "Discoverer CPU"
+  # Example: CPU cluster with LDAP user management
+  - name: "Example CPU cluster with LDAP"
     waldur_api_url: "https://waldur.example.com/api/"
     waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
     waldur_offering_uuid: ""
@@ -136,10 +136,10 @@ offerings: # Settings for offerings
       #   inode_hardlimit: 100000
       # LDAP integration (requires waldur-site-agent-ldap plugin)
       ldap:
-        uri: "ldap://ldap.sofiatech.bg"
-        bind_dn: "cn=admin,dc=sofiatech,dc=bg"
+        uri: "ldap://ldap.example.org"
+        bind_dn: "cn=admin,dc=example,dc=org"
         bind_password: "secret"
-        base_dn: "dc=sofiatech,dc=bg"
+        base_dn: "dc=example,dc=org"
         people_ou: "ou=People"
         groups_ou: "ou=Groups"
         uid_range_start: 5000
@@ -198,8 +198,8 @@ offerings: # Settings for offerings
         unit_factor: 60000
         accounting_type: "usage"
         label: "CPU"
-  # Example: EFP Discoverer+ GPU cluster with LDAP and billing
-  - name: "Discoverer+ GPU"
+  # Example: GPU cluster with LDAP and prepaid billing
+  - name: "Example GPU cluster with LDAP"
     waldur_api_url: "https://waldur.example.com/api/"
     waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
     waldur_offering_uuid: ""
@@ -218,10 +218,10 @@ offerings: # Settings for offerings
       default_partition: "common"
       enable_user_homedir_account_creation: true
       ldap:
-        uri: "ldap://ldap.sofiatech.bg"
-        bind_dn: "cn=admin,dc=sofiatech,dc=bg"
+        uri: "ldap://ldap.example.org"
+        bind_dn: "cn=admin,dc=example,dc=org"
         bind_password: "secret"
-        base_dn: "dc=sofiatech,dc=bg"
+        base_dn: "dc=example,dc=org"
         uid_range_start: 5000
         uid_range_end: 65000
         gid_range_start: 800
@@ -299,6 +299,9 @@ offerings: # Settings for offerings
     waldur_api_url: "http://localhost:8081/api/"
     waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
     waldur_offering_uuid: ""
+    order_processing_backend: "moab"
+    membership_sync_backend: "moab"
+    reporting_backend: "moab"
     backend_type: "moab"
     backend_settings:
       default_account: root
@@ -317,6 +320,8 @@ offerings: # Settings for offerings
     waldur_offering_uuid: ""
     backend_type: "azure"
     order_processing_backend: "azure"
+    # No membership_sync_backend: Azure has no backend membership to sync, so the
+    # membership_sync mode has nothing to do for this offering.
     reporting_backend: "azure"
     backend_settings:
       subscription_id: "" # Azure subscription the machines are created in
