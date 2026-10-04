@@ -221,7 +221,7 @@ offerings:
     stomp_enabled: true
     websocket_use_tls: true
     # Optional overrides; by default the agent connects to the host of waldur_api_url,
-    # path /rmqws-stomp, port 443 (80 when verify_ssl is false)
+    # path /rmqws-stomp, port 443 (80 when websocket_use_tls is false)
     # stomp_ws_host: "waldur.example.com"
     # stomp_ws_port: 443
     # stomp_ws_path: "/rmqws-stomp"
