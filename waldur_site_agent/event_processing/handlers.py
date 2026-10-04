@@ -62,10 +62,9 @@ def register_event_process_service(
     """A shortcut for initialization of the event_process service.
 
     Called at the top of every message handler, before the work the message
-    asks for. The service is telemetry, and the queue is subscribed with
-    ack="auto", so a message whose handler raises is neither requeued nor
-    retried - letting a failed lookup out of here would trade a real order or
-    membership event for a missing agent record. Failures are logged and the
+    asks for. The service is telemetry, and a message whose handler raises is
+    acked without a retry - letting a failed lookup out of here would trade a
+    real order or membership event for a missing agent record. Failures are logged and the
     handler proceeds without a service.
 
     Args:

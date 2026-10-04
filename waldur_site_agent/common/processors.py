@@ -3415,6 +3415,46 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                     exc,
                 )
 
+    def reconcile_resource_statuses(self) -> None:
+        """Re-apply every resource's paused/downscaled/restored status on the backend.
+
+        Event mode applies a status change when its resource message arrives; this
+        pass catches a message that was lost or failed. Each resource is re-read just
+        before it is applied, so a flag the message worker applied meanwhile is not
+        overwritten with the listing's older value, and a resource that left the
+        handled states since the listing is skipped. One failure is logged and the
+        rest still run; it never marks a resource ERRED — the membership path owns
+        that. The liveness heartbeat is touched per resource so a long pass cannot
+        outlive the probe window.
+        """
+        waldur_resources = self._get_waldur_resources()
+        logger.info(
+            "Reconciling the status of %d resource(s) of offering %s",
+            len(waldur_resources),
+            self.offering.name,
+        )
+        for listed in waldur_resources:
+            touch_heartbeat()
+            try:
+                waldur_resource = marketplace_provider_resources_retrieve.sync(
+                    uuid=listed.uuid.hex, client=self.waldur_rest_client
+                )
+                if waldur_resource.state not in self.resource_backend.handled_resource_states:
+                    logger.info(
+                        "Resource %s (%s) is now %s, skipping its status reconciliation",
+                        listed.name,
+                        listed.backend_id,
+                        waldur_resource.state,
+                    )
+                    continue
+                self._sync_resource_status(waldur_resource)
+            except Exception:
+                logger.exception(
+                    "Unable to reconcile the status of resource %s (%s)",
+                    listed.name,
+                    listed.backend_id,
+                )
+
     def _sync_resource_status(self, waldur_resource: WaldurResource) -> None:
         """Syncs resource status between Waldur and the backend."""
         logger.info(

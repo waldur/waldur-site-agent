@@ -200,6 +200,37 @@ The main loop includes a periodic reconciliation timer (default: 60 minutes, con
 This reconciliation is lightweight — it only syncs usernames, not a full membership sync — and is
 idempotent, so running it has no side effects when data is already consistent.
 
+### Resource status reconciliation
+
+A resource's `paused` / `downscaled` change reaches an event-mode agent only as one message,
+published when the flag changes. Every
+`WALDUR_SITE_AGENT_RESOURCE_STATUS_RECONCILIATION_MINUTES` (default 60; `0` disables it) the
+main loop re-applies the current status of every resource of each STOMP-enabled offering with a
+membership sync backend — pause, downscale, or restore — so a lost or failed message is caught
+within one interval. The first pass runs one interval after startup (initial processing has just
+applied every status). Each resource is re-read right before its status is applied, handled on
+its own, and a failure is only logged; this pass never marks a resource ERRED. Offerings with
+`stomp_membership_sync_enabled: false` are skipped — the polling agent owns their status.
+
+### Message handling and acknowledgement
+
+Handlers do not run on stomp.py's receiver thread. The listener only queues each message; one
+worker thread per queue runs the handlers in arrival order, so the receiver keeps reading frames
+and heartbeats however long a handler takes, and per-queue ordering is kept. Handling is
+still serial per queue: every object type of an offering shares one unified queue, so a slow
+handler (an order, say) holds up the messages behind it, including other object types. A
+handler running longer than `WALDUR_SITE_AGENT_STOMP_HANDLER_STUCK_AFTER_MINUTES` (default 30)
+counts as the queue being down for the liveness watchdog below.
+
+The queue is subscribed with `ack="client-individual"` and `prefetch-count: 1`. The worker acks
+a message after its handler returns — also when the handler raised, after logging the error, so
+a failing message is not retried. A message the broker delivered but the agent has not acked is
+requeued when the connection drops and redelivered after the reconnect. Messages queued from a
+dropped connection that the worker has not started are skipped and left to that redelivery, and
+no ack is sent with an id from an old connection. A message whose handler was running when the
+connection dropped can therefore be handled twice; handlers are idempotent (they re-read the
+order or resource state from Waldur).
+
 ### STOMP connection watchdog and liveness
 
 No STOMP connect is unbounded outside a listener's own reconnect loop: at startup each

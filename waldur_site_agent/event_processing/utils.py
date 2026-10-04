@@ -900,6 +900,46 @@ def run_periodic_project_hierarchy_sync(
             logger.exception("Project hierarchy sync failed for offering %s", offering.name)
 
 
+def run_periodic_resource_status_reconciliation(
+    waldur_offerings: list[common_structures.Offering], user_agent: str = ""
+) -> None:
+    """Re-apply paused/downscaled/restored status for every resource of STOMP offerings.
+
+    A resource flag change reaches event mode only as a message, published once
+    when the flag changes. If that message is lost or its handler fails, nothing
+    repeats it; this pass applies the current status so the backend catches up
+    within one interval.
+
+    Only runs for offerings with STOMP enabled and membership_sync_backend set, and
+    not for those with stomp_membership_sync_enabled=false: their membership and
+    status are owned by the polling agent.
+    """
+    for offering in waldur_offerings:
+        touch_heartbeat()
+        if (
+            not offering.stomp_enabled
+            or not offering.membership_sync_backend
+            or offering.stomp_membership_sync_enabled is False
+        ):
+            continue
+        try:
+            waldur_rest_client = get_client_for_offering(offering, user_agent)
+            resource_backend, resource_backend_version = get_backend_for_offering(
+                offering, "membership_sync_backend"
+            )
+            processor = common_processors.OfferingMembershipProcessor(
+                offering,
+                waldur_rest_client,
+                resource_backend=resource_backend,
+                resource_backend_version=resource_backend_version,
+            )
+            processor.reconcile_resource_statuses()
+        except Exception:
+            logger.exception(
+                "Resource status reconciliation failed for offering %s", offering.name
+            )
+
+
 def send_agent_health_checks(offerings: list[common_structures.Offering], user_agent: str) -> None:
     """Sends agent health checks for the specified offerings."""
     for offering in offerings:
