@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Packaging / Docs**: Rename the `systemd-conf/*/agent-legacy.service` units to `agent-file-logging.service`. They log to files with `StandardOutput=append:`, which needs systemd 240 or newer, so the old "legacy" name was wrong. Old raw download URLs for `agent-legacy.service` now return 404. All units now restart on failure and use a per-unit liveness heartbeat. (#50)
+
 ## 1.0.8-rc.6 - 2026-10-02
 
 - **Core / Envoy AI Gateway**: Manage resource API keys one at a time. Keys can now be requested, assigned, capped, paused, resumed and deleted, through both event processing and polling. (#30)

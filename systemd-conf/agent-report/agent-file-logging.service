@@ -13,6 +13,10 @@ RuntimeDirectory=waldur-site-agent-report
 Environment=WALDUR_SITE_AGENT_HEARTBEAT_PATH=/run/waldur-site-agent-report/heartbeat
 Restart=on-failure
 RestartSec=30
+# Write output to files instead of the journal. StandardOutput=append: needs
+# systemd 240 or newer; rotate these files with logrotate (copytruncate).
+StandardOutput=append:/var/log/waldur-site-agent-report.log
+StandardError=append:/var/log/waldur-site-agent-report-error.log
 
 [Install]
 WantedBy=multi-user.target

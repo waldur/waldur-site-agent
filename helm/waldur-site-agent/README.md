@@ -1,7 +1,8 @@
 # Waldur Site Agent Helm Chart
 
 This Helm chart deploys the Waldur Site Agent, a stateless application that synchronizes data between Waldur Mastermind and
-service provider backends (SLURM, MOAB, MUP clusters).
+service provider backends. The image is built with the core agent and every plugin in the repository at that release,
+so any of those backends can be configured without building a custom image.
 
 ## Installation
 
@@ -80,8 +81,11 @@ The following table lists the configurable parameters of the Waldur Site Agent c
 | `image.repository` | Container image repository | `opennode/waldur-site-agent` |
 | `image.tag` | Container image tag | `latest` |
 | `image.pullPolicy` | Container image pull policy | `IfNotPresent` |
+| `imagePullSecrets` | Image pull secrets for the agent pods | `[]` |
 | `nameOverride` | Override the name of the chart | `""` |
 | `fullnameOverride` | Override the full name of the chart | `""` |
+
+Published charts set `image.tag` to the matching agent release; an empty tag falls back to the chart's `appVersion`.
 
 ### Agent Deployment Configuration
 
@@ -124,8 +128,24 @@ and bind the required Role to it.
 | `resources.limits.memory` | Memory limit | `1024Mi` |
 | `resources.requests.cpu` | CPU request | `200m` |
 | `resources.requests.memory` | Memory request | `256Mi` |
-| `securityContext.runAsUser` | User ID to run container | `1000` |
-| `securityContext.runAsNonRoot` | Run as non-root user | `true` |
+| `podSecurityContext` | Pod security context | `{fsGroup: 1000}` |
+| `securityContext` | Container security context | UID 1000, read-only root, no escalation, no capabilities |
+| `podAnnotations` | Annotations for the agent pods | `{}` |
+| `nodeSelector` | Node selector for the agent pods | `{}` |
+| `tolerations` | Tolerations for the agent pods | `[]` |
+| `affinity` | Affinity rules for the agent pods | `{}` |
+
+### Extending the Pods
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `extraEnv` | Extra environment variables for every agent container (e.g. `https_proxy`) | `[]` |
+| `extraVolumes` | Extra volumes for every agent pod (e.g. munge key, `slurm.conf`) | `[]` |
+| `extraVolumeMounts` | Extra volume mounts for every agent container | `[]` |
+| `hostAliases` | `/etc/hosts` entries for every agent pod (e.g. SLURM node hostnames) | `[]` |
+| `strategy.type` | Deployment strategy | `Recreate` |
+
+`Recreate` keeps two pods of the same mode from processing the same offering during a rollout.
 
 ### Deployment Options
 
@@ -193,6 +213,9 @@ secret:
           waldur_offering_uuid: "your-offering-uuid"
           stomp_enabled: true
           backend_type: "slurm"
+          order_processing_backend: "slurm"
+          membership_sync_backend: "slurm"
+          reporting_backend: "slurm"
           backend_settings:
             default_account: "root"
             customer_prefix: "customer_"
@@ -237,7 +260,10 @@ secret:
           waldur_offering_uuid: "your-offering-uuid"
           stomp_enabled: false
           backend_type: "slurm"
-          # ... backend configuration
+          order_processing_backend: "slurm"
+          membership_sync_backend: "slurm"
+          reporting_backend: "slurm"
+          # ... backend_settings and backend_components
 ```
 
 ### Multiple Backend Configuration
@@ -253,12 +279,18 @@ secret:
           waldur_api_token: "token1"
           waldur_offering_uuid: "uuid1"
           backend_type: "slurm"
+          order_processing_backend: "slurm"
+          membership_sync_backend: "slurm"
+          reporting_backend: "slurm"
           # ... SLURM settings
         - name: "MOAB Cluster"
           waldur_api_url: "https://waldur.example.com/api/"
           waldur_api_token: "token2"
           waldur_offering_uuid: "uuid2"
           backend_type: "moab"
+          order_processing_backend: "moab"
+          membership_sync_backend: "moab"
+          reporting_backend: "moab"
           # ... MOAB settings
 ```
 
@@ -293,10 +325,22 @@ The agents are not designed as batch jobs.
 
 ## Troubleshooting
 
+Every offering needs its `*_backend` keys: without `order_processing_backend` the agent skips
+order processing for it, and without `membership_sync_backend` or `reporting_backend` those modes
+fail for it. Leave a key out only if you do not run that mode for the offering, or the backend has
+nothing to do in it (Azure, for example, has no backend membership to sync).
+
 ### Check Agent Logs
 
+Each enabled mode is its own Deployment, named `<fullname>-<mode>`. The fullname is the release
+name when it already contains `waldur-site-agent` (as `my-waldur-site-agent` below), otherwise
+`<release>-waldur-site-agent` (release `foo` gives `foo-waldur-site-agent-report`), unless
+`fullnameOverride` is set:
+
 ```bash
-kubectl logs deployment/my-waldur-site-agent
+kubectl get deployments -l app.kubernetes.io/instance=my-waldur-site-agent
+kubectl logs deployment/my-waldur-site-agent-event-process
+kubectl logs deployment/my-waldur-site-agent-report
 ```
 
 ### Validate Configuration
@@ -306,7 +350,11 @@ kubectl logs deployment/my-waldur-site-agent
 kubectl get secret my-waldur-site-agent-secret -o yaml
 
 # Check rendered configuration
-kubectl exec deployment/my-waldur-site-agent -- cat /etc/waldur-site-agent/config.yaml
+kubectl exec deployment/my-waldur-site-agent-report -- cat /etc/waldur-site-agent/config.yaml
+
+# Run the agent's own checks against that configuration
+kubectl exec deployment/my-waldur-site-agent-report -- \
+  waldur_site_diagnostics -c /etc/waldur-site-agent/config.yaml
 ```
 
 ### Test Connectivity

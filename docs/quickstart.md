@@ -58,13 +58,24 @@ Budget about 15-20 minutes if the offering side is already set up in Waldur.
 
 ## 2. Install the agent
 
+The core package has no backends of its own — install it together with the SLURM plugin and the
+default username backend, in one environment:
+
 ```bash
-pip install waldur-site-agent
+curl -LsSf https://astral.sh/uv/install.sh \
+  | sudo env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
+
+sudo env UV_TOOL_DIR=/opt/waldur-agent/tools \
+         UV_TOOL_BIN_DIR=/usr/local/bin \
+         UV_PYTHON_INSTALL_DIR=/opt/waldur-agent/python \
+  /usr/local/bin/uv tool install --python 3.12 --managed-python waldur-site-agent \
+    --with-executables-from waldur-site-agent-slurm \
+    --with waldur-site-agent-basic-username-management
 ```
 
-Starting from a bare server instead of an existing Python environment? Use the
-[Ubuntu 24.04](installation-ubuntu24.md) or [Rocky Linux 9](installation-rocky9.md) guide — they
-cover OS packages and the SLURM CLI tools the agent shells out to.
+The [Installation Guide](installation.md) covers the OS packages (including the SLURM client
+tools the agent shells out to), a pip-based alternative, other backends and why commands below
+are called by their full path.
 
 ## 3. Write a minimal config
 
@@ -112,6 +123,7 @@ offerings:
         accounting_type: "usage"
         label: "CPU"
 EOF
+sudo chmod 600 /etc/waldur/waldur-site-agent-config.yaml   # it holds the API token
 ```
 
 Swap in real values for the three lines marked `REQUIRED`. `default_account` must already exist
@@ -127,33 +139,35 @@ This pushes the `backend_components` block above (the `cpu` component here) into
 a billable plan component. Without this step the offering has nothing to charge for.
 
 ```bash
-waldur_site_load_components -c /etc/waldur/waldur-site-agent-config.yaml
+sudo /usr/local/bin/waldur_site_load_components -c /etc/waldur/waldur-site-agent-config.yaml
 ```
 
 ## 5. Check your setup before you touch systemd
 
 ```bash
-waldur_site_diagnostics -c /etc/waldur/waldur-site-agent-config.yaml
+sudo /usr/local/bin/waldur_site_diagnostics -c /etc/waldur/waldur-site-agent-config.yaml
+echo "exit code: $?"
 ```
 
-This confirms the Waldur side: the API is reachable, your token authenticates and has the right
-role, the offering UUID resolves, and the components you just loaded are visible. **It does not
-check backend connectivity** — it won't tell you whether the agent can actually reach and command
-your SLURM cluster. If you're on the SLURM backend, run the deeper, backend-aware check after
-placing at least one test order (step 7):
+This checks both sides for every offering: the Waldur API, your token and the offering, and the
+backend itself — for SLURM it runs the SLURM tools, so a missing `sacctmgr` or an unreachable
+accounting database shows up here. It exits non-zero when something is wrong. Once at least one
+resource exists (step 7), the SLURM plugin's deeper check compares an account's SLURM state with
+what Waldur expects:
 
 ```bash
-waldur_site_diagnose_slurm_account -c /etc/waldur/waldur-site-agent-config.yaml
+sudo /usr/local/bin/waldur_site_diagnose_slurm_account <allocation-account> \
+  -c /etc/waldur/waldur-site-agent-config.yaml
 ```
 
-Other backends (MOAB, MUP, Rancher, LDAP, ...) don't have an equivalent backend-side check yet —
-for those, the first real run in step 7 is your first signal.
+`<allocation-account>` is the SLURM account the agent created for the resource: its backend ID,
+shown on the resource in Waldur, normally `allocation_prefix` followed by the resource's slug.
 
 ## 6. Enable it for real
 
 Follow [Deployment → Systemd Service Setup](deployment.md#systemd-service-setup) to install and
-start the four services (`order_process`, `report`, `membership_sync`, and either polling or
-event-based, your choice). Come back here once they're running.
+start the services: three for polling (`order_process`, `membership_sync`, `report`) or two for
+event-based processing (`event_process`, `report`). Come back here once they're running.
 
 ## 7. Verify end-to-end
 
