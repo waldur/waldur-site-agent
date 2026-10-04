@@ -29,7 +29,7 @@ from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.common.structures import Offering
-from waldur_site_agent.common.utils import get_client
+from waldur_site_agent.common.utils import get_client_for_offering
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +83,7 @@ def make_target_order_handler(
         )
 
         try:
-            source_client = get_client(
-                source_offering.api_url,
-                source_offering.api_token,
-                user_agent,
-                verify_ssl=source_offering.verify_ssl,
-            )
+            source_client = get_client_for_offering(source_offering, user_agent)
 
             # Find the source order whose backend_id matches the target order UUID.
             # The source order processor sets backend_id = target_order_uuid when
@@ -205,12 +200,7 @@ def make_target_offering_user_handler(
         )
 
         try:
-            source_client = get_client(
-                source_offering.api_url,
-                source_offering.api_token,
-                user_agent,
-                verify_ssl=source_offering.verify_ssl,
-            )
+            source_client = get_client_for_offering(source_offering, user_agent)
 
             updated = backend.sync_offering_user_usernames(
                 waldur_a_offering_uuid=source_offering.uuid,
@@ -272,12 +262,7 @@ def make_target_resource_end_date_handler(
         )
 
         try:
-            source_client = get_client(
-                source_offering.api_url,
-                source_offering.api_token,
-                user_agent,
-                verify_ssl=source_offering.verify_ssl,
-            )
+            source_client = get_client_for_offering(source_offering, user_agent)
 
             # Find the Waldur A resource that maps to this Waldur B resource
             from waldur_api_client.api.marketplace_provider_resources import (  # noqa: PLC0415

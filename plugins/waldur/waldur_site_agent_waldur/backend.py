@@ -1623,6 +1623,9 @@ class WaldurBackend(backends.BaseBackend):
                 stomp_ws_path=getattr(source_offering, "stomp_ws_path", None),
                 websocket_use_tls=getattr(source_offering, "websocket_use_tls", True),
             )
+            # The config loader sets this on configured offerings; a synthetic one
+            # must carry it too, or clients built from it bypass the proxy.
+            target_offering._global_proxy = global_proxy
 
             # Register agent identity on Waldur B
             target_client = get_client(
