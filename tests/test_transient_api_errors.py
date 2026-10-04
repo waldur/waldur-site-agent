@@ -319,3 +319,31 @@ def test_membership_backend_error_still_marks_resource_erred(
 
     mock_mark_erred.assert_called_once()
     mock_refresh_last_sync.sync_detailed.assert_not_called()
+
+
+@mock.patch("waldur_site_agent.common.processors.sleep")
+def test_success_on_last_attempt_is_not_logged_as_failure(mock_sleep, processor, mock_order, caplog):
+    """The final attempt succeeding must not be reported as 'Failed … after retries'."""
+    processor.process_order = mock.Mock(
+        side_effect=[make_unexpected_status(503), make_unexpected_status(503), None]
+    )
+    processor.get_order_info = mock.Mock(return_value=mock_order)
+
+    with caplog.at_level("ERROR"):
+        processor.process_order_with_retries(mock_order, retry_count=3, delay=5)
+
+    assert processor.process_order.call_count == 3
+    assert not [r for r in caplog.records if "after 3 retries" in r.getMessage()]
+
+
+@mock.patch("waldur_site_agent.common.processors.sleep")
+def test_no_sleep_after_final_failed_attempt(mock_sleep, processor, mock_order, caplog):
+    """Sleeping after the last attempt only delays the next message on the receiver thread."""
+    processor.process_order = mock.Mock(side_effect=make_unexpected_status(503))
+    processor.get_order_info = mock.Mock(return_value=mock_order)
+
+    with caplog.at_level("ERROR"):
+        processor.process_order_with_retries(mock_order, retry_count=3, delay=5)
+
+    assert mock_sleep.call_count == 2
+    assert [r for r in caplog.records if "after 3 retries" in r.getMessage()]

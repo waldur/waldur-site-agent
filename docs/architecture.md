@@ -200,6 +200,36 @@ The main loop includes a periodic reconciliation timer (default: 60 minutes, con
 This reconciliation is lightweight — it only syncs usernames, not a full membership sync — and is
 idempotent, so running it has no side effects when data is already consistent.
 
+### STOMP connection watchdog and liveness
+
+No STOMP connect is unbounded outside a listener's own reconnect loop: at startup each
+offering gets three attempts (each limited to 30 s for the WebSocket handshake and the
+broker's CONNECTED frame), and a queue that registered but could not connect is kept, so the
+main loop always starts and later only reconnects it.
+
+Each listener reconnects on its own after a disconnect, but gives up after ten attempts
+(roughly ten minutes of exponential backoff). On every tick (60 s) the main loop's watchdog
+makes one bounded attempt for any consumer still disconnected, and retries each missing
+consumer of a STOMP-enabled offering separately — the offering's own queue and, for
+federation, the target subscription — with backoff up to 15 minutes. A consumer only counts
+as recovered after two consecutive ticks connected, so a queue the broker closes right after
+connecting does not look healthy. When the broker reports the queue is gone (`NOT_FOUND`),
+the listener registers it again before reconnecting.
+
+While everything is connected the loop touches the liveness heartbeat as usual. Once the
+offering's own consumer, or a transiently failing setup, has stayed down longer than
+`WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES` (default 15, above the listener's own retry
+window), the loop stops touching the heartbeat and an orchestrator restarts the agent. The
+probe fails only once the heartbeat is older than its own maximum age
+(`waldur_site_healthz --max-age`, default 300 s), so the time from the outage to a failed
+probe is roughly the threshold plus five minutes, plus the probe's period × failure
+threshold before the restart. The watchdog keeps retrying meanwhile; the heartbeat resumes
+the tick the connection comes back.
+
+What a restart cannot fix only logs at ERROR and never withholds the heartbeat: a federation
+target's consumer (another Waldur's broker), and a setup refused with a 4xx other than 408/429
+(for example a queue held by another user, 409), which is retried every 15 minutes.
+
 ### STOMP subscription types
 
 Each offering can subscribe to multiple object types depending on configuration:

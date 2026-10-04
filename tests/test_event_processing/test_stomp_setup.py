@@ -279,7 +279,11 @@ class TestSetupUnifiedConnection(unittest.TestCase):
 
     @mock.patch("waldur_site_agent.event_processing.utils.EventSubscriptionManager")
     def test_connection_start_fails(self, mock_esm_class):
-        """Returns None when the STOMP connection fails to start."""
+        """A registered queue whose broker is unreachable is still returned.
+
+        The connection is handed to the listener and the event-mode watchdog to
+        reconnect, so setup never blocks on a down broker and never registers twice.
+        """
         self.mock_identity_manager.register_queue.return_value = self.unified_queue
         mock_esm = mock_esm_class.return_value
         mock_esm.setup_stomp_connection.return_value = mock.Mock()
@@ -292,7 +296,9 @@ class TestSetupUnifiedConnection(unittest.TestCase):
             "test-agent",
             self.object_types,
         )
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1], self.unified_queue)
+        self.assertGreater(mock_esm.start_stomp_connection.call_args.kwargs["max_retries"], 0)
 
     def test_timeout_during_registration(self):
         """Returns None when register_queue times out."""

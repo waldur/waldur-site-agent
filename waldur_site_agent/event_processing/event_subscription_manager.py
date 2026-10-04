@@ -19,7 +19,12 @@ from waldur_site_agent.backend import logger
 from waldur_site_agent.common import utils
 from waldur_site_agent.common.structures import Offering, UnifiedQueue
 from waldur_site_agent.event_processing import handlers
-from waldur_site_agent.event_processing.listener import WaldurListener, connect_to_stomp_server
+from waldur_site_agent.event_processing.listener import (
+    CONNECT_TIMEOUT,
+    STARTUP_CONNECT_ATTEMPTS,
+    WaldurListener,
+    connect_to_stomp_server,
+)
 
 WALDUR_LISTENER_NAME = "waldur-listener"
 OBJECT_TYPE_TO_HANDLER_STOMP: dict[ObservableObjectTypeEnum, Callable] = {
@@ -102,6 +107,7 @@ class EventSubscriptionManager:
         custom_stomp_ws_host: Optional[str] = None,
         custom_stomp_ws_port: Optional[int] = None,
         custom_stomp_ws_path: Optional[str] = None,
+        on_queue_missing: Optional[Callable[[], None]] = None,
     ) -> stomp.WSStompConnection:
         """Create the STOMP connection to the unified consumer queue.
 
@@ -112,6 +118,7 @@ class EventSubscriptionManager:
                 web_stomp directly instead of the nginx proxy).
             custom_stomp_ws_port: broker port override.
             custom_stomp_ws_path: broker WebSocket path override.
+            on_queue_missing: re-registers the queue when the broker reports it gone.
 
         Returns:
             The constructed (not yet connected) STOMP connection.
@@ -142,6 +149,10 @@ class EventSubscriptionManager:
             vhost=vhost_name,
             reconnect_attempts_max=1,
             heartbeats=(10000, 10000),
+            # Bounds the WebSocket handshake. It also applies to reads, which is
+            # harmless: heartbeats arrive every 10 s and a 30 s silence is a dead
+            # connection anyway.
+            timeout=CONNECT_TIMEOUT,
         )
         if self.offering.websocket_use_tls:
             connection.set_ssl(for_hosts=[(stomp_host, stomp_port)])
@@ -157,6 +168,7 @@ class EventSubscriptionManager:
                 self.offering,
                 self.user_agent,
                 expose_backend_error_details=self.expose_backend_error_details,
+                on_queue_missing=on_queue_missing,
             ),
         )
 
@@ -177,12 +189,21 @@ class EventSubscriptionManager:
         self,
         unified_queue: UnifiedQueue,
         connection: stomp.WSStompConnection,
+        max_retries: int = STARTUP_CONNECT_ATTEMPTS,
     ) -> bool:
-        """Start (connect) the unified STOMP connection."""
+        """Start (connect) the unified STOMP connection, bounded by ``max_retries``.
+
+        On failure the connection is still usable: its listener and the event-mode
+        watchdog keep reconnecting it.
+        """
         try:
             logger.info("Starting unified STOMP connection for queue %s", unified_queue.queue_name)
             connect_to_stomp_server(
-                connection, unified_queue.rmq_username, self.offering.api_token
+                connection,
+                unified_queue.rmq_username,
+                self.offering.api_token,
+                max_retries=max_retries,
+                connect_timeout=CONNECT_TIMEOUT,
             )
             logger.info("Started unified STOMP connection for queue %s", unified_queue.queue_name)
         except Exception as e:

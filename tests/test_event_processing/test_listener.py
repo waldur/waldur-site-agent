@@ -11,6 +11,7 @@ from waldur_site_agent.event_processing.listener import (
     BACKOFF_FACTOR,
     BACKOFF_INITIAL,
     BACKOFF_MAX,
+    CONNECT_TIMEOUT,
     RECONNECT_MAX_RETRIES,
     WaldurListener,
     _calculate_backoff,
@@ -183,7 +184,11 @@ class TestWaldurListenerOnDisconnected(unittest.TestCase):
         listener.on_disconnected()
 
         mock_connect.assert_called_once_with(
-            listener.conn, "user", "pass", max_retries=RECONNECT_MAX_RETRIES
+            listener.conn,
+            "user",
+            "pass",
+            max_retries=RECONNECT_MAX_RETRIES,
+            connect_timeout=CONNECT_TIMEOUT,
         )
 
     @mock.patch("waldur_site_agent.event_processing.listener.connect_to_stomp_server")
@@ -244,3 +249,34 @@ class TestWaldurListenerOnDisconnected(unittest.TestCase):
         """Listener should have a threading lock for reconnection."""
         listener = self._make_listener()
         self.assertIsInstance(listener._reconnect_lock, type(threading.Lock()))
+
+
+class TestWaldurListenerOnMessage(unittest.TestCase):
+    """A malformed frame must not escape into stomp.py's receiver thread."""
+
+    def _make_listener(self, callback=None):
+        return WaldurListener(
+            conn=mock.Mock(),
+            queue="test-queue",
+            username="user",
+            password="pass",
+            on_message_callback=callback or mock.Mock(),
+            offering=mock.Mock(),
+            user_agent="test-agent",
+        )
+
+    def test_non_json_body_does_not_raise(self):
+        """An exception here kills the receiver loop and forces a reconnect."""
+        listener = self._make_listener()
+        frame = mock.Mock(body="not json at all", headers={})
+
+        listener.on_message(frame)
+
+    def test_json_body_reaches_callback(self):
+        callback = mock.Mock()
+        listener = self._make_listener(callback)
+        frame = mock.Mock(body='{"object_type": "order"}', headers={})
+
+        listener.on_message(frame)
+
+        callback.assert_called_once()

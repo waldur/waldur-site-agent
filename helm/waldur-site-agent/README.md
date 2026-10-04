@@ -149,6 +149,19 @@ liveness and a slow Waldur restarts the pod before it ever runs. Raise
 `startupProbe.failureThreshold` (attempts, `periodSeconds` apart) for a site
 whose Waldur is slow to answer.
 
+In event mode the main loop also withholds the heartbeat while a STOMP consumer
+stays disconnected longer than `WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES`
+(default 15, set it through `extraEnv`), so liveness restarts an agent that has
+stopped receiving events. The probe fails once the heartbeat is older than its
+maximum age (300 s), so expect the restart roughly threshold + 5 min +
+`periodSeconds` × `failureThreshold` after the outage starts. Federation target
+consumers and setups refused with a 4xx are logged, not counted.
+
+The heartbeat file defaults to `/tmp/waldur-site-agent-heartbeat`; each pod has
+its own `/tmp`, so the chart needs no change. Elsewhere set
+`WALDUR_SITE_AGENT_HEARTBEAT_PATH` (and `waldur_site_healthz --heartbeat-path`)
+so processes sharing a filesystem do not share a heartbeat.
+
 ## Usage Examples
 
 ### Combination 1: Event-based Processing (Default)

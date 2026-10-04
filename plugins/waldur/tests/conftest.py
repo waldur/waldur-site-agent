@@ -1,5 +1,6 @@
 """Shared test fixtures for Waldur federation plugin tests."""
 
+from waldur_site_agent.testing.pytest_heartbeat import isolated_heartbeat  # noqa: F401
 import pytest
 
 
