@@ -3,6 +3,25 @@
 This plugin provides **production-ready** integration between Waldur Mastermind and Harbor container registry,
 enabling automated management of Harbor projects, storage quotas, and OIDC-based access control.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `harbor` | `waldur_site_agent.backends` | order processing, membership sync, reporting |
+
+**Modes:** `order_process`, `membership_sync`, `report`, `event_process`.
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | OIDC group per project; Harbor project with the ordered quota; group added with `project_role_id` |
+| Terminate resource | Deletes the Harbor project |
+| Update limits | Sets the project's storage quota |
+| Add / remove members | **No-op** — access comes from the OIDC group, which the identity provider fills |
+| Pause | **No-op** — returns `False`; Harbor has no pause |
+| Downscale | Sets the project's storage quota to 1 GB |
+| Restore | Sets the quota back to `default_storage_quota_gb` (not to the ordered limit) |
+| Usage reporting | Storage used, read from the project's quota |
+
 ## Features
 
 - **✅ Automated Project Management**: Creates Harbor projects for each Waldur resource
@@ -119,17 +138,25 @@ Add the Harbor backend configuration to your `waldur-site-agent-config.yaml`:
 
 ```yaml
 offerings:
-  harbor-registry:
-    backend_type: harbor
+  - name: "Harbor registry"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<harbor offering uuid>"
+
+    backend_type: "harbor"
+    order_processing_backend: "harbor"
+    membership_sync_backend: "harbor"
+    reporting_backend: "harbor"
+
     backend_settings:
       # Harbor instance URL
       harbor_url: "https://harbor.example.com"
 
       # Robot account credentials (ensure robot has sufficient permissions)
       robot_username: "robot$waldur-agent"
-      robot_password: "your-robot-password-here"
+      robot_password: "<robot secret>"
 
-      # Default storage quota in GB for new projects
+      # Storage quota in GB when an order carries no storage limit
       default_storage_quota_gb: 10
 
       # Naming prefixes
@@ -137,7 +164,7 @@ offerings:
       allocation_prefix: "waldur-"      # Harbor projects: waldur-{resource_slug}
 
       # Harbor project role for OIDC groups
-      # 1=Admin, 2=Developer (recommended), 3=Guest, 4=Maintainer
+      # 1=Admin, 2=Developer (default), 3=Guest, 4=Maintainer
       project_role_id: 2
 
     backend_components:
@@ -146,14 +173,25 @@ offerings:
         accounting_type: "limit"
         label: "Container Storage"
         unit_factor: 1
-
-    # Waldur API settings
-    api_url: "https://waldur.example.com/api/"
-    api_token: "your-waldur-api-token"
-
-    # Offering UUID in Waldur
-    offering_uuid: "harbor-offering-uuid"
 ```
+
+The backend requires a `storage` component.
+
+### Backend settings
+
+Validated by `waldur_site_agent_harbor.schemas.HarborBackendSettingsSchema`; a
+misspelt or missing required key is logged as a warning when the agent loads
+its configuration, and the backend refuses to start without the required ones.
+
+| Setting | Required | Default | Description |
+|---|---|---|---|
+| `harbor_url` | yes | — | Harbor base URL |
+| `robot_username` | yes | — | Robot account name |
+| `robot_password` | yes | — | Robot account secret |
+| `default_storage_quota_gb` | no | `10` | Quota when an order has no storage limit; also what restore sets |
+| `oidc_group_prefix` | no | `waldur-` | Prefix of the OIDC group per Waldur project |
+| `project_role_id` | no | `2` | Role of the group in the project: 1 admin, 2 developer, 3 guest, 4 maintainer |
+| `allocation_prefix` | no | empty | Prefix of Harbor project names (read by the agent core) |
 
 ### Robot Account Permissions
 
@@ -265,28 +303,30 @@ The plugin implements the following Harbor API operations:
 ### ✅ Usage Reporting (Fully Working)
 
 - ✅ Query project storage usage via quota API
-- ✅ Report repository counts
 - ✅ Track storage consumption for Waldur billing
-- ✅ Get project metadata and statistics
+- ✅ Get project metadata (the repository count is stored as resource metadata, not reported as usage)
 
 ### 🔄 Supported Waldur Operations
 
 - ✅ **order_process**: Create/update Harbor projects and quotas
 - ✅ **report**: Report storage usage back to Waldur
-- ✅ **membership_sync**: Manage OIDC group memberships
+- ✅ **membership_sync**: Resource status and limits; members are **not** synced —
+  access comes from the OIDC group, which the identity provider fills
 - ✅ **diagnostics**: Health checks and connectivity testing
 - ❌ **pause**: Not supported (Harbor has no pause concept, returns False)
+- ⚠️ **downscale / restore**: downscale sets the quota to 1 GB; restore sets it to
+  `default_storage_quota_gb`, not to the ordered limit
 
 ## Testing
 
 Run the test suite:
 
 ```bash
-# Run all Harbor plugin tests
-uv run pytest plugins/harbor/tests/ -v
+# Run all Harbor plugin tests (from the plugin directory, so its entry points resolve)
+cd plugins/harbor && uv run pytest tests/ -v
 
 # Run with coverage
-uv run pytest plugins/harbor/tests/ --cov=waldur_site_agent_harbor
+cd plugins/harbor && uv run pytest tests/ --cov=waldur_site_agent_harbor
 ```
 
 ## Troubleshooting
@@ -359,10 +399,8 @@ are terminated, leading to storage waste and potential quota issues.
 #### Enable Debug Logging
 
 ```yaml
-# In waldur-site-agent config
-logging:
-  level: DEBUG
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# In waldur-site-agent config (top level)
+log_level: "DEBUG"
 ```
 
 #### Test Harbor Client Directly
@@ -440,19 +478,8 @@ curl -X DELETE -u "robot\$username:password" \
 
 ### Project Structure
 
-```text
-plugins/harbor/
-├── waldur_site_agent_harbor/
-│   ├── __init__.py
-│   ├── backend.py       # HarborBackend implementation
-│   ├── client.py        # Harbor API client
-│   └── exceptions.py    # Custom exceptions
-├── tests/
-│   ├── test_harbor_backend.py
-│   └── test_harbor_client.py
-├── pyproject.toml
-└── README.md
-```
+The backend is `waldur_site_agent_harbor/backend.py`, the Harbor API client
+`client.py`, and the settings schema `schemas.py`; tests live in `tests/`.
 
 ### Adding New Features
 

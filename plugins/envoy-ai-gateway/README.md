@@ -10,6 +10,24 @@ the gateway.
 The plugin is Kubernetes-native: API keys live in Kubernetes Secrets that the Envoy Gateway
 `SecurityPolicy` reads.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `envoy` | `waldur_site_agent.backends` | order processing, membership sync |
+| `envoy-usage` | `waldur_site_agent.backends` | reporting |
+
+**Modes:** `order_process`, `membership_sync`, `report`, `event_process` (for API key commands).
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | Registers the resource and its gateway endpoint; the agent then issues its API keys |
+| Terminate resource | Removes every key of the resource from both Secrets |
+| Update limits | **No-op** — Waldur enforces limits by pausing the resource from reported usage |
+| Pause / restore | Moves the resource's keys to the blocked Secret and back |
+| Downscale | Same as pause — keys are blocked; a key has no partial-capacity state |
+| Usage reporting | `envoy`: **No-op**. `envoy-usage`: usage from the warehouse API |
+
 ## Features
 
 - **API key lifecycle**: provision, pause, restore, and terminate gateway API keys directly from
@@ -52,9 +70,10 @@ entries in a Kubernetes Secret. This backend manages those entries.
 **Key lifecycle** — to pause and restore a key without regenerating it, two Secrets are kept and
 entries move between them:
 
-- **create (order)**: register the resource with its UUID as the `backend_id` and surface the
-  gateway endpoint on it. The agent then generates the resource's keys, adds each as a
-  `<backend_id>-<n>: key` entry to the **active** Secret, and reports it to Waldur.
+- **create (order)**: register the resource under the backend id the order processor generates
+  (`{allocation_prefix}{resource slug}`) and surface the gateway endpoint on it. The agent then
+  generates the resource's keys, adds each as a `<backend_id>-<n>: key` entry to the **active**
+  Secret, and reports it to Waldur.
 - **pause**: move every key of the resource **active → blocked** — authentication now fails
   with 401.
 - **restore**: move the resource's keys **blocked → active**, except keys paused on their own.
@@ -167,7 +186,7 @@ combined example.
 | `apikey_secret` | no | `envoy-ai-gateway-apikeys` | Secret the `SecurityPolicy` reads keys from |
 | `blocked_secret` | no | `<apikey_secret>-blocked` | Secret holding paused keys (resource or key paused) |
 | `kubeconfig_path` | no | in-cluster | Path to a kubeconfig; omit to use in-cluster config |
-| `kube_context` | no | current | kubeconfig context to target (local/dev) |
+| `kube_context` | no | — | kubeconfig context (local/dev); without it and `kubeconfig_path`: in-cluster |
 
 ### Usage reporting backend settings (`envoy-usage`)
 
@@ -181,6 +200,10 @@ combined example.
 ```yaml
 offerings:
   - name: "LLM Inference"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<offering uuid>"
+    backend_type: "envoy"
     order_processing_backend: "envoy"
     membership_sync_backend: "envoy"     # required for pause/restore (key blocking)
     reporting_backend: "envoy-usage"

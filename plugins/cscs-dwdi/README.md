@@ -4,6 +4,23 @@ This plugin provides integration with the CSCS Data Warehouse Data Intelligence 
 compute, storage, and LLM inference usage data to Waldur. The plugin supports secure OIDC authentication and
 optional SOCKS proxy connectivity for accessing DWDI API endpoints from restricted networks.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `cscs-dwdi-compute` | `waldur_site_agent.backends` | reporting |
+| `cscs-dwdi-storage` | `waldur_site_agent.backends` | reporting |
+| `cscs-dwdi-inference` | `waldur_site_agent.backends` | reporting |
+
+**Modes:** `report`. The backends only report usage: set them as `reporting_backend`
+and leave order processing and membership sync to another backend (or unset).
+
+| Operation | Behaviour |
+|---|---|
+| Create / terminate resource | Not supported |
+| Update limits, pause, downscale, restore | Not supported — raise `NotImplementedError` |
+| Usage reporting | Compute: node and CPU hours. Storage: space and inodes. Inference: pre-priced cost |
+
 ## Features
 
 - **Multiple Backend Support**: Separate backends for compute, storage, and inference usage reporting
@@ -67,8 +84,11 @@ records the amount as-is.
 
 ### Compute Backend Configuration
 
+Fragment of an offering (complete files are in [`examples/`](examples/)):
+
 ```yaml
 backend_type: "cscs-dwdi-compute"
+reporting_backend: "cscs-dwdi-compute"
 
 backend_settings:
   cscs_dwdi_api_url: "https://dwdi.cscs.ch"
@@ -93,8 +113,11 @@ backend_components:
 
 ### Storage Backend Configuration
 
+Fragment of an offering (complete files are in [`examples/`](examples/)):
+
 ```yaml
 backend_type: "cscs-dwdi-storage"
+reporting_backend: "cscs-dwdi-storage"
 
 backend_settings:
   cscs_dwdi_api_url: "https://dwdi.cscs.ch"
@@ -128,8 +151,11 @@ backend_components:
 
 ### Inference Backend Configuration
 
+Fragment of an offering (complete files are in [`examples/`](examples/)):
+
 ```yaml
 backend_type: "cscs-dwdi-inference"
+reporting_backend: "cscs-dwdi-inference"
 
 backend_settings:
   cscs_dwdi_api_url: "https://dwdi.cscs.ch"
@@ -153,11 +179,12 @@ as-is.
 
 ## Authentication
 
-Both backends use OIDC client credentials flow for authentication with the DWDI API. The authentication tokens are
+All three backends use the OIDC client credentials flow for authentication with the DWDI API. The authentication tokens are
 automatically managed with refresh capabilities.
 
 ### Required Settings
 
+- `cscs_dwdi_api_url`: DWDI API base URL
 - `cscs_dwdi_client_id`: OIDC client identifier
 - `cscs_dwdi_client_secret`: OIDC client secret
 - `cscs_dwdi_oidc_token_url`: OIDC token endpoint URL
@@ -165,6 +192,11 @@ automatically managed with refresh capabilities.
 ### Optional Settings
 
 - `cscs_dwdi_oidc_scope`: OIDC scope (defaults to "openid")
+
+The storage backend also requires `storage_filesystem` and `storage_data_type`. The
+settings are validated by `waldur_site_agent_cscs_dwdi.schemas` (one schema for compute and
+inference, one for storage); a misspelt or missing required key is logged as a warning when
+the agent loads its configuration, and the backend refuses to start without the required ones.
 
 ### Token Management
 
@@ -174,7 +206,7 @@ automatically managed with refresh capabilities.
 
 ## SOCKS Proxy Support
 
-Both backends support SOCKS proxy for network connectivity. This is useful when the DWDI API is only accessible
+All three backends support a SOCKS proxy for network connectivity. This is useful when the DWDI API is only accessible
 through a proxy or jump host.
 
 ### SOCKS Proxy Configuration
@@ -229,7 +261,7 @@ For storage resources, there are two options:
 
 ## Usage Reporting
 
-Both backends are read-only and designed for usage reporting. They implement the `_get_usage_report()` method
+All three backends are read-only and designed for usage reporting. They implement the `_get_usage_report()` method
 but do not support:
 
 - Account creation/deletion
@@ -370,7 +402,7 @@ See the `examples/` directory for complete configuration examples:
 
 - `cscs-dwdi-compute-config.yaml` - Compute backend only
 - `cscs-dwdi-storage-config.yaml` - Storage backend only
-- `cscs-dwdi-combined-config.yaml` - Both backends in one configuration
+- `cscs-dwdi-combined-config.yaml` - Compute and storage offerings in one configuration
 
 ## Installation
 
@@ -402,13 +434,14 @@ pip install -e plugins/cscs-dwdi/
 
 ```bash
 # Run all cscs-dwdi tests
-uv run pytest plugins/cscs-dwdi/tests/
+cd plugins/cscs-dwdi   # run from the plugin directory, so its entry points resolve
+uv run pytest tests/
 
 # Run with coverage
-uv run pytest plugins/cscs-dwdi/tests/ --cov=waldur_site_agent_cscs_dwdi
+uv run pytest tests/ --cov=waldur_site_agent_cscs_dwdi
 
 # Run specific test files
-uv run pytest plugins/cscs-dwdi/tests/test_cscs_dwdi.py -v
+uv run pytest tests/test_cscs_dwdi.py -v
 ```
 
 ### Test Coverage
@@ -521,18 +554,9 @@ curl --proxy socks5://localhost:12345 -H "Authorization: Bearer YOUR_TOKEN" http
 
 ### Project Structure
 
-```text
-plugins/cscs-dwdi/
-├── pyproject.toml                           # Plugin configuration
-├── README.md                               # This documentation
-├── examples/                               # Configuration examples
-├── waldur_site_agent_cscs_dwdi/
-│   ├── __init__.py                         # Package init
-│   ├── backend.py                          # Backend implementations
-│   └── client.py                          # CSCS-DWDI API client
-└── tests/
-    └── test_cscs_dwdi.py                  # Plugin tests
-```
+`waldur_site_agent_cscs_dwdi/` holds the three backends (`backend.py`), the DWDI API
+client (`client.py`) and the settings schemas (`schemas.py`); tests are in `tests/`,
+example configurations in `examples/`.
 
 ### Key Classes
 

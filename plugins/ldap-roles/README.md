@@ -21,6 +21,22 @@ Group naming templates are configurable per offering. Roles outside the
 configured `role_map` are ignored. Users not present in LDAP are skipped
 with a warning — sync continues.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `ldap-roles` | `waldur_site_agent.backends` | order processing (required), membership sync |
+
+**Modes:** `order_process`, `membership_sync`, `event_process`.
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | Records the backend id (the resource slug); writes nothing to LDAP yet |
+| Terminate resource | Empties every group the resource owns |
+| Add / remove members | Group membership from offering roles on the resource and its resource projects |
+| Pause / downscale / restore | **No-op** — returns `True` without changing anything |
+| Usage reporting | **No-op** — reports nothing |
+
 ## Resource lifecycle
 
 `ldap-roles` must also be the offering's `order_processing_backend`:
@@ -127,6 +143,12 @@ backend_settings:
   # LDAP membership attribute: "memberUid" (POSIX) or "member" (DN-based).
   membership_type: memberUid
 
+  # Look LDAP users up by Waldur user UUID instead of username.
+  lookup_by_user_uuid: false
+
+  # Verify TLS for the Waldur API calls above (default true).
+  waldur_verify_ssl: true
+
   # Tag in the ownership marker written to the groups this backend creates
   # (see "Group ownership and revocation").
   managed_by_tag: "waldur-site-agent"
@@ -138,12 +160,24 @@ backend_settings:
     base_dn: dc=example,dc=com
     people_ou: ou=People
     groups_ou: ou=Groups
+    use_starttls: false        # STARTTLS on an ldap:// connection
 ```
+
+Template variables (missing ones substitute to empty): `${role_name}` (the mapped
+role token), `${resource_slug}`, `${rp_uuid}` (ResourceProject UUID, 32 hex),
+`${rp_uuid_short}` (its first 8 hex), `${customer_slug}`, `${project_slug}` (the
+parent Waldur project, not the ResourceProject) and `${project_name}` (the
+ResourceProject name).
+
+The settings are validated by
+`waldur_site_agent_ldap_roles.schemas.LdapRolesBackendSettingsSchema`; a misspelt or
+missing required key is logged as a warning when the agent loads its configuration.
 
 ## What this plugin does NOT do
 
 - Does not provision or update LDAP **user** entries — pair this plugin
   with `waldur-site-agent-ldap` (or another username-management
   backend) if user provisioning is needed.
-- Does not enforce quotas, run usage reports, or manage resource state
-  transitions — it is membership-sync only.
+- Does not enforce quotas, run usage reports, or pause / downscale / restore —
+  apart from recording a new resource and emptying its groups on terminate (see
+  "Resource lifecycle"), it only syncs group membership.

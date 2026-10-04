@@ -20,6 +20,9 @@ waldur-site-agent = { workspace = true }
 [project.entry-points."waldur_site_agent.backends"]
 nextcloud = "waldur_site_agent_nextcloud.backend:NextcloudBackend"
 
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+nextcloud = "waldur_site_agent_nextcloud.schemas:NextcloudBackendSettingsSchema"
+
 [tool.ruff]
 extend = "../../pyproject.toml"
 

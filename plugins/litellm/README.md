@@ -9,6 +9,24 @@ It is the same shape as the sibling `envoy-ai-gateway` plugin, but talks to Lite
 REST API instead of Kubernetes Secrets — so there is no cluster access and no separate usage
 warehouse to deploy.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `litellm` | `waldur_site_agent.backends` | order processing, membership sync |
+| `litellm-usage` | `waldur_site_agent.backends` | reporting |
+
+**Modes:** `order_process`, `membership_sync`, `report`, `event_process` (for API key commands).
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | Registers the resource and its `{api_url}/v1` endpoint; the agent then issues its keys |
+| Terminate resource | Deletes every key of the resource (`soft_delete` does not apply) |
+| Update limits | `POST /key/update` with the backstop fields on every key |
+| Add / remove members | LiteLLM users (and Open WebUI accounts when configured) |
+| Pause / downscale / restore | Blocks / unblocks every key |
+| Usage reporting | `litellm`: **No-op**. `litellm-usage`: token and spend usage from the spend API |
+
 ## Features
 
 - **Virtual key lifecycle**: provision, rotate, pause, restore, and terminate LiteLLM keys
@@ -414,6 +432,7 @@ that provisions and revokes people.
 | `downscale_resource()` | same as pause (a key has no partial-capacity state) |
 | `delete_resource()` | `POST /key/delete` for every key |
 | `set_resource_limits()` | `POST /key/update` — full target state of the four backstop fields |
+| `sync_resource_limits()` | pushes Waldur's limits onto the keys (the base pulls them the other way) |
 | `add_users_to_resource()` | `POST /user/new` (or `/user/update` to adopt), plus Open WebUI `auths/add` |
 | `remove_users_from_resource()` | Open WebUI role → `pending` (or `DELETE`), then `POST /user/delete` |
 | `list_resource_users()` | `GET /user/list`, filtered on the `waldur_resource` metadata stamp |
@@ -481,6 +500,7 @@ block.
 | `api_token` | yes | — | Master or admin key for the spend API |
 | `verify_ssl` | no | `true` | Verify the proxy's TLS certificate |
 | `timeout` | no | `30` | Per-request timeout in seconds |
+| `component_metrics` | no | — | Extra component → metric pairs; see [Billing many models][billing] |
 | `usage_cache_ttl` | no | half report period | Seconds a fetched month of rows is reused in one pass; `0` disables |
 
 ### Composed offering (both backends)
@@ -488,6 +508,10 @@ block.
 ```yaml
 offerings:
   - name: "LLM Inference"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<offering uuid>"
+    backend_type: "litellm"
     order_processing_backend: "litellm"
     membership_sync_backend: "litellm"     # required — pause/restore blocks the keys
     reporting_backend: "litellm-usage"
@@ -701,3 +725,5 @@ model_list:
 general_settings:
   master_key: sk-master-local
 ```
+
+[billing]: #billing-many-models-from-one-offering

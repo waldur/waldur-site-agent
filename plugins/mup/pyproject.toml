@@ -22,6 +22,9 @@ waldur-site-agent = { workspace = true }
 [project.entry-points."waldur_site_agent.backends"]
 mup = "waldur_site_agent_mup.backend:MUPBackend"
 
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+mup = "waldur_site_agent_mup.schemas:MUPBackendSettingsSchema"
+
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [
   "S101",   # we can (and MUST!) use 'assert' in test files.

@@ -9,6 +9,26 @@ A create order yields a running machine and a terminate order deletes it.
 Pausing and downscaling deallocate it, restoring starts it again. There are no
 start, stop or restart actions.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `azure` | `waldur_site_agent.backends` | order processing, membership sync, reporting |
+
+**Modes:** `order_process`, `membership_sync`, `report`, `event_process`.
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | Resource group, network, public IP, NIC and the machine (see below) |
+| Terminate resource | Deletes the machine and its network objects |
+| Update limits | **Not supported** — resizing a machine is not implemented |
+| Add / remove members | **No-op** — machine access is the SSH key, not membership |
+| Pause / downscale | Deallocates the machine |
+| Restore | Starts the machine |
+| Usage reporting | Metered usage from Azure (see [Metering](#metering)) |
+
+A forced resource sync does not re-create a deleted machine under its old id.
+
 ## Provisioning a machine
 
 An order creates, in this order: a resource group, a virtual network, a subnet, a
