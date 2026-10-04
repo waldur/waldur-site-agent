@@ -5,23 +5,38 @@ not a tutorial — if this is your first setup, start with the [Quickstart](quic
 and come back here once something needs a field this page covers but the Quickstart didn't.
 
 **Required in every offering**, regardless of backend: [`name`](#name),
-[`waldur_api_url`](#waldur_api_url), [`waldur_api_token`](#waldur_api_token),
-[`waldur_offering_uuid`](#waldur_offering_uuid), a `*_backend` setting for each process you run
-(e.g. `order_processing_backend`), and at least one entry under
-[`backend_components`](#backend-components). Everything else on this page — global settings,
-event processing, resource management, backend-specific `backend_settings`, and the ~15 optional
-component fields — has a working default and can be added when you actually need it.
+[`waldur_api_url`](#waldur_api_url), [`waldur_offering_uuid`](#waldur_offering_uuid),
+[`backend_type`](#backend_type), credentials — either [`waldur_api_token`](#waldur_api_token) or the
+three
+[OIDC client-credential settings](#oidc-client-credentials-oidc_token_url-oidc_client_id-oidc_client_secret)
+— and a `*_backend` setting for each process you run (e.g. `order_processing_backend`). An
+offering without any `*_backend` loads without error but is not served: `order_process` skips it,
+`membership_sync` logs `Unable to create backend` for it, and `report` stops with that error. Most backends also need
+at least one entry under [`backend_components`](#backend-components) to provision limits or
+report usage. Everything else on this page — global settings, event processing, resource
+management, backend-specific `backend_settings`, and the optional component fields — has a
+working default and can be added when you actually need it.
+
+Unknown keys are **ignored silently**, at the top level and inside an offering, so a misspelt
+optional setting quietly keeps its default. See [Configuration Validation](configuration-validation.md)
+for what is checked and how errors are reported.
 
 ## Configuration File Structure
 
-The agent uses a YAML configuration file (`waldur-site-agent-config.yaml`) with the following structure:
+The agent reads a YAML configuration file (default `waldur-site-agent-config.yaml` in the
+working directory; set another with `-c`) with the following structure:
 
 ```yaml
-sentry_dsn: ""
 timezone: "UTC"
+log_level: "INFO"
 offerings:
   - name: "Example Offering"
-    # Offering-specific configuration...
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<token>"
+    waldur_offering_uuid: "<offering UUID>"
+    backend_type: "slurm"
+    order_processing_backend: "slurm"
+    # ... backend_settings, backend_components, other offering settings
 ```
 
 ## Global Settings
@@ -43,14 +58,54 @@ offerings:
 
 ### `timezone`
 
-- **Type**: String
+- **Type**: String (IANA zone name)
 - **Description**: Timezone for billing period calculations
-- **Default**: System timezone
-- **Recommended**: `"UTC"`
+- **Default**: `"UTC"`
 - **Examples**: `"UTC"`, `"Europe/Tallinn"`, `"America/New_York"`
+- **Validation**: An unknown zone name fails configuration loading.
 
-**Note**: Important when agent and Waldur are deployed in different timezones to prevent billing period
-mismatches at month boundaries.
+**Note**: Set it to the zone Waldur bills in when agent and Waldur run in different timezones,
+otherwise usage near a month boundary can be filed against the wrong billing period.
+
+### `log_level`
+
+- **Type**: String
+- **Values**: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive)
+- **Default**: `"INFO"`
+- **Description**: Level of the agent's own log output.
+
+### `reporting_periods`
+
+- **Type**: Integer, 1–12
+- **Default**: `2`
+- **Description**: Number of billing periods `report` mode sends usage for, counting back from
+  the current one: `1` reports only the current month, `2` also re-sends the previous month so late
+  accounting data lands in the right period.
+
+### `expose_backend_error_details`
+
+- **Type**: Boolean
+- **Default**: `true`
+- **Description**: When the agent marks an order or resource as ERRED, it forwards the exception
+  message and traceback to Waldur's error details. With `false`, Waldur gets only the message of a
+  `BackendError` raised by the plugin; any other exception is reported as "Internal backend error.
+  Please contact the service provider." and tracebacks stay in the agent's own log.
+
+### `log_shipping`
+
+Ships the agent's own log entries to Waldur (`POST /api/marketplace-site-agent-logs/`) so they can
+be read without shell access to the agent host. Off by default.
+
+```yaml
+log_shipping:
+  enabled: true              # default false
+  ship_interval_seconds: 60  # >= 10
+  buffer_size_mb: 1          # in-memory buffer, >= 1
+  log_level: "WARNING"       # minimum level shipped
+```
+
+Entries below `log_level` are not shipped, so with the default `WARNING` a quiet agent ships
+nothing. Shipping uses the same credentials as the offering (static token or OIDC).
 
 ### `global_proxy`
 
@@ -151,9 +206,12 @@ offerings:
 #### `backend_type`
 
 - **Type**: String
-- **Required**: Yes for legacy configurations
-- **Values**: `"slurm"`, `"moab"`, `"mup"`
-- **Description**: Type of backend (legacy setting, use specific backend settings instead)
+- **Required**: Yes — configuration loading fails without it
+- **Description**: Names the plugin whose schemas validate this offering's `backend_settings` and
+  `backend_components` (for example `"slurm"`, `"waldur"`, `"litellm"`). Lowercased on load.
+  Usually the same name as the `*_backend` settings below. Only `backend_type` selects the schema,
+  so in an offering that combines backends (say `litellm` for orders and `litellm-usage` for
+  reporting) the settings are validated against the `backend_type` plugin only.
 
 #### Backend Selection
 
@@ -163,29 +221,46 @@ Configure which backends to use for different operations:
 order_processing_backend: "slurm"    # Backend for order processing
 membership_sync_backend: "slurm"     # Backend for membership syncing
 reporting_backend: "slurm"           # Backend for usage reporting
-username_management_backend: "base"  # Backend for username management
+username_management_backend: "base"  # Backend for username management (default "base")
 ```
 
-**Available backends** (via entry points):
+**Processing backends** (entry point group `waldur_site_agent.backends`; names as installed by the
+plugins in this repository):
 
-- `"slurm"`: SLURM cluster management
-- `"moab"`: MOAB cluster management
-- `"mup"`: MUP portal integration
-- `"waldur"`: Waldur-to-Waldur federation
-- `"base"`: Basic username management
-- `"rancher"`: Direct Rancher REST API integration (single offering = one cluster)
-- `"ceph_s3"`: Ceph S3 storage (croit and RadosGW flavours)
-- `"digitalocean"`: DigitalOcean droplets
-- `"azure"`: Azure virtual machines. See
-  [`plugins/azure/README.md`](../plugins/azure/README.md).
-- `"rancher-kc-crd"`: CRD-driven Rancher + Keycloak management via the
-  [`rancher-keycloak-operator`](https://github.com/waldur/rancher-keycloak-operator).
-  Membership-sync only; targets multiple clusters per offering by reading
-  `cluster_id` from each Resource's `backend_id`. See
-  [`plugins/rancher-kc-crd/README.md`](../plugins/rancher-kc-crd/README.md).
-- Custom backends via plugins
+<!-- pyml disable-num-lines 20 line-length -->
+| Name | Plugin package | Purpose |
+| ---- | -------------- | ------- |
+| `slurm` | `waldur-site-agent-slurm` | SLURM accounts, limits, usage |
+| `moab` | `waldur-site-agent-moab` | MOAB Accounting Manager |
+| `mup` | `waldur-site-agent-mup` | MUP portal |
+| `waldur` | `waldur-site-agent-waldur` | Waldur-to-Waldur federation |
+| `rancher` | `waldur-site-agent-rancher` | Rancher projects via the Rancher API |
+| `rancher-kc-crd` | `waldur-site-agent-rancher-kc-crd` | Rancher + Keycloak via `ManagedRancherProject` CRDs |
+| `k8s-ut-namespace` | `waldur-site-agent-k8s-ut-namespace` | Kubernetes UT `ManagedNamespace` resources |
+| `okd` | `waldur-site-agent-okd` | OKD / OpenShift projects |
+| `opennebula` | `waldur-site-agent-opennebula` | OpenNebula VDCs and VMs |
+| `azure` | `waldur-site-agent-azure` | Azure virtual machines |
+| `digitalocean` | `waldur-site-agent-digitalocean` | DigitalOcean droplets |
+| `harbor` | `waldur-site-agent-harbor` | Harbor registry projects |
+| `nextcloud` | `waldur-site-agent-nextcloud` | Nextcloud |
+| `ceph_s3`, `croit_usage` | `waldur-site-agent-ceph-s3` | Ceph S3 users and buckets; croit usage reporting |
+| `litellm`, `litellm-usage` | `waldur-site-agent-litellm` | LiteLLM virtual keys; usage reporting |
+| `envoy`, `envoy-usage` | `waldur-site-agent-envoy-ai-gateway` | Envoy AI Gateway API keys; usage reporting |
+| `cscs-dwdi-compute`, `cscs-dwdi-storage`, `cscs-dwdi-inference` | `waldur-site-agent-cscs-dwdi` | CSCS DWDI usage reporting |
+| `ldap-roles` | `waldur-site-agent-ldap-roles` | LDAP group membership driven by Waldur roles |
 
-**Note**: If a backend setting is omitted, that process won't start for the offering.
+**Username management backends** (`waldur_site_agent.username_management_backends`): `base`
+(`waldur-site-agent-basic-username-management`), `ldap` (`waldur-site-agent-ldap`) and
+`waldur-identity-bridge` (`waldur-site-agent-waldur`).
+
+A backend is available only when its plugin package is installed alongside the core package;
+`pip install waldur-site-agent` alone installs none. Third-party plugins register under the same
+entry point groups — see the [Plugin Development Guide](plugin-development-guide.md).
+
+**Note**: If a `*_backend` setting is omitted, `order_process` skips the offering
+(`Order processing is disabled for offering …`), `membership_sync` logs `Unable to create backend
+for <offering>` for it, and `report` stops the whole process with the same error. In
+`event_process`, the matching event subscriptions are not created.
 
 ### Event Processing
 
@@ -215,7 +290,35 @@ username_management_backend: "base"  # Backend for username management
 - **Default**: `true`
 - **Description**: Use TLS for websocket connections
 
+#### `stomp_ws_host`, `stomp_ws_port`, `stomp_ws_path`
+
+- **Type**: String / Integer / String
+- **Defaults**: the host of `waldur_api_url`; port `443` when `verify_ssl` is true, otherwise `80`;
+  path `/rmqws-stomp`
+- **Description**: Where the agent opens the STOMP WebSocket. Override them when RabbitMQ's
+  web-STOMP endpoint is not served behind the Waldur API host — for example a development broker
+  on `localhost:15674` with path `/ws`. Set `websocket_use_tls` to match the endpoint; the default
+  port follows `verify_ssl`, not `websocket_use_tls`.
+
+#### `username_reconciliation_enabled`
+
+- **Type**: Boolean
+- **Default**: `false`
+- **Description**: Pull usernames that the backend assigns (for example Waldur B's offering users
+  in a federation) back into Waldur at the start of each membership pass, and — in `event_process`
+  mode — on the reconciliation timer.
+
 ### Resource Management
+
+#### `omit_anomalous_usage_components`
+
+- **Type**: Boolean
+- **Default**: `false`
+- **Description**: A component whose reported usage is lower than what Waldur already holds for
+  the period is treated as a data-collection error. With `false` that one component blocks the
+  whole usage submission for the resource; with `true` only the decreasing components are left out
+  and the rest are reported. Use `true` for backends whose meters are independent of each other
+  (for example Waldur-to-Waldur federation).
 
 #### `resource_import_enabled`
 
@@ -269,6 +372,22 @@ These settings can be used in `backend_settings` for any backend type.
   `project_slug` account name generation policy is used. Set to a lower value
   if collisions are rare or a higher value for large deployments.
 
+### `soft_delete`
+
+- **Type**: Boolean
+- **Default**: `false`
+- **Description**: On a terminate order, set every component limit of the backend resource to 0
+  instead of deleting it. The account and its data stay on the backend.
+
+### Home directory settings
+
+Backends that create POSIX home directories (SLURM, and the standalone
+`waldur_site_create_homedirs` command) read `enable_user_homedir_account_creation` (default
+`true`), `default_homedir_umask` (default `"0077"`), `homedir_base_path` (where home directories
+live; when unset, the path comes from the system passwd database) and `homedir_quota` (filesystem
+quota for each new home directory). `homedir_quota` and the quota providers are described in
+[SLURM Storage Quotas](slurm-storage-quotas.md).
+
 ### Account name generation vs. resource slug templates
 
 The offering's `account_name_generation_policy` plugin option (set in Waldur,
@@ -293,7 +412,12 @@ not in the agent config) controls how the agent derives a resource's backend ID
 
 ## Backend-Specific Settings
 
+Each plugin's README holds its full settings reference; the blocks below show the common keys.
+
 ### SLURM Backend Settings
+
+See the [SLURM plugin README](../plugins/slurm/README.md) for every key, including the REST
+execution mode, QoS management and periodic limits.
 
 ```yaml
 backend_settings:
@@ -325,11 +449,18 @@ backend_settings:
 
 ```yaml
 backend_settings:
-  # MUP-specific settings
-  api_url: "https://mup.example.com/api/"
-  api_token: "your-api-token"
-  # Other MUP-specific configuration
+  api_url: "https://mup.example.com/api/"   # required
+  username: "agent-user"                    # required
+  password: "secret"                        # required
+  project_prefix: "waldur_"                 # default "waldur_"
+  allocation_prefix: "alloc_"               # default "alloc_"
+  default_research_field: 1                 # default 1
+  default_agency: "FCT"                     # default "FCT"
 ```
+
+The agent refuses to start the MUP backend when `api_url`, `username` or `password` is missing.
+The remaining optional keys (default user profile fields and others) are listed in the
+[MUP plugin README](../plugins/mup/README.md).
 
 ### Waldur Federation Backend Settings
 
@@ -392,10 +523,19 @@ backend_components:
 #### `unit_factor`
 
 - **Type**: Number
+- **Default**: `1.0`
 - **Description**: Factor for conversion from Waldur units to backend units
 - **Examples**:
   - `60000` for CPU (60 * 1000, converts k-Hours to CPU-minutes)
   - `61440` for memory (60 * 1024, converts gb-Hours to MB-minutes)
+
+#### `unit_factor_reporting`
+
+- **Type**: Number
+- **Optional**: Yes
+- **Description**: Factor used instead of `unit_factor` when converting backend usage back to
+  Waldur units, falling back to `unit_factor` when unset. Only the CSCS DWDI reporting backends
+  read it; every other backend uses `unit_factor` for both directions.
 
 #### `accounting_type`
 
@@ -562,17 +702,21 @@ backend_components:
 
 ## Environment Variables
 
-Override configuration values using environment variables:
+These are read from the environment, not from the configuration file. All are optional.
 
-### Agent Timing
+<!-- pyml disable-num-lines 9 line-length -->
+| Variable | Default | Used by | Meaning |
+| -------- | ------- | ------- | ------- |
+| `WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES` | `5` | `order_process` | Minutes between order-processing cycles. Accepts a fraction (`0.5`). |
+| `WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES` | `5` | `membership_sync` | Minutes between membership cycles. Whole number. |
+| `WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES` | `30` | `report` | Minutes between reporting cycles. Whole number. |
+| `WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES` | `60` | `event_process` | Minutes between the periodic reconciliation passes (see [Architecture](architecture.md#periodic-reconciliation)). Whole number. |
+| `WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES` | `15` | `event_process` | How long a STOMP consumer may stay down before the agent stops touching its liveness heartbeat (see [Architecture](architecture.md#stomp-connection-watchdog-and-liveness)). Accepts a fraction. |
+| `WALDUR_SITE_AGENT_HEARTBEAT_PATH` | `/tmp/waldur-site-agent-heartbeat` | all modes, `waldur_site_healthz` | File the agent touches as its liveness heartbeat and the probe reads. Give each agent process sharing a `/tmp` its own path. |
+| `SENTRY_ENVIRONMENT` | — | Sentry SDK | Environment tag on Sentry events; read by the Sentry SDK itself when `sentry_dsn` is set. |
 
-- `WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES`: Order processing period (default: 5)
-- `WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES`: Reporting period (default: 30)
-- `WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES`: Membership sync period (default: 5)
-
-### Monitoring
-
-- `SENTRY_ENVIRONMENT`: Environment name for Sentry
+A value that is not a number makes the agent fail at start-up; the three "whole number" variables
+also reject a fraction such as `2.5`.
 
 ## Example Configurations
 
@@ -588,6 +732,7 @@ offerings:
     verify_ssl: true
     waldur_offering_uuid: "uuid-from-waldur"
 
+    backend_type: "slurm"
     order_processing_backend: "slurm"
     membership_sync_backend: "slurm"
     reporting_backend: "slurm"
@@ -627,6 +772,7 @@ offerings:
     waldur_api_token: "your-api-token"
     waldur_offering_uuid: "uuid-from-waldur"
 
+    backend_type: "moab"
     order_processing_backend: "moab"
     membership_sync_backend: "moab"
     reporting_backend: "moab"
@@ -648,17 +794,40 @@ offerings:
 
 ### Event-Based Processing
 
+Run with `-m event_process`. Each `*_backend` set here decides which events the agent subscribes
+to: orders need `order_processing_backend`, and role, resource, offering-user and account events
+need `membership_sync_backend`. Leaving `membership_sync_backend` out does not move membership to
+polling — it switches membership sync off for the offering. To keep membership on HTTP polling
+while orders arrive over STOMP, set `stomp_membership_sync_enabled: false` and run a separate
+`membership_sync` agent for the offering.
+
 ```yaml
 offerings:
   - name: "Event-Driven SLURM"
-    # ... basic settings ...
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "your-api-token"   # STOMP needs a static token, not OIDC
+    waldur_offering_uuid: "uuid-from-waldur"
+    backend_type: "slurm"
 
     stomp_enabled: true
     websocket_use_tls: true
 
     order_processing_backend: "slurm"
-    reporting_backend: "slurm"
-    # Note: membership_sync_backend omitted for event processing
+    membership_sync_backend: "slurm"
+    reporting_backend: "slurm"            # reporting still needs a separate `report` agent
+
+    backend_settings:
+      default_account: "root"
+      customer_prefix: "hpc_"
+      project_prefix: "hpc_"
+      allocation_prefix: "hpc_"
+
+    backend_components:
+      cpu:
+        measured_unit: "k-Hours"
+        unit_factor: 60000
+        accounting_type: "usage"
+        label: "CPU"
 ```
 
 ### Waldur-to-Waldur Federation
@@ -713,9 +882,21 @@ offerings:
 Validate your configuration:
 
 ```bash
-# Test configuration syntax
+# Load the file, query Waldur with each offering's credentials, and run the diagnostics of the
+# offering's order processing backend (for SLURM: the binaries and `sinfo -V`).
 waldur_site_diagnostics -c /etc/waldur/waldur-site-agent-config.yaml
 
-# Load components (validates backend configuration)
+# Create the offering's components in Waldur from backend_components
 waldur_site_load_components -c /etc/waldur/waldur-site-agent-config.yaml
 ```
+
+`waldur_site_diagnostics` is designed to exit 1 when an order processing backend's own diagnostics
+fail or its `cluster_name` does not match the offering's `backend_id` in Waldur. Waldur API errors
+are logged as errors; when the offering itself cannot be fetched (a rejected token, an unknown
+offering UUID) the command then stops with a Python traceback, which also exits non-zero. A failure
+fetching orders is only logged. Read the output, not just the exit status. Membership and
+reporting backends are not checked.
+
+Loading alone does not catch everything: unknown keys are ignored and a plugin settings schema
+failure only logs a warning. [Configuration Validation](configuration-validation.md) explains which
+errors stop the agent and which do not.

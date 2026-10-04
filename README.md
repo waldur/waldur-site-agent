@@ -21,12 +21,14 @@ The agent uses a **uv workspace architecture** with pluggable backends:
 
 ## Installation
 
-The core agent and every plugin are published to PyPI. Install the core package
-plus the plugins you need — all packages share the same version number, so keep
-them in sync:
+The core agent and every plugin are published to PyPI. The core package contains
+no backends, so install it together with the plugins you need — all packages share
+the same version number, so keep them in sync. `waldur-site-agent-basic-username-management`
+provides the default username backend (`base`); include it unless the offering sets
+another `username_management_backend`:
 
 ```bash
-pip install waldur-site-agent waldur-site-agent-slurm
+pip install waldur-site-agent waldur-site-agent-slurm waldur-site-agent-basic-username-management
 ```
 
 See the [plugin table](#plugins) below for the full list of published packages.
@@ -51,6 +53,29 @@ them. Configurable values are documented in the
 waldur_site_agent -m <mode> -c <config-file>
 ```
 
+- `-m`, `--mode`: `order_process` (default), `report`, `membership_sync` or `event_process`
+- `-c`, `--config-file`: path to the configuration file (default
+  `waldur-site-agent-config.yaml` in the working directory)
+
+### Command-line tools
+
+<!-- pyml disable-num-lines 11 line-length -->
+| Command | Purpose |
+| ------- | ------- |
+| `waldur_site_agent` | Run the agent in one mode |
+| `waldur_site_diagnostics` | Check the configuration, Waldur access and the order processing backend; see [Validation](docs/configuration.md#validation) for what it checks |
+| `waldur_site_load_components` | Create the offering's components in Waldur from `backend_components` |
+| `waldur_site_healthz` | Liveness (heartbeat age) and readiness (Waldur reachable) probe for containers |
+| `waldur_site_create_homedirs` | Create home directories for the offering's users |
+| `waldur_sync_offering_users` | Run username generation and state transitions for the offering users once |
+| `waldur_sync_resource_limits` | Reconcile resource limits once — by default the backend's limits are written to Waldur |
+| `waldur_site_test_order` | Generate an order from a template and run it through a mock (or, with `--use-real-backend`, the real) backend |
+| `waldur_site_load_historical_usage` | Backfill historical usage into Waldur |
+
+The utility commands accept `-c` for the configuration file like the agent does;
+`waldur_site_healthz` spells it `--config-file` (plus `--max-age`, `--heartbeat-path` and
+`--liveness-only`). Run any of them with `--help`.
+
 ## Logging
 
 The agent emits structured logs in JSON format to stdout. This applies to both the core
@@ -58,21 +83,26 @@ agent and CLI tools.
 
 Example log entry:
 
+<!-- pyml disable-num-lines 3 line-length -->
 ```json
 {"event": "Running agent in order_process mode", "level": "info", "logger": "waldur_site_agent.backend", "timestamp": "2026-02-03T14:02:35.551020+00:00"}
 ```
 
-### CLI Arguments
-
-- `-m`, `--mode`: Agent mode (`order_process`, `report`, `membership_sync`, `event_process`)
-- `-c`, `--config-file`: Path to configuration file
+The level is set by `log_level` in the configuration file (default `INFO`).
 
 ### Environment Variables
 
-- `WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES`: Order processing period (default: 5)
-- `WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES`: Reporting period (default: 30)
-- `WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES`: Membership sync period (default: 5)
+- `WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES`: order processing period (default 5)
+- `WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES`: reporting period (default 30)
+- `WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES`: membership sync period (default 5)
+- `WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES`: `event_process` reconciliation period (default 60)
+- `WALDUR_SITE_AGENT_STOMP_UNHEALTHY_AFTER_MINUTES`: how long a STOMP consumer may stay down before
+  liveness fails (default 15)
+- `WALDUR_SITE_AGENT_HEARTBEAT_PATH`: liveness heartbeat file (default
+  `/tmp/waldur-site-agent-heartbeat`)
 - `SENTRY_ENVIRONMENT`: Sentry environment name
+
+See [Environment Variables](docs/configuration.md#environment-variables) for details.
 
 ## Development
 
@@ -109,7 +139,8 @@ For operators deploying the agent:
 - [Quickstart](docs/quickstart.md) - the fastest path from a fresh install to a running, verified agent
 - [Installation Guide](docs/installation.md)
 - [Configuration Reference](docs/configuration.md)
-- [Configuration Validation](docs/configuration-validation.md) - how config errors are reported, and how to read them
+- [Configuration Validation](docs/configuration-validation.md) - what is checked on load, which errors
+  stop the agent, and how to read them
 - [Deployment Guide](docs/deployment.md)
 - [Upgrading Guide](docs/upgrading.md)
 - [Username Management](docs/offering-users.md)
@@ -123,7 +154,7 @@ For contributors:
 ## Plugins
 
 <!-- BEGIN PLUGIN TABLE -->
-<!-- pyml disable-num-lines 22 line-length -->
+<!-- pyml disable-num-lines 24 line-length -->
 | Plugin | PyPI package | Description |
 | ------ | ------------ | ----------- |
 | [azure](plugins/azure/README.md) | [`waldur-site-agent-azure`](https://pypi.org/project/waldur-site-agent-azure/) | Azure virtual machines plugin |
@@ -136,6 +167,8 @@ For contributors:
 | [k8s-ut-namespace](plugins/k8s-ut-namespace/README.md) | [`waldur-site-agent-k8s-ut-namespace`](https://pypi.org/project/waldur-site-agent-k8s-ut-namespace/) | Kubernetes UT ManagedNamespace plugin |
 | [keycloak-client](plugins/keycloak-client/) | [`waldur-site-agent-keycloak-client`](https://pypi.org/project/waldur-site-agent-keycloak-client/) | Shared Keycloak client for Waldur Site Agent plugins |
 | [ldap](plugins/ldap/README.md) | [`waldur-site-agent-ldap`](https://pypi.org/project/waldur-site-agent-ldap/) | LDAP plugin |
+| [ldap-client](plugins/ldap-client/README.md) | [`waldur-site-agent-ldap-client`](https://pypi.org/project/waldur-site-agent-ldap-client/) | Shared LDAP client for Waldur Site Agent plugins |
+| [ldap-roles](plugins/ldap-roles/README.md) | [`waldur-site-agent-ldap-roles`](https://pypi.org/project/waldur-site-agent-ldap-roles/) | LDAP role-driven group membership sync plugin |
 | [litellm](plugins/litellm/README.md) | [`waldur-site-agent-litellm`](https://pypi.org/project/waldur-site-agent-litellm/) | LiteLLM (virtual key lifecycle + usage reporting) plugin |
 | [moab](plugins/moab/README.md) | [`waldur-site-agent-moab`](https://pypi.org/project/waldur-site-agent-moab/) | MOAB plugin |
 | [mup](plugins/mup/README.md) | [`waldur-site-agent-mup`](https://pypi.org/project/waldur-site-agent-mup/) | MUP plugin |
