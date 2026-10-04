@@ -15,9 +15,10 @@ the current billing period and reporting it at regular intervals.
 ### System Requirements
 
 - Linux system with access to SLURM cluster head node
-- Python 3.11 or higher
+- Python 3.9.2 or higher
 - `uv` package manager installed
-- Root access (required for SLURM commands)
+- An OS account that can read every user's job records (root, `SlurmUser`, or
+  a user with `AdminLevel=Operator` or higher when `PrivateData` hides jobs)
 - Network access to Waldur Mastermind API
 
 ### SLURM Requirements
@@ -80,14 +81,12 @@ offerings:
       project_prefix: "hpc_"            # Prefix for project accounts
       allocation_prefix: "hpc_"         # Prefix for allocation accounts
 
-      # QoS settings (not used in report mode but required)
+      # Not used by report mode; shown because the same file usually also
+      # drives order_process / membership_sync. Optional.
       qos_downscaled: "limited"
       qos_paused: "paused"
       qos_default: "normal"
-
-      # Home directory settings (not used in report mode)
       enable_user_homedir_account_creation: false
-      default_homedir_umask: "0077"
 
     # Define components for usage reporting
     backend_components:
@@ -117,7 +116,8 @@ offerings:
 #### Backend Settings
 
 - `default_account`: `DefaultAccount=` set on user associations in the SLURM cluster
-- Prefixes: Used to identify accounts created by the agent (for filtering)
+- Prefixes: Used to name the accounts the agent creates. Report mode does not
+  use them to find accounts — see [How It Works](#how-it-works).
 
 #### Backend Components
 
@@ -166,15 +166,19 @@ waldur_site_agent -m report -c /etc/waldur/waldur-site-agent-config.yaml
 
 ### How It Works
 
-1. **Initialization**: Agent loads configuration and connects to SLURM cluster
-2. **Account Discovery**: Identifies accounts matching configured prefixes
-3. **Usage Collection**:
-   - Runs `sacct` to collect usage data for current billing period
-   - Aggregates CPU and memory usage per account and user
-   - Converts SLURM units to Waldur units using configured factors
-4. **Reporting**: Sends usage data to Waldur Mastermind API
-5. **Sleep**: Waits for configured interval (default: 30 minutes)
-6. **Repeat**: Returns to step 3
+1. **Initialization**: the agent loads the configuration and registers with Waldur.
+2. **Resource discovery**: it lists the offering's resources in Waldur; each
+   resource's `backend_id` is the SLURM account to report on. Accounts that are
+   not Waldur resources are never reported, whatever their name.
+3. **Usage collection**:
+   - runs `sacct --truncate --allocations --allusers` for the current month
+     (in REST mode, `GET /slurmdb/{version}/jobs/` instead — see the
+     [SLURM plugin README](../plugins/slurm/README.md#rest-api-execution-mode));
+   - aggregates usage per account and per user;
+   - converts SLURM units to Waldur units with each component's `unit_factor`.
+4. **Reporting**: sends the usage to Waldur.
+5. **Sleep**: waits for the reporting interval (default 30 minutes), then
+   repeats from step 2.
 
 ### Timing Configuration
 
@@ -205,18 +209,14 @@ Logs are written to stdout/stderr when running manually.
 
 ### Health Checks
 
-1. **Test SLURM connectivity:**
+Check the configuration, the connection to Waldur and the SLURM tools in one
+step (exits non-zero on failure):
 
 ```bash
-uv run waldur_site_diagnostics
+uv run waldur_site_diagnostics -c /etc/waldur/waldur-site-agent-config.yaml
 ```
 
-1. **Verify configuration:**
-
-```bash
-# Check if configuration is valid
-uv run waldur_site_agent -m report -c /etc/waldur/waldur-site-agent-config.yaml --dry-run
-```
+The agent has no dry-run mode; the historical loader does (`--dry-run`, below).
 
 ### Common Issues
 
@@ -234,14 +234,15 @@ uv run waldur_site_agent -m report -c /etc/waldur/waldur-site-agent-config.yaml 
 
 #### No Usage Data
 
-- Verify accounts exist in SLURM with configured prefixes
+- Verify the Waldur resources have `backend_id` set, and that those SLURM
+  accounts exist
 - Check SLURM accounting database has recent data
 - Ensure users have submitted jobs in the current billing period
 
 #### Permission Errors
 
-- Agent typically needs root access for SLURM commands
-- Verify service runs as root user
+- `sacct --allusers` only returns other users' jobs to root, `SlurmUser` or a
+  sufficiently privileged user (see Prerequisites)
 - Check file permissions on configuration file
 
 ### Debugging
@@ -281,11 +282,12 @@ This is useful for:
 
 ### Prerequisites for Historical Loading
 
-**Staff User Requirements:**
+**Token requirements:**
 
-- Historical usage loading requires a **staff user API token**
-- Regular offering API tokens cannot submit historical data
-- The staff user must have appropriate permissions in Waldur
+- By default the loader checks that `--user-token` belongs to a **staff** user.
+- A service-provider token works with `--no-staff-check`, except for
+  usage-based components in **past** billing periods: Mastermind only lets staff
+  backfill those and rejects the submission otherwise.
 
 **Data Requirements:**
 
@@ -312,6 +314,12 @@ waldur_site_load_historical_usage \
 - `--user-token`: **Staff user API token** (not the offering's regular API token)
 - `--start-date`: Start date in YYYY-MM-DD format
 - `--end-date`: End date in YYYY-MM-DD format
+- `--skip-user-usage`: Submit resource-level totals only
+- `--no-staff-check`: Skip the staff check (service-provider tokens)
+- `--dry-run`: Log what would be submitted; send nothing
+- `--reconcile-stale`: Zero Waldur usage records the backend no longer reports
+  (for example usage previously attributed to the wrong month)
+- `--resource-backend-id ID`: Process only this resource; repeatable
 
 #### Processing Behavior
 
@@ -375,21 +383,19 @@ waldur_site_load_historical_usage \
 
 #### Progress Tracking
 
-The command provides detailed progress information:
+The command logs its progress, for example:
 
 ```text
-🚀 Starting historical usage loading
-📊 Will process 12 months of data
-📅 Processing month 1/12: 2024-01
-📋 Found 5 active resources to process
-📊 Processing usage data for 5 accounts
-📤 Submitted usage for resource project1_allocation: {'cpu': 15000, 'mem': 25000}
-✅ Completed processing 2024-01 (5 resources)
-📅 Processing month 2/12: 2024-02
+Starting historical usage loading
+Will process 12 months of data
+Processing month 1/12: 2024-01 for offering 'SLURM Usage Reporting' (<uuid>)
+Found 5 active resources to process
 ...
-🎉 Historical usage loading completed successfully!
+Historical usage loading completed successfully!
 Processed 12 months from 2024-01-01 to 2024-12-31
 ```
+
+Use `--dry-run` first to see what would be submitted.
 
 #### Log Files
 
@@ -412,15 +418,16 @@ waldur_site_load_historical_usage \
 **No Staff Privileges:**
 
 ```text
-❌ Historical usage loading requires staff user privileges
+Historical usage loading requires staff user privileges
 ```
 
-- Solution: Use an API token from a user with `is_staff=True` in Waldur
+- Solution: use a staff token, or `--no-staff-check` with a service-provider
+  token (not enough for past periods of usage-based components)
 
 **No Resources Found:**
 
 ```text
-ℹ️ No active resources found for offering, skipping month
+No active resources found for offering, skipping month
 ```
 
 - Solution: Ensure resources exist in Waldur and have `backend_id` values set
@@ -428,19 +435,11 @@ waldur_site_load_historical_usage \
 **No Usage Data:**
 
 ```text
-ℹ️ No usage data found for 2024-01
+No usage data found for 2024-01
 ```
 
 - Solution: Check SLURM accounting database has data for that period
 - Verify SLURM account names match Waldur resource `backend_id` values
-
-**Backend Not Supported:**
-
-```text
-❌ Backend does not support historical usage reporting
-```
-
-- Solution: Ensure you're using the SLURM backend and have updated code
 
 #### Performance Considerations
 
@@ -471,12 +470,11 @@ waldur_site_load_historical_usage \
 **Cross-Reference with SLURM:**
 
 ```bash
-# Verify SLURM usage data matches what was submitted
-sacct --accounts=project1_allocation \
-      --starttime=2024-01-01 \
-      --endtime=2024-01-31 \
-      --allocations \
-      --allusers \
+# The query the agent runs (CLI mode) for January 2024
+sacct --noconvert --truncate --allocations --allusers \
+      --accounts=project1_allocation \
+      --starttime=2024-01-01T00:00:00 \
+      --endtime=2024-01-31T23:59:59 \
       --format=Account,ReqTRES,Elapsed,User
 ```
 
@@ -494,4 +492,4 @@ You would need additional agent instances or a multi-mode configuration with dif
 
 - Historical loading is a separate command, not part of regular agent operation
 - Run historical loads **before** starting regular usage reporting to avoid conflicts
-- Historical data submission requires staff tokens, regular reporting uses offering tokens
+- Backfilling past periods of usage-based components needs a staff token; regular reporting uses the offering's token

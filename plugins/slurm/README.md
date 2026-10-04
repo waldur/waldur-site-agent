@@ -1,113 +1,211 @@
 # SLURM Plugin for Waldur Site Agent
 
-The SLURM plugin provides SLURM cluster management capabilities for Waldur Site Agent,
-including resource management, usage reporting, periodic limits, and historical data loading.
+The SLURM plugin connects a Waldur offering to a SLURM cluster: it creates and
+removes SLURM accounts for Waldur resources, keeps account associations in step
+with project membership, applies allocation limits, reports usage back to
+Waldur, and applies the periodic settings (fairshare, TRES-minute limits, raw
+usage resets) that Waldur Mastermind computes from a periodic usage policy.
 
 ## Features
 
-### Core SLURM Management
-
-- **Account Management**: Create, delete, list, and manage SLURM accounts
-- **User Association**: Add/remove users from SLURM accounts with automatic association management
-- **Resource Limits**: Set and manage CPU, memory, GPU, and custom TRES limits
-- **Usage Reporting**: Real-time usage data collection and reporting to Waldur
-- **Health Monitoring**: Cluster status checking and connectivity validation
-
-### Periodic Limits System
-
-- **Dynamic Fairshare**: Automatic fairshare adjustments based on usage patterns
-- **TRES Limits**: GrpTRESMins, MaxTRESMins, and GrpTRES limit management
-- **QoS Management**: Threshold-based Quality of Service adjustments
-- **Carryover Allocation**: Unused allocation carryover between billing periods
-- **Decay Calculations**: Configurable half-life decay for historical usage
-- **Event-Driven Updates**: Real-time periodic limits updates via STOMP
-
-### Historical Usage Loading
-
-The `waldur_site_load_historical_usage` command has been moved to the core package and is now
-available to all backend plugins. The SLURM backend implements `get_usage_report_for_period()`
-to supply historical data from SLURM accounting records.
-
-### Dual-Mode Operation
-
-- **Production Mode**: Direct SLURM cluster integration via `sacctmgr` and `sacct`
-- **Emulator Mode**: Development and testing with SLURM emulator integration
-- **Seamless Switching**: Configuration-driven mode selection
+- **Accounts**: a `customer → project → allocation` account tree under a
+  configurable root (or a flat layout under one parent), created, re-parented
+  and removed as Waldur resources change.
+- **Associations**: users are added to and removed from allocation accounts as
+  they join and leave the Waldur project, optionally scoped to partitions and
+  with a configurable default account policy.
+- **Limits**: Waldur component limits become `GrpTRESMins` on the account
+  (or on a dedicated per-account QoS), converted with each component's
+  `unit_factor`; per-user limits are supported.
+- **Usage reporting**: per-account and per-user usage for the current month,
+  plus past months for the historical loader.
+- **Pause / downscale / restore**: by swapping the account QoS, or with
+  `GrpSubmitJobs` when QoS swapping is disabled or QoS enforcement is on.
+- **Periodic settings**: fairshare, `GrpTRESMins`/`MaxTRESMins` and
+  `RawUsage=0` resets pushed by Waldur over STOMP. The policy itself (grace
+  ratio, carryover, billing weights, reset cadence) is computed in Mastermind;
+  the agent applies what it receives.
+- **Optional extras**: per-user home directories and quotas, project
+  directories with Lustre quotas, LDAP project groups.
+- **Two execution modes**: the SLURM CLI (`sacctmgr`, `sacct`, `scancel`,
+  `sinfo`) or [slurmrestd](https://slurm.schedmd.com/slurmrestd.html).
 
 ## Installation
 
-The SLURM plugin is included in the main Waldur Site Agent installation. For specific
-installation instructions, see the main [Installation Guide](../../docs/installation.md).
+The plugin is a separate package, `waldur-site-agent-slurm`; installing it pulls
+in the core agent and `httpx` (used by REST mode). The default
+`username_management_backend` (`base`) is another package, so install it too
+unless you configure a different username backend:
 
-### Dependencies
+```bash
+pip install waldur-site-agent-slurm waldur-site-agent-basic-username-management
+# with LDAP project-group support:
+pip install 'waldur-site-agent-slurm[ldap]' waldur-site-agent-basic-username-management
+```
 
-- **SLURM Tools**: `sacctmgr`, `sacct` commands available on cluster head node
-- **Python Packages**: Automatically installed with the plugin
-- **Optional**: SLURM emulator for development and testing
+See the [Installation Guide](../../docs/installation.md) for running the agent
+as a service.
+
+In CLI mode the host needs the SLURM client tools (`sacctmgr`, `sacct`,
+`scancel`, `sinfo`) and must be able to reach slurmdbd as a user with
+`AdminLevel=Administrator`. In REST mode only RawUsage resets still need
+`sacctmgr` on the host (see below).
 
 ## Configuration
 
-### Basic Configuration
+### Basic configuration
 
 ```yaml
 offerings:
   - name: "My SLURM Cluster"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<agent API token>"
+    waldur_offering_uuid: "<offering UUID>"
     backend_type: "slurm"
+    order_processing_backend: "slurm"
+    membership_sync_backend: "slurm"
+    reporting_backend: "slurm"
     backend_settings:
-      # Core SLURM account management
       default_account: "root"
-      # root_account: "root"   # optional, see "Account settings" below
-      customer_prefix: "waldur_"
-      project_prefix: "waldur_"
-      allocation_prefix: "waldur_"
-
+      customer_prefix: "hpc_"
+      project_prefix: "hpc_"
+      allocation_prefix: "hpc_"
     backend_components:
       cpu:
-        unit: "k-Hours"
-        unit_factor: 60000
+        measured_unit: "k-Hours"
+        unit_factor: 60000          # SLURM CPU-minutes per Waldur unit
+        accounting_type: "limit"
+        label: "CPU"
       mem:
-        unit: "GB-Hours"
-        unit_factor: 61440
-      gpu:
-        unit: "GPU-Hours"
-        unit_factor: 60
+        measured_unit: "GB-Hours"
+        unit_factor: 61440          # SLURM MB-minutes per Waldur unit
+        accounting_type: "limit"
+        label: "RAM"
 ```
 
-### REST API Execution Mode (optional)
+Component keys must match TRES names known to SLURM (`cpu`, `mem`,
+`gres/gpu`, …). `unit_factor` converts one Waldur unit into the SLURM
+TRES-minutes the account limit is expressed in; usage is divided by the same
+factor when it is reported back.
+
+### `backend_settings` reference
+
+Every key the plugin reads. Keys not listed here are ignored.
+
+- `default_account` (**required**) — `DefaultAccount=` given to user associations (see [Account
+  settings](#account-settings-users-vs-accounts)); also the fallback for `root_account`.
+- `customer_prefix` (**required**) — Prefix of customer-tier account names.
+- `project_prefix` (**required**) — Prefix of project-tier account names.
+- `allocation_prefix` (**required**) — Prefix of allocation account names (the resource's
+  `backend_id`).
+- `root_account` (default: `default_account`, then `"root"`) — Parent of the customer tier.
+- `parent_account` (default: unset) — Flat layout: create project accounts directly under this
+  account, without a customer tier. `root_account` is then unused.
+- `default_account_policy` (default: `common`) — `common` (use `default_account`), `individual` (the
+  allocation account itself) or `none` (leave it to slurmdbd). See
+  [Upgrading](docs/upgrading.md#default_account_policy).
+- `slurm_bin_path` (default: `/usr/bin`) — Directory holding the SLURM binaries.
+- `cluster_name` (default: unset) — Scope every command / REST payload to one cluster. Required in
+  REST mode.
+- `execution_mode` (default: `cli`) — `cli` or `rest`.
+- `rest_api` (default: unset) — slurmrestd connection, required when `execution_mode: rest` — see
+  [REST mode](#rest-api-execution-mode).
+- `default_partition` (default: unset) — Partition for user associations when partitions are not
+  enforced.
+- `enforce_offering_partitions` (default: `false`) — Create one association per partition of the
+  Waldur offering — see [Partitions](#partitions).
+- `qos_default` (default: `normal`) — Account QoS when the resource is neither paused nor
+  downscaled.
+- `qos_downscaled` (default: unset) — Account QoS while the resource is downscaled.
+- `qos_paused` (default: unset) — Account QoS while the resource is paused.
+- `qos_enforcement_enabled` (default: `false`) — Opt-in gate for per-association QoS grants — see
+  [QoS enforcement](#qos-enforcement-multi-qos-offerings).
+- `enforce_offering_qos` (default: unset) — With the gate on: `true` forces enforcement, `false`
+  forces informational mode, unset respects the offering's `plugin_options.enforce_qos`.
+- `qos_management` (default: unset) — Dedicated QoS per account — see [Per-account
+  QoS](#per-account-qos-qos_management).
+- `periodic_limits` (default: unset) — See [Periodic settings](#periodic-settings).
+- `project_directory` (default: unset) — Project directories and Lustre quotas — see [Storage
+  Quotas](#storage-quotas).
+- `ldap` (default: unset) — LDAP project groups — see [LDAP project groups](#ldap-project-groups).
+- `enable_user_homedir_account_creation` (default: `true`) — Create a home directory for each user
+  added to an account.
+- `default_homedir_umask` (default: `0077`) — Umask for created home directories.
+- `homedir_base_path` (default: unset) — Home directory parent; when unset the path comes from the
+  passwd database.
+- `homedir_quota` (default: unset) — Per-user home directory quota — see [Storage
+  Quotas](#storage-quotas).
+- `soft_delete` (default: `false`) — On termination keep the account but cancel jobs, remove users
+  and zero its limits, so it can be restored under the same `backend_id`.
+- `check_backend_id_uniqueness` (default: `false`) — Before creating an account, ask Waldur whether
+  the `backend_id` was ever used in this offering, so a terminated resource's account name is not
+  reused.
+- `check_all_offerings` (default: `false`) — With `check_backend_id_uniqueness`, check across all
+  the customer's offerings instead of this one.
+- `backend_id_max_retries` (default: `50`) — With `check_backend_id_uniqueness` (or project-slug
+  naming), how many candidate account names to try before the order fails; otherwise one attempt.
+
+### REST API execution mode
 
 The plugin can talk to [slurmrestd](https://slurm.schedmd.com/slurmrestd.html)
-instead of shelling out to `sacctmgr`/`scancel` for account, association,
-QoS and limit management. Usage reporting still uses `sacct` (the REST API
-has no `sreport` equivalent) — see
-[docs/slurm-rest-api-design.md](../../docs/slurm-rest-api-design.md) for the
-full design, scope and limitations.
+instead of the SLURM CLI. Everything goes over REST — accounts, associations,
+users, QoS, limits, job cancellation, health checks, and usage reporting —
+except RawUsage resets (of an account or of a per-account QoS), which have no
+REST endpoint and still run `sacctmgr` (so raw-usage resets need `sacctmgr` on
+the host; without it they fail with an explicit error). The design record is
+[docs/slurm-rest-api-design.md](../../docs/slurm-rest-api-design.md).
 
 ```yaml
 offerings:
   - name: "My SLURM Cluster"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<agent API token>"
+    waldur_offering_uuid: "<offering UUID>"
     backend_type: "slurm"
+    order_processing_backend: "slurm"
+    membership_sync_backend: "slurm"
+    reporting_backend: "slurm"
     backend_settings:
-      # ... basic settings as above ...
+      default_account: "root"
+      customer_prefix: "hpc_"
+      project_prefix: "hpc_"
+      allocation_prefix: "hpc_"
       cluster_name: "mycluster"      # required in REST mode
-      execution_mode: "rest"         # "cli" (default) | "rest"
+      execution_mode: "rest"
       rest_api:
-        # http(s)://host:port or unix:///path/to/socket
-        url: "unix:///run/slurmrestd/slurmrestd.sock"
+        url: "unix:///run/slurmrestd/slurmrestd.sock"   # or http://host:6820
         api_version: "v0.0.43"
         username: "waldur-agent"
         token_file: "/etc/waldur/slurmrestd.token"
         # token_env: SLURM_JWT       # alternative to token_file
+    backend_components:
+      cpu:
+        measured_unit: "k-Hours"
+        unit_factor: 60000
+        accounting_type: "limit"
+        label: "CPU"
 ```
 
-Requires the optional `httpx` dependency:
+`rest_api` keys:
 
-```bash
-pip install 'waldur-site-agent-slurm[rest]'
-```
+- `url` (**required**) — `http(s)://host:port` or `unix:///path/to/socket`. slurmrestd speaks plain
+  HTTP; use `https` only through a TLS-terminating proxy.
+- `username` (**required**) — Sent as `X-SLURM-USER-NAME`.
+- `token_file` / `token_env` (**one required**) — JWT source. `token_file` is re-read on HTTP
+  401, so an external rotator (e.g. cron running `scontrol token`) keeps the agent working.
+- `api_version` (default: `v0.0.43`) — data_parser version to pin.
+- `verify_ssl` (default: `true`) — Verify TLS certificates.
+- `timeout` (default: `30`) — Request timeout in seconds.
 
-The JWT token is re-read from `token_file` on HTTP 401, so an external
-rotator (e.g. a cron job running `scontrol token`) keeps the agent working
-without restarts. Recommended SLURM version for REST mode: 25.11 or newer.
+**Usage reporting differs slightly between modes.** CLI mode runs
+`sacct --truncate --allocations --format=Account,ReqTRES,Elapsed,User` and so
+bills *requested* TRES. REST mode reads `GET /slurmdb/{version}/jobs/` and
+bills the TRES the job was *allocated* (falling back to requested TRES for jobs
+that never started), clipped to the reporting month like `sacct --truncate`.
+For jobs whose allocation differs from their request (e.g. whole-node
+allocation) the two modes report different numbers.
+
+Recommended SLURM version for REST mode: 25.11 or newer.
 
 ### Account settings: users vs. accounts
 
@@ -146,31 +244,43 @@ backend_settings:
 > with no customer tier) is configured separately via the `parent_account`
 > setting; when `parent_account` is set, `root_account` is not used.
 
-### Periodic Limits Configuration
+### Partitions
+
+User associations are created without a partition unless one of these applies:
+
+- `enforce_offering_partitions: true` — one association per partition defined
+  on the **Waldur offering** (Offering → Partitions). Off by default, so
+  partitions recorded in Waldur for other tools (e.g. Open OnDemand) do not
+  change SLURM associations.
+- otherwise `default_partition` — a single association in that partition.
+
+With QoS enforcement on, the consumer's selected partition takes precedence
+(see below).
+
+### Periodic settings
 
 ```yaml
 backend_settings:
-  # Periodic limits system. Gates the RESOURCE_PERIODIC_LIMITS STOMP
-  # subscription and the apply_periodic_settings handler. Policy
-  # parameters (grace ratio, carryover factor, billing weights, raw
-  # usage reset cadence, ...) are NOT configured here — they live on
-  # Mastermind's SlurmPeriodicUsagePolicy and arrive in the STOMP
-  # payload; the agent applies what it receives.
   periodic_limits:
     enabled: true
-    emulator_mode: false              # true for development
-    emulator_base_url: "http://localhost:8080"
-
-    # Fallback SLURM limit type used when the inbound STOMP payload
-    # omits the limit_type key. Real periodic settings carry their
-    # own limit_type from Mastermind.
-    limit_type: "GrpTRESMins"
+    limit_type: "GrpTRESMins"     # fallback when a message omits limit_type
+    # emulator_mode: true         # development: send settings to the
+    # emulator_base_url: "http://localhost:8080"   # SLURM emulator's API
 ```
 
-QoS state (normal / downscaled / paused) is driven by the resource flags
-`paused` / `downscaled` set by Waldur Mastermind and applied by the agent
-through the top-level `qos_default` / `qos_downscaled` / `qos_paused`
-backend settings — the same path used by manual pause/downscale.
+`enabled` subscribes the offering to the `RESOURCE_PERIODIC_LIMITS` STOMP topic
+(event mode). For each message the agent applies, on the allocation account:
+
+- `fairshare` — skipped when SLURM already holds the value;
+- `grp_tres_mins` / `max_tres_mins` — written as `GrpTRESMins` or
+  `MaxTRESMins` (the message's `limit_type`, else the setting above), only the
+  TRES that differ from what SLURM holds;
+- `reset_raw_usage: true` — `RawUsage=0`.
+
+Nothing else: the agent does not compute thresholds, carryover or decay, and
+does not change QoS on its own. QoS still follows the resource's `paused` /
+`downscaled` flags (see the `qos_*` settings). See also
+[Verifying a raw-usage reset](#verifying-a-raw-usage-reset-on-the-cluster).
 
 ### QoS enforcement (multi-QoS offerings)
 
@@ -192,8 +302,8 @@ backend_settings:
   #   enforce_offering_qos: null    # (default) respect each offering's flag
   #   enforce_offering_qos: true    # force enforcement for every offering
   #   enforce_offering_qos: false   # force informational mode
-  # Optional per-offering partition scoping still applies (see above):
-  # offering_partitions + enforce_offering_partitions.
+  # Partition scoping still applies: see "Partitions" above
+  # (enforce_offering_partitions / default_partition).
 ```
 
 - **Partition scope.** The grant is scoped to the consumer's selected
@@ -204,11 +314,33 @@ backend_settings:
   operational lever), pause/downscale block new submissions with
   `GrpSubmitJobs=0` and restore clears it (`GrpSubmitJobs=-1`), leaving the QoS
   grant untouched. The `qos_paused` / `qos_downscaled` settings are **not** used
-  in this mode (and forcing enforcement together with them is rejected at config
-  validation).
+  in this mode. Forcing enforcement (`enforce_offering_qos: true`) while they are set
+  is reported as a plugin schema warning at start-up; the agent still starts, enforces QoS, and
+  ignores them — remove them from such offerings.
 - **Execution modes.** Both `cli` and `rest` execution modes implement the QoS
   grant and the `GrpSubmitJobs` lever. In REST mode the grant is a single
   `users_association` POST whose `association` template carries the QoS.
+
+### Per-account QoS (`qos_management`)
+
+```yaml
+backend_settings:
+  qos_management:
+    enabled: true                  # create a QoS named after each account
+    flags: "DenyOnLimit,NoDecay"   # default
+    grp_tres: "cpu=25600,node=100"
+    max_jobs: 100
+    max_submit: 200
+    max_wall: "2-00:00:00"
+    min_tres_per_job: "gres/gpu=1"
+    additional_qos: ["2cpu-single-host"]   # also attached to the account
+    skip_qos_swap: false           # true: pause/downscale use GrpSubmitJobs=0
+    apply_limits_to_qos: false     # true: GrpTRESMins on the QoS, not the account
+```
+
+`apply_limits_to_qos` requires `enabled` and `skip_qos_swap`; `skip_qos_swap`
+cannot be combined with `qos_paused` / `qos_downscaled` / an explicit
+`qos_default`. The agent rejects these combinations at start-up.
 
 ### Storage Quotas
 
@@ -223,10 +355,36 @@ See [docs/slurm-storage-quotas.md](../../docs/slurm-storage-quotas.md) for
 configuration reference, command flow, prerequisites (Lustre project quotas
 require LDAP integration), and operator troubleshooting tips.
 
+### LDAP project groups
+
+With an `ldap` block the plugin keeps an LDAP group per allocation account:
+created with the account, members added and removed with the SLURM
+associations, deleted with the account. Requires the `[ldap]` extra.
+
+```yaml
+backend_settings:
+  ldap:
+    uri: "ldaps://ldap.example.com"
+    bind_dn: "cn=admin,dc=example,dc=com"
+    bind_password: "<secret>"
+    base_dn: "dc=example,dc=com"
+    groups_ou: "ou=Groups"                  # default
+    gid_range_start: 10000                  # default
+    gid_range_end: 65000                    # default
+    project_group_object_classes: ["posixGroup", "top"]   # default
+    use_starttls: false                     # default
+```
+
+The block is passed to the shared [LDAP client](../ldap-client/README.md)
+(`LdapClient`), which the LDAP plugin uses too; the keys and defaults are
+documented in the [LDAP plugin README](../ldap/README.md).
+
 ### Event Processing Configuration
 
 STOMP event processing is configured with top-level keys **on the offering**
 (not in a separate `event_processing` block):
+
+<!-- docs-check: skip -->
 
 ```yaml
 offerings:
@@ -252,51 +410,40 @@ is `true`, the agent subscribes to the `RESOURCE_PERIODIC_LIMITS` topic
 
 ## Usage
 
-### Basic Agent Operations
+### Agent modes
 
 ```bash
-# Resource management mode
-uv run waldur_site_agent -m order_process -c config.yaml
-
-# Usage reporting mode
-uv run waldur_site_agent -m report -c config.yaml
-
-# User synchronization mode
-uv run waldur_site_agent -m membership_sync -c config.yaml
-
-# Event processing mode (for periodic limits)
-uv run waldur_site_agent -m event_process -c config.yaml
+waldur_site_agent -m order_process   -c config.yaml   # create/update/terminate
+waldur_site_agent -m membership_sync -c config.yaml   # associations, limits, QoS
+waldur_site_agent -m report          -c config.yaml   # usage reporting
+waldur_site_agent -m event_process   -c config.yaml   # STOMP events, periodic settings
+waldur_site_diagnostics -c config.yaml                # config + cluster check
 ```
 
-### Loading Historical Usage
+### Loading historical usage
 
 ```bash
-# Load historical data for specific date range
-uv run waldur_site_load_historical_usage \
+waldur_site_load_historical_usage \
   --config /etc/waldur/config.yaml \
   --offering-uuid 12345678-1234-1234-1234-123456789abc \
-  --user-token staff-user-api-token \
+  --user-token <token> \
   --start-date 2024-01-01 \
   --end-date 2024-12-31
 ```
 
-**Requirements for historical loading:**
-- **Staff user token** (regular offering tokens cannot submit historical data).
-  Use `--no-staff-check` to bypass staff validation when submitting with a
-  service-provider token.
-- Optional flags: `--skip-user-usage` (submit resource-level totals only),
-  `--no-staff-check` (skip staff validation)
-- Resources must already exist in Waldur
-- SLURM accounting database must contain historical data for requested periods
+- `--dry-run` — Log what would be submitted; send nothing.
+- `--skip-user-usage` — Submit resource-level totals only.
+- `--no-staff-check` — Skip the client-side staff check (service-provider tokens).
+- `--reconcile-stale` — Zero Waldur usage records the backend no longer reports (e.g. usage
+  previously attributed to the wrong month).
+- `--resource-backend-id ID` — Only this resource; repeatable. Useful to verify a correction before
+  an offering-wide run.
 
-### Periodic Limits Management
-
-Periodic limits are managed automatically via event processing when enabled. The system:
-
-1. **Receives signals** from Waldur Mastermind with calculated periodic settings
-2. **Applies settings** to SLURM cluster (fairshare, limits, QoS)
-3. **Monitors thresholds** and adjusts QoS based on current usage
-4. **Reports status** back to Waldur
+The loader checks by default that the token belongs to a staff user. A
+service-provider token works with `--no-staff-check`, except for
+usage-based components in past billing periods: Mastermind only lets staff
+backfill those and rejects the submission otherwise. Resources must already
+exist in Waldur, and slurmdbd must still hold job records for the period.
 
 ### Account Diagnostics
 
@@ -473,427 +620,129 @@ OVERALL: MISMATCH (1 issue found)
 
 ## Architecture
 
-### Component Overview
-
 ```mermaid
 graph TB
     subgraph "Waldur Site Agent"
-        BACKEND[SLURM Backend<br/>Core Logic]
-        CLIENT[SLURM Client<br/>Command Execution]
-        EVENTS[Event Handler<br/>Periodic Limits]
+        BACKEND[SlurmBackend]
+        CLIENT[SlurmClient<br/>CLI mode]
+        REST[SlurmRestClient<br/>REST mode]
     end
 
-    subgraph "SLURM Cluster"
-        SACCTMGR[sacctmgr<br/>Account Management]
-        SACCT[sacct<br/>Usage Reporting]
-        SQUEUE[squeue<br/>Status Monitoring]
+    subgraph "SLURM"
+        SACCTMGR[sacctmgr<br/>accounts, associations, QoS, limits]
+        SACCT[sacct<br/>usage, job lists]
+        SCANCEL[scancel]
+        SINFO[sinfo -V<br/>version]
+        SLURMRESTD[slurmrestd<br/>/slurm, /slurmdb]
     end
 
     subgraph "Waldur Mastermind"
-        API[REST API<br/>Resource Management]
-        STOMP[STOMP Broker<br/>Event Publishing]
-        POLICY[Periodic Policy<br/>Usage Calculations]
+        API[REST API]
+        STOMP[STOMP broker]
     end
 
-    subgraph "Development Tools"
-        EMULATOR[SLURM Emulator<br/>Testing Environment]
-    end
-
-    %% Connections
     BACKEND --> CLIENT
+    BACKEND --> REST
     CLIENT --> SACCTMGR
     CLIENT --> SACCT
-    CLIENT --> SQUEUE
-    CLIENT -.-> EMULATOR
-
+    CLIENT --> SCANCEL
+    CLIENT --> SINFO
+    REST --> SLURMRESTD
+    REST -. RawUsage reset .-> SACCTMGR
     BACKEND <--> API
-    EVENTS <--> STOMP
-    POLICY --> STOMP
-    EVENTS --> BACKEND
-
-    %% Styling
-    classDef agent fill:#e3f2fd
-    classDef slurm fill:#f3e5f5
-    classDef waldur fill:#fff3e0
-    classDef dev fill:#f1f8e9
-
-    class BACKEND,CLIENT,EVENTS agent
-    class SACCTMGR,SACCT,SQUEUE slurm
-    class API,STOMP,POLICY waldur
-    class EMULATOR dev
+    STOMP --> BACKEND
 ```
 
-### Backend Methods
+The CLI client also runs `id -u <user>` to check that a user exists on the
+host before creating an association.
 
-The SLURM backend (`SlurmBackend`) extends `BaseBackend` and implements or overrides these methods:
+### Backend methods
 
-#### Resource Lifecycle
+`SlurmBackend` extends `BaseBackend`:
 
-- `create_resource(waldur_resource, user_context=None)` — inherited from `BaseBackend`
-- `delete_resource(waldur_resource, **kwargs)` — inherited from `BaseBackend`
-- `_pre_create_resource(waldur_resource, user_context=None)` — sets up SLURM account hierarchy,
-  LDAP groups, QoS, and project directories
-- `post_create_resource(resource, waldur_resource, user_context=None)` — creates home directories for users
-- `_pre_delete_resource(waldur_resource)` — cancels jobs, removes users, cleans up QoS and LDAP groups
-- `_collect_resource_limits(waldur_resource)` — converts Waldur limits to SLURM TRES limits (with ComponentMapper support)
-- `set_resource_limits(resource_backend_id, limits)` — sets limits using ComponentMapper when target_components are configured
-- `get_resource_limits(resource_backend_id)` — gets account limits converted to Waldur units
+- **Lifecycle**: `create_resource` / `delete_resource` (inherited);
+  `_pre_create_resource` builds the account tree, LDAP group, QoS and project
+  directory; `post_create_resource` creates home directories;
+  `_pre_delete_resource` cancels jobs, removes users, QoS and LDAP group.
+- **Limits**: `_collect_resource_limits`, `set_resource_limits`,
+  `get_resource_limits`, `set_resource_user_limits`.
+- **Users**: `add_user`, `add_users_to_resource`, `remove_user`,
+  `remove_users_from_resource` (inherited), `process_existing_users`.
+- **Usage**: `_get_usage_report`, `get_usage_report_for_period`.
+- **State**: `downscale_resource`, `pause_resource`, `restore_resource`,
+  `get_resource_metadata` (current QoS).
+- **Periodic settings**: `apply_periodic_settings`.
+- **Health**: `ping` (lists accounts), `diagnostics`, `list_components`.
 
-#### User Management
+### Commands the CLI client runs
 
-- `add_user(waldur_resource, username, **kwargs)` — adds user to SLURM account with optional partition and LDAP group
-- `add_users_to_resource(waldur_resource, user_ids, **kwargs)` — adds users and creates home directories
-- `remove_user(waldur_resource, username, **kwargs)` — removes user from SLURM account and LDAP group
-- `remove_users_from_resource(waldur_resource, usernames)` — inherited from `BaseBackend`
-- `set_resource_user_limits(resource_backend_id, username, limits)` — sets per-user limits with unit_factor conversion
-- `process_existing_users(existing_users)` — ensures home directories exist for current users
-
-#### Usage Reporting
-
-- `_get_usage_report(resource_backend_ids)` — collects current usage from SLURM accounting
-- `get_usage_report_for_period(resource_backend_ids, year, month)` — collects historical usage for a billing period
-
-#### Resource State Management
-
-- `downscale_resource(resource_backend_id)` — sets QoS to downscaled state
-- `pause_resource(resource_backend_id)` — sets QoS to paused state
-- `restore_resource(resource_backend_id)` — restores QoS to default
-- `get_resource_metadata(resource_backend_id)` — returns current QoS as metadata
-
-#### Periodic Limits
-
-- `apply_periodic_settings(resource_id, settings, config=None)` — applies periodic settings (production or emulator mode)
-
-#### Health and Diagnostics
-
-- `ping(raise_exception=False)` — checks if the SLURM cluster is online
-- `diagnostics()` — logs diagnostic information and validates cluster connectivity
-- `list_components()` — returns available TRES on the SLURM cluster
-
-### Client Commands
-
-The SLURM client executes commands via `sacctmgr` and `sacct`:
-
-#### Account Commands
+`sacctmgr` runs with `--parsable2 --noheader --immediate`. When `cluster_name`
+is set, `sacctmgr` commands get a `cluster=` filter and `sacct` / `scancel` get
+`--cluster=`.
 
 ```bash
-# Create account
-sacctmgr create account waldur_project123 description="Project 123"
+# Accounts
+sacctmgr add account hpc_alloc1 description="..." organization="..." parent="hpc_proj1"
+sacctmgr modify account where name=hpc_alloc1 set parent=hpc_proj2
+sacctmgr remove account where name=hpc_alloc1
 
-# Set limits
-sacctmgr modify account waldur_project123 set GrpTRESMins=cpu=60000
+# Associations
+sacctmgr add user alice account=hpc_alloc1 DefaultAccount=root Share=parent
+sacctmgr remove user where name=alice and account=hpc_alloc1
 
-# Delete account
-sacctmgr delete account waldur_project123
-```
+# Limits, QoS, periodic settings
+sacctmgr modify account hpc_alloc1 set GrpTRESMins=cpu=600000
+sacctmgr modify account hpc_alloc1 set qos=normal
+sacctmgr modify account hpc_alloc1 set fairshare=500
+sacctmgr modify account hpc_alloc1 set RawUsage=0
 
-#### User Association Commands
+# Usage for the current month
+sacct --noconvert --truncate --allocations --allusers \
+  --starttime=2024-01-01T00:00:00 --endtime=2024-01-31T23:59:59 \
+  --accounts=hpc_alloc1 --format=Account,ReqTRES,Elapsed,User
 
-```bash
-# Add user to account
-sacctmgr create user user123 account=waldur_project123
-
-# Remove user from account
-sacctmgr delete user user123 account=waldur_project123
-```
-
-#### Usage Reporting Commands
-
-```bash
-# Get current usage
-sacct --accounts=waldur_project123 --starttime=2024-01-01 --endtime=2024-01-31 --allocations
-
-# Get historical usage
-sacct --accounts=waldur_project123 --starttime=2024-01-01 --endtime=2024-12-31 --allocations
-```
-
-#### Periodic Limits Commands
-
-```bash
-# Set fairshare
-sacctmgr modify account waldur_project123 set fairshare=500
-
-# Set TRES limits
-sacctmgr modify account waldur_project123 set GrpTRESMins=cpu=60000,mem=120000
-
-# Reset raw usage
-sacctmgr modify account waldur_project123 set RawUsage=0
-
-# Set QoS
-sacctmgr modify account waldur_project123 set QoS=slowdown
+# Termination
+scancel -A hpc_alloc1 -f
 ```
 
 ## Testing
 
-### Test Structure
-
-```text
-plugins/slurm/tests/
-├── test_periodic_limits/                # Periodic limits functionality
-│   ├── test_periodic_limits_plugin.py
-│   ├── test_backend_integration.py
-│   ├── test_configuration_validation.py
-│   ├── test_mock_mastermind_signals.py
-│   ├── test_emulator_integration.py
-│   ├── test_emulator_scenarios_direct.py
-│   ├── test_emulator_scenarios_working.py
-│   ├── test_real_emulator_scenarios.py
-│   ├── README.md
-│   ├── EMULATOR_USAGE.md
-│   └── TEST_SCENARIO_MAPPING.md
-├── test_historical_usage/               # SLURM-specific historical usage tests
-│   ├── test_integration.py
-│   ├── test_slurm_client_historical.py
-│   ├── test_slurm_backend_historical.py
-│   └── README.md
-│   # Note: Loader and backend utils tests moved to core tests/
-├── e2e/                                 # End-to-end tests (gated by WALDUR_E2E_TESTS)
-│   ├── test_e2e_api_optimizations.py
-│   ├── test_e2e_benchmark.py
-│   ├── test_e2e_ldap.py
-│   ├── test_e2e_order_reconciliation.py
-│   ├── test_e2e_partition_associations.py
-│   ├── test_e2e_policy.py
-│   ├── test_e2e_prepaid.py
-│   ├── test_e2e_qos_backcompat.py
-│   ├── test_e2e_qos_matrix.py
-│   ├── test_e2e_qos_polling.py
-│   ├── test_e2e_qos_stomp.py
-│   ├── test_e2e_restore.py
-│   └── test_e2e_stomp.py
-├── test_diagnostics.py                  # Account diagnostics CLI
-├── test_order_processing.py             # Order processing / resource lifecycle
-├── test_reporing.py                     # Usage reporting
-├── test_membership_sync.py              # User management
-├── test_parser.py                       # sacct/sacctmgr output parsing
-├── test_command_construction.py         # sacctmgr command construction
-├── test_prepaid_limits.py               # Prepaid (duration-based) limits
-├── test_prepaid_emulator.py             # Prepaid limits via emulator
-├── test_limit_echo_loop.py              # Limit echo-loop guard
-├── test_partition_associations.py       # Partition-scoped user associations
-├── test_project_reparenting.py          # Account reparenting
-├── test_username_set_race_condition.py  # Username set race condition
-├── test_timezone.py                     # Timezone handling in usage windows
-└── test_slurm_bin_path.py               # Configurable SLURM binary path
-```
-
-### Running Tests
-
-Run plugin tests from **inside the plugin directory** — the SLURM backend
-entry point only resolves when pytest runs from `plugins/slurm/` (running
-from the workspace root fails with `Unsupported backend type: slurm`).
+Unit tests live in `tests/`; `tests/test_periodic_limits/` and
+`tests/test_historical_usage/` have their own READMEs, and `tests/e2e/` holds
+end-to-end suites gated by `WALDUR_E2E_TESTS` (see
+[docs/e2e-testing.md](../../docs/e2e-testing.md)). Tests that need SLURM
+commands use [slurm-emulator](https://pypi.org/project/slurm-emulator/), part
+of the plugin's `dev` dependency group.
 
 ```bash
+uv sync --all-packages
 cd plugins/slurm
-
-# All tests
-uv run pytest tests/ -v
-
-# Periodic limits tests only
-uv run pytest tests/test_periodic_limits/ -v
-
-# Historical usage tests only
-uv run pytest tests/test_historical_usage/ -v
-
-# With coverage
+uv run pytest tests/ --ignore=tests/e2e
+uv run pytest tests/test_periodic_limits/
 uv run pytest tests/ --cov=waldur_site_agent_slurm --cov-report=html
 ```
 
-### Test Features
-
-#### Mock Mastermind Integration
-
-The test suite includes complete mocking of Waldur Mastermind's periodic limits policy system:
-
-- **`MockWaldurMastermindPolicy`**: Simulates real policy calculations
-- **`MockSTOMPFrame`**: Simulates STOMP message structure
-- **End-to-end testing**: Complete workflow validation without external dependencies
-
-#### SLURM Emulator Integration
-
-Tests can use the SLURM emulator for realistic command testing:
-
-- **Development dependency**: `uv add --dev slurm-emulator`
-- **Automatic switching**: Tests detect emulator availability
-- **Realistic scenarios**: Built-in scenario framework
-
-## Development
-
-### Development Environment
-
-```bash
-# Clone the repository
-git clone <waldur-site-agent-repo>
-cd waldur-site-agent/plugins/slurm
-
-# Install development dependencies
-uv add --dev slurm-emulator
-
-# Install plugin in development mode
-uv sync --all-packages
-
-# Run tests (from inside the plugin dir)
-cd plugins/slurm && uv run pytest tests/ -v
-```
-
-### Adding New Features
-
-1. **Implement backend methods** in `waldur_site_agent_slurm/backend.py`
-2. **Add client commands** in `waldur_site_agent_slurm/client.py`
-3. **Write unit tests** with mocked dependencies
-4. **Add integration tests** with emulator if needed
-5. **Update documentation** in README and docstrings
-
-### Debugging
-
-```bash
-# Enable debug logging by setting log_level in the YAML config:
-#   log_level: DEBUG
-# (the agent reads log_level from the configuration file; there is no
-#  --verbose flag and no LOG_LEVEL environment variable for the main agent)
-uv run waldur_site_agent -m order_process -c config.yaml
-
-# Test specific functionality
-python -c "
-from waldur_site_agent_slurm.client import SlurmClient
-client = SlurmClient()
-print(client.list_accounts())
-"
-```
-
-## Advanced Configuration
-
-### Production Deployment
-
-```yaml
-# Production configuration with periodic limits
-offerings:
-  - name: "HPC Cluster"
-    backend_type: "slurm"
-    # STOMP event processing (top-level offering keys)
-    stomp_enabled: true
-    stomp_ws_host: "mastermind.example.com"
-    stomp_ws_port: 443
-    websocket_use_tls: true
-    backend_settings:
-      default_account: "root"
-      customer_prefix: "waldur_"
-      project_prefix: "waldur_"
-      allocation_prefix: "waldur_"
-
-      # Periodic limits for production
-      periodic_limits:
-        enabled: true
-        emulator_mode: false
-        limit_type: "GrpTRESMins"
-```
-
-### Multi-Cluster Setup
-
-```yaml
-offerings:
-  # Cluster 1: CPU-focused
-  - name: "CPU Cluster"
-    backend_type: "slurm"
-    backend_settings:
-      default_account: "root"
-      customer_prefix: "cpu_"
-      project_prefix: "cpu_"
-      allocation_prefix: "cpu_"
-      periodic_limits:
-        enabled: true
-        limit_type: "MaxTRESMins"
-
-  # Cluster 2: GPU-focused
-  - name: "GPU Cluster"
-    backend_type: "slurm"
-    backend_settings:
-      default_account: "root"
-      customer_prefix: "gpu_"
-      project_prefix: "gpu_"
-      allocation_prefix: "gpu_"
-      periodic_limits:
-        enabled: true
-        limit_type: "GrpTRESMins"
-```
-
-### Development/Testing Setup
-
-```yaml
-# Development with emulator
-offerings:
-  - name: "Development Cluster"
-    backend_type: "slurm"
-    # No STOMP needed for development
-    stomp_enabled: false
-    backend_settings:
-      periodic_limits:
-        enabled: true
-        emulator_mode: true
-        emulator_base_url: "http://localhost:8080"
-```
+The emulator keeps its state in `/tmp/slurm_emulator_db.json` unless
+`SLURM_EMULATOR_STATE_FILE` points elsewhere; set it when running tests next to
+a live agent or other test runs.
 
 ## Troubleshooting
 
-### Common Issues
+- **`Command not found: … sacctmgr`** — the binaries are not in
+  `slurm_bin_path` (default `/usr/bin`).
+- **Permission denied / "not an administrator"** — the agent's user needs
+  `AdminLevel=Administrator` in slurmdbd.
+- **Periodic settings never arrive** — the offering needs `stomp_enabled: true`
+  and `periodic_limits.enabled: true`, the agent must run in `event_process`
+  mode, and Mastermind must have a periodic usage policy for the offering.
+- **Historical load rejected with "backfilling past billing periods"** — use a
+  staff token.
+- **RawUsage reset fails in REST mode** — install the SLURM client tools on
+  the agent host (see [REST mode](#rest-api-execution-mode)).
 
-#### SLURM Commands Not Found
-
-```text
-❌ Command 'sacctmgr' not found
-```
-
-**Solution**: Install SLURM client tools or use emulator mode for development.
-
-#### Permission Denied
-
-```text
-❌ Permission denied executing sacctmgr
-```
-
-**Solution**: Ensure site agent runs with appropriate SLURM privileges or configure sudo access.
-
-#### Periodic Limits Not Working
-
-```text
-❌ Periodic limits updates not received
-```
-
-**Solutions**:
-- Verify event processing is enabled
-- Check STOMP connection settings
-- Ensure offering has `periodic_limits.enabled: true`
-- Verify STOMP broker is publishing periodic limits events
-
-#### Historical Loading Errors
-
-```text
-❌ Historical usage loading requires staff user privileges
-```
-
-**Solution**: Use an API token from a user with `is_staff=True` in Waldur.
-
-### Debug Commands
-
-```bash
-# Test SLURM connectivity
-sacctmgr list account format=account,description
-
-# Test site agent backend
-python -c "
-from waldur_site_agent_slurm.backend import SlurmBackend
-backend = SlurmBackend({}, {})
-print(backend.ping())
-"
-
-# Test periodic limits
-python -c "
-from waldur_site_agent_slurm.backend import SlurmBackend
-backend = SlurmBackend({'periodic_limits': {'enabled': True}}, {})
-result = backend.apply_periodic_settings('test_account', {'fairshare': 100})
-print(result)
-"
-```
+`waldur_site_diagnostics -c config.yaml` checks the configuration, the SLURM
+version, the binaries and the connection to the cluster, and exits non-zero on
+failure. For one account, use `waldur_site_diagnose_slurm_account` (above).
 
 ### Verifying a raw-usage reset on the cluster
 
@@ -927,15 +776,10 @@ sacctmgr show assoc account=waldur_project123 \
 > transactions` above is the authoritative source for when the reset actually
 > applied. Reconcile all timestamps in UTC before drawing conclusions.
 
-## Support
+## See also
 
-For issues, bug reports, or feature requests related to the SLURM plugin, please check:
-
-1. **Plugin documentation** - This README and test documentation
-2. **Main project documentation** - [Waldur Site Agent docs](../../index.md)
-3. **Test coverage** - Run tests to verify expected behavior
-4. **Debug logging** - Enable debug mode for detailed troubleshooting
-
-The SLURM plugin provides enterprise-grade SLURM cluster integration with advanced
-features like periodic limits and historical data loading, making it suitable for
-production HPC environments.
+- [Configuration reference](../../docs/configuration.md)
+- [Upgrading the SLURM plugin](docs/upgrading.md)
+- [Usage reporting setup](../../docs/slurm-usage-reporting-setup.md)
+- [Storage quotas](../../docs/slurm-storage-quotas.md)
+- [REST API design](../../docs/slurm-rest-api-design.md)
