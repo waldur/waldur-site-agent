@@ -23,6 +23,7 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    PrivateAttr,
     ValidationError,
     field_validator,
     model_validator,
@@ -238,6 +239,16 @@ class Offering(BaseModel):
             "independent (e.g. Waldur-to-Waldur)."
         ),
     )
+
+    # Copied from the root-level global_proxy by the config loader, so every client
+    # built from an offering -- including in event mode, where handlers only see the
+    # offering -- goes through the configured proxy. Not an offering-level setting.
+    _global_proxy: str = PrivateAttr(default="")
+
+    @property
+    def global_proxy(self) -> str:
+        """Proxy URL for Waldur API connections, from the root-level global_proxy."""
+        return self._global_proxy
 
     @model_validator(mode="after")
     def validate_auth_config(self) -> Offering:
@@ -597,7 +608,9 @@ class RootConfiguration(BaseModel):
                 )
                 offering_data["backend_settings"] = validated_settings
 
-            parsed_offerings.append(Offering(**offering_data))
+            offering = Offering(**offering_data)
+            offering._global_proxy = self.global_proxy
+            parsed_offerings.append(offering)
 
         return WaldurAgentConfiguration(
             offerings=parsed_offerings,

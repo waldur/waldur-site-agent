@@ -52,6 +52,20 @@ offerings:
 **Note**: Important when agent and Waldur are deployed in different timezones to prevent billing period
 mismatches at month boundaries.
 
+### `global_proxy`
+
+- **Type**: String
+- **Description**: Proxy for every Waldur API connection the agent makes — polling and event
+  mode, the OIDC token request, and Waldur-to-Waldur federation calls. Supports `http://`,
+  `https://` and `socks5://` proxies.
+- **Default**: Empty (no proxy)
+- **Example**: `"socks5://localhost:12345"`
+
+**Note**: The STOMP WebSocket used in event mode does **not** go through `global_proxy`. Its client
+only honours the `http_proxy` / `https_proxy` environment variables, so a site whose only egress is
+a proxy must also set those for the event-mode agent. Proxy support for the WebSocket is tracked in
+[waldur-site-agent#57](https://code.opennodecloud.com/waldur/waldur-site-agent/-/work_items/57).
+
 ## Offering Configuration
 
 Each offering in the `offerings` array represents a separate service offering.

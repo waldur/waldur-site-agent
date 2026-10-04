@@ -62,7 +62,7 @@ class TestTargetOrderHandler:
         frame = _make_frame(TARGET_ORDER_UUID_HEX, "executing")
 
         with patch(
-            "waldur_site_agent_waldur.target_event_handler.get_client"
+            "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
         ) as mock_get_client:
             handler(frame, target_offering, "test-agent")
             mock_get_client.assert_not_called()
@@ -73,7 +73,7 @@ class TestTargetOrderHandler:
         frame = _make_frame(TARGET_ORDER_UUID_HEX, "pending-provider")
 
         with patch(
-            "waldur_site_agent_waldur.target_event_handler.get_client"
+            "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
         ) as mock_get_client:
             handler(frame, target_offering, "test-agent")
             mock_get_client.assert_not_called()
@@ -93,7 +93,7 @@ class TestTargetOrderHandler:
 
         with (
             patch(
-                "waldur_site_agent_waldur.target_event_handler.get_client"
+                "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
             ) as mock_get_client,
             patch(
                 "waldur_site_agent_waldur.target_event_handler.marketplace_orders_list"
@@ -127,7 +127,7 @@ class TestTargetOrderHandler:
 
         with (
             patch(
-                "waldur_site_agent_waldur.target_event_handler.get_client"
+                "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
             ) as mock_get_client,
             patch(
                 "waldur_site_agent_waldur.target_event_handler.marketplace_orders_list"
@@ -159,7 +159,7 @@ class TestTargetOrderHandler:
 
         with (
             patch(
-                "waldur_site_agent_waldur.target_event_handler.get_client"
+                "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
             ) as mock_get_client,
             patch(
                 "waldur_site_agent_waldur.target_event_handler.marketplace_orders_list"
@@ -190,7 +190,7 @@ class TestTargetOrderHandler:
 
         with (
             patch(
-                "waldur_site_agent_waldur.target_event_handler.get_client"
+                "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
             ) as mock_get_client,
             patch(
                 "waldur_site_agent_waldur.target_event_handler.marketplace_orders_list"
@@ -215,7 +215,7 @@ class TestTargetOrderHandler:
 
         with (
             patch(
-                "waldur_site_agent_waldur.target_event_handler.get_client"
+                "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
             ) as mock_get_client,
             patch(
                 "waldur_site_agent_waldur.target_event_handler.marketplace_orders_list"
@@ -247,7 +247,7 @@ class TestTargetOrderHandler:
 
         with (
             patch(
-                "waldur_site_agent_waldur.target_event_handler.get_client"
+                "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
             ) as mock_get_client,
             patch(
                 "waldur_site_agent_waldur.target_event_handler.marketplace_orders_list"
@@ -272,7 +272,7 @@ class TestTargetOrderHandler:
         frame = stomp.utils.Frame(cmd="MESSAGE", headers={}, body=body)
 
         with patch(
-            "waldur_site_agent_waldur.target_event_handler.get_client"
+            "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
         ) as mock_get_client:
             handler(frame, target_offering, "test-agent")
             mock_get_client.assert_not_called()
@@ -317,7 +317,7 @@ class TestTargetOfferingUserHandler:
         )
 
         with patch(
-            "waldur_site_agent_waldur.target_event_handler.get_client"
+            "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
         ) as mock_get_client:
             mock_client = MagicMock()
             mock_get_client.return_value = mock_client
@@ -341,7 +341,7 @@ class TestTargetOfferingUserHandler:
         )
 
         with patch(
-            "waldur_site_agent_waldur.target_event_handler.get_client"
+            "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
         ) as mock_get_client:
             mock_get_client.return_value = MagicMock()
 
@@ -384,7 +384,7 @@ class TestTargetOfferingUserHandler:
         )
 
         with patch(
-            "waldur_site_agent_waldur.target_event_handler.get_client"
+            "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
         ) as mock_get_client:
             handler(frame, target_offering, "test-agent")
 
@@ -401,7 +401,7 @@ class TestTargetOfferingUserHandler:
         )
 
         with patch(
-            "waldur_site_agent_waldur.target_event_handler.get_client"
+            "waldur_site_agent_waldur.target_event_handler.get_client_for_offering"
         ) as mock_get_client:
             mock_get_client.return_value = MagicMock()
 
@@ -477,6 +477,37 @@ class TestSetupTargetEventSubscriptions:
             # ...and given a custom router that dispatches by payload object_type.
             router = mock_setup.call_args.kwargs["on_message_callback"]
             assert callable(router)
+
+    def test_target_offering_carries_global_proxy(
+        self, backend_settings, backend_components_passthrough
+    ):
+        """The synthetic Waldur B offering keeps global_proxy for clients built from it."""
+        backend_settings["target_stomp_enabled"] = True
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        backend.client = MagicMock()
+
+        source_offering = MagicMock()
+        source_offering.name = "Source"
+        source_offering.stomp_ws_host = None
+        source_offering.stomp_ws_port = None
+        source_offering.stomp_ws_path = None
+
+        with (
+            patch(
+                "waldur_site_agent.event_processing.utils._setup_unified_stomp_connection"
+            ) as mock_setup,
+            patch("waldur_site_agent.common.utils.get_client"),
+            patch(
+                "waldur_site_agent.common.agent_identity_management.AgentIdentityManager"
+            ),
+        ):
+            mock_setup.return_value = (MagicMock(), MagicMock(), MagicMock())
+            backend.setup_target_event_subscriptions(
+                source_offering, "agent", "http://proxy.example.com:3128"
+            )
+
+        target_offering = mock_setup.call_args.args[0]
+        assert target_offering.global_proxy == "http://proxy.example.com:3128"
 
     def test_enabled_but_registration_fails(
         self, backend_settings, backend_components_passthrough

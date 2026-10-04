@@ -36,6 +36,7 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
         stomp_consumers_map = utils.start_stomp_consumers(
             configuration.waldur_offerings,
             configuration.waldur_user_agent,
+            global_proxy=configuration.global_proxy,
             expose_backend_error_details=configuration.expose_backend_error_details,
         )
 

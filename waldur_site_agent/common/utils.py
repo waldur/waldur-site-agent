@@ -401,13 +401,16 @@ def get_client_for_offering(
     Args:
         offering: Offering configuration containing API URL and auth settings
         agent_header: Optional User-Agent string for HTTP requests
-        proxy: Optional proxy URL (e.g., 'socks5://localhost:12345')
+        proxy: Optional proxy URL (e.g., 'socks5://localhost:12345'). Defaults to
+            the configuration's global_proxy; an empty value means no proxy.
         timeout: HTTP timeout in seconds applied to both the OIDC token request
             and the returned client. Defaults to the long agent timeouts.
 
     Returns:
         Configured AuthenticatedClient instance ready for API calls
     """
+    # httpx rejects proxy="" outright, so an unset proxy must become None.
+    proxy = proxy or offering.global_proxy or None
     auth: Optional[OfferingAuth] = None
     if offering.waldur_api_token:
         token = offering.waldur_api_token
