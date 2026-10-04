@@ -14,7 +14,8 @@ graph TB
     subgraph "Core Package"
         WA[waldur-site-agent<br/>Core Logic & Processing]
         BB[BaseBackend<br/>Abstract Interface]
-        BC[BaseClient<br/>Abstract Interface]
+        BC[BaseClient<br/>Client Interface]
+        UB[AbstractUsernameManagementBackend<br/>Abstract Interface]
         CU[Common Utils<br/>Entry Point Discovery]
     end
 
@@ -26,32 +27,36 @@ graph TB
     subgraph "Entry Point System"
         EP_BACKENDS[waldur_site_agent.backends]
         EP_USERNAME[waldur_site_agent.username_management_backends]
+        EP_SCHEMAS[waldur_site_agent.component_schemas<br/>waldur_site_agent.backend_settings_schemas]
     end
 
     %% Core dependencies
     WA --> BB
     WA --> BC
+    WA --> UB
     WA --> CU
 
     %% Plugin registration and discovery
     CU --> EP_BACKENDS
     CU --> EP_USERNAME
+    CU --> EP_SCHEMAS
     EP_BACKENDS -.-> PLUGINS
     EP_USERNAME -.-> UMANAGE
+    EP_SCHEMAS -.-> PLUGINS
 
     %% Plugin inheritance
     PLUGINS -.-> BB
     PLUGINS -.-> BC
-    UMANAGE -.-> BB
+    UMANAGE -.-> UB
 
     %% Styling - Dark mode compatible colors
     classDef corePackage fill:#1E3A8A,stroke:#3B82F6,stroke-width:2px,color:#FFFFFF
     classDef plugin fill:#581C87,stroke:#8B5CF6,stroke-width:2px,color:#FFFFFF
     classDef entrypoint fill:#065F46,stroke:#10B981,stroke-width:2px,color:#FFFFFF
 
-    class WA,BB,BC,CU corePackage
+    class WA,BB,BC,UB,CU corePackage
     class PLUGINS,UMANAGE plugin
-    class EP_BACKENDS,EP_USERNAME entrypoint
+    class EP_BACKENDS,EP_USERNAME,EP_SCHEMAS entrypoint
 ```
 
 ## Agent modes & external systems
@@ -119,22 +124,23 @@ config:
 graph TB
     subgraph "Startup"
         INIT[Run Initial<br/>Offering Processing]
-        REG[Register Agent Identity<br/>& Event Subscriptions]
-        STOMP_CONN[Connect WebSocket STOMP<br/>per Object Type]
+        REG[Register Agent Identity<br/>& Unified Event Queue]
+        STOMP_CONN[Connect one WebSocket STOMP<br/>per offering]
     end
 
     subgraph "Main Loop (1-min tick)"
         TICK[Wake Up]
-        HC_CHECK{Health Check<br/>interval elapsed?<br/>default: 30 min}
-        HC[Send Health Checks<br/>for All Offerings]
+        WD[Watchdog: reconnect dropped consumers,<br/>touch liveness heartbeat while healthy]
+        HC_CHECK{Health check<br/>every 30 min?}
+        HC[Send Health Checks<br/>for offerings with order processing]
         RC_CHECK{Reconciliation<br/>interval elapsed?<br/>default: 60 min}
-        RC[Run Username<br/>Reconciliation]
+        RC[Reconcile orders, API keys,<br/>offering users, project hierarchy<br/>+ usernames if enabled]
         SLEEP[Sleep 60s]
     end
 
-    subgraph "STOMP Event Handlers (daemon threads)"
-        ORDER_H[Order Handler<br/>process orders]
-        MEMBER_H[Membership Handler<br/>sync roles & users]
+    subgraph "STOMP Event Handlers"
+        ORDER_H[Order & API Key<br/>Handlers]
+        MEMBER_H[Membership Handlers<br/>roles, resources, accounts,<br/>forced resource sync]
         OU_H[OfferingUser Handler<br/>sync usernames]
         IMPORT_H[Resource Import<br/>Handler]
         LIMITS_H[Periodic Limits<br/>Handler]
@@ -151,7 +157,7 @@ graph TB
 
     %% Main loop
     STOMP_CONN --> TICK
-    TICK --> HC_CHECK
+    TICK --> WD --> HC_CHECK
     HC_CHECK -->|Yes| HC --> RC_CHECK
     HC_CHECK -->|No| RC_CHECK
     RC_CHECK -->|Yes| RC --> SLEEP
@@ -175,6 +181,7 @@ graph TB
     ORDER_H --> BACKEND
     MEMBER_H --> BACKEND
     STOMP_CONN --> RMQ
+    WD --> RMQ
 
     %% Styling - Dark mode compatible colors
     classDef startup fill:#1E3A8A,stroke:#3B82F6,stroke-width:2px,color:#FFFFFF
@@ -184,21 +191,34 @@ graph TB
     classDef decision fill:#065F46,stroke:#10B981,stroke-width:2px,color:#FFFFFF
 
     class INIT,REG,STOMP_CONN startup
-    class TICK,HC,RC,SLEEP loop
+    class TICK,WD,HC,RC,SLEEP loop
     class ORDER_H,MEMBER_H,OU_H,IMPORT_H,LIMITS_H handler
     class WALDUR,RMQ,BACKEND external
     class HC_CHECK,RC_CHECK decision
 ```
 
+Each STOMP-enabled offering registers **one** consumer queue (`consumer_<uuid>`) for its agent
+identity and opens one WebSocket STOMP connection to it. Every event type the offering subscribes
+to arrives on that queue; the payload's `object_type` picks the handler.
+
 ### Periodic reconciliation
 
-Event-driven processing can miss updates due to transient STOMP disconnections or message loss.
-The main loop includes a periodic reconciliation timer (default: 60 minutes, configurable via
-`WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES` environment variable) that runs
-`sync_offering_user_usernames()` for all STOMP-enabled offerings with a membership sync backend.
+Event-driven processing can miss updates — a dropped connection loses messages that were in flight.
+The main loop therefore runs a reconciliation pass on its first tick and then every
+`WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES` (default 60). It covers every offering in the
+configuration, STOMP-enabled or not:
 
-This reconciliation is lightweight — it only syncs usernames, not a full membership sync — and is
-idempotent, so running it has no side effects when data is already consistent.
+<!-- pyml disable-num-lines 7 line-length -->
+| Step | Runs for offerings with | What it does |
+| ---- | ----------------------- | ------------ |
+| Order reconciliation | `order_processing_backend` | Re-processes orders stuck in `executing` or `pending-provider` for 30+ minutes |
+| API key reconciliation | `order_processing_backend` and a backend that supports resource API keys | Re-issues API key commands whose reply never reached Waldur |
+| Offering user reconciliation | `membership_sync_backend` | Retries username generation for offering users stuck in a pre-OK state; then runs the username backend's own reconcile and deletion sweep (that part also runs without a membership backend) |
+| Project hierarchy sync | `membership_sync_backend` | Checks and corrects the backend account hierarchy |
+| Username reconciliation | `username_reconciliation_enabled: true` | Pulls backend-assigned usernames back into Waldur |
+
+Every step is idempotent: on an offering whose state is already consistent it changes nothing.
+Health checks are sent on their own fixed 30-minute timer.
 
 ### Resource status reconciliation
 
@@ -263,16 +283,23 @@ target's consumer (another Waldur's broker), and a setup refused with a 4xx othe
 
 ### STOMP subscription types
 
-Each offering can subscribe to multiple object types depending on configuration:
+Which object types an offering's queue receives depends on its configuration. "Membership events
+on" below means `membership_sync_backend` is set and `stomp_membership_sync_enabled` is not
+`false`.
 
-- **ORDER**: Order processing events (requires `order_processing_backend`)
-- **USER_ROLE**: Role grant/revoke events (requires `membership_sync_backend`)
-- **RESOURCE**: Resource lifecycle events (requires `membership_sync_backend`)
-- **SERVICE_ACCOUNT**: Service account events (requires `membership_sync_backend`)
-- **COURSE_ACCOUNT**: Course account events (requires `membership_sync_backend`)
-- **OFFERING_USER**: Offering user create/update events (requires `membership_sync_backend`)
-- **IMPORTABLE_RESOURCES**: Resource import events (requires `resource_import_enabled`)
-- **RESOURCE_PERIODIC_LIMITS**: Periodic limit updates (requires `periodic_limits.enabled`)
+<!-- pyml disable-num-lines 8 line-length -->
+| Object type | Subscribed when |
+| ----------- | --------------- |
+| `order`, `resource_api_key_rotation` | `order_processing_backend` is set |
+| `user_role`, `resource`, `service_account`, `course_account`, `offering_user`, `offering_resources_sync` | membership events on |
+| `offering_user` only | no membership backend, `stomp_membership_sync_enabled` not `false`, and the username backend has reconcile hooks (LDAP, for example) |
+| `service_provider_project_group` | `stomp_membership_sync_enabled` not `false` and the username backend writes project groups |
+| `importable_resources` | `resource_import_enabled: true` |
+| `resource_periodic_limits` | `backend_settings.periodic_limits.enabled: true` |
+
+Leaving `membership_sync_backend` out of an `event_process` offering therefore turns membership sync
+off for it; it does not fall back to polling. To poll membership while orders come over STOMP, set
+`stomp_membership_sync_enabled: false` and run a `membership_sync` agent.
 
 ## Key plugin features
 
@@ -299,9 +326,13 @@ plugins/{backend_name}/
 
 ## Available plugins
 
+The full list of plugin packages is the plugin table in the [README](../README.md#plugins). The
+sections below describe a selection.
+
 ### SLURM plugin (`waldur-site-agent-slurm`)
 
-- **Communication**: CLI-based via `sacctmgr`, `sacct`, `scancel` commands
+- **Communication**: `sacctmgr` / `sacct` / `scancel` commands, or the `slurmrestd` REST API
+  (`execution_mode: rest`)
 - **Components**: CPU, memory, GPU (TRES-based accounting)
 - **Features**:
   - QoS management (downscale, pause, restore)
@@ -407,36 +438,47 @@ A ready-to-use plugin template is available at `docs/plugin-template/`.
 
 ## Plugin discovery mechanism
 
-The core system automatically discovers plugins through Python entry points:
+`waldur_site_agent.common.utils` builds the backend registries from entry points when it is
+imported:
 
 ```python
-from importlib.metadata import entry_points
-
-BACKENDS = {
-    entry_point.name: entry_point.load()
+BACKENDS: dict[str, tuple[type[BaseBackend], str, str]] = {
+    entry_point.name: (
+        entry_point.load(),                      # backend class
+        entry_point.dist.name if entry_point.dist else entry_point.name,  # distribution
+        version(entry_point.dist.name) if entry_point.dist else "unknown",  # its version
+    )
     for entry_point in entry_points(group="waldur_site_agent.backends")
 }
 ```
 
-This enables:
+`USERNAME_BACKENDS` is built the same way from `waldur_site_agent.username_management_backends`.
+The settings and component schemas are discovered from their own groups when a configuration file
+is loaded.
 
-- **Zero-configuration discovery**: Plugins are found automatically when installed
-- **Dynamic loading**: Plugin classes are loaded on-demand
-- **Flexible deployment**: Different plugin combinations for different environments
-- **Third-party integration**: External plugins work seamlessly with the core system
+This means:
+
+- **Zero-configuration discovery**: an installed plugin is found without any registration step.
+- **Eager loading**: importing `common.utils` imports every installed backend plugin. A plugin
+  module that imports `common.utils` at module level therefore creates an import cycle — import it
+  inside the function that needs it.
+- **Flexible deployment**: the set of available backends is whatever plugin packages are installed
+  next to the core package.
 
 ## Configuration integration
 
 Plugins integrate through offering configuration:
 
+<!-- docs-check: skip -->
+
 ```yaml
 offerings:
   - name: "Example Offering"
-    backend_type: "slurm"                    # Legacy setting
+    backend_type: "slurm"                    # Selects the settings/component schemas
     order_processing_backend: "slurm"        # Order processing via SLURM
-    reporting_backend: "custom-api"          # Custom reporting backend
+    reporting_backend: "custom-api"          # A third-party reporting backend
     membership_sync_backend: "slurm"         # Membership sync via SLURM
-    username_management_backend: "custom"    # Custom username generation
+    username_management_backend: "custom"    # A third-party username backend
 ```
 
 This allows:
