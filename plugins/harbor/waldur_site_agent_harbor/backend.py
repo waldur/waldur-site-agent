@@ -26,6 +26,16 @@ from waldur_site_agent_harbor.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+# Project-scoped label on every project the agent creates, followed by the
+# Waldur resource uuid. Harbor rejects custom project metadata keys, so a label
+# is the durable marker that ties a project to its resource.
+RESOURCE_LABEL_PREFIX = "waldur-resource-"
+
+
+def _is_forbidden(error: Exception) -> bool:
+    """True for a Harbor 403, which retrying will not fix."""
+    return "403" in str(error)
+
 
 class HarborBackend(backends.BaseBackend):
     """Harbor backend implementation for Waldur Site Agent.
@@ -210,9 +220,15 @@ class HarborBackend(backends.BaseBackend):
         Returns:
             BackendResourceInfo with created project details
 
+        If the project already exists and carries this resource's label, an
+        earlier attempt created it -- the order is retried because recording the
+        backend id in Waldur failed -- so it is adopted: the quota is applied and
+        the group access granted, as for a new project.
+
         Raises:
-            DuplicateResourceError: A project with this name already exists, so
-                the processor can try its next candidate name.
+            DuplicateResourceError: A project with this name already exists and
+                was not created for this resource, so the processor can try its
+                next candidate name.
         """
         logger.info(
             "Creating Harbor project for Waldur resource %s", waldur_resource.uuid
@@ -231,13 +247,22 @@ class HarborBackend(backends.BaseBackend):
             if not isinstance(self.client, HarborClient):
                 raise HarborProjectError("Client is not a HarborClient")
             created = self.client.create_project(harbor_project_name, storage_quota_gb)
-            if not created:
+            if created:
+                logger.info(
+                    "Created Harbor project %s with %dGB quota",
+                    harbor_project_name,
+                    storage_quota_gb,
+                )
+                self._mark_project(harbor_project_name, waldur_resource)
+            elif self._is_marked_for(harbor_project_name, waldur_resource):
+                logger.info(
+                    "Adopting Harbor project %s already created for resource %s",
+                    harbor_project_name,
+                    waldur_resource.uuid,
+                )
+                self.client.update_project_quota(harbor_project_name, storage_quota_gb)
+            else:
                 raise DuplicateResourceError(harbor_project_name)
-            logger.info(
-                "Created Harbor project %s with %dGB quota",
-                harbor_project_name,
-                storage_quota_gb,
-            )
 
             # Assign OIDC group to the project
             oidc_group_name = f"{self.oidc_group_prefix}{waldur_resource.project_slug}"
@@ -254,13 +279,73 @@ class HarborBackend(backends.BaseBackend):
                 harbor_project_name,
             )
 
-        except (HarborProjectError, HarborOIDCError) as e:
+        except HarborError as e:
             raise BackendError(f"Failed to create Harbor project: {e}") from e
 
         return structures.BackendResourceInfo(
             backend_id=harbor_project_name,
             limits={"storage": storage_quota_gb},
         )
+
+    @staticmethod
+    def _resource_label(waldur_resource: WaldurResource) -> str:
+        """Label that ties a Harbor project to its Waldur resource."""
+        resource_uuid = waldur_resource.uuid
+        uuid_hex = getattr(resource_uuid, "hex", None) or str(resource_uuid).replace("-", "")
+        return f"{RESOURCE_LABEL_PREFIX}{uuid_hex}"
+
+    def _mark_project(self, project_name: str, waldur_resource: WaldurResource) -> None:
+        """Label a new project with its resource, retrying once on failure.
+
+        A failure only costs retry safety: an unlabelled project cannot be
+        adopted later, so if this order is retried the name counts as taken
+        and the project has to be removed by hand.
+        """
+        label = self._resource_label(waldur_resource)
+        if not isinstance(self.client, HarborClient):
+            return
+        for attempt in (1, 2):
+            try:
+                self.client.add_project_label(project_name, label)
+                return
+            except HarborError as e:
+                if attempt == 1 and not _is_forbidden(e):
+                    logger.info("Retrying label on Harbor project %s: %s", project_name, e)
+                    continue
+                logger.warning(
+                    "Could not label Harbor project %s for resource %s (%s). If this order "
+                    "is retried the project cannot be adopted and must be deleted by hand. "
+                    "Grant the robot account Label: Create, List to enable adoption.",
+                    project_name,
+                    waldur_resource.uuid,
+                    e,
+                )
+                return
+
+    def _is_marked_for(self, project_name: str, waldur_resource: WaldurResource) -> bool:
+        """True when the project's only resource label names ``waldur_resource``.
+
+        Raises:
+            BackendError: The labels could not be read. Answering "not ours"
+                here would send the processor on to its next candidate name and
+                create a second project, so the order is retried instead.
+        """
+        try:
+            if not isinstance(self.client, HarborClient):
+                raise HarborProjectError("Client is not a HarborClient")
+            labels = self.client.list_project_label_names(project_name)
+        except HarborError as e:
+            if _is_forbidden(e):
+                msg = (
+                    f"Harbor project {project_name} already exists and its labels cannot be "
+                    "read: grant the robot account Label: List so the agent can tell whether "
+                    f"it created this project ({e})"
+                )
+            else:
+                msg = f"Could not read labels of Harbor project {project_name}: {e}"
+            raise BackendError(msg) from e
+        markers = [name for name in labels if name.startswith(RESOURCE_LABEL_PREFIX)]
+        return markers == [self._resource_label(waldur_resource)]
 
     def delete_resource(
         self,

@@ -62,6 +62,16 @@ You can override defaults per resource using attributes passed from Waldur:
 If `ssh_public_key` is provided, the plugin will create the key in DigitalOcean
 if it does not already exist.
 
+Every droplet the agent creates also gets the tag `waldur-resource:<resource uuid, 32 hex
+digits without dashes>`. Ordered or default tags starting with `waldur-resource:` are
+dropped, so one order cannot claim another resource's droplet, and a droplet carrying
+more than one such tag is never adopted.
+If an order is retried after the droplet was created but before Waldur recorded
+its id, the agent finds the droplet by this tag and adopts it instead of creating
+a second one. Two droplets with the same resource tag stop the order with an
+error; delete the extra one and the next retry continues. Do not remove the tag
+from a droplet whose order has not finished.
+
 ## Resize via limits
 
 To resize droplets from UPDATE orders, you can provide a size mapping:
