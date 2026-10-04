@@ -825,8 +825,23 @@ If your backend does not support a certain operation, use these return values:
 
 ## Annotated YAML configuration
 
+Every ```yaml block that contains `offerings:` in the repository's Markdown, and every file
+under `examples/` and `plugins/*/examples/`, is loaded by `tests/test_docs_config_examples.py`
+in the core test job. A block fails when it does not load through the real configuration
+loader, uses a key the configuration model does not define (the loader would ignore it
+silently), names a backend that is not a registered entry point, sets no `*_backend` at all,
+or produces a settings-schema warning. A deliberately partial snippet opts out with a comment
+on the line before its opening fence (a blank line in between is fine):
+
+```markdown
+<!-- docs-check: skip -->
+```
+
+A top-level key starting with `.` (for example `.ldap: &ldap_settings`) is accepted as a YAML
+anchor holder.
+
 The `mycustom` entry point below is the template plugin's; it resolves only
-once you register your own.
+once you register your own, so the block is marked to be skipped.
 
 <!-- docs-check: skip -->
 

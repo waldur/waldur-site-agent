@@ -37,7 +37,6 @@ offerings:
     #     -d '{"username":"staff","password":"demo"}'
     waldur_api_token: "a9024d33461434432bd4c5a4b762c0738fc35664"
     waldur_offering_uuid: "feeb119a7df24e67b413f171e8968fa5"
-    waldur_verify_ssl: false
 
     # CRD-driven plugin -- membership-sync only. Order processing and
     # reporting come from other backends (or none, in this offering).

@@ -11,9 +11,11 @@ Rules that apply to every section:
 - **No hard-coded test counts or file trees.** They are out of date the next
   time someone adds a test. Name the test directory and the command instead.
 - **Every complete configuration example must load.** A YAML block that
-  contains `offerings:` must load with the real configuration loader (checked
-  in CI once #48 lands); a deliberately partial snippet is marked with `<!-- docs-check: skip -->`
-  on its own line before the opening fence (a blank line in between is fine).
+  contains `offerings:` must load with the real configuration loader, use only
+  keys the agent reads and registered backend names (checked in CI by
+  `tests/test_docs_config_examples.py`); a deliberately partial snippet is marked with
+  `<!-- docs-check: skip -->` on its own line before the opening fence (a blank line in
+  between is fine).
 - **No-ops are named.** If a backend method does nothing (for example
   `pause_resource` returns `True` without touching the backend), the operations
   table says so rather than leaving the reader to assume it works.
@@ -47,7 +49,11 @@ namespace, ...).
 
 ## Configuration
 
-A complete offering that loads as written:
+A complete offering that loads as written. The `<name>` placeholders below are not real
+backends, so this template's copy is marked to be skipped; drop the marker in the plugin
+README, where CI loads the block through the real configuration loader.
+
+<!-- docs-check: skip -->
 
 ```yaml
 offerings:
