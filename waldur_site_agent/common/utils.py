@@ -1014,6 +1014,20 @@ def get_current_user_from_client(waldur_rest_client: AuthenticatedClient) -> Use
     return users_me_retrieve.sync(client=waldur_rest_client)
 
 
+def _describe_waldur_error(err: Exception) -> str:
+    """One line for a failed Waldur call, naming bad credentials as such."""
+    if isinstance(err, UnexpectedStatus):
+        if err.status_code in (401, 403):
+            return (
+                f"authentication failed (HTTP {err.status_code}): check waldur_api_token "
+                "or the OIDC settings, and that the account manages this offering"
+            )
+        return f"HTTP {err.status_code} from {err.url}"
+    if isinstance(err, httpx.TransportError):
+        return f"cannot reach Waldur: {err}"
+    return str(err)
+
+
 def diagnostics() -> int:
     """Perform comprehensive system diagnostics for all offerings.
 
@@ -1025,6 +1039,7 @@ def diagnostics() -> int:
         0 if all diagnostics pass, 1 if any issues are detected
     """
     configuration = init_configuration()
+    issues_found = False
     logger.info("-" * 10 + "DIAGNOSTICS START" + "-" * 10)
     logger.info("Provided settings:")
     format_string = "{:<30} = {:<10}"
@@ -1072,6 +1087,7 @@ def diagnostics() -> int:
             offering, configuration.waldur_user_agent, configuration.global_proxy
         )
 
+        offering_data = None
         try:
             current_user = get_current_user_from_client(waldur_rest_client)
             print_current_user(current_user)
@@ -1109,8 +1125,9 @@ def diagnostics() -> int:
                 logger.info(format_string.format(*component))
 
             logger.info("")
-        except UnexpectedStatus as err:
-            logger.error("Unable to fetch offering data, reason: %s", err)
+        except (UnexpectedStatus, httpx.TransportError) as err:
+            logger.error("Unable to fetch offering data: %s", _describe_waldur_error(err))
+            issues_found = True
 
         logger.info("")
         try:
@@ -1133,8 +1150,9 @@ def diagnostics() -> int:
             logger.info(format_string.format(*headers))
             for order in orders:
                 logger.info(format_string.format(order.project_name, order.type_, order.state))
-        except UnexpectedStatus as err:
-            logger.error("Unable to fetch orders, reason: %s", err)
+        except (UnexpectedStatus, httpx.TransportError) as err:
+            logger.error("Unable to fetch orders: %s", _describe_waldur_error(err))
+            issues_found = True
 
         backend, _ = get_backend_for_offering(offering, "order_processing_backend")
 
@@ -1165,7 +1183,7 @@ def diagnostics() -> int:
 
     logger.info("-" * 10 + "DIAGNOSTICS END" + "-" * 10)
 
-    return 0
+    return 1 if issues_found else 0
 
 
 def create_homedirs_for_offering_users() -> None:
