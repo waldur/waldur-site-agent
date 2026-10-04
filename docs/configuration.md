@@ -362,7 +362,7 @@ for <offering>` for it, and `report` stops the whole process with the same error
 #### `stomp_ws_host`, `stomp_ws_port`, `stomp_ws_path`
 
 - **Type**: String / Integer / String
-- **Defaults**: the host of `waldur_api_url`; port `443` when `verify_ssl` is true, otherwise `80`;
+- **Defaults**: the host of `waldur_api_url`; port `443` when `websocket_use_tls` is true, otherwise `80`;
   path `/rmqws-stomp`
 - **Description**: Where the agent opens the STOMP WebSocket. Override them when RabbitMQ's
   web-STOMP endpoint is not served behind the Waldur API host — for example a development broker

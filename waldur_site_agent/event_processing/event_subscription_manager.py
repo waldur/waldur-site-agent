@@ -139,9 +139,10 @@ class EventSubscriptionManager:
         queue_name = unified_queue.queue_name
 
         stomp_host = custom_stomp_ws_host or urllib3.util.parse_url(self.offering.api_url).host
-        stomp_port = custom_stomp_ws_port or (
-            443 if self.waldur_rest_client._verify_ssl else 80
-        )
+        # The default port follows whether the WebSocket uses TLS. verify_ssl only
+        # decides whether the certificate is checked: a self-signed https Waldur
+        # still serves web-STOMP on 443.
+        stomp_port = custom_stomp_ws_port or (443 if self.offering.websocket_use_tls else 80)
         ws_path = custom_stomp_ws_path or "/rmqws-stomp"
 
         logger.info("Using %s:%s/%s%s broker", stomp_host, stomp_port, vhost_name, ws_path)
