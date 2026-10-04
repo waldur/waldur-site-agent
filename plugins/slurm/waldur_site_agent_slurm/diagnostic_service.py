@@ -37,6 +37,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _as_plain_dict(value: object) -> Optional[dict[str, Any]]:
+    """An SDK attrs model (or a dict) as a plain dict; None when unset.
+
+    The Waldur client returns models such as ``ResourceLimits`` here, which the
+    report code iterates with ``.items()`` and serialises to JSON.
+    """
+    if value is None or isinstance(value, type(UNSET)):
+        return None
+    if isinstance(value, dict):
+        return dict(value)
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    return None
+
+
 class SlurmAccountDiagnosticService:
     """Service for diagnosing SLURM account configuration against Waldur."""
 
@@ -211,7 +227,7 @@ class SlurmAccountDiagnosticService:
                 if not isinstance(resource.customer_name, type(UNSET))
                 else None
             ),
-            limits=resource.limits if not isinstance(resource.limits, type(UNSET)) else None,
+            limits=_as_plain_dict(resource.limits),
             backend_id=(
                 resource.backend_id if not isinstance(resource.backend_id, type(UNSET)) else None
             ),
@@ -280,11 +296,7 @@ class SlurmAccountDiagnosticService:
                 if not isinstance(policy.tres_billing_enabled, type(UNSET))
                 else None
             ),
-            tres_billing_weights=(
-                policy.tres_billing_weights
-                if not isinstance(policy.tres_billing_weights, type(UNSET))
-                else None
-            ),
+            tres_billing_weights=_as_plain_dict(policy.tres_billing_weights),
             grace_ratio=(
                 policy.grace_ratio if not isinstance(policy.grace_ratio, type(UNSET)) else None
             ),
