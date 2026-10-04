@@ -787,7 +787,6 @@ offerings:
       customer_prefix: "c_"
       project_prefix: "p_"
       allocation_prefix: "a_"
-      enable_user_homedir_account_creation: true
 
     backend_components:
       deposit:
