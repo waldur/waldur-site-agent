@@ -144,6 +144,18 @@ class TestK8sUtNamespaceBackendQuota:
     def test_parse_k8s_quantity_invalid(self, backend_settings, backend_components):
         assert K8sUtNamespaceBackend._parse_k8s_quantity("invalid") == 0
 
+    def test_parse_k8s_quantity_millicores_not_truncated(
+        self, backend_settings, backend_components
+    ):
+        # True division, not floor division: used to be int(500) // 1000 == 0, silently
+        # dropping a sub-1-core request entirely (see _current_pod_usage_in_waldur_units).
+        assert K8sUtNamespaceBackend._parse_k8s_quantity("500m") == 0.5
+
+    def test_parse_k8s_quantity_mebibytes_not_truncated(
+        self, backend_settings, backend_components
+    ):
+        assert K8sUtNamespaceBackend._parse_k8s_quantity("512Mi") == 0.5
+
 
 class TestK8sUtNamespaceBackendCreateResource:
     """Tests for resource creation."""
@@ -644,12 +656,22 @@ class TestK8sUtNamespaceBackendStatusOps:
 class TestK8sUtNamespaceBackendUsageReport:
     """Tests for usage report generation.
 
-    Quota x elapsed time, accumulated month-to-date via a JSON-encoded
-    annotation on the CR (see backend.py's _get_usage_report docstring for
-    why: a ManagedNamespace's quota is only ever a point-in-time snapshot,
-    so the backend has to persist its own running total between calls, the
-    same way sacct's own historical log lets SLURM recompute month-to-date
-    freshly on every call without needing to persist anything itself).
+    cpu/ram/gpu x elapsed time, sampled from live Running pod requests
+    (_current_pod_usage_in_waldur_units); storage x elapsed time, sampled from the
+    CR's own spec.quota (_current_quota_in_waldur_units) since a PVC isn't a per-pod
+    request and persists independent of any pod. Either way, accumulated month-to-date
+    via a JSON-encoded annotation on the CR (see backend.py's _get_usage_report
+    docstring for why: neither source has history of its own, so the backend persists
+    its own running total between calls, the same way sacct's own historical log lets
+    SLURM recompute month-to-date freshly on every call without needing to persist
+    anything itself).
+
+    Most tests here set up one Running pod whose requests exactly match CR_QUOTA's
+    cpu/ram/gpu figures, so the expected totals are identical to what a pure
+    quota-based reading would have given -- this validates the elapsed-time
+    accumulation logic (unchanged) through the new pod-based sampling path (changed),
+    rather than conflating the two. Pod-sampling specifics (multiple pods, multiple
+    containers, non-Running phases) get their own dedicated tests below.
     """
 
     CR_QUOTA: ClassVar[dict[str, str]] = {
@@ -659,8 +681,27 @@ class TestK8sUtNamespaceBackendUsageReport:
     def _cr(self, annotations=None):
         return {
             "metadata": {"name": "waldur-test-ns", "annotations": annotations or {}},
-            "spec": {"quota": dict(self.CR_QUOTA)},
+            "spec": {"name": "waldur-test-ns", "quota": dict(self.CR_QUOTA)},
         }
+
+    @staticmethod
+    def _pod(cpu=None, memory=None, gpu=None, phase="Running"):
+        """A single-container pod requesting the given resources, in the given phase."""
+        requests = {}
+        if cpu is not None:
+            requests["cpu"] = cpu
+        if memory is not None:
+            requests["memory"] = memory
+        if gpu is not None:
+            requests["nvidia.com/gpu"] = gpu
+        return {
+            "status": {"phase": phase},
+            "spec": {"containers": [{"resources": {"requests": requests}}]},
+        }
+
+    def _matching_pod(self):
+        """One Running pod whose requests exactly match CR_QUOTA's cpu/ram/gpu."""
+        return self._pod(cpu="4", memory="8Gi", gpu="1")
 
     @freeze_time("2026-09-15 12:00:00")
     def test_first_sample_accumulates_nothing_yet(self, backend_settings, backend_components):
@@ -706,11 +747,12 @@ class TestK8sUtNamespaceBackendUsageReport:
         mock_k8s.get_managed_namespace.return_value = self._cr(
             {USAGE_ACCUMULATOR_ANNOTATION: json.dumps(prior_state)}
         )
+        mock_k8s.list_pods.return_value = [self._matching_pod()]
 
         with freeze_time("2026-09-15 12:30:00"):  # 30 minutes later
             report = backend._get_usage_report(["waldur-test-ns"])
 
-        # quota (cpu=4, ram=8, storage=100, gpu=1) x 30 minutes elapsed
+        # pod requests (cpu=4, ram=8, gpu=1) + quota (storage=100) x 30 minutes elapsed
         assert report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"] == {
             "cpu": 120.0, "ram": 240.0, "storage": 3000.0, "gpu": 30.0,
         }
@@ -729,6 +771,7 @@ class TestK8sUtNamespaceBackendUsageReport:
             return {}
 
         mock_k8s.replace_managed_namespace.side_effect = fake_replace
+        mock_k8s.list_pods.return_value = [self._matching_pod()]
 
         with freeze_time("2026-09-15 12:00:00"):
             mock_k8s.get_managed_namespace.return_value = self._cr()
@@ -814,6 +857,7 @@ class TestK8sUtNamespaceBackendUsageReport:
         mock_k8s.get_managed_namespace.return_value = self._cr(
             {USAGE_ACCUMULATOR_ANNOTATION: json.dumps(prior_state)}
         )
+        mock_k8s.list_pods.return_value = [self._matching_pod()]
         mock_k8s.replace_managed_namespace.side_effect = BackendError("write conflict")
 
         with freeze_time("2026-09-15 12:30:00"):
@@ -844,6 +888,127 @@ class TestK8sUtNamespaceBackendUsageReport:
         report = backend._get_usage_report(["waldur-test-ns"])
 
         assert set(report["waldur-test-ns"]["TOTAL_ACCOUNT_USAGE"].keys()) == {"cpu", "ram"}
+
+
+class TestK8sUtNamespaceBackendPodUsageSampling:
+    """Tests for _current_pod_usage_in_waldur_units.
+
+    What gets summed, from where, and what's correctly excluded. Each test drives it
+    through a full _get_usage_report() call (prior accumulated
+    state fixed at 0, a fixed 10-minute elapsed window) so the assertion is a plain,
+    readable total x 10, rather than calling the private method directly.
+    """
+
+    def _cr(self, name="waldur-pod-test-ns", quota=None):
+        return {
+            "metadata": {"name": name, "annotations": {
+                USAGE_ACCUMULATOR_ANNOTATION: json.dumps({
+                    "period": "2026-09",
+                    "last_sample_at": "2026-09-15T12:00:00+00:00",
+                    "accumulated": {"cpu": 0.0, "ram": 0.0, "storage": 0.0, "gpu": 0.0},
+                }),
+            }},
+            "spec": {"name": name, "quota": quota or {
+                "cpu": "4", "memory": "8Gi", "storage": "100Gi", "gpu": "1",
+            }},
+        }
+
+    @staticmethod
+    def _container(cpu=None, memory=None, gpu=None):
+        requests = {}
+        if cpu is not None:
+            requests["cpu"] = cpu
+        if memory is not None:
+            requests["memory"] = memory
+        if gpu is not None:
+            requests["nvidia.com/gpu"] = gpu
+        return {"resources": {"requests": requests}}
+
+    @staticmethod
+    def _pod(containers, phase="Running"):
+        return {"status": {"phase": phase}, "spec": {"containers": containers}}
+
+    def _sample(self, backend, mock_k8s, pods):
+        mock_k8s.get_managed_namespace.return_value = self._cr()
+        mock_k8s.list_pods.return_value = pods
+        with freeze_time("2026-09-15 12:10:00"):  # +10 min
+            report = backend._get_usage_report(["waldur-pod-test-ns"])
+        return report["waldur-pod-test-ns"]["TOTAL_ACCOUNT_USAGE"]
+
+    def test_sums_requests_across_multiple_pods(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        pods = [
+            self._pod([self._container(cpu="1", memory="2Gi", gpu="1")]),
+            self._pod([self._container(cpu="2", memory="4Gi")]),
+        ]
+        usage = self._sample(backend, mock_k8s, pods)
+        # (1+2) cpu, (2+4) ram, (1+0) gpu -- x 10 minutes elapsed
+        assert usage["cpu"] == 30.0
+        assert usage["ram"] == 60.0
+        assert usage["gpu"] == 10.0
+
+    def test_sums_requests_across_multiple_containers_in_one_pod(
+        self, backend_settings, backend_components
+    ):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        pods = [self._pod([
+            self._container(cpu="1", memory="1Gi"),
+            self._container(cpu="1", memory="1Gi"),  # sidecar
+        ])]
+        usage = self._sample(backend, mock_k8s, pods)
+        assert usage["cpu"] == 20.0  # (1+1) cpu x 10 min
+        assert usage["ram"] == 20.0  # (1+1) ram x 10 min
+
+    def test_non_running_pods_excluded(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        pods = [
+            self._pod([self._container(cpu="4")], phase="Running"),
+            self._pod([self._container(cpu="100")], phase="Succeeded"),
+            self._pod([self._container(cpu="100")], phase="Pending"),
+            self._pod([self._container(cpu="100")], phase="Failed"),
+        ]
+        usage = self._sample(backend, mock_k8s, pods)
+        assert usage["cpu"] == 40.0  # only the Running pod's 4 cpu x 10 min
+
+    def test_no_pods_gives_zero_cpu_ram_gpu_but_storage_still_from_quota(
+        self, backend_settings, backend_components
+    ):
+        # An empty namespace (or one that doesn't exist yet -- list_pods()
+        # already returns [] for that case, not an error) means genuinely zero
+        # compute usage, but storage is still the CR's own standing quota.
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        usage = self._sample(backend, mock_k8s, [])
+        assert usage["cpu"] == 0.0
+        assert usage["ram"] == 0.0
+        assert usage["gpu"] == 0.0
+        assert usage["storage"] == 1000.0  # 100Gi quota x 10 min, unaffected by pods
+
+    def test_fractional_requests_not_truncated_to_zero(
+        self, backend_settings, backend_components
+    ):
+        # The _parse_k8s_quantity bug this depends on being fixed: "500m" cpu / "512Mi"
+        # memory used to floor-divide to 0, which would have made pod-based metering
+        # silently undercount almost every real pod (sub-1-core/sub-1Gi requests are
+        # the common case, not the exception).
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        pods = [self._pod([self._container(cpu="500m", memory="512Mi")])]
+        usage = self._sample(backend, mock_k8s, pods)
+        assert usage["cpu"] == 5.0   # 0.5 cpu x 10 min
+        assert usage["ram"] == 5.0   # 0.5 (512Mi/1024) ram x 10 min
+
+    def test_list_pods_called_with_spec_name_not_cr_namespace(
+        self, backend_settings, backend_components
+    ):
+        # The CR lives in cr_namespace (e.g. "waldur-system"); the pods being metered
+        # live in the real workload namespace, spec.name -- these must never be
+        # conflated.
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr(name="waldur-pod-test-ns")
+        mock_k8s.list_pods.return_value = []
+
+        backend._get_usage_report(["waldur-pod-test-ns"])
+
+        mock_k8s.list_pods.assert_called_once_with("waldur-pod-test-ns")
 
 
 class TestK8sUtNamespaceBackendUsageReportConcurrency:

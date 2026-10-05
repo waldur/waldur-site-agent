@@ -32,6 +32,17 @@ DEFAULT_COMPONENT_QUOTA_MAPPING = {
     "gpu": "gpu",
 }
 
+# Component types with a direct per-container pod resource-request analogue, and the
+# key each one is requested under in a container spec's resources.requests. storage has
+# no entry here deliberately: a PVC isn't a container resource request and persists
+# independent of any pod, so it stays metered from the CR's own quota (allocation-based,
+# like before) rather than live pod requests (job-like, like cpu/ram/gpu become below).
+POD_REQUEST_KEYS = {
+    "cpu": "cpu",
+    "ram": "memory",
+    "gpu": "nvidia.com/gpu",
+}
+
 # Annotation key persisting the running usage accumulator between
 # _get_usage_report() calls (see that method). Domain-prefixed to match the
 # CRD's own API group. metadata.annotations, unlike spec/status, are never
@@ -334,6 +345,50 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             result[component_key] = float(self._parse_k8s_quantity(quota[quota_field]))
         return result
 
+    def _current_pod_usage_in_waldur_units(self, ns_name: str) -> dict[str, float]:
+        """Sum requested cpu/ram/gpu across every *Running* pod in ns_name.
+
+        *ns_name* is the real workload namespace, not self.cr_namespace.
+
+        Unlike spec.quota (a static, namespace-level allocation that exists whether or
+        not anything is actually running), this reflects what's actually scheduled right
+        now -- the same *kind* of figure SLURM's own ReqTRES is: requested, not measured
+        utilization, but scoped to real, currently-running work, not a standing
+        reservation. Only backend_components whose type has a POD_REQUEST_KEYS entry are
+        summed here (storage is handled separately -- see that constant's comment).
+
+        Only Running pods count -- Pending/Succeeded/Failed/unknown contribute nothing,
+        consistent with "not actually consuming anything right now". Sums regular
+        containers only, not each init container's own request (the Kubernetes scheduler
+        computes a pod's *effective* request as the max of this sum and each init
+        container's, a known simplification here, not the full scheduler algorithm).
+
+        This is sampling, not a continuous watch: a pod that starts and finishes between
+        two poll cycles is missed entirely -- the same class of imprecision SLURM's own
+        ReqTRES x Elapsed already accepts, not a new one introduced here.
+        """
+        component_keys = {
+            key
+            for key, cfg in self.backend_components.items()
+            if cfg.get("type", key) in POD_REQUEST_KEYS
+        }
+        totals: dict[str, float] = dict.fromkeys(component_keys, 0.0)
+        if not component_keys:
+            return totals
+
+        for pod in self.k8s_client.list_pods(ns_name):
+            if (pod.get("status") or {}).get("phase") != "Running":
+                continue
+            for container in (pod.get("spec") or {}).get("containers") or []:
+                requests = (container.get("resources") or {}).get("requests") or {}
+                for component_key in component_keys:
+                    component_config = self.backend_components[component_key]
+                    component_type = component_config.get("type", component_key)
+                    request_key = POD_REQUEST_KEYS[component_type]
+                    if request_key in requests:
+                        totals[component_key] += self._parse_k8s_quantity(requests[request_key])
+        return totals
+
     @staticmethod
     def _load_usage_state(annotations: dict) -> Optional[dict]:
         """Parse the usage-accumulator annotation, if present and valid."""
@@ -357,18 +412,24 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             return None
 
     def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
-        """Meter usage as quota x elapsed time.
+        """Meter usage as (pod requests, for cpu/ram/gpu; quota, for storage) x elapsed time.
 
-        The same convention SLURM's ReqTRES x Elapsed already uses in this
-        system (AQS bills SLURM's
-        *requested* TRES for the job's elapsed time, not measured
-        utilization; see ska-src-accounting-quota-api's docs/open-issues.md
-        §5). A ManagedNamespace's ResourceQuota only ever exposes the
-        *current* quota -- a point-in-time snapshot, with no history of what
-        it was a moment ago -- so this samples the current quota on every
-        call and accumulates quota x (time since the last sample) into a
-        running month-to-date total per component, mirroring how `sacct`
-        itself provides SLURM's month-to-date figures.
+        The same convention SLURM's ReqTRES x Elapsed already uses in this system (AQS
+        bills SLURM's *requested* TRES for the job's elapsed time, not measured
+        utilization; see ska-src-accounting-quota-api's docs/open-issues.md §5) --  but
+        scoped to real, currently-running pods for cpu/ram/gpu (see
+        _current_pod_usage_in_waldur_units), not the namespace's standing quota
+        allocation: a namespace's spec.quota exists whether or not anything is actually
+        running in it, so metering *that* continuously (an earlier version of this
+        method did) bills for holding an allocation, not for running anything -- not what
+        "usage" means for every other backend in this system. storage has no per-pod
+        request (a PVC isn't a container resource and persists independent of any pod),
+        so it's the one component type still metered from the CR's own
+        spec.quota -- see _current_quota_in_waldur_units -- which is itself only ever a
+        point-in-time snapshot, with no history of what it was a moment ago, so this
+        samples it on every call and accumulates quota x (time since the last sample).
+        Either way, the running total per component accumulates into a month-to-date
+        figure, mirroring how `sacct` itself provides SLURM's month-to-date figures.
 
         The running total is persisted as a JSON-encoded annotation on the
         CR itself (see USAGE_ACCUMULATOR_ANNOTATION) rather than in local
@@ -428,22 +489,35 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             if cr is None:
                 return None
 
+            # cpu/ram/gpu: what's actually scheduled right now (see
+            # _current_pod_usage_in_waldur_units). storage: the CR's own standing quota
+            # (see _current_quota_in_waldur_units) -- a PVC isn't a per-pod request and
+            # persists independent of any pod, so it stays allocation-based. spec.name is
+            # the real workload namespace this CR manages, not self.cr_namespace.
+            ns_real_name = (cr.get("spec") or {}).get("name") or ns_name
+            sample = self._current_pod_usage_in_waldur_units(ns_real_name)
             quota = self._current_quota_in_waldur_units(cr)
-            if not quota:
+            for component_key, value in quota.items():
+                component_type = self.backend_components.get(component_key, {}).get(
+                    "type", component_key
+                )
+                if component_type not in POD_REQUEST_KEYS:
+                    sample[component_key] = value
+            if not sample:
                 return None
 
             annotations = (cr.get("metadata") or {}).get("annotations") or {}
             state = self._load_usage_state(annotations)
 
             if state is None or state.get("period") != current_period:
-                accumulated = dict.fromkeys(quota, 0.0)
+                accumulated = dict.fromkeys(sample, 0.0)
             else:
                 prior = state.get("accumulated") or {}
-                accumulated = {c: float(prior.get(c, 0.0)) for c in quota}
+                accumulated = {c: float(prior.get(c, 0.0)) for c in sample}
                 last_sample_at = self._parse_iso8601(state.get("last_sample_at")) or now
                 elapsed_minutes = max(0.0, (now - last_sample_at).total_seconds() / 60)
-                for component, component_quota in quota.items():
-                    accumulated[component] += component_quota * elapsed_minutes
+                for component, component_sample in sample.items():
+                    accumulated[component] += component_sample * elapsed_minutes
 
             new_state = {
                 "period": current_period,
@@ -482,19 +556,30 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         return accumulated
 
     @staticmethod
-    def _parse_k8s_quantity(value: str) -> int:
-        """Parse a K8s resource quantity string to an integer."""
+    def _parse_k8s_quantity(value: str) -> float:
+        """Parse a K8s resource quantity string into a float.
+
+        Units are this backend's own: whole cores for cpu, whole GiB for ram/storage,
+        whole units for gpu or any other bare integer.
+
+        True division throughout, not floor division: a pod requesting "500m" cpu or
+        "512Mi" memory is extremely common, and truncating either to 0 (this used to be
+        floor division, returning int) silently dropped most of a typical pod's real
+        request once this helper started being used to sum live pod requests
+        (_current_pod_usage_in_waldur_units), not just namespace-level quota strings
+        (usually whole units already, so the bug was latent there before).
+        """
         value = str(value)
         if value.endswith("Gi"):
-            return int(value[:-2])
+            return float(value[:-2])
         if value.endswith("Mi"):
-            return int(value[:-2]) // 1024
+            return float(value[:-2]) / 1024
         if value.endswith("m"):
-            return int(value[:-1]) // 1000
+            return float(value[:-1]) / 1000
         try:
-            return int(value)
+            return float(value)
         except ValueError:
-            return 0
+            return 0.0
 
     @staticmethod
     def _parse_ready_condition(status: dict) -> dict:
