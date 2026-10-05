@@ -158,10 +158,15 @@ class TestDefaultAccountPolicy:
         report.text(f"Slurm account: `{account}`\n")
 
         configured_default = offering.backend_settings.get("default_account", "root")
+        # ``none`` means the agent does not manage the default. slurmdbd then
+        # makes a new user's first association their default
+        # (as_mysql_assoc.c), so for a fresh user that is this very account --
+        # the same value ``individual`` sets explicitly. What tells the two
+        # apart is that under ``none`` the agent passed no DefaultAccount= at all.
         expected = {
             "common": configured_default,
             "individual": account,
-            "none": "",
+            "none": account,
         }
 
         sacctmgr = _sacctmgr_path(offering)
@@ -175,7 +180,15 @@ class TestDefaultAccountPolicy:
                 slurm_backend._default_account_policy = policy
                 user = f"{TEST_USER}-{policy}"
 
+                slurm_backend.client.clear_executed_commands()
                 slurm_backend.add_user(resource, user)
+                passed_default = any(
+                    "DefaultAccount=" in cmd for cmd in slurm_backend.client.executed_commands
+                )
+                assert passed_default == (policy != "none"), (
+                    f"policy={policy!r}: DefaultAccount= {'must' if policy != 'none' else 'must not'} "
+                    f"be passed to sacctmgr; commands: {slurm_backend.client.executed_commands}"
+                )
 
                 actual = _show_user_default_account(sacctmgr, user)
                 report.text(

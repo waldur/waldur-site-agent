@@ -118,10 +118,13 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
             logger.warning("No offering context — cannot fetch attribute config")
             return
         try:
-            waldur_a_client = AuthenticatedClient(
-                base_url=self.offering.waldur_api_url.rstrip("/api"),
-                token=self.offering.waldur_api_token,
+            # Imported here: common.utils loads backend entry points (this module
+            # among them) at import time, so a top-level import would be circular.
+            from waldur_site_agent.common.utils import (  # noqa: PLC0415
+                get_client_for_offering,
             )
+
+            waldur_a_client = get_client_for_offering(self.offering)
             response = waldur_a_client.get_httpx_client().get(
                 f"/api/marketplace-provider-offerings/{self.offering.waldur_offering_uuid}"
                 f"/user-attribute-config/",

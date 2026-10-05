@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import datetime
+from typing import Optional
 
 from waldur_api_client import AuthenticatedClient
-from waldur_api_client.api.event_subscriptions import event_subscriptions_create_queue
 from waldur_api_client.api.marketplace_site_agent_identities import (
     marketplace_site_agent_identities_create,
     marketplace_site_agent_identities_list,
-    marketplace_site_agent_identities_register_event_subscription,
+    marketplace_site_agent_identities_register_queue,
     marketplace_site_agent_identities_register_service,
     marketplace_site_agent_identities_update,
 )
@@ -21,21 +21,16 @@ from waldur_api_client.models import (
     AgentIdentityRequest,
     AgentProcessor,
     AgentProcessorCreateRequest,
+    AgentQueueRegistrationRequest,
     AgentService,
     AgentServiceCreateRequest,
-    EventSubscription,
-    EventSubscriptionQueue,
-    EventSubscriptionQueueCreateRequest,
     ObservableObjectTypeEnum,
 )
 from waldur_api_client.models.agent_dependency_request import AgentDependencyRequest
-from waldur_api_client.models.agent_event_subscription_create_request import (
-    AgentEventSubscriptionCreateRequest,
-)
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import WALDUR_SITE_AGENT_VERSION, utils
-from waldur_site_agent.common.structures import Offering
+from waldur_site_agent.common.structures import LogShippingConfig, Offering, UnifiedQueue
 
 
 class AgentIdentityDoesNotExistError(Exception):
@@ -140,57 +135,52 @@ class AgentIdentityManager:
         logger.info("Registered new identity %s, UUID %s", identity.name, identity.uuid.hex)
         return identity
 
-    def register_event_subscription(
-        self, identity: AgentIdentity, object_type: ObservableObjectTypeEnum
-    ) -> EventSubscription:
-        """Register an event subscription within the agent identity for the specified object type.
+    def register_queue(
+        self,
+        identity: AgentIdentity,
+        object_types: list[ObservableObjectTypeEnum],
+    ) -> UnifiedQueue:
+        """Register (or refresh) the single unified event-consumer queue for this identity.
+
+        Replaces the legacy per-object-type register_event_subscription +
+        create_event_subscription_queue pair: one call provisions one RabbitMQ
+        queue (consumer_{uuid}) that receives ALL the requested object types,
+        with the object type carried in each message payload. The call is
+        idempotent: re-registering returns the existing queue and refreshes the
+        RabbitMQ password to match the presented API token.
 
         Args:
-            identity (AgentIdentity): Agent identity
-            object_type (str): type of the observable object
+            identity: Agent identity owning the queue.
+            object_types: Observable object types to receive. An empty list means
+                all types; a non-empty list narrows the queue.
 
         Returns:
-            EventSubscription: Event subscription data
+            UnifiedQueue: queue name, RMQ username/vhost, and the effective types.
         """
         logger.info(
-            "Registering event subscription for identity %s and object type %s",
+            "Registering unified event queue for identity %s with object types %s",
             identity.name,
-            object_type,
+            [ot.value for ot in object_types],
         )
-        body = AgentEventSubscriptionCreateRequest(
-            observable_object_type=object_type,
-            description="Event subscription created by the site agent for identity {identity.name}",
-        )
-        event_subscription = marketplace_site_agent_identities_register_event_subscription.sync(
+        body = AgentQueueRegistrationRequest(object_types=object_types)
+        data = marketplace_site_agent_identities_register_queue.sync(
             uuid=identity.uuid.hex,
             body=body,
             client=self.waldur_rest_client,
         )
-        logger.info("Registered new event subscription with UUID %s", event_subscription.uuid.hex)
-        return event_subscription
-
-    def create_event_subscription_queue(
-        self, event_subscription: EventSubscription, object_type: ObservableObjectTypeEnum
-    ) -> EventSubscriptionQueue | None:
-        """Create an event subscription queue for the given agent identity and object type."""
-        try:
-            logger.info(
-                "Creating event subscription queue for %s, object type %s",
-                event_subscription.uuid.hex,
-                object_type,
-            )
-            body = EventSubscriptionQueueCreateRequest(
-                offering_uuid=self.offering.uuid,
-                object_type=object_type,
-            )
-            return event_subscriptions_create_queue.sync(
-                uuid=event_subscription.uuid.hex,
-                client=self.waldur_rest_client,
-                body=body,
-            )
-        except Exception as e:
-            logger.error("Failed to create event subscription queue: %s", e)
-            return None
+        logger.info(
+            "Registered unified queue %s (rmq user %s) for identity %s",
+            data.queue_name,
+            data.rmq_username,
+            identity.name,
+        )
+        return UnifiedQueue(
+            queue_name=data.queue_name,
+            rmq_username=data.rmq_username,
+            vhost=data.vhost,
+            observable_object_types=list(data.observable_object_types),
+            agent_identity_uuid=identity.uuid.hex,
+        )
 
     def register_service(self, identity: AgentIdentity, name: str, mode: str) -> AgentService:
         """Register a service within the agent identity.
@@ -249,3 +239,71 @@ class AgentIdentityManager:
         )
         logger.info("Registered new processor %s with UUID %s", processor.name, processor.uuid.hex)
         return processor
+
+
+def ensure_agent_telemetry(
+    offering: Offering,
+    waldur_rest_client: AuthenticatedClient,
+    agent_mode: str,
+    log_shipping: Optional[LogShippingConfig] = None,
+    service_name: Optional[str] = None,
+) -> Optional[AgentService]:
+    """Register the agent's identity and service and start shipping its logs.
+
+    All three are telemetry: they make the agent visible in Waldur (version,
+    uptime, processors, logs), but the agent does its actual work through the
+    marketplace REST API and never reads them back. A Waldur that refuses the
+    registration must therefore not stop the offering from being processed, so
+    failures are logged and swallowed rather than raised.
+
+    Args:
+        offering: The Waldur offering configuration.
+        waldur_rest_client: Authenticated REST client for Waldur API.
+        agent_mode: Agent mode, recorded as the service's mode and, unless
+            service_name overrides it, as its name too.
+        log_shipping: Global log shipping configuration. Omit where the caller
+            manages its own shippers, and none is started here.
+        service_name: Name to register the service under, when it differs from
+            the mode.
+
+    Returns:
+        AgentService: The registered service, or None if registration failed.
+    """
+    manager = AgentIdentityManager(offering, waldur_rest_client)
+    identity_name = f"agent-{offering.uuid}"
+
+    try:
+        identity = manager.register_identity(identity_name)
+    except Exception as e:
+        logger.warning(
+            "Unable to register the identity %s for the offering %s: %s. "
+            "Continuing without agent telemetry.",
+            identity_name,
+            offering.name,
+            e,
+        )
+        return None
+
+    try:
+        if log_shipping is not None:
+            utils.ensure_log_shipper(offering, identity.uuid.hex, log_shipping)
+    except Exception as e:
+        logger.warning(
+            "Unable to start the log shipper for the offering %s: %s. "
+            "Continuing without agent telemetry.",
+            offering.name,
+            e,
+        )
+
+    name = service_name or agent_mode
+    try:
+        return manager.register_service(identity, name, agent_mode)
+    except Exception as e:
+        logger.warning(
+            "Unable to register the service %s for the offering %s: %s. "
+            "Continuing without agent telemetry.",
+            name,
+            offering.name,
+            e,
+        )
+        return None

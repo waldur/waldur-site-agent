@@ -11,3 +11,4 @@ poetry.lock
 .ruff_cache
 ci/db-cache/
 waldur-site-agent-config.yaml
+ci/sssd-demo/.agent-config.local.yaml

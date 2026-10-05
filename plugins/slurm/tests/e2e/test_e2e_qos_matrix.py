@@ -37,6 +37,7 @@ from waldur_api_client.api.marketplace_orders import (
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_retrieve,
 )
+from waldur_api_client.api.marketplace_resources import marketplace_resources_terminate
 from waldur_api_client.api.marketplace_slurm_periodic_usage_policies import (
     marketplace_slurm_periodic_usage_policies_destroy,
 )
@@ -53,7 +54,7 @@ from waldur_api_client.models.order_create_request_limits import (
 )
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.policy_period_enum import PolicyPeriodEnum
-from waldur_api_client.models.request_types import RequestTypes
+from waldur_api_client.models.resource_terminate_request import ResourceTerminateRequest
 from waldur_api_client.types import UNSET
 from waldur_site_agent_slurm.backend import SlurmBackend
 
@@ -170,7 +171,6 @@ def _create_order(
         plan=plan_url,
         limits=order_limits,
         attributes=attrs,
-        type_=RequestTypes.CREATE,
     )
     order = marketplace_orders_create.sync(client=client, body=body)
     return order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
@@ -583,25 +583,15 @@ class TestQosMatrix:
             if not offering or not backend:
                 continue
             try:
-                offering_url, plan_url = _offering_urls(matrix_client, cfg.offering_uuid)
-                res = marketplace_provider_resources_retrieve.sync(
-                    uuid=info["resource_uuid"], client=matrix_client
+                result = marketplace_resources_terminate.sync(
+                    uuid=info["resource_uuid"],
+                    client=matrix_client,
+                    body=ResourceTerminateRequest(),
                 )
-                resource_url = (
-                    res.url if not isinstance(res.url, type(UNSET)) else None
-                )
-                body = OrderCreateRequest(
-                    offering=offering_url,
-                    project=s["project_url"],
-                    plan=plan_url,
-                    attributes=GenericOrderAttributes(),
-                    type_=RequestTypes.TERMINATE,
-                )
-                if resource_url:
-                    body.additional_properties["resource"] = resource_url
-                order = marketplace_orders_create.sync(client=matrix_client, body=body)
                 order_uuid = (
-                    order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
+                    result.order_uuid.hex
+                    if hasattr(result.order_uuid, "hex")
+                    else str(result.order_uuid)
                 )
                 _process_order_terminal(
                     offering, matrix_client, backend, order_uuid

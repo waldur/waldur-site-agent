@@ -64,6 +64,25 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
     def account_has_users(self, account: str) -> bool:
         """Check if the account has associated users."""
 
+    # The three below are what ``delete_association`` and
+    # ``delete_all_users_from_account`` need to move a user's DefaultAccount out
+    # of the way before dropping an association: slurmdbd refuses to remove a
+    # default association while the user keeps others. Deliberately *not*
+    # abstract -- both shipped clients override them, and making them abstract
+    # would stop an existing out-of-tree client from instantiating at all.
+
+    def list_user_accounts(self, username: str) -> list[str]:
+        """Accounts the user holds an association with, lower-cased and sorted."""
+        raise NotImplementedError(type(self).__name__)
+
+    def get_user_default_account(self, username: str) -> Optional[str]:
+        """The user's DefaultAccount, lower-cased, or None when the user is unknown."""
+        raise NotImplementedError(type(self).__name__)
+
+    def set_user_default_account(self, username: str, account: str) -> None:
+        """Re-point the user's DefaultAccount."""
+        raise NotImplementedError(type(self).__name__)
+
     @abc.abstractmethod
     def get_historical_usage_report(
         self, resource_ids: list[str], year: int, month: int
@@ -94,12 +113,16 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
         """Delete a QoS from the SLURM cluster."""
 
     @abc.abstractmethod
-    def set_account_qos(self, account: str, qos: str) -> None:
-        """Set the specified QoS for the account."""
+    def set_account_qos(self, account: str, qos: str, default_qos: Optional[str] = None) -> None:
+        """Set the specified QoS for the account, optionally moving its DefaultQOS too."""
 
     @abc.abstractmethod
     def get_current_account_qos(self, account: str) -> str:
         """Return a name of the current QoS of the account."""
+
+    @abc.abstractmethod
+    def get_current_account_default_qos(self, account: str) -> str:
+        """Return the effective DefaultQOS of the account, or "" when none is set."""
 
     @abc.abstractmethod
     def set_account_qos_list(self, account: str, qos_list: list[str]) -> None:
@@ -112,6 +135,18 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
     @abc.abstractmethod
     def set_account_default_qos(self, account: str, qos_name: str) -> None:
         """Set the default QoS for an account."""
+
+    @abc.abstractmethod
+    def set_qos_grp_tres_mins(self, qos_name: str, limits_dict: dict[str, int]) -> None:
+        """Set GrpTRESMins on the named QoS (not the account association)."""
+
+    @abc.abstractmethod
+    def get_qos_grp_tres_mins(self, qos_name: str) -> dict[str, int]:
+        """Return GrpTRESMins of the named QoS as TRES-name to integer minutes."""
+
+    @abc.abstractmethod
+    def reset_qos_raw_usage(self, qos_name: str) -> None:
+        """Reset RawUsage on the named QoS (clean budget start)."""
 
     # ===== PARTITION-AWARE ASSOCIATIONS =====
 

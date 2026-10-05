@@ -1,0 +1,22 @@
+[Unit]
+Description=Waldur site agent: processing orders (polling)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=root
+Group=root
+ExecStart=waldur_site_agent -m order_process -c /etc/waldur/waldur-site-agent-config.yaml
+# Each unit gets its own liveness heartbeat, so a healthy unit on the same host
+# cannot keep a stalled one looking alive (checked by waldur_site_healthz).
+RuntimeDirectory=waldur-site-agent-order-process
+Environment=WALDUR_SITE_AGENT_HEARTBEAT_PATH=/run/waldur-site-agent-order-process/heartbeat
+Restart=on-failure
+RestartSec=30
+# Write output to files instead of the journal. StandardOutput=append: needs
+# systemd 240 or newer; rotate these files with logrotate (copytruncate).
+StandardOutput=append:/var/log/waldur-site-agent-order-process.log
+StandardError=append:/var/log/waldur-site-agent-order-process-error.log
+
+[Install]
+WantedBy=multi-user.target

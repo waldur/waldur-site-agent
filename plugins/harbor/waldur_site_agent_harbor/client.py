@@ -23,6 +23,8 @@ from waldur_site_agent_harbor.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+_LABEL_PAGE_SIZE = 100
+
 
 class HarborClient(BaseClient):
     """Client for communicating with Harbor API v2.0."""
@@ -206,6 +208,51 @@ class HarborClient(BaseClient):
             return None
         except HarborAPIError:
             return None
+
+    def add_project_label(self, project_name: str, label_name: str) -> None:
+        """Create a project-scoped label in ``project_name``.
+
+        Raises:
+            HarborProjectError: The project does not exist.
+            HarborAPIError: Harbor refused the label, e.g. the robot account
+                lacks label permissions on the project.
+        """
+        project = self.get_project(project_name)
+        if not project:
+            raise HarborProjectError(f"Project {project_name} not found")
+        self._make_request(
+            "POST",
+            "/labels",
+            json={
+                "name": label_name,
+                "scope": "p",
+                "project_id": project.get("project_id"),
+                "description": "Managed by Waldur site agent",
+            },
+        )
+
+    def list_project_label_names(self, project_name: str) -> list[str]:
+        """Return the names of the project-scoped labels in ``project_name``.
+
+        Raises:
+            HarborAPIError: Harbor refused the listing.
+        """
+        project = self.get_project(project_name)
+        if not project:
+            return []
+        names: list[str] = []
+        page = 1
+        while True:
+            response = self._make_request(
+                "GET",
+                f"/labels?scope=p&project_id={project.get('project_id')}"
+                f"&page={page}&page_size={_LABEL_PAGE_SIZE}",
+            )
+            labels = self._parse_json_response(response) or []
+            names.extend(label.get("name", "") for label in labels)
+            if len(labels) < _LABEL_PAGE_SIZE:
+                return names
+            page += 1
 
     def get_project_usage(self, project_name: str) -> dict:
         """Get storage usage statistics for a project.

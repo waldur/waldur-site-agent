@@ -1,0 +1,407 @@
+"""Pure decision logic for Waldur-authoritative LDAP reconciliation.
+
+Nothing here touches a directory or an API. :func:`build_desired` turns an
+offering user into the entry Waldur says should exist, and :func:`classify`
+compares that against what the directory currently holds. Keeping both free of
+I/O is what makes the interesting cases — a UID already taken by somebody else,
+an entry whose ids drifted, a second account sharing an email — testable without
+an LDAP server.
+
+The caller is responsible for acting on the returned :class:`Decision`; see
+``LdapUsernameBackend._reconcile_from_waldur``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+from waldur_api_client.models.offering_user import OfferingUser
+from waldur_api_client.types import Unset
+from waldur_site_agent_ldap_client import LdapClient
+
+# Attributes carrying the account's POSIX identity, as opposed to its profile.
+# A disagreement here is a drift; a disagreement anywhere else is just stale data.
+POSIX_ATTRIBUTES = ("uidNumber", "gidNumber")
+
+
+class SkipReason(str, Enum):
+    """Why an offering user cannot be reconciled this cycle."""
+
+    # Waldur has not assigned a POSIX login name yet (account still REQUESTED,
+    # or the service provider has not set one). Ordinary and transient.
+    NO_USERNAME = "no_username"
+    # The server did not return the POSIX fields at all. Almost always means the
+    # Mastermind predates them, or the agent is not requesting them — an
+    # offering-wide condition, so the caller logs it once rather than per user.
+    IDS_UNSET = "ids_unset"
+    # The server returned them as null: no PosixIdPool resolves for the offering,
+    # or enable_posix_account is off. A per-account condition.
+    IDS_MISSING = "ids_missing"
+
+
+class Outcome(str, Enum):
+    """What should happen to one account."""
+
+    CREATE = "create"  # nothing in the directory yet, and the UID is free
+    NOOP = "noop"  # directory already agrees
+    UPDATE = "update"  # profile / home / shell differ; safe to rewrite
+    DRIFT = "drift"  # uidNumber or gidNumber differ; policy decides
+    UID_TAKEN = "uid_taken"  # a different entry already holds this UID
+    # The entry holding this UID is this same account under the name Waldur
+    # used before: rename it rather than refuse the new name.
+    RENAME = "rename"
+    # The entry under this name carries another person's Waldur username in
+    # waldur_username_attribute: it is not this account's, whatever its ids say.
+    KEY_CONFLICT = "key_conflict"
+    # The entry exists with the right ids but was parked by the agent when the
+    # person left (see LdapClient.disable_user); they are back, so wake it up.
+    REENABLE = "reenable"
+
+
+@dataclass
+class DesiredEntry:
+    """The directory entry Waldur says should exist for one offering user."""
+
+    username: str
+    uid_number: int
+    gid_number: int
+    home_directory: str
+    login_shell: str
+    first_name: str = ""
+    last_name: str = ""
+    email: str = ""
+    # The person's Waldur username, written to waldur_username_attribute: the
+    # stable key a renamed account's entry is found by. None when the
+    # attribute is not configured.
+    waldur_username: Optional[str] = None
+
+    @property
+    def common_name(self) -> str:
+        """The cn to write: full name when we have one, else the login name."""
+        return f"{self.first_name} {self.last_name}".strip() or self.username
+
+
+@dataclass
+class Decision:
+    """The verdict for one account, plus everything needed to act on or report it."""
+
+    outcome: Outcome
+    # Attribute -> value, for Outcome.UPDATE. Ready to hand to update_user_attributes.
+    updates: dict = field(default_factory=dict)
+    # Attribute -> (actual, desired), for Outcome.DRIFT. Reporting only.
+    diff: dict = field(default_factory=dict)
+    # uid of the entry already holding the wanted uidNumber, for Outcome.UID_TAKEN
+    # and Outcome.RENAME (the old name).
+    uid_taken_by: Optional[str] = None
+    # For Outcome.UID_TAKEN and Outcome.KEY_CONFLICT: why nothing was written.
+    reason: Optional[str] = None
+    # For an update that rewrites the key: the value it replaces.
+    restamped_from: Optional[str] = None
+    # uid of another entry carrying the same email. A warning, never a blocker:
+    # one person legitimately holds several accounts in a shared directory.
+    duplicate_mail_owner: Optional[str] = None
+
+
+def _text(value: object) -> str:
+    """An OfferingUser string field as a plain str, treating UNSET/None as empty."""
+    if value is None or isinstance(value, Unset):
+        return ""
+    return str(value)
+
+
+def _number(value: object) -> Optional[int]:
+    """An OfferingUser integer field as an int, or None when absent."""
+    if value is None or isinstance(value, Unset):
+        return None
+    if isinstance(value, int):
+        return value
+    return int(str(value))
+
+
+def attr(entry: Optional[dict], name: str) -> Optional[object]:
+    """One attribute of an ldap3 ``entry_attributes_as_dict``, unwrapped.
+
+    ldap3 hands back a list for every attribute; an attribute that is present but
+    empty comes back as ``[]``, which must read as absent rather than as a value.
+    """
+    if not entry:
+        return None
+    value = entry.get(name)
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else None
+    return value
+
+
+def _attr_text(entry: Optional[dict], name: str) -> str:
+    value = attr(entry, name)
+    return "" if value is None else str(value)
+
+
+def _attr_number(entry: Optional[dict], name: str) -> Optional[int]:
+    value = attr(entry, name)
+    if value is None or value == "":
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value))
+    except ValueError:
+        return None
+
+
+def build_desired(
+    offering_user: OfferingUser,
+    *,
+    default_home_base: str,
+    default_login_shell: str,
+    waldur_username_attribute: str = "",
+) -> tuple[Optional[DesiredEntry], Optional[SkipReason]]:
+    """Turn an offering user into the entry that should exist, or say why not.
+
+    Exactly one of the two return values is set. ``home_directory`` and
+    ``login_shell`` fall back to the configured defaults when Waldur holds none —
+    unlike the ids, a local default for those is harmless. The ids never fall
+    back: inventing one here is precisely the dual-allocation this mode exists to
+    remove.
+    """
+    username = _text(getattr(offering_user, "username", None))
+    if not username:
+        return None, SkipReason.NO_USERNAME
+
+    raw_uid = getattr(offering_user, "uidnumber", None)
+    raw_gid = getattr(offering_user, "primarygroup", None)
+    # UNSET (field never came back) and None (came back null) mean different
+    # things to an operator, so they are reported differently.
+    if isinstance(raw_uid, Unset) and isinstance(raw_gid, Unset):
+        return None, SkipReason.IDS_UNSET
+
+    uid_number = _number(raw_uid)
+    gid_number = _number(raw_gid)
+    if uid_number is None or gid_number is None:
+        return None, SkipReason.IDS_MISSING
+
+    home_directory = _text(getattr(offering_user, "home_directory", None))
+    if not home_directory:
+        home_directory = f"{default_home_base.rstrip('/')}/{username}"
+    login_shell = _text(getattr(offering_user, "login_shell", None)) or default_login_shell
+
+    waldur_username = _text(getattr(offering_user, "user_username", None))
+    return (
+        DesiredEntry(
+            username=username,
+            uid_number=uid_number,
+            gid_number=gid_number,
+            home_directory=home_directory,
+            login_shell=login_shell,
+            first_name=_text(getattr(offering_user, "user_first_name", None)),
+            last_name=_text(getattr(offering_user, "user_last_name", None)),
+            email=_text(getattr(offering_user, "user_email", None)),
+            waldur_username=(
+                waldur_username if waldur_username and waldur_username_attribute else None
+            ),
+        ),
+        None,
+    )
+
+
+def rename_refusal(
+    desired: DesiredEntry,
+    key_owners: Optional[list[str]],
+    directory: dict,
+) -> tuple[Optional[str], Optional[str]]:
+    """Find the entry this account had under another name, by the Waldur-username key.
+
+    Returns ``(old_name, None)`` for a rename, or ``(None, reason)`` when there
+    is none to make. The key is the person's Waldur username, written on every
+    entry the agent creates or matches; it survives a change of POSIX name, so
+    the entry carrying it under another uid is this account's, provided it also
+    carries this account's uidNumber. Anything ambiguous refuses.
+    """
+    if key_owners is None:
+        return None, "waldur_username_attribute is not configured, so renames are not followed"
+    if not desired.waldur_username:
+        return None, "the account has no Waldur username to find its entry by"
+    if len(key_owners) > 1:
+        return None, (
+            f"entries {', '.join(sorted(key_owners))} all carry the Waldur username "
+            f"{desired.waldur_username}"
+        )
+    if not key_owners:
+        return None, (
+            f"no entry carries the Waldur username {desired.waldur_username} (the "
+            "holder is another person, or the POSIX and Waldur usernames changed at once)"
+        )
+    owner = key_owners[0]
+    if _attr_number(directory.get(owner), "uidNumber") != desired.uid_number:
+        return None, (
+            f"{owner} carries the Waldur username {desired.waldur_username} but not "
+            "this account's uidNumber"
+        )
+    return owner, None
+
+
+def classify(  # noqa: PLR0911
+    desired: DesiredEntry,
+    actual: Optional[dict],
+    *,
+    uid_owner: Optional[str] = None,
+    mail_owner: Optional[str] = None,
+    waldur_username_attribute: str = "",
+    key_owners: Optional[list[str]] = None,
+    directory: Optional[dict] = None,
+    current_keys: Optional[set[str]] = None,
+) -> Decision:
+    """Compare the wanted entry against the directory and decide what to do.
+
+    ``actual`` is the existing entry for ``desired.username``, or None.
+    ``uid_owner`` is the uid of whichever *other* entry already holds
+    ``desired.uid_number``; ``mail_owner`` likewise for the email address. Both
+    are resolved by the caller from its bulk read.
+
+    ``uid_owner`` blocks two distinct cases: creating an account on a taken UID,
+    and renumbering a drifted account onto one.
+
+    ``key_owners`` are the uids of the entries whose ``waldur_username_attribute``
+    holds ``desired.waldur_username`` (None when the attribute is not
+    configured), and ``directory`` the bulk read they come from. With no entry
+    under the wanted name, the one key owner under another name with this
+    account's uidNumber is the same account renamed (see :func:`rename_refusal`).
+    """
+    key_others = [o for o in key_owners or [] if o != desired.username]
+    if actual is None:
+        if key_others or (uid_owner is not None and uid_owner != desired.username):
+            old_name, reason = rename_refusal(desired, key_owners, directory or {})
+            if old_name is not None:
+                return Decision(outcome=Outcome.RENAME, uid_taken_by=old_name)
+            if uid_owner is not None and uid_owner != desired.username:
+                # Case 5 outranks creation: taking a UID that belongs to somebody
+                # else would break that account, and no policy makes that acceptable.
+                return Decision(
+                    outcome=Outcome.UID_TAKEN, uid_taken_by=uid_owner, reason=reason
+                )
+            # The UID is free but the key sits elsewhere; refuse rather than
+            # create a second entry for one person.
+            return Decision(
+                outcome=Outcome.UID_TAKEN, uid_taken_by=", ".join(key_others), reason=reason
+            )
+        # Case 6 does not block — a shared directory legitimately holds more than
+        # one account per person — but it is worth saying out loud.
+        return Decision(
+            outcome=Outcome.CREATE,
+            duplicate_mail_owner=(
+                mail_owner if mail_owner and mail_owner != desired.username else None
+            ),
+        )
+
+    # The key gates every write to an existing entry: one carrying another
+    # person's Waldur username is never updated, re-enabled, adopted or
+    # renumbered for this account, and its key is never overwritten.
+    held_key = _attr_text(actual, waldur_username_attribute) if waldur_username_attribute else ""
+    restamp_from = None
+    if held_key and desired.waldur_username and held_key != desired.waldur_username:
+        # The one case a different key is rewritten: the entry is this
+        # account's by its ids (its uid is the wanted name, and here its
+        # uidNumber matches too), and the old value is no current account's
+        # Waldur username -- the person's Waldur username changed. The
+        # attribute is reserved for the agent by configuration.
+        if (
+            _attr_number(actual, "uidNumber") == desired.uid_number
+            and held_key not in (current_keys or set())
+        ):
+            restamp_from = held_key
+        else:
+            return Decision(
+                outcome=Outcome.KEY_CONFLICT,
+                reason=(
+                    f"its {waldur_username_attribute} is {held_key}, this account's Waldur "
+                    f"username is {desired.waldur_username}"
+                ),
+            )
+
+    # Case 4: the POSIX identity itself disagrees. Reported as a diff and left to
+    # policy — rewriting a live uidNumber orphans every file the account owns.
+    diff = {}
+    actual_uid = _attr_number(actual, "uidNumber")
+    actual_gid = _attr_number(actual, "gidNumber")
+    if actual_uid != desired.uid_number:
+        diff["uidNumber"] = (actual_uid, desired.uid_number)
+    if actual_gid != desired.gid_number:
+        diff["gidNumber"] = (actual_gid, desired.gid_number)
+    if diff:
+        # A drifted uidNumber cannot be adopted onto a value another entry already
+        # holds. LDAP does not enforce uidNumber uniqueness, so the write would
+        # succeed and leave two accounts sharing ownership of every file -- the
+        # same reason the creation path refuses it above, and no policy makes it
+        # acceptable either.
+        if "uidNumber" in diff and uid_owner is not None and uid_owner != desired.username:
+            return Decision(outcome=Outcome.UID_TAKEN, uid_taken_by=uid_owner)
+        return Decision(outcome=Outcome.DRIFT, diff=diff)
+
+    # Case 3: everything else is cheap and safe to bring into line.
+    wanted = [
+        ("homeDirectory", desired.home_directory),
+        ("loginShell", desired.login_shell),
+        ("cn", desired.common_name),
+        ("mail", desired.email),
+        ("givenName", desired.first_name or desired.username),
+        ("sn", desired.last_name or desired.username),
+    ]
+    if (
+        waldur_username_attribute
+        and desired.waldur_username
+        and (not held_key or restamp_from)
+        and not key_others
+    ):
+        # Stamped only on an entry whose uid and ids match Waldur's -- that is
+        # the only way here -- only where none is set yet, and never as a second
+        # copy of a key another entry carries.
+        wanted.append((waldur_username_attribute, desired.waldur_username))
+    updates = {name: value for name, value in wanted if value and _attr_text(actual, name) != value}
+
+    # Case 7: same DN, same ids, but the agent parked this entry when the person
+    # left. Waldur lists them live again, so it is re-enabled -- not created (the
+    # entry exists), not merely updated (the no-login shell was ours, and so are
+    # the expiry and the marker). The shell is restored by the enable step, so it
+    # is not also written as a profile update.
+    restamped_from = restamp_from if waldur_username_attribute in updates else None
+    if LdapClient.is_disabled_by_agent(actual):
+        updates.pop("loginShell", None)
+        return Decision(outcome=Outcome.REENABLE, updates=updates, restamped_from=restamped_from)
+
+    if updates:
+        return Decision(outcome=Outcome.UPDATE, updates=updates, restamped_from=restamped_from)
+    return Decision(outcome=Outcome.NOOP)
+
+
+def index_by_uid_number(users: dict) -> dict[int, str]:
+    """``{uidNumber: uid}`` over a bulk :meth:`LdapClient.list_users` result."""
+    index: dict[int, str] = {}
+    for uid, entry in users.items():
+        number = _attr_number(entry, "uidNumber")
+        if number is not None:
+            index.setdefault(number, uid)
+    return index
+
+
+def index_by_mail(users: dict) -> dict[str, str]:
+    """``{mail: uid}`` over a bulk :meth:`LdapClient.list_users` result."""
+    index: dict[str, str] = {}
+    for uid, entry in users.items():
+        mail = _attr_text(entry, "mail")
+        if mail:
+            index.setdefault(mail.lower(), uid)
+    return index
+
+
+def index_by_attribute(users: dict, attribute: str) -> dict[str, list[str]]:
+    """``{value: [uid, ...]}`` of one attribute over a bulk read; empty without one."""
+    index: dict[str, list[str]] = {}
+    if not attribute:
+        return index
+    for uid, entry in users.items():
+        value = _attr_text(entry, attribute)
+        if value:
+            index.setdefault(value, []).append(uid)
+    return index

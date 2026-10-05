@@ -5,26 +5,58 @@ Read the [general upgrade guide](../../../docs/upgrading.md) first.
 
 ## Required `backend_settings` keys
 
-The SLURM backend reads the following keys from `backend_settings`.
-Required keys must be present or the agent will fail to start.
+The full list of keys, with defaults, is the
+[`backend_settings` reference](../README.md#backend_settings-reference) in the
+plugin README. Four keys are required: `default_account`, `customer_prefix`,
+`project_prefix` and `allocation_prefix`.
 
-| Key | Required | Notes |
-|---|---|---|
-| `default_account` | **Yes** | `DefaultAccount=` set on user associations; must exist in the cluster |
-| `default_account_policy` | No | `common` (default), `individual`, or `none` — see below |
-| `root_account` | No | Parent of the top-tier customer account. Defaults to `default_account`, then `root` |
-| `customer_prefix` | **Yes** | Prefix for customer-level SLURM accounts |
-| `project_prefix` | **Yes** | Prefix for project-level SLURM accounts |
-| `allocation_prefix` | **Yes** | Prefix for allocation accounts |
-| `cluster_name` | No | Must match the offering's `backend_id` in Waldur; required in multi-cluster setups |
-| `slurm_bin_path` | No | Default `/usr/bin` |
-| `parent_account` | No | Set for flat hierarchies (no customer tier); omit for nested hierarchy |
-| `default_partition` | No | Fallback SLURM partition |
-| `enforce_offering_partitions` | No | Default `false` |
-| `enable_user_homedir_account_creation` | No | Default `true` |
-| `default_homedir_umask` | No | Default `0077` |
+A missing required key does **not** stop the agent from starting: plugin schema
+validation only logs `Plugin schema validation failed for slurm settings: …`
+and continues. The agent then fails later, when it first needs the key — for
+example when creating an account or running `waldur_site_diagnostics`. Check
+the agent log for that warning after upgrading, and read the
+[CHANGELOG](../../../CHANGELOG.md) for new keys before upgrading.
 
-Check the [CHANGELOG](../../../CHANGELOG.md) for any new required keys before upgrading.
+`cluster_name` is optional in CLI mode and required in REST mode. It must be a
+cluster SLURM knows (`sacctmgr list cluster`); `waldur_site_diagnostics` fails
+when it is not. By convention it matches the offering's `backend_id` in Waldur.
+
+## `preserve_unmanaged_backend_users`
+
+Offering-level (not `backend_settings`). Default `false`: membership sync
+removes every backend user who is not on the Waldur resource team.
+
+Set to `true` if the service provider also adds users locally on a
+Waldur-managed allocation (for example people who cannot get an offering user
+because of identity-document policy). Then:
+
+- users Waldur has **ever** known as offering users of this offering (any
+  state, including `DELETED` / `REQUESTED_DELETION` and restricted) are
+  removed once they leave the team;
+- accounts Waldur has **never** seen are kept.
+
+Applies to every local-username backend (SLURM, MOAB, MUP, OKD, Harbor, …).
+Ignored for Waldur-to-Waldur federation (identity-bridge).
+
+Remaining gaps — all of which leave the user in place, not remove them:
+
+- an offering user hard-deleted in Waldur (API delete, deleting the user
+  account, remote-offering sync);
+- offering users hidden from the agent's token by
+  `ENFORCE_USER_CONSENT_FOR_OFFERINGS` consent filtering.
+
+If the agent cannot fetch the unfiltered offering-user list in a cycle, it only
+removes users still present in the regular offering-user list for that cycle and
+logs the deferred removals at ERROR; departed and restricted users stay on the
+cluster until the list can be fetched again.
+
+<!-- docs-check: skip -->
+
+```yaml
+offerings:
+  - name: "Example SLURM Offering"
+    preserve_unmanaged_backend_users: true
+```
 
 ## `default_account_policy`
 
@@ -39,16 +71,28 @@ user's jobs charge when they submit without an explicit `-A`/`--account`.
   Keeps users off the org-wide root by default, **but** when that resource is
   terminated and its account deleted, the user's `DefaultAccount` dangles and
   SLURM rejects their job submissions until an operator repairs it.
-- **`none`** — `DefaultAccount=` omitted entirely; sacctmgr auto-assigns for new
-  users. Relies on the deployment's sacctmgr auto-assignment for brand-new users;
-  for an existing user whose prior default account was deleted, the stale default
-  is left unchanged (they may be unable to submit until repaired).
+- **`none`** — the agent does not manage the default: `DefaultAccount=` is
+  omitted entirely and slurmdbd's own rule applies. That rule makes a brand-new
+  user's **first association their default** (`as_mysql_assoc.c`), so with this
+  policy a new user's default is whichever resource the agent happened to add
+  first — an empty `DefaultAccount` is not a reachable state once any
+  association exists. For an existing user whose prior default account was
+  deleted, the stale default is left unchanged (they may be unable to submit
+  until repaired).
 
 `common` is the safe default and is what most deployments should use. Only switch
 to `individual` or `none` if you understand the dangling-`DefaultAccount` failure
 modes above and have an operational process to handle them. An invalid value
 (e.g. a typo) raises an error at agent startup rather than silently falling back
 to `common`.
+
+Whatever the policy, the agent moves a default out of the way before it drops
+the association carrying it: slurmdbd refuses to remove a user's *default*
+association while the user keeps others (`as_mysql_remove_assocs`), so the
+default is re-pointed at one of the remaining accounts first. This applies both
+when a single user leaves a resource and when a whole account is terminated and
+all of its users are removed. When the association being dropped is the user's
+last one, the user record goes with it, as `sacctmgr remove user` does.
 
 ## QoS configuration
 
@@ -69,7 +113,60 @@ Optional per-account QoS creation during resource provisioning is available via
 backend_settings:
   qos_management:
     enabled: true
+    # Opt-in; both default false so existing enabled-only configs are unchanged.
+    # skip_qos_swap: true         # pause/downscale/restore use GrpSubmitJobs, never set qos=
+    # apply_limits_to_qos: true   # GrpTRESMins on the QoS (requires enabled + skip_qos_swap)
     # ...other QoS management keys
+```
+
+`skip_qos_swap` cannot be combined with `qos_default` / `qos_paused` /
+`qos_downscaled` — `SlurmBackend` construction raises `BackendError` (plugin
+schema validation alone is soft-fail and only logs a warning). Drop those keys
+on the offering that uses `skip_qos_swap`.
+
+**Trade-off:** with `skip_qos_swap`, Waldur `paused` / `downscaled` no longer change
+the account QoS list. Instead the agent sets `GrpSubmitJobs=0` (block new
+submissions) and clears it with `GrpSubmitJobs=-1` on restore — the same
+orthogonal lever used by QoS enforcement. Budget exhaustion is still enforced by
+`DenyOnLimit` on the dedicated QoS when `apply_limits_to_qos` is also on. This is
+compatible with QoS enforcement: enabling both does not silently disable pause.
+
+**`apply_limits_to_qos` prerequisites:**
+
+- Requires `enabled` and `skip_qos_swap`. Misconfiguration
+  (`apply_limits_to_qos` without `enabled`) is rejected at backend construction —
+  otherwise the agent would write GrpTRESMins to a QoS that was never created
+  and SLURM would silently leave the allocation uncapped.
+- The agent creates a QoS with the **same name as the allocation account** and
+  writes `GrpTRESMins` there. Do not enable this on an offering where a QoS with
+  that name already exists and is shared across accounts — creation is skipped when
+  the name exists; GrpTRESMins is still written, but `RawUsage` is **not** reset
+  on collision (only on a freshly created QoS).
+- When `backend_components` use `target_components` (one Waldur component mapped to
+  several SLURM TRES, e.g. `node_hours` → `billing` + `gres/gpu`), pushing limits
+  **from Waldur to SLURM** works. Pulling limits **from SLURM back into Waldur**
+  during periodic sync does not yet reverse-map multi-target caps — the sync step
+  no-ops and Waldur keeps the limits from the order. **Usage reporting (`sacct`) is
+  unaffected**; only the limit echo is incomplete until a single reverse source is
+  configured (follow-up).
+
+### Accounts with a `DefaultQOS`
+
+slurmdbd requires every association's effective DefaultQOS to be in its
+effective QoS list and rolls back any `sacctmgr modify` that would break that
+(`These associations don't have access to their default qos`). The
+pause/downscale/restore swap reads the account's current default and, when it
+is set and not in the new list, writes `qos=<x> defaultqos=<x>` in one command.
+Accounts without a DefaultQOS are handled exactly as before (`qos=<x>` only);
+no configuration change is needed.
+
+The agent only writes the *account-level* default. A user association that
+carries its own explicit DefaultQOS outside the new list still makes slurmdbd
+reject the swap — the error lists the offending `U = <user>` rows. Either clear
+those user-level defaults so they inherit the account's, or move them by hand:
+
+```bash
+sacctmgr modify user where account=<acct> cluster=<cluster> set defaultqos=<qos_paused>
 ```
 
 ## Account hierarchy and `sync_resource_project`
@@ -113,10 +210,11 @@ If any project was moved between customers while the agent was not running or
 was on an older version, the SLURM account parent may be stale. Trigger a sync
 by restarting the agent or waiting for one reconciliation interval.
 
-To check a specific account's parent directly:
+To check a specific account's parent directly (the account row is the one with
+an empty `User`; `sacctmgr show account` does not report `ParentName`):
 
 ```bash
-sacctmgr show account <allocation_account> format=Account,ParentName -P
+sacctmgr show assoc where account=<allocation_account> format=Account,ParentName,User -P
 ```
 
 ### Confirm QoS names exist in SLURM

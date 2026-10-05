@@ -57,6 +57,13 @@ def backend_with_conversion(backend_settings, backend_components_with_conversion
 
 
 class TestInitialization:
+    def test_declares_target_waldur_as_remote(
+        self, backend_settings, backend_components_passthrough
+    ):
+        """Waldur B's errors are backend errors even when B shares Waldur A's origin."""
+        backend = WaldurBackend(backend_settings, backend_components_passthrough)
+        assert backend.remote_waldur_base_urls() == ["https://waldur-b.example.com"]
+
     def test_init_with_valid_settings(self, backend_settings, backend_components_passthrough):
         backend = WaldurBackend(backend_settings, backend_components_passthrough)
         assert backend.backend_type == "waldur"
@@ -1141,6 +1148,25 @@ class TestRemoveUsersRoleHandling:
         waldur_resource = MagicMock()
         waldur_resource.backend_id = str(RESOURCE_UUID)
         return waldur_resource
+
+    def test_remove_does_not_report_a_user_it_could_not_resolve(self, backend, mock_client):
+        """An unresolved user is not a removed user: the two causes are one value.
+
+        Every resolver swallows its errors and returns None, and the default
+        user_not_found_action only warns -- so "no such person on Waldur B" and
+        "the lookup failed" arrive here identically. Reporting the name as
+        removed would release the account whenever Waldur B is briefly
+        unreachable, which is the failure this whole contract exists to stop.
+        The account waits for a cycle that can tell the difference.
+        """
+        waldur_resource = self._setup_resource(mock_client)
+        mock_client.resolve_user_via_identity_bridge.return_value = None
+        mock_client.list_project_users.return_value = []
+
+        result = backend.remove_users_from_resource(waldur_resource, {"alice"})
+
+        assert result == []
+        mock_client.remove_user_from_project.assert_not_called()
 
     def test_remove_forwards_role_from_user_roles(self, backend, mock_client):
         waldur_resource = self._setup_resource(mock_client)

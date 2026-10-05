@@ -28,6 +28,7 @@ def _backend(enforce=None, offering_enforce=False, settings=None, enabled=True):
     backend = SlurmBackend(base, {"cpu": {"unit": "minutes"}})
     backend.client = MagicMock()
     backend.client.get_association.return_value = None
+    backend.client.get_current_account_default_qos.return_value = ""
     # Patch the opt-in gate + cached agent override + processor-pushed offering flag.
     backend._qos_enforcement_enabled = enabled
     backend._enforce_offering_qos = enforce

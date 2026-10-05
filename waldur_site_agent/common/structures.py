@@ -14,6 +14,7 @@ from __future__ import annotations
 # Import after to avoid circular imports
 import logging
 import zoneinfo
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
@@ -22,6 +23,7 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    PrivateAttr,
     ValidationError,
     field_validator,
     model_validator,
@@ -86,20 +88,14 @@ class BackendComponent(BaseModel):
     description: Optional[str] = Field(default=None, description="Description of the component")
     min_value: Optional[int] = Field(default=None, description="Minimum allowed value")
     max_value: Optional[int] = Field(default=None, description="Maximum allowed value")
-    max_available_limit: Optional[int] = Field(
-        default=None, description="Maximum available limit"
-    )
+    max_available_limit: Optional[int] = Field(default=None, description="Maximum available limit")
     default_limit: Optional[int] = Field(default=None, description="Default limit value")
     limit_period: Optional[str] = Field(
         default=None, description="Limit period: annual, month, quarterly, total"
     )
     article_code: Optional[str] = Field(default=None, description="Article code for billing")
-    is_boolean: Optional[bool] = Field(
-        default=None, description="Whether the component is boolean"
-    )
-    is_prepaid: Optional[bool] = Field(
-        default=None, description="Whether the component is prepaid"
-    )
+    is_boolean: Optional[bool] = Field(default=None, description="Whether the component is boolean")
+    is_prepaid: Optional[bool] = Field(default=None, description="Whether the component is prepaid")
     min_prepaid_duration: Optional[int] = Field(
         default=None, description="Minimum prepaid duration in months"
     )
@@ -167,6 +163,7 @@ class Offering(BaseModel):
         membership_sync_backend: Backend name for membership synchronization
         reporting_backend: Backend name for usage reporting
         username_management_backend: Backend name for username management
+        preserve_unmanaged_backend_users: Keep backend users who were never offering users
     """
 
     name: str = Field(..., description="Human-readable name for the offering")
@@ -221,17 +218,71 @@ class Offering(BaseModel):
     username_reconciliation_enabled: bool = Field(
         default=False, description="Enable periodic username reconciliation from target backend"
     )
+    preserve_unmanaged_backend_users: bool = Field(
+        default=False,
+        description=(
+            "If False (default), membership sync removes any backend user who is not "
+            "on the Waldur resource team. If True, users Waldur has ever known as "
+            "offering users of this offering (any state, including DELETED and "
+            "restricted) are removed once they leave the team; accounts Waldur has "
+            "never seen are kept. Applies to local-username backends; ignored for "
+            "identity-bridge / federation."
+        ),
+    )
     verify_ssl: bool = Field(default=True, description="Verify SSL certificates")
+    omit_anomalous_usage_components: bool = Field(
+        default=False,
+        description=(
+            "If False (default), a decreasing component blocks the whole set_usage "
+            "payload. If True, only the decreasing components are omitted and the "
+            "rest are still reported. Use True for backends whose meters are "
+            "independent (e.g. Waldur-to-Waldur)."
+        ),
+    )
+
+    # Copied from the root-level global_proxy by the config loader, so every client
+    # built from an offering -- including in event mode, where handlers only see the
+    # offering -- goes through the configured proxy. Not an offering-level setting.
+    _global_proxy: str = PrivateAttr(default="")
+
+    @property
+    def global_proxy(self) -> str:
+        """Proxy URL for Waldur API connections, from the root-level global_proxy."""
+        return self._global_proxy
 
     @model_validator(mode="after")
     def validate_auth_config(self) -> Offering:
         """Validate that either a static token or full OIDC config is provided."""
         has_token = bool(self.waldur_api_token)
-        has_oidc = all([self.oidc_token_url, self.oidc_client_id, self.oidc_client_secret])
+        oidc_values = [self.oidc_token_url, self.oidc_client_id, self.oidc_client_secret]
+        has_oidc = all(oidc_values)
+        if any(oidc_values) and not has_oidc:
+            msg = (
+                "oidc_token_url, oidc_client_id and oidc_client_secret must be set "
+                "together; only some of them are set"
+            )
+            raise ValueError(msg)
         if not has_token and not has_oidc:
             msg = (
                 "Either waldur_api_token or all of oidc_token_url, "
                 "oidc_client_id, oidc_client_secret must be set"
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_stomp_auth(self) -> Offering:
+        """Reject STOMP event processing for offerings without a static token.
+
+        RabbitMQ authenticates the STOMP session with the agent's static API
+        token as the passcode. An OIDC-only offering has no such token, so the
+        broker refuses the login and the offering would receive no events.
+        """
+        if self.stomp_enabled and not self.waldur_api_token:
+            msg = (
+                "stomp_enabled requires waldur_api_token: the STOMP session is "
+                "authenticated with the static API token, which an OIDC-only offering "
+                "does not have. Use polling mode or configure waldur_api_token."
             )
             raise ValueError(msg)
         return self
@@ -456,6 +507,10 @@ class RootConfiguration(BaseModel):
     and handles the transformation to WaldurAgentConfiguration.
     """
 
+    # Root-level values can carry credentials (a proxy URL with user:password@);
+    # keep them out of validation errors, which end up in logs and Sentry.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     offerings: list[dict[str, Any]] = Field(..., description="Raw offering configurations")
     sentry_dsn: Optional[str] = Field(
         default=None, description="Sentry DSN for error reporting (URL)"
@@ -488,6 +543,35 @@ class RootConfiguration(BaseModel):
         default_factory=LogShippingConfig,
         description="Configuration for shipping agent logs to Waldur",
     )
+
+    @field_validator("global_proxy")
+    @classmethod
+    def validate_global_proxy(cls, v: str) -> str:
+        """Accept only proxy schemes httpx can use; warn about https and the WebSocket."""
+        if not v:
+            return v
+        # Imported here: the event-processing package imports stomp/websocket.
+        from waldur_site_agent.event_processing.ws_proxy import (  # noqa: PLC0415
+            SUPPORTED_PROXY_SCHEMES,
+            redacted_proxy,
+        )
+
+        scheme = v.split("://", 1)[0].lower() if "://" in v else ""
+        if scheme not in SUPPORTED_PROXY_SCHEMES:
+            msg = (
+                f"global_proxy {redacted_proxy(v) if scheme else '(no scheme)'} is not supported; "
+                f"use one of: {', '.join(sorted(SUPPORTED_PROXY_SCHEMES))}"
+            )
+            raise ValueError(msg)
+        if scheme == "https":
+            logger.warning(
+                "global_proxy %s is an https proxy: REST calls use it, but the event-mode "
+                "STOMP WebSocket cannot and connects without it (http_proxy/https_proxy "
+                "environment variables still apply). Use an http:// or socks5:// proxy "
+                "to route the WebSocket too.",
+                redacted_proxy(v),
+            )
+        return v
 
     @field_validator("sentry_dsn")
     @classmethod
@@ -535,14 +619,14 @@ class RootConfiguration(BaseModel):
             # Convert backend_components dict to BackendComponent instances
             if "backend_components" in offering_data:
                 components = {}
-                backend_type = offering_data.get("backend_type", "")
+                from waldur_site_agent.common import plugin_schemas  # noqa: PLC0415
+
+                backend_names = plugin_schemas.offering_backend_names(offering_data)
 
                 for name, component_data in offering_data["backend_components"].items():
-                    # Apply plugin-specific validation if available
-                    from waldur_site_agent.common import plugin_schemas  # noqa: PLC0415
-
-                    validated_data = plugin_schemas.validate_component_with_plugin_schema(
-                        backend_type, name, component_data
+                    # Apply the schemas of every backend the offering uses
+                    validated_data = plugin_schemas.validate_component_for_backends(
+                        backend_names, name, component_data
                     )
                     components[name] = BackendComponent(**validated_data)
                 offering_data["backend_components"] = components
@@ -551,13 +635,15 @@ class RootConfiguration(BaseModel):
             if "backend_settings" in offering_data:
                 from waldur_site_agent.common import plugin_schemas  # noqa: PLC0415
 
-                backend_type = offering_data.get("backend_type", "")
-                validated_settings = plugin_schemas.validate_backend_settings_with_plugin_schema(
-                    backend_type, offering_data["backend_settings"]
+                validated_settings = plugin_schemas.validate_backend_settings_for_backends(
+                    plugin_schemas.offering_backend_names(offering_data),
+                    offering_data["backend_settings"],
                 )
                 offering_data["backend_settings"] = validated_settings
 
-            parsed_offerings.append(Offering(**offering_data))
+            offering = Offering(**offering_data)
+            offering._global_proxy = self.global_proxy
+            parsed_offerings.append(offering)
 
         return WaldurAgentConfiguration(
             offerings=parsed_offerings,
@@ -594,3 +680,20 @@ class AccountType(Enum):
 
     SERVICE_ACCOUNT = "service_account"
     COURSE_ACCOUNT = "course_account"
+
+
+@dataclass
+class UnifiedQueue:
+    """Descriptor of a single unified consumer queue (``consumer_{uuid}``).
+
+    Returned by ``AgentIdentityManager.register_queue()``. One queue per agent
+    identity receives ALL observable object types; the object type of each
+    message is carried in the payload, so routing happens per-message rather
+    than per-queue (unlike the legacy per-object-type subscription queues).
+    """
+
+    queue_name: str
+    rmq_username: str
+    vhost: str
+    observable_object_types: list[str] = field(default_factory=list)
+    agent_identity_uuid: str = ""

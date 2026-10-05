@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import json
 import time
-import uuid
 from pathlib import Path
 from typing import Any, Optional
-from unittest.mock import MagicMock
 from uuid import uuid4
 
 from pydantic import BaseModel
 from waldur_api_client.models.order_details import OrderDetails
-from waldur_api_client.models.provider_offering_details import ProviderOfferingDetails
-from waldur_api_client.models.service_provider import ServiceProvider
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import structures, utils
@@ -81,24 +77,6 @@ class OrderTestHarness:
         # Use real backend for integration testing
         backend, _ = utils.get_backend_for_offering(offering, "order_processing_backend")
         return backend
-
-    def _create_mock_waldur_client(self) -> MagicMock:
-        """Create a mock Waldur REST client for testing."""
-        mock_client = MagicMock()
-
-        # Mock common API responses
-        mock_client.timeout = 30.0
-        mock_client.base_url = "https://mock.waldur.com/api/"
-
-        # Mock offering retrieval
-        ProviderOfferingDetails(
-            uuid=uuid.uuid4(), name="Mock Offering", customer_uuid=uuid.uuid4(), components=[]
-        )
-
-        # Mock service provider
-        ServiceProvider(uuid=uuid.uuid4(), name="Mock Provider")
-
-        return mock_client
 
     def test_order_from_file(self, order_file: str | Path, **kwargs: Any) -> TestResult:  # noqa: ANN401
         """Test order processing from a JSON file.

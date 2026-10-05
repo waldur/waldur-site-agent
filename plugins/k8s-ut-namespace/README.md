@@ -4,6 +4,26 @@ This plugin enables integration between Waldur Site Agent and Kubernetes cluster
 `ManagedNamespace` custom resources (CRD: `provisioning.hpc.ut.ee/v1`) with optional Keycloak
 RBAC group integration.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `k8s-ut-namespace` | `waldur_site_agent.backends` | order processing, membership sync |
+
+**Modes:** `order_process`, `membership_sync`, `event_process`. `report` runs but reports
+nothing (see [Usage reporting](#usage-reporting)).
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | Three Keycloak groups (when enabled) and a `ManagedNamespace` CR with quotas |
+| Terminate resource | Deletes the CR and the Keycloak groups |
+| Update limits | Updates the quotas in the CR spec |
+| Add / remove members | Keycloak group membership; optionally user lists in the CR (`sync_users_to_cr`) |
+| Downscale | Quota set to cpu=1, memory=1Gi, storage=1Gi |
+| Pause | Quota set to zero |
+| Restore | **No-op** — returns `True`; limits come back with the next limit update |
+| Usage reporting | **No-op** — reports nothing; billing is by limits |
+
 ## Features
 
 - **ManagedNamespace Lifecycle**: Creates, updates, and deletes `ManagedNamespace` custom resources
@@ -245,12 +265,18 @@ offerings:
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `keycloak_enabled` | boolean | No | `false` | Enable Keycloak RBAC integration |
-| `keycloak.keycloak_url` | string | Conditional | - | Keycloak server URL |
-| `keycloak.keycloak_realm` | string | Conditional | - | Keycloak realm name |
-| `keycloak.keycloak_user_realm` | string | Conditional | - | Keycloak user realm for auth |
-| `keycloak.keycloak_username` | string | Conditional | - | Keycloak admin username |
-| `keycloak.keycloak_password` | string | Conditional | - | Keycloak admin password |
-| `keycloak.keycloak_ssl_verify` | boolean | No | `true` | Whether to verify SSL certificates |
+| `keycloak.keycloak_url` | string | No | `https://localhost/auth/` | Keycloak server URL |
+| `keycloak.keycloak_realm` | string | No | `waldur` | Realm the groups are managed in |
+| `keycloak.keycloak_user_realm` | string | No | `master` | Realm the admin user authenticates against |
+| `keycloak.client_id` | string | No | `admin-cli` | Client used for the admin login |
+| `keycloak.keycloak_username` | string | No | empty | Keycloak admin username |
+| `keycloak.keycloak_password` | string | No | empty | Keycloak admin password |
+| `keycloak.keycloak_ssl_verify` | boolean or path | No | `true` | Verify TLS; a path names a CA bundle |
+
+The settings are validated by
+`waldur_site_agent_k8s_ut_namespace.schemas.K8sUtNamespaceBackendSettingsSchema` (the
+`keycloak:` block by the [keycloak-client](../keycloak-client/README.md) schema); a
+misspelt key is logged as a warning when the agent loads its configuration.
 
 ## Usage
 
@@ -274,7 +300,7 @@ uv run waldur_site_diagnostics -c k8s-namespace-config.yaml
 
 - **order_process**: Creates and manages ManagedNamespace CRs based on Waldur resource orders
 - **membership_sync**: Synchronizes user memberships between Waldur and Keycloak groups
-- **report**: Reports namespace quota allocations to Waldur
+- **report**: Runs, but reports no usage (see [Usage reporting](#usage-reporting))
 
 ## Resource Lifecycle
 
@@ -403,6 +429,10 @@ that into a real `Namespace` (and binding RBAC/quota to it) is a separate, exter
 operator/controller's job. Without one, `cpu`/`ram`/`gpu` usage is always zero (no real
 namespace means no real pods), while `storage` still reads normally from the CR's own
 quota.
+The plugin reports **no usage**: `_get_usage_report` returns an empty report, and
+offerings using it bill by limits (allocation), not consumption. Reporting actual
+consumption from `ResourceQuota.status.used` is tracked in
+[waldur-site-agent#6](https://code.opennodecloud.com/waldur/waldur-site-agent/-/work_items/6).
 
 ### Namespace Labels & Annotations
 
@@ -425,7 +455,7 @@ backend_settings:
 |-----------|--------|
 | Downscale | Quota set to minimal: cpu=1, memory=1Gi, storage=1Gi |
 | Pause | Quota set to zero: cpu=0, memory=0Gi, storage=0Gi |
-| Restore | No-op (limits should be re-set via a separate update order) |
+| Restore | **No-op** (limits come back with the next limit update) |
 
 ## Error Handling
 
@@ -440,7 +470,8 @@ backend_settings:
 ### Running Tests
 
 ```bash
-.venv/bin/python -m pytest plugins/k8s-ut-namespace/tests/
+# From the plugin directory, so its entry points resolve
+cd plugins/k8s-ut-namespace && uv run pytest tests/
 ```
 
 ### Code Quality

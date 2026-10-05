@@ -1,0 +1,75 @@
+# E2E configuration for provider project groups written from Waldur.
+#
+# One offering of the provider whose POSIX ID pool the Waldur-authoritative suite
+# uses. With project groups switched on for the provider, Waldur gives every
+# project using its offerings one group with a GID from the pool's group range;
+# this agent writes them under ou=WaldurProjects and lists the groups of projects
+# using the provider's LDAP offering (e2ef...0004) in a cluster entry.
+#
+# STOMP is on, so the suite can prove a project-group change reaches the
+# directory by the event path. API, LDAP and broker host is "docker" -- the DinD
+# service hostname in GitLab CI.
+
+timezone: "UTC"
+
+offerings:
+  - name: "E2E SLURM LDAP project groups"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000005"
+    stomp_enabled: true
+    stomp_ws_host: "docker"
+    stomp_ws_port: 15674
+    stomp_ws_path: "/ws"
+    websocket_use_tls: false
+    backend_type: "slurm"
+    username_management_backend: "ldap"
+    order_processing_backend: "slurm"
+    reporting_backend: "slurm"
+    membership_sync_backend: "slurm"
+    backend_settings:
+      slurm_bin_path: ".venv/bin"
+      default_account: "root"
+      customer_prefix: ""
+      project_prefix: ""
+      allocation_prefix: ""
+      parent_account: "eurohpc"
+      default_partition: "cn"
+      enable_user_homedir_account_creation: false
+      ldap:
+        uri: "ldap://docker:389"
+        bind_dn: "cn=admin,dc=sofiatech,dc=bg"
+        bind_password: "e2e-ldap-password"
+        base_dn: "dc=sofiatech,dc=bg"
+        people_ou: "ou=People"
+        groups_ou: "ou=Groups"
+        gid_range_start: 1200
+        gid_range_end: 1400
+        default_login_shell: "/bin/bash"
+        default_home_base: "/home"
+        account_source: "waldur"
+        on_missing_posix_ids: "error"
+        on_posix_mismatch: "report"
+        user_object_classes:
+          - "inetOrgPerson"
+          - "posixAccount"
+          - "top"
+        user_group_object_classes:
+          - "posixGroup"
+          - "top"
+        project_group_object_classes:
+          - "posixGroup"
+          - "top"
+        project_groups:
+          enabled: true
+          ou: "ou=WaldurProjects"
+          member_attribute: "memberUid"
+          membership: "sync"
+          # The suite renumbers a group in Waldur and expects the directory to
+          # follow; production keeps the default, "report".
+          on_gid_mismatch: "adopt"
+          parents:
+            - dn: "cn=e2e-cluster,ou=Clusters,dc=sofiatech,dc=bg"
+              attribute: "member"
+              offering_uuids:
+                - "e2ef0000000000000000000000000004"

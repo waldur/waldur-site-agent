@@ -28,7 +28,6 @@ import subprocess
 import time
 import types
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -40,9 +39,7 @@ from waldur_api_client.api.marketplace_orders import (
     marketplace_orders_create,
     marketplace_orders_retrieve,
 )
-from waldur_api_client.api.marketplace_provider_resources import (
-    marketplace_provider_resources_retrieve,
-)
+from waldur_api_client.api.marketplace_resources import marketplace_resources_terminate
 from waldur_api_client.api.marketplace_slurm_periodic_usage_policies import (
     marketplace_slurm_periodic_usage_policies_destroy,
 )
@@ -60,15 +57,15 @@ from waldur_api_client.models.order_create_request_limits import (
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.policy_period_enum import PolicyPeriodEnum
 from waldur_api_client.models.qos_strategy_enum import QosStrategyEnum
-from waldur_api_client.models.request_types import RequestTypes
+from waldur_api_client.models.resource_terminate_request import ResourceTerminateRequest
 from waldur_api_client.models.slurm_periodic_usage_policy_request import (
     SlurmPeriodicUsagePolicyRequest,
 )
 from waldur_api_client.types import UNSET
+from waldur_site_agent_slurm.backend import SlurmBackend
 
 from waldur_site_agent.common.processors import OfferingOrderProcessor
 from waldur_site_agent.common.utils import get_client, load_configuration
-from waldur_site_agent_slurm.backend import SlurmBackend
 
 logger = logging.getLogger(__name__)
 
@@ -293,7 +290,6 @@ def _create_order(
         plan=plan_url,
         limits=order_limits,
         attributes=attrs,
-        type_=RequestTypes.CREATE,
     )
     order = marketplace_orders_create.sync(client=client, body=body)
     return order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
@@ -420,25 +416,16 @@ def _delete_policy(client, policy_uuid: str):
     )
 
 
-def _terminate_resource(client, resource_uuid: str, offering_url, project_url, plan_url, offering, backend):
+def _terminate_resource(client, resource_uuid: str, offering, backend):
     """Create TERMINATE order and process it."""
-    res = marketplace_provider_resources_retrieve.sync(
-        uuid=resource_uuid, client=client
+    result = marketplace_resources_terminate.sync(
+        uuid=resource_uuid, client=client, body=ResourceTerminateRequest()
     )
-    resource_url = res.url if not isinstance(res.url, type(UNSET)) else None
-
-    body = OrderCreateRequest(
-        offering=offering_url,
-        project=project_url,
-        plan=plan_url,
-        attributes=GenericOrderAttributes(),
-        type_=RequestTypes.TERMINATE,
+    order_uuid = (
+        result.order_uuid.hex
+        if hasattr(result.order_uuid, "hex")
+        else str(result.order_uuid)
     )
-    if resource_url:
-        body.additional_properties["resource"] = resource_url
-
-    order = marketplace_orders_create.sync(client=client, body=body)
-    order_uuid = order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
     _process_order(offering, client, backend, order_uuid, max_cycles=10)
 
 
@@ -889,7 +876,6 @@ class TestSlurmPolicyE2E:
         """Delete policies and terminate resources."""
         policies = TestSlurmPolicyE2E._state.get("policies", {})
         resources = TestSlurmPolicyE2E._state.get("resources", {})
-        project_url = TestSlurmPolicyE2E._state.get("project_url", "")
 
         # Delete policies first
         for cfg_id, policy_uuid in policies.items():
@@ -912,9 +898,6 @@ class TestSlurmPolicyE2E:
                 _terminate_resource(
                     waldur_client,
                     info["resource_uuid"],
-                    info["offering_url"],
-                    project_url,
-                    info["plan_url"],
                     offering,
                     backend,
                 )

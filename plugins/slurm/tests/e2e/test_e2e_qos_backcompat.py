@@ -33,13 +33,14 @@ from waldur_api_client.api.marketplace_orders import (
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_retrieve,
 )
+from waldur_api_client.api.marketplace_resources import marketplace_resources_terminate
 from waldur_api_client.models.generic_order_attributes import GenericOrderAttributes
 from waldur_api_client.models.order_create_request import OrderCreateRequest
 from waldur_api_client.models.order_create_request_limits import (
     OrderCreateRequestLimits,
 )
 from waldur_api_client.models.order_state import OrderState
-from waldur_api_client.models.request_types import RequestTypes
+from waldur_api_client.models.resource_terminate_request import ResourceTerminateRequest
 from waldur_api_client.types import UNSET
 from waldur_site_agent_slurm.backend import SlurmBackend
 
@@ -95,7 +96,6 @@ def _create_order(
         plan=plan_url,
         limits=order_limits,
         attributes=attrs,
-        type_=RequestTypes.CREATE,
     )
     order = marketplace_orders_create.sync(client=client, body=body)
     return order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
@@ -282,21 +282,16 @@ class TestQosBackcompat:
             pytest.skip("setup did not run")
 
         try:
-            res = marketplace_provider_resources_retrieve.sync(
-                uuid=s["resource_uuid"], client=bc_client
+            result = marketplace_resources_terminate.sync(
+                uuid=s["resource_uuid"],
+                client=bc_client,
+                body=ResourceTerminateRequest(),
             )
-            resource_url = res.url if not isinstance(res.url, type(UNSET)) else None
-            body = OrderCreateRequest(
-                offering=s["offering_url"],
-                project=s["project_url"],
-                plan=s["plan_url"],
-                attributes=GenericOrderAttributes(),
-                type_=RequestTypes.TERMINATE,
+            order_uuid = (
+                result.order_uuid.hex
+                if hasattr(result.order_uuid, "hex")
+                else str(result.order_uuid)
             )
-            if resource_url:
-                body.additional_properties["resource"] = resource_url
-            order = marketplace_orders_create.sync(client=bc_client, body=body)
-            order_uuid = order.uuid.hex if hasattr(order.uuid, "hex") else str(order.uuid)
             _process_order_terminal(bc_offering, bc_client, bc_backend, order_uuid)
         except Exception as exc:
             logger.warning("Resource terminate failed: %s", exc)

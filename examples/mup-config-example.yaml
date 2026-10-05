@@ -16,13 +16,16 @@ offerings:
     stomp_enabled: true
     websocket_use_tls: false
 
-    # Backend type
+    # Backends from the waldur-site-agent-mup plugin
+    order_processing_backend: "mup"
+    membership_sync_backend: "mup"
+    reporting_backend: "mup"
     backend_type: "mup"
 
     # MUP-specific backend settings
     backend_settings:
       # MUP API connection details
-      api_url: "https://mupdevb.macc.fccn.pt/"
+      api_url: "https://mup.example.org/"
       username: "your_mup_username"
       password: "your_mup_password"
 

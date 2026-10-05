@@ -28,11 +28,14 @@ IS_RC="${IS_RC:-false}"
 BASE_VERSION=$(echo "$VERSION" | sed 's/-rc\.[0-9]*$//')
 
 if [ -f "$CHANGELOG" ]; then
+    # Only X.Y.Z / X.Y.Z-rc.N headers are release markers; prose headers such as
+    # "## Unreleased" must never be mistaken for a git ref.
+    VERSION_HEADERS=$(grep -E "^## [0-9]+\.[0-9]+\.[0-9]+" "$CHANGELOG" || true)
     if [ "$IS_RC" = "true" ]; then
         # For RC releases, find the last *stable* version (skip RC entries)
-        PREV_TAG=$(grep "^## " "$CHANGELOG" | grep -v "\-rc\." | head -n 1 | sed 's/^## \([^ ]*\).*/\1/')
+        PREV_TAG=$(echo "$VERSION_HEADERS" | grep -v "\-rc\." | head -n 1 | sed 's/^## \([^ ]*\).*/\1/')
     else
-        PREV_TAG=$(grep -m 1 "^## " "$CHANGELOG" | sed 's/^## \([^ ]*\).*/\1/')
+        PREV_TAG=$(echo "$VERSION_HEADERS" | head -n 1 | sed 's/^## \([^ ]*\).*/\1/')
     fi
 fi
 

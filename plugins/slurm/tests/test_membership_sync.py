@@ -3,7 +3,7 @@ import unittest
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Optional
 from unittest import mock
 
 import respx
@@ -35,6 +35,58 @@ def _serialize_datetime_aware(obj: dict[str, Any]) -> bytes:
     return json.dumps(
         obj, default=lambda x: x.isoformat() if hasattr(x, "isoformat") else str(x)
     ).encode()
+
+
+def _must_not_fetch_known_usernames() -> set[str]:
+    """Sentinel: the unfiltered offering-user fetch must not run on this path."""
+    msg = (
+        "_get_known_offering_usernames must not be called when "
+        "preserve_unmanaged_backend_users is off or identity-bridge is on"
+    )
+    raise AssertionError(msg)
+
+
+def _grouping_processor(
+    team: list,
+    backend_users: Optional[list[str]] = None,
+    *,
+    resource_backend: Optional[SimpleNamespace] = None,
+    preserve_unmanaged: bool = False,
+    known_usernames: Optional[set[str]] = None,
+    known_fetch_raises: bool = False,
+    known_fetch_failed: bool = False,
+) -> tuple[OfferingMembershipProcessor, SimpleNamespace, SimpleNamespace]:
+    """Minimal membership processor for _group_resource_usernames unit tests."""
+    processor = object.__new__(OfferingMembershipProcessor)
+    processor._team_cache = {}
+    processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
+    processor.resource_backend = resource_backend or SimpleNamespace(user_resolve_method=None)
+    processor.offering = SimpleNamespace(
+        preserve_unmanaged_backend_users=preserve_unmanaged,
+        uuid="test-offering-uuid",
+    )
+    processor.service_provider = None
+    processor._known_offering_usernames_fetch_failed = known_fetch_failed
+    processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
+    if known_fetch_raises:
+
+        def _raise_known_fetch() -> set[str]:
+            raise RuntimeError("offering-user listing failed")
+
+        processor._get_known_offering_usernames = _raise_known_fetch  # type: ignore[method-assign]
+    elif known_usernames is not None:
+        processor._get_known_offering_usernames = (  # type: ignore[method-assign]
+            lambda: set(known_usernames)
+        )
+    else:
+        processor._get_known_offering_usernames = _must_not_fetch_known_usernames  # type: ignore[method-assign]
+    waldur_resource = SimpleNamespace(
+        uuid=SimpleNamespace(hex="r"),
+        project_uuid=SimpleNamespace(hex="p"),
+        backend_id="r",
+    )
+    backend_resource_info = SimpleNamespace(users=list(backend_users or []))
+    return processor, waldur_resource, backend_resource_info
 
 
 waldur_client_mock = mock.Mock()
@@ -292,6 +344,9 @@ class MembershipSyncTest(unittest.TestCase):
         self.mock_downscale_resource = mock.patch.object(
             backend.SlurmBackend, "downscale_resource"
         ).start()
+        self.mock_pause_resource = mock.patch.object(
+            backend.SlurmBackend, "pause_resource", return_value=True
+        ).start()
         mock.patch.object(backend.SlurmBackend, "sync_resource_project").start()
 
     def test_association_create(
@@ -359,6 +414,75 @@ class MembershipSyncTest(unittest.TestCase):
         self.mock_downscale_resource.assert_called_once()
         self.mock_get_resource_metadata.assert_called_once()
 
+    def test_qos_pausing(
+        self,
+    ) -> None:
+        self.waldur_resource.paused = True
+        self.waldur_resource.downscaled = False
+
+        self._setup_common_mocks()
+        self._setup_team_mock()
+        self._setup_offering_users_mock()
+        self._setup_offering_details_mock()
+        self._setup_slurm_mock()
+
+        set_backend_metadata_response = respx.post(
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_backend_metadata/"
+        ).respond(200, json={"status": "OK"})
+
+        processor = OfferingMembershipProcessor(self.offering, self.mock_client)
+        processor.process_offering()
+
+        self.mock_pause_resource.assert_called_once()
+        self.mock_downscale_resource.assert_not_called()
+        self.mock_restore_resource.assert_not_called()
+        self.mock_get_resource_metadata.assert_called_once()
+        assert set_backend_metadata_response.call_count == 1
+
+    def test_qos_pausing_takes_precedence_over_downscaling(
+        self,
+    ) -> None:
+        self.waldur_resource.paused = True
+        self.waldur_resource.downscaled = True
+
+        self._setup_common_mocks()
+        self._setup_team_mock()
+        self._setup_offering_users_mock()
+        self._setup_offering_details_mock()
+        self._setup_slurm_mock()
+
+        processor = OfferingMembershipProcessor(self.offering, self.mock_client)
+        processor.process_offering()
+
+        self.mock_pause_resource.assert_called_once()
+        self.mock_downscale_resource.assert_not_called()
+        self.mock_restore_resource.assert_not_called()
+
+    def test_qos_restore_when_not_paused_or_downscaled(
+        self,
+    ) -> None:
+        self.waldur_resource.paused = False
+        self.waldur_resource.downscaled = False
+
+        self._setup_common_mocks()
+        self._setup_team_mock()
+        self._setup_offering_users_mock()
+        self._setup_offering_details_mock()
+        self._setup_slurm_mock()
+
+        set_backend_metadata_response = respx.post(
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource.uuid.hex}/set_backend_metadata/"
+        ).respond(200, json={"status": "OK"})
+
+        processor = OfferingMembershipProcessor(self.offering, self.mock_client)
+        processor.process_offering()
+
+        self.mock_pause_resource.assert_not_called()
+        self.mock_downscale_resource.assert_not_called()
+        self.mock_restore_resource.assert_called_once()
+        self.mock_get_resource_metadata.assert_called_once()
+        assert set_backend_metadata_response.call_count == 1
+
     def test_limits_update(
         self,
     ) -> None:
@@ -383,20 +507,6 @@ class MembershipSyncTest(unittest.TestCase):
         to using CUID (ProjectUser.username). Consent filtering is enforced upstream by the
         team API call (has_consent=True), so all returned team members are included.
         """
-        processor = object.__new__(OfferingMembershipProcessor)
-        processor._team_cache = {}
-        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
-
-        # Fake backend that supports identity bridge resolution
-        processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
-
-        # Fake resource + backend info
-        waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
-        )
-        backend_resource_info = SimpleNamespace(users=[])
-
-        # Team member has CUID but no offering_user_username yet.
         team = [
             SimpleNamespace(
                 offering_user_username="",
@@ -404,7 +514,10 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MANAGER",
             )
         ]
-        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            resource_backend=SimpleNamespace(user_resolve_method="identity_bridge"),
+        )
 
         (
             _existing_usernames,
@@ -425,18 +538,6 @@ class MembershipSyncTest(unittest.TestCase):
 
     def test_group_resource_usernames_skips_cuid_without_identity_bridge(self) -> None:
         """Without identity bridge, CUID-only users must NOT be included."""
-        processor = object.__new__(OfferingMembershipProcessor)
-        processor._team_cache = {}
-        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
-
-        # Backend without identity bridge (e.g. Slurm)
-        processor.resource_backend = SimpleNamespace(user_resolve_method="local")
-
-        waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
-        )
-        backend_resource_info = SimpleNamespace(users=[])
-
         team = [
             SimpleNamespace(
                 offering_user_username="",
@@ -444,7 +545,10 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MANAGER",
             )
         ]
-        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            resource_backend=SimpleNamespace(user_resolve_method="local"),
+        )
 
         (
             _existing_usernames,
@@ -465,18 +569,6 @@ class MembershipSyncTest(unittest.TestCase):
 
     def test_group_resource_usernames_skips_cuid_when_attr_missing(self) -> None:
         """Backend with no user_resolve_method attr should not include CUID-only users."""
-        processor = object.__new__(OfferingMembershipProcessor)
-        processor._team_cache = {}
-        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
-
-        # Backend without user_resolve_method attribute at all
-        processor.resource_backend = SimpleNamespace()
-
-        waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
-        )
-        backend_resource_info = SimpleNamespace(users=[])
-
         team = [
             SimpleNamespace(
                 offering_user_username="",
@@ -484,7 +576,10 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MEMBER",
             )
         ]
-        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            resource_backend=SimpleNamespace(),
+        )
 
         (
             _existing_usernames,
@@ -505,32 +600,22 @@ class MembershipSyncTest(unittest.TestCase):
 
     def test_group_resource_usernames_mixed_users_with_identity_bridge(self) -> None:
         """With identity bridge, membership diff keys are always CUIDs."""
-        processor = object.__new__(OfferingMembershipProcessor)
-        processor._team_cache = {}
-        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
-        processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
-
-        waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
-        )
-        backend_resource_info = SimpleNamespace(users=[])
-
         team = [
-            # User with offering_user_username already assigned
             SimpleNamespace(
                 offering_user_username="alice-on-b",
                 username="cuid:alice",
                 role="PROJECT.MANAGER",
             ),
-            # User without offering_user_username (CUID-only)
             SimpleNamespace(
                 offering_user_username="",
                 username="cuid:bob",
                 role="PROJECT.MEMBER",
             ),
         ]
-        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
-
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            resource_backend=SimpleNamespace(user_resolve_method="identity_bridge"),
+        )
         alice_ou = SimpleNamespace(
             username="alice-on-b", user_username="cuid:alice", user_email=None, state=None
         )
@@ -563,17 +648,7 @@ class MembershipSyncTest(unittest.TestCase):
         Reproduces Waldur federation churn where A team has offering_user_username
         (domeneca) but Waldur B pull_resources reports myaccessid CUIDs.
         """
-        processor = object.__new__(OfferingMembershipProcessor)
-        processor._team_cache = {}
-        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
-        processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
-
-        waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
-        )
         cuid = "bc7eb766-edited-e638a46f163c@myaccessid.org"
-        backend_resource_info = SimpleNamespace(users=[cuid])
-
         team = [
             SimpleNamespace(
                 offering_user_username="domeneca",
@@ -581,8 +656,11 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MANAGER",
             ),
         ]
-        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
-
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            [cuid],
+            resource_backend=SimpleNamespace(user_resolve_method="identity_bridge"),
+        )
         offering_user = SimpleNamespace(
             username="domeneca",
             user_username=cuid,
@@ -612,17 +690,6 @@ class MembershipSyncTest(unittest.TestCase):
 
     def test_group_resource_usernames_cuid_user_existing_on_backend(self) -> None:
         """CUID-only user (ToS accepted) already on backend should appear in existing, not new."""
-        processor = object.__new__(OfferingMembershipProcessor)
-        processor._team_cache = {}
-        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
-        processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
-
-        waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
-        )
-        # Backend already has this CUID user
-        backend_resource_info = SimpleNamespace(users=["cuid:alice"])
-
         team = [
             SimpleNamespace(
                 offering_user_username="",
@@ -630,8 +697,11 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MANAGER",
             )
         ]
-        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
-
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            ["cuid:alice"],
+            resource_backend=SimpleNamespace(user_resolve_method="identity_bridge"),
+        )
         alice_ou = SimpleNamespace(username=None, user_username="cuid:alice", user_email=None)
 
         (
@@ -656,16 +726,6 @@ class MembershipSyncTest(unittest.TestCase):
         Consent filtering is enforced upstream via has_consent=True on the API call,
         so site-agent includes every team member returned regardless of local offering_users.
         """
-        processor = object.__new__(OfferingMembershipProcessor)
-        processor._team_cache = {}
-        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
-        processor.resource_backend = SimpleNamespace(user_resolve_method="identity_bridge")
-
-        waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
-        )
-        backend_resource_info = SimpleNamespace(users=[])
-
         team = [
             SimpleNamespace(
                 offering_user_username="",
@@ -678,7 +738,10 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MEMBER",
             ),
         ]
-        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            resource_backend=SimpleNamespace(user_resolve_method="identity_bridge"),
+        )
 
         (
             _existing_usernames,
@@ -709,18 +772,9 @@ class MembershipSyncTest(unittest.TestCase):
         offering_users list, so intersecting stale candidates with it never flagged them.
         Stale must be derived from the backend user list minus the current team.
         """
-        processor = object.__new__(OfferingMembershipProcessor)
-        processor._team_cache = {}
-        processor._get_exposed_fields = lambda: []  # type: ignore[assignment]
-        processor.resource_backend = SimpleNamespace(user_resolve_method=None)
-
-        waldur_resource = SimpleNamespace(
-            uuid=SimpleNamespace(hex="r"), project_uuid=SimpleNamespace(hex="p")
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
         )
-        # Backend still reports the departed user alongside a current member.
-        backend_resource_info = SimpleNamespace(users=["departed-user-01", "remaining-user-01"])
-
-        # Team only contains the remaining member.
         team = [
             SimpleNamespace(
                 offering_user_username="remaining-user-01",
@@ -728,11 +782,9 @@ class MembershipSyncTest(unittest.TestCase):
                 role="PROJECT.MEMBER",
             )
         ]
-        processor._get_waldur_resource_team = lambda _resource, **_kw: team  # type: ignore[assignment]
-
-        # offering_users no longer lists the departed user (filtered out upstream).
-        remaining_ou = SimpleNamespace(
-            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            ["departed-user-01", "remaining-user-01"],
         )
 
         (
@@ -750,4 +802,315 @@ class MembershipSyncTest(unittest.TestCase):
 
         assert stale_usernames == {"departed-user-01"}
         assert existing_usernames == {"remaining-user-01"}
+        assert new_usernames == set()
+
+    def test_preserve_unmanaged_soft_deleted_offering_user_is_stale(self) -> None:
+        """Departed user still counts as Waldur-managed after soft-delete.
+
+        Production: they drop out of the state-filtered offering_users list
+        (REQUESTED_DELETION/DELETED) but remain in the unfiltered known set
+        with the same username. They must be removed -- this is gh-13.
+        """
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            ["departed-user-01", "remaining-user-01"],
+            preserve_unmanaged=True,
+            known_usernames={"remaining-user-01", "departed-user-01"},
+        )
+
+        (
+            existing_usernames,
+            stale_usernames,
+            new_usernames,
+            _user_roles,
+            _user_emails,
+            _user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[remaining_ou]
+        )
+
+        assert stale_usernames == {"departed-user-01"}
+        assert existing_usernames == {"remaining-user-01"}
+        assert new_usernames == set()
+
+    def test_preserve_unmanaged_restricted_offering_user_is_stale(self) -> None:
+        """Restricted offering users are filtered from offering_users but still known."""
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            ["restricted-user-01", "remaining-user-01"],
+            preserve_unmanaged=True,
+            known_usernames={"remaining-user-01", "restricted-user-01"},
+        )
+
+        (
+            _existing_usernames,
+            stale_usernames,
+            _new_usernames,
+            _user_roles,
+            _user_emails,
+            _user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[remaining_ou]
+        )
+
+        assert stale_usernames == {"restricted-user-01"}
+
+    def test_preserve_unmanaged_known_fetch_failure_uses_confirmed_managed_fallback(self) -> None:
+        """When the unfiltered list is unavailable, remove only offering_users seen this pass."""
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+        filtered_stale_ou = SimpleNamespace(
+            username="filtered-stale-user-01",
+            user_username="cuid:carol",
+            user_email=None,
+            state=None,
+        )
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            [
+                "sp-manual-user",
+                "departed-user-01",
+                "filtered-stale-user-01",
+                "remaining-user-01",
+            ],
+            preserve_unmanaged=True,
+            known_fetch_raises=True,
+        )
+
+        (
+            existing_usernames,
+            stale_usernames,
+            new_usernames,
+            _user_roles,
+            _user_emails,
+            _user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource,
+            backend_resource_info,
+            offering_users=[remaining_ou, filtered_stale_ou],
+        )
+
+        assert processor._known_offering_usernames_fetch_failed is True
+        assert stale_usernames == {"filtered-stale-user-01"}
+        assert "sp-manual-user" not in stale_usernames
+        assert "departed-user-01" not in stale_usernames
+        assert existing_usernames == {"remaining-user-01"}
+        assert new_usernames == set()
+
+    def test_preserve_unmanaged_known_fetch_failure_logs_deferred_removals(self) -> None:
+        """Departed users deferred by the fallback are logged at error level."""
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+        filtered_stale_ou = SimpleNamespace(
+            username="filtered-stale-user-01",
+            user_username="cuid:carol",
+            user_email=None,
+            state=None,
+        )
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            [
+                "sp-manual-user",
+                "departed-user-01",
+                "filtered-stale-user-01",
+                "remaining-user-01",
+            ],
+            preserve_unmanaged=True,
+            known_fetch_raises=True,
+        )
+
+        with self.assertLogs(level="ERROR") as log:
+            processor._group_resource_usernames(
+                waldur_resource,
+                backend_resource_info,
+                offering_users=[remaining_ou, filtered_stale_ou],
+            )
+
+        deferred_msgs = [
+            msg
+            for msg in log.output
+            if "Deferring removal of" in msg and "unfiltered offering-user list unavailable" in msg
+        ]
+        assert len(deferred_msgs) == 1
+        assert "departed-user-01" in deferred_msgs[0]
+        assert "filtered-stale-user-01" not in deferred_msgs[0]
+
+    def test_preserve_unmanaged_known_fetch_failure_sets_cycle_flag(self) -> None:
+        """After the first failure, later resources skip the unfiltered fetch."""
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            ["sp-manual-user", "remaining-user-01"],
+            preserve_unmanaged=True,
+            known_fetch_raises=True,
+        )
+        fetch_mock = mock.Mock(side_effect=RuntimeError("offering-user listing failed"))
+        processor._get_known_offering_usernames = fetch_mock  # type: ignore[method-assign]
+
+        processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[remaining_ou]
+        )
+        other_backend = SimpleNamespace(users=["sp-manual-user-02", "remaining-user-01"])
+        processor._group_resource_usernames(
+            waldur_resource, other_backend, offering_users=[remaining_ou]
+        )
+
+        assert fetch_mock.call_count == 1
+        assert processor._known_offering_usernames_fetch_failed is True
+
+    def test_preserve_unmanaged_keeps_hand_added_user(self) -> None:
+        """Username Waldur has never seen is kept on the backend."""
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            ["sp-manual-user", "remaining-user-01"],
+            preserve_unmanaged=True,
+            known_usernames={"remaining-user-01"},
+        )
+
+        (
+            existing_usernames,
+            stale_usernames,
+            new_usernames,
+            _user_roles,
+            _user_emails,
+            _user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[remaining_ou]
+        )
+
+        assert stale_usernames == set()
+        assert "sp-manual-user" not in stale_usernames
+        assert existing_usernames == {"remaining-user-01"}
+        assert new_usernames == set()
+
+    def test_preserve_unmanaged_flag_off_does_not_fetch_known(self) -> None:
+        """Flag off: extras are still stale and the unfiltered list is not fetched."""
+        remaining_ou = SimpleNamespace(
+            username="remaining-user-01", user_username="cuid:bob", user_email=None, state=None
+        )
+        team = [
+            SimpleNamespace(
+                offering_user_username="remaining-user-01",
+                username="cuid:bob",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            ["sp-manual-user", "departed-user-01", "remaining-user-01"],
+            preserve_unmanaged=False,
+        )
+
+        (
+            _existing_usernames,
+            stale_usernames,
+            _new_usernames,
+            _user_roles,
+            _user_emails,
+            _user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[remaining_ou]
+        )
+
+        assert stale_usernames == {"sp-manual-user", "departed-user-01"}
+
+    def test_preserve_unmanaged_ignored_for_identity_bridge(self) -> None:
+        """Federation still removes extras even if preserve_unmanaged_backend_users is set."""
+        team = [
+            SimpleNamespace(
+                offering_user_username="alice-on-b",
+                username="cuid:alice",
+                role="PROJECT.MEMBER",
+            )
+        ]
+        processor, waldur_resource, backend_resource_info = _grouping_processor(
+            team,
+            ["cuid:alice", "cuid:manual"],
+            resource_backend=SimpleNamespace(user_resolve_method="identity_bridge"),
+            preserve_unmanaged=True,
+        )
+        alice_ou = SimpleNamespace(
+            username="alice-on-b", user_username="cuid:alice", user_email=None, state=None
+        )
+
+        (
+            existing_usernames,
+            stale_usernames,
+            new_usernames,
+            _user_roles,
+            _user_emails,
+            _user_cuids,
+            _user_attributes,
+            _offering_user_states,
+        ) = processor._group_resource_usernames(
+            waldur_resource, backend_resource_info, offering_users=[alice_ou]
+        )
+
+        assert stale_usernames == {"cuid:manual"}
+        assert existing_usernames == {"cuid:alice"}
         assert new_usernames == set()

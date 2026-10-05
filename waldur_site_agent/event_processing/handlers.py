@@ -1,6 +1,7 @@
 """Handlers for different events and protocols."""
 
 import json
+import threading
 from typing import Optional
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from stomp.constants import HDR_DESTINATION
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_offering_users import (
     marketplace_offering_users_list,
+    marketplace_offering_users_retrieve,
 )
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_list,
@@ -31,17 +33,22 @@ from waldur_api_client.models.slurm_command_result_request import (
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import logger
-from waldur_site_agent.common import agent_identity_management, structures
+from waldur_site_agent.backend.backends import (
+    DEPARTED_OFFERING_USER_STATES,
+    AbstractUsernameManagementBackend,
+)
+from waldur_site_agent.common import agent_identity_management, resource_api_keys, structures
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import utils as common_utils
 from waldur_site_agent.event_processing.structures import (
     AccountMessage,
-    ApiKeyRotationMessage,
+    ApiKeyCommandMessage,
     BackendResourceRequestMessage,
     OfferingResourcesSyncMessage,
     OfferingUserMessage,
     OrderMessage,
     PeriodicLimitsMessage,
+    ProjectGroupMessage,
     ResourceMessage,
     UserRoleMessage,
 )
@@ -51,8 +58,14 @@ def register_event_process_service(
     offering: structures.Offering,
     waldur_rest_client: AuthenticatedClient,
     observable_object: ObservableObjectTypeEnum,
-) -> AgentService:
+) -> Optional[AgentService]:
     """A shortcut for initialization of the event_process service.
+
+    Called at the top of every message handler, before the work the message
+    asks for. The service is telemetry, and a message whose handler raises is
+    acked without a retry - letting a failed lookup out of here would trade a
+    real order or membership event for a missing agent record. Failures are logged and the
+    handler proceeds without a service.
 
     Args:
         offering (structures.Offering): Waldur offering
@@ -60,19 +73,41 @@ def register_event_process_service(
         observable_object (ObservableObjectTypeEnum): Type of observable object
 
     Returns:
-        AgentService: Registered agent service
+        AgentService: Registered agent service, or None if it is unavailable
     """
     agent_identity_manager = agent_identity_management.AgentIdentityManager(
         offering, waldur_rest_client
     )
     agent_identity_name = f"agent-{offering.uuid}"
-    agent_identity = agent_identity_manager.get_identity(agent_identity_name)
     service_name = f"{structures.AgentMode.EVENT_PROCESS.value}-{observable_object}"
-    return agent_identity_manager.register_service(
-        agent_identity,
-        service_name,
-        structures.AgentMode.EVENT_PROCESS.value,
-    )
+
+    try:
+        agent_identity = agent_identity_manager.get_identity(agent_identity_name)
+    except Exception as e:
+        logger.warning(
+            "Unable to look up the identity %s for the offering %s: %s. "
+            "Handling the message without agent telemetry.",
+            agent_identity_name,
+            offering.name,
+            e,
+        )
+        return None
+
+    try:
+        return agent_identity_manager.register_service(
+            agent_identity,
+            service_name,
+            structures.AgentMode.EVENT_PROCESS.value,
+        )
+    except Exception as e:
+        logger.warning(
+            "Unable to register the service %s for the offering %s: %s. "
+            "Handling the message without agent telemetry.",
+            service_name,
+            offering.name,
+            e,
+        )
+        return None
 
 
 def process_account_message(
@@ -199,6 +234,10 @@ def on_user_role_message_stomp(
     message: UserRoleMessage = json.loads(frame.body)
     logger.info("Received message: %s on topic %s", message, frame.headers.get("destination"))
     user_uuid = message.get("user_uuid")
+    # Bound before the try: the except block logs them, and a failure earlier in
+    # the try must surface as itself rather than as an UnboundLocalError.
+    user_username = message.get("user_username")
+    role_granted = message.get("granted")
     project_name = message["project_name"]
     project_uuid = message["project_uuid"]
 
@@ -222,8 +261,9 @@ def on_user_role_message_stomp(
         )
         processor.register(agent_service)
         if user_uuid:
-            user_username = message["user_username"]
-            role_granted = message["granted"]
+            if not user_username:
+                logger.error("Missing required field 'user_username' for user role change")
+                return
             if role_granted is None:
                 logger.error("Missing required field 'granted' for user role change")
                 return
@@ -256,7 +296,7 @@ def on_user_role_message_stomp(
                 processor.process_project_user_sync(project_uuid)
     except Exception as e:
         if user_uuid:
-            logger.error(
+            logger.exception(
                 "Failed to process user %s (%s) role change in project %s (%s) (granted: %s): %s",
                 user_username,
                 user_uuid,
@@ -266,7 +306,7 @@ def on_user_role_message_stomp(
                 e,
             )
         else:
-            logger.error(
+            logger.exception(
                 "Failed to process full project all users sync event for project %s: %s",
                 project_uuid,
                 e,
@@ -322,9 +362,7 @@ def on_offering_resources_sync_message_stomp(
         message.get("requested_by_user_uuid"),
     )
     try:
-        waldur_rest_client = common_utils.get_client(
-            offering.api_url, offering.api_token, user_agent, offering.verify_ssl
-        )
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
     except Exception as e:
         logger.exception(
             "Failed to create Waldur client for offering resources sync of %s: %s",
@@ -439,11 +477,21 @@ def on_account_message_stomp(
     user_agent: str,
     expose_backend_error_details: bool = True,
 ) -> None:
-    """Service account handler for STOMP."""
+    """Service/course account handler for STOMP.
+
+    Under the unified queue the destination is ``consumer_{uuid}`` and no longer
+    encodes the account type, so the type is read from the message payload
+    ``object_type`` (stamped by Mastermind) rather than the queue name. Falls
+    back to the legacy queue-name suffix for any message without object_type.
+    """
     message: AccountMessage = json.loads(frame.body)
-    queue: str = frame.headers[HDR_DESTINATION]
-    queue_parts = queue.split("_")
-    account_type_raw = f"{queue_parts[-2]}_{queue_parts[-1]}"
+    account_type_raw = message.get("object_type")
+    if account_type_raw is None:
+        # Legacy per-object-type queue: derive from the queue name suffix.
+        # TODO: drop once no Mastermind still serves per-type subscription queues.
+        queue: str = frame.headers[HDR_DESTINATION]
+        queue_parts = queue.split("_")
+        account_type_raw = f"{queue_parts[-2]}_{queue_parts[-1]}"
     account_type = structures.AccountType.SERVICE_ACCOUNT
     observable_object = ObservableObjectTypeEnum.SERVICE_ACCOUNT
     if account_type_raw == structures.AccountType.COURSE_ACCOUNT.value:
@@ -580,28 +628,26 @@ def on_resource_periodic_limits_update_stomp(
         logger.error("Error processing periodic limits update: %s", e)
 
 
-def on_resource_api_key_rotation_stomp(
+def on_resource_api_key_command_stomp(
     frame: stomp.utils.Frame,
     offering: structures.Offering,
     user_agent: str,
     expose_backend_error_details: bool = True,
 ) -> None:
-    """Handle a resource API key rotation command.
+    """Handle a command about one resource API key.
 
-    The agent generates the key and applies it to the backend, then reports the
-    outcome to Waldur via the provider endpoints. Rotation is the only command:
-    the key count is fixed at provisioning.
+    The payload's ``action`` names the command — create, rotate, pause, resume,
+    update or delete. The agent carries it out on the backend, then acknowledges it
+    through the provider endpoint that answers it; see ``resource_api_keys``.
     """
     try:
-        message: ApiKeyRotationMessage = json.loads(frame.body)
-        action = message.get("action")
-        resource_uuid = message.get("resource_uuid")
-        backend_id = message.get("resource_backend_id")
-        api_key_uuid = message.get("api_key_uuid")
-        client_id = message.get("client_id")
-        logger.info("Processing API key %s for resource %s", action, resource_uuid)
+        message: ApiKeyCommandMessage = json.loads(frame.body)
+        command = resource_api_keys.ApiKeyCommand.from_message(dict(message))
+        logger.info(
+            "Processing API key %s for resource %s", command.action, command.resource_uuid
+        )
 
-        if not resource_uuid or not backend_id:
+        if not command.resource_uuid or not command.resource_backend_id:
             logger.error("Invalid API key message: missing resource_uuid/backend_id")
             return
 
@@ -611,20 +657,10 @@ def on_resource_api_key_rotation_stomp(
             return
 
         waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
-
-        if action != "rotate":
-            logger.error("Unknown API key action: %s", action)
-            return
-        if not api_key_uuid or not client_id:
-            logger.error("rotate command missing api_key_uuid/client_id")
-            return
-        common_utils.rotate_resource_api_key(
+        resource_api_keys.execute_api_key_command(
             waldur_rest_client,
-            api_key_uuid,
-            client_id,
             backend,
-            backend_id,
-            resource_uuid,
+            command,
             expose_backend_error_details=expose_backend_error_details,
         )
 
@@ -675,7 +711,20 @@ def _process_offering_user_message(
             attributes = message.get("attributes", {})
             logger.info("Offering user %s created with attributes: %s", username, list(attributes))
             _forward_user_attributes_to_backend(offering, username, attributes, user_agent)
-        elif action in ("update", "delete"):
+            _reconcile_offering_user(offering, offering_user_uuid, waldur_rest_client)
+        elif action == "update":
+            # A state change (Waldur requesting deletion, or restoring an
+            # account) arrives as an update. The payload carries the new state,
+            # so a deletion request is recognised without a round-trip and runs
+            # for every offering, username backend or not.
+            logger.info("Offering user %s action: %s (no attribute forwarding)", username, action)
+            if message.get("state") in _DEPARTED_STATE_NAMES:
+                _process_offering_user_deletion_event(
+                    offering, offering_user_uuid, waldur_rest_client
+                )
+            else:
+                _reconcile_offering_user(offering, offering_user_uuid, waldur_rest_client)
+        elif action == "delete":
             logger.info("Offering user %s action: %s (no attribute forwarding)", username, action)
         elif action == "username_set":
             resource_backend_ids = message.get("resource_backend_ids", [])
@@ -696,6 +745,7 @@ def _process_offering_user_message(
                 waldur_rest_client,
                 user_cuid=user_cuid,
             )
+            _reconcile_offering_user(offering, offering_user_uuid, waldur_rest_client)
         else:
             logger.warning("Unknown offering user action: %s", action)
     except Exception:
@@ -704,6 +754,138 @@ def _process_offering_user_message(
             action,
             username,
             offering_user_uuid,
+        )
+
+
+def _reconcile_offering_user(
+    offering: structures.Offering,
+    offering_user_uuid: str,
+    waldur_rest_client: AuthenticatedClient,
+) -> None:
+    """Push one offering user through the username backend's reconcile hook.
+
+    On a STOMP-only offering nothing else does this between restarts: polling
+    membership sync skips such offerings entirely, and the periodic offering-user
+    reconciliation only looks at accounts stuck in a pre-OK state. Without this an
+    account created or renamed without an accompanying role change would not reach
+    the backend's directory until the agent restarted.
+
+    An account Waldur has moved into a deletion state goes to the backend's
+    release hook instead of its profile sync: there is nothing to converge on
+    for an account that is meant to disappear.
+
+    Only backends that actually implement a hook pay the extra round-trip - the
+    defaults on the abstract base are no-ops, so there is nothing to fetch for them.
+    """
+    if not offering_user_uuid:
+        return
+    try:
+        backend, _ = common_utils.get_username_management_backend(offering)
+    except Exception:
+        logger.exception("Could not resolve the username management backend for %s", offering.name)
+        return
+
+    if type(backend).sync_user_profiles is AbstractUsernameManagementBackend.sync_user_profiles:
+        return
+
+    try:
+        # Deliberately no `field=` filter: the reconciler needs the POSIX
+        # attributes, which the processor's curated field list does not imply here.
+        offering_user = marketplace_offering_users_retrieve.sync(
+            uuid=offering_user_uuid, client=waldur_rest_client
+        )
+        if offering_user is None:
+            logger.warning("Offering user %s not found for reconcile", offering_user_uuid)
+            return
+        if offering_user.state in DEPARTED_OFFERING_USER_STATES:
+            # A payload without the state field, or a stale one; still the
+            # teardown's business, never the profile sync's.
+            process_offering_user_deletions(offering, waldur_rest_client, [offering_user])
+        else:
+            backend.sync_user_profiles([offering_user])
+    except Exception:
+        logger.exception("Failed to reconcile offering user %s", offering_user_uuid)
+
+
+_DEPARTED_STATE_NAMES = frozenset(state.value for state in DEPARTED_OFFERING_USER_STATES)
+
+
+def _process_offering_user_deletion_event(
+    offering: structures.Offering,
+    offering_user_uuid: str,
+    waldur_rest_client: AuthenticatedClient,
+) -> None:
+    """Fetch the offering user named by a deletion-state update and tear it down."""
+    if not offering_user_uuid:
+        return
+    try:
+        offering_user = marketplace_offering_users_retrieve.sync(
+            uuid=offering_user_uuid, client=waldur_rest_client
+        )
+        if offering_user is None:
+            logger.warning("Offering user %s not found for deletion", offering_user_uuid)
+            return
+        if offering_user.state not in DEPARTED_OFFERING_USER_STATES:
+            # Restored between the event and now; nothing to tear down.
+            logger.info(
+                "Offering user %s is %s again, not tearing it down",
+                offering_user_uuid,
+                offering_user.state,
+            )
+            return
+        process_offering_user_deletions(offering, waldur_rest_client, [offering_user])
+    except Exception:
+        logger.exception("Failed to process deletion of offering user %s", offering_user_uuid)
+
+
+def process_offering_user_deletions(
+    offering: structures.Offering,
+    waldur_rest_client: AuthenticatedClient,
+    offering_users: list,
+) -> None:
+    """Tear down offering users Waldur wants gone, in the polling sweep's order.
+
+    Associations first, then the username backend's release, then the
+    acknowledgement. An offering without a membership backend has no
+    agent-managed associations and skips straight to the release; one without
+    a username backend skips the release. Neither configuration blocks the
+    acknowledgement. Resources are listed and pulled once for the whole batch,
+    without the usage report.
+    """
+    if not offering_users:
+        return
+    resource_backend = None
+    resource_report: Optional[dict] = None
+    if offering.membership_sync_backend:
+        try:
+            resource_backend, _ = common_utils.get_backend_for_offering(
+                offering, "membership_sync_backend"
+            )
+            resources = common_processors.fetch_offering_resources(
+                offering, waldur_rest_client, resource_backend
+            )
+            # strict: see OfferingMembershipProcessor._process_requested_deletions --
+            # a dropped resource would be read as "no association here".
+            resource_report = resource_backend.pull_resources(
+                resources, include_usage=False, strict=True
+            )
+        except Exception:
+            # Without the association step the acknowledgement would be wrong,
+            # so the whole batch waits rather than skipping ahead.
+            logger.exception(
+                "Could not pull the resources of %s; deletions wait for the next cycle",
+                offering.name,
+            )
+            return
+    username_backend = common_utils.get_release_capable_username_backend(offering)
+    for offering_user in offering_users:
+        common_processors.teardown_offering_user(
+            offering,
+            offering_user,
+            waldur_rest_client,
+            resource_backend,
+            username_backend,
+            resource_report,
         )
 
 
@@ -829,3 +1011,82 @@ def _add_user_to_resources(
                 )
     except Exception:
         logger.exception("Failed to create associations for user %s", username)
+
+
+# A burst of project-group events -- an import, a backfill numbering every
+# group of a provider -- becomes one pass: the first event schedules it, and
+# the ones arriving before it starts ride along. Every pass reads the whole
+# listing, so nothing an event said is lost by coalescing.
+PROJECT_GROUP_RECONCILE_DELAY_SECONDS = 3.0
+_project_group_timers: dict[str, threading.Timer] = {}
+_project_group_timers_lock = threading.Lock()
+
+
+def on_project_group_message_stomp(
+    frame: stomp.utils.Frame,
+    offering: structures.Offering,
+    user_agent: str,
+    expose_backend_error_details: bool = True,  # noqa: ARG001
+) -> None:
+    """Provider project group event handler for STOMP."""
+    message: ProjectGroupMessage = json.loads(frame.body)
+    logger.info(
+        "Received project group message: %s %s (GID %s)",
+        message.get("action"),
+        message.get("name", ""),
+        message.get("gid"),
+    )
+    schedule_project_group_reconcile(offering, user_agent)
+
+
+def schedule_project_group_reconcile(
+    offering: structures.Offering,
+    user_agent: str,
+    delay: Optional[float] = None,
+) -> bool:
+    """Schedule one project-group pass for the offering; False if one is pending."""
+    key = str(offering.uuid)
+    with _project_group_timers_lock:
+        if key in _project_group_timers:
+            return False
+        timer = threading.Timer(
+            PROJECT_GROUP_RECONCILE_DELAY_SECONDS if delay is None else delay,
+            run_project_group_reconcile,
+            args=(offering, user_agent),
+        )
+        # A pass cut short by shutdown is harmless: the next one converges.
+        timer.daemon = True
+        _project_group_timers[key] = timer
+    timer.start()
+    return True
+
+
+def run_project_group_reconcile(offering: structures.Offering, user_agent: str) -> None:
+    """Run the username backend's project-group pass for the offering.
+
+    The pending marker is cleared before the pass starts, so an event arriving
+    while it runs schedules the next one rather than being absorbed by a pass
+    that may already have read the listing.
+    """
+    with _project_group_timers_lock:
+        pending = _project_group_timers.pop(str(offering.uuid), None)
+    if pending is not None and pending is not threading.current_thread():
+        # Called directly while a pass was scheduled: this one covers it.
+        pending.cancel()
+    try:
+        waldur_rest_client = common_utils.get_client_for_offering(offering, user_agent)
+        register_event_process_service(
+            offering,
+            waldur_rest_client,
+            ObservableObjectTypeEnum.SERVICE_PROVIDER_PROJECT_GROUP,
+        )
+        backend, _ = common_utils.get_username_management_backend(offering)
+        if not backend.reconciles_project_groups():
+            logger.info(
+                "Offering %s does not write project groups; event ignored", offering.name
+            )
+            return
+        logger.info("Running the project group pass for offering %s on events", offering.name)
+        backend.reconcile_project_groups(waldur_rest_client)
+    except Exception:
+        logger.exception("Project group reconcile failed for offering %s", offering.name)

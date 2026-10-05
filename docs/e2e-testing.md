@@ -34,29 +34,75 @@ cluster or second Waldur instance is needed.
 
 The Docker stack boots PostgreSQL, RabbitMQ (with `rabbitmq_web_stomp`),
 and Waldur Mastermind (API + Celery worker). A demo preset
-(`ci/site_agent_e2e.json`) loads 6 users, 3 offerings, plans, components,
+(`ci/site_agent_e2e.json`) loads the users, projects, offerings, plans, components,
 and role assignments.
 
 ## Test suites
 
-### SLURM E2E tests (`plugins/slurm/tests/e2e/`)
+Each file reads one agent-config variable and runs in one CI job (see
+[CI pipeline](#ci-pipeline)). `tests/test_docs_e2e_index.py` fails when a
+`test_e2e_*.py` file has no row here, when its Job column disagrees with the
+job whose `script` runs it, when a file runs in no job (unless its section says
+the suite is manual) or in several, and when a CI job or a config variable is
+missing from this page. It does not check the Config column.
 
-| File | Tests | What it validates |
-|------|-------|-------------------|
-| `test_e2e_api_optimizations.py` | ~20 | Order lifecycle (create/update/terminate), membership sync, reporting |
-| `test_e2e_benchmark.py` | ~10 | API call counts and response sizes; scales to N resources |
-| `test_e2e_stomp.py` | 4 | STOMP WebSocket connections, event delivery, order processing with STOMP active |
+### SLURM (`plugins/slurm/tests/e2e/`)
 
-### Waldur federation E2E tests (`plugins/waldur/tests/e2e/`)
+Config: the `WALDUR_E2E_*_CONFIG` variable the file reads (`CONFIG` =
+`WALDUR_E2E_CONFIG`, `STOMP` = `WALDUR_E2E_STOMP_CONFIG`, and so on). Job:
+`REST` = `E2E: REST & STOMP`, `policy` = `E2E: policy, QoS & LDAP`,
+`matrix` = `E2E: QoS matrix`.
 
-| File | Tests | What it validates |
-|------|-------|-------------------|
-| `test_e2e_federation.py` | ~10 | Full Waldur A → Waldur B order processing pipeline |
-| `test_e2e_username_sync.py` | ~8 | Username reconciliation between federated instances |
-| `test_e2e_usage_sync.py` | ~5 | Usage reporting across federation |
-| `test_e2e_stomp.py` | ~5 | STOMP event routing for federation |
-| `test_e2e_offering_user_pubsub.py` | ~4 | Offering user attribute sync via STOMP |
-| `test_e2e_order_rejection.py` | ~3 | Order rejection handling in federation |
+| File | Config | Job | What it validates |
+|------|--------|-----|-------------------|
+| `test_e2e_api_optimizations.py` | CONFIG | REST | Order lifecycle, membership sync, reporting |
+| `test_e2e_benchmark.py` | CONFIG | REST | API call counts and response sizes; scales to N resources |
+| `test_e2e_default_account_policy.py` | CONFIG | REST | `default_account_policy` sets the DefaultAccount |
+| `test_e2e_membership_stale.py` | MEMBERSHIP | REST | Which backend users membership sync removes or keeps |
+| `test_e2e_order_reconciliation.py` | CONFIG | REST | Periodic order reconciliation recovers stuck orders |
+| `test_e2e_partition_associations.py` | CONFIG | REST | Offering partitions applied to user associations |
+| `test_e2e_prepaid.py` | CONFIG | REST | Prepaid billing model |
+| `test_e2e_qos_backcompat.py` | CONFIG | REST | Backwards compatibility of the periodic-limits handler |
+| `test_e2e_resources_sync.py` | CONFIG | REST | Forced resources sync after SLURM data loss |
+| `test_e2e_rest_api.py` | — ² | REST | `SlurmRestClient` against the emulator's REST API |
+| `test_e2e_restore.py` | CONFIG | REST | Restoring a resource from TERMINATED |
+| `test_e2e_stomp.py` | STOMP | REST | STOMP connections, event delivery, orders with STOMP |
+| `test_e2e_ldap.py` | LDAP ³ | policy | LDAP-integrated SLURM backend |
+| `test_e2e_policy.py` | POLICY | policy | Periodic usage policy evaluation |
+| `test_e2e_qos_polling.py` | POLICY | policy | QoS application via the polling path |
+| `test_e2e_qos_stomp.py` | STOMP | policy | QoS application via STOMP RESOURCE events |
+| `test_e2e_qos_matrix.py` | POLICY | matrix | QoS sweep across all 11 policy configurations |
+
+² Runs against the emulator's slurmrestd; no agent config.
+³ `WALDUR_E2E_LDAP_CONFIG`, `WALDUR_E2E_LDAP_INVERTED_CONFIG` and
+`WALDUR_E2E_LDAP_PROJECT_GROUPS_CONFIG`.
+
+### ldap-roles (`plugins/ldap-roles/tests/e2e/`)
+
+| File | Config | Job | What it validates |
+|------|-----------------|--------|-------------------|
+| `test_e2e_ldap_roles.py` | LDAP_ROLES | policy | ldap-roles membership-sync backend |
+
+### Azure (`plugins/azure/tests/e2e/`)
+
+| File | Config | Job | What it validates |
+|------|-----------------|--------|-------------------|
+| `test_e2e_orders.py` | CONFIG | `E2E: Azure` | Orders carried through the agent onto Azure (SDK faked) |
+
+### Waldur federation (`plugins/waldur/tests/e2e/`)
+
+These need two Waldur instances (A and B) and are **not wired into CI**; run
+them by hand against a federation pair. See `plugins/waldur/tests/e2e/TEST_PLAN.md`.
+
+| File | Config | What it validates |
+|------|-----------------|-------------------|
+| `test_e2e_federation.py` | CONFIG | Waldur A → Waldur B order processing |
+| `test_e2e_membership_sync.py` | CONFIG | Membership sync across federation |
+| `test_e2e_offering_user_pubsub.py` | CONFIG | OFFERING_USER attribute sync via STOMP |
+| `test_e2e_order_rejection.py` | CONFIG | Order rejection handling |
+| `test_e2e_stomp.py` | CONFIG | STOMP event routing for federation |
+| `test_e2e_usage_sync.py` | CONFIG | Usage reporting B → A |
+| `test_e2e_username_sync.py` | CONFIG | Username reconciliation B → A |
 
 ## Running locally
 
@@ -71,6 +117,7 @@ and role assignments.
 ```bash
 docker compose -f ci/docker-compose.e2e.yml up waldur-db-migration
 docker compose -f ci/docker-compose.e2e.yml up -d
+# add `--profile ldap` (or COMPOSE_PROFILES=ldap) to also start OpenLDAP for test_e2e_ldap.py
 
 # Wait for API to be ready
 curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/
@@ -86,6 +133,8 @@ docker compose -f ci/docker-compose.e2e.yml exec waldur-api \
 Copy `ci/e2e-ci-config.yaml` and change the API host from `docker` to
 `localhost`:
 
+<!-- docs-check: skip -->
+
 ```yaml
 # e2e-local-config.yaml
 offerings:
@@ -99,6 +148,8 @@ offerings:
 
 For STOMP tests, create a second config with `stomp_enabled: true` and
 STOMP connection settings:
+
+<!-- docs-check: skip -->
 
 ```yaml
 # e2e-local-config-stomp.yaml
@@ -144,39 +195,71 @@ WALDUR_E2E_BENCH_RESOURCES=10 \
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `WALDUR_E2E_TESTS` | Yes | Set to `true` to enable E2E tests (skipped otherwise) |
-| `WALDUR_E2E_CONFIG` | For REST tests | Path to agent config YAML (`stomp_enabled: false`) |
-| `WALDUR_E2E_STOMP_CONFIG` | For STOMP tests | Path to agent config YAML (`stomp_enabled: true`) |
 | `WALDUR_E2E_PROJECT_A_UUID` | Yes | Project UUID on Waldur to create orders in |
+| `WALDUR_E2E_CONFIG` | Per file | Agent config for the REST suites (`stomp_enabled: false`) |
+| `WALDUR_E2E_STOMP_CONFIG` | Per file | Agent config with `stomp_enabled: true` and WebSocket settings |
+| `WALDUR_E2E_MEMBERSHIP_CONFIG` | Per file | Config for `test_e2e_membership_stale.py` |
+| `WALDUR_E2E_POLICY_CONFIG` | Per file | Config with periodic-limits policies (policy and QoS suites) |
+| `WALDUR_E2E_LDAP_CONFIG` | Per file | SLURM + LDAP config |
+| `WALDUR_E2E_LDAP_INVERTED_CONFIG` | Per file | SLURM + LDAP config with inverted group mapping |
+| `WALDUR_E2E_LDAP_PROJECT_GROUPS_CONFIG` | Per file | SLURM + LDAP config writing project groups |
+| `WALDUR_E2E_LDAP_ROLES_CONFIG` | Per file | ldap-roles backend config |
 | `WALDUR_E2E_BENCH_RESOURCES` | No | Number of resources for multi-resource benchmark (default: 800, CI uses 5) |
+
+The CI values are the `ci/e2e-ci-config*.yaml` files; the [test suite tables](#test-suites)
+show which file reads which variable.
 
 ## CI pipeline
 
-The E2E job runs in the `E2E integration tests` stage in `.gitlab-ci.yml`.
-It triggers on pushes to `main` and release tags.
+The E2E suites run as four jobs in `.gitlab-ci.yml`, all extending a shared
+`.E2E base` that boots its own Waldur stack:
 
-### CI flow
+- `E2E: REST & STOMP` — the SLURM REST suites, `test_e2e_stomp.py`,
+  `test_e2e_rest_api.py`. Runs on MRs touching slurm/ldap/ldap-client/ldap-roles/azure/core/ci
+  files, on tags, and when `RUN_E2E_TESTS` / `RUN_E2E` is set.
+- `E2E: policy, QoS & LDAP` — `test_e2e_policy.py`, `test_e2e_qos_polling.py`,
+  `test_e2e_qos_stomp.py`, `test_e2e_ldap.py` and ldap-roles'
+  `test_e2e_ldap_roles.py`. Same triggers as above.
+- `E2E: Azure` — `plugins/azure/tests/e2e/test_e2e_orders.py`, with the Azure
+  SDK faked in-process. Same triggers as above.
+- `E2E: QoS matrix` — `test_e2e_qos_matrix.py` (11 policy configs, ~5 min).
+  Runs on tags; on `main` / MRs only with `RUN_E2E_TESTS`.
+
+The waldur federation suite is not run in CI.
+
+The REST job lists its test files explicitly. A new `test_e2e_*.py` must be
+added to exactly one job's `script`, otherwise it never runs in CI — and to
+the tables on this page; `tests/test_docs_e2e_index.py` checks both.
+
+### CI flow (per job)
 
 1. Install Docker CLI + Compose plugin (static binaries)
 2. `uv sync --all-packages` — install site-agent + slurm-emulator
 3. `docker compose -f ci/docker-compose.e2e.yml up` — boot Waldur stack
-4. Wait for API health check (`curl http://docker:8080/api/`)
+4. Wait for the Celery worker and the API (`curl http://docker:8080/api/`)
 5. Copy and load `site_agent_e2e` demo preset
 6. Force-set deterministic auth token
-7. **REST E2E tests** — `pytest plugins/slurm/tests/e2e/ --ignore=test_e2e_stomp.py`
-8. **STOMP E2E tests** — `pytest plugins/slurm/tests/e2e/test_e2e_stomp.py`
-9. Collect JUnit XML reports, stack logs, and markdown reports as artifacts
+7. One `pytest` invocation over the job's test files, with coverage disabled
+   (`-o addopts=`) and every `WALDUR_E2E_*_CONFIG` variable the files need
+8. Collect JUnit XML reports, stack logs, and markdown reports as artifacts
 
-The REST and STOMP tests run sequentially in the same job to reuse the
-~14min Docker stack boot + migration time.
+Steps 1-6 live in `before_script` and cost ~3 min per job; splitting the
+suites across jobs trades that for running them in parallel (~21 min serial
+→ ~10 min wall).
 
 ### CI files
 
 | File | Purpose |
 |------|---------|
 | `ci/docker-compose.e2e.yml` | Minimal Waldur stack: PostgreSQL, RabbitMQ (with web_stomp), API + worker |
-| `ci/e2e-ci-config.yaml` | REST test config: 3 offerings (usage/limits/mixed), `stomp_enabled: false` |
-| `ci/e2e-ci-config-stomp.yaml` | STOMP test config: 1 offering, `stomp_enabled: true` |
-| `ci/site_agent_e2e.json` | Demo preset: 6 users, 3 offerings, plans, components, roles |
+| `ci/e2e-ci-config.yaml` | REST config: SLURM usage/limits/mixed and the Azure offering, no STOMP |
+| `ci/e2e-ci-config-stomp.yaml` | STOMP test config: a SLURM offering and a policy offering, `stomp_enabled: true` |
+| `ci/e2e-ci-config-membership.yaml` | `WALDUR_E2E_MEMBERSHIP_CONFIG` |
+| `ci/e2e-ci-config-policy.yaml` | `WALDUR_E2E_POLICY_CONFIG` |
+| `ci/e2e-ci-config-ldap.yaml`, `-ldap-inverted.yaml`, `-ldap-project-groups.yaml` | The three SLURM + LDAP configs |
+| `ci/e2e-ci-config-ldap-roles.yaml` | `WALDUR_E2E_LDAP_ROLES_CONFIG` |
+| `ci/ldap-seed.ldif` | OpenLDAP seed data (`--profile ldap`) |
+| `ci/site_agent_e2e.json` | Demo preset: users, projects, offerings, plans, components, roles, offering users |
 | `ci/override.conf.py` | Mastermind Django settings (Celery broker, RabbitMQ STOMP) |
 | `ci/rabbitmq-enabled-plugins` | Enables `rabbitmq_management`, `rabbitmq_web_stomp`, `rabbitmq_stomp` |
 | `ci/rabbitmq.conf` | RabbitMQ connection and permissions config |
@@ -184,7 +267,7 @@ The REST and STOMP tests run sequentially in the same job to reuse the
 
 ### Artifacts
 
-- `e2e-report-rest.xml` / `e2e-report-stomp.xml` — JUnit test results
+- `e2e-report-*.xml` — JUnit test results (one file per job)
 - `waldur-stack-logs.txt` — Docker stack logs for debugging failures
 - `plugins/slurm/tests/e2e/*-report.md` — Detailed markdown reports with API call tables
 - `plugins/slurm/tests/e2e/*-report.json` — Machine-readable API call counts

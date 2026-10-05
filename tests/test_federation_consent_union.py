@@ -64,11 +64,13 @@ def _make_federation_processor():
     processor.offering = mock.Mock()
     processor.offering.uuid = uuid.uuid4().hex
     processor.offering.backend_settings = {}
+    processor.offering.preserve_unmanaged_backend_users = False
     processor.resource_backend = mock.Mock()
     processor.resource_backend.shared_project_membership = True
     processor.resource_backend.fetch_consented_users_only = True
     processor.resource_backend.user_resolve_method = "identity_bridge"
     processor.resource_backend.handled_resource_states = [ResourceState.OK]
+    processor.service_provider = None
     processor._team_cache = {}
     return processor
 

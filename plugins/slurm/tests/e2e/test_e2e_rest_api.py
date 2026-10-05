@@ -1,7 +1,7 @@
 """E2E tests for SlurmRestClient against slurm-emulator's slurmrestd API.
 
 slurm-emulator >= 0.7.0 ships a slurmrestd-compatible FastAPI app
-(``emulator.api.slurmrestd.app``) serving the ``v0.0.46`` data_parser
+(``emulator.api.slurmrestd.app``) serving the ``v0.0.43`` data_parser
 schema. This suite starts it as a subprocess with an isolated state
 file and drives the real ``SlurmRestClient`` against it over HTTP —
 no Waldur instance is needed.
@@ -37,7 +37,12 @@ from waldur_site_agent_slurm.rest_client import SlurmRestClient
 E2E_TESTS = os.environ.get("WALDUR_E2E_TESTS", "false").lower() == "true"
 pytestmark = pytest.mark.skipif(not E2E_TESTS, reason="WALDUR_E2E_TESTS not set")
 
-API_VERSION = "v0.0.46"  # the only version slurm-emulator serves
+# slurm-emulator >= 0.9.4 impersonates one tracked Slurm release and serves only
+# that release's data_parser version (SLURM_EMULATOR_SLURM_VERSION; default 26.05
+# -> v0.0.45). Pin the release here so the suite does not drift with the emulator
+# default; 25.05 serves v0.0.43, the REST client's DEFAULT_API_VERSION.
+EMULATED_SLURM_RELEASE = "25.05"
+API_VERSION = "v0.0.43"
 # The emulator's add_account() places account-level associations on its
 # current cluster, which is "default" out of the box.
 CLUSTER = "default"
@@ -56,7 +61,11 @@ def slurmrestd_url(tmp_path_factory):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    env = {**os.environ, "SLURM_EMULATOR_STATE_FILE": str(state_file)}
+    env = {
+        **os.environ,
+        "SLURM_EMULATOR_STATE_FILE": str(state_file),
+        "SLURM_EMULATOR_SLURM_VERSION": EMULATED_SLURM_RELEASE,
+    }
     proc = subprocess.Popen(  # noqa: S603
         [
             sys.executable,

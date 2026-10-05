@@ -1,0 +1,46 @@
+# E2E configuration for the ldap-roles membership-sync backend.
+# Uses the OpenLDAP container from docker-compose.e2e.yml (compose profile "ldap").
+# The suite keeps its people and groups under ou=ldap-roles-e2e, which it creates
+# and removes itself, so the SLURM LDAP suite sharing the directory is unaffected.
+#
+# API and LDAP host is "docker" — the DinD service hostname in GitLab CI.
+# For a local stack, point both URIs at localhost.
+
+timezone: "UTC"
+offerings:
+  - name: "E2E LDAP Roles"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000008"
+
+    stomp_enabled: false
+
+    backend_type: "ldap-roles"
+    # Create sets the backend ID membership sync needs; terminate empties
+    # the resource's groups.
+    order_processing_backend: "ldap-roles"
+    membership_sync_backend: "ldap-roles"
+
+    backend_settings:
+      # ldap-roles reads Resource and ResourceProject roles itself.
+      waldur_api_url: "http://docker:8080/api/"
+      waldur_api_token: "e2e0000000000000000000000000token001"
+
+      # Offering roles the suite creates on the offering. Keys are the Waldur
+      # role names; values become ${role_name} in the group templates.
+      resource_role_map:
+        "RESOURCE.OPERATOR": "operator"
+      resource_project_role_map:
+        "RESOURCE_PROJECT.MEMBER": "member"
+
+      membership_type: "memberUid"
+
+      ldap:
+        uri: "ldap://docker:389"
+        bind_dn: "cn=admin,dc=sofiatech,dc=bg"
+        bind_password: "e2e-ldap-password"
+        base_dn: "dc=sofiatech,dc=bg"
+        people_ou: "ou=People,ou=ldap-roles-e2e"
+        groups_ou: "ou=Groups,ou=ldap-roles-e2e"
+        gid_range_start: 7000
+        gid_range_end: 7999

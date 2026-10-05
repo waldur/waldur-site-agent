@@ -2,7 +2,13 @@
 #
 # This plugin writes ManagedRancherProject CRDs to a Kubernetes cluster
 # running rancher-keycloak-operator; the operator does the actual
-# Rancher project + Keycloak group work. Recommended operator: 0.3.1+.
+# Rancher project + Keycloak group work.
+#
+# Operator version: 0.3.1+ covers everything up to and including the
+# project-scope role bindings. This file also configures the
+# cluster-scope bindings (`cluster_role_map` further down), which need
+# 0.4.0+ -- drop that section if you are on 0.3.x, since an older
+# operator ignores it silently rather than complaining.
 #
 # Each Waldur Resource is 1:1 with a Rancher downstream cluster -- the
 # plugin reads the cluster ID from `resource.backend_id` at CR-build
@@ -32,8 +38,14 @@ offerings:
       # offering). Without these, pull_resource is a no-op and the
       # backend can only be exercised from external callers
       # (apply_resource_project) — useful for tests, not production.
+      # NB: the agent loads this file with a plain yaml.safe_load -- there
+      # is no ${ENV_VAR} interpolation anywhere in the config path. Write
+      # the token literally here (and chmod 600 the file), or template the
+      # file out of your config management / a Kubernetes Secret before
+      # the agent reads it. A "${WALDUR_API_TOKEN}" written here is sent
+      # to Waldur verbatim as the token and simply 401s.
       waldur_api_url: "https://waldur.example.com/api/"
-      waldur_api_token: "${WALDUR_API_TOKEN}"
+      waldur_api_token: "your-waldur-api-token"
       waldur_verify_ssl: true
 
       # Namespace where ManagedRancherProject CRs are created. The
@@ -151,8 +163,18 @@ offerings:
       # ${rp_uuid} hex prefix).
       #
       # Without this section the cluster bindings are not emitted, and
-      # the operator behaves as in 0.3.x. Requires operator 0.4.0+ --
-      # earlier operators reject `spec.cluster` via CRD validation.
+      # the operator behaves as in 0.3.x.
+      #
+      # Requires operator 0.4.0+. Against an older operator the failure
+      # is SILENT, not loud: the pre-0.4.0 CRD is a structural schema
+      # with no `x-kubernetes-preserve-unknown-fields`, so the API
+      # server PRUNES `spec.cluster` on apply -- no rejection, no error
+      # in the agent or operator logs, the CRs just never grow the
+      # block and no CRTB is ever created. If cluster roles appear to
+      # do nothing, check the operator version first:
+      #   kubectl get crd managedrancherprojects.waldur.io \
+      #     -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.cluster}'
+      # An empty result means the operator predates 0.4.0.
       cluster_role_map:
         resource_member: "cluster-member"
         resource_admin: "cluster-owner"

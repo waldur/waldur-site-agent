@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-ldap"
-version = "1.0.6rc17"
+version = "1.0.8rc6"
 description = "LDAP plugin for Waldur Site Agent"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9.2, <4"
 dependencies = [
-    "waldur-site-agent>=1.0.6rc17",
-    "ldap3>=2.9.0,<3",
+    "waldur-site-agent>=1.0.8rc6",
+    "waldur-site-agent-ldap-client>=1.0.8rc6",
     "jinja2>=3.0.0,<4.0",
 ]
 
@@ -16,6 +16,7 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 waldur-site-agent = { workspace = true }
+waldur-site-agent-ldap-client = { workspace = true }
 
 # Entry points for exporting username management backend
 [project.entry-points."waldur_site_agent.username_management_backends"]

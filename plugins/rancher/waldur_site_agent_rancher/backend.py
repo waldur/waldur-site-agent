@@ -84,7 +84,9 @@ class RancherBackend(backends.BaseBackend):
         logger.info("=" * 60)
 
         logger.info(
-            format_string.format("Rancher API URL", self.backend_settings.get("api_url", "Not set"))
+            format_string.format(
+                "Rancher URL", self.backend_settings.get("backend_url", "Not set")
+            )
         )
         logger.info(format_string.format("Cluster ID", self.cluster_id))
         logger.info(format_string.format("Project prefix", self.project_prefix))
@@ -99,7 +101,7 @@ class RancherBackend(backends.BaseBackend):
             logger.info(
                 format_string.format(
                     "Keycloak URL",
-                    self.backend_settings.get("keycloak", {}).get("server_url", "Not set"),
+                    self.backend_settings.get("keycloak", {}).get("keycloak_url", "Not set"),
                 )
             )
         else:
@@ -634,6 +636,10 @@ class RancherBackend(backends.BaseBackend):
             # Use our enhanced version that includes Keycloak group users
             return self._pull_backend_resource(backend_id, waldur_resource)
         except Exception as e:
+            if self.strict_pull_requested():
+                # Returning None would tell a strict caller this resource has no
+                # users, which the teardown reads as "safe to release".
+                raise
             logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
             return None
 

@@ -8,11 +8,10 @@ offerings: # Settings for offerings
     username_management_backend: "base" # Name of the backend from entrypoints to use for username management
     order_processing_backend: "slurm" # Use SLURM for order processing (account creation, deletion, etc.)
     membership_sync_backend: "slurm" # Use SLURM for membership syncing (user associations)
-    reporting_backend: "cscs-dwdi" # Use CSCS-DWDI for usage reporting
+    reporting_backend: "cscs-dwdi-compute" # Use CSCS-DWDI compute accounting for usage reporting
     resource_import_enabled: false # Whether to expose importable resources to Waldur
-    mqtt_enabled: false # MQTT feature toggler
     stomp_enabled: false # STOMP feature toggler
-    websocket_use_tls: true # Whether to use TLS for MQTT connection
+    websocket_use_tls: true # Whether to use TLS for the STOMP WebSocket connection
     backend_type: "slurm" # Backend type for order processing and membership sync
 
     # SLURM settings for order processing and membership sync
@@ -28,10 +27,10 @@ offerings: # Settings for offerings
       default_homedir_umask: "0077" # A umask for created homedirs
 
       # CSCS-DWDI settings for usage reporting
-      cscs_dwdi_api_url: "https://dwdi-api.cscs.ch" # Base URL for the CSCS-DWDI API service
+      cscs_dwdi_api_url: "https://dwdi-api.example.com" # Base URL for the CSCS-DWDI API service
       cscs_dwdi_client_id: "your-oidc-client-id" # OIDC client ID for authentication
       cscs_dwdi_client_secret: "your-oidc-client-secret" # OIDC client secret for authentication
-      cscs_dwdi_oidc_token_url: "https://identity.cscs.ch/realms/cscs/protocol/openid-connect/token" # OIDC token endpoint URL
+      cscs_dwdi_oidc_token_url: "https://identity.example.com/realms/example/protocol/openid-connect/token" # OIDC token endpoint URL
       cscs_dwdi_oidc_scope: "cscs-dwdi:read" # OIDC scope to request (optional, defaults to "openid")
 
     # Backend components configuration
@@ -65,19 +64,18 @@ offerings: # Settings for offerings
     waldur_api_url: "http://localhost:8081/api/"
     waldur_api_token: ""
     waldur_offering_uuid: ""
-    reporting_backend: "cscs-dwdi" # Only reporting is supported
+    reporting_backend: "cscs-dwdi-compute" # Only reporting is supported
     resource_import_enabled: false
-    mqtt_enabled: false
     stomp_enabled: false
     websocket_use_tls: true
-    backend_type: "cscs-dwdi" # Backend type for reporting-only
+    backend_type: "cscs-dwdi-compute" # Backend type for reporting-only
 
     backend_settings:
       # CSCS-DWDI API configuration
-      cscs_dwdi_api_url: "https://dwdi-api.cscs.ch"
+      cscs_dwdi_api_url: "https://dwdi-api.example.com"
       cscs_dwdi_client_id: "your-oidc-client-id"
       cscs_dwdi_client_secret: "your-oidc-client-secret"
-      cscs_dwdi_oidc_token_url: "https://identity.cscs.ch/realms/cscs/protocol/openid-connect/token"
+      cscs_dwdi_oidc_token_url: "https://identity.example.com/realms/example/protocol/openid-connect/token"
       cscs_dwdi_oidc_scope: "cscs-dwdi:read"
 
     backend_components:

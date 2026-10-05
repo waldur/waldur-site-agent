@@ -1,0 +1,38 @@
+[project]
+name = "waldur-site-agent-ldap-roles"
+version = "1.0.8rc6"
+description = "LDAP role-driven group membership sync plugin for Waldur Site Agent"
+readme = "README.md"
+authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
+requires-python = ">=3.9.2, <4"
+dependencies = [
+    "waldur-site-agent>=1.0.8rc6",
+    "waldur-site-agent-ldap-client>=1.0.8rc6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+waldur-site-agent = { workspace = true }
+waldur-site-agent-ldap-client = { workspace = true }
+
+# Maps Waldur Resource and ResourceProject roles to LDAP group
+# memberships. Offerings opt in by setting backend_type or
+# membership_sync_backend to "ldap-roles".
+[project.entry-points."waldur_site_agent.backends"]
+ldap-roles = "waldur_site_agent_ldap_roles.backend:LdapRolesBackend"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+ldap-roles = "waldur_site_agent_ldap_roles.schemas:LdapRolesBackendSettingsSchema"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+]

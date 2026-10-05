@@ -729,3 +729,26 @@ class TestRancherBackendGpuTypes:
         assert usage["gpu_h100"] == 1.0
         assert usage["gpu_h200"] == 3.0
         assert usage["cpu"] == 2.5
+
+
+@patch("waldur_site_agent_rancher.backend.KeycloakClient")
+@patch("waldur_site_agent_rancher.backend.RancherClient")
+def test_diagnostics_reports_the_urls_the_clients_use(
+    mock_rancher_client, mock_keycloak_client, rancher_components, caplog
+):
+    """Diagnostics prints the settings the Rancher and Keycloak clients actually read."""
+    settings = {
+        "backend_url": "https://rancher.example.com",
+        "cluster_id": "c-m-test",
+        "keycloak_enabled": True,
+        "keycloak": {"keycloak_url": "https://keycloak.example.com/auth/"},
+    }
+    backend = RancherBackend(settings, rancher_components)
+    backend.rancher_client.list_projects.return_value = []
+
+    with caplog.at_level("INFO"):
+        backend.diagnostics()
+
+    assert "https://rancher.example.com" in caplog.text
+    assert "https://keycloak.example.com/auth/" in caplog.text
+    assert "Not set" not in caplog.text

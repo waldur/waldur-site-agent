@@ -1,0 +1,51 @@
+# E2E configuration for the membership-sync stale-user suite
+# (plugins/slurm/tests/e2e/test_e2e_membership_stale.py).
+#
+# The offering has offering_user_auto_deletion enabled in the site_agent_e2e
+# preset, so a member who leaves their last project gets an offering user in
+# "Requested deletion" -- the state that hides them from the agent's filtered
+# offering-user list (gh-13). The suite toggles preserve_unmanaged_backend_users
+# on the loaded Offering per test.
+#
+# API host is "docker" — the DinD service hostname in GitLab CI.
+
+timezone: "UTC"
+offerings:
+  - name: "E2E SLURM Membership"
+    waldur_api_url: "http://docker:8080/api/"
+    waldur_api_token: "e2e0000000000000000000000000token001"
+    waldur_offering_uuid: "e2ef0000000000000000000000000007"
+
+    stomp_enabled: false
+    preserve_unmanaged_backend_users: false
+
+    backend_type: "slurm"
+    order_processing_backend: "slurm"
+    reporting_backend: "slurm"
+    membership_sync_backend: "slurm"
+
+    backend_settings:
+      slurm_bin_path: ".venv/bin"
+      default_account: "root"
+      customer_prefix: "e2e_mcust_"
+      project_prefix: "e2e_mproj_"
+      allocation_prefix: "e2e_malloc_"
+      qos_downscaled: "limited"
+      qos_paused: "paused"
+      qos_default: "normal"
+      enable_user_homedir_account_creation: false
+      check_backend_id_uniqueness: true
+
+    backend_components:
+      cpu:
+        limit: 10000
+        measured_unit: "k-Hours"
+        unit_factor: 60000
+        accounting_type: "limit"
+        label: "CPU"
+      ram:
+        limit: 10000
+        measured_unit: "gb-Hours"
+        unit_factor: 61440
+        accounting_type: "limit"
+        label: "RAM"

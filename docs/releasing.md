@@ -21,16 +21,18 @@ committing, and tagging. CI takes care of publishing.
 
 ## Prerequisites
 
-- You are on the `main` branch with a clean working tree.
+- You are on the `main` branch with a clean working tree, up to
+  date with `origin/main`. The script fetches first and stops if
+  `main` is behind or has diverged.
 - The [Claude CLI][claude-cli] is installed (used for
   changelog generation).
-- Python 3.9+ is available.
+- Python 3.9+ and [uv](https://docs.astral.sh/uv/) are available.
 
 [claude-cli]: https://docs.anthropic.com/en/docs/claude-code
 
 ## What the Release Script Does
 
-`scripts/release.sh <VERSION>` runs four steps:
+`scripts/release.sh <VERSION>` runs five steps:
 
 ### 1. Bump Versions
 
@@ -45,7 +47,12 @@ all packages and updates:
 Plugin discovery is automatic — no hardcoded list. Adding a new
 plugin directory with a `pyproject.toml` is all that's needed.
 
-### 2. Generate Changelog
+### 2. Regenerate the Lockfile
+
+Runs `uv lock`, so `uv.lock` records the new versions of the
+workspace packages.
+
+### 3. Generate Changelog
 
 Calls `scripts/changelog.sh <VERSION>`, which:
 
@@ -61,15 +68,19 @@ Calls `scripts/changelog.sh <VERSION>`, which:
    **regenerate**, or **quit**.
 5. Prepends the accepted entry to `CHANGELOG.md`.
 
-### 3. Commit
+If `CHANGELOG.md` did not change, the script stops before
+committing.
+
+### 4. Commit
 
 Creates a single commit with the message `Release X.Y.Z`
 containing:
 
 - All updated `pyproject.toml` files
+- The regenerated `uv.lock`
 - The updated `CHANGELOG.md`
 
-### 4. Tag
+### 5. Tag
 
 Creates a git tag `X.Y.Z` pointing at the release commit.
 
@@ -80,9 +91,10 @@ Pushing the tag to origin triggers GitLab CI, which:
 | Job | What it does |
 |---|---|
 | **Publish python module** | Bumps versions, builds, publishes to PyPI |
-| **Publish Helm chart** | Packages chart, pushes to GitHub Pages |
+| **Publish Helm chart** | Packages chart, pushes to GitHub Pages, refreshes `artifacthub-repo.yml` |
 | **Publish Docker image** | Builds and pushes multiarch images |
-| **Generate SBOM** | Creates CycloneDX SBOM, uploads to docs |
+| **Generate SBOMs** | Creates CycloneDX SBOMs of the image and `uv.lock`, attaches them to the GitHub release |
+| **Announce release on Slack** | Posts the tag's `CHANGELOG.md` entry to Slack, after the jobs above succeed |
 
 ## Running Individual Scripts
 
@@ -172,8 +184,9 @@ separately:
 
 ```bash
 python3 scripts/bump_versions.py <VERSION>
+uv lock
 # Edit CHANGELOG.md manually
-git add pyproject.toml plugins/*/pyproject.toml CHANGELOG.md
+git add pyproject.toml plugins/*/pyproject.toml uv.lock CHANGELOG.md
 git commit -m "Release <VERSION>"
 git tag <VERSION>
 ```

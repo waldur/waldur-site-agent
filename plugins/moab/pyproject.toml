@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-moab"
-version = "1.0.6rc17"
+version = "1.0.8rc6"
 description = "MOAB plugin for Waldur Site Agent"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9.2, <4"
 dependencies = [
-    "waldur-site-agent>=1.0.6rc17"
+    "waldur-site-agent>=1.0.8rc6"
 ]
 
 [build-system]
@@ -19,3 +19,6 @@ waldur-site-agent = { workspace = true }
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]
 moab = "waldur_site_agent_moab.backend:MoabBackend"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+moab = "waldur_site_agent_moab.schemas:MoabBackendSettingsSchema"

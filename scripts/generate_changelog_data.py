@@ -59,12 +59,25 @@ def ref_exists(ref, cwd):
         return False
 
 
-def resolve_ref(ref, cwd):
-    """Return the ref itself if it exists, otherwise fall back to HEAD."""
+def resolve_ref(ref, cwd, allow_head_fallback=False):
+    """Resolve a git ref.
+
+    The ref for the version being released does not exist yet at this point, so
+    HEAD is the right stand-in for it. Every other ref must resolve: silently
+    falling back to HEAD there yields an empty HEAD..HEAD range and a changelog
+    that looks like "no changes".
+    """
     if ref_exists(ref, cwd):
         return ref
-    print(f"Ref '{ref}' not found, using HEAD instead", file=sys.stderr)
-    return "HEAD"
+    if allow_head_fallback:
+        print(f"Ref '{ref}' not found, using HEAD instead", file=sys.stderr)
+        return "HEAD"
+    print(
+        f"Error: ref '{ref}' does not exist. Expected a tag or commit to "
+        f"compare against; refusing to fall back to HEAD.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +238,7 @@ def main():
 
     repo_root = get_repo_root()
 
-    current = resolve_ref(args.current_ref, repo_root)
+    current = resolve_ref(args.current_ref, repo_root, allow_head_fallback=True)
     previous = resolve_ref(args.previous_ref, repo_root)
 
     print(

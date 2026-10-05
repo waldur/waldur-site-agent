@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 import traceback
+from http import HTTPStatus
 from pathlib import Path
 from typing import Optional, Union, cast
 from uuid import UUID
@@ -30,7 +31,10 @@ from waldur_api_client.api.marketplace_offering_users import (
     marketplace_offering_users_begin_creating,
     marketplace_offering_users_list,
     marketplace_offering_users_partial_update,
+    marketplace_offering_users_set_deleted,
+    marketplace_offering_users_set_deleting,
     marketplace_offering_users_set_error_creating,
+    marketplace_offering_users_set_error_deleting,
     marketplace_offering_users_set_pending_account_linking,
     marketplace_offering_users_set_pending_additional_validation,
     marketplace_offering_users_set_validation_complete,
@@ -105,6 +109,7 @@ from waldur_site_agent.backend import (
 )
 from waldur_site_agent.backend import exceptions as backend_exceptions
 from waldur_site_agent.backend.backends import (
+    DEPARTED_OFFERING_USER_STATES,
     AbstractUsernameManagementBackend,
     BaseBackend,
     UnknownBackend,
@@ -208,6 +213,12 @@ def log_versions(configuration: structures.WaldurAgentConfiguration) -> None:
                     )
 
 
+# Long-running agent calls (paginated listings, bulk syncs) need a generous
+# timeout. Short-lived callers such as the readiness probe pass their own.
+DEFAULT_CLIENT_TIMEOUT = 600
+DEFAULT_OIDC_TIMEOUT = 30
+
+
 def get_client(
     api_url: str,
     access_token: str,
@@ -215,6 +226,8 @@ def get_client(
     verify_ssl: bool = True,
     proxy: Optional[str] = None,
     token_prefix: str = "Token",  # noqa: S107
+    timeout: float = DEFAULT_CLIENT_TIMEOUT,
+    auth: Optional[httpx.Auth] = None,
 ) -> AuthenticatedClient:
     """Create an authenticated Waldur API client.
 
@@ -225,23 +238,28 @@ def get_client(
         verify_ssl: Whether or not to verify SSL certificates
         proxy: Optional proxy URL (e.g., 'socks5://localhost:12345')
         token_prefix: Authorization header prefix ('Token' for static tokens, 'Bearer' for JWTs)
+        timeout: HTTP timeout in seconds for requests made with this client
+        auth: Optional httpx auth that sets the Authorization header per request,
+            overriding the static one built from access_token
 
     Returns:
         Configured AuthenticatedClient instance ready for API calls
     """
     headers = {"User-Agent": agent_header} if agent_header else {}
-    url = api_url.rstrip("/api")
+    url = api_url.rstrip("/").removesuffix("/api")
 
     # Configure httpx args with proxy if specified
-    httpx_args = {}
+    httpx_args: dict[str, object] = {}
     if proxy:
         httpx_args["proxy"] = proxy
+    if auth is not None:
+        httpx_args["auth"] = auth
 
     return AuthenticatedClient(
         base_url=url,
         token=access_token,
         prefix=token_prefix,
-        timeout=600,
+        timeout=timeout,
         headers=headers,
         verify_ssl=verify_ssl,
         httpx_args=httpx_args,
@@ -270,6 +288,7 @@ def fetch_oidc_token(
     client_secret: str,
     verify_ssl: bool = True,
     proxy: Optional[str] = None,
+    timeout: float = DEFAULT_OIDC_TIMEOUT,
 ) -> str:
     """Fetch (and cache) a JWT access token via the OIDC client_credentials grant.
 
@@ -283,6 +302,7 @@ def fetch_oidc_token(
         client_secret: OIDC client secret
         verify_ssl: Whether to verify the provider's TLS certificate
         proxy: Optional proxy URL used to reach the provider
+        timeout: HTTP timeout in seconds for the token request
 
     Returns:
         Access token string from the OIDC provider response
@@ -299,7 +319,8 @@ def fetch_oidc_token(
                 return token
 
     # Fetch outside the lock to avoid blocking other offerings during network I/O.
-    with httpx.Client(verify=verify_ssl, proxy=proxy, timeout=30) as client:
+    # An empty proxy (the global_proxy default) means none; httpx rejects "".
+    with httpx.Client(verify=verify_ssl, proxy=proxy or None, timeout=timeout) as client:
         response = client.post(
             oidc_token_url,
             data={
@@ -325,10 +346,51 @@ def fetch_oidc_token(
     return token
 
 
+class OfferingAuth(httpx.Auth):
+    """Authorization header for an offering, resolved on every request.
+
+    Static tokens are sent as ``Token <token>``. For OIDC-only offerings the
+    bearer JWT is looked up per request through ``fetch_oidc_token``, so a
+    long-lived client keeps working after the token it started with expires;
+    a cache hit costs only a dictionary lookup.
+    """
+
+    def __init__(
+        self,
+        offering: structures.Offering,
+        proxy: Optional[str] = None,
+        timeout: float = DEFAULT_OIDC_TIMEOUT,
+    ) -> None:
+        """Remember the offering whose credentials authorize requests."""
+        self.offering = offering
+        self.proxy = proxy
+        self.timeout = timeout
+
+    def authorization(self) -> str:
+        """Return the current Authorization header value."""
+        if self.offering.waldur_api_token:
+            return f"Token {self.offering.waldur_api_token}"
+        token = fetch_oidc_token(
+            self.offering.oidc_token_url,  # type: ignore[arg-type]
+            self.offering.oidc_client_id,  # type: ignore[arg-type]
+            self.offering.oidc_client_secret,  # type: ignore[arg-type]
+            self.offering.verify_ssl,
+            self.proxy,
+            timeout=self.timeout,
+        )
+        return f"Bearer {token}"
+
+    def auth_flow(self, request: httpx.Request):  # noqa: ANN201
+        """Set the Authorization header on each outgoing request."""
+        request.headers["Authorization"] = self.authorization()
+        yield request
+
+
 def get_client_for_offering(
     offering: structures.Offering,
     agent_header: Optional[str] = None,
     proxy: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> AuthenticatedClient:
     """Create an authenticated Waldur API client from an Offering configuration.
 
@@ -339,25 +401,44 @@ def get_client_for_offering(
     Args:
         offering: Offering configuration containing API URL and auth settings
         agent_header: Optional User-Agent string for HTTP requests
-        proxy: Optional proxy URL (e.g., 'socks5://localhost:12345')
+        proxy: Optional proxy URL (e.g., 'socks5://localhost:12345'). Defaults to
+            the configuration's global_proxy; an empty value means no proxy.
+        timeout: HTTP timeout in seconds applied to both the OIDC token request
+            and the returned client. Defaults to the long agent timeouts.
 
     Returns:
         Configured AuthenticatedClient instance ready for API calls
     """
+    # httpx rejects proxy="" outright, so an unset proxy must become None.
+    proxy = proxy or offering.global_proxy or None
+    auth: Optional[OfferingAuth] = None
     if offering.waldur_api_token:
         token = offering.waldur_api_token
         token_prefix = "Token"  # noqa: S105
     else:
+        # Fetch once up front so a misconfigured provider fails here, then let
+        # OfferingAuth refresh the JWT per request for long-lived clients.
+        auth = OfferingAuth(
+            offering, proxy, DEFAULT_OIDC_TIMEOUT if timeout is None else timeout
+        )
         token = fetch_oidc_token(
             offering.oidc_token_url,  # type: ignore[arg-type]
             offering.oidc_client_id,  # type: ignore[arg-type]
             offering.oidc_client_secret,  # type: ignore[arg-type]
             offering.verify_ssl,
             proxy,
+            timeout=DEFAULT_OIDC_TIMEOUT if timeout is None else timeout,
         )
         token_prefix = "Bearer"  # noqa: S105
     return get_client(
-        offering.waldur_api_url, token, agent_header, offering.verify_ssl, proxy, token_prefix
+        offering.waldur_api_url,
+        token,
+        agent_header,
+        offering.verify_ssl,
+        proxy,
+        token_prefix,
+        timeout=DEFAULT_CLIENT_TIMEOUT if timeout is None else timeout,
+        auth=auth,
     )
 
 
@@ -592,8 +673,9 @@ def get_backend_for_offering(
     backend_type = getattr(offering, backend_type_key, "")
     backend_info = BACKENDS.get(backend_type)
     if not backend_info:
-        logger.error("Unsupported backend type for %s: %s", backend_type_key, backend_type)
-        return UnknownBackend(), "unknown"
+        if backend_type:
+            logger.error("Unsupported backend type for %s: %s", backend_type_key, backend_type)
+        return UnknownBackend(backend_type), "unknown"
 
     backend_class, dist_name, dist_version = backend_info
 
@@ -676,7 +758,9 @@ def mark_waldur_resources_as_erred(
             marketplace_provider_resources_set_as_erred.sync_detailed(
                 uuid=resource.uuid.hex, client=waldur_rest_client, body=request_body
             )
-        except UnexpectedStatus as e:
+        except (UnexpectedStatus, httpx.TransportError) as e:
+            # One resource that cannot be marked must not stop the others: the
+            # caller is usually walking every resource of the offering.
             logger.exception(
                 "Waldur REST client error while setting resource state to Erred %s: %s",
                 resource.backend_id,
@@ -694,12 +778,8 @@ def load_offering_components() -> None:
     configuration = init_configuration()
     for offering in configuration.waldur_offerings:
         logger.info("Processing %s offering", offering.name)
-        waldur_rest_client = get_client(
-            offering.api_url,
-            offering.api_token,
-            configuration.waldur_user_agent,
-            offering.verify_ssl,
-            configuration.global_proxy,
+        waldur_rest_client = get_client_for_offering(
+            offering, configuration.waldur_user_agent, configuration.global_proxy
         )
 
         load_components_to_waldur(
@@ -934,6 +1014,20 @@ def get_current_user_from_client(waldur_rest_client: AuthenticatedClient) -> Use
     return users_me_retrieve.sync(client=waldur_rest_client)
 
 
+def _describe_waldur_error(err: Exception) -> str:
+    """One line for a failed Waldur call, naming bad credentials as such."""
+    if isinstance(err, UnexpectedStatus):
+        if err.status_code in (401, 403):
+            return (
+                f"authentication failed (HTTP {err.status_code}): check waldur_api_token "
+                "or the OIDC settings, and that the account manages this offering"
+            )
+        return f"HTTP {err.status_code} from {err.url}"
+    if isinstance(err, httpx.TransportError):
+        return f"cannot reach Waldur: {err}"
+    return str(err)
+
+
 def diagnostics() -> int:
     """Perform comprehensive system diagnostics for all offerings.
 
@@ -945,6 +1039,7 @@ def diagnostics() -> int:
         0 if all diagnostics pass, 1 if any issues are detected
     """
     configuration = init_configuration()
+    issues_found = False
     logger.info("-" * 10 + "DIAGNOSTICS START" + "-" * 10)
     logger.info("Provided settings:")
     format_string = "{:<30} = {:<10}"
@@ -977,7 +1072,6 @@ def diagnostics() -> int:
         offering_uuid = offering.uuid
         offering_name = offering.name
         offering_api_url = offering.api_url
-        offering_api_token = offering.api_token
 
         logger.info(format_string.format("Offering name", offering_name))
         logger.info(format_string.format("Offering UUID", offering_uuid))
@@ -989,13 +1083,11 @@ def diagnostics() -> int:
             )
         )
 
-        waldur_rest_client = get_client(
-            offering_api_url,
-            offering_api_token,
-            configuration.waldur_user_agent,
-            offering.verify_ssl,
+        waldur_rest_client = get_client_for_offering(
+            offering, configuration.waldur_user_agent, configuration.global_proxy
         )
 
+        offering_data = None
         try:
             current_user = get_current_user_from_client(waldur_rest_client)
             print_current_user(current_user)
@@ -1033,8 +1125,9 @@ def diagnostics() -> int:
                 logger.info(format_string.format(*component))
 
             logger.info("")
-        except UnexpectedStatus as err:
-            logger.error("Unable to fetch offering data, reason: %s", err)
+        except (UnexpectedStatus, httpx.TransportError) as err:
+            logger.error("Unable to fetch offering data: %s", _describe_waldur_error(err))
+            issues_found = True
 
         logger.info("")
         try:
@@ -1057,8 +1150,9 @@ def diagnostics() -> int:
             logger.info(format_string.format(*headers))
             for order in orders:
                 logger.info(format_string.format(order.project_name, order.type_, order.state))
-        except UnexpectedStatus as err:
-            logger.error("Unable to fetch orders, reason: %s", err)
+        except (UnexpectedStatus, httpx.TransportError) as err:
+            logger.error("Unable to fetch orders: %s", _describe_waldur_error(err))
+            issues_found = True
 
         backend, _ = get_backend_for_offering(offering, "order_processing_backend")
 
@@ -1089,7 +1183,7 @@ def diagnostics() -> int:
 
     logger.info("-" * 10 + "DIAGNOSTICS END" + "-" * 10)
 
-    return 0
+    return 1 if issues_found else 0
 
 
 def create_homedirs_for_offering_users() -> None:
@@ -1123,12 +1217,8 @@ def create_homedirs_for_offering_users() -> None:
         # One offering's unreachable backend or API must not cost the remaining
         # offerings their homedirs — this command sweeps all of them in one run.
         try:
-            waldur_rest_client = get_client(
-                offering.api_url,
-                offering.api_token,
-                configuration.waldur_user_agent,
-                offering.verify_ssl,
-                configuration.global_proxy,
+            waldur_rest_client = get_client_for_offering(
+                offering, configuration.waldur_user_agent, configuration.global_proxy
             )
             offering_users = marketplace_offering_users_list.sync_all(
                 client=waldur_rest_client,
@@ -1225,6 +1315,153 @@ def get_username_management_backend(
     )
 
 
+#: What a username backend's ``release_users`` needs about each offering user:
+#: enough to name the account, to tell what Waldur thinks of it, and to look
+#: for the same person's other accounts on the same provider.
+RELEASE_OFFERING_USER_FIELDS: list[OfferingUserFieldEnum] = [
+    OfferingUserFieldEnum.UUID,
+    OfferingUserFieldEnum.USERNAME,
+    OfferingUserFieldEnum.USER_UUID,
+    OfferingUserFieldEnum.USER_USERNAME,
+    OfferingUserFieldEnum.USER_EMAIL,
+    OfferingUserFieldEnum.STATE,
+    OfferingUserFieldEnum.IS_RESTRICTED,
+    OfferingUserFieldEnum.OFFERING_UUID,
+    OfferingUserFieldEnum.OFFERING_NAME,
+    OfferingUserFieldEnum.CUSTOMER_UUID,
+]
+
+
+def get_release_capable_username_backend(
+    offering: structures.Offering,
+) -> Optional[AbstractUsernameManagementBackend]:
+    """The offering's username backend, if it implements ``release_users``.
+
+    The default on the abstract base is a no-op, so for a backend that leaves it
+    alone there is nothing to fetch and nothing to call; callers skip the Waldur
+    round-trips on ``None``.
+    """
+    try:
+        backend, _ = get_username_management_backend(offering)
+    except Exception:
+        logger.exception(
+            "Could not resolve the username management backend for %s", offering.name
+        )
+        return None
+    if type(backend).release_users is AbstractUsernameManagementBackend.release_users:
+        return None
+    return backend
+
+
+def _check_transition(response: object, target: str) -> None:
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and status_code >= HTTPStatus.BAD_REQUEST:
+        msg = f"Transition to {target} rejected with HTTP {status_code}"
+        raise BackendError(msg)
+
+
+def claim_offering_user_deletion(
+    offering_user: OfferingUser, waldur_rest_client: AuthenticatedClient
+) -> bool:
+    """Move the offering user to DELETING *before* touching the provider side.
+
+    This is the compare-and-swap that protects a person who was restored in the
+    meantime: Waldur's transition validator refuses ``set_deleting`` for a row
+    that is live again (only REQUESTED_DELETION / ERROR_DELETING may become
+    DELETING), so a refusal here means "do not tear this account down" rather
+    than an error. Returns whether the claim holds; a row already in DELETING
+    is ours from an earlier, interrupted attempt.
+    """
+    state = getattr(offering_user, "state", UNSET)
+    if state == OfferingUserState.DELETING:
+        return True
+    if state not in DEPARTED_OFFERING_USER_STATES:
+        return False
+    response = marketplace_offering_users_set_deleting.sync_detailed(
+        uuid=offering_user.uuid, client=waldur_rest_client
+    )
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and status_code >= HTTPStatus.BAD_REQUEST:
+        logger.info(
+            "Waldur refused to move offering user %s (%s) to DELETING (HTTP %s); it was "
+            "restored in the meantime, leaving the account alone",
+            offering_user.username,
+            offering_user.uuid,
+            status_code,
+        )
+        return False
+    return True
+
+
+def complete_offering_user_deletion(
+    offering_user: OfferingUser, waldur_rest_client: AuthenticatedClient
+) -> None:
+    """Mark a claimed (DELETING) offering user DELETED.
+
+    Only DELETING may become DELETED. This is what lets Waldur release the
+    provider-wide identity behind the account, so it runs only once the
+    provider side is torn down.
+    """
+    _check_transition(
+        marketplace_offering_users_set_deleted.sync_detailed(
+            uuid=offering_user.uuid, client=waldur_rest_client
+        ),
+        "DELETED",
+    )
+    logger.info(
+        "Marked offering user %s (%s) DELETED in Waldur", offering_user.username, offering_user.uuid
+    )
+
+
+def mark_offering_user_error_deleting(
+    offering_user: OfferingUser, waldur_rest_client: AuthenticatedClient
+) -> None:
+    """Best-effort: make a failed teardown visible in Waldur; the sweep retries it."""
+    state = getattr(offering_user, "state", UNSET)
+    if state not in (OfferingUserState.REQUESTED_DELETION, OfferingUserState.DELETING):
+        return
+    try:
+        _check_transition(
+            marketplace_offering_users_set_error_deleting.sync_detailed(
+                uuid=offering_user.uuid, client=waldur_rest_client
+            ),
+            "ERROR_DELETING",
+        )
+    except Exception:
+        logger.exception(
+            "Could not mark offering user %s (%s) as error deleting",
+            offering_user.username,
+            offering_user.uuid,
+        )
+
+
+def release_offering_users(
+    backend: AbstractUsernameManagementBackend,
+    offering: structures.Offering,
+    offering_users: list[OfferingUser],
+    waldur_rest_client: AuthenticatedClient,
+) -> None:
+    """Hand departed offering users to the username backend, never raising.
+
+    A failure here must not abort the membership cycle that triggered it: the
+    associations are already gone, and the backend gets the same accounts again
+    on the next cycle for as long as Waldur keeps them in a deletion state.
+    """
+    if not offering_users:
+        return
+    logger.info(
+        "Releasing %d departed offering user(s) of %s through the %s backend: %s",
+        len(offering_users),
+        offering.name,
+        offering.username_management_backend,
+        ", ".join(sorted(ou.username for ou in offering_users if ou.username)),
+    )
+    try:
+        backend.release_users(offering_users, waldur_rest_client)
+    except Exception:
+        logger.exception("Failed to release departed offering users of %s", offering.name)
+
+
 def update_offering_users(
     offering: structures.Offering,
     waldur_rest_client: AuthenticatedClient,
@@ -1255,6 +1492,24 @@ def update_offering_users(
     # Skip processing if we have an unknown username management backend
     if isinstance(username_management_backend, UnknownUsernameManagementBackend):
         logger.debug("Skipping username processing - unknown username management backend")
+        return False
+
+    # The backend does not own the login name — Waldur does. Never ask it to mint
+    # one, and never PATCH a name back over the authoritative value. Checked here
+    # rather than in _update_user_username so that both call sites are covered by
+    # one log line instead of one per user. Reaching this branch means the offering
+    # is misconfigured: _can_generate_usernames above returns False for every
+    # policy other than 'service_provider', so a correct setup never gets here.
+    if not username_management_backend.is_username_authoritative:
+        logger.error(
+            "Offering %s (%s) uses the '%s' username management backend, for which "
+            "Waldur is the source of truth, but its username_generation_policy is "
+            "'service_provider'. Skipping username generation - change the policy "
+            "in Waldur, or point the offering at a backend that assigns names.",
+            offering.name,
+            offering.uuid,
+            offering.username_management_backend,
+        )
         return False
 
     # Group users by their current state for efficient processing
@@ -1545,12 +1800,8 @@ def sync_offering_users() -> None:
     for offering in configuration.waldur_offerings:
         logger.info("Processing offering users for %s", offering.name)
 
-        waldur_rest_client = get_client(
-            offering.api_url,
-            offering.api_token,
-            configuration.waldur_user_agent,
-            offering.verify_ssl,
-            configuration.global_proxy,
+        waldur_rest_client = get_client_for_offering(
+            offering, configuration.waldur_user_agent, configuration.global_proxy
         )
         offering_users = marketplace_offering_users_list.sync_all(
             client=waldur_rest_client,
@@ -1608,12 +1859,8 @@ def sync_resource_limits() -> None:
         )
         backend, _ = get_backend_for_offering(offering, "membership_sync_backend")
         logger.info("Using class %s as a backend", backend.__class__.__name__)
-        waldur_rest_client = get_client(
-            offering.api_url,
-            offering.api_token,
-            configuration.waldur_user_agent,
-            offering.verify_ssl,
-            configuration.global_proxy,
+        waldur_rest_client = get_client_for_offering(
+            offering, configuration.waldur_user_agent, configuration.global_proxy
         )
         resources = marketplace_resources_list.sync_all(
             client=waldur_rest_client,
@@ -1667,7 +1914,7 @@ def ensure_log_shipper(
     Subsequent calls with the same agent_identity_uuid are no-ops.
 
     Args:
-        offering: offering configuration (provides api_url and api_token)
+        offering: offering configuration (provides api_url and credentials)
         agent_identity_uuid: UUID of the registered AgentIdentity
         log_shipping_config: global log shipping configuration
     """
@@ -1689,6 +1936,7 @@ def ensure_log_shipper(
         api_url=offering.api_url,
         api_token=offering.api_token,
         agent_identity_uuid=agent_identity_uuid,
+        auth=OfferingAuth(offering),
         ship_interval=ls_cfg.ship_interval_seconds,
     )
     shipper.start()

@@ -23,6 +23,8 @@ offerings: # Settings for offerings
     reporting_backend: "slurm" # Name of the backend from entrypoints to use for reporting
     resource_import_enabled: false # Whether to expose importable resources to Waldur
     username_reconciliation_enabled: false # Enable periodic username reconciliation from target backend (e.g. Waldur B). Only needed for Waldur federation setups.
+    preserve_unmanaged_backend_users: false # If true, membership sync keeps backend users Waldur has never seen as offering users (SP-added extras). Users Waldur has ever known (any state) are still removed when they leave the team. Default false: remove anyone not on the Waldur team. Applies to every non-identity-bridge backend. Ignored for Waldur federation.
+    omit_anomalous_usage_components: false # If false (default), a decreasing component blocks the whole usage payload. Set true to omit only the decreasing components and still report the rest (recommended for Waldur-to-Waldur).
     stomp_enabled: false # STOMP feature toggler
     # stomp_membership_sync_enabled: false  # Inherits stomp_enabled. Set false to keep
     #   HTTP polling for membership sync even when stomp_enabled is true.
@@ -89,8 +91,8 @@ offerings: # Settings for offerings
           # to SLURM units (60 * 1024)
         accounting_type: "usage" # Can be usage or limit
         label: RAM # A label for a component in Waldur
-  # Example: EFP Discoverer CPU cluster with LDAP user management
-  - name: "Discoverer CPU"
+  # Example: CPU cluster with LDAP user management
+  - name: "Example CPU cluster with LDAP"
     waldur_api_url: "https://waldur.example.com/api/"
     waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
     waldur_offering_uuid: ""
@@ -134,10 +136,10 @@ offerings: # Settings for offerings
       #   inode_hardlimit: 100000
       # LDAP integration (requires waldur-site-agent-ldap plugin)
       ldap:
-        uri: "ldap://ldap.sofiatech.bg"
-        bind_dn: "cn=admin,dc=sofiatech,dc=bg"
+        uri: "ldap://ldap.example.org"
+        bind_dn: "cn=admin,dc=example,dc=org"
         bind_password: "secret"
-        base_dn: "dc=sofiatech,dc=bg"
+        base_dn: "dc=example,dc=org"
         people_ou: "ou=People"
         groups_ou: "ou=Groups"
         uid_range_start: 5000
@@ -147,6 +149,16 @@ offerings: # Settings for offerings
         default_login_shell: "/bin/bash"
         default_home_base: "/home"
         username_format: "first_initial_lastname" # e.g. jsmith from John Smith
+        # Who owns username/uidNumber/gidNumber/homeDirectory/loginShell.
+        # "ldap" (default) allocates locally, as configured above. Set "waldur"
+        # when several offerings of one service provider share this directory:
+        # the agent then writes the offering user's values instead of allocating,
+        # so the same person keeps one UID everywhere. Requires a POSIX ID pool on
+        # the provider, a username_generation_policy other than "service_provider",
+        # and username_format removed (Waldur names the accounts).
+        # account_source: "waldur"
+        # on_posix_mismatch: "report"   # report (default) | adopt | fail
+        # on_missing_posix_ids: "error" # error (default) | skip
         generate_vpn_password: false
         remove_user_on_deactivate: false # Keep users in LDAP when removed from offering
         access_groups: # Per-user access groups (configured per offering)
@@ -160,6 +172,11 @@ offerings: # Settings for offerings
         max_jobs: 10
         max_submit: 20
         max_wall: "2880"
+        # Opt-in (default false). Existing enabled-only deploys are unchanged.
+        # skip_qos_swap: true            # pause/downscale via GrpSubmitJobs; never set qos=
+        # apply_limits_to_qos: true      # GrpTRESMins on the QoS, not the account
+        # (apply_limits_to_qos requires enabled and skip_qos_swap; drop qos_default /
+        # qos_paused / qos_downscaled when skip_qos_swap is true)
       # Project directory on shared filesystem
       project_directory:
         enabled: true
@@ -181,8 +198,8 @@ offerings: # Settings for offerings
         unit_factor: 60000
         accounting_type: "usage"
         label: "CPU"
-  # Example: EFP Discoverer+ GPU cluster with LDAP and billing
-  - name: "Discoverer+ GPU"
+  # Example: GPU cluster with LDAP and prepaid billing
+  - name: "Example GPU cluster with LDAP"
     waldur_api_url: "https://waldur.example.com/api/"
     waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
     waldur_offering_uuid: ""
@@ -201,10 +218,10 @@ offerings: # Settings for offerings
       default_partition: "common"
       enable_user_homedir_account_creation: true
       ldap:
-        uri: "ldap://ldap.sofiatech.bg"
-        bind_dn: "cn=admin,dc=sofiatech,dc=bg"
+        uri: "ldap://ldap.example.org"
+        bind_dn: "cn=admin,dc=example,dc=org"
         bind_password: "secret"
-        base_dn: "dc=sofiatech,dc=bg"
+        base_dn: "dc=example,dc=org"
         uid_range_start: 5000
         uid_range_end: 65000
         gid_range_start: 800
@@ -222,6 +239,9 @@ offerings: # Settings for offerings
         max_wall: "120"
         min_tres_per_job: "gres/gpu=1"
         additional_qos: ["2cpu-single-host"]
+        # Opt-in (default false). Existing enabled-only deploys are unchanged.
+        # skip_qos_swap: true
+        # apply_limits_to_qos: true
     backend_components:
       billing:
         limit: 2328000
@@ -279,15 +299,51 @@ offerings: # Settings for offerings
     waldur_api_url: "http://localhost:8081/api/"
     waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
     waldur_offering_uuid: ""
+    order_processing_backend: "moab"
+    membership_sync_backend: "moab"
+    reporting_backend: "moab"
     backend_type: "moab"
     backend_settings:
       default_account: root
       customer_prefix: "c_"
       project_prefix: "p_"
       allocation_prefix: "a_"
-      enable_user_homedir_account_creation: true
     backend_components: # For MOAB backend, only "deposit" is supported
       deposit:
         measured_unit: 'EUR'
         accounting_type: limit
         label: Deposit (EUR)
+  - name: "Example Azure Offering"
+    waldur_api_url: "http://localhost:8081/api/"
+    waldur_api_token: "" # Static token to access the Waldur API. Leave blank to use OIDC auth.
+    waldur_offering_uuid: ""
+    backend_type: "azure"
+    order_processing_backend: "azure"
+    # No membership_sync_backend: Azure has no backend membership to sync, so the
+    # membership_sync mode has nothing to do for this offering.
+    reporting_backend: "azure"
+    backend_settings:
+      subscription_id: "" # Azure subscription the machines are created in
+      tenant_id: "" # Azure AD tenant of the service principal
+      client_id: "" # Service principal client ID
+      client_secret: "" # Service principal client secret
+      default_location: "westeurope"
+      default_size: "Standard_B1s"
+      default_image: "Canonical:0001-com-ubuntu-server-jammy:22_04-lts:latest"
+      # Without any range a machine accepts no SSH connections; the whole
+      # internet is deliberately not the default.
+      allowed_ssh_ranges:
+        - "203.0.113.0/24"
+    backend_components: # Allocation, not consumption: the shape the machine runs at
+      cpu:
+        measured_unit: 'Cores'
+        accounting_type: limit
+        label: CPU
+      ram:
+        measured_unit: 'MiB'
+        accounting_type: limit
+        label: RAM
+      disk:
+        measured_unit: 'MiB'
+        accounting_type: limit
+        label: Disk

@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
 
+from waldur_site_agent.backend import logger
 from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import (
     BackendError,
@@ -175,8 +176,40 @@ class SlurmClient(SlurmClientInterface):
         )
 
     def delete_all_users_from_account(self, name: str) -> str:
-        """Drop all the users from the account based on the account name."""
+        """Drop all the users from the account based on the account name.
+
+        slurmdbd refuses to remove a user's *default* association while the
+        user keeps others (as_mysql_remove_assocs), so a user whose default is
+        this account is re-pointed at one of their remaining accounts first --
+        the same rule ``delete_association`` follows for a single user. Without
+        it the whole-account teardown hits the very restriction the per-user
+        path was fixed for.
+        """
+        self._repoint_defaults_away_from(name)
         return self._execute_command(["remove", "user", "where", f"account={name}"])
+
+    def _repoint_defaults_away_from(self, account: str) -> None:
+        """Move the DefaultAccount of every user defaulting to this account.
+
+        The listing can name the same user more than once (one row per
+        association), so each name is handled once.
+        """
+        target = account.lower()
+        for username in dict.fromkeys(self.list_resource_users(account)):
+            if self.get_user_default_account(username) != target:
+                continue
+            remaining = [item for item in self.list_user_accounts(username) if item != target]
+            if not remaining:
+                # This account is the user's last one: removing it takes the
+                # user record with it, which slurmdbd allows.
+                continue
+            logger.info(
+                "Moving default account of %s from %s to %s before removing the account's users",
+                username,
+                account,
+                remaining[0],
+            )
+            self.set_user_default_account(username, remaining[0])
 
     def account_has_users(self, account: str) -> bool:
         """Checks if the account with the specified name have related users."""
@@ -204,9 +237,21 @@ class SlurmClient(SlurmClientInterface):
             ["modify", "user", username, "where", f"account={resource_id}", "set", quota]
         )
 
-    def set_account_qos(self, account: str, qos: str) -> None:
-        """Set the specified QoS for the account."""
-        self._execute_command(["modify", "account", account, "set", f"qos={qos}"])
+    def set_account_qos(self, account: str, qos: str, default_qos: Optional[str] = None) -> None:
+        """Set the specified QoS for the account.
+
+        ``default_qos`` is written in the same ``sacctmgr modify`` as the list.
+        slurmdbd validates the post-modify state of the account and of every
+        association under it: each effective DefaultQOS must be in its
+        effective QoS list, otherwise the whole request is rolled back with
+        "These associations don't have access to their default qos". Replacing
+        the list on an account that has a default therefore only succeeds when
+        the default moves with it, in the same command.
+        """
+        args = ["modify", "account", account, "set", f"qos={qos}"]
+        if default_qos:
+            args.append(f"defaultqos={default_qos}")
+        self._execute_command(args)
 
     def get_association(self, user: str, resource_id: str) -> Association | None:
         """Returns associations between the user and the account if exists."""
@@ -234,8 +279,75 @@ class SlurmClient(SlurmClientInterface):
         args.append("Share=parent")  # Inherits fairshare value from the parent account
         return self._execute_command(args)
 
+    def list_user_accounts(self, username: str) -> list[str]:
+        """Accounts the user holds an association with, lower-cased, deduplicated, sorted.
+
+        The rows are matched by their user column rather than trusting the
+        ``where`` filter (an implementation that ignores it would otherwise
+        report every association on the cluster). Account names are folded to
+        lower case: slurmdbd stores them that way and prints them that way,
+        whatever case they were created with.
+        """
+        output = self._execute_command(
+            ["show", "association", "where", f"user={username}", "format=user,account"]
+        )
+        accounts = set()
+        for line in output.splitlines():
+            if "|" not in line:
+                continue
+            user, account, *_ = (*line.split("|"), "")
+            if user.strip() == username and account.strip():
+                accounts.add(account.strip().lower())
+        return sorted(accounts)
+
+    def get_user_default_account(self, username: str) -> Optional[str]:
+        """The user's DefaultAccount, or None when the user is unknown."""
+        output = self._execute_command(
+            ["show", "user", "where", f"name={username}", "format=user,defaultaccount"]
+        )
+        # Match the row by its user column rather than trusting the filter: a
+        # listing that ignores ``where`` (or one seeded with other users, such
+        # as root) would otherwise hand back somebody else's default.
+        for line in output.splitlines():
+            if "|" not in line:
+                continue
+            name, default_account, *_ = (*line.split("|"), "")
+            if name.strip() == username:
+                return default_account.strip().lower() or None
+        return None
+
+    def set_user_default_account(self, username: str, account: str) -> None:
+        """Re-point the user's DefaultAccount."""
+        self._execute_command(
+            ["modify", "user", "where", f"name={username}", "set", f"DefaultAccount={account}"]
+        )
+
+    def delete_user(self, username: str) -> str:
+        """Remove the user record together with every association it holds."""
+        return self._execute_command(["remove", "user", "where", f"name={username}"])
+
     def delete_association(self, username: str, resource_id: str) -> str:
-        """Deletes association between the account and the user in SLURM cluster."""
+        """Delete the association between the account and the user, slurmdbd-style.
+
+        slurmdbd refuses to remove a user's *default* association while the
+        user keeps others (as_mysql_remove_assocs), so the default is moved to
+        one of the remaining accounts first. When this is the user's last
+        association the user record goes with it, which is what
+        ``sacctmgr remove user`` does and what the emulator mirrors.
+        """
+        accounts = self.list_user_accounts(username)
+        remaining = [account for account in accounts if account != resource_id.lower()]
+        if accounts and not remaining:
+            logger.info("Removing user %s: %s was its last association", username, resource_id)
+            return self.delete_user(username)
+        if remaining and self.get_user_default_account(username) == resource_id.lower():
+            logger.info(
+                "Moving default account of %s from %s to %s before removing the association",
+                username,
+                resource_id,
+                remaining[0],
+            )
+            self.set_user_default_account(username, remaining[0])
         return self._execute_command(
             [
                 "remove",
@@ -369,23 +481,35 @@ class SlurmClient(SlurmClientInterface):
 
     def get_current_account_qos(self, account: str) -> str:
         """Returns a name of the current QoS of the account."""
+        return self._get_account_association_column(account, "qos")
+
+    def get_current_account_default_qos(self, account: str) -> str:
+        """Return the effective DefaultQOS of the account, or "" when none is set.
+
+        ``sacctmgr list associations`` reports the inherited default when the
+        account row has none of its own, which is exactly the value slurmdbd
+        checks against the QoS list on modify.
+        """
+        return self._get_account_association_column(account, "defaultqos")
+
+    def _get_account_association_column(self, account: str, column: str) -> str:
         args = [
             "list",
             "associations",
-            "format=account,qos",
+            f"format=account,{column}",
             "where",
             f"account={account}",
         ]
         output = self._execute_command(args)
-        # sacctmgr returns one row per association ("account|qos"); --parsable2
-        # emits no trailing separator. Match on the account column and take the
-        # qos column.
-        min_columns_for_qos = 2
+        # sacctmgr returns one row per association ("account|<column>");
+        # --parsable2 emits no trailing separator. Match on the account column
+        # and take the requested column from the first matching row.
+        min_columns = 2
         for line in output.splitlines():
             if "|" not in line:
                 continue
             parts = line.split("|")
-            if len(parts) < min_columns_for_qos or parts[0].strip() != account:
+            if len(parts) < min_columns or parts[0].strip() != account:
                 continue
             return parts[1].strip()
         return ""
@@ -412,15 +536,22 @@ class SlurmClient(SlurmClientInterface):
         return [line.split("|")[0] for line in output.splitlines() if "|" in line]
 
     def check_user_exists(self, username: str) -> bool:
-        """Check if the user exists in the system."""
+        """Check if the user exists in the system (local ``id`` lookup).
+
+        Unknown user is False. Any other failure -- ``id`` missing on the host,
+        NSS down -- is raised as a BackendError naming the cause, never a crash
+        from an unset result.
+        """
         args = ["-u", username]
         try:
             output = self._execute_command(
                 args, command_name="id", immediate=False, parsable=False, silent=True
             )
         except BackendError as e:
-            if "no such user" in str(e):
+            if "no such user" in str(e).lower():
                 return False
+            msg = f"Cannot check whether user {username} exists on this host: {e}"
+            raise BackendError(msg) from e
         return output.strip().isdigit()
 
     def _parse_account(self, line: str) -> ClientResource:
@@ -590,6 +721,37 @@ class SlurmClient(SlurmClientInterface):
         self._execute_command(
             ["modify", "account", "set", f"defaultqos={qos_name}", "where", f"account={account}"]
         )
+
+    def set_qos_grp_tres_mins(self, qos_name: str, limits_dict: dict[str, int]) -> None:
+        """Set GrpTRESMins on the QoS (allocation budget lives on the QoS)."""
+        limits_str = ",".join([f"{key}={value}" for key, value in sorted(limits_dict.items())])
+        self._execute_command(["modify", "qos", qos_name, "set", f"GrpTRESMins={limits_str}"])
+
+    def get_qos_grp_tres_mins(self, qos_name: str) -> dict[str, int]:
+        """Return GrpTRESMins of the named QoS."""
+        output = self._execute_command(
+            ["show", "qos", qos_name, "format=Name,GrpTRESMins"],
+            immediate=False,
+        )
+        for line in output.splitlines():
+            if "|" not in line:
+                continue
+            name, _, tres_field = line.partition("|")
+            if name.strip() != qos_name:
+                continue
+            parsed = self._parse_tres_string(tres_field.strip())
+            result: dict[str, int] = {}
+            for key, value in parsed.items():
+                try:
+                    result[key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+            return result
+        return {}
+
+    def reset_qos_raw_usage(self, qos_name: str) -> None:
+        """Reset RawUsage on the QoS so the new GrpTRESMins budget starts clean."""
+        self._execute_command(["modify", "qos", qos_name, "set", "RawUsage=0"])
 
     def set_account_grp_submit_jobs(self, account: str, value: int) -> None:
         """Set GrpSubmitJobs on the account (``value=-1`` clears the limit).

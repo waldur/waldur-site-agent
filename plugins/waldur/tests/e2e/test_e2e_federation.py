@@ -44,7 +44,6 @@ from waldur_api_client.models.order_create_request_limits import (
     OrderCreateRequestLimits,
 )
 from waldur_api_client.models.order_state import OrderState
-from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.types import UNSET
 
 from plugins.waldur.tests.e2e.conftest import snapshot_order, snapshot_resource
@@ -117,7 +116,6 @@ def _create_source_order(
         plan=plan_url,
         limits=order_limits,
         attributes=attrs,
-        type_=RequestTypes.CREATE,
     )
 
     order = marketplace_orders_create.sync(client=client, body=body)

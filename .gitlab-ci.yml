@@ -13,73 +13,41 @@ include:
     file: "/templates/test/lint-dockerfile.yaml"
   - project: "waldur/waldur-pipelines"
     file: "/templates/test/vulnerability-scan.yml"
-  # Temporarily disabled
-  # - project: "waldur/waldur-pipelines"
-  #   file: "/templates/sbom/upload-sboms-to-docs.yml"
-  # - project: "waldur/waldur-pipelines"
-  #   file: "/templates/sbom/generate-image-sbom.yml"
-  # - project: "waldur/waldur-pipelines"
-  #   file: "/templates/sbom/generate-python-codebase-sbom.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/test/license-scan.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/release/announce-slack.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/sbom/generate-image-sbom.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/sbom/generate-python-codebase-sbom.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/sbom/publish-sboms-to-github-release.yml"
 
 # Avoid running two full pipelines for every MR-branch push. Job rules here match
 # both `$CI_COMMIT_BRANCH` and `merge_request_event`, so an MR branch push used to
 # spawn a redundant branch pipeline AND the merge-request pipeline for the same
-# SHA (~2x CI cost on every active MR). Suppress the branch pipeline when an MR is
-# open; tags, scheduled runs, upstream triggers, and branches without an open MR
-# still run normally.
+# SHA (~2x CI cost on every active MR). Branch pipelines are therefore limited to
+# `main`; feature branches are tested through their merge request. Pushing a
+# branch *before* opening its MR no longer triggers a pipeline either (that gap
+# used to cost a full run per new branch). Tags, scheduled runs, upstream
+# triggers and pipelines started from the web UI / API still run normally, as
+# does a push with `-o ci.variable=RUN_E2E=true` (the E2E escape hatch).
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+    - if: '$RUN_E2E == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != "main"'
       when: never
     - when: always
 
 variables:
   COMPONENT_VERSION: "latest"
-  # Project-relative uv cache dir so the default cache: block can persist it
-  # (uv's default cache lives outside $CI_PROJECT_DIR and can't be cached).
-  UV_CACHE_DIR: .uv-cache
 
-# Default cache for all jobs: share uv's download cache across the pipeline keyed
-# on the lockfile. Previously the repo had NO cache, so all ~45 test jobs ran
-# `pip install uv && uv sync --all-packages` completely cold. Consumer jobs pull;
-# the .pre "Prime uv cache" job below is the single writer.
-cache: &uv_cache
-  key:
-    files:
-      - uv.lock
-  policy: pull
-  paths:
-    - .uv-cache
-
-Prime uv cache:
-  stage: .pre
-  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
-  interruptible: true
-  # Cache warming is best-effort: it must never red the pipeline. Without rules a
-  # job defaults to `only: branches/tags` and is skipped in MR pipelines (where it
-  # is most useful), so gate it explicitly on the same events as the consumers.
-  # allow_failure covers the occasional uv/hatchling build race in `uv sync`.
-  allow_failure: true
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: $CI_COMMIT_TAG
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
-  retry:
-    max: 2
-    when:
-      - runner_system_failure
-      - stuck_or_timeout_failure
-      - script_failure
-  cache:
-    <<: *uv_cache
-    policy: pull-push
-  script:
-    - pip install uv
-    - uv sync --all-packages
+# No uv cache: the runner cache is local-only and never hit by the test jobs
+# (every trace showed "Cache file does not exist"), while a cold
+# `uv sync --all-packages` takes ~5-10s. The former ".pre" cache-priming job also
+# serialised every pipeline behind itself for no benefit.
 
 # Helm linting and validation
 Lint helm chart:
@@ -88,6 +56,7 @@ Lint helm chart:
     entrypoint: [""]
   stage: test
   interruptible: true
+  needs: []
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
       when: never
@@ -121,276 +90,237 @@ Lint helm chart:
     paths:
       - rendered-templates
 
-# Base test template with common settings
+# ---------------------------------------------------------------------------
+# Unit tests
+#
+# Interpreter matrix: merge requests run only the supported floor and ceiling
+# (3.9, 3.13); the three interpreters in between run on main, tags and
+# scheduled pipelines via the "(3.10-3.12)" companion jobs. Suites are split into
+# three jobs -- core, slurm (the two long ones) and one job that loops over every
+# other plugin -- because the per-job overhead (runner prep + uv sync, ~30s) used
+# to exceed the pytest time of most plugin suites, and half a dozen plugins with
+# tests had no CI job at all.
+# ---------------------------------------------------------------------------
+
+.mr_python_versions: &mr_python_versions ["3.9", "3.13"]
+.extra_python_versions: &extra_python_versions ["3.10", "3.11", "3.12"]
+
 .Run tests base:
   stage: test
   interruptible: true
+  needs: []
   # script_failure is included because `uv sync` occasionally dies on a
-  # uv/hatchling build race in the extracted .uv-cache (same flake the
-  # "Prime uv cache" job retries for); the cost is one wasted re-run when
-  # a test failure is real.
+  # uv/hatchling build race; the cost is one wasted re-run when a test failure
+  # is real.
   retry: &uv_flake_retry
     max: 1
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
       - script_failure
-  # One image + matrix over all supported interpreters, shared by every suite
-  # job below. Replaces the 45 hand-written "Run python vX.Y <suite> tests" jobs
-  # and their 9 wrapper templates — adding a Python version is now one entry here.
   image: "registry.hpc.ut.ee/mirror/library/python:$PYTHON_VERSION"
   parallel:
     matrix:
-      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+      - PYTHON_VERSION: *mr_python_versions
   coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
-  # Hoisted from the 9 identical wrapper templates.
   before_script:
     - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
+    - pip install uv
+    - uv sync --all-packages
+    - source .venv/bin/activate
   artifacts:
     when: always
     expire_in: 1 week
     reports:
-      junit: report.xml
+      junit: report*.xml
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
 
-# Core tests template - runs tests/ directory
-Run core tests:
+# Rules shared by the "(3.10-3.12)" companion jobs: on merge requests only when
+# the pipeline definition itself changes, so a CI edit that breaks them cannot
+# reach main unexercised.
+.full_matrix_rules: &full_matrix_rules
+  - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+    when: never
+  - if: '$CI_COMMIT_BRANCH == "main"'
+  - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+  - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    changes:
+      - .gitlab-ci.yml
+
+.Core tests:
   extends: .Run tests base
+  script:
+    - pytest --cov=waldur_site_agent --cov-report=xml --cov-report=term --junitxml=report.xml tests/
+
+Run core tests:
+  extends: .Core tests
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
       when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
     - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - tests/**/*
-        - pyproject.toml
         - waldur_site_agent/**/*
+        - pyproject.toml
         - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=waldur_site_agent --cov-report=xml --cov-report=term --junitxml=report.xml tests/
+        - .gitlab-ci.yml
 
-# Plugin test templates - each runs only when its plugin or core changes
-Run slurm tests:
+Run core tests (3.10-3.12):
+  extends: .Core tests
+  parallel:
+    matrix:
+      - PYTHON_VERSION: *extra_python_versions
+  rules: *full_matrix_rules
+
+.Slurm tests:
   extends: .Run tests base
+  script:
+    - cd plugins/slurm
+    - pytest --cov=waldur_site_agent_slurm --cov-report=xml:$CI_PROJECT_DIR/coverage.xml --cov-report=term --junitxml=$CI_PROJECT_DIR/report.xml tests/ --ignore=tests/e2e
+
+Run slurm tests:
+  extends: .Slurm tests
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
       when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
     - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - plugins/slurm/**/*
-        - pyproject.toml
         - waldur_site_agent/**/*
+        - pyproject.toml
         - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/slurm --cov-report=xml --cov-report=term --junitxml=report.xml plugins/slurm/
+        - .gitlab-ci.yml
 
-Run mup tests:
+Run slurm tests (3.10-3.12):
+  extends: .Slurm tests
+  parallel:
+    matrix:
+      - PYTHON_VERSION: *extra_python_versions
+  rules: *full_matrix_rules
+
+# Every plugin except slurm, run one after another from inside its own directory
+# (entry points only resolve reliably that way -- see CLAUDE.md). A failure in
+# one plugin does not stop the others; the job fails at the end and the summary
+# names the offenders. e2e/ directories are gated by env vars anyway but are
+# skipped outright to keep collection cheap.
+.Plugin tests:
   extends: .Run tests base
+  script:
+    - |
+      failed=""
+      for tests_dir in plugins/*/tests; do
+        plugin_dir=$(dirname "$tests_dir")
+        plugin=$(basename "$plugin_dir")
+        [ "$plugin" = "slurm" ] && continue
+        package=$(cd "$plugin_dir" && ls -d waldur_site_agent_* 2>/dev/null | head -1)
+        echo ""
+        echo "=================== $plugin ==================="
+        if ! (cd "$plugin_dir" && pytest --cov="${package:-.}" \
+              --cov-report=xml:"$CI_PROJECT_DIR/coverage-$plugin.xml" --cov-report=term \
+              --junitxml="$CI_PROJECT_DIR/report-$plugin.xml" tests/ --ignore=tests/e2e); then
+          failed="$failed $plugin"
+        fi
+      done
+      echo ""
+      if [ -n "$failed" ]; then
+        echo "FAILED plugin suites:$failed"
+        exit 1
+      fi
+      echo "All plugin suites passed."
+  artifacts:
+    when: always
+    expire_in: 1 week
+    reports:
+      junit: report-*.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage-*.xml
+
+Run plugin tests:
+  extends: .Plugin tests
   rules:
     - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
       when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
     - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
-        - plugins/mup/**/*
-        - pyproject.toml
+        - plugins/**/*
         - waldur_site_agent/**/*
+        - pyproject.toml
         - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/mup --cov-report=xml --cov-report=term --junitxml=report.xml plugins/mup/
+        - .gitlab-ci.yml
 
-Run harbor tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/harbor/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/harbor --cov-report=xml --cov-report=term --junitxml=report.xml plugins/harbor/
-
-Run nextcloud tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/nextcloud/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/nextcloud --cov-report=xml --cov-report=term --junitxml=report.xml plugins/nextcloud/
-
-Run okd tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/okd/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/okd --cov-report=xml --cov-report=term --junitxml=report.xml plugins/okd/
-
-Run rancher tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/rancher/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/rancher --cov-report=xml --cov-report=term --junitxml=report.xml plugins/rancher/
-
-Run ceph-s3 tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/ceph-s3/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/ceph-s3 --cov-report=xml --cov-report=term --junitxml=report.xml plugins/ceph-s3/
-
-Run cscs-dwdi tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/cscs-dwdi/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/cscs-dwdi --cov-report=xml --cov-report=term --junitxml=report.xml plugins/cscs-dwdi/
-
-Run waldur tests:
-  extends: .Run tests base
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH == "develop"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/waldur/**/*
-        - pyproject.toml
-        - waldur_site_agent/**/*
-        - uv.lock
-  script:
-    - pip install uv
-    - uv sync --all-packages
-    - source .venv/bin/activate
-    - pytest --cov=plugins/waldur --cov-report=xml --cov-report=term --junitxml=report.xml plugins/waldur/ --ignore=plugins/waldur/tests/e2e/
+Run plugin tests (3.10-3.12):
+  extends: .Plugin tests
+  parallel:
+    matrix:
+      - PYTHON_VERSION: *extra_python_versions
+  rules: *full_matrix_rules
 
 Scan Python dependencies:
   extends: .Vulnerability scan template
   variables:
     LOCKFILE_PATH: "uv.lock"
 
-Run linters:
-  image: "registry.hpc.ut.ee/mirror/library/python:$PYTHON_VERSION"
+# Linters run once, on the newest interpreter. Only mypy is interpreter
+# sensitive (ruff's target-version is pinned in pyproject.toml, the rest is
+# YAML/Markdown/whitespace), so the supported floor gets a mypy-only job instead
+# of a second full pre-commit run.
+.Linters base:
   extends: .Run linters template
-  parallel:
-    matrix:
-      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+  image: "registry.hpc.ut.ee/mirror/library/python:$PYTHON_VERSION"
+  needs: []
+  # Keyed per interpreter: the two linter jobs run concurrently and would
+  # otherwise overwrite each other's hook environments.
+  cache:
+    key:
+      prefix: "prek-py$PYTHON_VERSION"
+      files:
+        - .pre-commit-config.yaml
+    paths:
+      - .cache/prek
   before_script:
     - |
       echo 'default_language_version:' >> .pre-commit-config.yaml
       echo "  python: python$PYTHON_VERSION" >> .pre-commit-config.yaml
-    - cat .pre-commit-config.yaml
 
-# E2E integration tests: boots a minimal Waldur stack (PostgreSQL + RabbitMQ +
-# Mastermind API/Worker) via Docker-in-Docker, loads the site_agent_e2e demo
-# preset, then runs the SLURM emulator E2E test suite against it.
-E2E integration tests:
+Run linters:
+  extends: .Linters base
+  variables:
+    PYTHON_VERSION: "3.13"
+
+Run mypy (3.9):
+  extends: .Linters base
+  variables:
+    PYTHON_VERSION: "3.9"
+    PREK_RUN_ARGS: mypy
+
+# E2E integration tests: boot a minimal Waldur stack (PostgreSQL + RabbitMQ +
+# Mastermind API/Worker) via Docker-in-Docker, load the site_agent_e2e demo
+# preset, then run the SLURM emulator E2E test suite against it.
+#
+# The suites are spread over three jobs that each boot their own stack, because
+# a single serial job took ~21 min on the MR critical path (setup ~3 min, tests
+# ~17 min). The stack boot, preset load and auth token live in before_script;
+# each job's script only runs pytest. The 11-config QoS matrix (5+ min on its
+# own, "defense-in-depth" over the same policy code that "E2E: policy, QoS &
+# LDAP" covers) runs on main and tags but not on merge requests.
+.E2E base:
   image: "registry.hpc.ut.ee/mirror/library/python:3.11"
   stage: test
   interruptible: true
+  needs: []
   # Same uv-flake / infrastructure retry as .Run tests base — this job also
   # runs `uv sync` and is not covered by that template.
   retry: *uv_flake_retry
@@ -403,23 +333,16 @@ E2E integration tests:
     DOCKER_TLS_CERTDIR: ""
     DOCKER_REGISTRY_PREFIX: "registry.hpc.ut.ee/mirror/"
     WALDUR_MASTERMIND_IMAGE_TAG: "latest"
-  rules:
-    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
-      when: never
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
-      when: never
-    - if: '$RUN_E2E_TESTS && $CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$RUN_E2E_TESTS && $CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - plugins/slurm/**/*
-        - plugins/ldap/**/*
-        - waldur_site_agent/**/*
-        - ci/**/*
-        - pyproject.toml
-        - uv.lock
-    - if: '$RUN_E2E == "true"'
+    # Common pytest environment; each job adds the WALDUR_E2E_*_CONFIG variables
+    # its test files read. Every test file reads exactly one config variable, so
+    # all suites of a job run in a single pytest invocation (one interpreter
+    # start + collection instead of one per suite).
+    WALDUR_E2E_TESTS: "true"
+    WALDUR_E2E_PROJECT_A_UUID: "e2eb0000000000000000000000000001"
+    # The E2E runs are not coverage-gated and coverage tracing adds ~65% to the
+    # agent code that runs between API calls, so the root addopts (--cov) are
+    # cleared for these jobs.
+    E2E_PYTEST: "pytest -o addopts= -v"
   before_script:
     # Install Docker CLI + Compose plugin (static binaries)
     - apt-get update -qq && apt-get install -y -qq curl
@@ -432,12 +355,57 @@ E2E integration tests:
     - pip install uv
     - uv sync --all-packages
     - cp examples/waldur-site-agent-config.yaml.example ./waldur-site-agent-config.yaml
-  script:
-    # Boot minimal Waldur stack
+    # Boot the minimal Waldur stack, load the demo preset and set the auth token.
     - docker compose -f ci/docker-compose.e2e.yml pull
     - docker compose -f ci/docker-compose.e2e.yml up waldur-db-migration
     - docker compose -f ci/docker-compose.e2e.yml up -d
     - docker compose -f ci/docker-compose.e2e.yml ps
+    # Guard against the RabbitMQ `transient_nonexcl_queues` deprecation
+    # crash-looping the Celery worker. RabbitMQ 4.3 denies transient,
+    # non-exclusive queues by default -- the combination kombu's pidbox and
+    # Celery's gossip queues declare unless the mastermind image sets
+    # CELERY_CONTROL_QUEUE_EXCLUSIVE / CELERY_EVENT_QUEUE_EXCLUSIVE. This
+    # guards both sides: the broker conf and the image.
+    #
+    # Polls rather than sleeping a fixed interval -- the worker connects,
+    # runs mingle, and only then declares the pidbox queue, so on a loaded
+    # runner the failure can surface well after a short sleep.
+    - |
+      COMPOSE="docker compose -f ci/docker-compose.e2e.yml"
+      echo "Waiting for waldur-worker to start cleanly against RabbitMQ..."
+      worker_ready=""
+      for _ in $(seq 1 18); do
+        logs=$($COMPOSE logs waldur-worker 2>&1 || true)
+        case "$logs" in
+          *transient_nonexcl_queues*)
+            echo "ERROR: RabbitMQ rejected a Celery queue declaration (transient_nonexcl_queues)."
+            echo "Either the broker is missing deprecated_features.permit.transient_nonexcl_queues,"
+            echo "or the mastermind image predates the exclusive control-plane queue settings."
+            echo "$logs"
+            exit 1
+            ;;
+        esac
+        if $COMPOSE ps --status exited --status dead --services | grep -qx waldur-worker; then
+          echo "ERROR: waldur-worker container stopped during startup."
+          $COMPOSE ps -a waldur-worker
+          echo "$logs"
+          exit 1
+        fi
+        case "$logs" in
+          *" ready."*)
+            worker_ready=1
+            break
+            ;;
+        esac
+        sleep 5
+      done
+      if [ -z "$worker_ready" ]; then
+        echo "ERROR: waldur-worker did not report ready within 90s."
+        $COMPOSE ps -a waldur-worker
+        $COMPOSE logs waldur-worker
+        exit 1
+      fi
+      echo "waldur-worker started cleanly."
     # Wait for Waldur API to be ready (401 = up but unauthenticated, which is expected)
     - |
       echo "Waiting for Waldur API..."
@@ -473,28 +441,89 @@ E2E integration tests:
       Token.objects.create(user=u, key='e2e0000000000000000000000000token001')
       print('Token set successfully')
       "
-    # Run REST E2E tests (stomp_enabled=false)
+  after_script:
+    - docker compose -f ci/docker-compose.e2e.yml logs > waldur-stack-logs.txt 2>&1 || true
+    - docker compose -f ci/docker-compose.e2e.yml down || true
+  artifacts:
+    when: always
+    reports:
+      junit: e2e-report-*.xml
+    paths:
+      - waldur-stack-logs.txt
+      - plugins/slurm/tests/e2e/*-report.md
+      - plugins/slurm/tests/e2e/*-report.json
+    expire_in: 1 week
+
+# Rules for the E2E jobs that run on merge requests.
+.e2e_mr_rules: &e2e_mr_rules
+  - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+    when: never
+  - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    when: never
+  - if: '$RUN_E2E_TESTS && $CI_PIPELINE_SOURCE == "merge_request_event"'
+  - if: '$RUN_E2E_TESTS && $CI_COMMIT_BRANCH == "main"'
+  - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+  - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    changes:
+      - plugins/slurm/**/*
+      - plugins/ldap/**/*
+      - plugins/ldap-client/**/*
+      - plugins/ldap-roles/**/*
+      - plugins/azure/**/*
+      - waldur_site_agent/**/*
+      - ci/**/*
+      - pyproject.toml
+      - uv.lock
+      - .gitlab-ci.yml
+  - if: '$RUN_E2E == "true"'
+
+"E2E: REST & STOMP":
+  extends: .E2E base
+  rules: *e2e_mr_rules
+  variables:
+    WALDUR_E2E_CONFIG: ci/e2e-ci-config.yaml
+    WALDUR_E2E_STOMP_CONFIG: ci/e2e-ci-config-stomp.yaml
+    WALDUR_E2E_MEMBERSHIP_CONFIG: ci/e2e-ci-config-membership.yaml
+    WALDUR_E2E_BENCH_RESOURCES: "5"
+  script:
+    # REST suite (stomp_enabled=false), then STOMP (stomp_enabled=true) and the
+    # QoS backwards-compatibility file. Files are listed explicitly rather than
+    # via --ignore so that a new test_e2e_*.py gated on another job's config
+    # variable is not silently collected here and skipped green; a new file must
+    # be wired into exactly one job.
     - |
       source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_CONFIG=ci/e2e-ci-config.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      WALDUR_E2E_BENCH_RESOURCES=5 \
-      pytest plugins/slurm/tests/e2e/ -v --junitxml=e2e-report-rest.xml \
-        --ignore=plugins/slurm/tests/e2e/test_e2e_stomp.py \
-        --ignore=plugins/slurm/tests/e2e/test_e2e_policy.py \
-        --ignore=plugins/slurm/tests/e2e/test_e2e_qos_polling.py \
-        --ignore=plugins/slurm/tests/e2e/test_e2e_qos_stomp.py \
-        --ignore=plugins/slurm/tests/e2e/test_e2e_qos_matrix.py \
-        --ignore=plugins/slurm/tests/e2e/test_e2e_qos_backcompat.py
-    # Run STOMP E2E tests (stomp_enabled=true)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_STOMP_CONFIG=ci/e2e-ci-config-stomp.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_stomp.py -v \
-        --junitxml=e2e-report-stomp.xml
+      $E2E_PYTEST --junitxml=e2e-report-rest.xml \
+        plugins/slurm/tests/e2e/test_e2e_api_optimizations.py \
+        plugins/slurm/tests/e2e/test_e2e_benchmark.py \
+        plugins/slurm/tests/e2e/test_e2e_default_account_policy.py \
+        plugins/slurm/tests/e2e/test_e2e_membership_stale.py \
+        plugins/slurm/tests/e2e/test_e2e_order_reconciliation.py \
+        plugins/slurm/tests/e2e/test_e2e_partition_associations.py \
+        plugins/slurm/tests/e2e/test_e2e_prepaid.py \
+        plugins/slurm/tests/e2e/test_e2e_resources_sync.py \
+        plugins/slurm/tests/e2e/test_e2e_rest_api.py \
+        plugins/slurm/tests/e2e/test_e2e_restore.py \
+        plugins/slurm/tests/e2e/test_e2e_stomp.py \
+        plugins/slurm/tests/e2e/test_e2e_qos_backcompat.py
+
+"E2E: policy, QoS & LDAP":
+  extends: .E2E base
+  rules: *e2e_mr_rules
+  variables:
+    WALDUR_E2E_POLICY_CONFIG: ci/e2e-ci-config-policy.yaml
+    WALDUR_E2E_STOMP_CONFIG: ci/e2e-ci-config-stomp.yaml
+    WALDUR_E2E_LDAP_CONFIG: ci/e2e-ci-config-ldap.yaml
+    # Waldur-authoritative mode: two offerings of one provider against the same
+    # directory, so the suite can prove they converge on a single entry.
+    WALDUR_E2E_LDAP_INVERTED_CONFIG: ci/e2e-ci-config-ldap-inverted.yaml
+    # Provider project groups written from Waldur (periodic and event path).
+    WALDUR_E2E_LDAP_PROJECT_GROUPS_CONFIG: ci/e2e-ci-config-ldap-project-groups.yaml
+    # ldap-roles: LDAP groups from Resource and ResourceProject roles.
+    WALDUR_E2E_LDAP_ROLES_CONFIG: ci/e2e-ci-config-ldap-roles.yaml
+    # Only this job needs the OpenLDAP container (compose profile "ldap").
+    COMPOSE_PROFILES: ldap
+  script:
     # Wait for OpenLDAP to be ready
     - |
       echo "Waiting for OpenLDAP..."
@@ -512,80 +541,65 @@ E2E integration tests:
         fi
         sleep 2
       done
-    # Run LDAP E2E tests (LDAP + SLURM emulator)
+    # Policy suite (11 SLURM policy configurations), QoS-flow polling path,
+    # QoS-flow STOMP path (RESOURCE event -> agent -> emulator), LDAP suite,
+    # ldap-roles suite.
     - |
       source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_LDAP_CONFIG=ci/e2e-ci-config-ldap.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_ldap.py -v \
-        --junitxml=e2e-report-ldap.xml
-    # Run Policy E2E tests (11 distinct SLURM policy configurations)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_POLICY_CONFIG=ci/e2e-ci-config-policy.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_policy.py -v \
-        --junitxml=e2e-report-policy.xml
-    # Run QoS-flow polling-path test (one policy offering, focused phases)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_POLICY_CONFIG=ci/e2e-ci-config-policy.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_qos_polling.py -v \
-        --junitxml=e2e-report-qos-polling.xml
-    # Run QoS-flow STOMP-path test (RESOURCE event → agent → emulator)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_STOMP_CONFIG=ci/e2e-ci-config-stomp.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_qos_stomp.py -v \
-        --junitxml=e2e-report-qos-stomp.xml
-    # Run QoS matrix across all 11 policy configs (defense-in-depth)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_POLICY_CONFIG=ci/e2e-ci-config-policy.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_qos_matrix.py -v \
-        --junitxml=e2e-report-qos-matrix.xml
-    # Run QoS backwards-compatibility test (legacy periodic-limits payload)
-    - |
-      source .venv/bin/activate
-      WALDUR_E2E_TESTS=true \
-      WALDUR_E2E_CONFIG=ci/e2e-ci-config.yaml \
-      WALDUR_E2E_PROJECT_A_UUID=e2eb0000000000000000000000000001 \
-      pytest plugins/slurm/tests/e2e/test_e2e_qos_backcompat.py -v \
-        --junitxml=e2e-report-qos-backcompat.xml
-  after_script:
-    - docker compose -f ci/docker-compose.e2e.yml logs > waldur-stack-logs.txt 2>&1 || true
-    - docker compose -f ci/docker-compose.e2e.yml down || true
-  artifacts:
-    when: always
-    reports:
-      junit:
-        - e2e-report-rest.xml
-        - e2e-report-stomp.xml
-        - e2e-report-ldap.xml
-        - e2e-report-policy.xml
-        - e2e-report-qos-polling.xml
-        - e2e-report-qos-stomp.xml
-        - e2e-report-qos-matrix.xml
-        - e2e-report-qos-backcompat.xml
-    paths:
-      - waldur-stack-logs.txt
-      - plugins/slurm/tests/e2e/*-report.md
-      - plugins/slurm/tests/e2e/*-report.json
-    expire_in: 1 week
+      $E2E_PYTEST --junitxml=e2e-report-policy-qos-ldap.xml \
+        plugins/slurm/tests/e2e/test_e2e_policy.py \
+        plugins/slurm/tests/e2e/test_e2e_qos_polling.py \
+        plugins/slurm/tests/e2e/test_e2e_qos_stomp.py \
+        plugins/slurm/tests/e2e/test_e2e_ldap.py \
+        plugins/ldap-roles/tests/e2e/test_e2e_ldap_roles.py
 
+"E2E: Azure":
+  extends: .E2E base
+  rules: *e2e_mr_rules
+  variables:
+    WALDUR_E2E_CONFIG: ci/e2e-ci-config.yaml
+  script:
+    # The Azure SDK is faked in-process; everything from the order to the
+    # resource in Waldur is real.
+    - |
+      source .venv/bin/activate
+      $E2E_PYTEST --junitxml=e2e-report-azure.xml \
+        plugins/azure/tests/e2e/test_e2e_orders.py
+
+"E2E: QoS matrix":
+  extends: .E2E base
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$RUN_E2E_TESTS && $CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$RUN_E2E_TESTS && $CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$RUN_E2E == "true"'
+  variables:
+    WALDUR_E2E_POLICY_CONFIG: ci/e2e-ci-config-policy.yaml
+  script:
+    # QoS matrix across all 11 policy configs
+    - |
+      source .venv/bin/activate
+      $E2E_PYTEST --junitxml=e2e-report-qos-matrix.xml \
+        plugins/slurm/tests/e2e/test_e2e_qos_matrix.py
+
+# Lints the published opennode/waldur-site-agent:latest image from Docker Hub --
+# never the merge request's own content -- so there is nothing for it to verify
+# on an MR. It runs where the image can actually have changed.
 Lint docker image:
   extends: .Lint docker image template
+  needs: []
   variables:
     IMAGE: opennode/waldur-site-agent:latest
-    RUN_IMAGE_LINT: "true"
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
 
 Lint dockerfile:
   extends: .Lint dockerfile template
@@ -597,45 +611,16 @@ Lint dockerfile:
         - DL3008 # "versions for `apt-get install`" warning
         - DL3009 # "Delete apt-get lists" warning (handled in same RUN)
 
-# Temporarily disabled
-# .Generate Codebase SBOM template:
-#   image:
-#     name: "registry.hpc.ut.ee/mirror/library/python:3.11-bullseye"
-#   stage: build
-#   rules:
-#     - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
-#   before_script:
-#     - apt-get update
-#   script:
-#     - pip install uv
-#     - uv sync --all-packages
-#     - uv pip install cyclonedx-bom
-#     - uv run cyclonedx-py environment "$(which python )" -o ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
-#     - echo "SBOM generated. Size:"
-#     - du -h ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
-#     - tar -czf ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.json
-#     - echo "SBOM archived. Size:"
-#     - du -h ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz
-#   artifacts:
-#     paths:
-#       - ${PROJECT_NAME}-${CI_COMMIT_TAG}-source.cyclonedx.tar.gz
-#     expire_in: 1 day
+Generate Image SBOM:
+  extends: .Generate Image SBOM template
 
-# Temporarily disabled
-# Generate Codebase SBOM:
-#   extends: .Generate Codebase SBOM template
-#   variables:
-#     PROJECT_NAME: "waldur-site-agent"
+Generate Codebase SBOM:
+  extends: .Generate Codebase SBOM template
+  variables:
+    UV_EXPORT_ARGS: "--all-packages"
 
-# Temporarily disabled
-# Upload Source SBOM:
-#   extends: .Upload SBOM template
-#   needs:
-#     - Generate Codebase SBOM
-#   variables:
-#     PROJECT_NAME: "waldur-site-agent"
-#     SBOM_TYPE: "source"
-#     SBOM_DIR: "source"
+Publish SBOMs to GitHub release:
+  extends: .Publish SBOMs to GitHub release template
 
 Publish python module tagged release with uv:
   image: registry.hpc.ut.ee/mirror/library/python:3.13-bookworm
@@ -695,6 +680,10 @@ Publish new chart version and update docs on github:
     - git checkout $CI_COMMIT_TAG -- docs/ || true
     - git add README.md || true
     - git add docs/ || true
+    # Publish Artifact Hub repository metadata next to index.yaml so the
+    # repository is recognised as coming from a verified publisher
+    - git checkout $CI_COMMIT_TAG -- artifacthub-repo.yml || true
+    - git add artifacthub-repo.yml || true
     # Move archive to directory and update index
     - mkdir charts/ || true
     - mv waldur-site-agent-$CI_COMMIT_TAG.tgz charts/
@@ -723,3 +712,41 @@ Publish multiarch waldur-site-agent docker image (YOLO):
   stage: test
   variables:
     IMAGE_TAG: "opennode/${CI_PROJECT_NAME}:yolo"
+
+# Posts the CHANGELOG.md entry for the tag to Slack, to the same channels the
+# platform release is announced in. Runs in postdeploy behind the publish jobs,
+# so a tag whose artifacts never reached PyPI, the chart repository or Docker
+# Hub announces nothing.
+#
+# The `latest` image job only exists for stable tags, so it is depended on
+# optionally — otherwise every candidate would be blocked on a job that its own
+# pipeline never creates.
+Announce release on Slack:
+  extends: .Announce release on Slack template
+  stage: postdeploy
+  needs:
+    - job: "Publish python module tagged release with uv"
+    - job: "Publish new chart version and update docs on github"
+    - job: "Publish multiarch waldur-site-agent docker image with version"
+    - job: "Publish multiarch waldur-site-agent docker image latest"
+      optional: true
+  variables:
+    SLACK_PRODUCT_NAME: "Waldur Site Agent"
+    # CHANGELOG.md is not synced into waldur-docs, so the link points at the
+    # GitHub mirror, whose heading anchors keep the ' - ' as three hyphens.
+    SLACK_CHANGELOG_URL: "https://github.com/waldur/waldur-site-agent/blob/main/CHANGELOG.md"
+    SLACK_ANCHOR_STYLE: "github"
+
+# Fails when a dependency arrives under a licence Waldur cannot ship — strong
+# copyleft (GPL, AGPL), source-available (SSPL, BUSL, Elastic) or non-OSI
+# use-restricted (Hippocratic, JSON). LGPL and MPL pass but stay listed in the
+# job artifact. See waldur/waldur-mastermind#285.
+#
+# The job only runs on merge requests that touch pyproject.toml or uv.lock, plus
+# the default branch and release tags.
+#
+# allow_failure is inherited as true from the template, so this cannot redden an
+# MR while it is being adopted. Override it with `allow_failure: false` to make
+# the gate binding once this repo is known clean.
+Check dependency licences:
+  extends: .Licence gate (python) template

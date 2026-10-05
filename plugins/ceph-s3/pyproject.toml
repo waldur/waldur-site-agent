@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-ceph-s3"
-version = "1.0.6rc17"
+version = "1.0.8rc6"
 description = "Ceph S3 storage plugin (croit and RadosGW flavours)"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9.2, <4"
 dependencies = [
-    "waldur-site-agent>=1.0.6rc17",
+    "waldur-site-agent>=1.0.8rc6",
     "httpx>=0.25.0",
     "boto3>=1.40.71"
 ]
@@ -24,6 +24,10 @@ ceph_s3 = "waldur_site_agent_ceph_s3.backend:CephS3Backend"
 # Reporting only: GB-day metering reads croit's statistics subsystem, which
 # has no RadosGW equivalent.
 croit_usage = "waldur_site_agent_ceph_s3.reporting:CroitUsageBackend"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+ceph_s3 = "waldur_site_agent_ceph_s3.schemas:CephS3BackendSettingsSchema"
+croit_usage = "waldur_site_agent_ceph_s3.schemas:CephS3BackendSettingsSchema"
 
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [

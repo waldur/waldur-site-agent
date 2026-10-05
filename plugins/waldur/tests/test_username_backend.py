@@ -3,7 +3,9 @@
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
+import httpx
 import pytest
+import respx
 
 from waldur_api_client import errors
 from waldur_api_client.models.identity_bridge_request_request import (
@@ -18,6 +20,7 @@ from waldur_site_agent_waldur.username_backend import (
 )
 
 MODULE = "waldur_site_agent_waldur.username_backend"
+_GET_CLIENT_FOR_OFFERING = "waldur_site_agent.common.utils.get_client_for_offering"
 
 
 @pytest.fixture()
@@ -312,21 +315,19 @@ class TestLogAttributeConfig:
         mock_response.raise_for_status = MagicMock()
         mock_httpx.get.return_value = mock_response
 
-        with patch(
-            f"{MODULE}.AuthenticatedClient"
-        ) as MockClient:
+        with patch(_GET_CLIENT_FOR_OFFERING) as mock_get_client:
             mock_instance = MagicMock()
             mock_instance.get_httpx_client.return_value = mock_httpx
-            MockClient.return_value = mock_instance
+            mock_get_client.return_value = mock_instance
 
             WaldurIdentityBridgeUsernameBackend(
                 backend_settings=identity_bridge_settings,
                 offering=mock_offering,
             )
 
-        MockClient.assert_any_call(
-            base_url="https://waldur-a.example.com",
-            token="test-token-waldur-a",
+        mock_get_client.assert_called_once_with(mock_offering)
+        mock_httpx.get.assert_called_once_with(
+            "/api/marketplace-provider-offerings/offering-uuid-on-waldur-a/user-attribute-config/",
         )
 
     def test_warns_on_missing_fields(self, identity_bridge_settings, mock_offering):
@@ -341,14 +342,12 @@ class TestLogAttributeConfig:
         mock_httpx.get.return_value = mock_response
 
         with (
-            patch(
-                f"{MODULE}.AuthenticatedClient"
-            ) as MockClient,
+            patch(_GET_CLIENT_FOR_OFFERING) as mock_get_client,
             patch(f"{MODULE}.logger") as mock_logger,
         ):
             mock_instance = MagicMock()
             mock_instance.get_httpx_client.return_value = mock_httpx
-            MockClient.return_value = mock_instance
+            mock_get_client.return_value = mock_instance
 
             WaldurIdentityBridgeUsernameBackend(
                 backend_settings=identity_bridge_settings,
@@ -522,3 +521,36 @@ class TestPushWithFieldFiltering:
         retry_dict = retry_body.to_dict()
         assert "country_of_residence" not in retry_dict
         assert "email" in retry_dict
+
+
+class TestLogAttributeConfigOidc:
+    """The Waldur A attribute-config read authenticates like the rest of the agent."""
+
+    @respx.mock
+    def test_oidc_only_offering_uses_bearer_token(self, identity_bridge_settings):
+        from waldur_site_agent.common import utils as common_utils
+        from waldur_site_agent.common.structures import Offering
+
+        offering = Offering(
+            name="oidc",
+            waldur_api_url="https://waldur-a.example.com/api/",
+            waldur_offering_uuid="12345678123412341234123456789abc",
+            waldur_api_token="",
+            oidc_token_url="https://idp.example.com/token",
+            oidc_client_id="agent",
+            oidc_client_secret="secret",  # noqa: S106
+            backend_type="waldur",
+        )
+        route = respx.get(
+            "https://waldur-a.example.com/api/marketplace-provider-offerings/"
+            "12345678123412341234123456789abc/user-attribute-config/"
+        ).mock(return_value=httpx.Response(200, json={"exposed_fields": [], "is_default": True}))
+        respx.route(host="waldur-b.example.com").mock(return_value=httpx.Response(200, json=[]))
+
+        with patch.object(common_utils, "fetch_oidc_token", return_value="jwt-from-idp"):
+            WaldurIdentityBridgeUsernameBackend(
+                backend_settings=identity_bridge_settings, offering=offering
+            )
+
+        assert route.called
+        assert route.calls.last.request.headers["Authorization"] == "Bearer jwt-from-idp"

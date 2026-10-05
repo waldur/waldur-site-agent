@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-nextcloud"
-version = "1.0.6rc17"
+version = "1.0.8rc6"
 description = "Nextcloud plugin for Waldur Site Agent"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9, <4"
 dependencies = [
-    "waldur-site-agent>=1.0.6rc17",
+    "waldur-site-agent>=1.0.8rc6",
     "httpx>=0.25.0",
 ]
 
@@ -19,6 +19,9 @@ waldur-site-agent = { workspace = true }
 
 [project.entry-points."waldur_site_agent.backends"]
 nextcloud = "waldur_site_agent_nextcloud.backend:NextcloudBackend"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+nextcloud = "waldur_site_agent_nextcloud.schemas:NextcloudBackendSettingsSchema"
 
 [tool.ruff]
 extend = "../../pyproject.toml"

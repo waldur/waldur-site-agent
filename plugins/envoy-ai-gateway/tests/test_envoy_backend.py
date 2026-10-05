@@ -37,6 +37,7 @@ def _make_backend() -> EnvoyAIGatewayBackend:
     with mock.patch("waldur_site_agent_envoy_ai_gateway.backend.EnvoyAIGatewayClient"):
         backend = EnvoyAIGatewayBackend(dict(SETTINGS), dict(COMPONENTS))
     backend.gateway_client = mock.MagicMock()
+    backend.gateway_client.is_resource_marked_paused.return_value = False
     return backend
 
 
@@ -78,7 +79,7 @@ def test_create_resource_does_not_mint_a_key() -> None:
 
 def test_generate_resource_keys_makes_two_by_default() -> None:
     backend = _make_backend()
-    backend.gateway_client.list_client_ids.return_value = []
+    backend.gateway_client.key_states.return_value = {}
 
     keys = list(backend.generate_resource_keys("res-1"))
 
@@ -89,7 +90,7 @@ def test_generate_resource_keys_makes_two_by_default() -> None:
 
 def test_generate_resource_keys_continues_past_existing() -> None:
     backend = _make_backend()
-    backend.gateway_client.list_client_ids.return_value = ["res-1-1", "res-1-2"]
+    backend.gateway_client.key_states.return_value = {"res-1-1": "active", "res-1-2": "active"}
 
     keys = list(backend.generate_resource_keys("res-1", count=1))
 
@@ -110,7 +111,7 @@ def test_rotate_resource_key_generates_and_applies() -> None:
 def test_rotate_resource_key_provisions_when_absent() -> None:
     backend = _make_backend()
     backend.gateway_client.rotate_key.return_value = False
-    backend.gateway_client.list_client_ids.return_value = []
+    backend.gateway_client.key_states.return_value = {}
 
     new_key = backend.rotate_resource_key("res-1-1", "res-1")
 
@@ -123,8 +124,7 @@ def test_rotate_fallback_stays_blocked_on_paused_resource() -> None:
     # resource on the active Secret.
     backend = _make_backend()
     backend.gateway_client.rotate_key.return_value = False
-    backend.gateway_client.list_client_ids.return_value = ["res-1-1", "res-1-2"]
-    backend.gateway_client.is_active.return_value = False
+    backend.gateway_client.key_states.return_value = {"res-1-2": "blocked"}
 
     new_key = backend.rotate_resource_key("res-1-1", "res-1")
 
@@ -135,8 +135,7 @@ def test_generate_resource_keys_blocks_new_key_on_paused_resource() -> None:
     # An add to a paused resource (all existing keys blocked) must land blocked,
     # or the add would silently un-pause it and bypass quota enforcement.
     backend = _make_backend()
-    backend.gateway_client.list_client_ids.return_value = ["res-1-1"]
-    backend.gateway_client.is_active.return_value = False
+    backend.gateway_client.key_states.return_value = {"res-1-1": "blocked"}
 
     list(backend.generate_resource_keys("res-1", count=1))
 
@@ -145,8 +144,7 @@ def test_generate_resource_keys_blocks_new_key_on_paused_resource() -> None:
 
 def test_generate_resource_keys_active_when_resource_live() -> None:
     backend = _make_backend()
-    backend.gateway_client.list_client_ids.return_value = ["res-1-1"]
-    backend.gateway_client.is_active.return_value = True
+    backend.gateway_client.key_states.return_value = {"res-1-1": "active"}
 
     list(backend.generate_resource_keys("res-1", count=1))
 

@@ -59,6 +59,16 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- if .Values.healthCheck.enabled }}
+          {{- if .Values.healthCheck.startupProbe.enabled }}
+          startupProbe:
+            exec:
+              command:
+                - waldur_site_healthz
+                - --liveness-only
+            periodSeconds: {{ .Values.healthCheck.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
+            failureThreshold: {{ .Values.healthCheck.startupProbe.failureThreshold }}
+          {{- end }}
           livenessProbe:
             exec:
               command:

@@ -1,12 +1,12 @@
 [project]
 name = "waldur-site-agent-harbor"
-version = "1.0.6rc17"
+version = "1.0.8rc6"
 description = "Harbor container registry plugin for Waldur Site Agent"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9.2, <4"
 dependencies = [
-    "waldur-site-agent>=1.0.6rc17",
+    "waldur-site-agent>=1.0.8rc6",
     "httpx>=0.25.0"
 ]
 
@@ -20,6 +20,9 @@ waldur-site-agent = { workspace = true }
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]
 harbor = "waldur_site_agent_harbor.backend:HarborBackend"
+
+[project.entry-points."waldur_site_agent.backend_settings_schemas"]
+harbor = "waldur_site_agent_harbor.schemas:HarborBackendSettingsSchema"
 
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [

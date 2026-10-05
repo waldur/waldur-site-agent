@@ -6,6 +6,21 @@ state into `ManagedRancherProject` Custom Resources; the
 `rancher-keycloak-operator` running inside the target Kubernetes
 cluster owns the actual Rancher project + Keycloak group lifecycle.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `rancher-kc-crd` | `waldur_site_agent.backends` | membership sync only |
+
+**Modes:** `membership_sync`, `event_process`.
+
+| Operation | Behaviour |
+|---|---|
+| Create / terminate resource | Not handled — clusters pre-exist; use another backend for orders |
+| Add / remove members | Writes one `ManagedRancherProject` CR per ResourceProject; the operator binds Keycloak groups |
+| Pause / downscale / restore | **No-op** — returns `True` without changing anything |
+| Usage reporting | **No-op** — reports nothing |
+
 ## Expected operator
 
 This plugin only writes CRs — it relies on
@@ -469,16 +484,33 @@ above for why.
 
 | Key | Type | Required | Description |
 |---|---|---|---|
-| `waldur_api_url` | string | yes | Mastermind API root with `/api/`. Plugin strips trailing `/api` for the SDK. |
-| `waldur_api_token` | string | yes | Long-lived token from `/api/users/<uuid>/keys/`. Don't use a session token. |
+| `waldur_api_url` | string | no | Mastermind API root with `/api/`; see **note B**. |
+| `waldur_api_token` | string | no | Long-lived token from `/api/users/<uuid>/keys/`. Don't use a session token. |
 | `waldur_verify_ssl` | bool | no (default `true`) | TLS verify for Waldur calls. |
 | `kubeconfig_path` | string | no | Path to a kubeconfig file. Omit to use in-cluster credentials. |
 | `context` | string | no | kubeconfig context to use when `kubeconfig_path` is set. |
-| `namespace` | string | yes | Namespace for `ManagedRancherProject` CRs (typically `waldur-system`). |
+| `namespace` | string | no (default `waldur-system`) | Namespace for `ManagedRancherProject` CRs. |
 | `parent_group_name` | string | no | Top-level KC group; var `${cluster_id}`. Default `c_${cluster_id}`. |
-| `group_name_template` | string | no | Per-role child KC group; vars listed in **note A**. |
-| `role_map` | dict | yes | Waldur role name → Rancher role template ID. Roles outside the map are skipped. |
+| `group_name_template` | string | no | Per-role child KC group, vars in **note A**. |
+| `role_map` | dict | no (default `{}`) | Waldur role → Rancher project role template ID; see **note C**. |
+| `cluster_role_map` | dict | no | Resource-level role → Rancher cluster role template ID; see **note C**. |
+| `cluster_group_name_template` | string | no | KC group per cluster role. |
 | `keycloak_use_user_id` | bool | no | `false` (default) → match by username. `true` → match by UUID. See above. |
+
+Defaults: `group_name_template` is `c_${cluster_id}_${rp_uuid}_${role_name}`,
+`cluster_group_name_template` is `c_${cluster_id}_cluster_${role_name}`.
+
+**Note B — Waldur API credentials.** `waldur_api_url` / `waldur_api_token` are optional to
+the loader, but without them `pull_resource` does nothing and membership is never synced.
+The plugin strips a trailing `/api` for the SDK; use a long-lived token, not a session token.
+
+**Note C — role maps.** Roles outside `role_map` are skipped, so an empty map binds nobody.
+When `cluster_role_map` is set, the Resource-level user roles are written to every CR's
+`spec.cluster` block for cluster-wide bindings; when it is unset there are no cluster bindings.
+
+The settings are validated by
+`waldur_site_agent_rancher_kc_crd.schemas.RancherKcCrdBackendSettingsSchema`; a misspelt
+key is logged as a warning when the agent loads its configuration.
 
 `spec.clusterId` is resolved from each Resource's `backend_id` (1:1
 with a Rancher cluster) — there is no offering-level `cluster_id`
@@ -587,25 +619,21 @@ cd <repo-root>
 uv sync --all-packages
 
 # Run unit tests for this plugin only
-uv run pytest plugins/rancher-kc-crd/tests/
+cd plugins/rancher-kc-crd && uv run pytest tests/
 
 # Integration tests (requires a real K8s cluster with operator + CRDs)
 K8S_CRD_TEST=1 \
 RANCHER_CLUSTER_ID=c-m-abc12345 \
 KUBE_CONTEXT=docker-desktop \
-  uv run pytest plugins/rancher-kc-crd/tests/test_backend_integration.py -v
+  uv run pytest tests/test_backend_integration.py -v
 
 # Lint + format
 uvx prek run --all-files
 ```
 
-`tests/` layout:
-
-| File | Coverage |
-|---|---|
-| `test_translator.py` | 15 pure tests: `cr_name`, group templates, role bindings, full CR build. |
-| `test_status_reader.py` | 13 pure tests: status → BackendResourceInfo + drift detection. |
-| `test_backend_integration.py` | 6 tests, `K8S_CRD_TEST=1`: quotas, no-client, orphan pruning. |
+`tests/` holds pure unit tests (translator, status reader, sync-report derivation,
+unmapped-role warnings, settings schema) and `test_backend_integration.py`, which only
+runs with `K8S_CRD_TEST=1` against a real cluster with the operator and CRDs installed.
 
 ---
 

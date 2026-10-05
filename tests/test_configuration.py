@@ -160,6 +160,11 @@ class TestOfferingAuthValidation:
         assert offering.oidc_client_id == "my-client"
         assert offering.oidc_client_secret == "my-secret"  # noqa: S105
 
+    def test_preserve_unmanaged_backend_users_defaults_false(self):
+        """Unmanaged SLURM extras are removed unless the offering opts in."""
+        offering = Offering(**self.BASE_FIELDS, waldur_api_token="mytoken")  # noqa: S106
+        assert offering.preserve_unmanaged_backend_users is False
+
     def test_offering_rejects_partial_oidc_config(self):
         """Offering with only some OIDC fields set should raise a validation error."""
         with pytest.raises(ValidationError):

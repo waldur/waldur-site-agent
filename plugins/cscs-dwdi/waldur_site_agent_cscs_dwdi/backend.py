@@ -93,6 +93,10 @@ class CSCSDWDIComputeBackend(BaseBackend):
             if backend_resource_info is None:
                 return None
         except Exception:
+            if self.strict_pull_requested():
+                # Returning None would tell a strict caller this resource has no
+                # users, which the teardown reads as "safe to release".
+                raise
             logger.exception("Error while pulling resource [%s]", backend_id)
             return None
         else:

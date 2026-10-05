@@ -29,25 +29,29 @@ Templates are organized by order type:
 
 ## Template Variables
 
-Templates use Jinja2 syntax with custom filters:
+Templates use Jinja2 syntax with custom **filters** (not functions — `{{ uuid4() }}`
+fails with `'uuid4' is undefined`). Undefined variables are errors
+(`StrictUndefined`).
 
 - `{{ variable_name }}` - Required variable
 - `{{ variable_name | default('value') }}` - Optional variable with default
-- `{{ uuid4() }}` - Generate random UUID
-- `{{ timestamp() }}` - Current timestamp
-- `{{ from_json }}` - Parse JSON string
-- `{{ to_json }}` - Convert to JSON string
+- `{{ value | uuid4 }}` - `value` when it is set, otherwise a fresh random UUID (`{{ '' | uuid4 }}`
+  always generates one; each render gets a new UUID)
+- `{{ '' | timestamp }}` - Current timestamp (ISO 8601; ignores its input; evaluated per render)
+- `{{ value | from_json }}` - Parse a JSON string
+- `{{ value | to_json }}` - Serialize to a JSON string
 
 ## Common Variables
 
 All templates support these common variables:
 
-- `order_uuid` - Order UUID (auto-generated if not provided)
+- `order_uuid` - Order UUID. Every `create/` template uses it when provided and
+  generates one otherwise
 - `offering_uuid` - Target offering UUID (required)
 - `resource_name` - Name of the resource
 - `project_slug` - Project slug
 - `customer_slug` - Customer slug
-- `state` - Order state (defaults to 'EXECUTING')
+- `state` - Order state (defaults to `executing`)
 
 ## Usage Examples
 

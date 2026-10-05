@@ -38,7 +38,6 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
-
 from waldur_api_client.api.invoice_items import invoice_items_list
 from waldur_api_client.api.marketplace_orders import marketplace_orders_retrieve
 from waldur_api_client.api.marketplace_provider_resources import (
@@ -49,7 +48,6 @@ from waldur_api_client.models.order_create_request import OrderCreateRequest
 from waldur_api_client.models.order_create_request_limits import (
     OrderCreateRequestLimits,
 )
-from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.types import UNSET
 
 from plugins.slurm.tests.e2e.conftest import (
@@ -94,7 +92,6 @@ def _create_prepaid_order(
         plan=plan_url,
         limits=order_limits,
         attributes=attrs,
-        type_=RequestTypes.CREATE,
     )
 
     order = marketplace_orders_create.sync(client=client, body=body)
@@ -149,7 +146,7 @@ class TestPrepaidSlurmLifecycle:
         )
         project_url = get_project_url(waldur_client, project_uuid)
 
-        limits = {comp_name: 10 for comp_name in offering.backend_components}
+        limits = dict.fromkeys(offering.backend_components, 10)
         resource_name = f"e2e-prepaid-{uuid.uuid4().hex[:6]}"
         end_date = date.today() + timedelta(days=90)  # 3 months
 
@@ -259,7 +256,7 @@ class TestPrepaidSlurmLifecycle:
         resource_uuid = _state["resource_uuid"]
 
         # Increase limits (double the initial values)
-        new_limits = {comp_name: 20 for comp_name in offering.backend_components}
+        new_limits = dict.fromkeys(offering.backend_components, 20)
 
         resp = waldur_client.get_httpx_client().post(
             f"/api/marketplace-resources/{resource_uuid}/update_limits/",

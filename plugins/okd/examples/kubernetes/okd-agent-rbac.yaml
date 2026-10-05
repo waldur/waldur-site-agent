@@ -1,0 +1,36 @@
+# Service account and cluster permissions for a site agent running inside the
+# cluster with token_config.token_type: service_account. Deploy the agent itself
+# with the Helm chart (helm/waldur-site-agent) using this service account.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: waldur-site-agent
+  namespace: waldur-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: waldur-site-agent
+rules:
+  - apiGroups: ["project.openshift.io"]
+    resources: ["projects", "projectrequests"]
+    verbs: ["create", "delete", "get", "list", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["namespaces", "resourcequotas"]
+    verbs: ["create", "delete", "get", "list", "patch", "update"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create", "delete", "get", "list", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: waldur-site-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: waldur-site-agent
+subjects:
+  - kind: ServiceAccount
+    name: waldur-site-agent
+    namespace: waldur-system

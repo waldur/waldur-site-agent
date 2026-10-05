@@ -24,7 +24,7 @@ from waldur_api_client.types import UNSET
 from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent.backend.backends import BaseBackend
 from waldur_site_agent.backend.structures import BackendResourceInfo
-from waldur_site_agent.common.processors import OfferingReportProcessor
+from waldur_site_agent.common.processors import OfferingReportProcessor, UsageAnomalyError
 
 
 class TestUsageMatchesExisting(unittest.TestCase):
@@ -113,6 +113,33 @@ class TestUsageMatchesExisting(unittest.TestCase):
         assert self.fn({"cpu": 100}, only_unset, ["cpu"]) is False
 
 
+class TestReportedAmountsMatchExisting(unittest.TestCase):
+    """Pure unit tests for the post-anomaly amount comparison helper."""
+
+    fn = staticmethod(OfferingReportProcessor._reported_amounts_match_existing)
+
+    def _eu(self, type_, usage) -> ComponentUsage:
+        return ComponentUsage(type_=type_, usage=usage)
+
+    def test_empty_reported_matches(self) -> None:
+        existing = [self._eu("cpu", 100), self._eu("mem", 50)]
+        assert self.fn({}, existing, ["cpu", "mem"]) is True
+
+    def test_omitted_type_is_ignored(self) -> None:
+        # mem exists on Waldur but was dropped from the payload (anomaly).
+        # cpu still matches, so there is nothing left to submit.
+        existing = [self._eu("cpu", 100), self._eu("mem", 50)]
+        assert self.fn({"cpu": 100}, existing, ["cpu", "mem"]) is True
+
+    def test_remaining_amount_differs(self) -> None:
+        existing = [self._eu("cpu", 100), self._eu("mem", 50)]
+        assert self.fn({"cpu": 4000}, existing, ["cpu", "mem"]) is False
+
+    def test_new_remaining_component_does_not_match(self) -> None:
+        existing = [self._eu("mem", 50)]
+        assert self.fn({"cpu": 100}, existing, ["cpu", "mem"]) is False
+
+
 class TestSubmitTotalUsageIdempotencyIntegration(unittest.TestCase):
     """End-to-end: confirm set_usage is NOT POSTed when the reported usage
     matches what Waldur already has for the billing period."""
@@ -170,6 +197,9 @@ class TestSubmitTotalUsageIdempotencyIntegration(unittest.TestCase):
         proc.resource_backend = self.backend
         proc.timezone = ""  # type: ignore[attr-defined]
         proc.waldur_rest_client = self.client  # type: ignore[attr-defined]
+        proc.offering = OFFERING.model_copy(
+            update={"omit_anomalous_usage_components": False}
+        )
         return proc
 
     @respx.mock
@@ -366,3 +396,245 @@ class TestSubmitTotalUsageIdempotencyIntegration(unittest.TestCase):
         body = json.loads(set_usage_route.calls.last.request.content)
         amounts = {u["type"]: u["amount"] for u in body["usages"]}
         assert amounts["cpu"] == "150.50"
+
+
+class TestSubmitTotalUsagePartialAnomaly(unittest.TestCase):
+    """Anomaly detection omits decreasing components but still submits the rest."""
+
+    BASE_URL = "https://waldur.example.com"
+
+    def setUp(self) -> None:
+        self.resource_uuid = "10a0f810be1c43bbb651e8cbdbb90198"
+        self.waldur_resource = {
+            "uuid": self.resource_uuid,
+            "name": "alloc-01",
+            "backend_id": "alloc-01",
+            "state": "OK",
+        }
+        self.waldur_offering = {
+            "components": [
+                {"type": "cpu"},
+                {"type": "mem"},
+            ],
+            "customer_uuid": uuid.uuid4().hex,
+        }
+        self.client = AuthenticatedClient(
+            base_url=self.BASE_URL, token=OFFERING.api_token, headers={}
+        )
+        self.backend = mock.MagicMock(spec=BaseBackend)
+        self.backend.backend_type = "slurm"
+        self.backend.supports_decreasing_usage = False
+        self.backend.backend_components = {
+            "cpu": {"limit": 10, "measured_unit": "h", "unit_factor": 1,
+                    "accounting_type": "usage", "label": "CPU"},
+            "mem": {"limit": 10, "measured_unit": "GBh", "unit_factor": 1,
+                    "accounting_type": "usage", "label": "MEM"},
+        }
+        self.backend.timezone = ""
+
+    def _stub_common(self) -> None:
+        respx.get(f"{self.BASE_URL}/api/users/me/").respond(
+            200, json=user_me_api_response(base_url=self.BASE_URL, username="test-user")
+        )
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-provider-offerings/{OFFERING.uuid}/"
+        ).respond(200, json=self.waldur_offering)
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-provider-resources/"
+        ).respond(200, json=[self.waldur_resource])
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.resource_uuid}/"
+        ).respond(200, json=self.waldur_resource)
+        sp = ServiceProvider(uuid=uuid.uuid4())
+        respx.get(f"{self.BASE_URL}/api/marketplace-service-providers/").respond(
+            200, json=[sp.to_dict()]
+        )
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-user-usages/"
+        ).respond(200, json=[])
+
+    def _build_processor(self, omit_anomalous: bool = False) -> OfferingReportProcessor:
+        proc = OfferingReportProcessor.__new__(OfferingReportProcessor)
+        proc.resource_backend = self.backend
+        proc.timezone = ""  # type: ignore[attr-defined]
+        proc.waldur_rest_client = self.client  # type: ignore[attr-defined]
+        proc.offering = OFFERING.model_copy(
+            update={"omit_anomalous_usage_components": omit_anomalous}
+        )
+        return proc
+
+    def _resource_and_components(self):
+        waldur_resource = mock.MagicMock()
+        waldur_resource.uuid.hex = self.resource_uuid
+        waldur_resource.backend_id = "alloc-01"
+        offering_components = [SimpleNamespace(type_="cpu"), SimpleNamespace(type_="mem")]
+        return waldur_resource, offering_components
+
+    @respx.mock
+    def test_submits_only_non_anomalous_component(self) -> None:
+        # cpu decreased (anomaly), mem increased — POST mem only.
+        self._stub_common()
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-usages/"
+        ).respond(200, json=[
+            {"uuid": uuid.uuid4().hex, "type": "cpu", "usage": "15.0000"},
+            {"uuid": uuid.uuid4().hex, "type": "mem", "usage": "20.0000"},
+        ])
+        set_usage_route = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).respond(201, json={})
+
+        proc = self._build_processor(omit_anomalous=True)
+        waldur_resource, offering_components = self._resource_and_components()
+
+        skipped = proc._submit_total_usage_for_resource(
+            waldur_resource=waldur_resource,
+            total_usage={"cpu": 10.0, "mem": 30.0},
+            waldur_components=offering_components,
+            report_date=datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.timezone.utc),
+        )
+
+        assert skipped == ["cpu"]
+        assert set_usage_route.call_count == 1
+        body = json.loads(set_usage_route.calls.last.request.content)
+        amounts = {u["type"]: u["amount"] for u in body["usages"]}
+        assert amounts == {"mem": "30.00"}
+
+    @respx.mock
+    def test_raises_when_every_component_is_anomalous(self) -> None:
+        self._stub_common()
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-usages/"
+        ).respond(200, json=[
+            {"uuid": uuid.uuid4().hex, "type": "cpu", "usage": "15.0000"},
+            {"uuid": uuid.uuid4().hex, "type": "mem", "usage": "40.0000"},
+        ])
+        set_usage_route = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).respond(201, json={})
+
+        proc = self._build_processor()
+        waldur_resource, offering_components = self._resource_and_components()
+
+        with self.assertRaises(UsageAnomalyError):
+            proc._submit_total_usage_for_resource(
+                waldur_resource=waldur_resource,
+                total_usage={"cpu": 10.0, "mem": 30.0},
+                waldur_components=offering_components,
+                report_date=datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.timezone.utc),
+            )
+
+        assert set_usage_route.call_count == 0
+
+    @respx.mock
+    def test_skips_set_usage_when_remaining_already_matches(self) -> None:
+        # mem decreased (anomaly); cpu is unchanged. After dropping mem
+        # there is nothing new to send.
+        self._stub_common()
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-usages/"
+        ).respond(200, json=[
+            {"uuid": uuid.uuid4().hex, "type": "cpu", "usage": "214.77"},
+            {"uuid": uuid.uuid4().hex, "type": "mem", "usage": "3546.83"},
+        ])
+        set_usage_route = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).respond(201, json={})
+
+        proc = self._build_processor(omit_anomalous=True)
+        waldur_resource, offering_components = self._resource_and_components()
+
+        skipped = proc._submit_total_usage_for_resource(
+            waldur_resource=waldur_resource,
+            total_usage={"cpu": 214.77, "mem": 3494.0},
+            waldur_components=offering_components,
+            report_date=datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.timezone.utc),
+        )
+
+        assert skipped == ["mem"]
+        assert set_usage_route.call_count == 0
+
+    @respx.mock
+    def test_default_blocks_whole_payload_on_one_anomaly(self) -> None:
+        # cpu decreased, mem increased — default drop-all skips the POST.
+        self._stub_common()
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-usages/"
+        ).respond(200, json=[
+            {"uuid": uuid.uuid4().hex, "type": "cpu", "usage": "15.0000"},
+            {"uuid": uuid.uuid4().hex, "type": "mem", "usage": "20.0000"},
+        ])
+        set_usage_route = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).respond(201, json={})
+
+        proc = self._build_processor()
+        waldur_resource, offering_components = self._resource_and_components()
+
+        with self.assertRaises(UsageAnomalyError):
+            proc._submit_total_usage_for_resource(
+                waldur_resource=waldur_resource,
+                total_usage={"cpu": 10.0, "mem": 30.0},
+                waldur_components=offering_components,
+                report_date=datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.timezone.utc),
+            )
+
+        assert set_usage_route.call_count == 0
+
+    @respx.mock
+    def test_omitted_components_are_not_submitted_as_user_usages(self) -> None:
+        # cpu decreased, mem increased. set_usage posts mem only; per-user
+        # must not write cpu either, or the next cycle would skip anomaly
+        # detection for that type.
+        self._stub_common()
+        cpu_uuid = uuid.uuid4()
+        mem_uuid = uuid.uuid4()
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-usages/"
+        ).respond(200, json=[
+            {"uuid": str(cpu_uuid), "type": "cpu", "usage": "15.0000"},
+            {"uuid": str(mem_uuid), "type": "mem", "usage": "20.0000"},
+        ])
+        set_usage_route = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).respond(201, json={})
+        user_usage_cpu = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/"
+            f"{cpu_uuid}/set_user_usages/"
+        ).respond(201, json={})
+        user_usage_mem = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/"
+            f"{mem_uuid}/set_user_usages/"
+        ).respond(201, json={})
+
+        proc = self._build_processor(omit_anomalous=True)
+        proc._offering_users_cache = []
+        waldur_resource, offering_components = self._resource_and_components()
+        waldur_offering = SimpleNamespace(components=offering_components)
+        backend_resource_info = BackendResourceInfo(
+            backend_id="alloc-01",
+            users=["user-01"],
+            usage={
+                "user-01": {"cpu": 10.0, "mem": 30.0},
+                "TOTAL_ACCOUNT_USAGE": {"cpu": 10.0, "mem": 30.0},
+            },
+        )
+
+        proc._process_resource_period(
+            waldur_resource_info=waldur_resource,
+            waldur_offering=waldur_offering,
+            resource_backend_id="alloc-01",
+            backend_resource_info=backend_resource_info,
+            year=2024,
+            month=6,
+            is_current=True,
+        )
+
+        assert set_usage_route.call_count == 1
+        amounts = {
+            u["type"]: u["amount"]
+            for u in json.loads(set_usage_route.calls.last.request.content)["usages"]
+        }
+        assert amounts == {"mem": "30.00"}
+        assert user_usage_mem.call_count == 1
+        assert user_usage_cpu.call_count == 0

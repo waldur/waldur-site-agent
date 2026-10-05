@@ -1,3 +1,4 @@
+import json
 import unittest
 import uuid
 from unittest import mock
@@ -162,7 +163,7 @@ class ReportingTest(unittest.TestCase):
         assert user_usage_cpu_response.call_count == 1
 
     def test_usage_reporting_with_anomaly(self, mock_pull_backend_resource) -> None:
-        """Test that the usage reporting is not called when the waldur usage is higher than the incoming usage."""
+        """No set_usage when every component would decrease."""
         mock_pull_backend_resource.return_value = self.allocation_slurm
 
         respx.get("https://waldur.example.com/api/users/me/").respond(
@@ -194,7 +195,7 @@ class ReportingTest(unittest.TestCase):
                 {
                     "uuid": "ABFCD77BDE254F7485F839397968A12D",
                     "type": "mem",
-                    "usage": "20.0",
+                    "usage": "40.0",
                 },
             ],
         )
@@ -220,3 +221,83 @@ class ReportingTest(unittest.TestCase):
         processor.process_offering()
 
         assert set_usage_response.call_count == 0
+
+    def test_usage_reporting_submits_non_anomalous_component(
+        self, mock_pull_backend_resource
+    ) -> None:
+        """cpu decreased but mem increased — only mem is submitted, including per-user."""
+        mock_pull_backend_resource.return_value = self.allocation_slurm
+
+        respx.get("https://waldur.example.com/api/users/me/").respond(
+            200, json=user_me_api_response(username="test-user")
+        )
+        respx.get(f"{self.BASE_URL}/api/marketplace-provider-offerings/{OFFERING.uuid}/").respond(
+            200, json=self.waldur_offering
+        )
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-provider-resources/",
+        ).respond(200, json=[self.waldur_resource])
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/"
+        ).respond(200, json=self.waldur_resource)
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-offering-users/",
+        ).respond(200, json=[])
+
+        component_usage_uuid_cpu = uuid.uuid4()
+        component_usage_uuid_mem = uuid.uuid4()
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-usages/",
+        ).respond(
+            200,
+            json=[
+                {
+                    "uuid": str(component_usage_uuid_cpu),
+                    "type": "cpu",
+                    "usage": "15.0",
+                },
+                {
+                    "uuid": str(component_usage_uuid_mem),
+                    "type": "mem",
+                    "usage": "20.0",
+                },
+            ],
+        )
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-component-user-usages/",
+        ).respond(200, json=[])
+
+        set_usage_response = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/set_usage/"
+        ).respond(201, json={})
+        user_usage_cpu_response = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/{component_usage_uuid_cpu}/set_user_usages/"
+        ).respond(201, json={})
+        user_usage_mem_response = respx.post(
+            f"{self.BASE_URL}/api/marketplace-component-usages/{component_usage_uuid_mem}/set_user_usages/"
+        ).respond(201, json={})
+
+        respx.post(
+            f"{self.BASE_URL}/api/marketplace-provider-resources/{self.waldur_resource['uuid']}/set_as_erred/"
+        ).respond(200, json={})
+
+        service_provider = ServiceProvider(uuid=uuid.uuid4())
+        respx.get(
+            f"{self.BASE_URL}/api/marketplace-service-providers/",
+            params={"customer_uuid": self.waldur_offering["customer_uuid"], "field": "uuid"},
+        ).respond(200, json=[service_provider.to_dict()])
+
+        processor = OfferingReportProcessor(
+            self.offering.model_copy(update={"omit_anomalous_usage_components": True}),
+            self.mock_client,
+        )
+        processor.process_offering()
+
+        assert set_usage_response.call_count == 1
+        amounts = {
+            u["type"]: u["amount"]
+            for u in json.loads(set_usage_response.calls.last.request.content)["usages"]
+        }
+        assert amounts == {"mem": "30.00"}
+        assert user_usage_mem_response.call_count == 1
+        assert user_usage_cpu_response.call_count == 0

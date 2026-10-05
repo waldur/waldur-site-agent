@@ -4,6 +4,24 @@ Waldur-to-Waldur federation backend plugin for Waldur Site Agent. Enables federa
 resources, usage, and memberships between two Waldur instances (Waldur A and Waldur B),
 replacing the `marketplace_remote` Django app with a stateless, polling-based approach.
 
+## At a glance
+
+| Entry point | Group | Role |
+|---|---|---|
+| `waldur` | `waldur_site_agent.backends` | order processing, membership sync, reporting |
+| `waldur-identity-bridge` | `waldur_site_agent.username_management_backends` | username management |
+
+**Modes:** `order_process`, `membership_sync`, `report`, `event_process`.
+
+| Operation | Behaviour |
+|---|---|
+| Create resource | Creates the order on Waldur B and follows it to completion |
+| Terminate resource | Terminate order on Waldur B |
+| Update limits | Update order on Waldur B, with component conversion |
+| Add / remove members | Resolves users on Waldur B and adds / removes project roles there |
+| Pause / downscale / restore | **No-op** — returns `True` without changing anything on Waldur B |
+| Usage reporting | Usage from Waldur B, converted back to Waldur A components |
+
 ## Overview
 
 The plugin acts as a bridge: Waldur A (the "local" instance) receives orders from users
@@ -659,40 +677,12 @@ graph TB
 
 ## Plugin Structure
 
-```text
-plugins/waldur/
-├── pyproject.toml                         # Package metadata + entry points
-├── README.md
-├── waldur_site_agent_waldur/
-│   ├── __init__.py
-│   ├── backend.py                         # WaldurBackend(BaseBackend)
-│   ├── client.py                          # WaldurClient(BaseClient)
-│   ├── component_mapping.py               # ComponentMapper (forward + reverse)
-│   ├── schemas.py                         # Pydantic validation schemas
-│   ├── target_event_handler.py            # STOMP handler for Waldur B ORDER events
-│   └── username_backend.py               # Identity bridge username management backend
-└── tests/
-    ├── __init__.py
-    ├── conftest.py                        # Shared test fixtures
-    ├── integration_helpers.py             # Test setup helpers (WaldurTestSetup)
-    ├── test_backend.py                    # Backend unit tests (64 tests)
-    ├── test_client.py                     # Client tests (20 tests)
-    ├── test_component_mapping.py          # Mapper tests (22 tests)
-    ├── test_integration.py                # Integration tests (76 tests)
-    ├── test_integration_username_sync.py  # Username sync + STOMP event routing (18 tests)
-    ├── test_target_event_handler.py       # Target event handler tests
-    ├── test_username_backend.py           # Identity bridge username backend tests (22 tests)
-    └── e2e/                               # End-to-end tests against live instances
-        ├── conftest.py                    # E2E fixtures, AutoApproveWaldurBackend, MessageCapture
-        ├── test_e2e_federation.py         # REST polling lifecycle tests (create, update, terminate)
-        ├── test_e2e_stomp.py              # STOMP event tests (connections + event flow)
-        ├── test_e2e_membership_sync.py    # Membership sync: add/remove user with role mapping
-        ├── test_e2e_username_sync.py      # Username sync from Waldur B to A
-        ├── test_e2e_usage_sync.py         # Usage sync from Waldur B to A
-        ├── test_e2e_offering_user_pubsub.py # OFFERING_USER STOMP event tests
-        ├── test_e2e_order_rejection.py    # Order rejection flow
-        └── TEST_PLAN.md                   # Detailed E2E test plan
-```
+`waldur_site_agent_waldur/` holds the backend (`backend.py`), the Waldur B client
+(`client.py`), the component mapper (`component_mapping.py`), the settings schemas
+(`schemas.py`), the STOMP handler for Waldur B order events (`target_event_handler.py`)
+and the identity-bridge username backend (`username_backend.py`). Unit and integration
+tests are in `tests/`, end-to-end tests against live instances in `tests/e2e/`
+(with the plan in `tests/e2e/TEST_PLAN.md`).
 
 ### Entry Points
 
@@ -772,7 +762,7 @@ backend_settings:
   identity_bridge_source: "isd:efp"
 ```
 
-### Example: Remote eduTEAMS Resolution (default)
+### Example: Remote eduTEAMS Resolution
 
 ```yaml
 backend_settings:
@@ -841,6 +831,9 @@ offerings:
     waldur_offering_uuid: "offering-uuid-on-waldur-a"
     username_management_backend: "waldur-identity-bridge"
     backend_type: "waldur"
+    order_processing_backend: "waldur"
+    membership_sync_backend: "waldur"
+    reporting_backend: "waldur"
     backend_settings:
       target_api_url: "https://waldur-b.example.com/api/"
       target_api_token: "service-account-token-for-waldur-b"
@@ -878,58 +871,62 @@ On each resource creation, the plugin:
 
 ## Testing
 
+Run from the plugin directory (`cd plugins/waldur`), so its entry points resolve:
+
 ```bash
 # Run unit tests
-.venv/bin/python -m pytest plugins/waldur/tests/test_backend.py -v
-.venv/bin/python -m pytest plugins/waldur/tests/test_client.py -v
-.venv/bin/python -m pytest plugins/waldur/tests/test_component_mapping.py -v
-.venv/bin/python -m pytest plugins/waldur/tests/test_target_event_handler.py -v
+uv run pytest tests/test_backend.py -v
+uv run pytest tests/test_client.py -v
+uv run pytest tests/test_component_mapping.py -v
+uv run pytest tests/test_target_event_handler.py -v
 
 # Run integration tests (requires WALDUR_INTEGRATION_TESTS=true)
 WALDUR_INTEGRATION_TESTS=true \
-.venv/bin/python -m pytest plugins/waldur/tests/test_integration.py -v
+uv run pytest tests/test_integration.py -v
 
 # Run all E2E tests (REST + STOMP) against live instances
 WALDUR_E2E_TESTS=true \
 WALDUR_E2E_CONFIG=puhuri-federation-config.yaml \
 WALDUR_E2E_PROJECT_A_UUID=<uuid> \
-.venv/bin/python -m pytest plugins/waldur/tests/e2e/ -v -s
+uv run pytest tests/e2e/ -v -s
 
 # Run REST polling E2E tests only (Tests 1-4)
 WALDUR_E2E_TESTS=true \
 WALDUR_E2E_CONFIG=puhuri-federation-config.yaml \
 WALDUR_E2E_PROJECT_A_UUID=<uuid> \
-.venv/bin/python -m pytest plugins/waldur/tests/e2e/test_e2e_federation.py -v -s
+uv run pytest tests/e2e/test_e2e_federation.py -v -s
 
 # Run STOMP event E2E tests only (Tests 5-7)
 WALDUR_E2E_TESTS=true \
 WALDUR_E2E_CONFIG=puhuri-federation-config.yaml \
 WALDUR_E2E_PROJECT_A_UUID=<uuid> \
-.venv/bin/python -m pytest plugins/waldur/tests/e2e/test_e2e_stomp.py -v -s
+uv run pytest tests/e2e/test_e2e_stomp.py -v -s
 
 # Run with coverage
-.venv/bin/python -m pytest plugins/waldur/tests/ --cov=waldur_site_agent_waldur
+uv run pytest tests/ --cov=waldur_site_agent_waldur
 ```
 
 ### Test Coverage
 
-| Module | Tests | Focus |
-|--------|-------|-------|
-| `test_component_mapping.py` | 22 | Forward/reverse conversion, passthrough, round-trip |
-| `test_client.py` | 20 | API operations with mocked `waldur_api_client` |
-| `test_backend.py` | 64 | Resource lifecycle, async orders, usage reporting, membership sync, role mapping |
-| `test_username_backend.py` | 22 | Identity bridge username backend, attribute mapping, user sync |
-| `test_target_event_handler.py` | 19 | STOMP ORDER event handling, source order state updates |
-| `test_integration.py` | 76 | Integration tests against real single Waldur instance |
-| `test_identity_bridge_integration.py` | 8 | Identity bridge integration tests |
-| `test_integration_username_sync.py` | 18 | Username sync, STOMP event routing, periodic reconciliation |
-| `e2e/test_e2e_federation.py` | 4 | REST polling lifecycle (create, update, terminate) |
-| `e2e/test_e2e_stomp.py` | 4 | STOMP connections + event capture + order flow + cleanup |
-| `e2e/test_e2e_membership_sync.py` | 6 | Membership add/remove with identity bridge + role mapping |
-| `e2e/test_e2e_username_sync.py` | 7 | Username sync from Waldur B to A |
-| `e2e/test_e2e_usage_sync.py` | 7 | Usage sync with component reverse conversion |
-| `e2e/test_e2e_offering_user_pubsub.py` | 6 | OFFERING_USER STOMP events |
-| `e2e/test_e2e_order_rejection.py` | 5 | Order rejection propagation |
+| Module | Focus |
+|--------|-------|
+| `test_component_mapping.py` | Forward/reverse conversion, passthrough, round-trip |
+| `test_client.py` | API operations with mocked `waldur_api_client` |
+| `test_backend.py` | Resource lifecycle, async orders, usage reporting, membership sync, role mapping |
+| `test_username_backend.py` | Identity bridge username backend, attribute mapping, user sync |
+| `test_username_set_identity_bridge.py` | `username_set` events resolve users by CUID, not the local username |
+| `test_target_event_handler.py` | STOMP ORDER event handling, source order state updates |
+| `test_phantom_user_order_post_process.py` | Order post-processing for users not yet on Waldur B |
+| `test_integration.py` | Integration tests against a real single Waldur instance |
+| `test_identity_bridge_integration.py` | Identity bridge integration tests |
+| `test_integration_username_sync.py` | Username sync, STOMP event routing, periodic reconciliation |
+| `e2e/test_e2e_federation.py` | REST polling lifecycle (create, update, terminate) |
+| `e2e/test_e2e_stomp.py` | STOMP connections + event capture + order flow + cleanup |
+| `e2e/test_e2e_membership_sync.py` | Membership add/remove with identity bridge + role mapping |
+| `e2e/test_e2e_username_sync.py` | Username sync from Waldur B to A |
+| `e2e/test_e2e_usage_sync.py` | Usage sync with component reverse conversion |
+| `e2e/test_e2e_offering_user_pubsub.py` | OFFERING_USER STOMP events |
+| `e2e/test_e2e_order_rejection.py` | Order rejection propagation |
 
 ## Comparison with marketplace_remote
 

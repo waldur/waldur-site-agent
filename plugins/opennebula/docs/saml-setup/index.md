@@ -135,10 +135,16 @@ https://<keycloak-host>/keycloak/realms/opennebula/protocol/saml/descriptor
 ```yaml
 offerings:
   - name: "opennebula-vdc"
-    uuid: "<offering-uuid>"
-    backend_type: "opennebula"
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<waldur api token>"
+    waldur_offering_uuid: "<offering uuid>"
 
-    backend:
+    backend_type: "opennebula"
+    order_processing_backend: "opennebula"
+    membership_sync_backend: "opennebula"
+    reporting_backend: "opennebula"
+
+    backend_settings:
       api_url: "http://<opennebula-host>:2633/RPC2"
       credentials: "oneadmin:<password>"
       zone_id: 0
@@ -162,24 +168,24 @@ offerings:
       # Default role when adding users without explicit role
       default_user_role: "user"
 
-    components:
+    backend_components:
       cpu:
         type: "cpu"
-        name: "CPU Cores"
+        label: "CPU Cores"
         measured_unit: "cores"
-        billing_type: "limit"
+        accounting_type: "limit"
         unit_factor: 1
       ram:
         type: "ram"
-        name: "RAM"
+        label: "RAM"
         measured_unit: "MB"
-        billing_type: "limit"
+        accounting_type: "limit"
         unit_factor: 1
       storage:
         type: "storage"
-        name: "Storage"
+        label: "Storage"
         measured_unit: "MB"
-        billing_type: "limit"
+        accounting_type: "limit"
         unit_factor: 1
 ```
 
@@ -498,10 +504,10 @@ KEYCLOAK_REALM="opennebula" \
 KEYCLOAK_ADMIN_USERNAME="admin" \
 KEYCLOAK_ADMIN_PASSWORD="<password>" \
 KEYCLOAK_TEST_USERNAME="testuser1" \
-uv run pytest plugins/opennebula/tests/test_saml_integration_e2e.py -v
+uv run pytest tests/test_saml_integration_e2e.py -v   # from plugins/opennebula
 ```
 
-The integration test suite (`test_saml_integration_e2e.py`) runs 21 ordered tests covering the full lifecycle:
+The integration test suite (`test_saml_integration_e2e.py`) runs ordered tests covering the full lifecycle:
 
 | # | Test | Verifies |
 |---|------|----------|

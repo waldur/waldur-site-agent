@@ -133,9 +133,14 @@ lfs quota -u alice /home   # verification (logged)
 `BaseBackend.create_user_homedirs` iterates over the set of usernames it is
 given. For each one:
 
-1. `client.create_linux_user_homedir(username, umask)` is called.
+1. If `homedir_base_path` is set and `{homedir_base_path}/{username}` already
+   exists, creation is skipped (logged as `Homedir for user … already exists`).
+   Otherwise `client.create_linux_user_homedir(username, umask)` is called.
+   Without `homedir_base_path` the existence check is not possible, so creation
+   is always attempted.
 2. If `homedir_quota` is configured, the quota is then applied on the resolved
-   homedir path.
+   homedir path — also when creation was skipped because the directory
+   existed, so quota changes reach existing users.
 3. A failure for one user is logged but does not stop processing of the
    remaining users.
 4. If homedir creation itself fails for a user, the quota step is skipped for
@@ -233,7 +238,7 @@ A complete reference example showing both subsystems is in
 
 - The `Example SLURM Offering` shows `homedir_quota` placement with the
   `ceph_xattr` provider (commented out).
-- The `Discoverer CPU` offering shows `homedir_base_path`, the `lustre` and
+- The `Example CPU cluster with LDAP` offering shows `homedir_base_path`, the `lustre` and
   `xfs` `homedir_quota` provider examples (commented out), and a full
   uncommented `project_directory` block with `lustre_quota`.
 
