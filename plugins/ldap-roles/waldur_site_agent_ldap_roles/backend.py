@@ -615,8 +615,9 @@ class LdapRolesBackend(backends.BaseBackend):
         try:
             self.pull_resource(waldur_resource)
         except Exception as exc:
-            logger.warning("ldap-roles add_user re-sync failed: %s", exc)
-            return False
+            # The grant did not reach LDAP: a backend failure, not a skip.
+            msg = f"ldap-roles re-sync after granting {username} failed: {exc}"
+            raise BackendError(msg) from exc
         return True
 
     def remove_user(

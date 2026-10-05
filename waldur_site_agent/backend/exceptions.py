@@ -7,6 +7,15 @@ class BackendError(Exception):
     """Error happened on the backend."""
 
 
+class UserNotProvisionedError(BackendError):
+    """The user does not exist in the backend's identity provider yet.
+
+    Typical for IdP-backed backends (Keycloak) before the person's first
+    sign-in. Adding them is retried on the next pass rather than counted as a
+    backend failure -- it is the normal state of a newly invited member.
+    """
+
+
 class ConfigurationError(Exception):
     """Agent configuration is incorrect."""
 

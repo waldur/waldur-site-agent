@@ -533,6 +533,26 @@ This table shows which `BaseBackend` methods are called by each agent mode.
 
 ¹ Only for backends with `supports_cycle_preflight = True`.
 
+### Reporting user add/remove failures
+
+`add_user` and `remove_user` share one contract: return `True` when the user is
+associated (or removed) afterwards, `False` only when there was nothing to do
+(blank username, feature disabled), and **raise** `BackendError` when the backend
+refused. A failure folded into `False` reads as a skip and is never reported, so
+nobody learns the user is missing.
+
+Raise `UserNotProvisionedError` (a `BackendError` subclass) when the user does not
+exist in the identity provider yet, e.g. no first Keycloak sign-in. The base
+`add_users_to_resource` skips such users and retries them on the next pass.
+
+The base `add_users_to_resource` / `remove_users_from_resource` try every user
+and record each failure with its cause. Membership sync logs them at ERROR (the
+users, capped at ten, and the first cause) and retries them on the next pass.
+The resource state is not changed and `last_sync` is still refreshed: one
+member's problem is not a failure of an allocation that works for everyone else.
+A backend that overrides these bulk methods reports nothing unless it returns
+`AddedUsers` / `RemovedUsers` with `failed` filled in.
+
 ## Usage report format specification
 
 The `_get_usage_report` method must return data in this exact structure:

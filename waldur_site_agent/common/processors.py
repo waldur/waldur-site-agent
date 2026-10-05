@@ -19,6 +19,7 @@ import abc
 import datetime
 import math
 import time as _time
+from collections.abc import Collection
 from enum import Enum
 from http import HTTPStatus
 from time import sleep
@@ -208,6 +209,26 @@ def _is_transient_waldur_api_error(e: Exception) -> bool:
     return isinstance(e, UnexpectedStatus) and (
         e.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR
         or e.status_code == HTTPStatus.TOO_MANY_REQUESTS
+    )
+
+
+#: How many failed users a user-sync failure log line names before summarising the rest.
+_MAX_FAILED_USERS_IN_MESSAGE = 10
+
+
+def _describe_failed_users(verb: str, failed: object) -> str:
+    """One clause for the user-sync failure log line: the users, capped, and the first cause."""
+    if not isinstance(failed, dict) or not failed:
+        return ""
+    names = sorted(failed)
+    shown = ", ".join(names[:_MAX_FAILED_USERS_IN_MESSAGE])
+    more = len(names) - _MAX_FAILED_USERS_IN_MESSAGE
+    if more > 0:
+        shown += f" and {more} more"
+    first = names[0]
+    return (
+        f"could not {verb} {len(names)} user(s): {shown} "
+        f"(first error, {first}: {failed[first]})"
     )
 
 
@@ -3267,6 +3288,12 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     ) -> set[str]:
         """Sync users for the resource between Waldur and the site.
 
+        Users the backend failed to add or remove (reported through the
+        ``failed`` attribute of the backend's result) are logged at ERROR with
+        their cause and retried on the next pass. They do not mark the resource
+        ERRED and do not hold back ``last_sync``: one member's problem is not a
+        failure of an allocation that works for everyone else.
+
         return: the actual resource usernames (existing + added)
         """
         logger.info("Syncing user list for resource %s", waldur_resource.name)
@@ -3289,12 +3316,13 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 "Resource is restricted for members, removing all the existing associations"
             )
 
-            self.resource_backend.remove_users_from_resource(
+            removed_usernames = self.resource_backend.remove_users_from_resource(
                 waldur_resource,
                 existing_usernames,
                 user_cuids=user_cuids,
                 user_roles=user_roles,
             )
+            self._log_user_sync_failures(waldur_resource, set(), removed_usernames)
             return set()
 
         added_usernames = self.resource_backend.add_users_to_resource(
@@ -3314,6 +3342,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             user_cuids=user_cuids,
             user_roles=user_roles,
         )
+        # Logged before the steps below so a later error cannot lose them.
+        self._log_user_sync_failures(waldur_resource, added_usernames, removed_usernames)
         self._release_departed_users(
             self._confirmed_removals(stale_usernames, removed_usernames, waldur_resource)
         )
@@ -3330,6 +3360,31 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         self._report_membership_sync_statuses(waldur_resource)
 
         return existing_usernames | added_usernames
+
+    def _log_user_sync_failures(
+        self,
+        waldur_resource: WaldurResource,
+        added_usernames: Collection[str],
+        removed_usernames: Collection[str],
+    ) -> None:
+        """Log the users the backend failed to add or remove, with the cause.
+
+        Only logged: the users are retried on the next pass and the resource
+        state is left alone. Backends whose results carry no ``failed`` mapping
+        (their own add/remove implementations) report nothing here.
+        """
+        clauses = [
+            clause
+            for verb, result in (("add", added_usernames), ("remove", removed_usernames))
+            if (clause := _describe_failed_users(verb, getattr(result, "failed", None)))
+        ]
+        if clauses:
+            logger.error(
+                "User sync for resource %s (%s) is incomplete: %s",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+                "; ".join(clauses),
+            )
 
     def _report_membership_sync_statuses(self, waldur_resource: WaldurResource) -> None:
         """Post the backend's per-grant sync report to Waldur, if any.
