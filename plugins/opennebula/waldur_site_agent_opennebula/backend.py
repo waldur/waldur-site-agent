@@ -20,7 +20,7 @@ import yaml
 from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend.backends import BaseBackend
-from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.exceptions import BackendError, UserNotProvisionedError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
 from .client import OpenNebulaClient
@@ -1287,7 +1287,10 @@ class OpenNebulaBackend(BaseBackend):
         try:
             keycloak_user = self.keycloak_client.find_user(username)
             if not keycloak_user:
-                raise BackendError(f"User '{username}' not found in Keycloak")
+                # Not signed in yet: retried next pass, not a backend failure.
+                raise UserNotProvisionedError(
+                    f"User '{username}' not found in Keycloak (no first sign-in yet)"
+                )
 
             # Find the role group under this VDC's parent
             group = self._find_vdc_role_group(slug, role)

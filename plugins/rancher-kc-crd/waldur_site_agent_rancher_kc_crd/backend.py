@@ -604,8 +604,9 @@ class RancherKcCrdBackend(backends.BaseBackend):
         try:
             info = self.pull_resource(waldur_resource)
         except Exception as exc:
-            logger.warning("add_user CR re-sync failed: %s", exc)
-            return False
+            # The grant did not reach the CR: a backend failure, not a skip.
+            msg = f"CR re-sync after granting {username} failed: {exc}"
+            raise BackendError(msg) from exc
         logger.info(
             "add_user(rancher-kc-crd): resource=%s (%s) synced Keycloak members after re-sync: %s",
             waldur_resource.backend_id,

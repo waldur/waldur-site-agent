@@ -8,7 +8,7 @@ from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_site_agent_keycloak_client import KeycloakClient
 
 from waldur_site_agent.backend import backends, logger
-from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.exceptions import BackendError, UserNotProvisionedError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent_k8s_ut_namespace.k8s_client import K8sUtNamespaceClient
 
@@ -660,20 +660,20 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         target_group_id = group_ids.get(self.default_role)
 
         if not target_group_id:
-            logger.warning("No group found for default role %s", self.default_role)
-            return False
+            msg = f"No Keycloak group for default role {self.default_role} on {resource_slug}"
+            raise BackendError(msg)
 
         kc_user = self.keycloak_client.find_user(username, self.keycloak_use_user_id)
         if not kc_user:
-            logger.warning("User %s not found in Keycloak", username)
-            return False
+            msg = f"User {username} not found in Keycloak (no first sign-in yet)"
+            raise UserNotProvisionedError(msg)
 
         try:
             self.keycloak_client.add_user_to_group(kc_user["id"], target_group_id)
-            return True
         except Exception as e:
-            logger.warning("Failed to add user %s to group: %s", username, e)
-            return False
+            msg = f"Failed to add user {username} to Keycloak group: {e}"
+            raise BackendError(msg) from e
+        return True
 
     def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Remove user from ALL 3 Keycloak groups."""

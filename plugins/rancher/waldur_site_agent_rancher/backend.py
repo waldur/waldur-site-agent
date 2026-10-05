@@ -8,7 +8,7 @@ from waldur_site_agent_keycloak_client import KeycloakClient
 from waldur_site_agent_rancher.rancher_client import DEFAULT_K8S_RESOURCE_MAP, RancherClient
 
 from waldur_site_agent.backend import backends, logger
-from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.exceptions import BackendError, UserNotProvisionedError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
 
@@ -643,62 +643,66 @@ class RancherBackend(backends.BaseBackend):
             logger.exception("Error while pulling resource [%s]: %s", backend_id, e)
             return None
 
+    def _get_or_create_keycloak_child_group(
+        self, waldur_resource: WaldurResource, child_group_name: str
+    ) -> dict:
+        """Return the project-role group, creating and binding it if missing."""
+        if self.keycloak_client is None:
+            msg = "Keycloak integration is not enabled"
+            raise BackendError(msg)
+        group = self.keycloak_client.get_group_by_name(child_group_name)
+        if group:
+            return group
+        resource_backend_id = waldur_resource.backend_id
+        logger.info(f"Creating missing Keycloak groups for resource {resource_backend_id}")
+        _, child_id = self._create_keycloak_groups(waldur_resource)
+        if not child_id:
+            msg = f"Failed to create Keycloak group {child_group_name}"
+            raise BackendError(msg)
+        # Bind the new group to the Rancher project
+        self._bind_keycloak_group_to_rancher_project(
+            resource_backend_id, child_group_name, self.rancher_role
+        )
+        logger.info(f"Created and bound group {child_group_name}")
+        return {"id": child_id}
+
     def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
-        """Add user to Keycloak group (OIDC handles Rancher project access)."""
+        """Add user to Keycloak group (OIDC handles Rancher project access).
+
+        Without Keycloak there is nothing to do (True). A user not in Keycloak
+        yet raises UserNotProvisionedError (retried next pass); a group that
+        cannot be created or joined raises BackendError.
+        """
         del kwargs
         resource_backend_id = waldur_resource.backend_id
 
         logger.info(f"Adding user {username} to resource {resource_backend_id}")
 
-        try:
-            # Only manage Keycloak group membership - OIDC handles Rancher access
-            if self.keycloak_client:
-                try:
-                    # Now we have direct access to the project information!
-                    child_group_name = self._get_keycloak_child_group_name(waldur_resource)
-
-                    # Find the user in Keycloak (by ID or username based on setting)
-                    keycloak_user = self.keycloak_client.find_user(
-                        username, self.keycloak_use_user_id
-                    )
-                    if keycloak_user:
-                        # Find or create the project-role group
-                        group = self.keycloak_client.get_group_by_name(child_group_name)
-                        if not group:
-                            logger.info(
-                                f"Creating missing Keycloak groups for resource "
-                                f"{resource_backend_id}"
-                            )
-                            # Create the missing group structure
-                            _, child_id = self._create_keycloak_groups(waldur_resource)
-                            if child_id:
-                                # Bind the new group to the Rancher project
-                                self._bind_keycloak_group_to_rancher_project(
-                                    resource_backend_id, child_group_name, self.rancher_role
-                                )
-                                group = {"id": child_id}
-                                logger.info(f"Created and bound group {child_group_name}")
-                            else:
-                                logger.error(f"Failed to create group {child_group_name}")
-                                return False
-
-                        # Add user to group
-                        self.keycloak_client.add_user_to_group(keycloak_user["id"], group["id"])
-                        logger.info(f"Added {username} to Keycloak group {child_group_name}")
-                        logger.info("OIDC will automatically grant Rancher project access")
-                    else:
-                        logger.warning(f"User {username} not found in Keycloak")
-
-                except Exception as e:
-                    logger.warning(f"Failed to add user to Keycloak group: {e}")
-            else:
-                logger.info(f"Keycloak disabled - no group management for {username}")
-
+        # Only manage Keycloak group membership - OIDC handles Rancher access
+        if not self.keycloak_client:
+            logger.info(f"Keycloak disabled - no group management for {username}")
             return True
 
+        child_group_name = self._get_keycloak_child_group_name(waldur_resource)
+
+        # Find the user in Keycloak (by ID or username based on setting)
+        keycloak_user = self.keycloak_client.find_user(username, self.keycloak_use_user_id)
+        if not keycloak_user:
+            msg = f"User {username} not found in Keycloak (no first sign-in yet)"
+            raise UserNotProvisionedError(msg)
+
+        try:
+            group = self._get_or_create_keycloak_child_group(waldur_resource, child_group_name)
+            self.keycloak_client.add_user_to_group(keycloak_user["id"], group["id"])
+        except BackendError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to add user {username}: {e}")
-            return False
+            msg = f"Failed to add user {username} to Keycloak group {child_group_name}: {e}"
+            raise BackendError(msg) from e
+
+        logger.info(f"Added {username} to Keycloak group {child_group_name}")
+        logger.info("OIDC will automatically grant Rancher project access")
+        return True
 
     def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Remove user from Keycloak group (OIDC handles Rancher project access removal)."""

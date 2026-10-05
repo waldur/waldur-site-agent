@@ -764,7 +764,12 @@ class SlurmBackend(backends.BaseBackend):
         return qos, partition
 
     def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
-        """Add user to SLURM account, with optional partition and LDAP group."""
+        """Add user to SLURM account, with optional partition and LDAP group.
+
+        A failed ``sacctmgr`` association raises BackendError; a failed LDAP
+        group add stays non-fatal (logged), since the SLURM association --
+        what grants access to the allocation -- exists.
+        """
         del kwargs
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
@@ -832,8 +837,13 @@ class SlurmBackend(backends.BaseBackend):
                     )
                 logger.info("Created association between %s and %s", username, resource_backend_id)
             except BackendError as err:
-                logger.exception("Unable to create association on backend: %s", err)
-                return False
+                # Raise rather than return False (see BaseBackend.add_user): the
+                # caller has to know this user is still missing on the cluster.
+                msg = (
+                    f"Unable to create association between {username} and "
+                    f"{resource_backend_id}: {err}"
+                )
+                raise BackendError(msg) from err
         else:
             logger.info("Association already exists, skipping creation")
 

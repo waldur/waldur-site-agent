@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Optional
@@ -25,6 +26,7 @@ from waldur_site_agent.backend.exceptions import (
     BackendError,
     BackendNotReadyError,
     DuplicateResourceError,
+    UserNotProvisionedError,
 )
 
 UNKNOWN_BACKEND_TYPE = "unknown"
@@ -47,6 +49,40 @@ def _pull_include_usage() -> bool:
 def _pull_strict() -> bool:
     """Whether the pull running on this thread must fail loudly (False outside one)."""
     return bool(getattr(_PULL_STATE, "strict", False))
+
+
+class AddedUsers(set):
+    """Users added to a resource, plus those the backend failed to add.
+
+    A plain set to every caller that only wants the added names; membership
+    sync also reads ``failed`` ({username: cause}) to log the users it could
+    not add. Set operations and copies return a plain ``set`` and
+    drop ``failed``, so read it from the object the backend returned.
+    """
+
+    def __init__(
+        self, added: Iterable[str] = (), failed: Optional[Mapping[str, str]] = None
+    ) -> None:
+        """Hold the added usernames and the cause for each failed one."""
+        super().__init__(added)
+        self.failed: dict[str, str] = dict(sorted((failed or {}).items()))
+
+
+class RemovedUsers(list):
+    """Users no longer associated with a resource, plus those that failed to go.
+
+    A plain list to every caller that only wants the removed names (see
+    ``remove_users_from_resource``); ``failed`` maps each removal the backend
+    attempted and could not complete to its cause. Slicing, concatenation and
+    copies return a plain ``list`` and drop ``failed``.
+    """
+
+    def __init__(
+        self, removed: Iterable[str] = (), failed: Optional[Mapping[str, str]] = None
+    ) -> None:
+        """Hold the removed usernames and the cause for each failed one."""
+        super().__init__(removed)
+        self.failed: dict[str, str] = dict(sorted((failed or {}).items()))
 
 
 class PendingOrderDecision(Enum):
@@ -1062,12 +1098,21 @@ class BaseBackend(ABC):
     def add_users_to_resource(
         self, waldur_resource: WaldurResource, user_ids: set[str], **kwargs: dict
     ) -> set[str]:
-        """Add specified users to the resource on the backend."""
+        """Add specified users to the resource on the backend.
+
+        Every user is tried, so one failure does not block the rest. Returns an
+        ``AddedUsers`` set of the users added; its ``failed`` lists the users
+        whose ``add_user`` raised, with the cause; membership sync logs them at
+        ERROR and retries them on the next pass, leaving the resource state
+        alone. A user who
+        raises ``UserNotProvisionedError`` (not in the IdP yet) is skipped and
+        retried on the next pass.
+        """
         del kwargs
         resource_backend_id = waldur_resource.backend_id
         if len(user_ids) < 1:
             logger.info("No new users to add")
-            return set()
+            return AddedUsers()
 
         logger.info(
             "Adding %s users to resource %s on backend: %s",
@@ -1076,12 +1121,23 @@ class BaseBackend(ABC):
             " ,".join(user_ids),
         )
         added_users = set()
+        failed_users: dict[str, str] = {}
         for username in user_ids:
             try:
                 succeeded = self.add_user(waldur_resource, username)
                 if succeeded:
                     added_users.add(username)
+            except UserNotProvisionedError as e:
+                # Not in the identity provider yet (no first sign-in): retried on
+                # the next pass, not a backend failure.
+                logger.warning(
+                    "User %s is not provisioned for resource %s yet, will retry: %s",
+                    username,
+                    resource_backend_id,
+                    e,
+                )
             except BackendError as e:
+                failed_users[username] = str(e)
                 logger.exception(
                     "Unable to add user %s to resource %s, details: %s",
                     username,
@@ -1089,10 +1145,17 @@ class BaseBackend(ABC):
                     e,
                 )
 
-        return added_users
+        return AddedUsers(added_users, failed_users)
 
     def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
-        """Add association between user and backend resource if it doesn't exists."""
+        """Add association between user and backend resource if it doesn't exists.
+
+        Contract for overrides, as for ``remove_user``: return True when the
+        association exists afterwards and False when there was nothing to add
+        (a blank username). An association that could not be created must
+        **raise** BackendError -- False is read as a benign skip, so a failure
+        folded into it would report the user as handled.
+        """
         del kwargs  # Used by subclass overrides (e.g. WaldurBackend for role_name)
         resource_backend_id = waldur_resource.backend_id
         if not resource_backend_id.strip():
@@ -1114,8 +1177,11 @@ class BaseBackend(ABC):
                 )
                 logger.info("Created association between %s and %s", username, resource_backend_id)
             except BackendError as err:
-                logger.exception("Unable to create association on backend: %s", err)
-                return False
+                msg = (
+                    f"Unable to create association between {username} and "
+                    f"{resource_backend_id}: {err}"
+                )
+                raise BackendError(msg) from err
         else:
             logger.info("Association already exists, skipping creation")
         return True
@@ -1128,15 +1194,17 @@ class BaseBackend(ABC):
         Returns the usernames that are no longer associated with the resource:
         those removed here, plus any a backend knows were never associated at
         all. A name left out is one the caller must treat as still associated --
-        core releases a departed account only against this list, so the per-user
-        failure swallowed below (deliberately: one bad user must not stop the
-        rest) keeps that account until a later cycle removes it for real.
+        core releases a departed account only against this list, so a per-user
+        failure (caught below so one bad user does not stop the rest) keeps that
+        account until a later cycle removes it for real. The result is a
+        ``RemovedUsers`` list whose ``failed`` maps those users to the cause,
+        which membership sync logs at ERROR without changing the resource state.
         """
         del kwargs
         resource_backend_id = waldur_resource.backend_id
         if len(usernames) < 1:
             logger.info("No users to remove")
-            return []
+            return RemovedUsers()
 
         logger.info(
             "Removing %s users from resource %s on backend: %s",
@@ -1145,19 +1213,21 @@ class BaseBackend(ABC):
             " ,".join(usernames),
         )
         removed_users = []
+        failed_users: dict[str, str] = {}
         for username in usernames:
             try:
                 succeeded = self.remove_user(waldur_resource, username)
                 if succeeded:
                     removed_users.append(username)
             except BackendError as e:
+                failed_users[username] = str(e)
                 logger.exception(
                     "Unable to remove user %s from resource %s, details: %s",
                     username,
                     resource_backend_id,
                     e,
                 )
-        return removed_users
+        return RemovedUsers(removed_users, failed_users)
 
     def _pre_delete_user_actions(self, resource_backend_id: str, username: str) -> None:
         """Perform actions before removing the user from the resource.
