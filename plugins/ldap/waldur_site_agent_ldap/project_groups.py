@@ -11,6 +11,7 @@ reserved for as long as files may carry it, and Waldur owns that decision.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -115,6 +116,7 @@ class ProjectGroup:
     gid: Optional[int]
     members: list[str]
     offering_uuids: set[str]
+    customer_slug: str = ""
 
     @classmethod
     def from_api(cls, item: dict) -> ProjectGroup:
@@ -129,6 +131,7 @@ class ProjectGroup:
                 for offering in item.get("offerings") or []
                 if isinstance(offering, dict) and offering.get("uuid")
             },
+            customer_slug=str(item.get("customer_slug") or ""),
         )
 
 
@@ -145,6 +148,7 @@ class ReconcileReport:
     member_updates: int = 0
     parent_updates: int = 0
     marked: int = 0
+    description_updates: int = 0
 
 
 def _first(value: object) -> object:
@@ -198,6 +202,36 @@ def _is_group_of_names(object_classes: list[str]) -> bool:
     return "groupofnames" in {c.lower() for c in object_classes}
 
 
+_WARNED_BARE_TEMPLATES: set[str] = set()
+
+
+def _template_pattern(template: str) -> Optional[re.Pattern]:
+    """A pattern matching any value rendered from ``template``; None if it cannot.
+
+    A template that is nothing but ``{slug}`` matches every value, so values
+    written from it cannot be told from the operator's own.
+    """
+    if not template or "{slug}" not in template:
+        return None
+    prefix, _, suffix = template.partition("{slug}")
+    if not prefix and not suffix:
+        return None
+    return re.compile(re.escape(prefix) + r".+" + re.escape(suffix))
+
+
+def _warn_once_about_bare_organization_template(template: str) -> None:
+    if template in _WARNED_BARE_TEMPLATES:
+        return
+    _WARNED_BARE_TEMPLATES.add(template)
+    logger.warning(
+        "project_groups.organization_description is %r: with no text around {slug} "
+        "the agent cannot tell its value from other descriptions, so it adds the "
+        "current slug but never removes an old one. Use e.g. 'organization={slug}' "
+        "to have a changed slug replaced.",
+        template,
+    )
+
+
 class ProjectGroupReconciler:
     """Converge the project-group OU and its parent entries on Waldur's groups."""
 
@@ -235,6 +269,10 @@ class ProjectGroupReconciler:
         self.adopt_gid = _plain(settings.get("on_gid_mismatch")) == "adopt"
         self.parents = list(settings.get("parents") or [])
         self.marker = settings.get("managed_marker") or DEFAULT_MANAGED_MARKER
+        self.organization_template = settings.get("organization_description") or ""
+        self._organization_pattern = _template_pattern(self.organization_template)
+        if self.organization_template and self._organization_pattern is None:
+            _warn_once_about_bare_organization_template(self.organization_template)
         self.offering_uuid = normalize_uuid(offering_uuid)
         self._ou_suffix = "," + normalize_dn(f"{self.ou},{client.base_dn}")
 
@@ -464,8 +502,47 @@ class ProjectGroupReconciler:
             self.client.modify_entry(entry_dn, {"description": [(MODIFY_ADD, [self.marker])]})
             report.marked += 1
             logger.info("Marked LDAP group %s as managed (%s)", entry_dn, self.marker)
+        if self._sync_organization_description(entry_dn, attrs, group):
+            report.description_updates += 1
         if self._sync_members(entry_dn, attrs, group, context.user_names):
             report.member_updates += 1
+
+    def _organization_value(self, group: ProjectGroup) -> str:
+        """The description value naming the group's organization, or ''."""
+        if not self.organization_template or not group.customer_slug:
+            return ""
+        return self.organization_template.replace("{slug}", group.customer_slug)
+
+    def _sync_organization_description(self, dn: str, attrs: dict, group: ProjectGroup) -> bool:
+        """Add the organization value, replacing a stale one; True when written.
+
+        Only a value matching the template's literal text is ever removed, and
+        never the managed marker: everything else in ``description`` is the
+        operator's. A group whose project is gone keeps what it has.
+        """
+        desired = self._organization_value(group)
+        if not desired:
+            return False
+        current = _values(attrs, "description")
+        stale = []
+        if self._organization_pattern is not None:
+            stale = [
+                value
+                for value in current
+                if value not in (desired, self.marker)
+                and self._organization_pattern.fullmatch(value)
+            ]
+        to_add = [] if desired in current else [desired]
+        if not stale and not to_add:
+            return False
+        self.client.modify_entry(dn, {"description": _operations(to_add, stale)})
+        logger.info(
+            "LDAP group %s: organization description set to %r%s",
+            dn,
+            desired,
+            f", replacing {', '.join(map(repr, stale))}" if stale else "",
+        )
+        return True
 
     def _member_values(self, group: ProjectGroup, user_names: Optional[set[str]]) -> list[str]:
         # A member must name an entry: an account Waldur lists before this agent
@@ -487,7 +564,8 @@ class ProjectGroupReconciler:
             "objectClass": self.object_classes,
             "cn": group.name,
             "gidNumber": group.gid,
-            "description": [self.marker],
+            "description": [self.marker]
+            + ([organization] if (organization := self._organization_value(group)) else []),
         }
         members = self._member_values(group, user_names)
         if members:

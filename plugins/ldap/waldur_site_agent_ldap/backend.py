@@ -484,12 +484,14 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
             return
         logger.info(
             "LDAP project groups: %d created, %d kept, %d marked, %d renumbered, "
-            "%d member updates, %d parent updates, %d conflicts, %d skipped, %d failed",
+            "%d member updates, %d description updates, %d parent updates, "
+            "%d conflicts, %d skipped, %d failed",
             report.created,
             report.kept,
             report.marked,
             report.renumbered,
             report.member_updates,
+            report.description_updates,
             report.parent_updates,
             report.conflicts,
             report.skipped,

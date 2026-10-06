@@ -186,6 +186,22 @@ class ProjectGroupsConfig(PluginBackendSettingsSchema):
         description="Entries that list the DN of each project group whose project "
         "has a resource on the offering",
     )
+    organization_description: Optional[str] = Field(
+        default=None,
+        description="Template of a description value naming the project's "
+        "organization, e.g. 'organization={slug}'. Unset, nothing is written. Kept in "
+        "sync on every pass; with literal text around {slug} a changed slug replaces "
+        "the old value, a bare '{slug}' can only be added",
+    )
+
+    @field_validator("organization_description")
+    @classmethod
+    def validate_organization_description(cls, v: Optional[str]) -> Optional[str]:
+        """Exactly one ``{slug}`` placeholder, so the value can be found again."""
+        if v is not None and v.count("{slug}") != 1:
+            msg = "organization_description must contain {slug} exactly once"
+            raise ValueError(msg)
+        return v
 
 
     @model_validator(mode="after")
