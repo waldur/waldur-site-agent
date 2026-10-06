@@ -345,49 +345,134 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             result[component_key] = float(self._parse_k8s_quantity(quota[quota_field]))
         return result
 
-    def _current_pod_usage_in_waldur_units(self, ns_name: str) -> dict[str, float]:
-        """Sum requested cpu/ram/gpu across every *Running* pod in ns_name.
+    def _credit_pod_container_usage(
+        self, ns_name: str, pod_credit_state: dict[str, str], now: datetime.datetime
+    ) -> tuple[dict[str, float], dict[str, str]]:
+        """Credit requested cpu/ram/gpu per container from its own real timestamps.
 
-        *ns_name* is the real workload namespace, not self.cr_namespace.
+        Uses each container's own real start/finish timestamps, not a
+        namespace-wide snapshot rate.
 
-        Unlike spec.quota (a static, namespace-level allocation that exists whether or
-        not anything is actually running), this reflects what's actually scheduled right
-        now -- the same *kind* of figure SLURM's own ReqTRES is: requested, not measured
-        utilization, but scoped to real, currently-running work, not a standing
-        reservation. Only backend_components whose type has a POD_REQUEST_KEYS entry are
-        summed here (storage is handled separately -- see that constant's comment).
+        *ns_name* is the real workload namespace, not self.cr_namespace. *pod_credit_state*
+        is the prior call's returned state (persisted across calls in the usage-accumulator
+        annotation, alongside `accumulated` -- see _sample_and_accumulate_usage), keyed
+        "<pod uid>/<container name>" -> ISO8601 "credited up to" timestamp.
 
-        Only Running pods count -- Pending/Succeeded/Failed/unknown contribute nothing,
-        consistent with "not actually consuming anything right now". Sums regular
-        containers only, not each init container's own request (the Kubernetes scheduler
-        computes a pod's *effective* request as the max of this sum and each init
-        container's, a known simplification here, not the full scheduler algorithm).
+        Earlier versions of this method only summed *currently Running* pods' requests,
+        scaled by elapsed-since-last-sample at the namespace level. That missed any pod
+        whose entire lifetime fell between two polls -- confirmed live: a job submitted
+        and finished in under a report cycle contributed nothing, which an operator
+        correctly flagged, since real batch jobs commonly run for seconds to a few
+        minutes, well under a typical polling interval. Kubernetes already records a
+        container's real `started_at`/`finished_at` (while Running: started_at only, used
+        against *now*; once Terminated: both, the container's actual, exact lifetime) on
+        the pod object itself -- using that instead of "was it Running when we happened to
+        look" credits every container for the real wall-clock time it ran, regardless of
+        whether any poll ever caught it mid-flight.
 
-        This is sampling, not a continuous watch: a pod that starts and finishes between
-        two poll cycles is missed entirely -- the same class of imprecision SLURM's own
-        ReqTRES x Elapsed already accepts, not a new one introduced here.
+        Per container (not per pod): a pod's containers can start and stop at different
+        times (regular containers only, not each init container's own request -- the
+        Kubernetes scheduler computes a pod's *effective* request as the max of this sum
+        and each init container's, a known simplification here, not the full scheduler
+        algorithm). For each one currently visible:
+          - Running: credit from max(prior credited-until, its own started_at) to *now*,
+            and record *now* as its new credited-until (still accruing).
+          - Terminated: credit from max(prior credited-until, its own started_at) to its
+            own finished_at, and record finished_at as its credited-until -- NOT dropped:
+            a Succeeded/Failed pod is not deleted by Kubernetes on its own, it lingers
+            until garbage collected, often well past the next poll. Without recording
+            that it's already been credited up to finished_at, a repeat sighting would
+            see no prior state and credit its full duration all over again; recording it
+            means a repeat sighting computes zero elapsed (finished_at - finished_at) and
+            correctly adds nothing further.
+          - Waiting (not yet started): nothing to credit yet, and no entry recorded.
+        A container no longer present at all (pod fully garbage-collected) simply has no
+        entry in the next call's returned state -- nothing more could ever accrue for it,
+        so there's nothing to keep.
+
+        A container discovered for the first time (no prior credited-until) that's
+        *already* Terminated gets its full real duration credited in one shot -- this is
+        the exact fix for the "missed between polls" problem above, not a new carve-out:
+        if nothing credited it yet and it has a real recorded start/finish, that whole
+        duration is owed.
         """
         component_keys = {
             key
             for key, cfg in self.backend_components.items()
             if cfg.get("type", key) in POD_REQUEST_KEYS
         }
-        totals: dict[str, float] = dict.fromkeys(component_keys, 0.0)
+        deltas: dict[str, float] = dict.fromkeys(component_keys, 0.0)
+        new_state: dict[str, str] = {}
         if not component_keys:
-            return totals
+            return deltas, new_state
 
         for pod in self.k8s_client.list_pods(ns_name):
-            if (pod.get("status") or {}).get("phase") != "Running":
+            pod_uid = (pod.get("metadata") or {}).get("uid")
+            if not pod_uid:
                 continue
-            for container in (pod.get("spec") or {}).get("containers") or []:
-                requests = (container.get("resources") or {}).get("requests") or {}
+            requests_by_container = {
+                c.get("name"): (c.get("resources") or {}).get("requests") or {}
+                for c in (pod.get("spec") or {}).get("containers") or []
+            }
+            for status in (pod.get("status") or {}).get("container_statuses") or []:
+                container_name = status.get("name")
+                requests = requests_by_container.get(container_name) or {}
+                if not requests:
+                    continue
+                state = status.get("state") or {}
+                running = state.get("running")
+                terminated = state.get("terminated")
+                key = f"{pod_uid}/{container_name}"
+                prior_credited_until = self._parse_iso8601(pod_credit_state.get(key))
+
+                if terminated:
+                    started_at = terminated.get("started_at")
+                    finished_at = terminated.get("finished_at")
+                    if started_at is None or finished_at is None:
+                        continue
+                    credit_from = (
+                        max(prior_credited_until, started_at)
+                        if prior_credited_until
+                        else started_at
+                    )
+                    credit_to = finished_at
+                    # Carried forward (not dropped): a Succeeded/Failed pod is not
+                    # deleted by Kubernetes on its own -- it lingers until garbage
+                    # collected, often well past the next poll. Without recording that
+                    # we've already credited it up to finished_at, the *next* sighting
+                    # would see no prior state and credit its full duration all over
+                    # again. Recording credit_to == finished_at here means a repeat
+                    # sighting computes elapsed_minutes == 0 (finished_at - finished_at)
+                    # and correctly adds nothing further.
+                    new_state[key] = credit_to.isoformat()
+                elif running:
+                    started_at = running.get("started_at")
+                    if started_at is None:
+                        continue
+                    credit_from = (
+                        max(prior_credited_until, started_at)
+                        if prior_credited_until
+                        else started_at
+                    )
+                    credit_to = now
+                    new_state[key] = credit_to.isoformat()
+                else:
+                    continue  # waiting -- hasn't started yet, nothing to credit
+
+                elapsed_minutes = max(0.0, (credit_to - credit_from).total_seconds() / 60)
+                if elapsed_minutes <= 0:
+                    continue
                 for component_key in component_keys:
-                    component_config = self.backend_components[component_key]
-                    component_type = component_config.get("type", component_key)
+                    component_type = self.backend_components[component_key].get(
+                        "type", component_key
+                    )
                     request_key = POD_REQUEST_KEYS[component_type]
                     if request_key in requests:
-                        totals[component_key] += self._parse_k8s_quantity(requests[request_key])
-        return totals
+                        deltas[component_key] += (
+                            self._parse_k8s_quantity(requests[request_key]) * elapsed_minutes
+                        )
+
+        return deltas, new_state
 
     @staticmethod
     def _load_usage_state(annotations: dict) -> Optional[dict]:
@@ -412,22 +497,32 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             return None
 
     def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
-        """Meter usage as (pod requests, for cpu/ram/gpu; quota, for storage) x elapsed time.
+        """Build the per-resource usage report for this poll.
 
-        The same convention SLURM's ReqTRES x Elapsed already uses in this system (AQS
-        bills SLURM's *requested* TRES for the job's elapsed time, not measured
-        utilization; see ska-src-accounting-quota-api's docs/open-issues.md §5) --  but
-        scoped to real, currently-running pods for cpu/ram/gpu (see
-        _current_pod_usage_in_waldur_units), not the namespace's standing quota
-        allocation: a namespace's spec.quota exists whether or not anything is actually
-        running in it, so metering *that* continuously (an earlier version of this
-        method did) bills for holding an allocation, not for running anything -- not what
-        "usage" means for every other backend in this system. storage has no per-pod
-        request (a PVC isn't a container resource and persists independent of any pod),
-        so it's the one component type still metered from the CR's own
-        spec.quota -- see _current_quota_in_waldur_units -- which is itself only ever a
-        point-in-time snapshot, with no history of what it was a moment ago, so this
-        samples it on every call and accumulates quota x (time since the last sample).
+        Meters cpu/ram/gpu from each container's own real start/finish timestamps;
+        storage from the namespace's quota x elapsed time.
+
+        cpu/ram/gpu (see _credit_pod_container_usage): credited from Kubernetes' own
+        recorded per-container `started_at`/`finished_at`, not a namespace-wide snapshot
+        rate -- so a container is credited for the real wall-clock time it actually ran,
+        regardless of whether any poll happened to catch it mid-flight (confirmed live:
+        an earlier, snapshot-based version of this missed any pod whose entire lifetime
+        fell between two polls, which real batch jobs commonly do). Still the same
+        *convention* SLURM's `ReqTRES x Elapsed` uses in this system (AQS bills SLURM's
+        *requested* TRES for the job's elapsed time, not measured utilization; see
+        ska-src-accounting-quota-api's docs/open-issues.md §5) -- requested, not measured
+        utilization, just scoped to real, individually-timed containers instead of a
+        polling snapshot.
+
+        storage has no per-pod request (a PVC isn't a container resource and persists
+        independent of any pod), so it's the one component type still metered from the
+        CR's own spec.quota -- see _current_quota_in_waldur_units -- which is itself only
+        ever a point-in-time snapshot, with no history of what it was a moment ago, so
+        this samples it on every call and accumulates quota x (time since the last
+        sample): metering *that* continuously bills for holding an allocation, which is
+        the right model for storage specifically (unlike cpu/ram/gpu, a PVC's allocation
+        doesn't track to any one job's lifetime).
+
         Either way, the running total per component accumulates into a month-to-date
         figure, mirroring how `sacct` itself provides SLURM's month-to-date figures.
 
@@ -477,7 +572,8 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         back via replace_managed_namespace, which -- unlike a merge patch --
         the API server rejects with 409 if the CR changed since this
         attempt's read. On conflict: re-read the now-current state (which
-        may include another caller's own accumulation) and recompute from
+        may include another caller's own accumulation, and another caller's own
+        pod_credit_state -- see _credit_pod_container_usage) and recompute from
         there, rather than retrying the same stale delta.
         """
         for attempt in range(self._USAGE_ACCUMULATOR_RETRIES):
@@ -489,40 +585,58 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             if cr is None:
                 return None
 
-            # cpu/ram/gpu: what's actually scheduled right now (see
-            # _current_pod_usage_in_waldur_units). storage: the CR's own standing quota
-            # (see _current_quota_in_waldur_units) -- a PVC isn't a per-pod request and
-            # persists independent of any pod, so it stays allocation-based. spec.name is
-            # the real workload namespace this CR manages, not self.cr_namespace.
+            # cpu/ram/gpu: credited from each container's own real start/finish
+            # timestamps (see _credit_pod_container_usage), not a namespace-wide
+            # snapshot rate. storage: the CR's own standing quota (see
+            # _current_quota_in_waldur_units) -- a PVC isn't a per-pod request and
+            # persists independent of any pod, so it stays allocation-based. spec.name
+            # is the real workload namespace this CR manages, not self.cr_namespace.
             ns_real_name = (cr.get("spec") or {}).get("name") or ns_name
-            sample = self._current_pod_usage_in_waldur_units(ns_real_name)
-            quota = self._current_quota_in_waldur_units(cr)
-            for component_key, value in quota.items():
-                component_type = self.backend_components.get(component_key, {}).get(
-                    "type", component_key
-                )
-                if component_type not in POD_REQUEST_KEYS:
-                    sample[component_key] = value
-            if not sample:
-                return None
-
             annotations = (cr.get("metadata") or {}).get("annotations") or {}
             state = self._load_usage_state(annotations)
+            prior_pod_credit_state = (state or {}).get("pod_credit_state") or {}
+
+            pod_deltas, new_pod_credit_state = self._credit_pod_container_usage(
+                ns_real_name, prior_pod_credit_state, now
+            )
+            quota = self._current_quota_in_waldur_units(cr)
+            storage_like = {
+                component_key: value
+                for component_key, value in quota.items()
+                if self.backend_components.get(component_key, {}).get("type", component_key)
+                not in POD_REQUEST_KEYS
+            }
+            sample_keys = set(pod_deltas) | set(storage_like)
+            if not sample_keys:
+                return None
 
             if state is None or state.get("period") != current_period:
-                accumulated = dict.fromkeys(sample, 0.0)
+                # New period: zero out accumulated totals, same as before -- but
+                # pod_credit_state is NOT part of that reset. It tracks each
+                # container's own credited-until point, independent of which month's
+                # bucket its credit lands in, so a container already straddling the
+                # boundary doesn't get double-credited (or under-credited) for the
+                # portion that already landed in the now-reset-away prior period.
+                accumulated = dict.fromkeys(sample_keys, 0.0)
+                storage_elapsed_minutes = 0.0
             else:
                 prior = state.get("accumulated") or {}
-                accumulated = {c: float(prior.get(c, 0.0)) for c in sample}
+                accumulated = {c: float(prior.get(c, 0.0)) for c in sample_keys}
                 last_sample_at = self._parse_iso8601(state.get("last_sample_at")) or now
-                elapsed_minutes = max(0.0, (now - last_sample_at).total_seconds() / 60)
-                for component, component_sample in sample.items():
-                    accumulated[component] += component_sample * elapsed_minutes
+                storage_elapsed_minutes = max(0.0, (now - last_sample_at).total_seconds() / 60)
+
+            for component, delta in pod_deltas.items():
+                accumulated[component] = accumulated.get(component, 0.0) + delta
+            for component, component_quota in storage_like.items():
+                accumulated[component] = (
+                    accumulated.get(component, 0.0) + component_quota * storage_elapsed_minutes
+                )
 
             new_state = {
                 "period": current_period,
                 "last_sample_at": now.isoformat(),
                 "accumulated": {c: round(v, 6) for c, v in accumulated.items()},
+                "pod_credit_state": new_pod_credit_state,
             }
             updated_cr = copy.deepcopy(cr)
             updated_cr.setdefault("metadata", {}).setdefault("annotations", {})[
@@ -566,7 +680,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         "512Mi" memory is extremely common, and truncating either to 0 (this used to be
         floor division, returning int) silently dropped most of a typical pod's real
         request once this helper started being used to sum live pod requests
-        (_current_pod_usage_in_waldur_units), not just namespace-level quota strings
+        (_credit_pod_container_usage), not just namespace-level quota strings
         (usually whole units already, so the bug was latent there before).
         """
         value = str(value)

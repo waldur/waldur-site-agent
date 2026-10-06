@@ -31,7 +31,7 @@ nothing (see [Usage reporting](#usage-reporting)).
 - **Role-Based Access Control**: Creates 3 Keycloak groups per namespace (admin, readwrite, readonly)
 - **Waldur Role Mapping**: Maps Waldur roles to namespace access levels automatically
 - **User Management**: Adds/removes users from Keycloak groups, reconciles role changes
-- **Usage Reporting**: Meters cpu/ram/gpu from live Running pod requests, storage from the namespace's own quota, both × elapsed time (see "Usage Reporting" below)
+- **Usage Reporting**: Meters cpu/ram/gpu per container from its own real start/finish timestamps, storage from the namespace's own quota × elapsed time (see "Usage Reporting" below)
 - **Namespace Labels & Annotations**: Configurable labels and annotations propagated to created namespaces
 - **Status Monitoring**: Parses operator Ready condition and exposes readiness in Waldur metadata
 - **Configurable User Identity**: Choose which user attribute (email, civil_number, etc.) populates CR user fields
@@ -390,32 +390,41 @@ When users are removed:
 
 ### Usage Reporting
 
-Two different sources, depending on the component — in both cases **metered × elapsed
-time**, the same convention SLURM's own `ReqTRES × Elapsed` already uses in this
-system, accumulated into a running month-to-date total per component:
+Two different sources, depending on the component — in both cases billing
+**requested × elapsed time**, the same convention SLURM's own `ReqTRES × Elapsed`
+already uses in this system, accumulated into a running month-to-date total per
+component:
 
-- **cpu/ram/gpu**: summed from every *Running* pod's container resource requests in
-  the namespace (`spec.cpu`/`memory`/`nvidia.com/gpu`), sampled on every report call.
-  This reflects what's actually scheduled right now, not a standing allocation — a
-  namespace with its quota untouched but nothing running in it reports zero for these.
+- **cpu/ram/gpu**: credited per container, from that container's own real
+  `started_at`/`finished_at` timestamps as Kubernetes itself records them (not a
+  periodic snapshot of what's Running at the moment a report call happens to fire).
+  A container currently Running is credited from the later of its own start or its
+  last credited-until up to *now*; a container that has already Terminated is
+  credited for its own exact, real lifetime, even if that whole lifetime fell
+  between two report calls — a short job that starts and finishes in a few seconds
+  is credited in full, not missed. A namespace with its quota untouched but nothing
+  running in it reports zero for these. Kubernetes does not delete a Succeeded/Failed
+  pod on its own, so a terminated container already credited is not credited again
+  on a later sighting — each container's own "credited up to" timestamp is persisted
+  (see below) specifically to prevent that.
 - **storage**: a PVC isn't a per-pod resource request and persists independent of any
   pod, so this one component stays metered from the `ManagedNamespace`'s own
   `spec.quota` — a point-in-time snapshot, with no history of what it was a moment ago
   (there is no per-namespace consumption log the way `sacct` provides one for SLURM).
 
 Usage values are in Waldur component units, using the reverse of the component quota
-mapping (e.g., K8s `limits.memory: 4Gi` → Waldur `ram: 4`) for storage, or the pod
-request's own quantity for cpu/ram/gpu (e.g. a pod requesting `cpu: 500m` → `0.5`).
+mapping (e.g., K8s `limits.memory: 4Gi` → Waldur `ram: 4`) for storage, or the
+container request's own quantity for cpu/ram/gpu (e.g. a container requesting
+`cpu: 500m` → `0.5`).
 
-Sampling, not a continuous watch: a pod that starts and finishes between two report
-calls is missed entirely, the same class of imprecision SLURM's own `ReqTRES ×
-Elapsed` already accepts (bills *requested*, not measured utilization) — not a new
-one introduced here.
-
-The running total is persisted as a JSON-encoded annotation on the CR itself
-(`provisioning.hpc.ut.ee/usage-accumulator`), not in local site-agent state, so it
-survives an agent restart or reschedule. It resets to zero at the start of each
-calendar month, matching `sacct`'s own month-to-date convention.
+The running total — and, per container, the "credited up to" timestamp that
+prevents the double-counting described above — is persisted as a JSON-encoded
+annotation on the CR itself (`provisioning.hpc.ut.ee/usage-accumulator`), not in
+local site-agent state, so it survives an agent restart or reschedule. The
+accumulated total resets to zero at the start of each calendar month, matching
+`sacct`'s own month-to-date convention; the per-container credited-until state does
+not reset on a month boundary, so a container whose lifetime spans the boundary is
+neither double- nor under-credited for the portion on either side.
 
 **Requires `accounting_type: "usage"`** on the components you want metered this way
 (see the example configs below) — Waldur bills `accounting_type: "limit"` components

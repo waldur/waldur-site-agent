@@ -1,5 +1,6 @@
 """Tests for K8s UT namespace backend."""
 
+import datetime
 import json
 from typing import ClassVar
 
@@ -656,22 +657,22 @@ class TestK8sUtNamespaceBackendStatusOps:
 class TestK8sUtNamespaceBackendUsageReport:
     """Tests for usage report generation.
 
-    cpu/ram/gpu x elapsed time, sampled from live Running pod requests
-    (_current_pod_usage_in_waldur_units); storage x elapsed time, sampled from the
-    CR's own spec.quota (_current_quota_in_waldur_units) since a PVC isn't a per-pod
-    request and persists independent of any pod. Either way, accumulated month-to-date
-    via a JSON-encoded annotation on the CR (see backend.py's _get_usage_report
-    docstring for why: neither source has history of its own, so the backend persists
-    its own running total between calls, the same way sacct's own historical log lets
-    SLURM recompute month-to-date freshly on every call without needing to persist
-    anything itself).
+    cpu/ram/gpu, credited from each container's own real start/finish timestamps
+    (_credit_pod_container_usage); storage x elapsed time, sampled from the CR's own
+    spec.quota (_current_quota_in_waldur_units) since a PVC isn't a per-pod request and
+    persists independent of any pod. Either way, accumulated month-to-date via a
+    JSON-encoded annotation on the CR (see backend.py's _get_usage_report docstring for
+    why: neither source has history of its own, so the backend persists its own running
+    total between calls, the same way sacct's own historical log lets SLURM recompute
+    month-to-date freshly on every call without needing to persist anything itself).
 
-    Most tests here set up one Running pod whose requests exactly match CR_QUOTA's
-    cpu/ram/gpu figures, so the expected totals are identical to what a pure
-    quota-based reading would have given -- this validates the elapsed-time
-    accumulation logic (unchanged) through the new pod-based sampling path (changed),
-    rather than conflating the two. Pod-sampling specifics (multiple pods, multiple
-    containers, non-Running phases) get their own dedicated tests below.
+    Most tests here set up one pod, Running continuously since the prior sample, whose
+    requests exactly match CR_QUOTA's cpu/ram/gpu figures, so the expected totals are
+    identical to what a pure quota-based reading would have given -- this validates the
+    elapsed-time accumulation logic (unchanged in spirit) through the new per-container
+    crediting path (changed), rather than conflating the two. Pod-crediting specifics
+    (multiple pods, multiple containers, terminated-between-polls, no double-counting)
+    get their own dedicated tests below.
     """
 
     CR_QUOTA: ClassVar[dict[str, str]] = {
@@ -685,8 +686,13 @@ class TestK8sUtNamespaceBackendUsageReport:
         }
 
     @staticmethod
-    def _pod(cpu=None, memory=None, gpu=None, phase="Running"):
-        """A single-container pod requesting the given resources, in the given phase."""
+    def _pod(cpu=None, memory=None, gpu=None, pod_uid="pod-1", container_name="main",
+              running_since=None, terminated=None):
+        """A single-container pod requesting the given resources.
+
+        Pass running_since=<aware datetime> for a still-Running container, or
+        terminated=(started_at, finished_at) for one that's already Terminated.
+        """
         requests = {}
         if cpu is not None:
             requests["cpu"] = cpu
@@ -694,14 +700,24 @@ class TestK8sUtNamespaceBackendUsageReport:
             requests["memory"] = memory
         if gpu is not None:
             requests["nvidia.com/gpu"] = gpu
+        if terminated is not None:
+            started_at, finished_at = terminated
+            state = {
+                "running": None,
+                "terminated": {"started_at": started_at, "finished_at": finished_at},
+            }
+        else:
+            state = {"running": {"started_at": running_since}, "terminated": None}
         return {
-            "status": {"phase": phase},
-            "spec": {"containers": [{"resources": {"requests": requests}}]},
+            "metadata": {"uid": pod_uid},
+            "spec": {"containers": [{"name": container_name, "resources": {"requests": requests}}]},
+            "status": {"container_statuses": [{"name": container_name, "state": state}]},
         }
 
-    def _matching_pod(self):
-        """One Running pod whose requests exactly match CR_QUOTA's cpu/ram/gpu."""
-        return self._pod(cpu="4", memory="8Gi", gpu="1")
+    def _matching_pod(self, running_since):
+        """One pod, Running since *running_since*, whose requests exactly match
+        CR_QUOTA's cpu/ram/gpu."""
+        return self._pod(cpu="4", memory="8Gi", gpu="1", running_since=running_since)
 
     @freeze_time("2026-09-15 12:00:00")
     def test_first_sample_accumulates_nothing_yet(self, backend_settings, backend_components):
@@ -747,7 +763,9 @@ class TestK8sUtNamespaceBackendUsageReport:
         mock_k8s.get_managed_namespace.return_value = self._cr(
             {USAGE_ACCUMULATOR_ANNOTATION: json.dumps(prior_state)}
         )
-        mock_k8s.list_pods.return_value = [self._matching_pod()]
+        # Running continuously since the prior sample -- credited for the full 30 min.
+        running_since = datetime.datetime(2026, 9, 15, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        mock_k8s.list_pods.return_value = [self._matching_pod(running_since)]
 
         with freeze_time("2026-09-15 12:30:00"):  # 30 minutes later
             report = backend._get_usage_report(["waldur-test-ns"])
@@ -771,7 +789,9 @@ class TestK8sUtNamespaceBackendUsageReport:
             return {}
 
         mock_k8s.replace_managed_namespace.side_effect = fake_replace
-        mock_k8s.list_pods.return_value = [self._matching_pod()]
+        # Running continuously since the very first poll, through all three samples.
+        running_since = datetime.datetime(2026, 9, 15, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        mock_k8s.list_pods.return_value = [self._matching_pod(running_since)]
 
         with freeze_time("2026-09-15 12:00:00"):
             mock_k8s.get_managed_namespace.return_value = self._cr()
@@ -857,7 +877,8 @@ class TestK8sUtNamespaceBackendUsageReport:
         mock_k8s.get_managed_namespace.return_value = self._cr(
             {USAGE_ACCUMULATOR_ANNOTATION: json.dumps(prior_state)}
         )
-        mock_k8s.list_pods.return_value = [self._matching_pod()]
+        running_since = datetime.datetime(2026, 9, 15, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        mock_k8s.list_pods.return_value = [self._matching_pod(running_since)]
         mock_k8s.replace_managed_namespace.side_effect = BackendError("write conflict")
 
         with freeze_time("2026-09-15 12:30:00"):
@@ -891,21 +912,24 @@ class TestK8sUtNamespaceBackendUsageReport:
 
 
 class TestK8sUtNamespaceBackendPodUsageSampling:
-    """Tests for _current_pod_usage_in_waldur_units.
+    """Tests for _credit_pod_container_usage.
 
-    What gets summed, from where, and what's correctly excluded. Each test drives it
-    through a full _get_usage_report() call (prior accumulated
-    state fixed at 0, a fixed 10-minute elapsed window) so the assertion is a plain,
-    readable total x 10, rather than calling the private method directly.
+    What gets credited, from where, and how double-counting is avoided. Each test
+    drives it through a full _get_usage_report() call so the assertion stays
+    readable and exercises the real annotation round-trip, rather than calling the
+    private method directly.
     """
 
-    def _cr(self, name="waldur-pod-test-ns", quota=None):
+    UTC = datetime.timezone.utc
+
+    def _cr(self, name="waldur-pod-test-ns", quota=None, pod_credit_state=None):
         return {
             "metadata": {"name": name, "annotations": {
                 USAGE_ACCUMULATOR_ANNOTATION: json.dumps({
                     "period": "2026-09",
                     "last_sample_at": "2026-09-15T12:00:00+00:00",
                     "accumulated": {"cpu": 0.0, "ram": 0.0, "storage": 0.0, "gpu": 0.0},
+                    "pod_credit_state": pod_credit_state or {},
                 }),
             }},
             "spec": {"name": name, "quota": quota or {
@@ -914,7 +938,7 @@ class TestK8sUtNamespaceBackendPodUsageSampling:
         }
 
     @staticmethod
-    def _container(cpu=None, memory=None, gpu=None):
+    def _container(name, cpu=None, memory=None, gpu=None, running_since=None, terminated=None):
         requests = {}
         if cpu is not None:
             requests["cpu"] = cpu
@@ -922,24 +946,49 @@ class TestK8sUtNamespaceBackendPodUsageSampling:
             requests["memory"] = memory
         if gpu is not None:
             requests["nvidia.com/gpu"] = gpu
-        return {"resources": {"requests": requests}}
+        if terminated is not None:
+            started_at, finished_at = terminated
+            state = {
+                "running": None,
+                "terminated": {"started_at": started_at, "finished_at": finished_at},
+            }
+        elif running_since is not None:
+            state = {"running": {"started_at": running_since}, "terminated": None}
+        else:
+            state = {"running": None, "terminated": None}  # waiting
+        return {"name": name, "requests": requests, "state": state}
 
     @staticmethod
-    def _pod(containers, phase="Running"):
-        return {"status": {"phase": phase}, "spec": {"containers": containers}}
+    def _pod(pod_uid, containers):
+        return {
+            "metadata": {"uid": pod_uid},
+            "spec": {"containers": [
+                {"name": c["name"], "resources": {"requests": c["requests"]}} for c in containers
+            ]},
+            "status": {"container_statuses": [
+                {"name": c["name"], "state": c["state"]} for c in containers
+            ]},
+        }
 
-    def _sample(self, backend, mock_k8s, pods):
-        mock_k8s.get_managed_namespace.return_value = self._cr()
+    def _sample(
+        self, backend, mock_k8s, pods, pod_credit_state=None, sample_at="2026-09-15 12:10:00"
+    ):
+        mock_k8s.get_managed_namespace.return_value = self._cr(pod_credit_state=pod_credit_state)
         mock_k8s.list_pods.return_value = pods
-        with freeze_time("2026-09-15 12:10:00"):  # +10 min
+        with freeze_time(sample_at):
             report = backend._get_usage_report(["waldur-pod-test-ns"])
         return report["waldur-pod-test-ns"]["TOTAL_ACCOUNT_USAGE"]
 
     def test_sums_requests_across_multiple_pods(self, backend_settings, backend_components):
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        since = datetime.datetime(2026, 9, 15, 12, 0, 0, tzinfo=self.UTC)  # 10 min before sample
         pods = [
-            self._pod([self._container(cpu="1", memory="2Gi", gpu="1")]),
-            self._pod([self._container(cpu="2", memory="4Gi")]),
+            self._pod("pod-a", [
+                self._container("main", cpu="1", memory="2Gi", gpu="1", running_since=since)
+            ]),
+            self._pod("pod-b", [
+                self._container("main", cpu="2", memory="4Gi", running_since=since)
+            ]),
         ]
         usage = self._sample(backend, mock_k8s, pods)
         # (1+2) cpu, (2+4) ram, (1+0) gpu -- x 10 minutes elapsed
@@ -951,24 +1000,58 @@ class TestK8sUtNamespaceBackendPodUsageSampling:
         self, backend_settings, backend_components
     ):
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
-        pods = [self._pod([
-            self._container(cpu="1", memory="1Gi"),
-            self._container(cpu="1", memory="1Gi"),  # sidecar
+        since = datetime.datetime(2026, 9, 15, 12, 0, 0, tzinfo=self.UTC)
+        pods = [self._pod("pod-a", [
+            self._container("main", cpu="1", memory="1Gi", running_since=since),
+            self._container("sidecar", cpu="1", memory="1Gi", running_since=since),
         ])]
         usage = self._sample(backend, mock_k8s, pods)
         assert usage["cpu"] == 20.0  # (1+1) cpu x 10 min
         assert usage["ram"] == 20.0  # (1+1) ram x 10 min
 
-    def test_non_running_pods_excluded(self, backend_settings, backend_components):
+    def test_terminated_container_credited_for_its_real_duration_not_excluded(
+        self, backend_settings, backend_components
+    ):
+        # The exact regression this feature exists for: a container whose entire
+        # lifetime (started_at to finished_at) fell *before* this poll -- e.g. a short
+        # job that started and finished entirely between two report cycles -- still
+        # gets credited for the real time it ran, using Kubernetes' own recorded
+        # timestamps, not "was it Running at the moment we happened to look" (which an
+        # earlier, snapshot-based version of this used, and which an operator correctly
+        # found missed exactly this case).
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
-        pods = [
-            self._pod([self._container(cpu="4")], phase="Running"),
-            self._pod([self._container(cpu="100")], phase="Succeeded"),
-            self._pod([self._container(cpu="100")], phase="Pending"),
-            self._pod([self._container(cpu="100")], phase="Failed"),
-        ]
+        started_at = datetime.datetime(2026, 9, 15, 12, 5, 0, tzinfo=self.UTC)
+        finished_at = datetime.datetime(2026, 9, 15, 12, 5, 30, tzinfo=self.UTC)  # 30s job
+        pods = [self._pod("pod-a", [
+            self._container("main", cpu="4", memory="8Gi", terminated=(started_at, finished_at)),
+        ])]
+        usage = self._sample(backend, mock_k8s, pods)  # sampled at 12:10, well after it finished
+        assert usage["cpu"] == pytest.approx(4 * (30 / 60))  # 4 cpu x 30 real seconds
+        assert usage["ram"] == pytest.approx(8 * (30 / 60))
+
+    def test_terminated_container_not_double_counted_on_a_repeat_sighting(
+        self, backend_settings, backend_components
+    ):
+        # Kubernetes doesn't delete a Succeeded/Failed pod on its own -- it lingers
+        # until garbage collected, often well past the next poll. A second sighting of
+        # the *same* terminated container must add nothing further.
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        started_at = datetime.datetime(2026, 9, 15, 12, 5, 0, tzinfo=self.UTC)
+        finished_at = datetime.datetime(2026, 9, 15, 12, 5, 30, tzinfo=self.UTC)
+        pods = [self._pod("pod-a", [
+            self._container("main", cpu="4", terminated=(started_at, finished_at)),
+        ])]
+        # This container was already credited (up to finished_at) on a prior poll.
+        prior_state = {"pod-a/main": finished_at.isoformat()}
+        usage = self._sample(backend, mock_k8s, pods, pod_credit_state=prior_state)
+        assert usage["cpu"] == 0.0
+
+    def test_waiting_container_contributes_nothing(self, backend_settings, backend_components):
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        # neither running nor terminated
+        pods = [self._pod("pod-a", [self._container("main", cpu="4")])]
         usage = self._sample(backend, mock_k8s, pods)
-        assert usage["cpu"] == 40.0  # only the Running pod's 4 cpu x 10 min
+        assert usage["cpu"] == 0.0
 
     def test_no_pods_gives_zero_cpu_ram_gpu_but_storage_still_from_quota(
         self, backend_settings, backend_components
@@ -991,10 +1074,27 @@ class TestK8sUtNamespaceBackendPodUsageSampling:
         # silently undercount almost every real pod (sub-1-core/sub-1Gi requests are
         # the common case, not the exception).
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
-        pods = [self._pod([self._container(cpu="500m", memory="512Mi")])]
+        since = datetime.datetime(2026, 9, 15, 12, 0, 0, tzinfo=self.UTC)
+        pods = [self._pod("pod-a", [
+            self._container("main", cpu="500m", memory="512Mi", running_since=since)
+        ])]
         usage = self._sample(backend, mock_k8s, pods)
         assert usage["cpu"] == 5.0   # 0.5 cpu x 10 min
         assert usage["ram"] == 5.0   # 0.5 (512Mi/1024) ram x 10 min
+
+    def test_long_running_container_credited_incrementally_not_from_true_start_each_time(
+        self, backend_settings, backend_components
+    ):
+        # A container already credited up through a prior poll must only be credited
+        # for the *new* time since then, not its whole history again.
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        # true_start: 2h before credited_until, which is itself 10 min before the sample
+        true_start = datetime.datetime(2026, 9, 15, 10, 0, 0, tzinfo=self.UTC)
+        credited_until = datetime.datetime(2026, 9, 15, 12, 0, 0, tzinfo=self.UTC)
+        pods = [self._pod("pod-a", [self._container("main", cpu="4", running_since=true_start)])]
+        prior_state = {"pod-a/main": credited_until.isoformat()}
+        usage = self._sample(backend, mock_k8s, pods, pod_credit_state=prior_state)
+        assert usage["cpu"] == 40.0  # 4 cpu x 10 min since credited_until, not since true_start
 
     def test_list_pods_called_with_spec_name_not_cr_namespace(
         self, backend_settings, backend_components
