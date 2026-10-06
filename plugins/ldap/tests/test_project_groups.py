@@ -11,6 +11,7 @@ from unittest import mock
 
 import httpx
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 from waldur_api_client.models.offering_user_state import OfferingUserState
 from ldap3 import MOCK_SYNC, MODIFY_ADD, OFFLINE_SLAPD_2_4, Connection, Server
 from waldur_site_agent_ldap_client import LdapClient
@@ -1573,3 +1574,102 @@ class TestUniqueMemberParents:
         assert (project_groups.MODIFY_ADD, [STAND_IN]) in changes
         assert client.read_entry(parent, ["uniqueMember"])["uniqueMember"] == [STAND_IN]
         assert dn not in client.read_entry(parent, ["uniqueMember"])["uniqueMember"]
+
+
+def org_group(slug, name="proj", gid=20003, members=("alice", "bob")):
+    g = group(name=name, gid=gid, members=members)
+    g.customer_slug = slug
+    return g
+
+
+def descriptions(client, name="proj"):
+    return sorted(read(client, name, ("description",)).get("description", []))
+
+
+ORG = {"organization_description": "organization={slug}"}
+
+
+class TestOrganizationDescription:
+    def test_nothing_is_written_without_the_setting(self, client):
+        reconcile(client, [org_group("cscs")])
+        assert descriptions(client) == ["waldur-managed"]
+
+    def test_a_new_group_names_its_organization(self, client):
+        reconcile(client, [org_group("cscs")], **ORG)
+        assert descriptions(client) == ["organization=cscs", "waldur-managed"]
+
+    def test_an_adopted_group_gets_it_next_to_the_operators_values(self, client):
+        add_group(client, "proj", 20003, ["alice", "bob"])
+        client.modify_entry(
+            client.dn_under("proj", "ou=projects"),
+            {"description": [(MODIFY_ADD, ["Firecrest project group"])]},
+        )
+        report = reconcile(client, [org_group("cscs")], **ORG)
+        assert report.description_updates == 1
+        assert descriptions(client) == [
+            "Firecrest project group",
+            "organization=cscs",
+            "waldur-managed",
+        ]
+
+    def test_a_changed_slug_replaces_only_the_agents_value(self, client):
+        reconcile(client, [org_group("cscs")], **ORG)
+        client.modify_entry(
+            client.dn_under("proj", "ou=projects"),
+            {"description": [(MODIFY_ADD, ["kept by the operator"])]},
+        )
+        report = reconcile(client, [org_group("eth")], **ORG)
+        assert report.description_updates == 1
+        assert descriptions(client) == [
+            "kept by the operator",
+            "organization=eth",
+            "waldur-managed",
+        ]
+
+    def test_a_second_pass_writes_nothing(self, client):
+        reconcile(client, [org_group("cscs")], **ORG)
+        before = snapshot(client)
+        with mock.patch.object(client, "modify_entry") as modify:
+            report = reconcile(client, [org_group("cscs")], **ORG)
+        assert report.description_updates == 0
+        modify.assert_not_called()
+        assert snapshot(client) == before
+
+    def test_a_group_whose_project_is_gone_keeps_its_value(self, client):
+        reconcile(client, [org_group("cscs")], **ORG)
+        reconcile(client, [org_group("")], **ORG)
+        assert "organization=cscs" in descriptions(client)
+
+    def test_a_bare_slug_is_added_but_never_removes_anything(self, client):
+        with mock.patch("waldur_site_agent_ldap.project_groups.logger") as log:
+            reconcile(client, [org_group("cscs")], organization_description="{slug}")
+            reconcile(client, [org_group("eth")], organization_description="{slug}")
+        assert descriptions(client) == ["cscs", "eth", "waldur-managed"]
+        assert any("cannot tell its value" in c.args[0] for c in log.warning.call_args_list)
+
+    def test_the_slug_is_read_from_the_api(self):
+        item = {**api_item("proj", 20003), "customer_slug": "cscs"}
+        assert ProjectGroup.from_api(item).customer_slug == "cscs"
+        assert ProjectGroup.from_api(api_item("proj", 20003)).customer_slug == ""
+
+
+class TestOrganizationDescriptionSetting:
+    @pytest.mark.parametrize("template", ["organization", "{slug}-{slug}"])
+    def test_a_template_needs_slug_exactly_once(self, template):
+        with pytest.raises(PydanticValidationError):
+            LdapSettingsSchema(
+                **{
+                    **SETTINGS,
+                    "account_source": "waldur",
+                    "project_groups": {"enabled": True, "organization_description": template},
+                }
+            )
+
+    def test_a_valid_template_is_accepted(self):
+        LdapSettingsSchema(
+            **{
+                **SETTINGS,
+                "account_source": "waldur",
+                "project_groups": {"enabled": True, **ORG},
+            }
+        )

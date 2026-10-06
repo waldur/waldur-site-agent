@@ -828,6 +828,7 @@ backend_settings:
       member_attribute: "memberUid"   # or "member": user DNs, for rfc2307bis directories
       membership: "sync"              # or "add_only"
       on_gid_mismatch: "report"       # or "adopt"
+      organization_description: "organization={slug}"   # optional
       parents:
         - dn: "cn=alps,ou=clusters,dc=example,dc=org"
           attribute: "member"
@@ -842,6 +843,7 @@ backend_settings:
 | `membership` | `sync` | `sync` adds and removes members to match Waldur; `add_only` never removes one |
 | `on_gid_mismatch` | `report` | Same-named entry with another GID: `report` keeps the GID, `adopt` renumbers |
 | `managed_marker` | `waldur-managed` | Extra `description` value on every group the agent creates or adopts |
+| `organization_description` | unset | Organization `description` value, e.g. `organization={slug}` |
 | `parents` | `[]` | Entries that list the DN of each group whose project has a resource on the offering |
 | `parents[].dn` | -- | Full DN of the entry |
 | `parents[].attribute` | `member` | Attribute that holds the group DNs |
@@ -900,6 +902,16 @@ why `report` is the default.
 Every group the agent creates or adopts gets one extra `description` value,
 `managed_marker` (`waldur-managed` by default). The operator's own description
 values stay; `description` is multi-valued and allowed on `posixGroup`.
+
+With `organization_description` set, each group also carries one value naming
+its project's organization, rendered from the template with the organization
+slug (`organization={slug}` writes `organization=cscs`). It is kept in sync on
+every pass: added to existing and adopted groups, and replaced when the slug
+changes or the project moves to another organization. The agent finds its own
+value by the template's text around `{slug}`, so it never touches another
+description value or the marker. A bare `{slug}` has no such text: the agent
+then adds the current slug but never removes an old one, and warns once. A group
+whose project is gone keeps the value it has.
 
 Each parent is made to list the DNs of the groups whose project has a resource
 on the parent's offerings. A DN is only ever removed when it lies under the
