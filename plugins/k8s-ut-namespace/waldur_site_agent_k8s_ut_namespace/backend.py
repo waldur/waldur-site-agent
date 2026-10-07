@@ -406,6 +406,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         if not component_keys:
             return deltas, new_state
 
+        no_requests_count = 0
         for pod in self.k8s_client.list_pods(ns_name):
             pod_uid = (pod.get("metadata") or {}).get("uid")
             if not pod_uid:
@@ -418,6 +419,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 container_name = status.get("name")
                 requests = requests_by_container.get(container_name) or {}
                 if not requests:
+                    no_requests_count += 1
                     continue
                 state = status.get("state") or {}
                 running = state.get("running")
@@ -472,6 +474,20 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                             self._parse_k8s_quantity(requests[request_key]) * elapsed_minutes
                         )
 
+        if no_requests_count:
+            # The single most common "looks like a bug but isn't" support question this
+            # plugin gets: cpu/ram read 0.0 while storage keeps accruing normally. Billing
+            # is requested, not measured, resources (see this method's own docstring) --
+            # a container with no resources.requests has nothing to bill, by design. One
+            # summary line per poll (not one per container) so a long-lived pod lacking
+            # requests doesn't flood the log every cycle it's still visible.
+            logger.info(
+                "%s: %d container(s) have no resources.requests set -- contributing 0 to "
+                "cpu/ram/gpu usage this cycle (expected: billing is requested, not "
+                "measured, resources)",
+                ns_name,
+                no_requests_count,
+            )
         return deltas, new_state
 
     @staticmethod

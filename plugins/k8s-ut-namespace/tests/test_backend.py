@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import logging
 from typing import ClassVar
 
 import pytest
@@ -1052,6 +1053,26 @@ class TestK8sUtNamespaceBackendPodUsageSampling:
         pods = [self._pod("pod-a", [self._container("main", cpu="4")])]
         usage = self._sample(backend, mock_k8s, pods)
         assert usage["cpu"] == 0.0
+
+    def test_no_requests_logs_a_summary_not_silence(
+        self, backend_settings, backend_components, caplog
+    ):
+        # The single most common "looks like a bug but isn't" support question this
+        # plugin gets: cpu/ram read 0.0 while storage keeps accruing. A container with no
+        # resources.requests contributes nothing by design (billing is requested, not
+        # measured, resources) -- but that must be visible in the logs, not silent, so an
+        # operator doesn't have to rediscover it by reading the source.
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        since = datetime.datetime(2026, 9, 15, 12, 0, 0, tzinfo=self.UTC)
+        pods = [
+            self._pod("pod-a", [self._container("main", running_since=since)]),  # no requests
+            self._pod("pod-b", [self._container("main", cpu="1", running_since=since)]),
+        ]
+        with caplog.at_level(logging.INFO):
+            usage = self._sample(backend, mock_k8s, pods)
+        assert usage["cpu"] == 10.0  # only pod-b's 1 cpu x 10 min -- pod-a contributes 0
+        messages = [r.message for r in caplog.records]
+        assert any("1 container(s) have no resources.requests set" in m for m in messages)
 
     def test_no_pods_gives_zero_cpu_ram_gpu_but_storage_still_from_quota(
         self, backend_settings, backend_components
