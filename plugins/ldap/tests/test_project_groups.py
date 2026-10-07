@@ -221,17 +221,11 @@ class TestCreate:
 
 
 class TestExisting:
-    def test_same_name_and_gid_is_adopted_with_only_the_marker_written(self, client):
+    def test_same_name_and_gid_is_adopted_without_a_write(self, client):
         add_group(client, "proj", 20003, ["alice", "bob"])
-        with mock.patch.object(client, "modify_entry", wraps=client.modify_entry) as modify:
-            report = reconcile(client, [group()], parents=[])
-        assert (report.kept, report.created, report.marked) == (1, 0, 1)
-        modify.assert_called_once_with(
-            client.dn_under("proj", "ou=projects"),
-            {"description": [(MODIFY_ADD, ["waldur-managed"])]},
-        )
         with mock.patch.object(client, "modify_entry") as modify:
-            reconcile(client, [group()], parents=[])
+            report = reconcile(client, [group()], parents=[])
+        assert (report.kept, report.created) == (1, 0)
         modify.assert_not_called()
 
     def test_another_gid_keeps_its_gid_but_follows_members_and_parents(self, client):
@@ -339,7 +333,7 @@ class TestParents:
         reconcile(client, [group("a", offerings=())])
         assert hand_made in cluster_members(client)
 
-    def test_keeps_an_unlisted_dn_without_a_marked_entry(self, client):
+    def test_keeps_an_unlisted_dn_without_an_entry(self, client):
         stale = f"cn=legacy,ou=projects,{BASE_DN}"
         client.modify_entry(CLUSTER_DN, {"member": [(MODIFY_ADD, [stale])]})
         reconcile(client, [group("a")])
@@ -664,7 +658,7 @@ class TestSettings:
         assert config.membership == "sync"
         assert config.on_gid_mismatch == "report"
         assert config.parents == []
-        assert config.managed_marker == "waldur-managed"
+        assert config.managed_marker is None
 
     def test_parent_attribute_defaults_to_member(self):
         parsed = LdapSettingsSchema(
@@ -1032,12 +1026,12 @@ def description_of(client, name):
     return sorted(read(client, name, ("description",))["description"])
 
 
-class TestManagedMarker:
-    def test_a_created_group_carries_the_marker(self, client):
+class TestNoManagedMarker:
+    def test_a_created_group_has_no_description(self, client):
         reconcile(client, [group("a")])
-        assert description_of(client, "a") == ["waldur-managed"]
+        assert description_of(client, "a") == []
 
-    def test_adoption_adds_the_marker_and_keeps_the_operators_description(self, client):
+    def test_adoption_leaves_the_operators_description_alone(self, client):
         client.add_entry(
             client.dn_under("a", "ou=projects"),
             {
@@ -1048,35 +1042,59 @@ class TestManagedMarker:
             },
         )
         reconcile(client, [group("a")])
-        assert description_of(client, "a") == ["Project A, contact: hpc support", "waldur-managed"]
+        assert description_of(client, "a") == ["Project A, contact: hpc support"]
 
-    def test_the_marker_is_a_setting(self, client):
-        reconcile(client, [group("a")], managed_marker="managed-by=portal")
-        assert description_of(client, "a") == ["managed-by=portal"]
+    def test_an_old_marker_is_left_in_place(self, client):
+        add_group(client, "a", 20003, ["alice", "bob"])
+        client.modify_entry(
+            client.dn_under("a", "ou=projects"),
+            {"description": [(MODIFY_ADD, ["waldur-managed"])]},
+        )
+        reconcile(client, [group("a")])
+        assert description_of(client, "a") == ["waldur-managed"]
 
-    def test_a_hand_made_unmarked_group_in_the_cluster_survives(self, client):
+    def test_the_old_setting_still_loads_and_is_ignored_with_a_warning(self, client):
+        parsed = LdapSettingsSchema(
+            **SETTINGS, project_groups={"enabled": True, "managed_marker": "waldur-managed"}
+        )
+        assert parsed.project_groups.managed_marker == "waldur-managed"
+        with mock.patch("waldur_site_agent_ldap.project_groups._WARNED_MANAGED_MARKER", set()):
+            with mock.patch("waldur_site_agent_ldap.project_groups.logger") as log:
+                reconcile(client, [group("a")], managed_marker="waldur-managed")
+        assert description_of(client, "a") == []
+        assert any("managed_marker is set but ignored" in c.args[0] for c in log.warning.call_args_list)
+
+    def test_a_hand_made_group_in_the_cluster_survives(self, client):
         add_group(client, "benchmarking", 29500, ["ops"])
         dn = client.dn_under("benchmarking", "ou=projects")
         client.modify_entry(CLUSTER_DN, {"member": [(MODIFY_ADD, [dn])]})
         for _ in range(3):
             reconcile(client, [group("a")])
         assert dn in cluster_members(client)
-        assert description_of(client, "benchmarking") == []
 
-    def test_a_marked_group_that_drops_out_of_the_listing_leaves_the_cluster(self, client):
-        # The offering moved to another provider: this provider no longer lists it.
+    def test_a_group_that_drops_out_of_the_listing_stays_in_the_cluster(self, client):
+        # The offering moved to another provider: this provider no longer lists
+        # it. Taking it out of the cluster is left to the operator.
         reconcile(client, [group("a"), group("b", gid=20004)])
         dn = client.dn_under("b", "ou=projects")
         assert dn in cluster_members(client)
         reconcile(client, [group("a")])
-        assert dn not in cluster_members(client)
-        assert gid_of(client, "b") == 20004  # the entry itself stays
+        assert dn in cluster_members(client)
+        assert gid_of(client, "b") == 20004
 
-    def test_an_unlisted_group_marked_with_another_marker_stays(self, client):
-        reconcile(client, [group("a"), group("b", gid=20004)], managed_marker="other-portal")
+    def test_an_unlisted_group_with_an_old_marker_stays_in_the_cluster(self, client):
+        add_group(client, "b", 20004, ["ops"])
         dn = client.dn_under("b", "ou=projects")
+        client.modify_entry(dn, {"description": [(MODIFY_ADD, ["waldur-managed"])]})
+        client.modify_entry(CLUSTER_DN, {"member": [(MODIFY_ADD, [dn])]})
         reconcile(client, [group("a")])
         assert dn in cluster_members(client)
+
+    def test_a_listed_group_without_a_resource_still_leaves_the_cluster(self, client):
+        reconcile(client, [group("a"), group("b", gid=20004)])
+        dn = client.dn_under("b", "ou=projects")
+        reconcile(client, [group("a"), group("b", gid=20004, offerings=())])
+        assert dn not in cluster_members(client)
 
     def test_a_second_cycle_writes_nothing(self, client):
         add_group(client, "a", 20003, ["alice", "bob"])
@@ -1592,11 +1610,11 @@ ORG = {"organization_description": "organization={slug}"}
 class TestOrganizationDescription:
     def test_nothing_is_written_without_the_setting(self, client):
         reconcile(client, [org_group("cscs")])
-        assert descriptions(client) == ["waldur-managed"]
+        assert descriptions(client) == []
 
     def test_a_new_group_names_its_organization(self, client):
         reconcile(client, [org_group("cscs")], **ORG)
-        assert descriptions(client) == ["organization=cscs", "waldur-managed"]
+        assert descriptions(client) == ["organization=cscs"]
 
     def test_an_adopted_group_gets_it_next_to_the_operators_values(self, client):
         add_group(client, "proj", 20003, ["alice", "bob"])
@@ -1609,7 +1627,6 @@ class TestOrganizationDescription:
         assert descriptions(client) == [
             "Firecrest project group",
             "organization=cscs",
-            "waldur-managed",
         ]
 
     def test_a_changed_slug_replaces_only_the_agents_value(self, client):
@@ -1623,7 +1640,6 @@ class TestOrganizationDescription:
         assert descriptions(client) == [
             "kept by the operator",
             "organization=eth",
-            "waldur-managed",
         ]
 
     def test_a_second_pass_writes_nothing(self, client):
@@ -1644,7 +1660,7 @@ class TestOrganizationDescription:
         with mock.patch("waldur_site_agent_ldap.project_groups.logger") as log:
             reconcile(client, [org_group("cscs")], organization_description="{slug}")
             reconcile(client, [org_group("eth")], organization_description="{slug}")
-        assert descriptions(client) == ["cscs", "eth", "waldur-managed"]
+        assert descriptions(client) == ["cscs", "eth"]
         assert any("cannot tell its value" in c.args[0] for c in log.warning.call_args_list)
 
     def test_the_slug_is_read_from_the_api(self):

@@ -2322,7 +2322,8 @@ _PG_RENUMBERED = 1590
 _PG_OU = "ou=WaldurProjects"
 _PG_CLUSTER_DN = "cn=e2e-cluster,ou=Clusters,dc=sofiatech,dc=bg"
 _PG_STAND_IN = "cn=nobody,dc=sofiatech,dc=bg"
-_PG_MARKER = "waldur-managed"
+# Written by earlier agents; never by this one.
+_PG_OLD_MARKER = "waldur-managed"
 _PG_EVENT_TIMEOUT = 45
 _pg_state: dict = {}
 
@@ -2513,14 +2514,14 @@ class TestLdapProviderProjectGroups:
         _pg_state["group"] = group
 
     def test_03_the_periodic_pass_writes_it(self, pg_offering, pg_client, pg_directory):
-        """Name, GID, members and marker as Waldur says; listed in the cluster."""
+        """Name, GID and members as Waldur says, no marker; listed in the cluster."""
         group = _pg_group_of(pg_client, _pg_state["group"]["project_uuid"])
         _pg_periodic_pass(pg_offering, pg_client)
 
         entry = _pg_entry(pg_directory, group["name"])
         assert entry is not None, f"cn={group['name']} not under {_PG_OU}"
         assert int(entry["gidNumber"][0]) == group["gid"]
-        assert _PG_MARKER in entry.get("description", [])
+        assert _PG_OLD_MARKER not in entry.get("description", [])
         # Waldur lists every provider username of the project's members; the
         # directory gets those it holds an entry for (accounts of offerings that
         # do not write to it are left out, so NSS never sees a dangling name).

@@ -174,12 +174,10 @@ class ProjectGroupsConfig(PluginBackendSettingsSchema):
         "'report' leaves it alone, 'adopt' renumbers it to Waldur's GID unless "
         "another entry holds that GID",
     )
-    managed_marker: str = Field(
-        default="waldur-managed",
-        min_length=1,
-        description="Extra description value written on every project group the agent "
-        "creates or adopts. Only marked groups are taken out of a parent once Waldur "
-        "no longer lists them; unmarked groups under the OU are the operator's",
+    managed_marker: Optional[str] = Field(
+        default=None,
+        description="Deprecated and ignored: groups are no longer marked. Accepted so "
+        "that existing configurations still load",
     )
     parents: list[ParentGroupConfig] = Field(
         default_factory=list,
