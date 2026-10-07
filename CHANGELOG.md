@@ -1,35 +1,39 @@
 # Changelog
 
+## 1.0.8-rc.7 - 2026-10-07
+
+- **LDAP**: Write Waldur's project groups to the directory, with personal groups now optional. Provider project group events apply straight away, and a configurable template writes the organization slug into project group descriptions (#41) (waldur/waldur-mastermind#626) (waldur/waldur-mastermind#649).
+- **LDAP**: Take usernames and POSIX ids from Waldur instead of the directory (#17).
+- **LDAP**: Release accounts when a user loses their last offering access. Across backends, an account is released only once its removal is confirmed (waldur/waldur-mastermind#413).
+- **LDAP roles**: Add the new `ldap-roles` backend and move LDAP access into a shared `ldap-client` package.
+- **Azure**: Move the Azure plugin into the agent repository (#8).
+- **Envoy AI Gateway**: Manage resource API keys one by one: request, assign, cap, pause, resume and delete (#30).
+- **LiteLLM**: Add Open WebUI integration (#15). Add an option to derive the key's backend_id from the Waldur resource UUID instead of the slug (#22).
+- **Core**: Add `preserve_unmanaged_backend_users` to keep SLURM users added by the provider. Preserve mode now also handles removals when the unfiltered offering-user list fetch fails.
+- **Core**: Stop membership sync from removing service and course accounts, and skip backend metadata writes that change nothing.
+- **Core**: Reconnect dropped STOMP consumers and fail liveness while they stay down (#45). STOMP messages are now processed off the receiver thread and acknowledged only after handling (#38).
+- **Core**: Honour `global_proxy` in event mode, including for the STOMP WebSocket, and support SOCKS proxies (#44) (#57). The default STOMP port now follows `websocket_use_tls` rather than `verify_ssl` (#61).
+- **Core**: Route every Waldur client through OIDC-aware authentication (#43).
+- **Core**: Use ERRED only for backend failures in membership sync and order processing (#46). Failed user additions are now logged with their cause instead of being hidden (#58).
+- **Core**: Keep polling and event agents working when agent identity registration is refused or unavailable (#24) (waldur/waldur-mastermind#385).
+- **Core**: Stop the health and readiness probes from importing the full API client and plugins (#31).
+- **Core**: Fix `get_client` stripping hostname characters instead of the `/api` suffix. Diagnostics now report a rejected token instead of crashing (#59).
+- **SLURM**: Move the account DefaultQOS along with the QoS swap (#16).
+- **SLURM**: Account diagnostics now read SDK limits (#60) and build their client from the offering's backend settings (#65).
+- **DigitalOcean / Harbor**: Run the plugin create logic on the order path (#47). When an order is retried, the agent adopts the droplet or project it already created (#56).
+- **OKD**: Pass the CA bundle path to the Kubernetes client as `ssl_ca_cert` (#62).
+- **Plugins**: Add settings schemas for every backend, validate schemas per role, and provide READMEs for all plugins (#53).
+- **Testing**: Order templates keep supplied UUIDs and generate a new UUID on each render (#63).
+- **Docs**: Bring the installation, deployment, configuration, architecture, SLURM, offering-user and plugin-author docs in line with the code. CI now validates every config example, and the configuration reference tables are generated from the code (#48) (#49) (#50) (#51) (#52) (#54).
+- **Dependencies**: Upgrade anyio, oauthlib, pyjwt and urllib3 to fix security findings, and upgrade waldur-api-client to 8.1.3rc10. Release SBOMs are now published as GitHub release assets (waldur/waldur-mastermind#233).
+
+> 64 commits, 347 files changed (+43651/-8433 lines)
+
+---
+
 ## Unreleased
 
 - **Packaging / Docs**: Rename the `systemd-conf/*/agent-legacy.service` units to `agent-file-logging.service`. They log to files with `StandardOutput=append:`, which needs systemd 240 or newer, so the old "legacy" name was wrong. Old raw download URLs for `agent-legacy.service` now return 404. All units now restart on failure and use a per-unit liveness heartbeat. (#50)
-
-## 1.0.8-rc.6 - 2026-10-02
-
-- **Core / Envoy AI Gateway**: Manage resource API keys one at a time. Keys can now be requested, assigned, capped, paused, resumed and deleted, through both event processing and polling. (#30)
-- **LDAP**: Write Waldur's project groups to the directory, and make personal groups optional. (#41)
-- **LDAP**: Take usernames and POSIX IDs from Waldur instead of the directory. (#17)
-- **LDAP / Core**: Release a user's account when they lose their last offering access, but only after the backend confirms the removal. This rule now applies across all backends, and the teardown half of the offering-user lifecycle is documented. (waldur/waldur-mastermind#413)
-- **LDAP Roles**: Add a new `ldap-roles` backend, and move the LDAP client into a shared `ldap-client` package.
-- **Azure**: Move the Azure plugin into the agent repository. (#8)
-- **LiteLLM**: Add Open WebUI integration. (#15)
-- **LiteLLM**: Add an option to derive a key's `backend_id` from the Waldur resource UUID instead of its slug. (#22)
-- **SLURM**: Move the account's DefaultQOS along with the QoS swap. The test suite now requires slurm-emulator 0.9.5. (#16)
-- **Core**: Add `preserve_unmanaged_backend_users` so that SLURM users added by the provider are kept during membership sync.
-- **Core**: Stop membership sync from removing service and course accounts.
-- **Core**: Skip backend metadata writes in membership sync when nothing has changed.
-- **Core**: Keep polling and event-based agents working when agent identity registration is refused or unavailable. (#24, waldur/waldur-mastermind#385)
-- **Core / Helm**: Make the health and readiness probes lighter by keeping them from importing the full API client and plugins. (#31)
-- **Core**: Fix `get_client` stripping characters from the hostname instead of removing the `/api` suffix.
-- **Rancher KC CRD**: Fix four mistakes in the example config.
-- **Security**: Upgrade anyio (CVE-2026-63374, CVE-2026-64847), oauthlib, pyjwt and urllib3.
-- **Dependencies**: Upgrade waldur-api-client to 8.1.3rc10.
-- **Release**: Publish release SBOMs as GitHub release assets. The release script now refuses to run from a branch that is behind the remote, and stops before tagging if the changelog finds no commits. (waldur/waldur-mastermind#233)
-- **Docs**: Add developer quick-start steps to the plugin development guide.
-
-> 38 commits, 193 files changed (+29312/-1653 lines)
-
----
 
 ## 1.0.7 - 2026-09-02
 
