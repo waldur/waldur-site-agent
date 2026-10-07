@@ -30,7 +30,7 @@ The agent manages three concerns for offering users:
 flowchart TB
     subgraph "Waldur A (source)"
         A_USER[User gets project access]
-        A_OU[OfferingUser created<br/>state: CREATION_REQUESTED]
+        A_OU[OfferingUser created<br/>state: REQUESTED]
         A_STOMP_OUT["STOMP events sent<br/>(USER_ROLE, OFFERING_USER)"]
     end
 
@@ -82,7 +82,7 @@ sequenceDiagram
     participant MB as Waldur B
 
     MA->>MA: User gets project role
-    MA->>MA: Create OfferingUser (CREATION_REQUESTED)
+    MA->>MA: Create OfferingUser (REQUESTED)
 
     SA->>MA: List offering users (poll)
     MA-->>SA: OfferingUser (state=REQUESTED)
@@ -289,8 +289,11 @@ Two periodic reconciliation functions cover gaps:
 
 | Function | Condition | What it does |
 |----------|-----------|-------------|
-| `run_periodic_offering_user_reconciliation()` | `membership_sync_backend` set | Retries stuck users |
+| `run_periodic_offering_user_reconciliation()` | Every offering | Stuck-user retry ¹, reconcile, deletion sweep |
 | `run_periodic_username_reconciliation()` | `username_reconciliation_enabled` | Syncs usernames B→A |
+
+¹ Retrying stuck users needs a `membership_sync_backend`. The username backend's
+profile sync, `reconcile_offering` and the deletion sweep run for every offering.
 
 Both run on the reconciliation timer (default: every 60 minutes).
 
@@ -312,8 +315,10 @@ This means:
 - **Without `username_reconciliation_enabled: true`**, users that get stuck
   after startup will not self-heal until the agent is restarted.
 
+<!-- docs-check: skip -->
+
 ```yaml
-# Required for waldur federation deployments
+# Required for waldur federation deployments (partial offering block)
 offerings:
   - name: "Federated HPC"
     username_reconciliation_enabled: true  # <-- enables periodic B→A sync
@@ -360,9 +365,9 @@ because:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CREATION_REQUESTED : Mastermind creates OfferingUser
+    [*] --> REQUESTED : Mastermind creates OfferingUser
 
-    CREATION_REQUESTED --> CREATING : Agent calls begin_creating
+    REQUESTED --> CREATING : Agent calls begin_creating
 
     CREATING --> OK : Username set successfully
     CREATING --> ERROR_CREATING : BackendError
@@ -382,7 +387,7 @@ stateDiagram-v2
     PENDING_ADDITIONAL_VALIDATION --> PENDING_ACCOUNT_LINKING : Cross-transition
     PENDING_ADDITIONAL_VALIDATION --> PENDING_ADDITIONAL_VALIDATION : Still pending (idempotent)
 
-    OK --> DELETION_REQUESTED : User loses project access
+    OK --> REQUESTED_DELETION : User loses project access
     OK --> OK : Username synced from Waldur B
 
     note right of CREATING : Non-BackendError keeps state\nas CREATING for retry

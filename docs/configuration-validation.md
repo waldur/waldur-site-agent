@@ -1,278 +1,173 @@
-# Configuration Validation with Pydantic
+# Configuration Validation
 
-The Waldur Site Agent uses Pydantic for robust YAML configuration validation, providing type safety,
-clear error messages, and extensible plugin-specific validation.
+The agent validates its YAML configuration with Pydantic when it starts. This page says what is
+checked, which problems stop the agent and which only log a warning, how to read the errors, and
+what loading the file does **not** catch. The last section is for plugin authors who want their
+plugin's settings validated.
 
-## Overview
+## What happens when the file is loaded
 
-The validation system consists of two layers:
+First the top-level keys are checked (**fatal**). Then, for every offering, in this order:
 
-1. **Core Validation**: Universal fields validated by core Pydantic models
-2. **Plugin Validation**: Plugin-specific fields validated by plugin-provided schemas
+1. Plugin-specific component fields are checked against the plugin's component schema, if the
+   plugin registered one under the offering's `backend_type` (**warning only**).
+2. Each entry under `backend_components` is checked against the core component model (**fatal**).
+3. `backend_settings` is checked against the plugin's settings schema, if the plugin registered one
+   under the offering's `backend_type` (**warning only**).
+4. The offering itself is checked (**fatal**).
 
-## Core Configuration Validation
+Loading stops at the first model that fails, so a file with problems in several places reports
+them one place at a time.
 
-### Basic Structure
+### Fatal: the agent does not start
 
-All configurations are validated using Pydantic models with enum-based validation:
+<!-- pyml disable-num-lines 12 line-length -->
+| Check | Rule |
+| ----- | ---- |
+| Required offering keys | `name`, `waldur_api_url`, `waldur_offering_uuid`, `backend_type` |
+| Credentials | `waldur_api_token`, or all three of `oidc_token_url`, `oidc_client_id`, `oidc_client_secret`; a partial OIDC set is rejected even when a token is also set |
+| STOMP and OIDC | `stomp_enabled: true` requires `waldur_api_token` |
+| URLs | `waldur_api_url` and `oidc_token_url` must start with `http://` or `https://`; a missing trailing `/` on `waldur_api_url` is added |
+| Components | `measured_unit`, `accounting_type` and `label` are required; `accounting_type` is one of `usage`, `limit`, `one` |
+| `timezone` | must be a known IANA zone name |
+| `log_level` | one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (any case) |
+| `reporting_periods` | integer from 1 to 12 |
+| `sentry_dsn`, `elastic_apm_server_url` | a valid URL when set (an empty string means unset) |
+| `log_shipping` | `ship_interval_seconds` ≥ 10, `buffer_size_mb` ≥ 1 |
 
-```yaml
-sentry_dsn: "https://key@o123.ingest.sentry.io/456"  # URL validation
-timezone: "UTC"
-offerings:
-  - name: "My SLURM Cluster"
-    waldur_api_url: "https://waldur.example.com/api/"  # URL validation + auto-normalization
-    waldur_api_token: "your_token_here"
-    waldur_offering_uuid: "uuid-here"
-    backend_type: "slurm"  # Auto-lowercased
+`backend_type` is lowercased on load.
 
-    backend_components:
-      cpu:
-        measured_unit: "k-Hours"        # Required string
-        accounting_type: "usage"        # Enum: "usage" or "limit"
-        label: "CPU"                    # Required string
-        unit_factor: 60000              # Optional float
-        limit: 1000                     # Optional float
+### Warning only: the agent starts anyway
+
+A plugin settings or component schema failure is logged and the agent continues with the values
+exactly as written:
+
+<!-- pyml disable-num-lines 3 line-length -->
+```text
+{"event": "Plugin schema validation failed for slurm settings: 1 validation error for SlurmBackendSettingsSchema\ndefault_account\n  Field required [type=missing, ...]", "level": "warning", "logger": "waldur_site_agent.backend", ...}
 ```
 
-### Core Validation Features
+Treat these warnings as errors: the backend usually fails later, when it first reads the setting.
 
-**Automatic Validation:**
+### Not checked at all
 
-- **Required Fields**: `name`, `waldur_api_url`, `waldur_api_token`, `waldur_offering_uuid`, `backend_type`
-- **URL Validation**: `waldur_api_url` must be valid HTTP/HTTPS URL (auto-adds trailing slash)
-- **Enum Validation**: `accounting_type` must be "usage" or "limit"
-- **Type Conversion**: `backend_type` automatically lowercased
+- **Unknown keys are ignored** at the top level and inside offerings, so a misspelt optional key
+  silently keeps its default. Unknown keys inside a component are kept and passed to the backend
+  (plugins use them for their own component fields) — a misspelt one is simply never read. Plugin
+  settings schemas may allow extra keys too; the SLURM one does.
+- **`*_backend` names are not checked on load.** An unregistered name such as `cscs-dwdi` (the
+  registered ones are `cscs-dwdi-compute`, `-storage` and `-inference`) logs
+  `Unsupported backend type for reporting_backend: …` when that process starts. An offering with no
+  `*_backend` at all is silently skipped by `order_process`; `membership_sync` logs
+  `Unable to create backend for <offering>` for it, and `report` stops the whole process with
+  that error.
+- **Nothing is contacted.** Credentials, the offering UUID and the backend are not tried until the
+  agent runs. `waldur_site_diagnostics -c <config>` tries them: it queries Waldur with each
+  offering's credentials and runs the order processing backend's diagnostics. It exits 1 when those
+  backend diagnostics fail or `cluster_name` does not match the offering's `backend_id`. Waldur
+  errors are logged; if the offering itself cannot be fetched (rejected token, unknown UUID) the
+  command then stops with a traceback, so read the output rather than relying on the exit status.
 
-**Optional URL Validation:**
+## Reading the errors
 
-- **Sentry DSN**: Must be valid URL when provided (empty string → `None`)
+A fatal error is raised as `ValueError: Configuration validation failed:` followed by Pydantic's
+report, which names the model, the field and the reason:
 
-### AccountingType Enum
-
-The `accounting_type` field uses a validated enum:
-
-```python
-from waldur_site_agent.common.structures import AccountingType
-
-# Valid values
-AccountingType.USAGE   # "usage"
-AccountingType.LIMIT   # "limit"
+<!-- pyml disable-num-lines 5 line-length -->
+```text
+ValueError: Configuration validation failed: 1 validation error for Offering
+waldur_api_url
+  Value error, waldur_api_url must start with http:// or https:// [type=value_error, input_value='waldur.example.com/api/', input_type=str]
 ```
 
-**Benefits:**
+The model name tells you where to look:
 
-- IDE autocomplete
-- Compile-time type checking
-- Clear validation errors
-- No custom validator code needed
+| Model in the message | Where the problem is |
+| -------------------- | -------------------- |
+| `RootConfiguration` | a top-level key (`timezone`, `log_level`, …) |
+| `Offering` | an offering key; a rule over several keys has no field line, only the message |
+| `BackendComponent` | an entry under `backend_components` |
 
-## Plugin-Specific Validation
+Messages for the cross-field rules:
 
-### How Plugin Schemas Work
+<!-- pyml disable-num-lines 5 line-length -->
+```text
+Value error, Either waldur_api_token or all of oidc_token_url, oidc_client_id, oidc_client_secret must be set
+Value error, oidc_token_url, oidc_client_id and oidc_client_secret must be set together; only some of them are set
+Value error, stomp_enabled requires waldur_api_token: the STOMP session is authenticated with the static API token, which an OIDC-only offering does not have. Use polling mode or configure waldur_api_token.
+```
 
-Plugins can provide their own Pydantic schemas to validate plugin-specific configuration fields:
+A missing required key reads `Field required [type=missing, …]` under the key's name; an invalid
+`accounting_type` reads `Input should be 'usage', 'limit' or 'one'`.
 
-1. **Plugin defines schema**: Creates Pydantic models for their specific fields
-2. **Entry point registration**: Registers schema via `pyproject.toml`
-3. **Automatic discovery**: Core discovers and applies plugin validation
-4. **Graceful fallback**: Invalid plugin fields warn but don't break config
+## For plugin authors: validation schemas
 
-### Creating Plugin Schemas
+A plugin can validate its own `backend_settings` and its plugin-specific component fields by
+registering Pydantic models. Schemas are looked up by the offering's **`backend_type`** only —
+not by `order_processing_backend`, `membership_sync_backend` or `reporting_backend` — so register
+the schema under the name operators put in `backend_type`.
 
-#### Step 1: Create Schema File
+### Base classes
 
-Create `schemas.py` in your plugin:
+Both base classes live in `waldur_site_agent.common.plugin_schemas` and forbid unknown fields by
+default (`extra="forbid"`), so a typo in a plugin key is reported:
+
+- `PluginBackendSettingsSchema` validates the whole `backend_settings` mapping.
+  `HomedirSettingsSchema` extends it with the home-directory settings core reads
+  (`enable_user_homedir_account_creation`, `default_homedir_umask`, `homedir_base_path`,
+  `homedir_quota`); inherit from it if your backend creates home directories.
+- `PluginComponentSchema` validates only the component fields the core model does not know. Core
+  strips `measured_unit`, `unit_factor`, `accounting_type`, `label` and the other core fields
+  before calling it, so the schema declares just the plugin's own fields.
+
+The Waldur federation plugin is a working example:
 
 ```python
-from __future__ import annotations
-
-from enum import Enum
-from typing import Optional
-
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import Field
 
 from waldur_site_agent.common.plugin_schemas import (
     PluginBackendSettingsSchema,
     PluginComponentSchema,
+    TargetComponentConfig,
 )
 
 
-class MyPeriodType(Enum):
-    """Period types for my plugin."""
-
-    MONTHLY = "monthly"
-    QUARTERLY = "quarterly"
-    ANNUAL = "annual"
-
-
-class MyComponentSchema(PluginComponentSchema):
-    """My plugin-specific component validation."""
-
-    model_config = ConfigDict(extra="allow")  # Allow core fields
-
-    # Plugin-specific fields
-    my_period_type: Optional[MyPeriodType] = Field(
-        default=None,
-        description="Period type for my plugin features"
-    )
-    my_custom_ratio: Optional[float] = Field(
-        default=None,
-        description="Custom ratio (0.0-1.0)"
+class WaldurComponentSchema(PluginComponentSchema):
+    target_components: dict[str, TargetComponentConfig] = Field(
+        default_factory=dict,
+        description="Mapping of target component names to conversion config.",
     )
 
-    @field_validator("my_custom_ratio")
-    @classmethod
-    def validate_ratio(cls, v: Optional[float]) -> Optional[float]:
-        """Validate custom ratio is between 0.0 and 1.0."""
-        if v is not None and (v < 0.0 or v > 1.0):
-            msg = "my_custom_ratio must be between 0.0 and 1.0"
-            raise ValueError(msg)
-        return v
+
+class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
+    target_api_url: str = Field(..., description="Base URL for the target Waldur B API endpoint")
+    target_api_token: str = Field(..., description="Authentication token for Waldur B API")
+    # ... further settings
 ```
 
-#### Step 2: Register Entry Points
+### Registering the schemas
 
-Add to your plugin's `pyproject.toml`:
+In the plugin's `pyproject.toml`, under the same name as the backend entry point:
 
 ```toml
 [project.entry-points."waldur_site_agent.component_schemas"]
-my-plugin = "waldur_site_agent_my_plugin.schemas:MyComponentSchema"
+waldur = "waldur_site_agent_waldur.schemas:WaldurComponentSchema"
 
 [project.entry-points."waldur_site_agent.backend_settings_schemas"]
-my-plugin = "waldur_site_agent_my_plugin.schemas:MyBackendSettingsSchema"
+waldur = "waldur_site_agent_waldur.schemas:WaldurBackendSettingsSchema"
 ```
 
-#### Step 3: Use in Configuration
+### What validation does with your schema
 
-Your plugin-specific fields are now validated:
+- On success, `backend_settings` is replaced by `model_dump(exclude_unset=True)` of your model, so
+  defaults declared in the schema are **not** filled in — read them with a default in the backend
+  too.
+- On failure, the error is logged as a warning and the raw values are passed through unchanged
+  (see [Warning only](#warning-only-the-agent-starts-anyway)). Do not rely on the schema to stop a
+  misconfigured agent; raise a `BackendError` from the backend's constructor for settings it
+  cannot work without.
 
-```yaml
-offerings:
-  - name: "My Plugin Offering"
-    waldur_api_url: "https://waldur.example.com/api/"
-    waldur_api_token: "token"
-    waldur_offering_uuid: "uuid"
-    backend_type: "my-plugin"
+### Python 3.9 compatibility
 
-    backend_components:
-      cpu:
-        # Core fields (validated by BackendComponent)
-        measured_unit: "Hours"
-        accounting_type: "usage"  # AccountingType enum
-        label: "CPU"
-
-        # Plugin fields (validated by MyComponentSchema)
-        my_period_type: "quarterly"  # MyPeriodType enum
-        my_custom_ratio: 0.25        # 0.0-1.0 validation
-```
-
-## Best Practices
-
-### Use ConfigDict for Python 3.9+ Compatibility
-
-**✅ Correct approach:**
-
-```python
-from pydantic import ConfigDict
-
-class MySchema(PluginComponentSchema):
-    model_config = ConfigDict(extra="allow")  # Works on all Python versions
-```
-
-**❌ Avoid:**
-
-```python
-from typing import ClassVar
-
-class MySchema(PluginComponentSchema):
-    model_config: ClassVar = {"extra": "allow"}  # Fails on Python 3.9
-```
-
-### Prefer Enums Over String Validation
-
-**✅ Better approach:**
-
-```python
-class BackendType(Enum):
-    SLURM = "slurm"
-    MUP = "mup"
-
-backend_type: Optional[BackendType] = Field(default=None)
-```
-
-**❌ Avoid:**
-
-```python
-@field_validator("backend_type")
-@classmethod
-def validate_backend_type(cls, v):
-    if v not in {"slurm", "mup"}:
-        raise ValueError("Invalid backend type")
-    return v
-```
-
-## SLURM Plugin Example
-
-The SLURM plugin demonstrates real-world plugin validation:
-
-```python
-class PeriodType(Enum):
-    MONTHLY = "monthly"
-    QUARTERLY = "quarterly"
-    ANNUAL = "annual"
-
-class SlurmComponentSchema(PluginComponentSchema):
-    model_config = ConfigDict(extra="allow")
-
-    period_type: Optional[PeriodType] = Field(default=None)
-    carryover_enabled: Optional[bool] = Field(default=None)
-    grace_ratio: Optional[float] = Field(default=None)
-```
-
-## Error Handling
-
-### Core Validation Errors (Fatal)
-
-Stop configuration loading with clear error messages:
-
-```text
-ValidationError: 2 validation errors for Offering
-waldur_api_url
-  Value error, waldur_api_url must start with http:// or https://
-accounting_type
-  Input should be 'usage' or 'limit'
-```
-
-### Plugin Validation Errors (Warnings)
-
-Log warnings but continue with configuration loading:
-
-```text
-Warning: Plugin schema validation failed for slurm.cpu: 1 validation error
-period_type: Input should be 'monthly', 'quarterly' or 'annual'
-```
-
-## Benefits
-
-### Type Safety
-
-- **IDE Support**: Full autocomplete for configuration fields
-- **Compile-time Checking**: Catch errors before runtime
-- **Clear Documentation**: Field descriptions provide inline help
-
-### Runtime Validation
-
-- **Immediate Feedback**: Configuration errors caught at startup
-- **Rich Error Messages**: Pydantic provides detailed validation feedback
-- **Graceful Degradation**: Plugin validation warns but doesn't break
-
-### Maintainability
-
-- **Enum-Based**: No custom string validation code needed
-- **Extensible**: Plugins add validation without core changes
-- **Evidence-Based**: Schemas based on actual plugin requirements
-- **Future-Proof**: Easy to add new validation rules
-
-This validation system provides robust configuration management while maintaining clean separation
-between core and plugin concerns.
+Plugins must run on Python 3.9. Set `model_config = ConfigDict(...)` rather than a
+`ClassVar` dict, and use `Optional[X]` / `Union[X, Y]` instead of `X | Y` in field annotations.

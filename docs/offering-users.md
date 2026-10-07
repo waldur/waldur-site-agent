@@ -33,8 +33,8 @@ stateDiagram-v2
     OK --> [*] : User ready for resource access
 
     %% Teardown, once Waldur asks for the account to go
-    OK --> DELETION_REQUESTED : last project role revoked
-    DELETION_REQUESTED --> DELETING : set_deleting (the agent's claim)
+    OK --> REQUESTED_DELETION : last project role revoked
+    REQUESTED_DELETION --> DELETING : set_deleting (the agent's claim)
     DELETING --> DELETED : set_deleted (associations dropped, account released)
     DELETING --> ERROR_DELETING : a removal or the release failed
     ERROR_DELETING --> DELETING : retried on the next sweep
@@ -49,7 +49,7 @@ stateDiagram-v2
 - **PENDING_ACCOUNT_LINKING**: Manual intervention required to link user accounts
 - **PENDING_ADDITIONAL_VALIDATION**: Additional validation steps needed before proceeding
 - **ERROR_CREATING**: Backend failure during username generation; retried on next sync cycle
-- **DELETION_REQUESTED**: Waldur has asked for the account to be torn down
+- **REQUESTED_DELETION**: Waldur has asked for the account to be torn down
 - **DELETING**: the agent has claimed the request and is dropping associations and releasing the account
 - **DELETED**: nothing on the provider side refers to the account any more, so Waldur can release the
   provider-wide identity behind it
@@ -127,14 +127,11 @@ class CustomUsernameBackend(AbstractUsernameManagementBackend):
         """Retrieve existing username from local identity provider."""
         # Custom lookup logic here
         return existing_username
-
-    def get_or_create_username(self, offering_user: OfferingUser) -> Optional[str]:
-        """Get existing username or create new one if not found."""
-        username = self.get_username(offering_user)
-        if not username:
-            username = self.generate_username(offering_user)
-        return username
 ```
+
+`get_or_create_username` is provided by the base class: it calls
+`get_username` and falls back to `generate_username`, and returns `str`. Do
+not override it.
 
 #### When Waldur owns the username
 
@@ -219,9 +216,10 @@ the associations:
   `Error deleting`, so the next cycle retries and nothing is ever marked
   `Deleted` while something on the cluster still refers to it.
   `BaseBackend.remove_user` returns `False` for "nothing to remove" and raises
-  on a failed removal — plugins must never fold a failure into `False`. The flow runs for **every** offering: one without
-  a membership backend skips step 1, one without a username backend skips
-  step 2, neither skips the acknowledgement. It runs as a per-cycle sweep in
+  on a failed removal — plugins must never fold a failure into `False`. The flow
+  runs for **every** offering. Step 1 (the claim) and step 4 (the
+  acknowledgement) always run; an offering without a membership backend skips
+  step 2, and one without a username backend skips step 3. It runs as a per-cycle sweep in
   polling mode (one filtered list request), in the periodic username-backend
   reconciliation in event-processing mode, and immediately on the offering-user
   `update` event whose payload carries a deletion state. The sweep is what
@@ -282,7 +280,11 @@ custom_backend = "my_package.backend:CustomUsernameBackend"
 
 ### Offering Configuration
 
-Configure username management per offering in your agent configuration:
+Configure username management per offering in your agent configuration
+(partial snippet — see the configuration reference for the full offering
+block):
+
+<!-- docs-check: skip -->
 
 ```yaml
 offerings:
@@ -298,10 +300,16 @@ offerings:
 
 ### Prerequisites
 
-1. **Service Provider Username Generation**: The offering must be configured
-   with `username_generation_policy = SERVICE_PROVIDER` in Waldur
-2. **Backend Plugin**: Appropriate username management backend must be installed and configured
-3. **Permissions**: API token user must have **OFFERING.MANAGER** role on the offering
+1. **Service Provider Username Generation**: The agent generates usernames only
+   when the offering's `username_generation_policy` is `service_provider`. Under
+   every other policy Waldur assigns the usernames and this workflow does not run.
+2. **Service provider may create offering users**: under the `service_provider`
+   policy, the offering's plugin option `service_provider_can_create_offering_user`
+   must be `true`. Without it the agent logs an error and skips both username
+   generation and membership sync for the offering — no backend associations are
+   created.
+3. **Backend Plugin**: Appropriate username management backend must be installed and configured
+4. **Permissions**: API token user must have **OFFERING.MANAGER** role on the offering
    (grants permissions to manage offering users, orders, and agent identities)
 
 ## Integration with Order Processing
@@ -405,19 +413,64 @@ updates. To address this, the main event loop includes a periodic reconciliation
 
 ### How it works
 
-- **Interval**: Defaults to 60 minutes, configurable via `WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES`
-- **Scope**: Only runs for offerings with both `stomp_enabled: true` and a `membership_sync_backend`
-- **Operation**: Calls `sync_offering_user_usernames()` which compares usernames between source and
-  target offerings and patches any mismatches
-- **Idempotent**: Safe to run at any frequency — no side effects when data is already consistent
-- **Lightweight**: Only syncs usernames, not a full membership reconciliation
+Every `WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES` (default 60) the event
+loop runs, for each configured offering:
+
+- **Username pull** — only for offerings with `username_reconciliation_enabled: true`:
+  `sync_offering_user_usernames()` on the membership backend compares usernames
+  between source and target offerings and patches mismatches (Waldur federation).
+- **Offering-user reconciliation** — for every offering:
+  - with a `membership_sync_backend`: retries username generation for offering
+    users stuck in `Requested`, `Creating`, `Error creating` or a `Pending …` state;
+  - in all cases: the username backend's `sync_user_profiles` and
+    `reconcile_offering`, and the deletion sweep (teardown of offering users
+    Waldur moved into a deletion state).
+
+None of this is a full membership pass: in `event_process` mode the resource
+team diff runs only at startup and on events.
+
+The same timer also reconciles orders, resource API key commands and the
+project hierarchy.
 
 ### Reconciliation interval setting
 
-```yaml
+```bash
 # Environment variable (default: 60 minutes)
 WALDUR_SITE_AGENT_RECONCILIATION_PERIOD_MINUTES=60
 ```
+
+## Stale user removal
+
+Membership sync compares, per resource, the users the backend reports with
+the resource's Waldur team. Users on the team but not on the backend are
+added; users on the backend but no longer on the team are **stale** and are
+removed. Several rules narrow the stale set before anything is removed:
+
+1. **Service and course accounts are exempt.** They are not project-team
+   members, so the diff always flags them; their lifecycle belongs to the
+   service/course account sync. If the agent cannot list the resource's
+   service and course accounts, it skips stale-user removal for that resource
+   for the pass rather than risk removing (and cancelling the jobs of) an
+   account.
+2. **`preserve_unmanaged_backend_users: true`** (offering setting) keeps backend
+   users Waldur has never known — accounts the provider added by hand. Only
+   stale users that appear in the offering's **unfiltered** offering-user list
+   (including departed and restricted ones) are removed.
+   - If that unfiltered list cannot be fetched, the pass falls back to removing
+     only users still present in the filtered (active) offering-user list.
+     Departed and restricted users then stay on the backend until the list is
+     reachable again; the agent logs the deferred users at ERROR
+     (`Deferring removal of N backend user(s) …`). A failed fetch is not retried
+     for the rest of that pass.
+   - The setting is ignored for identity-bridge (Waldur-to-Waldur) backends,
+     whose diff is keyed on CUIDs, not offering usernames.
+3. **`skip_resource_team_diff = True`** on the backend class disables the diff
+   altogether: the backend manages membership below the resource level, and
+   core neither adds nor removes users through it.
+
+Removing a user goes through `remove_users_from_resource`; the username
+backend's `release_users` is called afterwards for the offering users whose
+usernames were removed (see [When a user leaves](#when-a-user-leaves)).
 
 ## User Attribute Forwarding
 
@@ -456,7 +509,7 @@ exposing `username`, `full_name`, and `email`.
 
 ### Username Backend Implementation
 
-1. **Idempotent Operations**: Ensure `get_or_create_username()` can be called multiple times safely
+1. **Idempotent Operations**: Ensure `get_username()` and `generate_username()` can be called multiple times safely
 2. **Error Handling**: Raise appropriate exceptions for recoverable errors
 3. **Logging**: Include detailed logging for troubleshooting
 4. **Validation**: Validate generated usernames meet backend system requirements
