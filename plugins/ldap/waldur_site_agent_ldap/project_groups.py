@@ -24,7 +24,6 @@ from waldur_site_agent_ldap_client.client import normalize_dn, uid_from_dn
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.exceptions import BackendError
 
-DEFAULT_MANAGED_MARKER = "waldur-managed"
 PROJECT_GROUPS_PATH = "/api/marketplace-service-provider-project-groups/"
 PAGE_SIZE = 100
 # A provider with more groups than this many pages would be its own problem; the
@@ -147,7 +146,6 @@ class ReconcileReport:
     failed: int = 0
     member_updates: int = 0
     parent_updates: int = 0
-    marked: int = 0
     description_updates: int = 0
 
 
@@ -203,6 +201,7 @@ def _is_group_of_names(object_classes: list[str]) -> bool:
 
 
 _WARNED_BARE_TEMPLATES: set[str] = set()
+_WARNED_MANAGED_MARKER: set[bool] = set()
 
 
 def _template_pattern(template: str) -> Optional[re.Pattern]:
@@ -217,6 +216,17 @@ def _template_pattern(template: str) -> Optional[re.Pattern]:
     if not prefix and not suffix:
         return None
     return re.compile(re.escape(prefix) + r".+" + re.escape(suffix))
+
+
+def _warn_once_about_managed_marker() -> None:
+    if _WARNED_MANAGED_MARKER:
+        return
+    _WARNED_MANAGED_MARKER.add(True)
+    logger.warning(
+        "project_groups.managed_marker is set but ignored: project groups are no longer "
+        "marked. Remove the setting; existing marker values in the directory are left "
+        "as they are"
+    )
 
 
 def _warn_once_about_bare_organization_template(template: str) -> None:
@@ -268,7 +278,8 @@ class ProjectGroupReconciler:
         self.add_only = _plain(settings.get("membership")) == "add_only"
         self.adopt_gid = _plain(settings.get("on_gid_mismatch")) == "adopt"
         self.parents = list(settings.get("parents") or [])
-        self.marker = settings.get("managed_marker") or DEFAULT_MANAGED_MARKER
+        if settings.get("managed_marker"):
+            _warn_once_about_managed_marker()
         self.organization_template = settings.get("organization_description") or ""
         self._organization_pattern = _template_pattern(self.organization_template)
         if self.organization_template and self._organization_pattern is None:
@@ -336,14 +347,10 @@ class ProjectGroupReconciler:
         # they are, since Waldur cannot yet say anything about them.
         untouchable: set[str] = set()
         seen: set[str] = set()
-        # DNs a parent may lose: groups Waldur lists, and entries carrying the
-        # marker (written or adopted by an agent before). An unlisted, unmarked
-        # entry under the project OU is the operator's and is never removed.
-        removable = {
-            key
-            for key, (_, attrs) in existing.items()
-            if self.marker in _values(attrs, "description")
-        }
+        # DNs a parent may lose: groups Waldur lists. An entry under the project
+        # OU that Waldur does not list -- hand-made, or a group of an offering
+        # since moved to another provider -- is never removed.
+        removable: set[str] = set()
         for group in groups:
             if not group.name:
                 report.skipped += 1
@@ -497,11 +504,6 @@ class ProjectGroupReconciler:
             report.conflicts += 1
 
         managed[key] = (entry_dn, group)
-        if self.marker not in _values(attrs, "description"):
-            # Adopted: mark it as Waldur's, next to whatever the operator wrote.
-            self.client.modify_entry(entry_dn, {"description": [(MODIFY_ADD, [self.marker])]})
-            report.marked += 1
-            logger.info("Marked LDAP group %s as managed (%s)", entry_dn, self.marker)
         if self._sync_organization_description(entry_dn, attrs, group):
             report.description_updates += 1
         if self._sync_members(entry_dn, attrs, group, context.user_names):
@@ -516,9 +518,9 @@ class ProjectGroupReconciler:
     def _sync_organization_description(self, dn: str, attrs: dict, group: ProjectGroup) -> bool:
         """Add the organization value, replacing a stale one; True when written.
 
-        Only a value matching the template's literal text is ever removed, and
-        never the managed marker: everything else in ``description`` is the
-        operator's. A group whose project is gone keeps what it has.
+        Only a value matching the template's literal text is ever removed:
+        everything else in ``description`` is the operator's. A group whose
+        project is gone keeps what it has.
         """
         desired = self._organization_value(group)
         if not desired:
@@ -529,7 +531,7 @@ class ProjectGroupReconciler:
             stale = [
                 value
                 for value in current
-                if value not in (desired, self.marker)
+                if value != desired
                 and self._organization_pattern.fullmatch(value)
             ]
         to_add = [] if desired in current else [desired]
@@ -564,9 +566,10 @@ class ProjectGroupReconciler:
             "objectClass": self.object_classes,
             "cn": group.name,
             "gidNumber": group.gid,
-            "description": [self.marker]
-            + ([organization] if (organization := self._organization_value(group)) else []),
         }
+        organization = self._organization_value(group)
+        if organization:
+            attributes["description"] = [organization]
         members = self._member_values(group, user_names)
         if members:
             attributes[self.member_attribute] = members
@@ -658,11 +661,11 @@ class ProjectGroupReconciler:
         """List the DN of every managed group whose project uses one of the parent's offerings.
 
         A DN is only ever removed if it lies under the project OU and is in
-        ``removable``: a group Waldur lists (with a GID), or an entry carrying
-        the managed marker. It then goes when the group is not wanted here -- no
-        resource on these offerings, not written because its GID or name is
-        held, or (marked entries only) no longer listed by Waldur at all.
-        Everything else, including hand-made groups under the project OU, stays.
+        ``removable``: a group Waldur lists (with a GID). It then goes when the
+        group is not wanted here -- no resource on these offerings, or not
+        written because its GID or name is held. Everything else, including
+        hand-made groups under the project OU and groups Waldur no longer
+        lists, stays.
         """
         parent_dn = parent["dn"]
         attribute = parent.get("attribute") or "member"

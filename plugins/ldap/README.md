@@ -842,7 +842,6 @@ backend_settings:
 | `member_attribute` | `memberUid` | `memberUid` writes usernames; `member` writes `uid=<name>,<people_ou>,<base_dn>` |
 | `membership` | `sync` | `sync` adds and removes members to match Waldur; `add_only` never removes one |
 | `on_gid_mismatch` | `report` | Same-named entry with another GID: `report` keeps the GID, `adopt` renumbers |
-| `managed_marker` | `waldur-managed` | Extra `description` value on every group the agent creates or adopts |
 | `organization_description` | unset | Organization `description` value, e.g. `organization={slug}` |
 | `parents` | `[]` | Entries that list the DN of each group whose project has a resource on the offering |
 | `parents[].dn` | -- | Full DN of the entry |
@@ -880,9 +879,9 @@ Then, for each group:
 
 | Directory state | Action |
 |-----------------|--------|
-| No entry, GID and name free | Create it with Waldur's name, GID, members and the marker |
+| No entry, GID and name free | Create it with Waldur's name, GID and members |
 | No entry, GID or name held (see below) | Report every cycle; nothing written, not added to parents |
-| Entry with the same name and GID | Adopt it: add the marker, reconcile members and parents |
+| Entry with the same name and GID | Adopt it: reconcile members and parents |
 | Same name, another GID, `report` | Report every cycle; the GID stays, members and parents are reconciled |
 | Same name, another GID, `adopt` | Rewrite `gidNumber` to Waldur's, unless it is held (then as `report`) |
 | Waldur has no GID for the group | Skip it and log; its DN in a parent is left as it is |
@@ -899,9 +898,10 @@ agent matches on.
 `chgrp`-ed to Waldur's. Renumbering a group any earlier orphans them, which is
 why `report` is the default.
 
-Every group the agent creates or adopts gets one extra `description` value,
-`managed_marker` (`waldur-managed` by default). The operator's own description
-values stay; `description` is multi-valued and allowed on `posixGroup`.
+The agent writes nothing to `description` except the optional organization
+value below; the operator's own description values stay. Earlier versions added
+a `waldur-managed` value to every group they created or adopted; the agent no
+longer reads or writes it, and leaves existing ones for the operator to remove.
 
 With `organization_description` set, each group also carries one value naming
 its project's organization, rendered from the template with the organization
@@ -909,24 +909,21 @@ slug (`organization={slug}` writes `organization=cscs`). It is kept in sync on
 every pass: added to existing and adopted groups, and replaced when the slug
 changes or the project moves to another organization. The agent finds its own
 value by the template's text around `{slug}`, so it never touches another
-description value or the marker. A bare `{slug}` has no such text: the agent
+description value. A bare `{slug}` has no such text: the agent
 then adds the current slug but never removes an old one, and warns once. A group
 whose project is gone keeps the value it has.
 
 Each parent is made to list the DNs of the groups whose project has a resource
 on the parent's offerings. A DN is only ever removed when it lies under the
-project OU, and then:
+project OU and belongs to a group Waldur lists, and then only when its project has no resource on the parent's
+offerings, or the group could not be written because its GID or name is held (a
+write that fails for any other reason this cycle leaves the DN as it is).
 
-- for a group Waldur lists, when its project has no resource on the parent's
-  offerings, or the group could not be written because its GID or name is held
-  (a write that fails for any other reason this cycle leaves the DN as it is);
-- for a group Waldur no longer lists (an offering moved to another provider,
-  say), only when its entry carries the marker.
-
-An unmarked group under the project OU that Waldur does not list (a hand-made
-`benchmarking` group, say) is never removed, nor is any DN from outside the
-project OU. A `groupOfNames` that would lose its
-last member gets `empty_group_member_dn` in the same modify.
+A group under the project OU that Waldur does not list is never removed, nor is
+any DN from outside the project OU. That covers a hand-made `benchmarking`
+group, and also a group Waldur stops listing because its offering moved to
+another provider or the provider was deleted: take such a DN out of the parent
+by hand. A `groupOfNames` that would lose its last member gets `empty_group_member_dn` in the same modify.
 
 Group entries are never deleted: their GIDs stay reserved in Waldur.
 
