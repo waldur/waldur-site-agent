@@ -14,6 +14,7 @@ MNS_API_VERSION = "v1"
 MNS_PLURAL = "managednamespaces"
 
 HTTP_NOT_FOUND = 404
+HTTP_CONFLICT = 409
 
 
 class K8sUtNamespaceClient:
@@ -32,6 +33,7 @@ class K8sUtNamespaceClient:
 
         self.api_client = k8s_client.ApiClient()
         self.custom_api = k8s_client.CustomObjectsApi(self.api_client)
+        self.core_api = k8s_client.CoreV1Api(self.api_client)
         self.cr_namespace = backend_settings.get("cr_namespace", "waldur-system")
 
         logger.info(
@@ -114,6 +116,38 @@ class K8sUtNamespaceClient:
         except ApiException as e:
             raise BackendError(f"Failed to patch ManagedNamespace {name}: {e}") from e
 
+    def replace_managed_namespace(self, name: str, obj: dict) -> dict:
+        """Replace a ManagedNamespace CR with *obj*.
+
+        *obj* must carry the ``metadata.resourceVersion`` it was read with. Unlike
+        :meth:`patch_managed_namespace` (a JSON merge patch, which never checks whether
+        the object changed since it was read), this is a full PUT: the API server
+        rejects it with 409 if *obj*'s resourceVersion is stale. Callers doing a
+        read-modify-write need this -- a merge patch alone silently lets a concurrent
+        writer's update be clobbered (confirmed live: report and membership_sync modes
+        both call _get_usage_report() independently, with no coordination between
+        them).
+
+        Raises:
+            ApiException: With ``status == 409`` on a stale resourceVersion -- callers
+                should re-read and retry, not treat this as a hard failure.
+        """
+        try:
+            result = self.custom_api.replace_namespaced_custom_object(
+                group=MNS_API_GROUP,
+                version=MNS_API_VERSION,
+                namespace=self.cr_namespace,
+                plural=MNS_PLURAL,
+                name=name,
+                body=obj,
+            )
+            logger.info("Replaced ManagedNamespace CR: %s", name)
+            return result
+        except ApiException as e:
+            if e.status == HTTP_CONFLICT:
+                raise
+            raise BackendError(f"Failed to replace ManagedNamespace {name}: {e}") from e
+
     def delete_managed_namespace(self, name: str) -> None:
         """Delete a ManagedNamespace custom resource."""
         try:
@@ -130,3 +164,24 @@ class K8sUtNamespaceClient:
                 logger.warning("ManagedNamespace %s not found, skipping deletion", name)
                 return
             raise BackendError(f"Failed to delete ManagedNamespace {name}: {e}") from e
+
+    def list_pods(self, namespace: str) -> list[dict]:
+        """List pods in *namespace*.
+
+        *namespace* is the real workload namespace this ManagedNamespace manages
+        (``spec.name``), not ``self.cr_namespace`` where the CR itself lives.
+
+        A namespace that doesn't exist yet reports zero pods, not an error: this backend
+        only ever creates the ManagedNamespace CR itself (see create_resource_with_id);
+        turning that into a real Namespace is a separate, external controller's job, so
+        "no real namespace yet" is an expected, ordinary state (e.g. right after a resource
+        is created, or in a test/demo cluster standing in for that controller), not a
+        failure -- and "no real namespace" genuinely means "no real running pods" either way.
+        """
+        try:
+            result = self.core_api.list_namespaced_pod(namespace=namespace)
+            return [pod.to_dict() for pod in result.items]
+        except ApiException as e:
+            if e.status == HTTP_NOT_FOUND:
+                return []
+            raise BackendError(f"Failed to list pods in {namespace}: {e}") from e

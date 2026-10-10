@@ -23,6 +23,7 @@ def mock_k8s_client():
     ):
         mock_custom_api = MagicMock()
         mock_client_module.CustomObjectsApi.return_value = mock_custom_api
+        mock_client_module.CoreV1Api.return_value = MagicMock()
         mock_client_module.ApiClient.return_value = MagicMock()
 
         client = K8sUtNamespaceClient({"kubeconfig_path": "/tmp/fake", "cr_namespace": "test-ns"})
@@ -164,3 +165,34 @@ class TestK8sUtNamespaceClient:
 
         with pytest.raises(BackendError, match="Failed to delete ManagedNamespace"):
             client.delete_managed_namespace("test-cr")
+
+    def test_list_pods(self, mock_k8s_client):
+        client, _ = mock_k8s_client
+        mock_pod = MagicMock()
+        mock_pod.to_dict.return_value = {"metadata": {"name": "pod-1"}}
+        mock_result = MagicMock()
+        mock_result.items = [mock_pod]
+        client.core_api.list_namespaced_pod.return_value = mock_result
+
+        result = client.list_pods("waldur-sv-demo")
+
+        client.core_api.list_namespaced_pod.assert_called_once_with(namespace="waldur-sv-demo")
+        assert result == [{"metadata": {"name": "pod-1"}}]
+
+    def test_list_pods_namespace_not_found_returns_empty(self, mock_k8s_client):
+        # Not an error: this backend only ever creates the ManagedNamespace CR itself,
+        # never the real Namespace -- that's a separate, external controller's job, so
+        # "no real namespace yet" is an expected state, and genuinely means zero pods.
+        client, _ = mock_k8s_client
+        client.core_api.list_namespaced_pod.side_effect = ApiException(status=404)
+
+        result = client.list_pods("waldur-sv-demo")
+
+        assert result == []
+
+    def test_list_pods_error(self, mock_k8s_client):
+        client, _ = mock_k8s_client
+        client.core_api.list_namespaced_pod.side_effect = ApiException(status=500)
+
+        with pytest.raises(BackendError, match="Failed to list pods"):
+            client.list_pods("waldur-sv-demo")
