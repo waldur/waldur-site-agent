@@ -131,20 +131,47 @@ offerings:
 
       # ── Optional: Keycloak user lookup ───────────────────────────
 
-      # Identifier the operator uses to look up users in Keycloak.
-      # false (default) = pass Waldur username, matched against
-      #                   keycloak.user.username. Works in both OIDC
-      #                   and self-hosted Waldur as long as Waldur
-      #                   usernames align with Keycloak ones (the
-      #                   typical OIDC mapping does this via the
-      #                   `preferred_username` claim).
-      # true            = pass Waldur UUID, matched against
-      #                   keycloak.user.id. Only correct when Waldur
-      #                   was OIDC-provisioned and its user UUIDs
-      #                   were seeded from the Keycloak `sub` claim.
-      # The default is False because it works in both topologies and
-      # tolerates UUID divergence; True is opt-in only.
-      keycloak_use_user_id: false
+      # Which Waldur field identifies a member, and how the operator
+      # finds it in the Rancher Keycloak.
+      #
+      # keycloak_user_identity_source:
+      #   username (default) -- Waldur username. Works whenever Waldur
+      #                         usernames align with Keycloak ones (the
+      #                         typical OIDC mapping does this via the
+      #                         `preferred_username` claim).
+      #   uuid               -- Waldur user UUID. Only correct with
+      #                         lookup `id` when Waldur was OIDC-provisioned
+      #                         and its UUIDs were seeded from `sub`.
+      #   civil_number       -- the user's civil code, for a Rancher
+      #                         Keycloak that is NOT the one Waldur logs in
+      #                         with. The offering must expose civil_number.
+      # keycloak_user_lookup:
+      #   username (default) -- match keycloak.user.username
+      #   id                 -- match keycloak.user.id (source uuid only)
+      #   attribute          -- match the user attribute named by
+      #                         keycloak_lookup_attribute (operator 0.5.0+)
+      #
+      # keycloak_use_user_id: true is the deprecated spelling of
+      # source uuid + lookup id.
+      keycloak_user_identity_source: username
+      keycloak_user_lookup: username
+
+      # Civil code, Rancher Keycloak username = civil code (e.g. a TARA
+      # broker with `sub` as username). Lowercased by default, because
+      # Keycloak stores usernames lowercased:
+      # keycloak_user_identity_source: civil_number
+      # keycloak_user_identity_template: "EE${value}"
+      #
+      # Civil code stored in a user attribute (declared in the realm user
+      # profile; operator 0.5.0+). Matched verbatim:
+      # keycloak_user_identity_source: civil_number
+      # keycloak_user_lookup: attribute
+      # keycloak_lookup_attribute: personalCode
+      # keycloak_user_identity_template: "${value}"     # default
+      # keycloak_user_identity_lowercase: false         # default for attribute
+      #
+      # Civil codes are stored in plaintext in the CR spec/status: keep
+      # `get` on managedrancherprojects in this namespace restricted.
 
       # ── Optional: cluster-scope role mapping (operator 0.4.0+) ───
       #

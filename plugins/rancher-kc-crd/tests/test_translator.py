@@ -1,5 +1,7 @@
 """Unit tests for the translator (pure logic, no I/O)."""
 
+import json
+
 import pytest
 from waldur_site_agent_rancher_kc_crd import translator as t
 
@@ -718,3 +720,285 @@ class TestClusterScopeBindings:
         # Only u1 (whose role IS mapped) ends up bound. Default username
         # path: _ur(uuid="u1") emits userIdentifier="user_u1".
         assert [m["userIdentifier"] for m in bindings[0]["members"]] == ["user_u1"]
+
+
+# ---------------------------------------------------------------------
+# Member identity: source -> template -> lowercase, lookup mode
+# ---------------------------------------------------------------------
+
+
+def _civil_ur(role="project_member", uuid="u1", username="alice", civil="38001010000"):
+    return {
+        "role_name": role,
+        "user_uuid": uuid,
+        "user_username": username,
+        "user_civil_number": civil,
+    }
+
+
+def _identity(**settings):
+    return t.resolve_identity_settings(settings)
+
+
+def _members(user_roles, **settings):
+    out = t.build_role_bindings(
+        user_roles,
+        cluster_id="c-1",
+        group_name_template="c_${cluster_id}_${role_name}",
+        role_map={"project_member": "project-member"},
+        identity=_identity(**settings),
+    )
+    return out[0]["members"] if out else []
+
+
+class TestMemberIdentity:
+    @pytest.mark.parametrize(
+        ("settings", "expected"),
+        [
+            ({}, {"userIdentifier": "alice", "lookupByID": False}),
+            (
+                {"keycloak_user_identity_source": "uuid", "keycloak_user_lookup": "id"},
+                {"userIdentifier": "u1", "lookupByID": True},
+            ),
+            (
+                {"keycloak_user_identity_source": "uuid"},
+                {"userIdentifier": "u1", "lookupByID": False},
+            ),
+            (
+                {"keycloak_user_identity_source": "civil_number"},
+                {"userIdentifier": "38001010000", "lookupByID": False},
+            ),
+            (
+                {
+                    "keycloak_user_identity_source": "civil_number",
+                    "keycloak_user_lookup": "attribute",
+                    "keycloak_lookup_attribute": "personalCode",
+                },
+                {
+                    "userIdentifier": "38001010000",
+                    "lookupByID": False,
+                    "lookupAttribute": "personalCode",
+                },
+            ),
+            (
+                {
+                    "keycloak_user_identity_source": "username",
+                    "keycloak_user_lookup": "attribute",
+                    "keycloak_lookup_attribute": "waldurUsername",
+                },
+                {
+                    "userIdentifier": "alice",
+                    "lookupByID": False,
+                    "lookupAttribute": "waldurUsername",
+                },
+            ),
+        ],
+    )
+    def test_source_and_lookup_combinations(self, settings, expected):
+        assert _members([_civil_ur()], **settings) == [expected]
+
+    def test_template_is_applied(self):
+        members = _members(
+            [_civil_ur()],
+            keycloak_user_identity_source="civil_number",
+            keycloak_user_identity_template="EE${value}",
+        )
+        # Username lookup lowercases by default: Keycloak stores usernames
+        # lowercased, so "EE..." would be re-added on every reconcile.
+        assert members[0]["userIdentifier"] == "ee38001010000"
+
+    def test_template_is_kept_verbatim_for_attribute_lookup(self):
+        members = _members(
+            [_civil_ur()],
+            keycloak_user_identity_source="civil_number",
+            keycloak_user_identity_template="EE${value}",
+            keycloak_user_lookup="attribute",
+            keycloak_lookup_attribute="personalCode",
+        )
+        assert members[0]["userIdentifier"] == "EE38001010000"
+
+    def test_lowercase_default_depends_on_lookup(self):
+        ur = _civil_ur(username="Alice", uuid="ABC")
+        assert _members([ur])[0]["userIdentifier"] == "alice"
+        assert (
+            _members(
+                [ur],
+                keycloak_user_identity_source="uuid",
+                keycloak_user_lookup="id",
+            )[0]["userIdentifier"]
+            == "ABC"
+        )
+        assert (
+            _members(
+                [ur],
+                keycloak_user_lookup="attribute",
+                keycloak_lookup_attribute="a",
+            )[0]["userIdentifier"]
+            == "Alice"
+        )
+
+    def test_lowercase_can_be_overridden(self):
+        ur = _civil_ur(username="Alice")
+        assert (
+            _members([ur], keycloak_user_identity_lowercase=False)[0]["userIdentifier"] == "Alice"
+        )
+        assert (
+            _members(
+                [ur],
+                keycloak_user_lookup="attribute",
+                keycloak_lookup_attribute="a",
+                keycloak_user_identity_lowercase=True,
+            )[0]["userIdentifier"]
+            == "alice"
+        )
+
+    def test_lookup_attribute_only_emitted_for_attribute_lookup(self):
+        for settings in (
+            {},
+            {"keycloak_use_user_id": True},
+            {"keycloak_user_identity_source": "civil_number"},
+        ):
+            assert all("lookupAttribute" not in m for m in _members([_civil_ur()], **settings))
+
+    def test_member_without_civil_code_is_skipped(self):
+        members = _members(
+            [_civil_ur(uuid="u1", civil=None), _civil_ur(uuid="u2", civil="49002020000")],
+            keycloak_user_identity_source="civil_number",
+        )
+        assert [m["userIdentifier"] for m in members] == ["49002020000"]
+
+    def test_binding_omitted_when_no_member_has_civil_code(self):
+        assert _members([_civil_ur(civil=None)], keycloak_user_identity_source="civil_number") == []
+
+    def test_cluster_bindings_use_the_same_identity(self):
+        body = t.build_cr_spec(
+            resource={"uuid": "r", "slug": "rs", "backend_id": "c-1"},
+            resource_project={"uuid": "rp", "name": "p", "limits": {}},
+            user_roles=[_civil_ur()],
+            cluster_user_roles=[_civil_ur(role="resource_admin", civil="49002020000")],
+            backend_settings={
+                "role_map": {"project_member": "project-member"},
+                "cluster_role_map": {"resource_admin": "cluster-owner"},
+                "keycloak_user_identity_source": "civil_number",
+                "keycloak_user_lookup": "attribute",
+                "keycloak_lookup_attribute": "personalCode",
+            },
+        )
+        cluster_member = body["spec"]["cluster"]["keycloak"]["roleBindings"][0]["members"][0]
+        assert cluster_member == {
+            "userIdentifier": "49002020000",
+            "lookupByID": False,
+            "lookupAttribute": "personalCode",
+        }
+
+    def test_mask_civil_code(self):
+        assert t.mask_civil_code("ee38001010000") == "ee38…00"
+        assert t.mask_civil_code("123") == "…"
+        assert t.mask_civil_code(None) == ""
+
+
+class TestBackwardsCompatibleSpec:
+    """Configs written before the identity settings produce byte-identical CRs."""
+
+    RESOURCE = {
+        "uuid": "1f2e3d4c5b6a79881f2e3d4c5b6a7988",
+        "slug": "rancher-prod",
+        "backend_id": "c-m-abc",
+        "customer_slug": "acme",
+        "project_slug": "web",
+    }
+    RP = {
+        "uuid": "7c9eba123f4d4a5b8c2e1234abcd5678",
+        "name": "Team Alpha",
+        "limits": {"cpu": 2000},
+        "description": "d",
+    }
+    USER_ROLES = [
+        {"role_name": "PROJECT.MANAGER", "user_uuid": "aa11", "user_username": "alice"},
+        {"role_name": "PROJECT.MANAGER", "user_uuid": "bb22", "user_username": "bob"},
+        {"role_name": "PROJECT.ADMIN", "user_uuid": "cc33", "user_username": "carol"},
+        {"role_name": "PROJECT.ADMIN", "user_uuid": None, "user_username": None},
+    ]
+    CLUSTER_USER_ROLES = [
+        {"role_name": "CUSTOMER.OWNER", "user_uuid": "dd44", "user_username": "dave"},
+    ]
+    # Rendered by the translator before the identity settings existed.
+    USERNAME_SPEC = (
+        '{"apiVersion": "waldur.io/v1alpha1", "kind": "ManagedRancherProject", "metadata"'
+        ': {"name": "rancher-prod-7c9eba12", "labels": {"waldur.io/resource-uuid": "1f2e3'
+        'd4c5b6a79881f2e3d4c5b6a7988", "waldur.io/resource-project-uuid": "7c9eba123f4d4a'
+        '5b8c2e1234abcd5678"}}, "spec": {"clusterId": "c-m-abc", "projectName": "Team Alp'
+        'ha", "resourceUuid": "1f2e3d4c5b6a79881f2e3d4c5b6a7988", "resourceProjectUuid": '
+        '"7c9eba123f4d4a5b8c2e1234abcd5678", "keycloak": {"enabled": true, "parentGroupNa'
+        'me": "c_c-m-abc", "roleBindings": [{"groupName": "c_c-m-abc_7c9eba123f4d4a5b8c2e'
+        '1234abcd5678_PROJECT.ADMIN", "rancherRole": "project-member", "members": [{"user'
+        'Identifier": "carol", "lookupByID": false}]}, {"groupName": "c_c-m-abc_7c9eba123'
+        'f4d4a5b8c2e1234abcd5678_PROJECT.MANAGER", "rancherRole": "project-owner", "membe'
+        'rs": [{"userIdentifier": "alice", "lookupByID": false}, {"userIdentifier": "bob"'
+        ', "lookupByID": false}]}]}, "cluster": {"keycloak": {"enabled": true, "roleBindi'
+        'ngs": [{"groupName": "c_c-m-abc_cluster_CUSTOMER.OWNER", "rancherRole": "cluster'
+        '-owner", "members": [{"userIdentifier": "dave", "lookupByID": false}]}]}}, "reso'
+        'urceQuotas": {"cpu": 2000}, "description": "d"}}'
+    )
+    UUID_SPEC = (
+        '{"apiVersion": "waldur.io/v1alpha1", "kind": "ManagedRancherProject", "metadata"'
+        ': {"name": "rancher-prod-7c9eba12", "labels": {"waldur.io/resource-uuid": "1f2e3'
+        'd4c5b6a79881f2e3d4c5b6a7988", "waldur.io/resource-project-uuid": "7c9eba123f4d4a'
+        '5b8c2e1234abcd5678"}}, "spec": {"clusterId": "c-m-abc", "projectName": "Team Alp'
+        'ha", "resourceUuid": "1f2e3d4c5b6a79881f2e3d4c5b6a7988", "resourceProjectUuid": '
+        '"7c9eba123f4d4a5b8c2e1234abcd5678", "keycloak": {"enabled": true, "parentGroupNa'
+        'me": "c_c-m-abc", "roleBindings": [{"groupName": "c_c-m-abc_7c9eba123f4d4a5b8c2e'
+        '1234abcd5678_PROJECT.ADMIN", "rancherRole": "project-member", "members": [{"user'
+        'Identifier": "cc33", "lookupByID": true}]}, {"groupName": "c_c-m-abc_7c9eba123f4'
+        'd4a5b8c2e1234abcd5678_PROJECT.MANAGER", "rancherRole": "project-owner", "members'
+        '": [{"userIdentifier": "aa11", "lookupByID": true}, {"userIdentifier": "bb22", "'
+        'lookupByID": true}]}]}, "cluster": {"keycloak": {"enabled": true, "roleBindings"'
+        ': [{"groupName": "c_c-m-abc_cluster_CUSTOMER.OWNER", "rancherRole": "cluster-own'
+        'er", "members": [{"userIdentifier": "dd44", "lookupByID": true}]}]}}, "resourceQ'
+        'uotas": {"cpu": 2000}, "description": "d"}}'
+    )
+
+    def _render(self, extra, identity=None):
+        settings = {
+            "role_map": {"PROJECT.MANAGER": "project-owner", "PROJECT.ADMIN": "project-member"},
+            "cluster_role_map": {"CUSTOMER.OWNER": "cluster-owner"},
+            **extra,
+        }
+        return json.dumps(
+            t.build_cr_spec(
+                resource=self.RESOURCE,
+                resource_project=self.RP,
+                user_roles=self.USER_ROLES,
+                backend_settings=settings,
+                cluster_user_roles=self.CLUSTER_USER_ROLES,
+                identity=identity,
+            )
+        )
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {},
+            {"keycloak_use_user_id": False},
+            {"keycloak_user_identity_source": "username", "keycloak_user_lookup": "username"},
+        ],
+    )
+    def test_default_username_config(self, extra):
+        assert self._render(extra) == self.USERNAME_SPEC
+        assert self._render(extra, t.resolve_identity_settings(extra)) == self.USERNAME_SPEC
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"keycloak_use_user_id": True},
+            {"keycloak_user_identity_source": "uuid", "keycloak_user_lookup": "id"},
+            {
+                "keycloak_use_user_id": True,
+                "keycloak_user_identity_source": "uuid",
+                "keycloak_user_lookup": "id",
+            },
+        ],
+    )
+    def test_uuid_config(self, extra):
+        assert self._render(extra) == self.UUID_SPEC
+        assert self._render(extra, t.resolve_identity_settings(extra)) == self.UUID_SPEC

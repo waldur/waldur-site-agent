@@ -5,7 +5,7 @@ Kubernetes client and the Waldur API client.
 """
 
 from string import Template
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 CRD_API_VERSION = "waldur.io/v1alpha1"
 CRD_KIND = "ManagedRancherProject"
@@ -45,6 +45,158 @@ def cr_name(resource_slug: str, resource_project_uuid: str) -> str:
         # Truncate the slug, never the suffix — keep identity stable.
         name = f"{safe[: MAX_K8S_NAME_LENGTH - NAME_SUFFIX_RESERVE]}-{suffix}"
     return name
+
+
+# ---------------------------------------------------------------------
+# Member identity: which Waldur field becomes ``userIdentifier`` and how
+# the operator looks it up in the Rancher Keycloak.
+# ---------------------------------------------------------------------
+
+IDENTITY_SOURCES = ("username", "uuid", "civil_number")
+USER_LOOKUPS = ("username", "id", "attribute")
+DEFAULT_IDENTITY_TEMPLATE = "${value}"
+
+# The user-role dict key each identity source reads (see
+# backend._user_role_to_dict).
+_SOURCE_FIELDS = {
+    "username": "user_username",
+    "uuid": "user_uuid",
+    "civil_number": "user_civil_number",
+}
+
+
+class IdentitySettings(NamedTuple):
+    """Effective member-identity settings, resolved once per backend."""
+
+    source: str = "username"
+    lookup: str = "username"
+    attribute: Optional[str] = None
+    template: str = DEFAULT_IDENTITY_TEMPLATE
+    lowercase: bool = True
+
+    @property
+    def report_key(self) -> str:
+        """Field identifying a user in the membership sync report.
+
+        ``username`` only in username-source mode; otherwise the Waldur
+        user UUID -- a civil code must never be sent back to Waldur.
+        """
+        return "username" if self.source == "username" else "user_uuid"
+
+
+LEGACY_USERNAME_IDENTITY = IdentitySettings()
+LEGACY_UUID_IDENTITY = IdentitySettings(source="uuid", lookup="id", lowercase=False)
+
+
+def resolve_identity_settings(backend_settings: dict) -> IdentitySettings:
+    """Turn the ``keycloak_*`` member-identity settings into effective values.
+
+    ``keycloak_use_user_id: true`` is the deprecated spelling of
+    ``source=uuid`` + ``lookup=id``. Raises ``ValueError`` on an invalid or
+    contradictory combination: a wrong identifier would silently grant
+    access to nobody, or to the wrong Keycloak user.
+    """
+    use_user_id = bool(backend_settings.get("keycloak_use_user_id"))
+    source = backend_settings.get("keycloak_user_identity_source")
+    lookup = backend_settings.get("keycloak_user_lookup")
+    attribute = backend_settings.get("keycloak_lookup_attribute")
+    template = backend_settings.get("keycloak_user_identity_template")
+    lowercase = backend_settings.get("keycloak_user_identity_lowercase")
+
+    if use_user_id:
+        if source not in (None, "uuid") or lookup not in (None, "id"):
+            msg = (
+                "keycloak_use_user_id is the deprecated form of "
+                "keycloak_user_identity_source=uuid + keycloak_user_lookup=id and "
+                f"conflicts with keycloak_user_identity_source={source!r} / "
+                f"keycloak_user_lookup={lookup!r}; drop keycloak_use_user_id"
+            )
+            raise ValueError(msg)
+        source, lookup = "uuid", "id"
+
+    source = source or "username"
+    lookup = lookup or "username"
+    if source not in IDENTITY_SOURCES:
+        msg = (
+            f"keycloak_user_identity_source must be one of {', '.join(IDENTITY_SOURCES)}; "
+            f"got {source!r}"
+        )
+        raise ValueError(msg)
+    if lookup not in USER_LOOKUPS:
+        msg = f"keycloak_user_lookup must be one of {', '.join(USER_LOOKUPS)}; got {lookup!r}"
+        raise ValueError(msg)
+    # Keycloak user IDs are UUIDs; only a Waldur UUID seeded from the
+    # OIDC sub claim can ever equal one.
+    if lookup == "id" and source != "uuid":
+        msg = (
+            "keycloak_user_lookup=id matches Keycloak user IDs and only works with "
+            f"keycloak_user_identity_source=uuid, not {source!r}"
+        )
+        raise ValueError(msg)
+    if lookup == "attribute":
+        if not attribute:
+            msg = "keycloak_user_lookup=attribute requires keycloak_lookup_attribute"
+            raise ValueError(msg)
+    elif attribute:
+        msg = "keycloak_lookup_attribute is only used with keycloak_user_lookup=attribute"
+        raise ValueError(msg)
+
+    template = template if template is not None else DEFAULT_IDENTITY_TEMPLATE
+    # string.Template.get_identifiers() is 3.11+; probe instead.
+    probe = Template(template)
+    if probe.safe_substitute(value="a") == probe.safe_substitute(value="b"):
+        msg = f"keycloak_user_identity_template must contain ${{value}}; got {template!r}"
+        raise ValueError(msg)
+
+    if lowercase is None:
+        # Keycloak stores usernames lowercased and the operator compares
+        # the spec string with the stored one: a mixed-case value would be
+        # added and removed on every reconcile.
+        lowercase = lookup == "username"
+
+    return IdentitySettings(
+        source=source,
+        lookup=lookup,
+        attribute=attribute if lookup == "attribute" else None,
+        template=template,
+        lowercase=bool(lowercase),
+    )
+
+
+def member_identifier(user_role: dict, identity: IdentitySettings) -> Optional[str]:
+    """Compute a member's ``userIdentifier``: source field -> template -> lowercase.
+
+    Returns ``None`` when the user has no value for the source field.
+    """
+    value = user_role.get(_SOURCE_FIELDS[identity.source])
+    if not value:
+        return None
+    ident = Template(identity.template).safe_substitute(value=value)
+    return ident.lower() if identity.lowercase else ident
+
+
+def build_member(user_role: dict, identity: IdentitySettings) -> Optional[dict]:
+    """CR member entry for a user role, or ``None`` when it has no identifier.
+
+    ``lookupAttribute`` is emitted only for attribute lookup: operators
+    and CRDs older than 0.5.0 reject unknown member fields.
+    """
+    ident = member_identifier(user_role, identity)
+    if not ident:
+        return None
+    member: dict[str, Any] = {"userIdentifier": ident, "lookupByID": identity.lookup == "id"}
+    if identity.lookup == "attribute":
+        member["lookupAttribute"] = identity.attribute
+    return member
+
+
+def mask_civil_code(value: Optional[str]) -> str:
+    """Mask a civil code for logs: first 4 and last 2 characters (``ee38…00``)."""
+    if not value:
+        return ""
+    if len(value) <= 6:  # noqa: PLR2004
+        return "…"
+    return f"{value[:4]}…{value[-2:]}"
 
 
 def render_group_name(
@@ -143,6 +295,7 @@ def build_role_bindings(
     group_name_template: str,
     role_map: dict[str, str],
     keycloak_use_user_id: bool = False,
+    identity: Optional[IdentitySettings] = None,
     rp_uuid: str = "",
     rp_uuid_short: str = "",
     project_name: str = "",
@@ -172,7 +325,14 @@ def build_role_bindings(
     where users were created locally, the default username path is the
     only thing that works because the Waldur UUID is unrelated to any
     Keycloak identity.
+
+    ``identity`` (see :func:`resolve_identity_settings`) supersedes
+    ``keycloak_use_user_id`` and selects the identity source, Keycloak
+    lookup mode, template and lowercasing; members without a value for
+    the source field are skipped.
     """
+    if identity is None:
+        identity = LEGACY_UUID_IDENTITY if keycloak_use_user_id else LEGACY_USERNAME_IDENTITY
     by_role: dict[str, list[dict]] = {}
     for ur in user_roles:
         role = ur.get("role_name")
@@ -183,12 +343,7 @@ def build_role_bindings(
     bindings: list[dict] = []
     for role_name in sorted(by_role):
         members = [
-            {
-                "userIdentifier": ident,
-                "lookupByID": keycloak_use_user_id,
-            }
-            for ur in by_role[role_name]
-            if (ident := (ur.get("user_uuid") if keycloak_use_user_id else ur.get("user_username")))
+            member for ur in by_role[role_name] if (member := build_member(ur, identity))
         ]
         if not members:
             continue
@@ -219,6 +374,7 @@ def build_cr_spec(
     user_roles: list[dict],
     backend_settings: dict,
     cluster_user_roles: Optional[list[dict]] = None,
+    identity: Optional[IdentitySettings] = None,
 ) -> dict[str, Any]:
     """Assemble the full CR body (apiVersion + kind + metadata + spec).
 
@@ -238,7 +394,12 @@ def build_cr_spec(
     drives operator-side CRTBs. Without either, the cluster section
     is omitted -- old operators (pre-0.4.0) reject any unknown spec
     field, so emitting an empty placeholder block would break them.
+
+    ``identity`` is the backend's resolved member identity; when omitted
+    it is resolved from ``backend_settings``.
     """
+    if identity is None:
+        identity = resolve_identity_settings(backend_settings)
     cluster_id = resource.get("backend_id")
     if not cluster_id:
         msg = (
@@ -302,7 +463,7 @@ def build_cr_spec(
                 cluster_id=cluster_id,
                 group_name_template=group_template,
                 role_map=role_map,
-                keycloak_use_user_id=backend_settings.get("keycloak_use_user_id", False),
+                identity=identity,
                 rp_uuid=rp_uuid,
                 rp_uuid_short=rp_uuid_short,
                 project_name=project_name,
@@ -329,7 +490,7 @@ def build_cr_spec(
             cluster_id=cluster_id,
             group_name_template=cluster_group_template,
             role_map=cluster_role_map,
-            keycloak_use_user_id=backend_settings.get("keycloak_use_user_id", False),
+            identity=identity,
             rp_uuid="",
             rp_uuid_short="",
             project_name="",
