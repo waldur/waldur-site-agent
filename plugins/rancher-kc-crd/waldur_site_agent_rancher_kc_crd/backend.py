@@ -6,7 +6,7 @@ membership-sync loop via the ``waldur_site_agent.backends`` entry point.
 
 import logging
 import uuid as uuid_lib
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from kubernetes import client as k8s
 from waldur_api_client.api.marketplace_provider_resource_projects import (
@@ -35,7 +35,16 @@ from .status_reader import (
     extract_synced_users,
     is_terminal_failure,
 )
-from .translator import build_cr_spec, cr_name
+from .translator import (
+    LEGACY_USERNAME_IDENTITY,
+    LEGACY_UUID_IDENTITY,
+    IdentitySettings,
+    build_cr_spec,
+    cr_name,
+    mask_civil_code,
+    member_identifier,
+    resolve_identity_settings,
+)
 
 # CR phase strings from operator 0.3.0+ (status.phase enum).
 _CR_PHASE_READY = "Ready"
@@ -50,6 +59,23 @@ _CR_PHASES_PROGRESSING = frozenset({"Pending", "Creating", "Updating"})
 
 logger = logging.getLogger(__name__)
 
+_MISSING_CIVIL_CODE_MESSAGE = "Civil code not available for this user"
+
+
+def _user_civil_number(u: Any) -> Optional[str]:  # noqa: ANN401
+    """Read ``user_civil_number`` off a list_users entry, tolerating older SDKs.
+
+    Mastermind returns the field only when the offering exposes
+    ``civil_number``. A ``waldur-api-client`` that predates the field
+    keeps it in ``additional_properties``; a newer one sets an attribute
+    that is ``UNSET`` (falsy) when absent.
+    """
+    value = getattr(u, "user_civil_number", None)
+    if not value:
+        extra = getattr(u, "additional_properties", None)
+        value = extra.get("user_civil_number") if isinstance(extra, dict) else None
+    return value if isinstance(value, str) and value else None
+
 
 def _derive_grant_states(
     user_roles: list[dict],
@@ -57,7 +83,7 @@ def _derive_grant_states(
     cr_status: dict,
     scope_type: str,
     resource_project_uuid: Optional[str],
-    use_user_id: bool,
+    identity: Union[IdentitySettings, bool],
 ) -> list[dict]:
     """Map desired grants against operator-confirmed CR status.
 
@@ -74,7 +100,18 @@ def _derive_grant_states(
     CR's bindings — per-binding attribution would require reversing the
     rendered group names, and a member missing from one group but
     present in another within the same CR only occurs transiently.
+
+    The CR identifier (compared with ``syncedMembers``) and the report
+    key are separate: the report carries ``username`` in username-source
+    mode and ``user_uuid`` otherwise, so a civil code never reaches
+    Waldur. A grant left out of the CR because the user has no civil
+    code is reported as ``missing_in_idp`` whatever the phase.
+    ``identity`` may be a bool for the legacy ``keycloak_use_user_id``.
     """
+    if isinstance(identity, bool):
+        identity = LEGACY_UUID_IDENTITY if identity else LEGACY_USERNAME_IDENTITY
+    report_key = identity.report_key
+    report_field = "user_username" if report_key == "username" else "user_uuid"
     phase = (cr_status or {}).get("phase")
     bindings_key = (
         "clusterKeycloakRoleBindings" if scope_type == "resource" else "keycloakRoleBindings"
@@ -91,10 +128,16 @@ def _derive_grant_states(
         role = ur.get("role_name")
         if not role or role not in role_map:
             continue
-        ident = ur.get("user_uuid") if use_user_id else ur.get("user_username")
-        if not ident:
+        report_value = ur.get(report_field)
+        if not report_value:
             continue
-        if phase == "Error":
+        ident = member_identifier(ur, identity)
+        if not ident:
+            if identity.source != "civil_number":
+                continue
+            state = "missing_in_idp"
+            message = _MISSING_CIVIL_CODE_MESSAGE
+        elif phase == "Error":
             state = "error"
             message = "Reconciliation failed on the provider side"
         elif phase in _CR_PHASES_PROGRESSING or not phase:
@@ -115,7 +158,7 @@ def _derive_grant_states(
             "state": state,
             "message": message,
         }
-        entry["user_uuid" if use_user_id else "username"] = ident
+        entry[report_key] = report_value
         if resource_project_uuid:
             entry["resource_project_uuid"] = resource_project_uuid
         entries.append(entry)
@@ -162,6 +205,14 @@ class RancherKcCrdBackend(backends.BaseBackend):
 
         self.namespace: str = backend_settings.get("namespace", "waldur-system")
         self.role_map: dict[str, str] = backend_settings.get("role_map", {})
+        # Member identity is resolved once: the translator, the sync
+        # report and log masking all read this same value.
+        self.identity: IdentitySettings = resolve_identity_settings(backend_settings)
+        if backend_settings.get("keycloak_use_user_id"):
+            logger.warning(
+                "rancher-kc-crd: keycloak_use_user_id is deprecated; set "
+                "keycloak_user_identity_source: uuid and keycloak_user_lookup: id instead"
+            )
         # Per-resource sync reports built during pull_resource from CR
         # status, served to the membership processor via
         # get_membership_sync_report after the user sync.
@@ -198,10 +249,13 @@ class RancherKcCrdBackend(backends.BaseBackend):
 
         logger.info(
             "rancher-kc-crd backend initialized: namespace=%s "
-            "role_map_keys=%s waldur_client=%s "
+            "role_map_keys=%s member_identity=%s/%s%s waldur_client=%s "
             "(cluster_id comes from each resource's backend_id)",
             self.namespace,
             sorted(self.role_map),
+            self.identity.source,
+            self.identity.lookup,
+            f"({self.identity.attribute})" if self.identity.attribute else "",
             "configured" if self.waldur_client else "not configured",
         )
 
@@ -282,6 +336,10 @@ class RancherKcCrdBackend(backends.BaseBackend):
         resource_dict = self._waldur_resource_to_dict(waldur_resource)
         rps = self._fetch_resource_projects(waldur_resource.uuid)
         synced_users: set[str] = set()
+        # CR identifier -> Waldur user UUID, to keep civil codes out of
+        # BackendResourceInfo.users (see _reported_users).
+        ident_to_uuid: dict[str, str] = {}
+        civil_roles_seen = civil_roles_with_code = 0
         expected_cr_names: set[str] = set()
 
         # Resource-scope user roles are fetched ONCE per cycle (not
@@ -294,6 +352,8 @@ class RancherKcCrdBackend(backends.BaseBackend):
         if self.backend_settings.get("cluster_role_map"):
             cluster_user_roles = self._fetch_resource_users(waldur_resource.uuid)
             cluster_ur_dicts = [self._user_role_to_dict(u) for u in cluster_user_roles]
+            civil_roles_seen += len(cluster_ur_dicts)
+            civil_roles_with_code += self._index_identifiers(cluster_ur_dicts, ident_to_uuid)
             logger.info(
                 "rancher-kc-crd: %d Resource-level user-role(s) for %s "
                 "to fan out across %d ResourceProject CR(s)",
@@ -309,13 +369,14 @@ class RancherKcCrdBackend(backends.BaseBackend):
             )
 
         sync_report: list[dict] = []
-        use_user_id = bool(self.backend_settings.get("keycloak_use_user_id"))
         last_cr_status: dict = {}
 
         for rp in rps:
             user_roles = self._fetch_resource_project_users(rp.uuid)
             rp_dict = self._resource_project_to_dict(rp)
             ur_dicts = [self._user_role_to_dict(u) for u in user_roles]
+            civil_roles_seen += len(ur_dicts)
+            civil_roles_with_code += self._index_identifiers(ur_dicts, ident_to_uuid)
             self._warn_unmapped_roles(ur_dicts, self.role_map, "role_map", f"{rp.name} ({rp.uuid})")
 
             body = build_cr_spec(
@@ -324,6 +385,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
                 user_roles=ur_dicts,
                 backend_settings=self.backend_settings,
                 cluster_user_roles=cluster_ur_dicts,
+                identity=self.identity,
             )
             self.crd.apply(body)
             expected_cr_names.add(body["metadata"]["name"])
@@ -340,7 +402,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
                     cr_status,
                     "resource_project",
                     rp.uuid.hex,
-                    use_user_id,
+                    self.identity,
                 )
             )
 
@@ -354,10 +416,22 @@ class RancherKcCrdBackend(backends.BaseBackend):
                     last_cr_status,
                     "resource",
                     None,
-                    use_user_id,
+                    self.identity,
                 )
             )
         self._membership_sync_reports[waldur_resource.uuid.hex] = sync_report
+        if (
+            self.identity.source == "civil_number"
+            and civil_roles_seen
+            and not civil_roles_with_code
+        ):
+            logger.warning(
+                "rancher-kc-crd: none of the %d user role(s) on resource %s carries a "
+                "civil code, so no member can be matched in the Rancher Keycloak; "
+                "enable expose_civil_number in the offering's user attribute config",
+                civil_roles_seen,
+                waldur_resource.uuid,
+            )
 
         # Prune CRs whose backing ResourceProject no longer exists in
         # Waldur. List by `waldur.io/resource-uuid` label (set by the
@@ -380,7 +454,41 @@ class RancherKcCrdBackend(backends.BaseBackend):
             except Exception as exc:
                 logger.warning("Failed to delete orphan CR %s: %s", name, exc)
 
-        return BackendResourceInfo(users=sorted(synced_users), usage={})
+        return BackendResourceInfo(
+            users=self._reported_users(synced_users, ident_to_uuid), usage={}
+        )
+
+    def _index_identifiers(self, ur_dicts: list[dict], ident_to_uuid: dict[str, str]) -> int:
+        """Record CR identifier -> user UUID; return how many roles carry a civil code."""
+        with_code = 0
+        for ur in ur_dicts:
+            if ur.get("user_civil_number"):
+                with_code += 1
+            ident = member_identifier(ur, self.identity)
+            if ident and ur.get("user_uuid"):
+                ident_to_uuid[ident] = ur["user_uuid"]
+        return with_code
+
+    def _reported_users(self, synced: set[str], ident_to_uuid: dict[str, str]) -> list[str]:
+        """Operator-confirmed members as reported in BackendResourceInfo.users.
+
+        In username and uuid modes the CR identifier is the Waldur
+        username / UUID and is passed through unchanged. In civil-number
+        mode it is a civil code, which must not leave the agent: confirmed
+        members are mapped back to their Waldur user UUID, and identifiers
+        that match no current grant (members added out of band, or a grant
+        revoked since) are dropped.
+        """
+        if self.identity.source != "civil_number":
+            return sorted(synced)
+        unmatched = sorted(i for i in synced if i not in ident_to_uuid)
+        if unmatched:
+            logger.info(
+                "rancher-kc-crd: %d confirmed member(s) match no current grant: %s",
+                len(unmatched),
+                ", ".join(mask_civil_code(i) for i in unmatched),
+            )
+        return sorted({ident_to_uuid[i] for i in synced if i in ident_to_uuid})
 
     # ------------------------------------------------------------------
     # SDK helpers
@@ -520,7 +628,8 @@ class RancherKcCrdBackend(backends.BaseBackend):
         return {
             "role_name": getattr(u, "role_name", None),
             "user_uuid": u.user_uuid.hex if getattr(u, "user_uuid", None) else None,
-            "user_username": getattr(u, "user_username", None),
+            "user_username": getattr(u, "user_username", None) or None,
+            "user_civil_number": _user_civil_number(u),
         }
 
     def get_membership_sync_report(self, waldur_resource: WaldurResource) -> Optional[list[dict]]:
