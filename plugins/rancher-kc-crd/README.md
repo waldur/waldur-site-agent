@@ -439,6 +439,105 @@ kubectl logs deploy/rko-rancher-keycloak-operator -n waldur-system --tail=100 -f
 
 ---
 
+## Importing access from existing clusters
+
+The sync is one-way: Waldur is the source of truth, and the agent never reads the bindings a
+cluster already has. Pointed at a cluster that is already in use, it adopts each Rancher project
+whose name matches a ResourceProject and grants only what Waldur knows. Existing project and
+cluster role bindings keep working, because the operator only touches bindings for its own
+groups, but Waldur doesn't show them. Import them **before the agent's first sync** with
+`waldur-rancher-kc-crd-import`.
+
+This assumes the offering's Resources already exist in Waldur with `backend_id` set to the
+Rancher cluster ID. The command reads the agent config for the offering, `role_map`,
+`cluster_role_map` and the identity settings, and takes the Rancher and Keycloak credentials from
+the environment variables the operator uses:
+
+```bash
+export RANCHER_URL=https://rancher.example.com RANCHER_BEARER_TOKEN=token-...
+export KEYCLOAK_URL=https://keycloak.example.com KEYCLOAK_REALM=rancher \
+       KEYCLOAK_USERNAME=... KEYCLOAK_PASSWORD=...   # also KEYCLOAK_USER_REALM, *_VERIFY_SSL
+export WALDUR_API_TOKEN=...   # a staff token; see below
+
+# 1. Read every cluster of the offering: projects, PRTBs, CRTBs, and the Keycloak
+#    users behind them (group principals expand to the group's direct members).
+uv run waldur-rancher-kc-crd-import inventory -c waldur-site-agent-config.yaml \
+    -o inventory.json
+
+# 2. Review the plan (dry run), then apply it.
+uv run waldur-rancher-kc-crd-import apply -c waldur-site-agent-config.yaml -i inventory.json
+uv run waldur-rancher-kc-crd-import apply -c waldur-site-agent-config.yaml -i inventory.json \
+    --execute --report import-report.json
+```
+
+To try the import on part of the offering first, narrow both commands with the same filters
+(each can be repeated):
+
+| Filter | Matches |
+|--------|---------|
+| `--cluster c-m-abc12345` | Rancher cluster ID (`Resource.backend_id`) |
+| `--resource <uuid-or-name>` | Waldur Resource |
+| `--project <name-or-id>` | Rancher project, by name, `c-m-…:p-…` ID or bare `p-…` ID |
+
+`--project` imports project-scope bindings only. Cluster role bindings don't belong to any one
+project, so they are left out.
+
+```bash
+uv run waldur-rancher-kc-crd-import inventory -c waldur-site-agent-config.yaml \
+    --cluster c-m-abc12345 -o inventory-c-m-abc12345.json
+uv run waldur-rancher-kc-crd-import apply -c waldur-site-agent-config.yaml \
+    -i inventory-c-m-abc12345.json --project analytics
+```
+
+`apply` creates a ResourceProject for each Rancher project, named exactly like the project so
+that the operator adopts it, and records the Rancher project ID as its `backend_id`. It then
+grants each user the Waldur role that maps back to their Rancher role template: `role_map` for
+project bindings, `cluster_role_map` for cluster bindings. It can be re-run safely: existing
+ResourceProjects and roles are left as they are, and a missing `backend_id` is filled in.
+
+The Waldur token must be a **staff token**. The import lists the offering's resources as their
+provider, records backend IDs through the provider API, and looks users up across organizations;
+neither the agent's own token nor an organization owner's token can do all three.
+
+**Quotas.** The operator replaces a project's Rancher quota with the ResourceProject's `limits`
+on every sync, so a ResourceProject without limits clears the quota. `apply` therefore copies
+each project's `resourceQuota.limit` into the new ResourceProject: `limitsCpu` becomes `cpu`
+(millicores), `limitsMemory` becomes `memory`, and `requestsStorage` becomes `storage`. Other quota
+keys (pods, `requests.cpu`, and so on) have no Waldur equivalent. The plan flags them with
+`WARN`, because the first sync removes them. It also flags an existing ResourceProject that has
+no limits while its Rancher project has a quota. The offering must accept these limits, or the
+creation fails and is reported.
+
+The plan lists everything it skips, with the reason:
+
+- the `Default` and `System` projects (`--include-system` imports them);
+- a Rancher project already linked, by `backend_id`, to a ResourceProject with a different
+  name: the operator adopts by name, so a second ResourceProject would put two CRs on one
+  project;
+- several projects on one cluster sharing a name, because the operator would adopt an arbitrary
+  one of them;
+- role templates that no Waldur role maps to, and Waldur roles the offering doesn't define;
+- principals that aren't Keycloak OIDC users or groups (local Rancher users, other auth
+  providers);
+- Keycloak users with no matching active Waldur user under the configured identity settings,
+  for example a user who has never logged in to Waldur.
+
+Rancher makes whoever creates a project its `project-owner`. Projects created by one admin
+therefore all carry that admin's binding, and the import grants the matching Waldur role on every
+one of them if the admin has a Waldur account. Drop those entries from the inventory if that
+isn't wanted.
+
+The inventory is a plain JSON file, so you can drop entries from it before running `apply`. It
+is written with mode `0600`, because it names users and, in civil-code mode, contains civil
+codes.
+
+After the agent's first sync, confirm the CRs are `Ready` and that users have access through the
+new groups. Then delete the old bindings in Rancher; the operator never removes them. Keep in
+mind that an adopted project is treated like any other: **removing its ResourceProject from
+Waldur deletes the Rancher project**.
+
+---
+
 ## User identity matching
 
 Each CR member is `{userIdentifier, lookupByID[, lookupAttribute]}`.
