@@ -17,6 +17,9 @@ build-backend = "hatchling.build"
 [tool.uv.sources]
 waldur-site-agent = { workspace = true }
 
+[project.scripts]
+waldur-rancher-kc-crd-import = "waldur_site_agent_rancher_kc_crd.import_existing:main"
+
 # Sits alongside the existing rancher plugin. Offerings opt in by
 # setting backend_type / membership_sync_backend to "rancher-kc-crd"
 # instead of "rancher".
