@@ -1036,6 +1036,10 @@ class BaseBackend(ABC):
         ):
             raise DuplicateResourceError(resource_backend_id)
 
+        # Prerequisites named after the backend ID run only now that the ID is
+        # known to be accepted, so a rejected attempt leaves nothing behind.
+        self._on_backend_resource_created(resource_backend_id, waldur_resource)
+
         # Setup limits
         waldur_limits = self._setup_resource_limits(resource_backend_id, waldur_resource)
         backend_resource_info = structures.BackendResourceInfo(
@@ -1071,6 +1075,27 @@ class BaseBackend(ABC):
         logger.info("Setting resource backend limits to: \n%s", limits_str)
         self.client.set_resource_limits(resource_backend_id, resource_backend_limits)
         return waldur_limits
+
+    def _on_backend_resource_created(
+        self, resource_backend_id: str, waldur_resource: WaldurResource
+    ) -> None:
+        """Perform actions once the backend resource has been created.
+
+        Called by ``create_resource_with_id`` right after the backend accepted
+        ``resource_backend_id`` and before limits are set. Use this for
+        anything later operations address by the backend ID (e.g., SLURM's LDAP
+        project group, project directory and per-account QoS).
+
+        Do not do this in ``_pre_create_resource``: the uniqueness retry calls
+        it for every candidate ID, including the ones the backend then rejects,
+        so it would leave a prerequisite behind for each rejected name.
+
+        Args:
+            resource_backend_id: The backend ID the resource was created with;
+                the value persisted as the resource's ``backend_id``.
+            waldur_resource: Resource data from Waldur marketplace.
+        """
+        del resource_backend_id, waldur_resource
 
     def post_create_resource(
         self,

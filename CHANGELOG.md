@@ -35,6 +35,7 @@
 
 ## Unreleased
 
+- **Core / SLURM**: New `BaseBackend._on_backend_resource_created` hook, called once the backend has accepted the resource's backend ID and before limits are set. SLURM now creates the LDAP project group, project directory and per-account QoS there, named after the persisted `backend_id` instead of the slug. This fixes `add_user` failing with `noSuchObject` (the order still reported DONE) for resources whose account name came from the project slug or a collision suffix, and stops the uniqueness retry from creating a group, directory or QoS for every name it rejects. Groups created under the old slug-derived name are renamed to the `backend_id` on the next add/remove of a user or on deletion, keeping their GID; a slug-derived name that is itself a live SLURM account is left alone (gh-23).
 - **Packaging / Docs**: Rename the `systemd-conf/*/agent-legacy.service` units to `agent-file-logging.service`. They log to files with `StandardOutput=append:`, which needs systemd 240 or newer, so the old "legacy" name was wrong. Old raw download URLs for `agent-legacy.service` now return 404. All units now restart on failure and use a per-unit liveness heartbeat. (#50)
 
 ## 1.0.7 - 2026-09-02

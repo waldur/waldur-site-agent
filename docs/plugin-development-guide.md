@@ -192,6 +192,9 @@ once more — most plugin review comments trace back to one of those six.
 - **Purpose**: Set up prerequisites before resource creation (e.g., parent accounts).
 - **`user_context`** contains pre-resolved data: `ssh_keys` (UUID → public key),
   `plan_quotas` (component → value), `team`, `offering_users`.
+- Runs once for every candidate backend ID the uniqueness retry tries, including
+  the ones the backend then rejects. Do not create anything named after the
+  resource's own backend ID here; use `_on_backend_resource_created`.
 - **No-op**: Use `pass`.
 
 #### `downscale_resource(resource_backend_id: str) -> bool`
@@ -225,6 +228,7 @@ backend needs custom behavior.
 
 | Method | Default | When to override |
 |---|---|---|
+| `_on_backend_resource_created` | No-op | Create what is addressed by the backend ID later (group, directory, QoS) |
 | `post_create_resource` | No-op | Post-creation setup; set `resource.backend_metadata` to push data to Waldur |
 | `_pre_delete_resource` | No-op | Pre-deletion cleanup (cancel jobs) |
 | `post_delete_resource` | No-op | Post-deletion cleanup (e.g., remove child offerings linked to the resource) |
@@ -1030,6 +1034,7 @@ sequenceDiagram
     B->>B: Read ssh_keys, plan_quotas from user_context
     B->>E: Create resource with resolved data
     E-->>B: Resource created
+    B->>B: _on_backend_resource_created(backend_id, resource)
 
     P->>B: post_create_resource(resource, waldur_resource, user_context)
     B->>B: Set resource.backend_metadata

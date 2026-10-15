@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from ldap3 import ALL, MODIFY_REPLACE, SUBTREE, Connection, Server
+from ldap3 import ALL, MODIFY_DELETE, MODIFY_REPLACE, SUBTREE, Connection, Server
 from waldur_api_client.api.marketplace_component_usages import (
     marketplace_component_usages_list,
 )
@@ -601,6 +601,34 @@ class LdapAssertions:
                 attributes=["uid"],
             )
             return [str(e.uid) for e in conn.entries]
+        finally:
+            conn.unbind()
+
+    def list_group_names(self) -> set[str]:
+        conn = self._connect()
+        try:
+            conn.search(self.groups_dn, "(cn=*)", search_scope=SUBTREE, attributes=["cn"])
+            return {str(e.cn) for e in conn.entries}
+        finally:
+            conn.unbind()
+
+    def rename_group(self, old_name: str, new_name: str) -> None:
+        """Rename a group behind the agent's back (modrdn keeps gidNumber/members)."""
+        conn = self._connect()
+        try:
+            assert conn.modify_dn(f"cn={old_name},{self.groups_dn}", f"cn={new_name}"), (
+                f"Renaming group {old_name} to {new_name} failed: {conn.result}"
+            )
+        finally:
+            conn.unbind()
+
+    def remove_member_uid(self, group_name: str, username: str) -> None:
+        conn = self._connect()
+        try:
+            assert conn.modify(
+                f"cn={group_name},{self.groups_dn}",
+                {"memberUid": [(MODIFY_DELETE, [username])]},
+            ), f"Removing {username} from {group_name} failed: {conn.result}"
         finally:
             conn.unbind()
 
@@ -1891,6 +1919,256 @@ class TestLdapBackwardCompat:
         back = mapper.convert_usage_from_target({"cpu": 640, "gpu": 80})
         assert back == {"node_hours": 20.0}
         logger.info("Conversion mapper verified: node_hours <-> cpu+gpu")
+
+
+# ---------------------------------------------------------------------------
+# Tests — account_name_generation_policy: project_slug (gh-23)
+# ---------------------------------------------------------------------------
+#
+# Under project_slug naming the allocation's backend ID comes from the project
+# slug, so it differs from the resource slug. This offering also has empty,
+# equal project and allocation prefixes and a flat hierarchy, so the first
+# candidate ID is the project account itself and the uniqueness retry always
+# rejects it, as does the second allocation's first free-looking candidate.
+# The LDAP group, project directory and QoS must exist under the persisted
+# backend ID only, and nothing may be created for a rejected candidate.
+
+_PROJECT_SLUG_DIR_BASE = Path("/tmp/e2e-projects")  # noqa: S108
+_slug_state: dict = {}
+
+
+def _waldur_api(client, method: str, path: str, **kwargs):
+    response = client.get_httpx_client().request(method, path, **kwargs)
+    assert response.status_code < 400, f"{method} {path}: {response.status_code} {response.text}"
+    return response.json() if response.content else None
+
+
+def _project_dirs() -> set[str]:
+    if not _PROJECT_SLUG_DIR_BASE.exists():
+        return set()
+    return {p.name for p in _PROJECT_SLUG_DIR_BASE.iterdir()}
+
+
+def _terminate(offering, client, backend, resource_uuid: str) -> None:
+    order = _waldur_api(client, "POST", f"/api/marketplace-resources/{resource_uuid}/terminate/")
+    final_state = run_processor_until_order_terminal(
+        offering, client, backend, order["order_uuid"]
+    )
+    assert final_state == OrderState.DONE, f"Terminate expected DONE, got {final_state}"
+
+
+@pytest.fixture(scope="class")
+def project_slug_policy(request, ldap_offering, ldap_waldur_client, ldap_slurm_backend):
+    """Switch the offering to project_slug naming, and back however the class ends."""
+    path = f"/api/marketplace-provider-offerings/{ldap_offering.waldur_offering_uuid}/"
+    original = _waldur_api(ldap_waldur_client, "GET", path)["plugin_options"] or {}
+    _waldur_api(
+        ldap_waldur_client,
+        "POST",
+        f"{path}update_integration/",
+        json={"plugin_options": {**original, "account_name_generation_policy": "project_slug"}},
+    )
+
+    def finalizer():
+        try:
+            for resource_uuid in _slug_state.get("pending_termination", []):
+                with contextlib.suppress(Exception):
+                    _terminate(ldap_offering, ldap_waldur_client, ldap_slurm_backend, resource_uuid)
+        finally:
+            # The suites after this one share the offering.
+            _waldur_api(
+                ldap_waldur_client,
+                "POST",
+                f"{path}update_integration/",
+                json={"plugin_options": original},
+            )
+
+    request.addfinalizer(finalizer)
+
+
+@pytest.mark.skipif(not E2E_TESTS, reason="E2E tests not enabled")
+@pytest.mark.usefixtures("project_slug_policy")
+class TestLdapProjectSlugNaming:
+    """project_slug naming: group, directory and QoS follow the persisted backend ID."""
+
+    def test_01_two_allocations_in_one_project(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_assertions,
+        ldap_project_uuid,
+        call_recorder,
+    ):
+        """Two orders in one project: prerequisites exist only under the accepted IDs."""
+        groups_before = ldap_assertions.list_group_names()
+        dirs_before = _project_dirs()
+
+        offering_url, plan_url = get_offering_info(
+            ldap_waldur_client, ldap_offering.waldur_offering_uuid
+        )
+        project_url = get_project_url(ldap_waldur_client, ldap_project_uuid)
+
+        resources = []
+        for _ in range(2):
+            order_uuid = create_source_order(
+                client=ldap_waldur_client,
+                offering_url=offering_url,
+                project_url=project_url,
+                plan_url=plan_url,
+                limits={"node_hours": 10},
+                name=f"e2e-ldap-ps-{uuid.uuid4().hex[:6]}",
+            )
+            with call_recorder.phase("agent"):
+                final_state = run_processor_until_order_terminal(
+                    ldap_offering, ldap_waldur_client, ldap_slurm_backend, order_uuid
+                )
+            assert final_state == OrderState.DONE, f"Expected DONE, got {final_state}"
+
+            call_recorder.set_phase("assert")
+            order = marketplace_orders_retrieve.sync(client=ldap_waldur_client, uuid=order_uuid)
+            resource_uuid = order.marketplace_resource_uuid.hex
+            _slug_state.setdefault("pending_termination", []).append(resource_uuid)
+            resource = _waldur_api(
+                ldap_waldur_client,
+                "GET",
+                f"/api/marketplace-provider-resources/{resource_uuid}/",
+            )
+            resource["resource_uuid"] = resource_uuid
+            resources.append(resource)
+
+        backend_ids = [r["backend_id"] for r in resources]
+        project_slug = resources[0]["project_slug"]
+        project_account = ldap_slurm_backend._get_project_backend_id(project_slug)
+        logger.info(
+            "project_slug %s, project account %s, backend IDs %s, resource slugs %s",
+            project_slug,
+            project_account,
+            backend_ids,
+            [r["slug"] for r in resources],
+        )
+
+        # The IDs come from the project slug, are distinct, and neither is the
+        # project account the retry had to step over.
+        assert len(set(backend_ids)) == 2, backend_ids
+        for backend_id in backend_ids:
+            assert backend_id.startswith(project_slug), backend_id
+            assert backend_id != project_account
+            assert_slurm_account_exists(ldap_slurm_backend, backend_id)
+
+        # Exactly the accepted IDs got a group, a directory and a QoS -- not the
+        # resource slugs, and not the project account rejected on attempt one.
+        expected = set(backend_ids)
+        assert ldap_assertions.list_group_names() - groups_before == expected - groups_before
+        assert _project_dirs() - dirs_before == expected - dirs_before
+        for backend_id in backend_ids:
+            ldap_assertions.assert_group_exists(backend_id)
+            assert (_PROJECT_SLUG_DIR_BASE / backend_id).is_dir()
+            assert_slurm_qos_exists(ldap_slurm_backend, backend_id)
+        assert not ldap_slurm_backend.client.qos_exists(project_account), (
+            f"No QoS may be created for the rejected candidate {project_account}"
+        )
+
+        _slug_state["resources"] = resources
+
+    def test_02_membership_sync_fills_both_groups(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_assertions,
+        call_recorder,
+    ):
+        """The regression: users land in the group named after each backend ID."""
+        resources = _slug_state.get("resources")
+        if not resources:
+            pytest.skip("No resources from test_01")
+
+        with call_recorder.phase("agent"):
+            processor = OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            )
+            processor.process_offering()
+
+        call_recorder.set_phase("assert")
+        usernames = [
+            ou.username
+            for ou in processor._get_cached_offering_users()
+            if not isinstance(ou.username, type(UNSET)) and ou.username
+        ]
+        if not usernames:
+            pytest.skip("No offering users with usernames")
+        for resource in resources:
+            members = ldap_assertions.get_group_members(resource["backend_id"])
+            for username in usernames:
+                assert username in members, (
+                    f"{username} should be in LDAP project group {resource['backend_id']}"
+                )
+        _slug_state["usernames"] = usernames
+
+    def test_03_slug_named_group_is_renamed_on_membership_sync(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_assertions,
+        call_recorder,
+    ):
+        """A group left under the slug-derived name is renamed, keeping its GID."""
+        resources = _slug_state.get("resources")
+        usernames = _slug_state.get("usernames")
+        if not resources or not usernames:
+            pytest.skip("No resources or usernames from previous tests")
+
+        resource = resources[1]
+        backend_id = resource["backend_id"]
+        legacy_name = ldap_slurm_backend._get_resource_backend_id(resource["slug"])
+        assert legacy_name != backend_id
+        assert ldap_slurm_backend.client.get_resource(legacy_name) is None
+        username = usernames[0]
+        gid = ldap_assertions.assert_group_exists(backend_id)["gidNumber"]
+
+        # Put the group back in the state a pre-fix agent left it in, and take
+        # one user out of the account so the next sync has to add them again.
+        ldap_assertions.rename_group(backend_id, legacy_name)
+        ldap_assertions.remove_member_uid(legacy_name, username)
+        ldap_slurm_backend.client.delete_association(username, backend_id)
+        ldap_assertions.assert_group_not_exists(backend_id)
+
+        with call_recorder.phase("agent"):
+            OfferingMembershipProcessor(
+                offering=ldap_offering,
+                waldur_rest_client=ldap_waldur_client,
+                resource_backend=ldap_slurm_backend,
+            ).process_offering()
+
+        call_recorder.set_phase("assert")
+        ldap_assertions.assert_group_not_exists(legacy_name)
+        group = ldap_assertions.assert_group_exists(backend_id)
+        assert group["gidNumber"] == gid, "The rename must keep the group's GID"
+        assert username in ldap_assertions.get_group_members(backend_id)
+        assert_slurm_association_exists(ldap_slurm_backend, username, backend_id)
+
+    def test_04_terminate_removes_groups(
+        self,
+        ldap_offering,
+        ldap_waldur_client,
+        ldap_slurm_backend,
+        ldap_assertions,
+    ):
+        """Termination finds and deletes each group under its backend ID."""
+        resources = _slug_state.get("resources")
+        if not resources:
+            pytest.skip("No resources from test_01")
+
+        for resource in resources:
+            resource_uuid = resource["resource_uuid"]
+            _terminate(ldap_offering, ldap_waldur_client, ldap_slurm_backend, resource_uuid)
+            _slug_state["pending_termination"].remove(resource_uuid)
+            assert_slurm_account_not_exists(ldap_slurm_backend, resource["backend_id"])
+            ldap_assertions.assert_group_not_exists(resource["backend_id"])
 
 
 # ---------------------------------------------------------------------------
