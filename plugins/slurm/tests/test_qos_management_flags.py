@@ -262,7 +262,7 @@ class TestSkipQosSwap:
 
 
 class TestQosAttachSequencing:
-    def test_enabled_only_still_attaches_during_pre_create(self):
+    def test_enabled_only_attaches_once_the_account_exists(self):
         backend = _backend(
             qos_management={"enabled": True, "additional_qos": ["2cpu-single-host"]},
             extra={
@@ -271,8 +271,7 @@ class TestQosAttachSequencing:
                 "allocation_prefix": "a-",
             },
         )
-        backend._create_backend_resource = MagicMock(return_value=True)
-        backend._pre_create_resource(_waldur_resource())
+        backend._on_backend_resource_created("a-alloc1", _waldur_resource())
         backend.client.create_qos.assert_called_once()
         backend.client.add_account_qos.assert_any_call("a-alloc1", "a-alloc1")
         backend.client.set_account_default_qos.assert_called_once_with("a-alloc1", "a-alloc1")
@@ -291,8 +290,7 @@ class TestQosAttachSequencing:
                 "allocation_prefix": "a-",
             },
         )
-        backend._create_backend_resource = MagicMock(return_value=True)
-        backend._pre_create_resource(_waldur_resource())
+        backend._on_backend_resource_created("a-alloc1", _waldur_resource())
         backend.client.create_qos.assert_called_once()
         backend.client.add_account_qos.assert_not_called()
         backend.client.set_account_default_qos.assert_not_called()
@@ -345,11 +343,10 @@ class TestApplyLimitsToQos:
                 "allocation_prefix": "a-",
             },
         )
-        backend._create_backend_resource = MagicMock(return_value=True)
         resource = _waldur_resource()
         resource.limits = MagicMock()
         resource.limits.to_dict.return_value = {"cpu": 50}
-        backend._pre_create_resource(resource)
+        backend._on_backend_resource_created("a-alloc1", resource)
         assert backend._qos_created_this_cycle is True
         backend._setup_resource_limits("a-alloc1", resource)
         backend.client.set_qos_grp_tres_mins.assert_called_once_with("a-alloc1", {"cpu": 50})
@@ -371,11 +368,10 @@ class TestApplyLimitsToQos:
             },
         )
         backend.client.qos_exists.return_value = True
-        backend._create_backend_resource = MagicMock(return_value=True)
         resource = _waldur_resource()
         resource.limits = MagicMock()
         resource.limits.to_dict.return_value = {"cpu": 50}
-        backend._pre_create_resource(resource)
+        backend._on_backend_resource_created("a-alloc1", resource)
         assert backend._qos_created_this_cycle is False
         backend._setup_resource_limits("a-alloc1", resource)
         backend.client.set_qos_grp_tres_mins.assert_called_once_with("a-alloc1", {"cpu": 50})

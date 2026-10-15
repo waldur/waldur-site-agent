@@ -137,7 +137,7 @@ class SlurmBackend(backends.BaseBackend):
         # qos_management.enabled configs keep create-and-attach + account
         # GrpTRESMins + classic qos= restore/pause.
         self._qos_config = self.backend_settings.get("qos_management", {}) or {}
-        # Set True in _pre_create_resource when a dedicated QoS was freshly
+        # Set True in _on_backend_resource_created when a dedicated QoS was freshly
         # created; consumed by _setup_resource_limits so RawUsage=0 runs only
         # then (never on a pre-existing/shared QoS name collision).
         self._qos_created_this_cycle = False
@@ -202,7 +202,12 @@ class SlurmBackend(backends.BaseBackend):
         waldur_resource: WaldurResource,
         user_context: Optional[dict] = None,
     ) -> None:
-        """Pre-creation setup: account hierarchy, LDAP groups, filesystem, QoS."""
+        """Pre-creation setup: the customer and project parent accounts.
+
+        Runs for every candidate ID the uniqueness retry tries, so nothing named
+        after the allocation's own ID belongs here -- see
+        ``_on_backend_resource_created``.
+        """
         if not waldur_resource.customer_slug or not waldur_resource.project_slug:
             logger.warning(
                 "Resource %s has unset or missing slug fields. customer_slug: %s, project_slug: %s",
@@ -219,8 +224,6 @@ class SlurmBackend(backends.BaseBackend):
             raise BackendError(msg)
 
         del user_context
-
-        resource_backend_id = self._get_resource_backend_id(waldur_resource.slug)
 
         parent_account = self.backend_settings.get("parent_account")
         if parent_account:
@@ -249,6 +252,17 @@ class SlurmBackend(backends.BaseBackend):
                 customer_backend_id,
             )
 
+    def _on_backend_resource_created(
+        self, resource_backend_id: str, waldur_resource: WaldurResource
+    ) -> None:
+        """Create the LDAP group, project directory and QoS of a new allocation.
+
+        Later operations (add_user, remove_user, delete_resource) address all
+        three by the persisted backend_id, so they are named after it, and only
+        once SLURM has accepted it as a new account.
+        """
+        del waldur_resource
+
         # Optional: create LDAP project group
         if self._ldap_client:
             try:
@@ -276,6 +290,49 @@ class SlurmBackend(backends.BaseBackend):
                     )
             else:
                 self._setup_account_qos(resource_backend_id)
+
+    def _heal_legacy_project_group(self, waldur_resource: WaldurResource) -> None:
+        """Rename a project group still named after the slug to the backend ID.
+
+        Before the group was named in ``_on_backend_resource_created`` it was
+        named after the resource slug, while every later lookup uses the
+        persisted backend_id. The two differ under the ``project_slug`` naming
+        policy or after a collision suffix, leaving such resources with a group
+        no lookup finds. A rename (modrdn) keeps the gidNumber and members, so
+        directory ownership and filesystem quotas keyed by the GID stay valid.
+        """
+        if not self._ldap_client:
+            return
+        backend_id = waldur_resource.backend_id
+        legacy_name = self._get_resource_backend_id(waldur_resource.slug)
+        if not backend_id or legacy_name == backend_id:
+            return
+        try:
+            if self._ldap_client.group_exists(backend_id):
+                return
+            if not self._ldap_client.group_exists(legacy_name):
+                return
+            if self.client.get_resource(legacy_name) is not None:
+                # The slug-derived name is a live SLURM account (another
+                # allocation, or the project account), so the group is its.
+                logger.warning(
+                    "LDAP project group %s is missing; not renaming %s to it, "
+                    "since %s is a SLURM account of its own",
+                    backend_id,
+                    legacy_name,
+                    legacy_name,
+                )
+                return
+            self._ldap_client.rename_group(legacy_name, backend_id)
+            logger.info(
+                "Renamed LDAP project group %s to the backend ID %s",
+                legacy_name,
+                backend_id,
+            )
+        except BackendError:
+            logger.exception(
+                "Failed to rename LDAP project group %s to %s", legacy_name, backend_id
+            )
 
     def sync_resource_project(
         self,
@@ -855,6 +912,7 @@ class SlurmBackend(backends.BaseBackend):
 
         # Optional: add user to LDAP project group
         if self._ldap_client:
+            self._heal_legacy_project_group(waldur_resource)
             try:
                 self._ldap_client.add_user_to_group(resource_backend_id, username)
             except BackendError:
@@ -891,6 +949,7 @@ class SlurmBackend(backends.BaseBackend):
         # Optional: remove user from LDAP project group
         if self._ldap_client:
             resource_backend_id = waldur_resource.backend_id
+            self._heal_legacy_project_group(waldur_resource)
             try:
                 self._ldap_client.remove_user_from_group(resource_backend_id, username)
             except BackendError:
@@ -1428,6 +1487,7 @@ class SlurmBackend(backends.BaseBackend):
 
         # Clean up LDAP project group
         if self._ldap_client:
+            self._heal_legacy_project_group(waldur_resource)
             try:
                 self._ldap_client.delete_group(backend_id)
                 logger.info("Deleted LDAP project group %s", backend_id)
@@ -1477,7 +1537,7 @@ class SlurmBackend(backends.BaseBackend):
             converted_limits or resource_backend_limits, self.backend_components
         )
         logger.info("Setting resource backend limits to: \n%s", limits_str)
-        # Only reset RawUsage when _pre_create_resource just created this QoS.
+        # Only reset RawUsage when _on_backend_resource_created just created this QoS.
         reset_raw_usage = self._qos_created_this_cycle
         self._qos_created_this_cycle = False
         self._write_allocation_limits(
