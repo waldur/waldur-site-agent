@@ -315,6 +315,32 @@ class TestBuildCrSpec:
         )
         assert body["spec"]["description"] == "Team Alpha workspace"
 
+    def test_organization_and_project_slug_from_resource(self):
+        body = t.build_cr_spec(
+            resource={
+                "uuid": "r1",
+                "slug": "r",
+                "backend_id": "c",
+                "customer_slug": "acme",
+                "project_slug": "web",
+            },
+            resource_project={"uuid": "p1", "name": "p", "limits": {}},
+            user_roles=[],
+            backend_settings={"role_map": {}},
+        )
+        assert body["spec"]["organization"] == "acme"
+        assert body["spec"]["projectSlug"] == "web"
+
+    def test_organization_and_project_slug_omitted_when_unknown(self):
+        body = t.build_cr_spec(
+            resource={"uuid": "r1", "slug": "r", "backend_id": "c"},
+            resource_project={"uuid": "p1", "name": "p", "limits": {}},
+            user_roles=[],
+            backend_settings={"role_map": {}},
+        )
+        assert "organization" not in body["spec"]
+        assert "projectSlug" not in body["spec"]
+
     def test_recommended_human_readable_template_renders_with_slugs(self):
         # End-to-end: backend dict carries customer_slug / project_slug /
         # resource_slug; with the recommended opt-in template, the
@@ -938,7 +964,7 @@ class TestBackwardsCompatibleSpec:
         ', "lookupByID": false}]}]}, "cluster": {"keycloak": {"enabled": true, "roleBindi'
         'ngs": [{"groupName": "c_c-m-abc_cluster_CUSTOMER.OWNER", "rancherRole": "cluster'
         '-owner", "members": [{"userIdentifier": "dave", "lookupByID": false}]}]}}, "reso'
-        'urceQuotas": {"cpu": 2000}, "description": "d"}}'
+        'urceQuotas": {"cpu": 2000}, "description": "d", "organization": "acme", "projectSlug": "web"}}'
     )
     UUID_SPEC = (
         '{"apiVersion": "waldur.io/v1alpha1", "kind": "ManagedRancherProject", "metadata"'
@@ -955,7 +981,7 @@ class TestBackwardsCompatibleSpec:
         'lookupByID": true}]}]}, "cluster": {"keycloak": {"enabled": true, "roleBindings"'
         ': [{"groupName": "c_c-m-abc_cluster_CUSTOMER.OWNER", "rancherRole": "cluster-own'
         'er", "members": [{"userIdentifier": "dd44", "lookupByID": true}]}]}}, "resourceQ'
-        'uotas": {"cpu": 2000}, "description": "d"}}'
+        'uotas": {"cpu": 2000}, "description": "d", "organization": "acme", "projectSlug": "web"}}'
     )
 
     def _render(self, extra, identity=None):

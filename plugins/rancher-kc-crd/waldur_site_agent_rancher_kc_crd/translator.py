@@ -518,6 +518,14 @@ def build_cr_spec(
     if description:
         spec["description"] = description
 
+    # The operator writes these to the Rancher project's
+    # waldur/organization and waldur/project_slug annotations; without
+    # them it stores "" and "unknown".
+    if customer_slug:
+        spec["organization"] = customer_slug
+    if project_slug:
+        spec["projectSlug"] = project_slug
+
     return {
         "apiVersion": CRD_API_VERSION,
         "kind": CRD_KIND,

@@ -527,6 +527,13 @@ class TestQuotaToLimits:
     def test_empty(self):
         assert ie.quota_to_limits({}) == ({}, [])
 
+    def test_ignores_the_rancher_schema_type(self):
+        limits, dropped = ie.quota_to_limits(
+            {"limitsCpu": "2000m", "type": "/v3/schemas/resourceQuotaLimit"}
+        )
+        assert limits == {"cpu": 2000}
+        assert dropped == []
+
 
 class TestReviewFixes:
     def test_inventory_records_quota(self, inventory_cluster):
