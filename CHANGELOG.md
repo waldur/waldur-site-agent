@@ -1,35 +1,41 @@
 # Changelog
 
-## 1.0.8-rc.9 - 2026-10-10
+## 1.0.8-rc.10 - 2026-10-19
 
-- **Core**: STOMP consumers now reconnect when dropped, and the liveness probe fails while they stay down. Messages are processed off the receiver thread and acknowledged only after handling (#45, #38).
-- **Core**: Event mode now honours `global_proxy`, including SOCKS proxies, for both API calls and the STOMP WebSocket. The default STOMP port now follows `websocket_use_tls` instead of `verify_ssl` (#44, #57, #61).
-- **Core**: Every Waldur client now uses OIDC-aware authentication (#43).
-- **Core**: ERRED is now set only for backend failures in membership sync and order processing. Failed user additions are logged with their cause instead of being hidden (#46, #58).
-- **Core**: Polling and event agents keep working when agent identity registration is refused or unavailable (waldur/waldur-mastermind#385, #24).
-- **Core**: Health and readiness probes no longer import the full API client or plugin modules (#31).
-- **Core**: Membership sync no longer removes service and course accounts, and it skips backend metadata writes when nothing changed. A new `preserve_unmanaged_backend_users` option keeps SLURM users that the provider added outside Waldur, and preserve-mode removals are now handled when the unfiltered offering-user fetch fails.
-- **Core**: Accounts are released only after their removal is confirmed (waldur/waldur-mastermind#413).
-- **Core**: `get_client` now strips the `/api` suffix instead of characters from the hostname.
-- **Core**: Settings schemas now exist for every backend and are validated per role (#53).
-- **LDAP**: Usernames and POSIX ids now come from Waldur instead of the directory. LDAP accounts are released when a user loses their last offering access (#17, waldur/waldur-mastermind#413).
-- **LDAP**: The plugin writes Waldur's project groups, and personal groups are now optional. Provider project group events are applied straight away (#41, waldur/waldur-mastermind#626).
-- **LDAP**: Project group descriptions include the organization slug through a configurable template, and the waldur-managed marker has been dropped (waldur/waldur-mastermind#649, #68).
-- **LDAP roles**: New `ldap-roles` backend, with LDAP access moved into a shared `ldap-client` package.
-- **Azure**: The Azure plugin now lives in the agent repository (#8).
-- **Envoy AI Gateway**: Resource API keys are managed one by one: request, assign, cap, pause, resume and delete (#30).
-- **LiteLLM**: New Open WebUI integration, and a new option to derive a key's `backend_id` from the Waldur resource UUID instead of its slug (#15, #22).
-- **Rancher KC CRD**: Keycloak members are now matched by civil code (waldur/waldur-mastermind#702).
-- **SLURM**: The account's DefaultQOS now moves along with the QoS swap (#16).
-- **SLURM**: Account diagnostics now read SDK limits and build their client from the offering's backend settings. A rejected token is reported instead of crashing (#60, #65, #59).
-- **DigitalOcean / Harbor**: Plugin create logic now runs on the order path, and a retried order adopts the droplet or project the agent already created (#47, #56).
-- **OKD**: A CA bundle path is now passed to the Kubernetes client as `ssl_ca_cert` (#62).
-- **Testing**: Order templates keep supplied UUIDs and generate a new UUID on each render (#63).
-- **Docs**: Install, deployment, configuration, SLURM and plugin docs now match the code. Config examples are validated in CI, and the reference tables are generated from the code (#48–#54).
-- **Security**: Upgraded anyio, oauthlib, pyjwt and urllib3 to clear OSV findings, and upgraded `waldur-api-client` to 8.1.3rc10.
-- **Release**: SBOMs are now published as GitHub release assets (waldur/waldur-mastermind#233).
+- **Azure**: Move the Azure plugin into the agent workspace (#8).
+- **LDAP roles**: Add the `ldap-roles` backend and move the LDAP client into the shared `ldap-client` package.
+- **LDAP**: Take usernames and POSIX IDs from Waldur instead of the directory (#17).
+- **LDAP**: Release LDAP accounts when a user loses their last offering access, and only after the removal is confirmed (waldur/waldur-mastermind#413).
+- **LDAP**: Write Waldur's project groups, make personal groups optional, and apply provider project group events straight away (#41, waldur/waldur-mastermind#626).
+- **LDAP**: Fill project group descriptions from a configurable template that includes the organization slug, and drop the waldur-managed marker from project groups (waldur/waldur-mastermind#649, #68).
+- **SLURM**: Name LDAP project groups after the resolved backend ID (gh-23).
+- **SLURM**: Move the account DefaultQOS along with the QoS swap (#16).
+- **SLURM**: Build the account diagnostics client from the offering's backend settings and read SDK limits correctly (#65, #60).
+- **Core**: Add `preserve_unmanaged_backend_users` to keep SLURM users that the provider added outside Waldur, including when the unfiltered offering-user list fetch fails.
+- **Core**: Stop membership sync from removing service and course accounts, and skip backend metadata writes when nothing changed.
+- **Core**: Manage resource API keys one by one: request, assign, cap, pause, resume and delete (#30).
+- **Core**: Process STOMP messages off the receiver thread and acknowledge them only after handling (#38).
+- **Core**: Reconnect dropped STOMP consumers and fail the liveness probe while they stay down (#45).
+- **Core**: Honour `global_proxy` in event mode, including for the STOMP WebSocket, and support SOCKS proxies (#44, #57).
+- **Core**: Take the default STOMP port from `websocket_use_tls` instead of `verify_ssl` (#61).
+- **Core**: Route every Waldur client through OIDC-aware auth (#43).
+- **Core**: Set ERRED only for backend failures in membership sync and order processing (#46).
+- **Core**: Log failed user additions with their cause instead of hiding them (#58).
+- **Core**: Keep polling and event agents working when the agent identity is unavailable or its registration is refused (#24, waldur/waldur-mastermind#385).
+- **Core**: Stop the health and readiness probes from importing the API client and plugins (#31).
+- **Core**: Fix `get_client` stripping characters from the hostname instead of the `/api` suffix.
+- **Core**: Report a rejected token in diagnostics instead of crashing (#59).
+- **Core**: Keep supplied UUIDs in order templates and generate a new UUID on each render (#63).
+- **Rancher KC CRD**: Import existing Rancher project and cluster access into Waldur (#70).
+- **Rancher KC CRD**: Match Keycloak members by civil code, and send the organization and project slugs to the Rancher operator (waldur/waldur-mastermind#702).
+- **DigitalOcean / Harbor**: Run the plugin's create logic on the order path, and reuse the agent's own droplet or project when an order is retried (#47, #56).
+- **LiteLLM**: Add an Open WebUI integration and an option to derive a key's `backend_id` from the resource UUID instead of the slug (#15, #22).
+- **OKD**: Pass the CA bundle path to the Kubernetes client as `ssl_ca_cert` (#62).
+- **Plugins**: Add settings schemas and READMEs for every backend, with schema validation for each role (#53).
+- **Docs**: Update the install, deployment, configuration, SLURM and plugin-author docs to match the code, generate the configuration reference tables, and validate every config example in CI (#48–#54).
+- **Security**: Upgrade anyio, oauthlib, pyjwt and urllib3 to clear the OSV scan findings.
 
-> 68 commits, 350 files changed (+44768/-8480 lines)
+> 72 commits, 353 files changed (+47497/-8494 lines)
 
 ---
 
