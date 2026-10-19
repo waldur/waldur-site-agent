@@ -178,7 +178,9 @@ def quota_to_limits(quota_limit: dict) -> tuple[dict, list[str]]:
     limits: dict[str, Any] = {}
     dropped: list[str] = []
     for key, value in (quota_limit or {}).items():
-        if value in (None, ""):
+        # The Rancher v3 API tags every nested object with its schema
+        # (``"type": "/v3/schemas/resourceQuotaLimit"``); it is not a quota.
+        if key == "type" or value in (None, ""):
             continue
         if key == "limitsCpu":
             cpu = parse_cpu_millicores(value)
