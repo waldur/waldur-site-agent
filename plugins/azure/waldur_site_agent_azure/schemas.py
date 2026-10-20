@@ -7,6 +7,7 @@ from typing import Optional
 from pydantic import ConfigDict, Field
 
 from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
     PluginBackendSettingsSchema,
     PluginComponentSchema,
 )
@@ -35,7 +36,9 @@ class AzureBackendSettingsSchema(PluginBackendSettingsSchema):
     subscription_id: str = Field(..., description="Azure subscription ID")
     tenant_id: str = Field(..., description="Azure AD tenant ID")
     client_id: str = Field(..., description="Service principal client ID")
-    client_secret: str = Field(..., description="Service principal client secret")
+    client_secret: str = Field(
+        ..., description="Service principal client secret", json_schema_extra=SECRET
+    )
 
     # Defaults for resource creation. Locations and sizes are Azure-wide, so an
     # offering that serves one region names it once here instead of on every order.

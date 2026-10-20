@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime
 import logging
 import re
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
@@ -38,6 +38,7 @@ class EnvoyUsageReportingBackend(backends.BaseBackend):
     """Reports token usage from the usage warehouse to Waldur."""
 
     supports_decreasing_usage: bool = True
+    supported_roles: ClassVar[tuple[backends.BackendRole, ...]] = (backends.BackendRole.REPORTING,)
     # Rows the usage shipper tags with the key they came through are also summed per
     # key, which is what Waldur enforces a key's limits against.
     supports_resource_api_key_usage: bool = True

@@ -93,8 +93,29 @@ class PendingOrderDecision(Enum):
     PENDING = "pending"
 
 
+class BackendRole(str, Enum):
+    """A role an offering can assign to a backend, named after its config key without ``_backend``.
+
+    Username management is not listed: those backends come from their own entry point
+    group, so the group already says which role they fill.
+    """
+
+    ORDER_PROCESSING = "order_processing"
+    MEMBERSHIP_SYNC = "membership_sync"
+    REPORTING = "reporting"
+
+
 class BaseBackend(ABC):
     """Backend class with implemented generic methods and other abstract methods."""
+
+    # Roles an offering may assign to this backend. Published in the plugin catalogue
+    # so Waldur can offer only fitting backends per role; a backend that only reports
+    # usage narrows it to REPORTING.
+    supported_roles: ClassVar[tuple[BackendRole, ...]] = (
+        BackendRole.ORDER_PROCESSING,
+        BackendRole.MEMBERSHIP_SYNC,
+        BackendRole.REPORTING,
+    )
 
     # Capability flag: Set to True for backends where usage can decrease
     # (e.g., storage backends reporting current state, not accumulated usage)

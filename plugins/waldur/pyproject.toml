@@ -28,6 +28,7 @@ waldur = "waldur_site_agent_waldur.schemas:WaldurComponentSchema"
 
 [project.entry-points."waldur_site_agent.backend_settings_schemas"]
 waldur = "waldur_site_agent_waldur.schemas:WaldurBackendSettingsSchema"
+waldur-identity-bridge = "waldur_site_agent_waldur.schemas:WaldurIdentityBridgeSettingsSchema"
 
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [

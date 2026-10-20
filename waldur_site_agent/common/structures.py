@@ -168,7 +168,13 @@ class Offering(BaseModel):
 
     name: str = Field(..., description="Human-readable name for the offering")
     waldur_api_url: str = Field(..., description="Base URL for the Waldur API endpoint")
-    waldur_api_token: str = Field(default="", description="Authentication token for Waldur API")
+    # Credentials carry the same {"secret": True} marker as plugin settings
+    # (plugin_schemas.SECRET, not imported here: the two modules import each other lazily).
+    waldur_api_token: str = Field(
+        default="",
+        description="Authentication token for Waldur API",
+        json_schema_extra={"secret": True},
+    )
     waldur_offering_uuid: str = Field(..., description="UUID of the offering in Waldur")
 
     # OIDC authentication (used when waldur_api_token is blank)
@@ -177,7 +183,9 @@ class Offering(BaseModel):
         default=None, description="OIDC client ID for token requests"
     )
     oidc_client_secret: Optional[str] = Field(
-        default=None, description="OIDC client secret for obtaining access tokens"
+        default=None,
+        description="OIDC client secret for obtaining access tokens",
+        json_schema_extra={"secret": True},
     )
 
     # Backend configuration

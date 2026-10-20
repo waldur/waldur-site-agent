@@ -7,7 +7,7 @@ from typing import Optional, Union
 from pydantic import Field
 from waldur_site_agent_keycloak_client.schemas import KeycloakSettingsSchema
 
-from waldur_site_agent.common.plugin_schemas import CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
 
 
 class RancherBackendSettingsSchema(CommonBackendSettingsSchema):
@@ -15,7 +15,9 @@ class RancherBackendSettingsSchema(CommonBackendSettingsSchema):
 
     backend_url: Optional[str] = Field(default=None, description="Rancher URL (API is <url>/v3)")
     username: Optional[str] = Field(default=None, description="Rancher API access key")
-    password: Optional[str] = Field(default=None, description="Rancher API secret key")
+    password: Optional[str] = Field(
+        default=None, description="Rancher API secret key", json_schema_extra=SECRET
+    )
     cluster_id: Optional[str] = Field(default=None, description="Cluster projects are created in")
     verify_cert: Optional[Union[bool, str]] = Field(
         default=None, description="Verify TLS: true/false, or a CA bundle path (default true)"

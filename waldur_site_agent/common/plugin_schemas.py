@@ -10,6 +10,7 @@ import sys
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.fields import FieldInfo
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.quota import HomedirQuotaConfig
@@ -18,6 +19,19 @@ if sys.version_info >= (3, 10):
     from importlib.metadata import entry_points
 else:
     from importlib_metadata import entry_points
+
+
+# Pass as ``json_schema_extra`` on every settings field that holds a credential:
+# ``Field(..., description="...", json_schema_extra=SECRET)``. Parsing is unchanged;
+# the marker reaches the field's JSON Schema as ``"secret": true``, which is how the
+# plugin catalogue tells Waldur which settings must never be stored there.
+SECRET: dict[str, Any] = {"secret": True}
+
+
+def is_secret_field(field_info: FieldInfo) -> bool:
+    """Return True when a pydantic field carries the ``SECRET`` marker."""
+    extra = field_info.json_schema_extra
+    return isinstance(extra, dict) and extra.get("secret") is True
 
 
 class TargetComponentConfig(BaseModel):
@@ -53,7 +67,9 @@ class PluginBackendSettingsSchema(BaseModel):
     settings validation schemas.
     """
 
-    model_config = ConfigDict(extra="forbid")  # Plugin schemas should be explicit
+    # Plugin schemas should be explicit. Validation errors are logged, and the
+    # settings hold credentials, so an error never repeats the value it rejected.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
 class CommonBackendSettingsSchema(PluginBackendSettingsSchema):

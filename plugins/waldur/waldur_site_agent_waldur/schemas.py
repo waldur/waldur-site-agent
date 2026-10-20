@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import Field
 
 from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
     PluginBackendSettingsSchema,
     PluginComponentSchema,
     TargetComponentConfig,
@@ -35,7 +36,7 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
         ..., description="Base URL for the target Waldur B API endpoint"
     )
     target_api_token: str = Field(
-        ..., description="Authentication token for Waldur B API"
+        ..., description="Authentication token for Waldur B API", json_schema_extra=SECRET
     )
     target_offering_uuid: str = Field(
         ..., description="UUID of the offering on Waldur B"
@@ -106,4 +107,21 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
     fetch_consented_users_only: bool = Field(
         default=False,
         description="If True, only sync users who have given data-sharing consent on Waldur A.",
+    )
+
+
+class WaldurIdentityBridgeSettingsSchema(PluginBackendSettingsSchema):
+    """Settings the waldur-identity-bridge username backend reads.
+
+    It shares ``backend_settings`` with the offering's other backends, so it only
+    declares its own keys; registering it is what tells Waldur that
+    ``target_api_token`` is a secret when this backend is chosen.
+    """
+
+    target_api_url: str = Field(..., description="Base URL of Waldur B's API")
+    target_api_token: str = Field(
+        ..., description="Token for Waldur B's API", json_schema_extra=SECRET
+    )
+    identity_bridge_source: str = Field(
+        ..., description="Identity source pushed users are attributed to, e.g. 'isd:efp'"
     )

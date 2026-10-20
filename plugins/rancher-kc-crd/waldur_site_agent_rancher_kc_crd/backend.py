@@ -6,7 +6,7 @@ membership-sync loop via the ``waldur_site_agent.backends`` entry point.
 
 import logging
 import uuid as uuid_lib
-from typing import Any, Optional, Union
+from typing import Any, ClassVar, Optional, Union
 
 from kubernetes import client as k8s
 from waldur_api_client.api.marketplace_provider_resource_projects import (
@@ -185,6 +185,11 @@ class RancherKcCrdBackend(backends.BaseBackend):
     #: own UserRole list, already fully reconciled by pull_resource --
     #: a flat-team diff would misclassify any ResourceProject-only
     #: member (not on the parent Project's team) as stale.
+    # Membership sync only: the cluster and its projects are provisioned
+    # outside the agent, and the operator owns usage.
+    supported_roles: ClassVar[tuple[backends.BackendRole, ...]] = (
+        backends.BackendRole.MEMBERSHIP_SYNC,
+    )
     skip_resource_team_diff = True
 
     def __init__(

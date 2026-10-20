@@ -6,7 +6,7 @@ from typing import Optional
 
 from pydantic import ConfigDict, Field, field_validator
 
-from waldur_site_agent.common.plugin_schemas import PluginBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, PluginBackendSettingsSchema
 
 
 class LdapConnectionSchema(PluginBackendSettingsSchema):
@@ -22,7 +22,7 @@ class LdapConnectionSchema(PluginBackendSettingsSchema):
 
     uri: str = Field(..., description="LDAP server URI (e.g. ldaps://ldap.example.com)")
     bind_dn: str = Field(..., description="DN to bind as")
-    bind_password: str = Field(..., description="Password for bind DN")
+    bind_password: str = Field(..., description="Password for bind DN", json_schema_extra=SECRET)
     base_dn: str = Field(..., description="Base DN for the directory")
     people_ou: str = Field(default="ou=People", description="OU for user entries")
     groups_ou: str = Field(default="ou=Groups", description="OU for group entries")
@@ -55,7 +55,7 @@ class LdapRolesBackendSettingsSchema(PluginBackendSettingsSchema):
         ...,
         description="Waldur API base URL (e.g. https://waldur.example.com/api/)",
     )
-    waldur_api_token: str = Field(..., description="Waldur API token")
+    waldur_api_token: str = Field(..., description="Waldur API token", json_schema_extra=SECRET)
     waldur_verify_ssl: Optional[bool] = Field(default=True, description="Verify TLS for Waldur API")
 
     # Group naming -- string.Template syntax, same variables as

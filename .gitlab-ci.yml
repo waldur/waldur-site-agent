@@ -167,6 +167,8 @@ Run core tests:
       changes:
         - tests/**/*
         - waldur_site_agent/**/*
+        # tests/test_plugin_catalogue.py checks every plugin's settings for unmarked secrets
+        - plugins/*/waldur_site_agent_*/schemas.py
         - pyproject.toml
         - uv.lock
         - .gitlab-ci.yml
@@ -267,6 +269,55 @@ Run plugin tests (3.10-3.12):
     matrix:
       - PYTHON_VERSION: *extra_python_versions
   rules: *full_matrix_rules
+
+# The catalogue Waldur vendors to offer backends per role and to validate an
+# offering's non-secret settings (docs/configuration-validation.md). Fetch the
+# latest with .../-/jobs/artifacts/main/raw/plugin-catalogue.json?job=Export%20plugin%20catalogue
+.Export plugin catalogue:
+  stage: test
+  interruptible: true
+  needs: []
+  retry: *uv_flake_retry
+  image: "registry.hpc.ut.ee/mirror/library/python:3.13"
+  before_script:
+    - pip install uv
+    # --locked: the output is policy Waldur vendors, so build it from exactly
+    # the plugins and versions in uv.lock.
+    - uv sync --all-packages --locked
+    - source .venv/bin/activate
+  script:
+    - waldur_site_export_plugin_catalogue --output plugin-catalogue.json
+  artifacts:
+    when: on_success
+    paths:
+      - plugin-catalogue.json
+
+# The job Waldur fetches the catalogue from; this project does not keep the
+# latest artifacts past their expiry, so main's and tags' never expire.
+Export plugin catalogue:
+  extends: .Export plugin catalogue
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+(-rc\.\d+)?$/'
+  artifacts:
+    expire_in: never
+
+# Checks on merge requests that the catalogue still builds; kept for review only.
+Export plugin catalogue (MR):
+  extends: .Export plugin catalogue
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - plugins/**/*
+        - waldur_site_agent/common/plugin_catalogue.py
+        - waldur_site_agent/common/plugin_schemas.py
+        - waldur_site_agent/common/structures.py
+        - waldur_site_agent/backend/backends.py
+        - pyproject.toml
+        - uv.lock
+        - .gitlab-ci.yml
+  artifacts:
+    expire_in: 1 week
 
 Scan Python dependencies:
   extends: .Vulnerability scan template

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pydantic import Field
-from waldur_site_agent.common.plugin_schemas import CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
 
 
 class NextcloudBackendSettingsSchema(CommonBackendSettingsSchema):
@@ -13,7 +13,9 @@ class NextcloudBackendSettingsSchema(CommonBackendSettingsSchema):
 
     nextcloud_url: str = Field(..., description="Nextcloud base URL")
     admin_username: str = Field(..., description="Admin account used for the OCS API")
-    admin_password: str = Field(..., description="Admin password or app password")
+    admin_password: str = Field(
+        ..., description="Admin password or app password", json_schema_extra=SECRET
+    )
     group_prefix: Optional[str] = Field(
         default=None, description="Prefix of the group per resource (default 'waldur-')"
     )

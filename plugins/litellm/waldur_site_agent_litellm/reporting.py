@@ -12,7 +12,7 @@ import datetime
 import logging
 import re
 import time
-from typing import Optional
+from typing import ClassVar, Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
@@ -61,6 +61,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
     """Reports per-resource token usage and spend from a LiteLLM proxy to Waldur."""
 
     supports_decreasing_usage: bool = True
+    supported_roles: ClassVar[tuple[backends.BackendRole, ...]] = (backends.BackendRole.REPORTING,)
 
     def __init__(self, backend_settings: dict, backend_components: dict) -> None:
         """Initialize the backend, normalizing component objects to plain dicts."""

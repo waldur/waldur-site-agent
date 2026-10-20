@@ -167,6 +167,42 @@ waldur = "waldur_site_agent_waldur.schemas:WaldurBackendSettingsSchema"
   misconfigured agent; raise a `BackendError` from the backend's constructor for settings it
   cannot work without.
 
+### Secret settings and roles: the plugin catalogue
+
+Waldur keeps an offering's non-secret backend settings itself and generates the agent
+configuration from them, so it needs to know two things about every plugin before any agent
+connects:
+
+- **Which settings are secrets.** Mark every field that holds a credential — a password, token,
+  client secret or private key — with the `SECRET` marker. Parsing is unchanged; the marker only
+  appears in the field's JSON Schema as `"secret": true`. Waldur refuses to store marked fields,
+  and they stay in the agent's configuration file.
+
+  ```python
+  from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
+
+  class MyBackendSettingsSchema(CommonBackendSettingsSchema):
+      api_url: str = Field(..., description="API base URL")
+      api_token: str = Field(..., description="Admin API token", json_schema_extra=SECRET)
+  ```
+
+  `tests/test_plugin_catalogue.py` fails for a field whose name contains `secret`, `password`,
+  `passwd`, `token`, `credentials` or `key` and that is not marked. A field that only looks like
+  one (a token URL, a path to a token file, the *name* of a Kubernetes Secret) goes in its
+  `NOT_SECRET` list with the reason.
+- **Which roles a backend can fill.** `BaseBackend.supported_roles` defaults to order processing,
+  membership sync and reporting. A backend that only reports usage narrows it:
+
+  ```python
+  supported_roles: ClassVar[tuple[BackendRole, ...]] = (BackendRole.REPORTING,)
+  ```
+
+`waldur_site_export_plugin_catalogue [-o FILE]` writes the catalogue of the installed plugins as
+JSON: for each entry point its package, version, roles, settings and component JSON Schemas, and
+the dotted paths of its secret settings (`keycloak.keycloak_password` for a nested model). CI
+publishes it as the `plugin-catalogue.json` artifact of the `Export plugin catalogue` job on
+`main` and on tags, which is where Waldur takes it from.
+
 ### Python 3.9 compatibility
 
 Plugins must run on Python 3.9. Set `model_config = ConfigDict(...)` rather than a

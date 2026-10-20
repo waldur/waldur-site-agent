@@ -7,6 +7,7 @@ from typing import Optional
 from pydantic import ConfigDict, Field
 
 from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
     PluginBackendSettingsSchema,
     PluginComponentSchema,
 )
@@ -59,5 +60,6 @@ class EnvoyUsageBackendSettingsSchema(PluginBackendSettingsSchema):
 
     api_url: str = Field(..., description="usage warehouse base URL, e.g. http://usage-warehouse:9000")
     api_token: Optional[str] = Field(
-        default=None, description="Optional bearer token for the usage warehouse API"
+        default=None, description="Optional bearer token for the usage warehouse API",
+        json_schema_extra=SECRET
     )

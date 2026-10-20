@@ -7,7 +7,7 @@ from typing import Any, Literal, Optional, Union
 from pydantic import Field
 from waldur_site_agent_keycloak_client.schemas import KeycloakSettingsSchema
 
-from waldur_site_agent.common.plugin_schemas import CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
 
 
 class OpenNebulaBackendSettingsSchema(CommonBackendSettingsSchema):
@@ -18,7 +18,7 @@ class OpenNebulaBackendSettingsSchema(CommonBackendSettingsSchema):
     """
 
     api_url: str = Field(..., description="OpenNebula XML-RPC endpoint")
-    credentials: str = Field(..., description="'username:password'")
+    credentials: str = Field(..., description="'username:password'", json_schema_extra=SECRET)
     resource_type: Optional[Literal["vdc", "vm"]] = Field(
         default=None, description="What a resource is: 'vdc' (default) or 'vm'"
     )

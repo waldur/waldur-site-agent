@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import uuid as uuid_lib
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 from waldur_api_client.api.marketplace_provider_resource_projects import (
     marketplace_provider_resource_projects_list,
@@ -71,6 +71,13 @@ class LdapRolesBackend(backends.BaseBackend):
     #: a mapped role as new -- and each of those becomes an
     #: add_user/remove_user call, i.e. one full re-sync per user per cycle.
     skip_resource_team_diff = True
+
+    #: Groups are created by order processing and reconciled by membership
+    #: sync; there is no usage to report.
+    supported_roles: ClassVar[tuple[backends.BackendRole, ...]] = (
+        backends.BackendRole.ORDER_PROCESSING,
+        backends.BackendRole.MEMBERSHIP_SYNC,
+    )
 
     def __init__(
         self,

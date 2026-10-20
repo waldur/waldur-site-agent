@@ -6,7 +6,7 @@ from typing import Optional
 
 from pydantic import Field
 
-from waldur_site_agent.common.plugin_schemas import CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
 
 
 class CSCSDWDIBackendSettingsSchema(CommonBackendSettingsSchema):
@@ -14,7 +14,9 @@ class CSCSDWDIBackendSettingsSchema(CommonBackendSettingsSchema):
 
     cscs_dwdi_api_url: str = Field(..., description="CSCS-DWDI API base URL")
     cscs_dwdi_client_id: str = Field(..., description="OIDC client id")
-    cscs_dwdi_client_secret: str = Field(..., description="OIDC client secret")
+    cscs_dwdi_client_secret: str = Field(
+        ..., description="OIDC client secret", json_schema_extra=SECRET
+    )
     cscs_dwdi_oidc_token_url: str = Field(..., description="OIDC token endpoint")
     cscs_dwdi_oidc_scope: Optional[str] = Field(default=None, description="OIDC scope")
     cscs_dwdi_cluster: Optional[str] = Field(

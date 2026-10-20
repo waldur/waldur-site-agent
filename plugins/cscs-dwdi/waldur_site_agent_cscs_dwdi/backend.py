@@ -3,7 +3,7 @@
 import calendar
 import logging
 from datetime import date
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 from pydantic import BaseModel
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -11,7 +11,7 @@ from waldur_api_client.types import Unset
 
 from waldur_site_agent.backend import structures
 from waldur_site_agent.backend import utils as backend_utils
-from waldur_site_agent.backend.backends import BaseBackend
+from waldur_site_agent.backend.backends import BackendRole, BaseBackend
 from waldur_site_agent.common.structures import BackendComponent
 
 from .client import CSCSDWDIClient
@@ -23,6 +23,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
     """Backend for reporting compute usage from CSCS-DWDI API."""
 
     supports_decreasing_usage: bool = True
+    supported_roles: ClassVar[tuple[BackendRole, ...]] = (BackendRole.REPORTING,)
 
     def __init__(
         self, backend_settings: dict[str, Any], backend_components: dict[str, Any]
@@ -530,6 +531,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
     """Backend for reporting storage usage from CSCS-DWDI API."""
 
     supports_decreasing_usage: bool = True
+    supported_roles: ClassVar[tuple[BackendRole, ...]] = (BackendRole.REPORTING,)
 
     def __init__(
         self, backend_settings: dict[str, Any], backend_components: dict[str, Any]
@@ -871,6 +873,7 @@ class CSCSDWDIInferenceBackend(BaseBackend):
     """Backend for reporting inference cost from CSCS-DWDI API."""
 
     supports_decreasing_usage: bool = True
+    supported_roles: ClassVar[tuple[BackendRole, ...]] = (BackendRole.REPORTING,)
 
     def __init__(
         self, backend_settings: dict[str, Any], backend_components: dict[str, Any]
