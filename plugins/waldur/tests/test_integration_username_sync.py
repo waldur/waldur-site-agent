@@ -628,8 +628,8 @@ def _setup_stomp_subscription_bounded(offering, identity, aim, user_agent, objec
 def _enable_identity_bridge():
     """Enable FEDERATED_IDENTITY_SYNC_ENABLED via Django ORM (local dev).
 
-    The /api/configuration/ endpoint is read-only, so we set the constance
-    setting directly via Django shell subprocess.
+    The /api/configuration/ endpoint is read-only, so we set the setting
+    directly via Django shell subprocess.
     """
     import shutil  # noqa: PLC0415
     import subprocess  # noqa: PLC0415
@@ -643,9 +643,16 @@ def _enable_identity_bridge():
         logger.warning("Cannot enable identity bridge: uv or waldur_dir not found")
         return
 
+    # Falls back to django-constance for mastermind checkouts without
+    # waldur_core.configuration; other import errors are re-raised.
     script = (
-        "from constance import config; "
-        "config.FEDERATED_IDENTITY_SYNC_ENABLED = True; "
+        "try:\n"
+        "    from waldur_core.configuration import config\n"
+        "except ModuleNotFoundError as e:\n"
+        "    if e.name != 'waldur_core.configuration':\n"
+        "        raise\n"
+        "    from constance import config\n"
+        "config.FEDERATED_IDENTITY_SYNC_ENABLED = True\n"
         "print('OK:', config.FEDERATED_IDENTITY_SYNC_ENABLED)"
     )
     try:
