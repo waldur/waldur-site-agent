@@ -47,6 +47,9 @@ def slurm_database() -> "SlurmDatabase":
     database = SlurmDatabase()
     root = Account(name="root", description="root", organization="root")
     database.accounts["root"] = root
+    # The components below use custom TRES names: a real cluster lists them in
+    # AccountingStorageTRES, otherwise sacctmgr refuses limits on them.
+    database.tres_types.extend(["node_hours", "gpu", "storage"])
     return database
 
 

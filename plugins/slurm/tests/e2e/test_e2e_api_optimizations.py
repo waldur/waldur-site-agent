@@ -584,11 +584,17 @@ class TestReportingOptimizations:
         te = TimeEngine()
         sim = UsageSimulator(te, db)
 
-        now = datetime.now().replace(day=1, hour=12, minute=0, second=0, microsecond=0)
+        # The emulator records injected usage as a run ending at ``at_time``,
+        # and the agent's sacct --truncate bills only the part inside the
+        # month: end every run now and keep the longest within the month.
+        now = datetime.now().replace(microsecond=0)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0)
+        hours_into_month = (now - month_start).total_seconds() / 3600
+        step = min(10.0, hours_into_month / (NUM_USAGE_USERS + 1))
         injected = {}
         for i in range(NUM_USAGE_USERS):
             username = f"e2euser{i + 1}"
-            node_hours = 10.0 * (i + 1)
+            node_hours = round(step * (i + 1), 4)
             sim.inject_usage(resource_backend_id, username, node_hours, at_time=now)
             injected[username] = node_hours
 

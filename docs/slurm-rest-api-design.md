@@ -157,6 +157,9 @@ layer (`httpx`) with endpoint mappings and payload builders.
   `max.tres.group.minutes`
 - `sacctmgr modify ... set qos/fairshare/parent` — association payload fields `qos`, `shares_raw`,
   `parent_account`
+- `sacctmgr modify account set qos+=...` — the account row's `qos` list, then the same QoS added to
+  every user association of the account whose own list lacks it (REST has no `+=` delta)
+- QOS `GrpTRESMins` — `limits.max.tres.minutes.total` (associations use `max.tres.group.minutes`)
 - `sacctmgr show association ...` (limits, users, QOS) — `GET
   /slurmdb/vX/associations?account=...&cluster=...`
 - QOS create/delete/modify — `GET/POST/DELETE /slurmdb/vX/qos`
@@ -238,6 +241,14 @@ version from `GET /slurm/vX/ping`; `ping()` lists accounts. The full key
 reference is in the [SLURM plugin README](../plugins/slurm/README.md#rest-api-execution-mode).
 
 ### 7. Limitations (documented, not worked around silently)
+
+- An association `POST` is the association's complete TRES state:
+  slurmrestd removes every TRES list the request leaves out
+  (`associations.c` `_diff_tres`). Every association write therefore
+  reads the row first and resends the lists it does not change. This
+  is a read-modify-write, so concurrent writers to the same
+  association can still lose an update; the agent serializes them per
+  account.
 
 - RawUsage resets (`reset_raw_usage`, `reset_qos_raw_usage`) have no
   REST endpoint and stay on the CLI client. Without `sacctmgr` on the
