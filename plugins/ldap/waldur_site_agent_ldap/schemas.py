@@ -8,7 +8,7 @@ from typing import Optional
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from waldur_site_agent.common.plugin_schemas import PluginBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, PluginBackendSettingsSchema
 
 
 # All of these derive from `str` on purpose. The backend compares them against
@@ -232,7 +232,7 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
     # Connection
     uri: str = Field(..., description="LDAP server URI (e.g., 'ldap://ldap.example.com')")
     bind_dn: str = Field(..., description="DN to bind as (e.g., 'cn=admin,dc=example,dc=com')")
-    bind_password: str = Field(..., description="Password for bind DN")
+    bind_password: str = Field(..., description="Password for bind DN", json_schema_extra=SECRET)
     base_dn: str = Field(..., description="Base DN for the directory (e.g., 'dc=example,dc=com')")
     use_starttls: Optional[bool] = Field(default=False, description="Use STARTTLS for connection")
 
@@ -395,7 +395,9 @@ class WelcomeEmailSchema(PluginBackendSettingsSchema):
     smtp_host: str = Field(..., description="SMTP server hostname")
     smtp_port: int = Field(default=587, description="SMTP server port")
     smtp_username: Optional[str] = Field(default=None, description="SMTP auth username")
-    smtp_password: Optional[str] = Field(default=None, description="SMTP auth password")
+    smtp_password: Optional[str] = Field(
+        default=None, description="SMTP auth password", json_schema_extra=SECRET
+    )
     use_tls: bool = Field(default=True, description="Use STARTTLS (port 587)")
     use_ssl: bool = Field(default=False, description="Use implicit SSL (port 465)")
     timeout: int = Field(default=30, description="SMTP connection timeout in seconds")

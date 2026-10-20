@@ -6,7 +6,7 @@ from typing import Optional
 
 from pydantic import Field
 
-from waldur_site_agent.common.plugin_schemas import CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
 
 
 class HarborBackendSettingsSchema(CommonBackendSettingsSchema):
@@ -14,7 +14,7 @@ class HarborBackendSettingsSchema(CommonBackendSettingsSchema):
 
     harbor_url: str = Field(..., description="Harbor base URL")
     robot_username: str = Field(..., description="Robot account name")
-    robot_password: str = Field(..., description="Robot account secret")
+    robot_password: str = Field(..., description="Robot account secret", json_schema_extra=SECRET)
     default_storage_quota_gb: Optional[int] = Field(
         default=None, ge=0, description="Quota when an order has no storage limit (default 10)"
     )

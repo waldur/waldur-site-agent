@@ -7,6 +7,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
     PluginBackendSettingsSchema,
     PluginComponentSchema,
 )
@@ -30,7 +31,9 @@ class OpenWebUISettingsSchema(BaseModel):
     api_url: str = Field(
         ..., description="Open WebUI base URL for the admin API, e.g. https://chat.example.com"
     )
-    api_token: str = Field(..., description="Admin API token used to manage accounts")
+    api_token: str = Field(
+        ..., description="Admin API token used to manage accounts", json_schema_extra=SECRET
+    )
     url: Optional[str] = Field(
         default=None,
         description=(
@@ -52,6 +55,7 @@ class OpenWebUISettingsSchema(BaseModel):
             "Temporary password for accounts the agent creates; required when "
             "account_provisioning is 'managed_password'"
         ),
+        json_schema_extra=SECRET,
     )
     delete_accounts_on_removal: Optional[bool] = Field(
         default=False,
@@ -78,7 +82,8 @@ class LiteLLMBackendSettingsSchema(PluginBackendSettingsSchema):
         ..., description="LiteLLM proxy base URL, e.g. https://litellm.example.com"
     )
     api_token: str = Field(
-        ..., description="LiteLLM master or admin key used for the management API"
+        ..., description="LiteLLM master or admin key used for the management API",
+        json_schema_extra=SECRET
     )
     models: Optional[list] = Field(
         default=None,
@@ -155,7 +160,8 @@ class LiteLLMUsageBackendSettingsSchema(PluginBackendSettingsSchema):
         ),
     )
     api_token: str = Field(
-        ..., description="LiteLLM master or admin key used for the spend API"
+        ..., description="LiteLLM master or admin key used for the spend API",
+        json_schema_extra=SECRET
     )
     verify_ssl: Optional[bool] = Field(
         default=None,

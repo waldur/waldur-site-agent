@@ -7,6 +7,7 @@ from typing import Optional
 from pydantic import ConfigDict, Field
 
 from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
     PluginBackendSettingsSchema,
     PluginComponentSchema,
 )
@@ -27,7 +28,7 @@ class DigitalOceanBackendSettingsSchema(PluginBackendSettingsSchema):
 
     model_config = ConfigDict(extra="allow")
 
-    token: str = Field(..., description="DigitalOcean API token")
+    token: str = Field(..., description="DigitalOcean API token", json_schema_extra=SECRET)
 
     # Defaults for droplet creation
     default_region: Optional[str] = Field(

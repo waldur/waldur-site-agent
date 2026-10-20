@@ -40,6 +40,7 @@ waldur_sync_offering_users = "waldur_site_agent.common.utils:sync_offering_users
 waldur_sync_resource_limits = "waldur_site_agent.common.utils:sync_resource_limits"
 waldur_site_test_order = "waldur_site_agent.testing.cli:main"
 waldur_site_load_historical_usage = "waldur_site_agent.common.historical_usage_loader:main"
+waldur_site_export_plugin_catalogue = "waldur_site_agent.common.plugin_catalogue:main"
 
 [dependency-groups]
 dev = [

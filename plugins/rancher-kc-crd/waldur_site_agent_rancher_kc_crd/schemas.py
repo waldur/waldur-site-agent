@@ -6,7 +6,7 @@ from typing import Literal, Optional
 
 from pydantic import Field, model_validator
 
-from waldur_site_agent.common.plugin_schemas import CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
 
 from .translator import resolve_identity_settings
 
@@ -78,7 +78,9 @@ class RancherKcCrdBackendSettingsSchema(CommonBackendSettingsSchema):
             "pull_resource does nothing without it"
         ),
     )
-    waldur_api_token: Optional[str] = Field(default=None, description="Token for waldur_api_url")
+    waldur_api_token: Optional[str] = Field(
+        default=None, description="Token for waldur_api_url", json_schema_extra=SECRET
+    )
     waldur_verify_ssl: Optional[bool] = Field(
         default=None, description="Verify TLS for waldur_api_url (default true)"
     )
