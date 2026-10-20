@@ -390,6 +390,9 @@ Run mypy (3.9):
     # start + collection instead of one per suite).
     WALDUR_E2E_TESTS: "true"
     WALDUR_E2E_PROJECT_A_UUID: "e2eb0000000000000000000000000001"
+    # The CI configs' custom TRES, tracked by the emulator's cluster as
+    # AccountingStorageTRES would on a real one (slurm-emulator >= 0.9.10).
+    SLURM_EMULATOR_ACCOUNTING_STORAGE_TRES: "ram,gpu,storage,node_hours"
     # The E2E runs are not coverage-gated and coverage tracing adds ~65% to the
     # agent code that runs between API calls, so the root addopts (--cov) are
     # cleared for these jobs.

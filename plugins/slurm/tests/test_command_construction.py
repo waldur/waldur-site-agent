@@ -339,16 +339,21 @@ class TestCommandPrefixByMethod:
     def test_get_account_fairshare_method(self, client):
         """get_account_fairshare uses sacctmgr with all standard flags."""
         c, mock_exec = client
-        mock_exec.return_value = "acct1|500|\n"
-        c.get_account_fairshare("acct1")
-        assert self._get_command(c).startswith("sacctmgr --parsable2 --noheader --immediate")
+        mock_exec.return_value = "acct1||500\n"
+        assert c.get_account_fairshare("acct1") == 500
+        cmd = self._get_command(c)
+        assert cmd.startswith("sacctmgr --parsable2 --noheader --immediate")
+        # Fairshare is an association field: empty without withassoc.
+        assert "list account withassoc format=account,user,fairshare" in cmd
 
     def test_get_account_limits_method(self, client):
         """get_account_limits uses sacctmgr with all standard flags."""
         c, mock_exec = client
-        mock_exec.return_value = "acct1|cpu=100|billing=72000|cpu=50|billing=36000|\n"
+        mock_exec.return_value = "acct1||cpu=100|billing=72000|cpu=50|billing=36000\n"
         c.get_account_limits("acct1")
-        assert self._get_command(c).startswith("sacctmgr --parsable2 --noheader --immediate")
+        cmd = self._get_command(c)
+        assert cmd.startswith("sacctmgr --parsable2 --noheader --immediate")
+        assert "list account withassoc format=account,user,grptres,grptresmin" in cmd
 
     # --- sacctmgr commands without --immediate ---
 
@@ -393,6 +398,10 @@ class TestCommandPrefixByMethod:
         cmd = self._get_command(c)
         assert cmd.startswith("sacct --parsable2 --noheader")
         assert "--immediate" not in cmd
+        # Jobs only (no <id>.batch steps), and only those still queued or
+        # running; COMPLETING is refused by sacct (options.c _supported_state).
+        assert " -X " in cmd
+        assert "--state=PENDING,RUNNING,SUSPENDED,REQUEUED,RESIZING" in cmd
 
     # --- scancel commands (NO --parsable2, NO --noheader, NO --immediate) ---
 

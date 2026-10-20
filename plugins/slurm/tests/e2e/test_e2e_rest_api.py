@@ -148,9 +148,11 @@ def seed_account(client: SlurmRestClient, name: str, parent: str = "root") -> No
 def seed_user_association(client: SlurmRestClient, user: str, account: str) -> None:
     """Create a user association through POST /associations/.
 
-    POST /associations/ creates the user and the association in both
-    the emulator and real slurmdbd; the users_association code path is
-    covered explicitly by TestRealRequestShapes.
+    POST /associations/ creates the association but no user record, in
+    the emulator and on a real 25.11.7 slurmdbd alike, so these users are
+    the ones ``delete_association`` must still clean up; the
+    users_association code path is covered explicitly by
+    TestRealRequestShapes.
     """
     client._request(
         "POST",

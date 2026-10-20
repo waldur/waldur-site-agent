@@ -90,8 +90,10 @@ class TestSlurmBackendHistorical:
             user2_component = user2_usage.get(component, 0)
             expected_total = user1_component + user2_component
 
-            # Allow for small floating point differences
-            assert abs(total_usage[component] - expected_total) < 0.001
+            # The total is summed before conversion, then each user and the
+            # total are rounded to 2 decimals on their own: they can differ by
+            # up to half a hundredth per rounded value.
+            assert abs(total_usage[component] - expected_total) <= 0.005 * 3 + 1e-9
 
     def test_get_usage_report_for_period_multiple_months(
         self,

@@ -282,13 +282,16 @@ class TestSlurmClientPeriodicLimits:
         """Test getting current fairshare value."""
         client, mock_execute = mock_client
 
-        # Mock sacctmgr output
-        mock_execute.return_value = "test-account|500|\n"
+        # sacctmgr list account withassoc: the account row has no user;
+        # user rows carry their own value.
+        mock_execute.return_value = "test-account||500\ntest-account|alice|parent\n"
 
         fairshare = client.get_account_fairshare("test-account")
 
         assert fairshare == 500
         mock_execute.assert_called_once()
+        command = mock_execute.call_args[0][0]
+        assert "withassoc" in command
 
         print("✅ get_account_fairshare working")
 
@@ -296,16 +299,21 @@ class TestSlurmClientPeriodicLimits:
         """Test getting current account limits."""
         client, mock_execute = mock_client
 
-        # Mock sacctmgr output with limits
-        mock_execute.return_value = "test-account|cpu=100|billing=72000|cpu=50|billing=36000|\n"
+        # sacctmgr list account withassoc: the account row has no user.
+        mock_execute.return_value = (
+            "test-account||cpu=100|billing=72000|cpu=50|billing=36000\n"
+            "test-account|alice||||cpu=5\n"
+        )
 
         limits = client.get_account_limits("test-account")
 
-        assert isinstance(limits, dict)
-        assert "GrpTRES" in limits
-        assert "GrpTRESMins" in limits
-        assert "MaxTRES" in limits
-        assert "MaxTRESMins" in limits
+        assert limits == {
+            "GrpTRES": {"cpu": "100"},
+            "GrpTRESMins": {"billing": "72000"},
+            "MaxTRES": {"cpu": "50"},
+            "MaxTRESMins": {"billing": "36000"},
+        }
+        assert "withassoc" in mock_execute.call_args[0][0]
 
         print("✅ get_account_limits working")
 

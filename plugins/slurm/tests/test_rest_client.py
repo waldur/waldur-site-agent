@@ -184,7 +184,9 @@ class TestAccounts:
         client.set_account_parent("acc1", "parent2")
         # "user" is a required ASSOC field; "" addresses the account-level
         # association (parsers.c add_parse_req / associations.c matching).
-        assert handler.body() == {
+        # The current association is read first (TRES carry-over), so the
+        # POST is the last request.
+        assert handler.body(-1) == {
             "associations": [
                 {
                     "account": "acc1",
@@ -258,11 +260,21 @@ class TestAccounts:
             if r.method == "POST" and r.url.path == f"/slurmdb/{API}/users/"
         ]
 
+    def test_get_user_default_account_asks_for_associations(self, client, handler):
+        # slurmdbd derives the default account from the default association
+        # and leaves it empty unless associations are requested
+        # (as_mysql_user.c); a valued flag is read as a string and warned about.
+        handler.responses[f"GET /slurmdb/{API}/user/user1"] = envelope(
+            users=[{"name": "user1", "default": {"account": "Acc1"}}]
+        )
+        assert client.get_user_default_account("user1") == "acc1"
+        assert handler.requests[0].url.query == b"with_assocs"
+
 
 class TestLimits:
     def test_set_resource_limits_builds_grp_tres_mins_payload(self, client, handler):
         client.set_resource_limits("acc1", {"cpu": 60000, "mem": 61440, "gres/gpu": 600})
-        assert handler.body() == {
+        assert handler.body(-1) == {
             "associations": [
                 {
                     "account": "acc1",
@@ -359,6 +371,74 @@ class TestLimits:
         ]
 
 
+class TestAssociationTresCarryOver:
+    """slurmrestd removes every TRES list an association POST leaves out.
+
+    associations.c _diff_tres marks each stored TRES missing from the request
+    for removal, so every write resends the lists it does not change.
+    """
+
+    STORED = {
+        "account": "acc1",
+        "user": "",
+        "max": {
+            "tres": {
+                "total": [{"type": "cpu", "count": 64}],
+                "group": {"minutes": [{"type": "cpu", "count": 1000}]},
+                "per": {"job": [{"type": "cpu", "count": 32}]},
+                "minutes": {"per": {"job": []}},
+            }
+        },
+    }
+
+    def _stored(self, handler, *extra):
+        handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
+            associations=[self.STORED, *extra]
+        )
+
+    def test_fairshare_update_resends_every_stored_tres_list(self, client, handler):
+        self._stored(handler)
+        client.set_account_fairshare("acc1", 7)
+        assoc = handler.body(-1)["associations"][0]
+        assert assoc["shares_raw"] == 7
+        assert assoc["max"]["tres"] == {
+            "total": [{"count": 64, "type": "cpu"}],
+            "group": {"minutes": [{"count": 1000, "type": "cpu"}]},
+            "per": {"job": [{"count": 32, "type": "cpu"}]},
+        }
+
+    def test_limit_update_replaces_only_its_own_list(self, client, handler):
+        self._stored(handler)
+        client.set_resource_limits("acc1", {"cpu": 5000})
+        tres = handler.body(-1)["associations"][0]["max"]["tres"]
+        assert tres["group"]["minutes"] == [{"count": 5000, "type": "cpu"}]
+        assert tres["total"] == [{"count": 64, "type": "cpu"}]
+        assert tres["per"]["job"] == [{"count": 32, "type": "cpu"}]
+
+    def test_scalar_update_keeps_its_sibling_paths(self, client, handler):
+        self._stored(handler)
+        client.set_account_grp_submit_jobs("acc1", 50)
+        assoc = handler.body(-1)["associations"][0]
+        assert assoc["max"]["jobs"] == {"per": {"submitted": 50}}
+        assert assoc["max"]["tres"]["total"] == [{"count": 64, "type": "cpu"}]
+
+    def test_user_update_reads_the_user_row_not_the_account_row(self, client, handler):
+        user_row = {
+            "account": "acc1",
+            "user": "user1",
+            "max": {"tres": {"total": [{"type": "mem", "count": 8}]}},
+        }
+        self._stored(handler, user_row)
+        client.set_resource_user_limits("acc1", "user1", {})
+        tres = handler.body(-1)["associations"][0]["max"]["tres"]
+        assert tres["total"] == [{"count": 8, "type": "mem"}]
+        assert "group" not in tres
+
+    def test_new_association_sends_only_the_requested_fields(self, client, handler):
+        client.set_account_fairshare("acc1", 7)
+        assert "max" not in handler.body(-1)["associations"][0]
+
+
 class TestAssociations:
     def test_create_association_posts_users_association(self, client, handler):
         client.create_association("user1", "acc1", default_account="defacc")
@@ -372,7 +452,8 @@ class TestAssociations:
                 # Share=parent equivalent
                 "association": {"fairshare": FAIRSHARE_USE_PARENT},
             },
-            "user": {"default": {"account": "defacc"}},
+            # USER_SHORT's default account is the flat "defaultaccount".
+            "user": {"defaultaccount": "defacc"},
         }
 
     def test_create_association_with_partition(self, client, handler):
@@ -405,17 +486,20 @@ class TestAssociations:
         # Flat ASSOC_REC_SET template keys (qoslevel/defaultqos), plus parent fairshare.
         assert condition["association"] == {
             "fairshare": FAIRSHARE_USE_PARENT,
-            "qoslevel": "normal,boost",
+            # QOS_STRING_ID_LIST: a comma-joined string adds nothing.
+            "qoslevel": ["normal", "boost"],
             "defaultqos": "boost",
         }
-        assert handler.body()["user"] == {"default": {"account": "defacc"}}
+        assert handler.body()["user"] == {"defaultaccount": "defacc"}
 
     def test_create_association_with_qos_no_partition(self, client, handler):
         client.create_association_with_qos("user1", "acc1", ["normal"])
         condition = handler.body()["association_condition"]
         assert "partitions" not in condition
-        assert condition["association"]["qoslevel"] == "normal"
+        assert condition["association"]["qoslevel"] == ["normal"]
         assert "defaultqos" not in condition["association"]
+        # "user" is required even without a default account.
+        assert handler.body()["user"] == {}
 
     def test_create_association_with_qos_empty_rejected(self, client):
         with pytest.raises(BackendError, match="non-empty"):
@@ -431,9 +515,9 @@ class TestAssociations:
 
     def test_set_account_grp_submit_jobs(self, client, handler):
         client.set_account_grp_submit_jobs("acc1", 0)
-        request = handler.requests[0]
-        assert request.url.path == f"/slurmdb/{API}/associations/"
-        assoc = handler.body()["associations"][0]
+        request = handler.requests[-1]
+        assert (request.method, request.url.path) == ("POST", f"/slurmdb/{API}/associations/")
+        assoc = handler.body(-1)["associations"][0]
         # Account-level row (user="") with the nested grp_submit_jobs path.
         assert assoc["account"] == "acc1"
         assert assoc["user"] == ""
@@ -441,7 +525,7 @@ class TestAssociations:
 
     def test_clear_account_grp_submit_jobs(self, client, handler):
         client.set_account_grp_submit_jobs("acc1", -1)
-        assoc = handler.body()["associations"][0]
+        assoc = handler.body(-1)["associations"][0]
         assert assoc["max"] == {"jobs": {"per": {"submitted": -1}}}
 
     def test_create_association_with_invalid_partition_raises(self, client):
@@ -491,13 +575,26 @@ class TestAssociations:
         assert handler.requests[-1].method == "DELETE"
         assert handler.requests[-1].url.path == f"/slurmdb/{API}/associations/"
 
-    def test_delete_last_association_removes_the_user(self, client, handler):
+    def test_delete_last_association_removes_it_and_then_the_user(self, client, handler):
+        """The association goes first, then the user record, which would otherwise stay."""
         self._user_with(handler, ["acc1"], default="acc1")
         client.delete_association("user1", "acc1")
-        last = handler.requests[-1]
-        assert (last.method, last.url.path) == ("DELETE", f"/slurmdb/{API}/user/user1")
-        assert all(r.url.path != f"/slurmdb/{API}/associations/" or r.method == "GET"
-                   for r in handler.requests)
+        deletes = [(r.method, r.url.path) for r in handler.requests if r.method == "DELETE"]
+        assert deletes == [
+            ("DELETE", f"/slurmdb/{API}/associations/"),
+            ("DELETE", f"/slurmdb/{API}/user/user1"),
+        ]
+
+    def test_last_association_of_a_user_without_record_is_still_removed(self, client, handler):
+        """Real slurmrestd answers 304 to DELETE /user for a user created only
+        through POST /associations; the association must still go."""
+        self._user_with(handler, ["acc1"], default="acc1")
+        handler.responses[f"GET /slurmdb/{API}/user/user1"] = envelope(users=[])
+        handler.status_codes[f"DELETE /slurmdb/{API}/user/user1"] = 304
+        client.delete_association("user1", "acc1")
+        assert ("DELETE", f"/slurmdb/{API}/associations/") in [
+            (r.method, r.url.path) for r in handler.requests
+        ]
     def test_get_association(self, client, handler):
         handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
             associations=[
@@ -570,13 +667,13 @@ class TestQos:
 
     def test_set_account_qos_splits_csv(self, client, handler):
         client.set_account_qos("acc1", "qos1,qos2")
-        assoc = handler.body()["associations"][0]
+        assoc = handler.body(-1)["associations"][0]
         assert assoc["qos"] == ["qos1", "qos2"]
         assert "default" not in assoc
 
     def test_set_account_qos_with_default_posts_default_qos(self, client, handler):
         client.set_account_qos("acc1", "stop", default_qos="stop")
-        assoc = handler.body()["associations"][0]
+        assoc = handler.body(-1)["associations"][0]
         assert assoc["qos"] == ["stop"]
         assert assoc["default"] == {"qos": "stop"}
 
@@ -605,25 +702,53 @@ class TestQos:
             associations=[{"account": "acc1", "user": "", "qos": ["qos1"]}]
         )
         client.add_account_qos("acc1", "qos2")
-        assert handler.body(-1)["associations"][0]["qos"] == ["qos1", "qos2"]
+        posts = [json.loads(r.content) for r in handler.requests if r.method == "POST"]
+        assert posts[0]["associations"][0]["qos"] == ["qos1", "qos2"]
 
     def test_add_account_qos_is_idempotent(self, client, handler):
         handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
             associations=[{"account": "acc1", "user": "", "qos": ["qos1"]}]
         )
         client.add_account_qos("acc1", "qos1")
-        assert len(handler.requests) == 1  # read only, no write
+        assert all(r.method == "GET" for r in handler.requests)  # reads only, no write
+
+    def test_add_account_qos_grants_it_to_users_with_their_own_list(self, client, handler):
+        """sacctmgr's qos+= reaches child associations; a REST write does not.
+
+        Without the grant, making the QoS the DefaultQOS is refused because
+        the user associations "don't have access to their default qos".
+        """
+        handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
+            associations=[
+                {"account": "acc1", "user": "", "qos": ["normal"]},
+                {"account": "acc1", "user": "user1", "qos": ["normal"]},
+                {"account": "acc1", "user": "user2", "partition": "gpu", "qos": ["normal"]},
+                {"account": "acc1", "user": "user3", "qos": ["normal", "slow"]},
+            ]
+        )
+        client.add_account_qos("acc1", "slow")
+        posts = [
+            json.loads(r.content)["associations"][0]
+            for r in handler.requests
+            if r.method == "POST"
+        ]
+        assert [(p["user"], p.get("partition"), p["qos"]) for p in posts] == [
+            ("", None, ["normal", "slow"]),
+            ("user1", None, ["normal", "slow"]),
+            ("user2", "gpu", ["normal", "slow"]),
+        ]
 
     def test_set_account_default_qos(self, client, handler):
         client.set_account_default_qos("acc1", "qos1")
-        assert handler.body()["associations"][0]["default"] == {"qos": "qos1"}
+        assert handler.body(-1)["associations"][0]["default"] == {"qos": "qos1"}
 
     def test_set_qos_grp_tres_mins_posts_qos_limits(self, client, handler):
         handler.responses[f"GET /slurmdb/{API}/qos/qos1"] = envelope(qos=[])
         client.set_qos_grp_tres_mins("qos1", {"billing": 19854000, "gres/gpu": 300000})
         qos = handler.body(-1)["qos"][0]
         assert qos["name"] == "qos1"
-        minutes = qos["limits"]["max"]["tres"]["group"]["minutes"]
+        # A QoS keeps GrpTRESMins at limits/max/tres/minutes/total (parsers.c QOS).
+        minutes = qos["limits"]["max"]["tres"]["minutes"]["total"]
         assert {"count": 19854000, "type": "billing"} in minutes
         assert {"count": 300000, "type": "gres", "name": "gpu"} in minutes
 
@@ -635,8 +760,8 @@ class TestQos:
                     "limits": {
                         "max": {
                             "tres": {
-                                "group": {
-                                    "minutes": [
+                                "minutes": {
+                                    "total": [
                                         {"type": "billing", "count": 100},
                                         {"type": "gres", "name": "gpu", "count": 50},
                                     ]
@@ -648,7 +773,7 @@ class TestQos:
             ]
         )
         client.set_qos_grp_tres_mins("qos1", {"billing": 200})
-        minutes = handler.body(-1)["qos"][0]["limits"]["max"]["tres"]["group"]["minutes"]
+        minutes = handler.body(-1)["qos"][0]["limits"]["max"]["tres"]["minutes"]["total"]
         assert {"count": 200, "type": "billing"} in minutes
         assert {"count": 50, "type": "gres", "name": "gpu"} in minutes
 
@@ -660,8 +785,8 @@ class TestQos:
                     "limits": {
                         "max": {
                             "tres": {
-                                "group": {
-                                    "minutes": [
+                                "minutes": {
+                                    "total": [
                                         {"type": "billing", "count": 14428800},
                                         {"type": "gres", "name": "gpu", "count": 216000},
                                     ]
@@ -681,7 +806,7 @@ class TestQos:
 class TestFairshareAndMisc:
     def test_set_account_fairshare(self, client, handler):
         assert client.set_account_fairshare("acc1", 50) is True
-        assert handler.body()["associations"][0]["shares_raw"] == 50
+        assert handler.body(-1)["associations"][0]["shares_raw"] == 50
 
     def test_get_account_fairshare_handles_tristate(self, client, handler):
         handler.responses[f"GET /slurmdb/{API}/associations/"] = envelope(
@@ -728,6 +853,17 @@ class TestFairshareAndMisc:
             TRES=[
                 {"type": "cpu", "name": "", "count": 0},
                 {"type": "gres", "name": "gpu", "count": 0},
+            ]
+        )
+        assert client.list_tres() == ["cpu", "gres/gpu"]
+
+    def test_list_tres_skips_the_dynamic_offset_placeholder(self, client, handler):
+        # slurmdbd's id-offset row (accounting_storage_mysql.c) is not a TRES.
+        handler.responses[f"GET /slurmdb/{API}/tres/"] = envelope(
+            TRES=[
+                {"type": "cpu", "name": "", "id": 1, "count": 0},
+                {"type": "dynamic_offset", "name": "", "id": 1000, "count": 0},
+                {"type": "gres", "name": "gpu", "id": 1001, "count": 0},
             ]
         )
         assert client.list_tres() == ["cpu", "gres/gpu"]

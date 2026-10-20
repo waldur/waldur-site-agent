@@ -526,10 +526,15 @@ class SlurmClient(SlurmClientInterface):
 
     def list_active_user_jobs(self, account: str, user: str) -> list[str]:
         """List active jobs for the account and user."""
+        # -X drops the job steps (<id>.batch, <id>.0); --state keeps the jobs
+        # that are still queued or running. sacct refuses states it does not
+        # account, such as COMPLETING (sacct/options.c _supported_state).
         args = [
             "-a",
+            "-X",
             f"--account={account}",
             f"--user={user}",
+            "--state=PENDING,RUNNING,SUSPENDED,REQUEUED,RESIZING",
             "--format=JobID,JobName,Partition,Account,User,State,Elapsed,Timelimit,NodeList",
         ]
         output = self._execute_command(args, command_name="sacct", immediate=False)
@@ -893,24 +898,26 @@ class SlurmClient(SlurmClientInterface):
     def get_account_fairshare(self, account: str) -> int:
         """Get current fairshare value for account."""
         try:
+            # Fairshare belongs to the association: without ``withassoc``
+            # sacctmgr leaves the column empty.
             command = [
                 "list",
                 "account",
-                "format=account,fairshare",
+                "withassoc",
+                "format=account,user,fairshare",
                 "where",
                 f"account={account}",
             ]
             output = self._execute_command(command)
 
             for line in output.splitlines():
-                if "|" in line and account in line:
-                    parts = line.split("|")
-                    min_parts_for_fairshare = 2
-                    if len(parts) >= min_parts_for_fairshare:
-                        try:
-                            return int(parts[1])
-                        except ValueError:
-                            pass
+                parts = line.split("|")
+                min_parts_for_fairshare = 3
+                if len(parts) >= min_parts_for_fairshare and parts[0] == account and not parts[1]:
+                    try:
+                        return int(parts[2])
+                    except ValueError:
+                        pass
             return 0
 
         except BackendError as e:
@@ -919,10 +926,13 @@ class SlurmClient(SlurmClientInterface):
     def get_account_limits(self, account: str) -> dict:
         """Get current account limits (GrpTRESMins, MaxTRESMins, etc.)."""
         try:
+            # The limits belong to the association: without ``withassoc``
+            # sacctmgr leaves these columns empty.
             command = [
                 "list",
                 "account",
-                "format=account,grptres,grptresmin,maxtres,maxtresmin",
+                "withassoc",
+                "format=account,user,grptres,grptresmin,maxtres,maxtresmin",
                 "where",
                 f"account={account}",
             ]
@@ -936,20 +946,18 @@ class SlurmClient(SlurmClientInterface):
             }
 
             for line in output.splitlines():
-                if "|" in line and account in line:
-                    parts = line.split("|")
-                    min_parts_for_limits = 5
-                    if len(parts) >= min_parts_for_limits:
-                        # Parse TRES format and populate limits dict
-                        # This is simplified - production would need proper TRES parsing
-                        if parts[1]:  # GrpTRES
-                            limits["GrpTRES"] = self._parse_tres_string(parts[1])
-                        if parts[2]:  # GrpTRESMins
-                            limits["GrpTRESMins"] = self._parse_tres_string(parts[2])
-                        if parts[3]:  # MaxTRES
-                            limits["MaxTRES"] = self._parse_tres_string(parts[3])
-                        if parts[4]:  # MaxTRESMins
-                            limits["MaxTRESMins"] = self._parse_tres_string(parts[4])
+                parts = line.split("|")
+                min_parts_for_limits = 6
+                # The account row is the one without a user.
+                if len(parts) >= min_parts_for_limits and parts[0] == account and not parts[1]:
+                    if parts[2]:  # GrpTRES
+                        limits["GrpTRES"] = self._parse_tres_string(parts[2])
+                    if parts[3]:  # GrpTRESMins
+                        limits["GrpTRESMins"] = self._parse_tres_string(parts[3])
+                    if parts[4]:  # MaxTRES
+                        limits["MaxTRES"] = self._parse_tres_string(parts[4])
+                    if parts[5]:  # MaxTRESMins
+                        limits["MaxTRESMins"] = self._parse_tres_string(parts[5])
 
             return limits
 

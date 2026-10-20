@@ -69,6 +69,29 @@ _ACTIVE_JOB_STATES = frozenset(
 
 _HTTP_UNAUTHORIZED = 401
 
+# Every TRES list of the ASSOC record (data_parser parsers.c ASSOC). slurmrestd
+# treats an association POST as the association's complete TRES state: a list
+# absent from the request is diffed against the stored one and each of its TRES
+# is removed (slurmrestd associations.c _diff_tres). Scalars left out are
+# NO_VAL (unchanged), so only these lists have to be carried on every write.
+_ASSOC_TRES_PATHS = (
+    ("max", "tres", "total"),
+    ("max", "tres", "group", "minutes"),
+    ("max", "tres", "group", "active"),
+    ("max", "tres", "minutes", "total"),
+    ("max", "tres", "minutes", "per", "job"),
+    ("max", "tres", "per", "job"),
+    ("max", "tres", "per", "node"),
+)
+
+# GrpTRESMins of a QoS (data_parser parsers.c QOS). Associations keep it at
+# max/tres/group/minutes; on a QoS that path is an unknown field.
+_QOS_GRP_TRES_MINS_PATH = ("limits", "max", "tres", "minutes", "total")
+
+# slurmdbd's placeholder row that offsets dynamically added TRES ids
+# (accounting_storage_mysql.c); slurmrestd lists it with the real TRES.
+_TRES_PLACEHOLDER_TYPES = frozenset({"dynamic_offset"})
+
 
 def _parse_walltime_minutes(value: str) -> int:
     """Convert a sacctmgr walltime string to minutes.
@@ -374,8 +397,25 @@ class SlurmRestClient(SlurmClientInterface):
                 return assoc
         return None
 
-    def _post_association(self, account: str, fields: dict, user: Optional[str] = None) -> str:
-        """Create/update an association identified by account(+user) on this cluster.
+    def _find_association(
+        self, account: str, user: Optional[str] = None, partition: Optional[str] = None
+    ) -> Optional[dict]:
+        """Return the association row the update handler would match, if any."""
+        if not user:
+            return self._get_account_association(account)
+        for assoc in self._list_associations(account=account, user=user):
+            if assoc.get("user") == user and (assoc.get("partition") or "") == (partition or ""):
+                return assoc
+        return None
+
+    def _post_association(
+        self,
+        account: str,
+        fields: dict,
+        user: Optional[str] = None,
+        partition: Optional[str] = None,
+    ) -> str:
+        """Create/update an association identified by account(+user, partition).
 
         ``user`` is a required field of the ASSOC parser (add_parse_req,
         data_parser parsers.c) — omitting it fails the request-body parse.
@@ -383,13 +423,27 @@ class SlurmRestClient(SlurmClientInterface):
         is also how the update handler matches them (it fills unset
         condition fields with empty strings, associations.c
         _foreach_update_assoc).
+
+        Every TRES list the association already has and ``fields`` does not
+        set is sent back unchanged: slurmrestd would otherwise remove it
+        (see ``_ASSOC_TRES_PATHS``), so a fairshare or QoS update would
+        drop the account's limits.
         """
         assoc: dict[str, Any] = {
             "account": account,
             "cluster": self.cluster_name,
             "user": user or "",
         }
-        assoc.update(fields)
+        if partition:
+            assoc["partition"] = partition
+        current = self._find_association(account, user, partition)
+        for path in _ASSOC_TRES_PATHS:
+            if self._dig(fields, *path) is not None:
+                continue
+            stored = self._tres_list_to_dict(self._dig(current, *path))
+            if stored:
+                self._merge(assoc, self._nested(path, self._tres_dict_to_list(stored)))
+        self._merge(assoc, fields)
         self._request("POST", self._db("associations/"), body={"associations": [assoc]})
         return ""
 
@@ -715,9 +769,13 @@ class SlurmRestClient(SlurmClientInterface):
             template.update(association_fields)
         if template:
             condition["association"] = template
-        body: dict[str, Any] = {"association_condition": condition}
+        # ``user`` is required (add_parse_req in data_parser parsers.c
+        # OPENAPI_USERS_ADD_COND_RESP) and is a USER_SHORT, whose default
+        # account field is the flat ``defaultaccount``.
+        user: dict[str, Any] = {}
         if default_account:
-            body["user"] = {"default": {"account": default_account}}
+            user["defaultaccount"] = default_account
+        body: dict[str, Any] = {"association_condition": condition, "user": user}
         self._request("POST", self._db("users_association/"), body=body)
         return ""
 
@@ -799,7 +857,9 @@ class SlurmRestClient(SlurmClientInterface):
                     msg = f"Invalid SLURM partition name: {name!r}"
                     raise BackendError(msg)
             sorted_parts = sorted(partitions)
-        association_fields: dict[str, Any] = {"qoslevel": ",".join(qos_list)}
+        # ``qoslevel`` is a QOS_STRING_ID_LIST: a comma-joined string is only
+        # warned about and the whole request then adds nothing.
+        association_fields: dict[str, Any] = {"qoslevel": list(qos_list)}
         if default_qos is not None:
             association_fields["defaultqos"] = default_qos
         return self._add_user_associations(
@@ -829,8 +889,17 @@ class SlurmRestClient(SlurmClientInterface):
         )
 
     def get_user_default_account(self, username: str) -> Optional[str]:
-        """The user's default account from ``GET /slurmdb/{v}/user/{name}``, if known."""
-        payload = self._request("GET", self._db(f"user/{quote(username)}"), allow_errors=True)
+        """The user's default account from ``GET /slurmdb/{v}/user/{name}``, if known.
+
+        slurmdbd derives the default account from the user's default
+        association and only does so when associations are requested
+        (as_mysql_user.c), so ``with_assocs`` is required.
+        """
+        # A bare flag: slurmrestd reads any value as a string and warns, and
+        # an empty value is false.
+        payload = self._request(
+            "GET", self._db(f"user/{quote(username)}") + "?with_assocs", allow_errors=True
+        )
         users = payload.get("users") or []
         if not users:
             return None
@@ -853,13 +922,15 @@ class SlurmRestClient(SlurmClientInterface):
         slurmdbd refuses to remove a user's *default* association while the
         user keeps others, so the default is moved to one of the remaining
         accounts first. When this is the user's last association the user
-        record goes with it (``sacctmgr remove user`` semantics).
+        record goes too (``sacctmgr remove user`` semantics): removing only
+        the association would leave the record behind. The association is
+        removed first either way, because a user can hold associations
+        without a user record (``POST /associations`` does not create one),
+        and then ``DELETE /user`` answers 304 and removes nothing -- both
+        seen on a 25.11.7 slurmrestd.
         """
         accounts = self.list_user_accounts(username)
         remaining = [account for account in accounts if account != resource_id.lower()]
-        if accounts and not remaining:
-            logger.info("Removing user %s: %s was its last association", username, resource_id)
-            return self.delete_user(username)
         if remaining and self.get_user_default_account(username) == resource_id.lower():
             logger.info(
                 "Moving default account of %s from %s to %s before removing the association",
@@ -872,6 +943,9 @@ class SlurmRestClient(SlurmClientInterface):
         if self.cluster_name:
             query["cluster"] = self.cluster_name
         self._request("DELETE", self._db("associations/"), query=query)
+        if accounts and not remaining:
+            logger.info("Removing user %s: %s was its last association", username, resource_id)
+            self.delete_user(username)
         return ""
 
     def list_resource_users(self, resource_id: str) -> list[str]:
@@ -988,6 +1062,25 @@ class SlurmRestClient(SlurmClientInterface):
         if qos_name not in qos_list:
             qos_list.append(qos_name)
             self._post_association(account, {"qos": qos_list})
+        self._grant_qos_to_user_associations(account, qos_name)
+
+    def _grant_qos_to_user_associations(self, account: str, qos_name: str) -> None:
+        """Add the QoS to every user association of the account that lacks it.
+
+        ``sacctmgr ... set qos+=`` is a delta slurmdbd also applies to child
+        associations. A REST write replaces the account row's list only, so a
+        user association holding its own QoS list would never get the QoS, and
+        making it the account's DefaultQOS would then be refused because those
+        associations "don't have access to their default qos".
+        """
+        for assoc in self._list_associations(account=account):
+            user = assoc.get("user")
+            current = list(assoc.get("qos") or [])
+            if not user or qos_name in current:
+                continue
+            self._post_association(
+                account, {"qos": [*current, qos_name]}, user=user, partition=assoc.get("partition")
+            )
 
     def set_account_default_qos(self, account: str, qos_name: str) -> None:
         """Set the default QoS for the account."""
@@ -997,7 +1090,7 @@ class SlurmRestClient(SlurmClientInterface):
         """Set GrpTRESMins on the named QoS via slurmrestd.
 
         slurmrestd replaces the whole TRES list at
-        ``limits/max/tres/group/minutes``. Read-merge the incoming values over
+        ``limits/max/tres/minutes/total``. Read-merge the incoming values over
         the current list so unmentioned TRES (e.g. usage-based statics written
         at create time) survive later partial updates — same parity goal as
         ``set_account_limits``.
@@ -1006,7 +1099,7 @@ class SlurmRestClient(SlurmClientInterface):
         merged.update({key: int(value) for key, value in limits_dict.items()})
         tres = self._tres_dict_to_list(merged)
         qos: dict[str, Any] = {"name": qos_name}
-        self._merge(qos, self._nested(("limits", "max", "tres", "group", "minutes"), tres))
+        self._merge(qos, self._nested(_QOS_GRP_TRES_MINS_PATH, tres))
         self._request("POST", self._db("qos/"), body={"qos": [qos]})
 
     def get_qos_grp_tres_mins(self, qos_name: str) -> dict[str, int]:
@@ -1015,9 +1108,7 @@ class SlurmRestClient(SlurmClientInterface):
         qos_list = payload.get("qos") or []
         if not qos_list:
             return {}
-        return self._tres_list_to_dict(
-            self._dig(qos_list[0], "limits", "max", "tres", "group", "minutes")
-        )
+        return self._tres_list_to_dict(self._dig(qos_list[0], *_QOS_GRP_TRES_MINS_PATH))
 
     def reset_qos_raw_usage(self, qos_name: str) -> None:
         """Reset QoS RawUsage — delegated to sacctmgr (no REST equivalent)."""
@@ -1061,7 +1152,11 @@ class SlurmRestClient(SlurmClientInterface):
         """Return a list of TRES available in the cluster."""
         payload = self._request("GET", self._db("tres/"))
         tres_objects = payload.get("TRES") or payload.get("tres") or []
-        return [self._tres_key(tres) for tres in tres_objects]
+        return [
+            self._tres_key(tres)
+            for tres in tres_objects
+            if tres.get("type") not in _TRES_PLACEHOLDER_TYPES
+        ]
 
     def _cached_tres_keys(self) -> list[str]:
         """Return TRES keys, fetching once and caching for the client lifetime."""
