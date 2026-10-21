@@ -110,6 +110,9 @@ Every key the plugin reads. Keys not listed here are ignored.
 - `execution_mode` (default: `cli`) — `cli` or `rest`.
 - `rest_api` (default: unset) — slurmrestd connection, required when `execution_mode: rest` — see
   [REST mode](#rest-api-execution-mode).
+- `usage_tres_source` (default: `requested`) — Bill job usage on `requested` (sacct `ReqTRES`) or
+  `allocated` (sacct `AllocTRES`) TRES, in both execution modes — see [Usage
+  reporting](#usage-reporting).
 - `default_partition` (default: unset) — Partition for user associations when partitions are not
   enforced.
 - `enforce_offering_partitions` (default: `false`) — Create one association per partition of the
@@ -197,15 +200,55 @@ offerings:
 - `verify_ssl` (default: `true`) — Verify TLS certificates.
 - `timeout` (default: `30`) — Request timeout in seconds.
 
-**Usage reporting differs slightly between modes.** CLI mode runs
-`sacct --truncate --allocations --format=Account,ReqTRES,Elapsed,User` and so
-bills *requested* TRES. REST mode reads `GET /slurmdb/{version}/jobs/` and
-bills the TRES the job was *allocated* (falling back to requested TRES for jobs
-that never started), clipped to the reporting month like `sacct --truncate`.
-For jobs whose allocation differs from their request (e.g. whole-node
-allocation) the two modes report different numbers.
+Usage reporting gives the same numbers in both modes — see [Usage reporting](#usage-reporting).
 
 Recommended SLURM version for REST mode: 25.11 or newer.
+
+### Usage reporting
+
+Usage is reported per account and user for the current month. CLI mode runs
+`sacct --truncate --allocations` over the month; REST mode reads
+`GET /slurmdb/{version}/jobs/` and applies the same rules, so both modes report
+the same usage for the same jobs:
+
+- The month's dates follow the offering's `timezone`; its edges are read in the
+  agent host's local time in both modes, as `sacct` reads them.
+- Only the part of a job inside the month is billed, and the month never extends
+  past now: a job still running is billed up to the time of the report.
+- Time a job spent suspended is not billed once it has been resumed. A job still
+  suspended when the report runs is billed for its current suspension too, as
+  slurmdbd only takes off suspend intervals that have ended.
+- A job requeued within the month (node failure, preemption, `scontrol requeue`)
+  is billed for its **last run only**, as `sacct` reports it without
+  `--duplicates`. Runs in different months are each billed in their own month.
+  SLURM's own rollups (`sreport`, fairshare) count every run, so the agent can
+  report less than `sreport` for such jobs.
+
+`usage_tres_source` picks which of a job's TRES the usage is multiplied by:
+
+- `requested` (default) — the TRES the job asked for (`ReqTRES`).
+- `allocated` — the TRES the scheduler gave it (`AllocTRES`), falling back to
+  `ReqTRES` for a job that never started.
+
+The two differ in practice. A job that asks for `--gres=gpu:1` without a type
+has only `gres/gpu=1` in `ReqTRES`, so its usage never reaches a typed GPU
+component such as `gres/gpu:h200-141g`; `AllocTRES` names the type that was
+allocated (if `AccountingStorageTRES` tracks it). But `AllocTRES` also counts
+CPUs the scheduler added beyond the request — whole cores on nodes with
+`ThreadsPerCore=2`, `DefCpuPerGPU`, exclusive nodes — so switching to
+`allocated` can raise CPU usage:
+
+```text
+ReqTRES:   billing=8,cpu=8,gres/gpu=1,mem=65536M,node=1
+AllocTRES: billing=16,cpu=16,gres/gpu:h200-141g=1,gres/gpu=1,mem=65536M,node=1
+```
+
+Whenever a GPU type is recorded — in `AllocTRES`, and in `ReqTRES` for a job
+that asks for a type (`--gres=gpu:h200:2`) — the generic `gres/gpu` total is
+there too. So with either setting, configure typed GPU components or a generic
+`gres/gpu` component, never both, or such GPUs are billed twice. Before
+switching a billed offering, compare a month of
+`sacct --format=JobID,ReqTRES,AllocTRES` output.
 
 ### Account settings: users vs. accounts
 

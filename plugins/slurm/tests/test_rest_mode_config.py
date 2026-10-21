@@ -7,7 +7,11 @@ from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_slurm.backend import SlurmBackend
 from waldur_site_agent_slurm.client import SlurmClient
 from waldur_site_agent_slurm.rest_client import SlurmRestClient
-from waldur_site_agent_slurm.schemas import SlurmBackendSettingsSchema, SlurmRestApiConfig
+from waldur_site_agent_slurm.schemas import (
+    SlurmBackendSettingsSchema,
+    SlurmRestApiConfig,
+    UsageTresSource,
+)
 
 BASE_SETTINGS = {
     "default_account": "root",
@@ -60,12 +64,30 @@ class TestBackendClientSelection:
         with pytest.raises(BackendError, match="Unknown SLURM execution_mode 'rset'"):
             SlurmBackend(settings, {})
 
+    @pytest.mark.parametrize("execution_mode", ["cli", "rest"])
+    def test_usage_tres_source_reaches_the_client(self, execution_mode):
+        settings = {
+            **BASE_SETTINGS,
+            "cluster_name": "testcluster",
+            "execution_mode": execution_mode,
+            "rest_api": dict(REST_API_SETTINGS),
+            "usage_tres_source": "allocated",
+        }
+        backend = SlurmBackend(settings, {})
+        assert backend.client.usage_tres_source is UsageTresSource.ALLOCATED
+
+    def test_unknown_usage_tres_source_raises(self):
+        settings = {**BASE_SETTINGS, "usage_tres_source": "alloc"}
+        with pytest.raises(BackendError, match="Unknown SLURM usage_tres_source 'alloc'"):
+            SlurmBackend(settings, {})
+
 
 class TestSchemaValidation:
     def test_cli_mode_needs_no_rest_settings(self):
         schema = SlurmBackendSettingsSchema(**BASE_SETTINGS)
         assert schema.execution_mode == "cli"
         assert schema.rest_api is None
+        assert schema.usage_tres_source is UsageTresSource.REQUESTED
 
     def test_valid_rest_configuration(self):
         schema = SlurmBackendSettingsSchema(
@@ -92,6 +114,10 @@ class TestSchemaValidation:
     def test_rest_api_requires_token_source(self):
         with pytest.raises(ValidationError, match="token_file or token_env"):
             SlurmRestApiConfig(url="http://localhost:6820", username="waldur-agent")
+
+    def test_invalid_usage_tres_source_rejected(self):
+        with pytest.raises(ValidationError):
+            SlurmBackendSettingsSchema(**BASE_SETTINGS, usage_tres_source="billing")
 
     def test_invalid_execution_mode_rejected(self):
         with pytest.raises(ValidationError):

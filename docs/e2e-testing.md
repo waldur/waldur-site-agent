@@ -67,13 +67,15 @@ Config: the `WALDUR_E2E_*_CONFIG` variable the file reads (`CONFIG` =
 | `test_e2e_rest_api.py` | — ² | REST | `SlurmRestClient` against the emulator's REST API |
 | `test_e2e_restore.py` | CONFIG | REST | Restoring a resource from TERMINATED |
 | `test_e2e_stomp.py` | STOMP | REST | STOMP connections, event delivery, orders with STOMP |
+| `test_e2e_usage_parity.py` | — ² | REST | CLI and REST mode report the same usage (truncation, suspend, requeue) |
 | `test_e2e_ldap.py` | LDAP ³ | policy | LDAP-integrated SLURM backend |
 | `test_e2e_policy.py` | POLICY | policy | Periodic usage policy evaluation |
 | `test_e2e_qos_polling.py` | POLICY | policy | QoS application via the polling path |
 | `test_e2e_qos_stomp.py` | STOMP | policy | QoS application via STOMP RESOURCE events |
 | `test_e2e_qos_matrix.py` | POLICY | matrix | QoS sweep across all 11 policy configurations |
 
-² Runs against the emulator's slurmrestd; no agent config.
+² Runs against the emulator's slurmrestd (and, for `test_e2e_usage_parity.py`, its
+`sacct` on the same state); no agent config.
 ³ `WALDUR_E2E_LDAP_CONFIG`, `WALDUR_E2E_LDAP_INVERTED_CONFIG` and
 `WALDUR_E2E_LDAP_PROJECT_GROUPS_CONFIG`.
 

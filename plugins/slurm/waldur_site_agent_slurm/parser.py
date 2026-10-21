@@ -3,6 +3,9 @@
 import datetime
 import re
 from functools import cached_property
+from typing import Optional, TypeVar
+
+from waldur_site_agent_slurm.schemas import UsageTresSource
 
 UNIT_PATTERN = re.compile(r"(\d+)([KMGTP]?)")
 
@@ -15,6 +18,23 @@ UNITS: dict[str, int] = {
 
 # Constants for time parsing
 MIN_TIME_COMPONENTS = 3
+
+_Tres = TypeVar("_Tres")
+
+
+def pick_usage_tres(
+    source: UsageTresSource, allocated: Optional[_Tres], requested: Optional[_Tres]
+) -> Optional[_Tres]:
+    """The TRES a job's usage is billed on, the one rule both clients follow.
+
+    The CLI client passes sacct's AllocTRES/ReqTRES strings, the REST client
+    the slurmdb ``tres.allocated``/``tres.requested`` lists. AllocTRES is
+    empty for a job that never started, so ``allocated`` falls back to the
+    request; such a job has no elapsed time, so the fallback bills nothing.
+    """
+    if source is UsageTresSource.ALLOCATED and allocated:
+        return allocated
+    return requested
 
 
 def parse_int(value: str) -> int:

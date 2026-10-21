@@ -14,7 +14,17 @@ from waldur_site_agent.backend.exceptions import (
 )
 from waldur_site_agent.backend.structures import Association, ClientResource
 from waldur_site_agent_slurm.interface import SlurmClientInterface
-from waldur_site_agent_slurm.parser import SlurmAssociationLine, SlurmReportLine
+from waldur_site_agent_slurm.parser import (
+    SlurmAssociationLine,
+    SlurmReportLine,
+    pick_usage_tres,
+)
+from waldur_site_agent_slurm.schemas import UsageTresSource
+
+# sacct --format of a usage report; ``usage_tres_source: allocated`` also asks
+# for AllocTRES and the lines are folded back to the four-column shape.
+_USAGE_FIELDS = "Account,ReqTRES,Elapsed,User"
+_ALLOC_USAGE_FIELDS = "Account,AllocTRES,ReqTRES,Elapsed,User"
 
 _PARTITION_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 # QoS names share the partition character set; guards against sacctmgr injection.
@@ -42,11 +52,13 @@ class SlurmClient(SlurmClientInterface):
         slurm_tres: dict,
         slurm_bin_path: str = "/usr/bin",
         cluster_name: Optional[str] = None,
+        usage_tres_source: UsageTresSource = UsageTresSource.REQUESTED,
     ) -> None:
         """Inits SLURM-related data."""
         self.slurm_tres = slurm_tres
         self.slurm_bin_path = slurm_bin_path
         self.cluster_name = cluster_name
+        self.usage_tres_source = usage_tres_source
         self.executed_commands: list[str] = []
 
     def get_version(self) -> str:
@@ -364,21 +376,7 @@ class SlurmClient(SlurmClientInterface):
     ) -> list[SlurmReportLine]:
         """Generates per-user usage report for the accounts."""
         month_start, month_end = backend_utils.format_current_month(timezone or "")
-
-        args = [
-            "--noconvert",
-            "--truncate",
-            "--allocations",
-            "--allusers",
-            f"--starttime={month_start}",
-            f"--endtime={month_end}",
-            f"--accounts={','.join(resource_ids)}",
-            "--format=Account,ReqTRES,Elapsed,User",
-        ]
-        output = self._execute_command(args, "sacct", immediate=False)
-        return [
-            SlurmReportLine(line, self.slurm_tres) for line in output.splitlines() if "|" in line
-        ]
+        return self._usage_lines(resource_ids, month_start, month_end)
 
     def get_historical_usage_report(
         self, resource_ids: list[str], year: int, month: int
@@ -394,7 +392,19 @@ class SlurmClient(SlurmClientInterface):
             List of SlurmReportLine objects containing usage data for the specified month
         """
         month_start, month_end = backend_utils.format_month_period(year, month)
+        return self._usage_lines(resource_ids, month_start, month_end)
 
+    def _usage_lines(
+        self, resource_ids: list[str], month_start: str, month_end: str
+    ) -> list[SlurmReportLine]:
+        """Run sacct over the window and parse its ``Account|TRES|Elapsed|User`` lines.
+
+        With ``usage_tres_source: allocated`` sacct prints both AllocTRES and
+        ReqTRES; each line is folded back to the four-column shape with the
+        TRES picked by ``pick_usage_tres``, the same rule the REST client uses.
+        """
+        allocated = self.usage_tres_source is UsageTresSource.ALLOCATED
+        fields = _ALLOC_USAGE_FIELDS if allocated else _USAGE_FIELDS
         args = [
             "--noconvert",
             "--truncate",
@@ -403,12 +413,22 @@ class SlurmClient(SlurmClientInterface):
             f"--starttime={month_start}",
             f"--endtime={month_end}",
             f"--accounts={','.join(resource_ids)}",
-            "--format=Account,ReqTRES,Elapsed,User",
+            f"--format={fields}",
         ]
         output = self._execute_command(args, "sacct", immediate=False)
-        return [
-            SlurmReportLine(line, self.slurm_tres) for line in output.splitlines() if "|" in line
-        ]
+        lines = [line for line in output.splitlines() if "|" in line]
+        if allocated:
+            lines = [self._fold_alloc_line(line) for line in lines]
+        return [SlurmReportLine(line, self.slurm_tres) for line in lines]
+
+    def _fold_alloc_line(self, line: str) -> str:
+        """``Account|AllocTRES|ReqTRES|Elapsed|User`` -> ``Account|TRES|Elapsed|User``."""
+        parts = line.split("|")
+        if len(parts) != len(_ALLOC_USAGE_FIELDS.split(",")):
+            return line
+        account, alloc_tres, req_tres, elapsed, user = parts
+        tres = pick_usage_tres(self.usage_tres_source, alloc_tres, req_tres) or ""
+        return f"{account}|{tres}|{elapsed}|{user}"
 
     def get_resource_limits(self, resource_id: str) -> dict[str, int]:
         """Returns limits for the account."""
