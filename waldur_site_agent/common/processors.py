@@ -1401,22 +1401,33 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     ) -> None:
         """Generate the resource's API keys and report each to Waldur.
 
-        The agent decides the count (both plugins make two so one can be rotated
-        with no downtime). Keys are reported as they are applied, so a failure
+        The agent decides the count. By default it is two, so one can be rotated
+        with no downtime. Keys are reported as they are applied, so a failure
         part-way leaves the already-reported keys usable and the rest unminted;
-        there is no add command, so a shortfall is only recovered by a restore.
+        without per-key management there is no add command, so a shortfall is
+        only recovered by a restore.
         Runs on both fresh creates and restores/re-creates — a restored resource
         has no keys (they were removed on terminate), so it must be re-provisioned
         or it would come back with no way to authenticate.
+
+        Where the offering manages keys one by one and the backend can mint a key
+        on request, none are minted: users request their own keys, and a
+        replacement can be requested before the old key is deleted, so the pair is
+        not what makes rotation safe there. It would only add two shared keys with
+        no assignee and no limits. Stale keys are still cleared either way.
         """
         if not getattr(self.resource_backend, "supports_resource_api_keys", False):
             return
+        minted_on_request = resource_api_keys.manages_api_keys(waldur_resource) and getattr(
+            self.resource_backend, "supports_resource_api_key_lifecycle", False
+        )
         try:
             utils.provision_resource_api_keys(
                 self.waldur_rest_client,
                 waldur_resource.uuid.hex,
                 backend_resource_info.backend_id,
                 self.resource_backend,
+                count=0 if minted_on_request else None,
             )
         except Exception as e:
             logger.warning("Failed to provision the resource API keys: %s", e)

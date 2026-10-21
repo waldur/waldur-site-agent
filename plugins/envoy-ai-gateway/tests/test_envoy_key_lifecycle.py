@@ -7,12 +7,16 @@ assertions are about where each key's entry ends up — which is what the gatewa
 from __future__ import annotations
 
 import base64
+import uuid
 from types import SimpleNamespace
 from typing import Optional
 from unittest import mock
 
 import pytest
 from kubernetes.client.rest import ApiException
+from waldur_api_client.models.resource_offering_plugin_options import (
+    ResourceOfferingPluginOptions,
+)
 from waldur_site_agent_envoy_ai_gateway.backend import EnvoyAIGatewayBackend
 from waldur_site_agent_envoy_ai_gateway.client import (
     EnvoyAIGatewayBackendError,
@@ -20,6 +24,9 @@ from waldur_site_agent_envoy_ai_gateway.client import (
 )
 
 from waldur_site_agent.backend.exceptions import BackendError
+from waldur_site_agent.backend.structures import BackendResourceInfo
+from waldur_site_agent.common.processors import OfferingOrderProcessor
+from waldur_site_agent.common.resource_api_keys import ApiKeyCommand, execute_api_key_command
 
 ACTIVE = "keys"
 BLOCKED = "keys-blocked"
@@ -29,6 +36,8 @@ SETTINGS = {
     "apikey_secret": ACTIVE,
 }
 COMPONENTS = {"input_tokens": {}, "output_tokens": {}}
+COMMON_UTILS = "waldur_site_agent.common.utils"
+KEYS = "waldur_site_agent.common.resource_api_keys"
 
 
 class FakeCoreApi:
@@ -528,3 +537,90 @@ def test_pausing_prefers_a_live_value_over_a_plain_blocked_copy() -> None:
 
     assert api.secrets[ACTIVE] == {}
     assert api.secrets[BLOCKED] == {"res-1-1.paused": "sk-new"}
+
+
+# --- a resource that starts with no keys ----------------------------------------
+#
+# On an offering that manages keys one by one, provisioning mints none: the
+# resource's first key is the first one a user requests. The core and the backend
+# run for real; Waldur is stubbed.
+
+
+def _provision(backend: EnvoyAIGatewayBackend, managed: bool) -> mock.Mock:
+    """Provision keys as the order processor does after creating the resource."""
+    processor = mock.Mock(resource_backend=backend)
+    resource = SimpleNamespace(
+        uuid=uuid.UUID(int=1),
+        offering_plugin_options=ResourceOfferingPluginOptions.from_dict(
+            {"enable_api_key_provisioning": managed}
+        ),
+    )
+    # A fresh resource: Waldur holds no keys for it, which reads as "unknown".
+    with mock.patch(f"{COMMON_UTILS}._known_client_ids", return_value=None), mock.patch(
+        f"{COMMON_UTILS}.marketplace_resource_api_keys_report_created"
+    ) as report_created:
+        OfferingOrderProcessor._provision_resource_api_keys(
+            processor, resource, BackendResourceInfo(backend_id="res-1")
+        )
+    return report_created
+
+
+def _request_key(backend: EnvoyAIGatewayBackend, paused: bool) -> dict:
+    """Carry out Waldur's command for a user's key request; return what was reported."""
+    command = ApiKeyCommand(
+        action="create",
+        api_key_uuid="key-uuid",
+        resource_uuid="res-uuid",
+        resource_backend_id="res-1",
+    )
+    with mock.patch(f"{KEYS}.list_all_api_keys", return_value=[]), mock.patch(
+        f"{KEYS}.marketplace_provider_resources_retrieve"
+    ) as retrieve, mock.patch(f"{KEYS}.marketplace_resource_api_keys_set_key") as set_key:
+        retrieve.sync.return_value = SimpleNamespace(paused=paused, downscaled=False)
+        with mock.patch(f"{KEYS}.marketplace_resource_api_keys_set_erred") as set_erred:
+            execute_api_key_command(mock.Mock(), backend, command)
+    set_erred.sync.assert_not_called()
+    body = set_key.sync.call_args.kwargs["body"]
+    return {"client_id": body.client_id, "api_key": body.api_key}
+
+
+def test_a_resource_whose_keys_are_requested_one_by_one_starts_with_none() -> None:
+    backend, api = _backend()
+
+    report_created = _provision(backend, managed=True)
+
+    assert api.secrets == {ACTIVE: {}, BLOCKED: {}}
+    report_created.sync.assert_not_called()
+
+
+def test_a_resource_without_key_management_starts_with_the_pair() -> None:
+    backend, api = _backend()
+
+    report_created = _provision(backend, managed=False)
+
+    assert set(api.secrets[ACTIVE]) == {"res-1-1", "res-1-2"}
+    assert report_created.sync.call_count == 2
+
+
+def test_the_first_key_requested_serves() -> None:
+    backend, api = _backend()
+    _provision(backend, managed=True)
+
+    key = _request_key(backend, paused=False)
+
+    assert api.secrets[ACTIVE] == {"res-1-1": key["api_key"]}
+    assert key["client_id"] == "res-1-1"
+
+
+def test_the_first_key_requested_on_a_paused_resource_lands_blocked() -> None:
+    # The membership sync skips a resource with no keys (the backend reports it as
+    # missing), so nothing applied the pause before the request; the command does.
+    backend, api = _backend()
+    _provision(backend, managed=True)
+
+    key = _request_key(backend, paused=True)
+
+    assert api.secrets[ACTIVE] == {}
+    assert api.secrets[BLOCKED][key["client_id"]] == key["api_key"]
+    backend.restore_resource("res-1")
+    assert api.secrets[ACTIVE] == {key["client_id"]: key["api_key"]}

@@ -107,6 +107,24 @@ class TestProvisioningPrune(unittest.TestCase):
 
         backend.generate_resource_keys.assert_called_once_with("uid", count=2)
 
+    def test_a_target_of_none_still_clears_the_residue(self, mock_known, mock_created):
+        """A resource whose users request their own keys starts with none.
+
+        The residue an interrupted create left behind is still live with no row in
+        Waldur, so it is cleared all the same; nothing is minted or reported.
+        """
+        mock_known.return_value = ["cid-held"]
+        backend = _backend()
+        backend.generate_resource_keys.return_value = []
+
+        common_utils.provision_resource_api_keys(
+            mock.Mock(), "res-uuid-1", "uid", backend, count=0
+        )
+
+        backend.prune_unknown_resource_keys.assert_called_once_with("uid", ["cid-held"])
+        backend.generate_resource_keys.assert_called_once_with("uid", count=0)
+        mock_created.sync.assert_not_called()
+
     def test_an_explicit_count_is_still_reconciled(self, mock_known, mock_created):
         """The caller's count is the target for the resource, not an amount to add."""
         mock_known.return_value = ["cid-held-1"]
