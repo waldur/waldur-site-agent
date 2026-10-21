@@ -23,7 +23,7 @@ from waldur_site_agent.common.component_mapping import ComponentMapper
 from waldur_site_agent_slurm import utils
 from waldur_site_agent_slurm.client import SlurmClient
 from waldur_site_agent_slurm.interface import SlurmClientInterface
-from waldur_site_agent_slurm.schemas import ExecutionMode
+from waldur_site_agent_slurm.schemas import ExecutionMode, UsageTresSource
 
 # Accepted values for the ``default_account_policy`` backend setting. An
 # unrecognized value (e.g. a typo) must fail loudly at construction rather than
@@ -69,17 +69,37 @@ def parse_execution_mode(backend_settings: dict) -> ExecutionMode:
         raise BackendError(msg) from e
 
 
+def parse_usage_tres_source(backend_settings: dict) -> UsageTresSource:
+    """The configured ``usage_tres_source``, rejecting unknown values."""
+    raw_source = backend_settings.get("usage_tres_source", UsageTresSource.REQUESTED.value)
+    try:
+        return UsageTresSource(raw_source)
+    except ValueError as e:
+        # A typo must not silently bill a different set of TRES.
+        msg = (
+            f"Unknown SLURM usage_tres_source {raw_source!r} — expected 'requested' or 'allocated'"
+        )
+        raise BackendError(msg) from e
+
+
 def create_slurm_client(backend_settings: dict, slurm_tres: dict) -> SlurmClientInterface:
     """Build the SLURM client an offering's backend_settings describe.
 
     The one place that turns ``slurm_bin_path``, ``cluster_name``,
-    ``execution_mode`` and ``rest_api`` into a client, shared by the backend and
-    the account diagnostics CLI so both talk to the same SLURM.
+    ``execution_mode``, ``rest_api`` and ``usage_tres_source`` into a client,
+    shared by the backend and the account diagnostics CLI so both talk to the
+    same SLURM.
     """
     slurm_bin_path = backend_settings.get("slurm_bin_path", "/usr/bin")
     cluster_name: Optional[str] = backend_settings.get("cluster_name")
+    usage_tres_source = parse_usage_tres_source(backend_settings)
     if parse_execution_mode(backend_settings) is not ExecutionMode.REST:
-        return SlurmClient(slurm_tres, slurm_bin_path=slurm_bin_path, cluster_name=cluster_name)
+        return SlurmClient(
+            slurm_tres,
+            slurm_bin_path=slurm_bin_path,
+            cluster_name=cluster_name,
+            usage_tres_source=usage_tres_source,
+        )
 
     rest_settings = backend_settings.get("rest_api")
     if not rest_settings:
@@ -108,6 +128,7 @@ def create_slurm_client(backend_settings: dict, slurm_tres: dict) -> SlurmClient
         rest_settings=rest_settings,
         cluster_name=cluster_name,
         slurm_bin_path=slurm_bin_path,
+        usage_tres_source=usage_tres_source,
     )
 
 
@@ -566,6 +587,9 @@ class SlurmBackend(backends.BaseBackend):
         logger.info("SLURM tres components:\n%s\n", pprint.pformat(self.backend_components))
 
         logger.info("SLURM execution mode: %s", self.execution_mode.value)
+        logger.info(
+            "SLURM usage TRES source: %s", parse_usage_tres_source(self.backend_settings).value
+        )
         try:
             slurm_version_info = self.client.get_version()
             logger.info("Slurm version: %s", slurm_version_info)

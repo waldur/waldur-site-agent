@@ -189,13 +189,23 @@ aggregation downstream is shared with CLI mode:
 
 - **Elapsed** is clipped to the reporting window, as `sacct --truncate`
   does: a job spanning a month boundary is billed to each month only for
-  its part inside it; a running job counts until the window closes.
-- **TRES** come from the job's `tres.allocated`, falling back to
-  `tres.requested` for jobs that never started. The CLI path bills
-  `ReqTRES`. The two modes therefore differ for jobs whose allocation
-  differs from the request (for example whole-node allocation), which is
-  worth checking against `sacct` for a period before switching a billed
-  offering to REST mode.
+  its part inside it; a running job counts until the window closes or
+  until now, whichever is earlier.
+- **TRES** come from `tres.requested` (sacct `ReqTRES`), or with
+  `usage_tres_source: allocated` from `tres.allocated` (sacct `AllocTRES`),
+  falling back to `tres.requested` for jobs that never started. Both
+  clients pick through the same function (`parser.pick_usage_tres`).
+- **Truncation and duplicates** are slurmdbd's: the query carries
+  `skip_steps=true` (sacct's `--allocations`), and setting any job-condition
+  flag stops slurmrestd from defaulting to `show_duplicates` and
+  `disable_truncate_usage_time`. slurmdbd then caps the window at now,
+  takes suspended time off and keeps one record per job ID, as for
+  `sacct --truncate` without `--duplicates`. The window is sent as epochs,
+  read in the agent host's local time as sacct reads the CLI's naive
+  window (the offering timezone only picks the dates), so slurmdbd and
+  the client use the same edges.
+  The client repeats the clip and the duplicate removal for a server that
+  ignores the flag.
 
 ### 5. Authentication
 
@@ -254,9 +264,12 @@ reference is in the [SLURM plugin README](../plugins/slurm/README.md#rest-api-ex
   REST endpoint and stay on the CLI client. Without `sacctmgr` on the
   host they fail with an explicit `BackendError` instead of a
   "command not found".
-- Usage figures are aggregated client-side from job records and bill
-  allocated TRES, so they can differ from CLI-mode (`sacct ReqTRES`)
-  figures (section 4).
+- Usage figures are aggregated client-side from job records but follow
+  the same rules as CLI mode, so both modes report the same usage
+  (section 4; `tests/test_usage_parity.py` holds them to it). One
+  case still depends on the server: if a slurmrestd ignored
+  `skip_steps`, suspended time of a job clipped at the window edge
+  would not be subtracted.
 - Beyond the delegated resets, there is no
   automatic REST→CLI fallback on errors: silent divergence between
   modes is worse than a loud failure. The mode is an explicit

@@ -558,6 +558,7 @@ Run mypy (3.9):
         plugins/slurm/tests/e2e/test_e2e_resources_sync.py \
         plugins/slurm/tests/e2e/test_e2e_rest_api.py \
         plugins/slurm/tests/e2e/test_e2e_restore.py \
+        plugins/slurm/tests/e2e/test_e2e_usage_parity.py \
         plugins/slurm/tests/e2e/test_e2e_stomp.py \
         plugins/slurm/tests/e2e/test_e2e_qos_backcompat.py
 

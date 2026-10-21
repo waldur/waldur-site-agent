@@ -10,8 +10,10 @@ from unittest import mock
 
 import httpx
 import pytest
+from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError
 
+from waldur_site_agent_slurm import rest_client as rest_client_module
 from waldur_site_agent_slurm.client import SlurmClient
 from waldur_site_agent_slurm.rest_client import (
     FAIRSHARE_USE_PARENT,
@@ -1070,8 +1072,14 @@ class TestUsageReport:
         params = dict(request.url.params)
         assert params["account"] == "acc1,acc2"
         assert params["cluster"] == "testcluster"
-        assert params["start_time"].endswith("T00:00:00")
-        assert params["end_time"].endswith("T23:59:59")
+        # The window goes out as epochs, so slurmdbd and the client clip to
+        # the same edges.
+        start, end = client._window_epochs(*backend_utils.format_current_month("UTC"))
+        assert params["start_time"] == str(start)
+        assert params["end_time"] == str(end)
+        # sacct's --allocations; also switches slurmdbd's truncation and
+        # duplicate removal back on (see TestUsageMatchesSacct).
+        assert params["skip_steps"] == "true"
 
     def test_jobs_become_sacct_shaped_lines(self, handler, monkeypatch):
         handler.responses[f"GET /slurmdb/{API}/jobs/"] = envelope(
@@ -1163,15 +1171,20 @@ class TestUsageReport:
         assert may.duration + june.duration == pytest.approx(56 * 60 - 1 / 60)
 
     def test_running_job_is_billed_to_the_window_end(self, handler, monkeypatch):
+        """A job still running after a past month closes is billed to that month's end."""
         import datetime as dt
 
         window_start = int(dt.datetime(2026, 5, 1, tzinfo=dt.timezone.utc).timestamp())
+        now = int(dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc).timestamp())
+        monkeypatch.setattr(rest_client_module.time, "time", lambda: now)
+        start = window_start + 3600
         job = _job(
             "acc1",
             "alice",
-            elapsed=10 * 3600,
+            # Untruncated slurmdb elapsed of a running job: its run time so far.
+            elapsed=now - start,
             tres=[{"type": "cpu", "count": 1}],
-            start=window_start + 3600,
+            start=start,
             end=0,  # still running per slurmdb
         )
         handler.responses[f"GET /slurmdb/{API}/jobs/"] = envelope(jobs=[job])
@@ -1192,24 +1205,39 @@ class TestUsageReport:
         (line,) = client.get_usage_report(["acc1"])
         assert line.duration == 60.0
 
-    def test_window_is_read_in_the_offering_timezone(self, handler, monkeypatch):
-        client = self._client(handler, monkeypatch)
-        start, end = client._window_epochs("2026-05-01T00:00:00", "2026-05-31T23:59:59", "UTC")
-        import datetime as dt
+    def test_window_is_read_in_the_host_local_time_like_sacct(self, handler, monkeypatch):
+        """The offering timezone picks the dates; the host's local time reads them.
 
-        assert start == int(dt.datetime(2026, 5, 1, tzinfo=dt.timezone.utc).timestamp())
-        assert end - start == 31 * 24 * 3600 - 1
-        shifted, _ = client._window_epochs(
-            "2026-05-01T00:00:00", "2026-05-31T23:59:59", "Europe/Tallinn"
-        )
-        assert start - shifted == 3 * 3600  # EEST is UTC+3 in May
+        sacct parses the naive window the CLI client gives it in the host's
+        local time, so a Tallinn offering on a UTC host cuts October at UTC
+        midnight in both modes.
+        """
+        import datetime as dt
+        import time
+
+        client = self._client(handler, monkeypatch)
+        monkeypatch.setenv("TZ", "UTC")
+        time.tzset()
+        try:
+            client.get_usage_report(["acc1"], "Europe/Tallinn")
+            params = dict(handler.requests[0].url.params)
+            month_start, month_end = backend_utils.format_current_month("Europe/Tallinn")
+            naive = dt.datetime.fromisoformat(month_start).replace(tzinfo=dt.timezone.utc)
+            assert params["start_time"] == str(int(naive.timestamp()))
+            end = dt.datetime.fromisoformat(month_end).replace(tzinfo=dt.timezone.utc)
+            assert params["end_time"] == str(int(end.timestamp()))
+        finally:
+            monkeypatch.delenv("TZ")
+            time.tzset()
 
     def test_historical_report_uses_the_given_month(self, handler, monkeypatch):
         client = self._client(handler, monkeypatch)
         client.get_historical_usage_report(["acc1"], 2026, 5)
         params = dict(handler.requests[0].url.params)
-        assert params["start_time"].startswith("2026-05-01")
-        assert params["end_time"].startswith("2026-05-31")
+        # Historical windows are naive local time, read like sacct reads them.
+        start, end = client._window_epochs("2026-05-01T00:00:00", "2026-05-31T23:59:59")
+        assert params["start_time"] == str(start)
+        assert params["end_time"] == str(end)
 
     def test_empty_account_list_makes_no_request(self, handler, monkeypatch):
         client = self._client(handler, monkeypatch)

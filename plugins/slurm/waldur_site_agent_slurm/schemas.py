@@ -38,6 +38,19 @@ class ExecutionMode(str, Enum):
     REST = "rest"
 
 
+class UsageTresSource(str, Enum):
+    """Which of a job's TRES its usage is billed on.
+
+    ``requested`` is sacct's ReqTRES, ``allocated`` its AllocTRES. They differ
+    when the scheduler hands a job more than it asked for (whole cores on SMT
+    nodes, ``DefCpuPerGPU``, exclusive nodes), and only AllocTRES names the
+    GPU type picked for a request that did not name one.
+    """
+
+    REQUESTED = "requested"
+    ALLOCATED = "allocated"
+
+
 class SlurmComponentSchema(PluginComponentSchema):
     """SLURM-specific component field validation.
 
@@ -284,6 +297,16 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
     rest_api: Optional[SlurmRestApiConfig] = Field(
         default=None,
         description="slurmrestd connection settings, required when execution_mode is 'rest'",
+    )
+    usage_tres_source: UsageTresSource = Field(
+        default=UsageTresSource.REQUESTED,
+        description=(
+            "TRES that job usage is billed on, in both execution modes: 'requested' "
+            "(sacct ReqTRES, default) or 'allocated' (sacct AllocTRES, falling back "
+            "to ReqTRES for jobs that never started). 'allocated' attributes "
+            "untyped GPU requests to the allocated gres/gpu:<type>, but also bills "
+            "CPUs the scheduler added beyond the request"
+        ),
     )
 
     # Optional: default partition for user associations

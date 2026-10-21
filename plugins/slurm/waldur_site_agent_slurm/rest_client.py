@@ -17,15 +17,14 @@ plain numbers are accepted by the server on input.
 
 from __future__ import annotations
 
-import contextlib
 import datetime
 import os
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from shutil import which
 from typing import Any, Optional
 from urllib.parse import quote, urlencode
-from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -39,7 +38,8 @@ from waldur_site_agent_slurm.client import (
     SlurmClient,
 )
 from waldur_site_agent_slurm.interface import SlurmClientInterface
-from waldur_site_agent_slurm.parser import SlurmReportLine
+from waldur_site_agent_slurm.parser import SlurmReportLine, pick_usage_tres
+from waldur_site_agent_slurm.schemas import UsageTresSource
 
 # SLURMDB_FS_USE_PARENT in slurm/slurmdb.h — the shares_raw sentinel
 # equivalent to ``sacctmgr ... Share=parent``.
@@ -142,6 +142,7 @@ class SlurmRestClient(SlurmClientInterface):
         cluster_name: str,
         slurm_bin_path: str = "/usr/bin",
         transport: Optional[httpx.BaseTransport] = None,
+        usage_tres_source: UsageTresSource = UsageTresSource.REQUESTED,
     ) -> None:
         """Init REST transport, auth settings and the internal CLI client.
 
@@ -152,12 +153,14 @@ class SlurmRestClient(SlurmClientInterface):
                 payloads always carry an explicit cluster, so this is required.
             slurm_bin_path: path to SLURM binaries for delegated CLI calls.
             transport: optional httpx transport override (used by tests).
+            usage_tres_source: which job TRES usage is billed on, as in CLI mode.
         """
         if not cluster_name:
             msg = "cluster_name is required when SLURM execution_mode is 'rest'"
             raise BackendError(msg)
         self.slurm_tres = slurm_tres
         self.cluster_name: Optional[str] = cluster_name
+        self.usage_tres_source = usage_tres_source
         self._executed_commands: list[str] = []
         # TRES is static for the cluster lifetime; cache it to avoid a
         # GET /tres round trip on every per-user limit write.
@@ -184,7 +187,10 @@ class SlurmRestClient(SlurmClientInterface):
         # CLI client for operations without a REST equivalent (sacct usage
         # reports, RawUsage reset) and for local OS commands (id, homedirs).
         self._cli = SlurmClient(
-            slurm_tres, slurm_bin_path=slurm_bin_path, cluster_name=cluster_name
+            slurm_tres,
+            slurm_bin_path=slurm_bin_path,
+            cluster_name=cluster_name,
+            usage_tres_source=usage_tres_source,
         )
 
     @property
@@ -1247,38 +1253,34 @@ class SlurmRestClient(SlurmClientInterface):
     ) -> list[SlurmReportLine]:
         """Per-user usage for the current month, from ``GET /slurmdb/{v}/jobs/``.
 
-        The sacct equivalent is ``--allocations --allusers --accounts=...
-        --format=Account,ReqTRES,Elapsed,User`` over the month. Each job record
-        is rendered into the same ``Account|TRES|Elapsed|User`` line so the
-        parser and everything downstream stay shared with the CLI client.
+        The sacct equivalent is ``--truncate --allocations --allusers
+        --accounts=... --format=Account,ReqTRES,Elapsed,User`` over the month,
+        and the result is meant to be the same number: each job record is
+        rendered into the same ``Account|TRES|Elapsed|User`` line so the parser
+        and everything downstream stay shared with the CLI client.
         """
         month_start, month_end = backend_utils.format_current_month(timezone or "")
-        return self._usage_lines(resource_ids, month_start, month_end, timezone)
+        return self._usage_lines(resource_ids, month_start, month_end)
 
     def get_historical_usage_report(
         self, resource_ids: list[str], year: int, month: int
     ) -> list[SlurmReportLine]:
         """Per-user usage for a past month, from ``GET /slurmdb/{v}/jobs/``."""
         month_start, month_end = backend_utils.format_month_period(year, month)
-        return self._usage_lines(resource_ids, month_start, month_end, None)
+        return self._usage_lines(resource_ids, month_start, month_end)
 
     @staticmethod
-    def _window_epochs(start_time: str, end_time: str, timezone: Optional[str]) -> tuple[int, int]:
-        """The report window as epoch seconds.
+    def _window_epochs(start_time: str, end_time: str) -> tuple[int, int]:
+        """The report window as epoch seconds, read in the agent host's local time.
 
-        The window strings are naive, in the offering's timezone (system-local
-        when none is set) -- the same reading sacct gives them. slurmdb job
-        times are epoch seconds, so the clip below needs both on one scale.
+        The offering's timezone only picks which dates the window covers
+        (``format_current_month``); the CLI client hands those naive strings
+        to sacct, which reads them in the host's local time (``parse_time``),
+        so this does the same. slurmdb job times are epoch seconds, so the
+        clip below needs both on one scale.
         """
-        tz: Optional[datetime.tzinfo] = None
-        if timezone:
-            with contextlib.suppress(Exception):
-                tz = ZoneInfo(timezone)
         start = datetime.datetime.fromisoformat(start_time)
         end = datetime.datetime.fromisoformat(end_time)
-        if tz is not None:
-            start = start.replace(tzinfo=tz)
-            end = end.replace(tzinfo=tz)
         return int(start.timestamp()), int(end.timestamp())
 
     def _usage_lines(
@@ -1286,21 +1288,28 @@ class SlurmRestClient(SlurmClientInterface):
         resource_ids: list[str],
         start_time: str,
         end_time: str,
-        timezone: Optional[str],
     ) -> list[SlurmReportLine]:
         if not resource_ids:
             return []
-        window = self._window_epochs(start_time, end_time, timezone)
+        window = self._window_epochs(start_time, end_time)
         query: dict[str, str] = {
             "account": ",".join(resource_ids),
-            "start_time": start_time,
-            "end_time": end_time,
+            # Epochs, not the naive strings: slurmrestd would read those in its
+            # own timezone, which need not be the agent host's.
+            "start_time": str(window[0]),
+            "end_time": str(window[1]),
+            # sacct's --allocations. Setting any job-condition flag also stops
+            # slurmrestd from defaulting to show_duplicates and
+            # disable_truncate_usage_time, so slurmdbd truncates usage time and
+            # drops superseded records exactly as it does for sacct --truncate
+            # (slurm://src/slurmrestd/plugins/openapi/slurmdbd/jobs.c#op_handler_jobs).
+            "skip_steps": "true",
         }
         if self.cluster_name:
             query["cluster"] = self.cluster_name
         payload = self._request("GET", self._db("jobs/"), query=query)
         wanted = set(resource_ids)
-        lines = []
+        jobs = []
         for job in payload.get("jobs") or []:
             account = job.get("account") or ""
             # Re-filter client-side: older slurmrestd ignore unknown query params.
@@ -1308,10 +1317,54 @@ class SlurmRestClient(SlurmClientInterface):
                 continue
             if self.cluster_name and job.get("cluster") not in (None, "", self.cluster_name):
                 continue
+            jobs.append(job)
+        lines = []
+        for job in self._latest_records(jobs):
             line = self._job_to_report_line(job, window)
             if line is not None:
                 lines.append(line)
         return lines
+
+    @staticmethod
+    def _db_job_states(job: dict) -> set[str]:
+        """States of a slurmdb job record (``state.current``, unlike slurmctld's ``job_state``)."""
+        state = job.get("state")
+        current = state.get("current") if isinstance(state, dict) else state
+        if isinstance(current, str):
+            return {current}
+        return set(current or [])
+
+    @classmethod
+    def _latest_records(cls, jobs: list[dict]) -> list[dict]:
+        """Keep one record per job ID, as sacct does without ``--duplicates``.
+
+        A requeued job leaves one record per run under the same job ID. slurmdbd
+        returns only the most recently submitted one, plus records left in
+        RESIZING, and never a revoked federated sibling
+        (slurm://src/plugins/accounting_storage/mysql/as_mysql_jobacct_process.c).
+        slurmdbd already does this when the query carries a job-condition flag;
+        repeating it here keeps a server that ignores the flag in line.
+        """
+        latest: dict[object, dict] = {}
+        for job in jobs:
+            job_id = job.get("job_id")
+            if job_id is None or "REVOKED" in cls._db_job_states(job):
+                continue
+            submitted = cls._time_field((job.get("time") or {}).get("submission")) or 0
+            current = latest.get(job_id)
+            if current is None or submitted > (
+                cls._time_field((current.get("time") or {}).get("submission")) or 0
+            ):
+                latest[job_id] = job
+        kept = []
+        for job in jobs:
+            states = cls._db_job_states(job)
+            if "REVOKED" in states:
+                continue
+            job_id = job.get("job_id")
+            if job_id is None or latest.get(job_id) is job or "RESIZING" in states:
+                kept.append(job)
+        return kept
 
     @staticmethod
     def _time_field(value: object) -> Optional[int]:
@@ -1328,9 +1381,17 @@ class SlurmRestClient(SlurmClientInterface):
 
         A job that spans a month boundary is billed to each month only for the
         part inside it; without this a 56h job crossing the boundary would be
-        charged 56h in both months. A running job has no end yet and is taken
-        as running until the window closes, like sacct does. Jobs without a
-        start time cannot be placed and keep their raw elapsed.
+        charged 56h in both months. As in slurmdbd, the window never extends
+        past now, so a job still running is billed up to now and not to the
+        end of the month. Jobs without a start time cannot be placed and keep
+        their raw elapsed.
+
+        slurmdbd already truncates when the query carries a job-condition flag,
+        and also takes suspended time off ``elapsed``; the clip is repeated for
+        a server that ignores the flag. ``elapsed`` never exceeds the clipped
+        span when slurmdbd truncated, and is the job's whole run time when it
+        did not, so the smaller of the two keeps the suspended-time correction
+        without billing time outside the window.
         """
         times = job.get("time") or {}
         elapsed = cls._time_field(times.get("elapsed"))
@@ -1339,27 +1400,32 @@ class SlurmRestClient(SlurmClientInterface):
         start = cls._time_field(times.get("start"))
         if not start:
             return elapsed
+        window_start = window[0]
+        window_end = min(window[1], int(time.time()))
         end = cls._time_field(times.get("end"))
-        if not end:
-            end = max(start + elapsed, window[1])
-        window_start, window_end = window
-        return max(0, min(end, window_end) - max(start, window_start))
+        if not end or end > window_end:
+            end = window_end
+        clipped = max(0, end - max(start, window_start))
+        return min(clipped, elapsed)
 
     def _job_to_report_line(
         self, job: dict, window: tuple[int, int]
     ) -> Optional[SlurmReportLine]:
-        """Render one slurmdb job record as a sacct ``Account|ReqTRES|Elapsed|User`` line.
+        """Render one slurmdb job record as a sacct ``Account|TRES|Elapsed|User`` line.
 
-        ``tres.allocated`` is what the job actually held (``requested`` is the
-        fallback for jobs that never started). Memory is in MB on the wire and
-        sacct prints it with an ``M`` suffix, which the parser expects.
+        ``tres.requested`` is sacct's ReqTRES and ``tres.allocated`` its
+        AllocTRES; ``pick_usage_tres`` chooses between them as the CLI client
+        does. Memory is in MB on the wire and sacct prints it with an ``M``
+        suffix, which the parser expects.
         """
         user = job.get("user") or job.get("user_name") or ""
         elapsed = self._truncated_elapsed(job, window)
         if not user or elapsed is None:
             return None
         tres_section = job.get("tres") or {}
-        tres_list = tres_section.get("allocated") or tres_section.get("requested")
+        tres_list = pick_usage_tres(
+            self.usage_tres_source, tres_section.get("allocated"), tres_section.get("requested")
+        )
         tres = self._tres_list_to_dict(tres_list)
         pairs = []
         for key in sorted(tres):
