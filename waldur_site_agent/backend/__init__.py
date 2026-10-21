@@ -14,6 +14,10 @@ ACCOUNT_NAME_REGEX = "a-zA-Z0-9-_"
 # common.utils, which has to know the target without asking the backend.
 DEFAULT_RESOURCE_KEY_COUNT = 2
 
+# Alone in a key's ``allowed_models``, it stands for every model, including ones
+# the offering adds later. Shared because it is Waldur's spelling, not a backend's.
+ALL_MODELS = "*"
+
 
 class BackendType(Enum):
     """Enum for backend types."""

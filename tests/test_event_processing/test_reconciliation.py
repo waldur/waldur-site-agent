@@ -681,6 +681,32 @@ class TestRunPeriodicApiKeyReconciliation(unittest.TestCase):
         )
         self.assertEqual(mock_set_key.sync.call_args.kwargs["body"].client_id, "res-1-3")
 
+    def test_replays_the_model_list_narrowed_by_the_resource(
+        self, mock_get_backend, mock_get_client
+    ):
+        """The key keeps its own list; a command carries the one its resource's
+        selection narrows it to, and so must a replay."""
+        backend = _key_backend(lifecycle=True)
+        rows = [
+            _stuck_row(
+                pending_action="update",
+                client_id="cid-u",
+                allowed_models=["*"],
+                effective_models=["qwen"],
+            ),
+            # A Waldur that predates the effective list narrows nothing.
+            _stuck_row(pending_action="resume", client_id="cid-r", allowed_models=["*"]),
+        ]
+
+        self._sweep(mock_get_backend, backend, rows)
+
+        backend.update_resource_key.assert_called_once_with(
+            "cid-u", "res-1", limits=None, allowed_models=["qwen"]
+        )
+        backend.resume_resource_key.assert_called_once_with(
+            "cid-r", "res-1", limits=None, allowed_models=["*"]
+        )
+
     def test_a_row_with_no_command_is_left_alone(self, mock_get_backend, mock_get_client):
         """Waldur names the command of every key in flight; without one there is
         nothing to replay, and guessing a rotation could resume a key it paused."""

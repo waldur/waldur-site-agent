@@ -14,7 +14,7 @@ from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
-from waldur_site_agent.backend import DEFAULT_RESOURCE_KEY_COUNT, backends
+from waldur_site_agent.backend import ALL_MODELS, DEFAULT_RESOURCE_KEY_COUNT, backends
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
@@ -227,18 +227,18 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
 
     @staticmethod
     def _refuse_model_allowlist(allowed_models: Optional[list[str]]) -> None:
-        """Fail a command that would restrict a key to some models.
+        """Fail a command that would restrict a key's models.
 
         The gateway authenticates a key but routes every model to it alike; there is
-        no per-key model rule to write. Accepting the list would show the key in
-        Waldur as restricted while it can call every model.
+        no per-key model rule to write. Accepting a list would show the key in Waldur
+        as restricted while it can call every model, and that goes for the empty list
+        too, which Waldur shows as a key with no models. Only every model can be
+        honoured: ``["*"]``, or no list at all from a Waldur that predates it.
         """
-        if allowed_models:
-            msg = (
-                "The Envoy AI Gateway cannot restrict a single key to some models; "
-                "clear the key's model list"
-            )
-            raise BackendError(msg)
+        if allowed_models is None or allowed_models == [ALL_MODELS]:
+            return
+        msg = "The Envoy AI Gateway cannot restrict a key's models; set the key to all models"
+        raise BackendError(msg)
 
     def mint_resource_key(
         self,

@@ -1408,10 +1408,17 @@ class BaseBackend(ABC):
     # again after it already succeeded, because the reconciliation sweep replays a
     # command whose acknowledgement never reached Waldur.
     #
-    # ``limits`` maps a component type to a limit in Waldur units (0 = no limit);
-    # ``allowed_models`` is a list of model names, or None for every model. A backend
-    # that cannot honour a setting it is given must raise rather than accept it
-    # silently: the key would otherwise be reported as restricted when it is not.
+    # ``limits`` maps a component type to a limit in Waldur units (0 = no limit).
+    # ``allowed_models`` lists the models the key may call: ``["*"]`` (ALL_MODELS on
+    # its own) is every model, an empty list is none, anything else is those names.
+    # None, which a Waldur older than ``["*"]`` still sends, also means every model.
+    # It is the key's effective list: Waldur narrows the key's own list by its
+    # resource's model selection before sending it, so ``["*"]`` reaches a backend
+    # only when neither restricts anything.
+    # A backend that cannot honour a setting it is given must raise rather than
+    # accept it silently: the key would otherwise be reported as restricted when it
+    # is not. The empty list is such a setting: Waldur shows that key as having no
+    # models.
 
     def mint_resource_key(
         self,
