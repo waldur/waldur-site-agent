@@ -190,6 +190,13 @@ class BaseBackend(ABC):
     # plugin never calls Waldur itself.
     requires_source_project: bool = False
 
+    # Capability flag: Set to True for backends that need to know who each of a
+    # resource's API keys is assigned to (a chat surface that follows the person's
+    # key, for instance). When enabled, and the offering manages its keys one by one,
+    # the processor joins Waldur's key listing to the offering users and passes the
+    # result to sync_resource_key_assignees, so the plugin never calls Waldur itself.
+    requires_resource_key_assignees: bool = False
+
     # Capability flag: Set to True for backends where every resource federated from a
     # given source project collapses onto one shared backend project (e.g. Waldur-to-
     # Waldur federation). When enabled, membership sync reconciles against the union of
@@ -1369,6 +1376,23 @@ class BaseBackend(ABC):
         """
         del waldur_resource, source_project
 
+    def sync_resource_key_assignees(
+        self, waldur_resource: WaldurResource, assignments: dict[str, Optional[str]]
+    ) -> None:
+        """Apply who each of the resource's API keys is assigned to.
+
+        Called when ``requires_resource_key_assignees`` is True and the offering
+        manages its keys one by one: on every membership sync of the resource (except
+        one restricted for its members, whose members are all removed), and after a
+        key is created. ``assignments`` maps the client_id of every key the resource
+        holds (deleted keys, and requested ones with no client_id yet, left out) to its
+        assignee's offering username -- the name the membership sync adds them under --
+        or to None when the key is assigned to nobody, or to someone with no actionable
+        offering user or no username yet. The map is complete: a client_id missing
+        from it is not a key of the resource. Default: no-op.
+        """
+        del waldur_resource, assignments
+
     def process_existing_users(self, existing_users: set[str]) -> None:
         """Process existing users on the backend.
 
@@ -1465,6 +1489,13 @@ class BaseBackend(ABC):
     # accept it silently: the key would otherwise be reported as restricted when it
     # is not. The empty list is such a setting: Waldur shows that key as having no
     # models.
+    #
+    # ``rotate_resource_key`` of a backend with the lifecycle also takes ``limits``
+    # and ``allowed_models`` as keywords: the key's own settings, for a rotation that
+    # has to mint a key the backend lost. ``limits`` is a dict whenever Waldur's
+    # settings are known; both None means they could not be read. It takes
+    # ``resource_limits`` too, as ``mint_resource_key`` does, when Waldur's resource
+    # was read.
 
     def mint_resource_key(
         self,
@@ -1472,6 +1503,7 @@ class BaseBackend(ABC):
         reserved_client_ids: list[str],
         limits: Optional[dict] = None,
         allowed_models: Optional[list[str]] = None,
+        resource_limits: Optional[dict] = None,
     ) -> dict:
         """Create one more key for the resource and apply it, leaving the others alone.
 
@@ -1480,8 +1512,12 @@ class BaseBackend(ABC):
         new key must not take one of them, since Waldur attributes usage by client_id
         and refuses a reused one. A key minted onto a paused resource must not serve
         until the resource is restored.
+
+        ``resource_limits`` are the resource's limits as Waldur holds them (None when
+        not read), for a backend that caps a key by its resource's limits as well as
+        its own; a backend that does not can ignore them.
         """
-        del resource_backend_id, reserved_client_ids, limits, allowed_models
+        del resource_backend_id, reserved_client_ids, limits, allowed_models, resource_limits
         msg = f"{type(self).__name__} does not mint individual API keys"
         raise NotImplementedError(msg)
 

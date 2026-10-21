@@ -16,12 +16,12 @@ from typing import ClassVar, Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
-from waldur_site_agent.backend import backends, structures
+from waldur_site_agent.backend import UNASSIGNED_USAGE_SUFFIX, backends, structures
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common import WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES
 from waldur_site_agent.common.structures import normalize_backend_components
 
-from .client import META_RESOURCE, LiteLLMClient
+from .client import META_KEY, META_RESOURCE, LiteLLMClient
 from .usage_client import LiteLLMUsageClient
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,12 @@ USAGE_COMPONENTS = USAGE_METRICS
 _SLOT_SUFFIX = re.compile(r"-\d+$")
 
 _REPORT_ONLY = "LiteLLM usage backend is reporting-only and does not manage resources"
+
+# Where per-key usage puts chat that no key can take: someone with no key assigned now,
+# whose key was deleted or reassigned this month, say. Not a slot (it has no number),
+# so it can never be a real key; Waldur holds no key by this name, and the core neither
+# submits it nor warns of it as a key Waldur does not hold.
+UNASSIGNED_CHAT_SUFFIX = UNASSIGNED_USAGE_SUFFIX
 
 # How long a fetched month of usage rows stays reusable, in seconds. It has to cover
 # one reporting pass and end before the next one starts, so it is derived from the
@@ -62,6 +68,9 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
 
     supports_decreasing_usage: bool = True
     supported_roles: ClassVar[tuple[backends.BackendRole, ...]] = (backends.BackendRole.REPORTING,)
+    # API usage arrives on the key itself; chat usage under the person's address,
+    # which the management backend links to the key assigned to them (``META_KEY``).
+    supports_resource_api_key_usage: bool = True
 
     def __init__(self, backend_settings: dict, backend_components: dict) -> None:
         """Initialize the backend, normalizing component objects to plain dicts."""
@@ -200,6 +209,43 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         """
         return _SLOT_SUFFIX.sub("", key_alias)
 
+    def _is_minted(self, alias: Optional[str]) -> bool:
+        """Whether a key alias is one this plugin minted, and so bills by alias.
+
+        Read off the alias shape alone, because this backend never learns the
+        offering's full resource list: every alias this plugin mints is
+        ``<uuid.hex>-<slot>``, so stripping the slot suffix changes it. A key with no
+        suffix -- Open WebUI's own shared key is exactly that -- is not.
+        """
+        return bool(alias) and self._resource_id_for(str(alias)) != alias
+
+    def _billed_by_alias(self, row: dict) -> bool:
+        """Whether a per-person row may have been served on a key billed by alias.
+
+        Such a row is left out of attribution by address, which would bill it twice --
+        and to whoever the request's address header named, which a key holder sets.
+
+        A row with no key on it (the proxy gave no per-key split) cannot be told apart,
+        so it counts as served on one of the plugin's keys whenever the day had any of
+        them in use, or no key breakdown to tell from. Dropping it then loses chat
+        usage, but only for such a day on such a proxy; counting it would let anyone
+        holding a key bill their API calls to another member.
+        """
+        alias = row.get("key_alias")
+        if alias:
+            return self._is_minted(alias)
+        day_aliases = row.get("day_key_aliases")
+        if day_aliases is None:
+            return False
+        ambiguous = not day_aliases or any(self._is_minted(other) for other in day_aliases)
+        if ambiguous:
+            logger.warning(
+                "LiteLLM gave no per-key split for usage under %s on a day keys of this "
+                "offering were used; it is not attributed by address",
+                row.get("user_id"),
+            )
+        return ambiguous
+
     def _usage_rows(self, start_date: str, end_date: str) -> list:
         """Return the proxy's usage rows for a date range, reusing a recent fetch.
 
@@ -233,35 +279,54 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         Read from the proxy rather than from Waldur: this backend never sees a team
         list, and the ownership stamp on the user record is in any case the thing that
         decides which resource an address bills to.
+        """
+        return self._user_maps()[0]
+
+    def _user_maps(self) -> tuple:
+        """Both maps above, or empty ones when the user list cannot be read.
+
+        Losing the maps costs the chat half of one pass; raising would lose the API half
+        as well, and the processor would report nothing at all for every resource on the
+        offering.
+        """
+        try:
+            return self._read_user_maps()
+        except BackendError:
+            logger.exception("Unable to read the LiteLLM user list; chat usage not attributed")
+            return {}, {}
+
+    def _read_user_maps(self) -> tuple:
+        """``({email: resource}, {email: key alias})`` from one ``/user/list`` walk.
+
+        The alias is the one the management backend stamped as the key assigned to the
+        person; "" when their chat follows a key but none is assigned. A user with no
+        stamp at all is on membership-based chat and is left out of the second map.
+        Raises when the listing fails.
 
         Cached on the same TTL as the usage rows, and for the same reason -- one
         reporting pass asks per resource, and the listing does not depend on which
         resource asked.
         """
         if self.litellm_client is None:
-            return {}
+            return {}, {}
         now = time.monotonic()
         cached = self._user_map_cache
         if cached is not None and now - cached[0] < self._usage_cache_ttl:
             return cached[1]
-        mapping = {}
-        try:
-            records = self.litellm_client.list_users()
-        except BackendError:
-            # Losing the map costs the chat half of one pass; raising would lose the
-            # API half as well, and the processor would report nothing at all for every
-            # resource on the offering.
-            logger.exception("Unable to read the LiteLLM user list; chat usage not attributed")
-            return {}
+        resources: dict = {}
+        keys: dict = {}
+        records = self.litellm_client.list_users()
         for record in records:
             email = str(record.get("user_id") or "").strip().lower()
             metadata = record.get("metadata")
             metadata = metadata if isinstance(metadata, dict) else {}
             resource_id = metadata.get(META_RESOURCE)
             if email and resource_id:
-                mapping[email] = str(resource_id)
-        self._user_map_cache = (now, mapping)
-        return mapping
+                resources[email] = str(resource_id)
+                if META_KEY in metadata:
+                    keys[email] = str(metadata.get(META_KEY) or "")
+        self._user_map_cache = (now, (resources, keys))
+        return resources, keys
 
     def _collect_usage(
         self, resource_backend_ids: list, start_date: str, end_date: str
@@ -294,8 +359,9 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
             owner = user_map.get(str(row["user_id"]).strip().lower())
             if owner is None or owner not in wanted:
                 continue
-            # Dropped when the key it was served on belongs to a resource this plugin
-            # manages *at all*, not merely one in this pass's scope. Attribution by
+            # Dropped when the key it was served on, or may have been served on, belongs
+            # to a resource this plugin manages *at all*, not merely one in this pass's
+            # scope. Attribution by
             # alias always wins: the row is already counted in step 1 when that
             # resource is in scope, and on the pass that does have it in scope
             # otherwise. Testing only against ``wanted`` would take a row served on
@@ -303,19 +369,75 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
             # to B on this pass and to A on the next one -- one resource's API traffic
             # charged to another, and charged twice overall.
             #
-            # "Managed" is read off the alias shape alone, because this backend never
-            # learns the offering's full resource list. Every alias this plugin mints is
-            # ``<uuid.hex>-<slot>``, so stripping the slot suffix changes it; a key with
-            # no suffix -- Open WebUI's own shared key is exactly that -- is left alone,
-            # and its rows are the chat usage this step exists to pick up. Testing
+            # "Managed" is read off the alias shape (``_is_minted``); the rows of Open
+            # WebUI's shared key are the chat usage this step exists to pick up. Testing
             # instead against the resources seen in this pass missed a resource that has
             # keys but no chat users: its key rows were billed to the address owner's
             # resource here and to itself by alias on its own pass.
-            alias = row["key_alias"]
-            if alias and self._resource_id_for(alias) != alias:
+            if self._billed_by_alias(row):
                 continue
             self._accumulate(report, owner, row)
         return report
+
+    def get_resource_key_usage_report(self, resource_backend_ids: list) -> dict:
+        """The current month's usage per key: ``{resource: {alias: {component: usage}}}``.
+
+        The same rows as the resource total, attributed one level finer, so the keys
+        of a resource sum to its total:
+
+        - a row served on a key this plugin minted lands on that key, whatever address
+          it carried -- the alias decides, exactly as for the resource total;
+        - a chat row lands on the key stamped as the one assigned to the person
+          (``META_KEY``), which is how a key's limit holds against its holder's chat.
+
+        Chat usage that no key can take -- from a person with no key assigned now,
+        or one still on membership-based chat -- goes on ``<resource>-unassigned``, which
+        no key is named. It keeps the keys' sum equal to the resource total without
+        charging the usage to a key it did not come through, and without taking per-key
+        reporting away from every other key of the resource for the rest of the month.
+        """
+        today = datetime.datetime.now(tz=datetime.timezone.utc)
+        start, end = self._month_range(today.year, today.month)
+        wanted = set(resource_backend_ids)
+        report: dict = {resource_id: {} for resource_id in wanted}
+        if not wanted or not self._usage_metrics:
+            return report
+
+        for row in self._usage_rows(start, end):
+            alias = row["key_alias"]
+            resource_id = self._resource_id_for(alias)
+            if resource_id in wanted:
+                self._accumulate_into(report[resource_id], alias, row)
+
+        try:
+            resources, keys = self._read_user_maps()
+        except BackendError:
+            # Reporting the keys without their holders' chat would drop a key paused at
+            # its limit by chat back under it, and Waldur would resume it. None tells the
+            # core to skip per-key usage for this round instead.
+            logger.exception("Unable to read the LiteLLM user list; per-key usage not reported")
+            return dict.fromkeys(wanted)
+        if resources:
+            for row in self._user_usage_rows(start, end):
+                email = str(row["user_id"]).strip().lower()
+                owner = resources.get(email)
+                if owner is None or owner not in wanted:
+                    continue
+                # Served on a key this plugin minted: counted above, by alias. See
+                # ``_collect_usage`` for why the shape of the alias decides.
+                if self._billed_by_alias(row):
+                    continue
+                key = keys.get(email)
+                if not key or self._resource_id_for(key) != owner:
+                    key = f"{owner}{UNASSIGNED_CHAT_SUFFIX}"
+                self._accumulate_into(report[owner], key, row)
+        return report
+
+    def _accumulate_into(self, totals_by_name: dict, name: str, row: dict) -> None:
+        """Add one usage row onto ``totals_by_name[name]``, starting it at zero."""
+        totals = totals_by_name.setdefault(name, dict.fromkeys(self._usage_metrics, 0))
+        for component, metric in self._usage_metrics.items():
+            totals[component] += row[metric]
 
     def _accumulate(self, report: dict, resource_id: str, row: dict) -> None:
         """Add one usage row onto a resource's running total.

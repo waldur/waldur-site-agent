@@ -24,8 +24,9 @@ warehouse to deploy.
 | Terminate resource | Deletes every key of the resource (`soft_delete` does not apply) |
 | Update limits | `POST /key/update` with the backstop fields on every key |
 | Add / remove members | LiteLLM users (and Open WebUI accounts when configured) |
-| Pause / downscale / restore | Blocks / unblocks every key |
-| Usage reporting | `litellm`: **No-op**. `litellm-usage`: token and spend usage from the spend API |
+| Pause / downscale / restore | Blocks / unblocks every key; a key paused on its own stays blocked |
+| Per-key commands | Create, pause, resume, update and delete one key; see [Per-key API keys](#per-key-api-keys) |
+| Usage reporting | `litellm`: **No-op**. `litellm-usage`: tokens and spend, per resource and per key |
 
 ## Features
 
@@ -37,10 +38,15 @@ warehouse to deploy.
   daily spend table — no sidecar collector
 - **Enforcement backstop**: mirror Waldur's limits onto each key (`max_budget`, `tpm_limit`,
   `rpm_limit`) so a burst between reporting cycles cannot outrun metering
-- **Model allowlist**: restrict every key of an offering to a set of models
+- **Model allowlist**: restrict every key of an offering to a set of models, and one key to a
+  subset of them
+- **Per-key API keys**: with `enable_api_key_provisioning` on the Waldur offering, each key is
+  created, limited, paused, resumed and deleted on its own, and its usage is reported on its own
 - **Chat surface (optional)**: provision people into [Open WebUI](https://openwebui.com)
   alongside their LiteLLM user, bill their chat usage back to the resource, and revoke
-  both together — see [The chat surface](#the-chat-surface-open-webui)
+  both together — see [The chat surface](#the-chat-surface-open-webui). With per-key API keys,
+  a person's chat follows the key assigned to them — see
+  [Chat that follows the key](#chat-that-follows-the-key)
 
 ## Overview
 
@@ -150,6 +156,128 @@ per-resource under any configuration; it is an offering-wide setting and only ap
 > on the 20th under `budget_duration: "30d"` resets on the 20th. This only affects the backstop —
 > Waldur's own metering and its report → pause path stay month-aligned — but it means a rotated or
 > late-minted key can carry a reset date its siblings do not share.
+
+## Per-key API keys
+
+Turn on `plugin_options.enable_api_key_provisioning` on the Waldur offering and Waldur governs
+a resource's keys one by one: a manager requests a key (for a person, if they like), gives it
+its own limits and model list, pauses, resumes and deletes it, and Waldur reads each key's
+usage. The plugin carries out each command on the proxy, then acknowledges it to Waldur. An
+offering without the option behaves as before: two keys per resource, reveal and rotate.
+
+| Command | What happens on the proxy |
+|---|---|
+| create | `POST /key/generate` as the next free `<backend_id>-<n>`; blocked on a paused resource |
+| pause | `POST /key/update` with `blocked: true` and the key's own-pause record, in one write |
+| resume / update | `POST /key/update` with the key's backstop, `models`, `blocked` and records, in one write |
+| delete | `POST /key/delete`; a key already gone counts as deleted |
+| rotate | `/key/regenerate` (or delete + mint), applying Waldur's limits and model list for the key when given |
+
+A new key skips every slot Waldur still holds, deleted keys included: Waldur attributes usage
+by alias and refuses a reused one. Every command can run twice: the agent's sweep replays one
+whose acknowledgement was lost.
+
+Rotation lifts a key's own pause instead of keeping it: Waldur rotates only a key it shows as
+serving and settles it OK, so a key still paused on its own at that point is the residue of a
+pause whose acknowledgement was lost.
+
+A rotation applies the key's limits and model list as Waldur holds them -- carried on the
+command, or read from Waldur -- whichever way the key is rotated, exactly as an update would,
+own-limit stamp and tighter-of backstop included. Only when Waldur cannot be read does the key
+keep the settings it has on the proxy.
+
+**A key changes hands by rotation.** Waldur rotates a key whose assignee is set, changed or
+cleared (waldur/waldur-mastermind#772), carrying any limits and models the same edit set. The
+previous holder -- or any project member, while the key was unassigned -- may have revealed the
+old secret; since API usage on the key counts against its limit and its chat follows the new
+holder, the old secret has to stop working. After the rotation the agent hands the resource's
+assignees to the proxy at once, as after a create, so chat moves to the new holder without
+waiting for the next membership pass. A Waldur older than that keeps the secret on
+reassignment: there, rotate a key after reassigning it.
+
+On an open-source proxy a rotation is a delete and a mint under the same alias, so the new key
+starts with no proxy spend: its `max_budget` backstop counts from zero again. Waldur's own
+metering is not affected, since usage is attributed by alias. A key the proxy lost is minted
+back with its own model list and limits from Waldur; if those cannot be read, it is minted
+paused with no models until an update or a resume from Waldur applies them, rather than with
+the offering's.
+
+Under key management the agent mints no keys when a resource is created: every key comes from
+a request in Waldur (waldur/waldur-site-agent#71, waldur/waldur-site-agent!619). A resource's
+first key takes the resource's limits from Waldur, since it has no sibling to read them from,
+and so does a key the proxy lost when a rotation mints it back: it may have been the resource's
+only one.
+
+### What is recorded on the key
+
+The proxy has one `blocked` flag per key and one set of limit fields, so the reasons behind
+them are kept in the key's `metadata`:
+
+| Metadata | Meaning |
+|---|---|
+| `waldur_key_paused` | Paused on its own, not with its resource: a resource restore leaves it blocked |
+| `waldur_key_limits` | The key's own limits, by Waldur component name |
+| `waldur_resource_limits` | The resource's limits as last reconciled, for a key created before the next |
+| `waldur_key_models` | The key's model list as Waldur sent it: `["*"]`, names, or `[]` |
+
+A key's `models` on the proxy is Waldur's list resolved against the offering's `models`
+setting when the key was written, and Waldur sends nothing when that setting changes. So the
+membership sync resolves every key's list again from `waldur_key_models`: a key with every
+model gets the offering's current list, and a named list keeps only the models the offering
+still serves (`no-default-models` when none is left). A model dropped from the offering
+therefore stops answering on the API at the next pass, as it closes in chat. A key written
+before the record existed only loses the models the offering no longer serves; nothing is
+added to it.
+
+A key paused on its own is no evidence that its resource is paused, so a resource's pause is
+read from its other keys: every key not paused on its own is blocked. That
+cannot record the pause of a resource with **no** keys, so the backend also remembers the
+pauses it applied. Before it creates, rotates, resumes or updates a key, the agent applies Waldur's
+own flag first, so a key created on a paused keyless resource lands blocked, and a key
+resumed on a paused resource whose keys are all paused on their own stays blocked.
+
+### Limits
+
+A key's own limit on a component the proxy has a field for (`token_cost`, `tpm`, `rpm`, see
+[Which limits reach the key](#which-limits-reach-the-key)) is written on that key only. Where
+the resource limits the same component, the tighter of the two applies, field by field; a 0
+in the key's limits means it has none of its own. The membership-sync reconciliation keeps it
+that way, and removing the key's limit returns the key to the resource's.
+
+Limits on `input_tokens` and `output_tokens` have no proxy field. Waldur enforces them, and
+every key limit, from the per-key usage report: a key whose usage reaches its limit is paused,
+and resumed when it is under the limit again in a new month.
+
+### Models
+
+A key's model list narrows within the offering's `models`:
+
+| Waldur sends | The key gets |
+|---|---|
+| `["*"]`, or no list (a Waldur older than `["*"]`) | the offering's `models` (every model when that is empty) |
+| a list of names | those names; a name the offering does not serve fails the command, naming it |
+| `[]` (no models) | `["no-default-models"]`: every call to a real model answers 403 |
+
+The proxy reads an empty `models` on a key as every model, so `[]` cannot be written as it is.
+Waldur sends `[]` when every model a key allows is switched off on its resource or retired
+from the offering; the key is written with the proxy's reserved `no-default-models` name as
+its only model instead, which no deployment carries. Its holder's chat stays open with no
+model in it.
+
+### Per-key usage
+
+`litellm-usage` reports each key's figure for the month. API usage lands on the key it was
+served on, whatever address the request carried. On an offering with a chat surface, a
+person's chat usage lands on the key assigned to them (see below). Chat usage from someone with
+no key assigned now -- their key was deleted or reassigned this month, say -- lands on
+`<backend_id>-unassigned`, which is no key: Waldur holds none by that name, so it counts
+against no key's limit and the agent leaves it out of the per-key report.
+Either way the keys of a resource sum to its total.
+
+A person's chat for the whole month counts against the key stamped on them **now**, so
+reassigning or deleting a key mid-month moves that month's chat with it: the new holder's
+chat lands on the key, the previous holder's leaves it. A key paused at its limit by chat
+can come back under it that way, and Waldur then resumes it.
 
 ## The chat surface (Open WebUI)
 
@@ -288,7 +416,9 @@ way that looks like a Waldur bug.
 - **`BYPASS_MODEL_ACCESS_CONTROL=True`** — without it a newly created account sees an
   **empty model list** and every chat returns `Model not found`. Open WebUI shows
   non-admins only models that have a stored model record, and models discovered from a
-  connection have none.
+  connection have none. **Except with per-key API keys**, which need it **off**: there the
+  plugin gives each model a record and a group, see
+  [Chat that follows the key](#chat-that-follows-the-key).
 - **`ENABLE_API_KEYS`** (admin config, **not** the env var) — the credential this plugin
   authenticates with.
 
@@ -323,6 +453,19 @@ every sync.
 - `POST /api/v1/auths/add` for an existing address is a **400**, so callers look the
   account up first.
 - `DELETE /api/v1/users/{id}` for an unknown id is **`200 true`**, not 404.
+
+Groups and model access, verified against 0.11.3 on 2026-10-15 with
+`BYPASS_MODEL_ACCESS_CONTROL=False`:
+
+- `POST /api/v1/models/model/access/update` with
+  `{"id", "name", "access_grants": [{"principal_type": "group", "principal_id": <id>, "permission": "read"}]}`
+  **replaces** the model's grants, and creates the model's record when it has none.
+- A person then lists and can chat with only the models of the groups they are in; any other
+  is refused at chat time too. A change of membership applies on the next request.
+- `POST /api/v1/groups/id/{id}/users/add` with `{"user_ids": [...]}` is safe **one user per
+  call only**: a batch that includes an existing member silently drops the new members
+  added before it, and still answers 200. Removing a non-member changes nothing.
+- `GET /api/v1/users/{id}/groups` lists one account's groups.
 
 Sign-in still succeeds for a demoted account: the person reaches the "awaiting approval"
 screen and can read their old conversations, but every model call is refused. That is the
@@ -392,10 +535,93 @@ LiteLLM's `"Unassigned"` bucket, which no managed address ever matches, so the c
 case separates on its own. Step 2's exclusion covers the other one: a person calling the
 API with their own key appears in both breakdowns and must be billed once.
 
+A proxy that gives an entity no `api_key_breakdown` leaves step 2 unable to tell which key
+each record was served on, and the address on it is whatever the request's header said: a
+key holder can name another member. Such a total is counted only on a day when none of the
+plugin's keys was used (only the shared key, or keys with no slot alias); on any other day
+it is skipped with a warning, losing that day's chat usage rather than billing a person for
+someone else's API calls. Proxies validated with this plugin always give the split.
+
 The address-to-resource map is read from the proxy (`GET /user/list`, filtered on the
 metadata stamp), not from Waldur — the reporting backend never sees a team list, and the
 stamp is in any case what decides where an address bills. An API-only offering never
 makes that call.
+
+### Chat that follows the key
+
+On an offering with both a chat surface and
+[per-key API keys](#per-key-api-keys), chat is granted by the key assigned to a person,
+not by project membership:
+
+- **Chat needs an assigned key.** A member's chat account is enabled while a key assigned to
+  them serves, and disabled when it is paused (at its limit or by hand), deleted or assigned
+  to someone else, when they leave the project, and while the resource is paused. A member
+  with no key has no chat. That includes people who chatted by membership before key
+  management was turned on: their chat closes until a key is assigned to them.
+- **Chat offers only the key's models.** Open WebUI lists and serves a person only the models
+  whose group they are in. The plugin keeps one group per model of the offering
+  (`waldur-model-<model>`), grants each model to its group, and puts the person in the
+  groups of their key's models: all of them for a key with every model. A model dropped
+  from the offering's `models` closes too: every `waldur-model-*` group counts as the
+  plugin's, so people leave the groups of retired models on the next membership sync. An
+  Open WebUI with such groups therefore serves one key-managed offering only.
+- **Chat counts against the key.** The person's chat usage is reported on their key, so
+  Waldur pauses the key, and with it the chat, at the key's limit.
+- **One key carries a person's chat.** Waldur lets a person hold several keys on a resource;
+  their chat follows the lowest-numbered one, whatever its state, and is closed while that key
+  is paused. Moving chat to another key while one is paused at its limit would let chat
+  alternate between the two and never stop.
+
+Who holds which key comes from Waldur: the membership sync reads the resource's keys and
+their assignees on every pass, and the key's alias is stamped on the person's LiteLLM user
+(`waldur_api_key` in its `metadata`). So a reassignment, a missed command, or an account that
+only appeared at the person's first sign-in all converge on the next membership sync. A newly
+created key's assignee is applied straight away.
+
+How the two request paths are governed:
+
+| | API calls, with the person's key | Chat, through Open WebUI |
+|---|---|---|
+| Authenticates as | the person's key | Open WebUI's shared key |
+| Usage reported on | the key it was served on | the key assigned to the person |
+| Model list | the proxy, on the key | Open WebUI, by group membership |
+| Monthly limit | Waldur (report → pause), plus the key's `max_budget` | Waldur (report → pause) |
+| Per-minute limits | the proxy, on the key | **not enforced** |
+| Pause | the key is blocked | the chat account is disabled |
+
+Two limits of this design are accepted:
+
+- **Chat can overshoot a monthly limit** until the next usage report (30 minutes by
+  default): only Waldur enforces it there.
+- **Per-minute limits do not apply in chat.** Chat authenticates as the shared key, which
+  the proxy checks instead.
+
+What the Open WebUI deployment needs on top of the list above:
+
+- **`BYPASS_MODEL_ACCESS_CONTROL=False`.** With it on, everyone sees every model.
+- **The offering's `models` setting.** It is the list the plugin makes groups for; without
+  it, chat model access is left to the operator.
+- **`DEFAULT_GROUP_ID` empty**, or naming a group that grants no models. It is applied to
+  every account at creation, the agent's own included.
+- **Group sync from the identity provider off**: `ENABLE_OAUTH_GROUP_MANAGEMENT`,
+  `WEBUI_AUTH_TRUSTED_GROUPS_HEADER` and SCIM each rewrite a person's groups at sign-in and
+  would undo the plugin's. If OAuth group management has to stay on, set
+  `OAUTH_BLOCKED_GROUPS` to cover `waldur-model-*`.
+- **The task model and the context-compaction model left unset** ("current model"). Open
+  WebUI checks them as the user, so naming one would need every user to have access to it.
+- **`DEFAULT_USER_ROLE=pending`**, as for SSO above, so an account a person creates at sign-in
+  stays closed until the plugin opens it.
+
+The plugin re-grants each model to its group on every pass, so a model an admin set to
+Public in the UI is closed again. Admins bypass model access control altogether.
+
+`BYPASS_MODEL_ACCESS_CONTROL` is instance-wide: an Open WebUI shared with an offering that
+grants chat by membership hides every model from that offering's people too. Give such an
+offering its own Open WebUI.
+
+Turning key management off again leaves each person's `waldur_api_key` stamp on their LiteLLM
+user, and restore keeps reading it. Remove the stamps (or the users, which the next
+membership sync re-adds) when switching an offering back to chat by membership.
 
 ### Chat surface settings (`openwebui:`, nested under the management settings)
 
@@ -437,6 +663,11 @@ that provisions and revokes people.
 | `remove_users_from_resource()` | Open WebUI role → `pending` (or `DELETE`), then `POST /user/delete` |
 | `list_resource_users()` | `GET /user/list`, filtered on the `waldur_resource` metadata stamp |
 | `get_resource_metadata()` | `active` = any key not blocked |
+| `mint_resource_key()` | `POST /key/generate` as the next free slot, with the key's own limits, models and records |
+| `pause_resource_key()` | `POST /key/update`: `blocked: true` and `waldur_key_paused`, plus the holder's chat closed |
+| `resume_` / `update_resource_key()` | `POST /key/update`: backstop, `models`, `blocked`, records; chat follows |
+| `delete_resource_key()` | `POST /key/delete`, plus the holder's chat closed and unlinked |
+| `sync_resource_key_assignees()` | stamps each member's key alias, opens or closes their chat, sets their model groups |
 | `recreate_missing_resource()` | returns `False` + warning — the agent cannot restore a key it never kept |
 
 > **`soft_delete` does not apply.** `delete_resource()` is overridden, so the core's soft-delete
@@ -466,7 +697,10 @@ bounds that reuse so it cannot outlive the pass. It defaults to **half**
 `WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES` (so 15 minutes on the default 30-minute period): a whole
 period would keep an entry alive into the next pass, which is exactly when fresh numbers are due.
 
-**Rollup:** usage is attributed per **resource**, not per key. On an offering with a
+**Per key:** `get_resource_key_usage_report()` reports the same rows one level finer, for an
+offering with [per-key API keys](#per-key-api-keys).
+
+**Rollup:** the resource total is attributed per **resource**, not per key. On an offering with a
 chat surface it is also attributed per **person** — see
 [How chat usage is billed](#how-chat-usage-is-billed). The `-<n>` slot suffix is stripped
 from the alias and the rows are summed, so rotating a key does not split a tenant's bill and a
@@ -631,6 +865,11 @@ Verified against `ghcr.io/berriai/litellm:main-stable` (open-source, **no** ente
 2026-08-25. These are the answers the implementation is built on; re-check them when targeting a
 much older or newer proxy.
 
+The per-key API keys were validated on LiteLLM 1.105.1. LiteLLM 1.107.0 answers 500 instead of
+401/403 when it refuses a key for authentication or budget (a blocked key, a key over its
+`max_budget`, a model the key does not allow): the refusal still holds, but clients see a server
+error.
+
 ### Enterprise-gated endpoints
 
 Three endpoints refuse to run without a `LITELLM_LICENSE`, and they do not agree on a status code —
@@ -683,6 +922,19 @@ using it would reintroduce the hash → alias map.
   (alongside `keys` and `total_count`), not nested under a `metadata` object — unlike
   `/user/daily/activity`, which nests them. Paging past the last page returns an empty `keys` list
   rather than an error. The two clients read the field from different places for this reason.
+- **`/key/generate` and `/key/update` take `metadata`, and `/key/update` *replaces* it.**
+  Posting `{"metadata": {"only": 1}}` to a key carrying three entries leaves exactly
+  `{"only": 1}`. So the plugin always writes a key's whole metadata, merged with what it
+  read. `/user/update` replaces a user's `metadata` the same way. Verified 2026-10-15.
+- **One `/key/update` can set `blocked` and `metadata` together**, and a key blocked that way
+  answers 401 at once. `/key/update` with `models` narrows the key: a model outside the list
+  answers 403. `models: []` is stored as `[]`, which the proxy reads as every model.
+  Verified 2026-10-15.
+- **A key with `models: ["no-default-models"]` can call no model.** A real model answers 403,
+  the reserved name itself 400 (no deployment), and the key's `/v1/models` lists nothing.
+  LiteLLM documents the name for users only; on a key it works because a key calls only the
+  names it lists. A made-up name blocks calls too, but `/v1/models` then lists it.
+  Verified 2026-10-15.
 - **`blocked` comes back as `null`, not `false`,** for a key that was never blocked, so it must be
   read as truthy/falsy rather than compared against `False`.
 - **Aliases are globally unique**: a duplicate `key_alias` is rejected with 400. A delete frees the

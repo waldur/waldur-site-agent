@@ -250,6 +250,7 @@ def test_generate_applies_the_model_allowlist_and_backstops() -> None:
         budget_duration=None,
         tpm_limit=100,
         rpm_limit=10,
+        metadata={"waldur_resource_limits": {}},
     )
 
 
@@ -305,6 +306,8 @@ def test_limits_are_reconciled_from_waldur_onto_the_keys() -> None:
             "tpm_limit": None,
             "rpm_limit": None,
             "budget_duration": "30d",
+            # Stamped so a key minted before the next cycle starts from them.
+            "metadata": {"waldur_resource_limits": {"token_cost": 50}},
         },
     )
 
@@ -351,7 +354,11 @@ def test_clearing_every_limit_still_reconciles() -> None:
 def test_reconciliation_skips_a_key_that_already_carries_the_limits() -> None:
     backend = _make_backend()
     backend.litellm_client.list_keys.return_value = [
-        {**_key(f"{RID}-1", "h1"), "max_budget": 50}
+        {
+            **_key(f"{RID}-1", "h1"),
+            "max_budget": 50,
+            "metadata": {"waldur_resource_limits": {"token_cost": 50}},
+        }
     ]
 
     backend.set_resource_limits(RID, {"token_cost": 50})
@@ -369,7 +376,12 @@ def test_reconciliation_skips_a_key_that_already_carries_a_budget_duration() -> 
     # does not turn reconciliation into one /key/update per key per cycle.
     backend = _make_backend({**SETTINGS, "budget_duration": "30d"})
     backend.litellm_client.list_keys.return_value = [
-        {**_key(f"{RID}-1", "h1"), "max_budget": 50, "budget_duration": "30d"}
+        {
+            **_key(f"{RID}-1", "h1"),
+            "max_budget": 50,
+            "budget_duration": "30d",
+            "metadata": {"waldur_resource_limits": {"token_cost": 50}},
+        }
     ]
 
     backend.set_resource_limits(RID, {"token_cost": 50})
@@ -474,7 +486,9 @@ def test_rotate_recreates_a_slot_the_proxy_lost() -> None:
     backend.litellm_client.list_keys.return_value = [_key(f"{RID}-2", "h2", blocked=True)]
     backend.litellm_client.generate_key.return_value = {"key": "sk-new"}
 
-    assert backend.rotate_resource_key(f"{RID}-1", RID) == "sk-new"
+    assert (
+        backend.rotate_resource_key(f"{RID}-1", RID, limits={}, allowed_models=["*"]) == "sk-new"
+    )
 
     backend.litellm_client.regenerate_key.assert_not_called()
     backend.litellm_client.delete_keys.assert_not_called()
@@ -676,6 +690,7 @@ def test_limits_are_mirrored_onto_every_key_in_full() -> None:
         "tpm_limit": 900,
         "rpm_limit": 60,
         "budget_duration": "30d",
+        "metadata": {"waldur_resource_limits": {"token_cost": 40, "tpm": 900, "rpm": 60}},
     }
     # Each key carries the resource's whole budget: the keys are alternatives for one
     # consumer, so splitting it would throttle a single-key consumer to half.

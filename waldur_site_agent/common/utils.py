@@ -2110,8 +2110,12 @@ def rotate_resource_api_key(
     resource_backend_id: str,
     resource_uuid: Optional[str] = None,
     expose_backend_error_details: bool = True,
-) -> None:
+    key_settings: Optional[dict] = None,
+) -> bool:
     """Rotate one key in the backend, then report the new value to Waldur.
+
+    Returns whether the new value reached Waldur; a failure is reported as
+    ``set_erred`` instead.
 
     A backend whose public identifier rotates together with the secret (an S3
     access key) returns both halves as a dict; one with a stable client_id (an
@@ -2120,6 +2124,12 @@ def rotate_resource_api_key(
     When ``resource_uuid`` is given, the resource's known client_ids travel with the
     rotation so a backend can drop keys Waldur never learned about — the residue of
     an earlier rotation whose reply was lost.
+
+    ``key_settings`` (``limits`` and ``allowed_models``, and ``resource_limits`` when
+    Waldur's resource was read) is passed on to the backend as keyword arguments when
+    given. Only a backend with the per-key lifecycle takes
+    them, to mint a lost key back with its own settings; the others keep the
+    signature they always had, so the caller leaves it out for them.
     """
     known = (
         _known_client_ids(waldur_rest_client, resource_uuid)
@@ -2128,7 +2138,7 @@ def rotate_resource_api_key(
     )
     try:
         result = backend.rotate_resource_key(
-            client_id, resource_backend_id, known_client_ids=known
+            client_id, resource_backend_id, known_client_ids=known, **(key_settings or {})
         )
         # The report is inside the try on purpose. Outside it, a failed set_key left
         # the row Updating with modified unadvanced, which is exactly what the
@@ -2148,4 +2158,5 @@ def rotate_resource_api_key(
             client=waldur_rest_client,
             body=ResourceApiKeySetErredRequest(error_message=error_message),
         )
-        return
+        return False
+    return True

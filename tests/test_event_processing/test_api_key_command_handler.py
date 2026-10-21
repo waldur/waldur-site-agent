@@ -81,7 +81,9 @@ class TestPushHelpers(unittest.TestCase):
         backend = _supporting_backend()
         backend.rotate_resource_key.return_value = "sk-new"
 
-        common_utils.rotate_resource_api_key(mock.Mock(), "key-uuid-1", "cid-1", backend, "cid")
+        self.assertTrue(
+            common_utils.rotate_resource_api_key(mock.Mock(), "key-uuid-1", "cid-1", backend, "cid")
+        )
 
         backend.rotate_resource_key.assert_called_once_with(
             "cid-1", "cid", known_client_ids=None
@@ -161,7 +163,9 @@ class TestPushHelpers(unittest.TestCase):
         backend = _supporting_backend()
         backend.rotate_resource_key.side_effect = Exception("boom")
 
-        common_utils.rotate_resource_api_key(mock.Mock(), "key-uuid-1", "cid-1", backend, "cid")
+        self.assertFalse(
+            common_utils.rotate_resource_api_key(mock.Mock(), "key-uuid-1", "cid-1", backend, "cid")
+        )
 
         mock_set_key.sync.assert_not_called()
         mock_erred.sync.assert_called_once()
@@ -186,6 +190,7 @@ class TestApiKeyHandlerDispatch(unittest.TestCase):
             # The rotation path used to be the only handler ignoring the flag, so it
             # forwarded raw backend exception text to a consumer-visible field.
             expose_backend_error_details=True,
+            key_settings=None,
         )
 
     def test_revoke_is_not_dispatched(

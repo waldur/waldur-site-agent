@@ -118,6 +118,23 @@ def test_rotate_resource_key_provisions_when_absent() -> None:
     backend.gateway_client.provision_key.assert_called_once_with("res-1-1", new_key, blocked=False)
 
 
+def test_rotate_accepts_and_ignores_the_keys_and_its_resources_settings() -> None:
+    # The core passes them to every backend with the per-key lifecycle.
+    backend = _make_backend()
+    backend.gateway_client.rotate_key.return_value = False
+    backend.gateway_client.key_states.return_value = {}
+
+    new_key = backend.rotate_resource_key(
+        "res-1-1",
+        "res-1",
+        limits={"input_tokens": 5},
+        allowed_models=["*"],
+        resource_limits={"input_tokens": 1000},
+    )
+
+    backend.gateway_client.provision_key.assert_called_once_with("res-1-1", new_key, blocked=False)
+
+
 def test_rotate_fallback_stays_blocked_on_paused_resource() -> None:
     # rotate found no entry to overwrite; the resource's sibling keys are all
     # blocked (paused), so the re-applied key must land blocked, not resurrect the

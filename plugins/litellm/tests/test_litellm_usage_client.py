@@ -171,6 +171,75 @@ def test_a_key_with_no_alias_is_skipped(mock_client_cls: mock.Mock) -> None:
 
 
 @mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")
+def test_user_rows_carry_the_key_each_was_served_on(mock_client_cls: mock.Mock) -> None:
+    instance = mock_client_cls.return_value
+    instance.get.return_value = _ok(
+        {
+            "results": [
+                _day(
+                    "2026-08-01",
+                    {"h-1": _entry("res-1", 10, 20, 0.5), "h-s": _entry("shared", 1, 2, 0.1)},
+                    {
+                        "entities": {
+                            "ada@example.com": {
+                                "metrics": {"prompt_tokens": 11, "completion_tokens": 22},
+                                "api_key_breakdown": {
+                                    "h-1": _entry("res-1", 10, 20, 0.5),
+                                    "h-s": _entry("shared", 1, 2, 0.1),
+                                },
+                            }
+                        }
+                    },
+                )
+            ],
+            "metadata": {"total_pages": 1, "has_more": False},
+        }
+    )
+
+    rows = _client().get_user_usage_rows("2026-08-01", "2026-08-31")
+
+    assert [(row["key_alias"], row["input_tokens"]) for row in rows] == [
+        ("res-1", 10),
+        ("shared", 1),
+    ]
+    assert all("day_key_aliases" not in row for row in rows)
+
+
+@mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")
+def test_a_user_row_with_no_key_split_carries_the_days_keys(mock_client_cls: mock.Mock) -> None:
+    # An older proxy gives the entity total only. The day's keys go with it, so the
+    # caller can tell whether it may hold usage already billed by alias.
+    instance = mock_client_cls.return_value
+    instance.get.return_value = _ok(
+        {
+            "results": [
+                _day(
+                    "2026-08-01",
+                    {
+                        "h-1": _entry("res-1", 10, 20, 0.5),
+                        "h-x": {"metadata": {}, "metrics": {}},
+                    },
+                    {
+                        "entities": {
+                            "ada@example.com": {
+                                "metrics": {"prompt_tokens": 11, "completion_tokens": 22}
+                            }
+                        }
+                    },
+                )
+            ],
+            "metadata": {"total_pages": 1, "has_more": False},
+        }
+    )
+
+    (row,) = _client().get_user_usage_rows("2026-08-01", "2026-08-31")
+
+    assert row["key_alias"] is None
+    assert row["input_tokens"] == 11
+    assert row["day_key_aliases"] == ["res-1", None]
+
+
+@mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")
 def test_paging_follows_has_more(mock_client_cls: mock.Mock) -> None:
     instance = mock_client_cls.return_value
     instance.get.side_effect = [

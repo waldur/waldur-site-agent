@@ -147,6 +147,7 @@ class TestPollingCarriesOutKeyCommands(unittest.TestCase):
             "res-1",
             str(row.resource_uuid),
             expose_backend_error_details=True,
+            key_settings=None,
         )
 
     def test_the_error_exposure_flag_is_forwarded(
