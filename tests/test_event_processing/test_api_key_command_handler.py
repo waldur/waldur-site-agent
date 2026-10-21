@@ -7,6 +7,9 @@ from unittest import mock
 
 import stomp.utils
 from waldur_api_client.models import ObservableObjectTypeEnum
+from waldur_api_client.models.resource_offering_plugin_options import (
+    ResourceOfferingPluginOptions,
+)
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.common import structures
@@ -225,15 +228,19 @@ class TestCreateResourceProvisionsKeys(unittest.TestCase):
     a restored resource is re-provisioned instead of coming back with no keys (F12).
     """
 
-    def _run(self, supports):
+    def _run(self, supports, managed=False, lifecycle=False):
         from waldur_site_agent.backend.structures import BackendResourceInfo
 
         processor = mock.Mock()
         processor.resource_backend = mock.Mock()
         processor.resource_backend.supports_resource_api_keys = supports
+        processor.resource_backend.supports_resource_api_key_lifecycle = lifecycle
         resource = mock.Mock()
         resource.uuid = uuid_lib.uuid4()
         resource.name = "test"
+        resource.offering_plugin_options = ResourceOfferingPluginOptions.from_dict(
+            {"enable_api_key_provisioning": managed}
+        )
         info = BackendResourceInfo(backend_id="cid")
         OfferingOrderProcessor._provision_resource_api_keys(processor, resource, info)
         return processor, resource
@@ -241,12 +248,38 @@ class TestCreateResourceProvisionsKeys(unittest.TestCase):
     def test_provisions_for_supporting_backend(self, mock_prov):
         processor, resource = self._run(True)
         mock_prov.assert_called_once_with(
-            processor.waldur_rest_client, resource.uuid.hex, "cid", processor.resource_backend
+            processor.waldur_rest_client,
+            resource.uuid.hex,
+            "cid",
+            processor.resource_backend,
+            count=None,
         )
 
     def test_skipped_for_other_backends(self, mock_prov):
         self._run(False)
         mock_prov.assert_not_called()
+
+    def test_mints_no_keys_where_users_request_them_one_by_one(self, mock_prov):
+        """The pair would be two shared keys with no assignee and no limits.
+
+        Provisioning still runs, at a target of none, so an interrupted create's
+        stale keys are cleared as before.
+        """
+        self._run(True, managed=True, lifecycle=True)
+        self.assertEqual(mock_prov.call_args.kwargs["count"], 0)
+
+    def test_mints_the_pair_without_key_management(self, mock_prov):
+        """Rotation is the only way to replace a key there, so the pair stays."""
+        self._run(True, managed=False, lifecycle=True)
+        self.assertIsNone(mock_prov.call_args.kwargs["count"])
+
+    def test_mints_the_pair_on_a_backend_that_cannot_mint_on_request(self, mock_prov):
+        """The option is the offering's, and nothing ties it to a backend like ceph-s3.
+
+        Without a per-key mint, a resource with no keys would have no way to get one.
+        """
+        self._run(True, managed=True, lifecycle=False)
+        self.assertIsNone(mock_prov.call_args.kwargs["count"])
 
 
 class TestApiKeySubscription(unittest.TestCase):

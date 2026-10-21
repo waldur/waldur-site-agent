@@ -72,8 +72,13 @@ entries move between them:
 
 - **create (order)**: register the resource under the backend id the order processor generates
   (`{allocation_prefix}{resource slug}`) and surface the gateway endpoint on it. The agent then
-  generates the resource's keys, adds each as a `<backend_id>-<n>: key` entry to the **active**
-  Secret, and reports it to Waldur.
+  generates two keys, adds each as a `<backend_id>-<n>: key` entry to the **active** Secret, and
+  reports it to Waldur. Two, so one key keeps serving while the other is rotated. On an offering
+  with the `enable_api_key_provisioning` plugin option the resource starts with **no keys**
+  instead: users request their own, one at a time (see the per-key lifecycle below), and a
+  replacement can be requested before the old key is deleted. A restored resource follows the
+  same rule. Turning the option on or off later changes nothing for an existing resource: it keeps
+  the keys it has.
 - **pause**: move every key of the resource **active → blocked** — authentication now fails
   with 401.
 - **restore**: move the resource's keys **blocked → active**, except keys paused on their own.

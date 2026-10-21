@@ -718,6 +718,15 @@ resource total. Map a resource to `None` when its usage cannot be attributed
 to keys; the core then skips per-key reporting for that resource. Waldur
 pauses a key once its reported usage reaches the key's limit.
 
+At provisioning, the core asks `generate_resource_keys` for two keys, so one
+keeps working while the other is rotated. It asks for none when the offering
+sets `enable_api_key_provisioning` and the backend declares
+`supports_resource_api_key_lifecycle`: users then request keys one at a time
+through `mint_resource_key`. `generate_resource_keys` must therefore accept
+`count=0`. `prune_unknown_resource_keys` runs before it either way. A restored
+resource follows the same rule, and existing resources are never topped up or
+trimmed when the option changes.
+
 ### `supports_user_homedirs: bool = False`
 
 Set to `True` for backends that can create POSIX home directories for
