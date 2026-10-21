@@ -133,7 +133,9 @@ class ApiKeyCommandMessage(TypedDict, total=False):
         limits (Optional[dict]): the key's limits per component, on create, resume
             and update
         allowed_models (Optional[list]): the models the key may call, on create,
-            resume and update; None allows every model
+            resume and update: ``["*"]`` for every model, an empty list for none.
+            None, from a Waldur older than ``["*"]``, allows every model. The
+            key's own list narrowed by its resource's model selection
 
     Every field is optional because this is parsed straight from an untrusted frame
     body; the handler rejects a command missing what its action needs.

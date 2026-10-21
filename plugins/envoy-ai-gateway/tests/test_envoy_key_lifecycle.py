@@ -389,6 +389,14 @@ def test_minting_with_a_model_allowlist_is_refused_before_anything_is_applied() 
     assert api.secrets[ACTIVE] == {"res-1-1": "sk-one", "res-1-2": "sk-two"}
 
 
+def test_minting_a_key_for_every_model_is_carried_out() -> None:
+    backend, api = _backend()
+
+    key = backend.mint_resource_key("res-1", reserved_client_ids=[], allowed_models=["*"])
+
+    assert api.secrets[ACTIVE] == {key["client_id"]: key["api_key"]}
+
+
 # --- update -------------------------------------------------------------------
 
 
@@ -401,7 +409,7 @@ def test_update_accepts_limits_without_touching_the_gateway() -> None:
 
 
 def test_updating_a_key_left_paused_makes_it_serve() -> None:
-    # An erred resume retried as an update (the user cleared the model list) is
+    # An erred resume retried as an update (the user set the key to all models) is
     # settled OK by Waldur, so the key must come out of its pause.
     backend, api = _backend({BLOCKED: {"res-1-1.paused": "sk-one"}})
 
@@ -417,20 +425,39 @@ def test_updating_a_key_with_no_entry_fails() -> None:
         backend.update_resource_key("res-1-1", "res-1")
 
 
+# Waldur shows a key with an empty list as having no models, so the gateway cannot
+# accept it any more than a list of names; nor "*" beside a name, which is not
+# every model.
 @pytest.mark.parametrize("method", ["update_resource_key", "resume_resource_key"])
-def test_a_model_allowlist_is_refused(method: str) -> None:
+@pytest.mark.parametrize("allowed_models", [["gpt"], [], ["*", "gpt"], ["gpt", "llama"]])
+def test_a_model_allowlist_is_refused(method: str, allowed_models: list) -> None:
     backend, api = _backend({BLOCKED: {"res-1-1.paused": "sk-one"}})
 
-    with pytest.raises(BackendError, match="models"):
-        getattr(backend, method)("res-1-1", "res-1", allowed_models=["gpt"])
+    with pytest.raises(BackendError, match="cannot restrict a key's models.*all models"):
+        getattr(backend, method)("res-1-1", "res-1", allowed_models=allowed_models)
 
     assert api.secrets[BLOCKED] == {"res-1-1.paused": "sk-one"}
 
 
-@pytest.mark.parametrize("allowed_models", [None, []])
-def test_an_empty_model_allowlist_is_accepted(allowed_models: Optional[list]) -> None:
-    backend, _ = _backend(_two_live_keys())
-    backend.update_resource_key("res-1-1", "res-1", allowed_models=allowed_models)
+def test_minting_a_key_with_no_models_is_refused() -> None:
+    backend, api = _backend(_two_live_keys())
+
+    with pytest.raises(BackendError, match="all models"):
+        backend.mint_resource_key("res-1", reserved_client_ids=[], allowed_models=[])
+
+    assert api.secrets[ACTIVE] == {"res-1-1": "sk-one", "res-1-2": "sk-two"}
+
+
+# None is what a Waldur older than ["*"] sends for every model.
+@pytest.mark.parametrize("method", ["update_resource_key", "resume_resource_key"])
+@pytest.mark.parametrize("allowed_models", [None, ["*"]])
+def test_every_model_is_carried_out(method: str, allowed_models: Optional[list]) -> None:
+    backend, api = _backend({BLOCKED: {"res-1-1.paused": "sk-one"}})
+
+    getattr(backend, method)("res-1-1", "res-1", allowed_models=allowed_models)
+
+    assert api.secrets[ACTIVE] == {"res-1-1": "sk-one"}
+    assert api.secrets[BLOCKED] == {}
 
 
 # --- key_states ---------------------------------------------------------------

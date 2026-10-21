@@ -697,6 +697,14 @@ command left pending for 30 minutes, in case the message was lost.
   cannot apply, such as a model allowlist on a gateway with no per-key model
   rule, it must raise. Accepting the setting silently would show the key in
   Waldur as restricted when it is not.
+- **Three model lists.** `allowed_models` is `["*"]` for every model, `[]` for
+  no model, or a list of names; `None`, which a Waldur older than `["*"]`
+  sends, also means every model. An empty list is a restriction like any
+  other: a backend without per-key model rules refuses it too, or Waldur
+  would show "No models" for a key that can call all of them. The list is the
+  key's effective one: Waldur narrows the key's own list by its resource's
+  model selection, in commands and in the listing's `effective_models`, which
+  is what the reconciliation sweep replays.
 
 A backend without `supports_resource_api_key_lifecycle` keeps generation and
 rotation only. The core answers any other command for its keys with

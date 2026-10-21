@@ -140,9 +140,14 @@ pause when the pause was applied but its acknowledgement failed.
 
 **Limits and models.** A key's limits work like the resource's limits. The plugin stores and enforces
 nothing: the reporting backend reports each key's usage, and Waldur pauses the key once its usage
-reaches a limit. The gateway has no per-key model rule, so a command that would restrict a key to
-some models fails with an error rather than leaving an unrestricted key that Waldur shows as
-restricted. Leave a key's model list empty on this backend.
+reaches a limit. The gateway has no per-key model rule, so a command that would restrict a key's
+models fails with an error rather than leaving an unrestricted key that Waldur shows as restricted.
+That includes a key with no models selected, which Waldur would show as "No models". Set every key
+to **All models** on this backend: the plugin carries out a command whose model list is `["*"]`, or
+that has none at all (a Waldur older than the All models setting), and errs one with any other list.
+Waldur narrows a key's list by its resource's model selection before sending it, so each resource
+has to stay on **All models** too: a resource limited to some models gives every key a narrower list,
+and its commands err.
 
 **Kubernetes objects touched:** Secrets (`get`/`patch`) in the configured namespace.
 

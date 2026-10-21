@@ -128,12 +128,29 @@ class ApiKeyCommand:
             resource_backend_id=row.resource_backend_id or "",
             client_id=_value(row.client_id) or "",
             limits=row.limits.additional_properties if row.limits else None,
-            allowed_models=row.allowed_models,
+            allowed_models=_effective_models(row),
         )
 
 
 def _value(field: Any) -> Any:  # noqa: ANN401 - any optional field of a generated model
     return None if isinstance(field, Unset) else field
+
+
+def _effective_models(row: ResourceApiKeyStatus) -> Optional[list]:
+    """The model list a command for this key would have carried.
+
+    Waldur stores a key's own list as ``allowed_models`` and sends the one its
+    resource's selection narrows it to, which the listing gives as
+    ``effective_models``. A Waldur that predates it narrows nothing, so its
+    ``allowed_models`` is what it would have sent. Read through the generated
+    model when the client knows the field, and from the extra JSON when not.
+    """
+    effective = getattr(row, "effective_models", UNSET)
+    if isinstance(effective, Unset):
+        effective = row.additional_properties.get("effective_models", UNSET)
+    if isinstance(effective, Unset):
+        return row.allowed_models
+    return effective
 
 
 def list_all_api_keys(
