@@ -478,6 +478,9 @@ sacct --noconvert --truncate --allocations --allusers \
       --format=Account,ReqTRES,Elapsed,User
 ```
 
+With `usage_tres_source: allocated` the agent asks for
+`--format=Account,AllocTRES,ReqTRES,Elapsed,User` and bills `AllocTRES`.
+
 ### Integration Notes
 
 This setup is designed for **usage reporting only**. For a complete Waldur Site Agent deployment that includes:
