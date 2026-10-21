@@ -515,3 +515,49 @@ def test_api_usage_on_a_key_only_resource_is_not_billed_to_the_address_owner() -
     ]
 
     assert backend.get_usage_report_for_period([RID], 2026, 8) == {}
+
+
+def _unsplit_row(email: str, day_aliases: list, prompt: int) -> dict:
+    """A per-person row from a proxy that gave no per-key split."""
+    return {**_user_row(email, None, prompt, 0, 0.0), "day_key_aliases": day_aliases}
+
+
+def test_unsplit_usage_on_a_day_with_minted_keys_is_not_billed_by_address() -> None:
+    # Bob called with his own key and Ada's address; the proxy gave no per-key split.
+    # The request is billed to Bob's key by alias, and must not land on Ada's resource
+    # as well.
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [
+        _user("ada@example.com", "other"),
+        _user("bob@example.com", RID),
+    ]
+    backend.usage_client.get_usage_rows.return_value = [_row(f"{RID}-1", 10, 20, 0.5)]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _unsplit_row("ada@example.com", [f"{RID}-1", "openwebui-shared"], 10)
+    ]
+
+    assert backend.get_usage_report_for_period(["other"], 2026, 8) == {}
+    totals = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+    assert totals["input_tokens"] == 10
+
+
+def test_unsplit_usage_on_a_day_with_only_the_shared_key_is_chat() -> None:
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [_user("ada@example.com", RID)]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _unsplit_row("ada@example.com", ["openwebui-shared", None], 100)
+    ]
+
+    totals = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    assert totals["input_tokens"] == 100
+
+
+def test_unsplit_usage_with_no_key_breakdown_to_tell_from_is_not_billed() -> None:
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [_user("ada@example.com", RID)]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _unsplit_row("ada@example.com", [], 100)
+    ]
+
+    assert backend.get_usage_report_for_period([RID], 2026, 8) == {}

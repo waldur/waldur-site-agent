@@ -244,6 +244,7 @@ backend needs custom behavior.
 | `sync_resource_limits` | Pulls backend limits into Waldur | Change the limits source of truth |
 | `sync_resource_effective_id` | No-op | Reflect downstream `backend_id` as `effective_id` on the source resource |
 | `sync_resource_project` | No-op | Push project metadata to backends that manage their own projects |
+| `sync_resource_key_assignees` | No-op | Act on API key assignees (see `requires_resource_key_assignees`) |
 | `update_user_attributes` | No-op | Forward `OFFERING_USER` attribute updates to the backend |
 | `sync_offering_user_usernames` | Returns `False` | Pull backend-assigned usernames into Waldur (federation) |
 | `create_user_homedirs` | Provided | Customise homedir quota or path logic (see `supports_user_homedirs`) |
@@ -706,6 +707,14 @@ command left pending for 30 minutes, in case the message was lost.
   model selection, in commands and in the listing's `effective_models`, which
   is what the reconciliation sweep replays.
 
+Before `mint_resource_key`, `rotate_resource_key`, `resume_resource_key` and
+`update_resource_key`, the core reads the resource from Waldur and calls
+`pause_resource`, `downscale_resource` or `restore_resource` on the same
+backend instance, so a backend that cannot tell its resource's pause from its
+keys alone (all of them paused on their own, or none left) still knows it.
+Those three methods therefore run once per such command, and must be cheap
+and safe to repeat.
+
 A backend without `supports_resource_api_key_lifecycle` keeps generation and
 rotation only. The core answers any other command for its keys with
 `set_erred`. ceph-s3 is such a backend: its access key rotates together with
@@ -825,6 +834,21 @@ Set to `True` for backends that mirror project metadata. Membership sync
 then pre-fetches the source project from Waldur and passes it to
 `sync_resource_project` and `sync_project_end_date`, so the plugin never
 calls Waldur for it.
+
+### `requires_resource_key_assignees: bool = False`
+
+Set to `True` for backends that need to know who each of a resource's API
+keys is assigned to, such as a chat surface that follows the person's key.
+On an offering with `enable_api_key_provisioning`, the core then calls
+`sync_resource_key_assignees(waldur_resource, assignments)` on every
+membership sync of the resource (except one restricted for its members) and
+right after a key is created. Keys not yet minted are left out.
+`assignments` maps the client_id of every key not deleted to its assignee's
+offering username (the name membership sync adds them under), or to `None`
+when the key is assigned to nobody, or to someone with no actionable offering
+user or no username yet. Waldur
+sends no command when a key is reassigned, so the membership sync is what
+carries a reassignment to the backend.
 
 ### `shared_project_membership: bool = False`
 

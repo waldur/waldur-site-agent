@@ -189,6 +189,9 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         client_id: str,
         resource_backend_id: str,
         known_client_ids: Optional[list[str]] = None,
+        limits: Optional[dict] = None,
+        allowed_models: Optional[list[str]] = None,
+        resource_limits: Optional[dict] = None,
     ) -> str:
         """Generate a new value for one key and apply it, revoking the previous one.
 
@@ -199,8 +202,12 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         ``known_client_ids`` is accepted and ignored: a rotation overwrites the value
         in an existing Secret entry rather than creating a new one, so a lost reply
         leaves nothing behind for Waldur to lose track of.
+
+        ``limits``, ``allowed_models`` and ``resource_limits`` are accepted and
+        ignored: a key re-applied here has no per-key settings to restore, since the
+        gateway stores no limits and routes every model to every key.
         """
-        del known_client_ids
+        del known_client_ids, limits, allowed_models, resource_limits
         api_key = _generate_key()
         key_states = self.gateway_client.key_states(resource_backend_id)
         if key_states.get(client_id) == KEY_PAUSED:
@@ -246,15 +253,17 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         reserved_client_ids: list[str],
         limits: Optional[dict] = None,
         allowed_models: Optional[list[str]] = None,
+        resource_limits: Optional[dict] = None,
     ) -> dict:
         """Add one key to the resource, as its next free ``<backend_id>-<n>`` slot.
 
         A slot Waldur still holds — a deleted key's included — is skipped even though
         its Secret entry is gone, because usage is attributed by client_id. Like
         ``generate_resource_keys``, the key lands blocked on a paused resource.
-        ``limits`` is not stored: Waldur enforces limits from reported usage.
+        ``limits`` and ``resource_limits`` are not stored: Waldur enforces limits from
+        reported usage.
         """
-        del limits
+        del limits, resource_limits
         self._refuse_model_allowlist(allowed_models)
         key_states = self.gateway_client.key_states(resource_backend_id)
         blocked = self._resource_is_paused(resource_backend_id, key_states)

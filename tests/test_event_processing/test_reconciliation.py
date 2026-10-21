@@ -581,7 +581,11 @@ class TestRunPeriodicApiKeyReconciliation(unittest.TestCase):
             f"{KEYS}.utils.rotate_resource_api_key"
         ) as mock_rotate, mock.patch(f"{KEYS}._acknowledge") as mock_ack, mock.patch(
             f"{KEYS}._set_erred"
-        ) as mock_erred:
+        ) as mock_erred, mock.patch(
+            # Resume and update read the resource's pause first.
+            f"{KEYS}._read_resource",
+            return_value=mock.Mock(paused=False, downscaled=False),
+        ):
             utils.run_periodic_api_key_reconciliation([offering], "agent", **kwargs)
         return listing, mock_rotate, mock_ack, mock_erred
 
@@ -620,6 +624,7 @@ class TestRunPeriodicApiKeyReconciliation(unittest.TestCase):
             "res-1",
             str(stuck.resource_uuid),
             expose_backend_error_details=True,
+            key_settings=None,
         )
 
     def test_a_backend_without_the_lifecycle_only_sweeps_updating_keys(
@@ -677,7 +682,7 @@ class TestRunPeriodicApiKeyReconciliation(unittest.TestCase):
             self._sweep(mock_get_backend, backend, [row])
 
         backend.mint_resource_key.assert_called_once_with(
-            "res-1", [], limits={"input_tokens": 5}, allowed_models=None
+            "res-1", [], limits={"input_tokens": 5}, allowed_models=None, resource_limits=None
         )
         self.assertEqual(mock_set_key.sync.call_args.kwargs["body"].client_id, "res-1-3")
 

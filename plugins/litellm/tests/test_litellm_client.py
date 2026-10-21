@@ -90,6 +90,17 @@ def test_generate_key_omits_unset_fields(mock_client_cls: mock.Mock) -> None:
 
 
 @mock.patch("waldur_site_agent_litellm.client.httpx.Client")
+def test_generate_key_carries_the_metadata_it_is_given(mock_client_cls: mock.Mock) -> None:
+    instance = mock_client_cls.return_value
+    instance.request.return_value = _response(json_body={"key": "sk-new"})
+
+    _client().generate_key("res-1", metadata={"waldur_key_limits": {"rpm": 30}})
+
+    body = instance.request.call_args.kwargs["json"]
+    assert body["metadata"] == {"waldur_key_limits": {"rpm": 30}}
+
+
+@mock.patch("waldur_site_agent_litellm.client.httpx.Client")
 def test_generate_key_rejects_a_response_without_a_key(mock_client_cls: mock.Mock) -> None:
     instance = mock_client_cls.return_value
     instance.request.return_value = _response(json_body={"key_alias": "res-1"})

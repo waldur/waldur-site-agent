@@ -114,7 +114,9 @@ class LiteLLMUsageClient:
         """Return one row per (day, user, key) in the inclusive ``YYYY-MM-DD`` range.
 
         Each row is ``{"user_id", "key_alias", "input_tokens", "output_tokens",
-        "token_cost"}``, where ``key_alias`` may be ``None``.
+        "token_cost"}``, where ``key_alias`` may be ``None``. A row with no alias also
+        carries ``day_key_aliases``: the aliases of every key served on that day, from
+        the ``api_keys`` breakdown, ``None`` for a key without one.
 
         This is the chat surface's usage. Open WebUI authenticates every request with
         one shared virtual key and forwards the signed-in person's address, which the
@@ -132,7 +134,9 @@ class LiteLLMUsageClient:
         """
         rows: list = []
         for result in self._walk_results(start_date, end_date):
-            entities = (result.get("breakdown") or {}).get("entities") or {}
+            breakdown = result.get("breakdown") or {}
+            entities = breakdown.get("entities") or {}
+            day_aliases: Optional[list] = None
             for user_id, record in entities.items():
                 if not isinstance(record, dict):
                     continue
@@ -144,13 +148,28 @@ class LiteLLMUsageClient:
                             rows.append(row)
                     continue
                 # No per-key split (an older proxy, or a record the proxy could not
-                # resolve a key for). The entity total is still the right number; it
-                # simply cannot be de-duplicated against the alias rows, so it is
-                # emitted with no alias and the caller counts it whole.
+                # resolve a key for). The entity total cannot be told apart from the
+                # alias rows, and the address on it is whatever the request's header
+                # said: someone calling with their own key can name another person's.
+                # So it goes out with the day's keys, and the caller counts it only
+                # when none of them is a key it bills by alias.
                 row = self._to_user_row(str(user_id), record)
                 if row is not None:
+                    if day_aliases is None:
+                        day_aliases = self._day_key_aliases(breakdown)
+                    row["day_key_aliases"] = day_aliases
                     rows.append(row)
         return rows
+
+    @staticmethod
+    def _day_key_aliases(breakdown: dict) -> list:
+        """The alias of every key in one day's ``api_keys`` breakdown, ``None`` if unset."""
+        aliases: list = []
+        for record in (breakdown.get("api_keys") or {}).values():
+            metadata = record.get("metadata") if isinstance(record, dict) else None
+            alias = metadata.get("key_alias") if isinstance(metadata, dict) else None
+            aliases.append(str(alias) if alias else None)
+        return aliases
 
     @staticmethod
     def _to_user_row(user_id: str, record: object) -> Optional[dict]:

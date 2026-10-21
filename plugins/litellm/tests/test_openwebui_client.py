@@ -117,3 +117,63 @@ def test_an_unreadable_user_payload_raises_rather_than_reading_as_no_such_accoun
     client.session.request.return_value = _response(json_body="nonsense")
     with pytest.raises(OpenWebUIError):
         client.find_user("ada@example.com")
+
+
+# --- groups and model access ----------------------------------------------------
+
+
+def _client_with(json_body: object) -> OpenWebUIClient:
+    client = _client()
+    client.session = mock.MagicMock()
+    client.session.request.return_value = _response(json_body=json_body)
+    return client
+
+
+def test_a_user_is_added_to_a_group_one_per_call() -> None:
+    # On 0.11.3 a batch with an existing member rolls back the new ones and answers 200.
+    client = _client_with({"id": "g-1", "member_count": 1})
+
+    client.add_user_to_group("g-1", "owui-1")
+
+    method, url = client.session.request.call_args.args
+    assert (method, url) == ("POST", "https://chat.example.com/api/v1/groups/id/g-1/users/add")
+    assert client.session.request.call_args.kwargs["json"] == {"user_ids": ["owui-1"]}
+
+
+def test_a_user_is_removed_from_a_group() -> None:
+    client = _client_with({"id": "g-1", "member_count": 0})
+
+    client.remove_user_from_group("g-1", "owui-1")
+
+    assert client.session.request.call_args.args[1].endswith("/api/v1/groups/id/g-1/users/remove")
+    assert client.session.request.call_args.kwargs["json"] == {"user_ids": ["owui-1"]}
+
+
+def test_a_model_is_granted_to_its_one_group_only() -> None:
+    client = _client_with({"id": "gpt-4o"})
+
+    client.grant_model_to_group("gpt-4o", "g-1")
+
+    assert client.session.request.call_args.args[1].endswith("/api/v1/models/model/access/update")
+    assert client.session.request.call_args.kwargs["json"] == {
+        "id": "gpt-4o",
+        "name": "gpt-4o",
+        "access_grants": [{"principal_type": "group", "principal_id": "g-1", "permission": "read"}],
+    }
+
+
+def test_a_users_groups_are_read_by_id() -> None:
+    client = _client_with([{"id": "g-1", "name": "waldur-model-gpt-4o"}, {"name": "no id"}])
+
+    assert client.user_group_ids("owui-1") == {"g-1"}
+    assert client.session.request.call_args.args[1].endswith("/api/v1/users/owui-1/groups")
+
+
+def test_a_group_listing_of_the_wrong_shape_is_an_error() -> None:
+    with pytest.raises(OpenWebUIError):
+        _client_with({"detail": "nope"}).list_groups()
+
+
+def test_a_created_group_without_an_id_is_an_error() -> None:
+    with pytest.raises(OpenWebUIError):
+        _client_with({"name": "waldur-model-gpt-4o"}).create_group("waldur-model-gpt-4o", "")

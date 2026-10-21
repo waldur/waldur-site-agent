@@ -222,3 +222,77 @@ class OpenWebUIClient:
         account, and either way the caller treats "already absent" as removed.
         """
         return self._request("DELETE", f"/api/v1/users/{user_id}", none_on_404=True) is not None
+
+    # --- groups and model access ------------------------------------------------
+    #
+    # With ``BYPASS_MODEL_ACCESS_CONTROL`` off, Open WebUI lists and serves a regular
+    # user only the models whose record grants them, or a group they are in, read
+    # access -- checked against the database on every request. A model with no record
+    # is hidden from every non-admin. So one group per model, granted that model once,
+    # turns "which models may this person chat with" into group membership.
+
+    def list_groups(self) -> list:
+        """Every group on the instance (an admin token sees them all)."""
+        payload = self._request("GET", "/api/v1/groups/")
+        if not isinstance(payload, list):
+            msg = f"Unexpected payload of type {type(payload).__name__} from GET /api/v1/groups/"
+            raise OpenWebUIError(msg)
+        return [group for group in payload if isinstance(group, dict)]
+
+    def create_group(self, name: str, description: str) -> dict:
+        """Create one group and return its record."""
+        payload = self._request(
+            "POST", "/api/v1/groups/create", json_body={"name": name, "description": description}
+        )
+        if not isinstance(payload, dict) or not payload.get("id"):
+            msg = f"Open WebUI /api/v1/groups/create returned no group for {name}"
+            raise OpenWebUIError(msg)
+        return payload
+
+    def user_group_ids(self, user_id: str) -> set:
+        """The ids of the groups one account is in."""
+        payload = self._request("GET", f"/api/v1/users/{user_id}/groups")
+        if not isinstance(payload, list):
+            msg = (
+                f"Unexpected payload of type {type(payload).__name__} from "
+                f"GET /api/v1/users/{user_id}/groups"
+            )
+            raise OpenWebUIError(msg)
+        return {str(group["id"]) for group in payload if isinstance(group, dict) and "id" in group}
+
+    def add_user_to_group(self, group_id: str, user_id: str) -> None:
+        """Add one account to one group.
+
+        One account per call, never a batch: on 0.11.3 a batch that includes an
+        existing member rolls back the new members added before it in the same call,
+        and still answers 200.
+        """
+        self._request(
+            "POST", f"/api/v1/groups/id/{group_id}/users/add", json_body={"user_ids": [user_id]}
+        )
+
+    def remove_user_from_group(self, group_id: str, user_id: str) -> None:
+        """Remove one account from one group; removing a non-member changes nothing."""
+        self._request(
+            "POST",
+            f"/api/v1/groups/id/{group_id}/users/remove",
+            json_body={"user_ids": [user_id]},
+        )
+
+    def grant_model_to_group(self, model_id: str, group_id: str) -> None:
+        """Make ``group_id`` the one group that may read (chat with) ``model_id``.
+
+        Replaces the model's whole grant list, and creates the model's record when it
+        has none -- which is what makes the model visible to anyone but an admin.
+        """
+        self._request(
+            "POST",
+            "/api/v1/models/model/access/update",
+            json_body={
+                "id": model_id,
+                "name": model_id,
+                "access_grants": [
+                    {"principal_type": "group", "principal_id": group_id, "permission": "read"}
+                ],
+            },
+        )

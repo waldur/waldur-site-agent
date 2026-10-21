@@ -249,6 +249,18 @@ def test_rotating_a_key_left_paused_makes_it_serve() -> None:
     assert api.secrets[BLOCKED] == {}
 
 
+def test_rotating_a_key_with_waldurs_settings_ignores_them() -> None:
+    # Waldur rotates a key that changes hands and carries its settings; the gateway
+    # stores no limits and routes every model to every key, so only the value moves.
+    backend, api = _backend(_two_live_keys())
+
+    new_key = backend.rotate_resource_key(
+        "res-1-1", "res-1", limits={"tokens": 5}, allowed_models=["gpt"]
+    )
+
+    assert api.secrets[ACTIVE] == {"res-1-1": new_key, "res-1-2": "sk-two"}
+
+
 def test_rotating_a_key_of_a_paused_resource_keeps_it_blocked() -> None:
     backend, api = _backend(_two_live_keys())
     backend.pause_resource("res-1")

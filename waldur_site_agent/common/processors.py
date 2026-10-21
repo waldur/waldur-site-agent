@@ -3368,6 +3368,19 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
             user_cuids,
         )
 
+        # After the members: an assignee has to be a provisioned member before the
+        # backend can act for them.
+        try:
+            resource_api_keys.sync_key_assignees(
+                self.waldur_rest_client, self.resource_backend, waldur_resource, offering_users
+            )
+        except Exception:
+            logger.exception(
+                "Unable to sync the API key assignees of resource %s (%s)",
+                waldur_resource.name,
+                waldur_resource.backend_id,
+            )
+
         self._report_membership_sync_statuses(waldur_resource)
 
         return existing_usernames | added_usernames

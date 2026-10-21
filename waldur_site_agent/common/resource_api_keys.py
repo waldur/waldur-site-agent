@@ -27,6 +27,7 @@ from typing import Any, Optional
 
 import httpx
 from waldur_api_client import AuthenticatedClient, errors
+from waldur_api_client.api.marketplace_offering_users import marketplace_offering_users_list
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_retrieve,
 )
@@ -40,6 +41,7 @@ from waldur_api_client.api.marketplace_resource_api_keys import (
     marketplace_resource_api_keys_set_ok,
     marketplace_resource_api_keys_set_paused,
 )
+from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.resource_api_key_set_erred_request import (
     ResourceApiKeySetErredRequest,
 )
@@ -55,7 +57,7 @@ from waldur_api_client.models.resource_api_key_usage_request_usages import (
 from waldur_api_client.models.resource_field_enum import ResourceFieldEnum
 from waldur_api_client.types import UNSET, Unset
 
-from waldur_site_agent.backend import logger
+from waldur_site_agent.backend import UNASSIGNED_USAGE_SUFFIX, logger
 from waldur_site_agent.common import structures, utils
 from waldur_site_agent.common.healthz import touch_heartbeat
 
@@ -73,6 +75,19 @@ ALL_STATES = list(ResourceApiKeyState)
 
 HTTP_BAD_REQUEST = 400
 HTTP_SERVER_ERROR = 500
+
+# Offering users in these states hold an entitlement. The membership pass filters on
+# the same set (``OfferingMembershipProcessor._get_waldur_offering_users``); a key
+# assigned to anyone else -- someone who left the project, say -- has no assignee the
+# backend may act for.
+_ACTIONABLE_OFFERING_USER_STATES = (
+    OfferingUserState.OK,
+    OfferingUserState.REQUESTED,
+    OfferingUserState.CREATING,
+    OfferingUserState.ERROR_CREATING,
+    OfferingUserState.PENDING_ACCOUNT_LINKING,
+    OfferingUserState.PENDING_ADDITIONAL_VALIDATION,
+)
 
 
 class _NotYet(Exception):  # noqa: N818 - a signal, not an error
@@ -204,6 +219,44 @@ def _apply_resource_pause(
         backend.restore_resource(resource_backend_id)
 
 
+def _read_resource(waldur_rest_client: AuthenticatedClient, command: ApiKeyCommand) -> object:
+    """The key's resource, with what a command needs before it touches the backend."""
+    try:
+        return marketplace_provider_resources_retrieve.sync(
+            uuid=command.resource_uuid,  # type: ignore[arg-type]
+            client=waldur_rest_client,
+            field=[
+                ResourceFieldEnum.PAUSED,
+                ResourceFieldEnum.DOWNSCALED,
+                # The resource's share of a new key's limits, for a resource with no
+                # keys yet to read them back from.
+                ResourceFieldEnum.LIMITS,
+                # For the backend's assignee hook, after a key is created.
+                ResourceFieldEnum.UUID,
+                ResourceFieldEnum.BACKEND_ID,
+                ResourceFieldEnum.OFFERING_UUID,
+                ResourceFieldEnum.OFFERING_PLUGIN_OPTIONS,
+            ],
+        )
+    except (httpx.TransportError, errors.UnexpectedStatus) as exc:
+        if isinstance(exc, errors.UnexpectedStatus) and exc.status_code < HTTP_SERVER_ERROR:
+            raise
+        # Waldur did not answer and nothing is applied yet: try again later.
+        raise _NotYet(str(exc)) from exc
+
+
+def _resource_limits(resource: object) -> Optional[dict]:
+    """The resource's limits as Waldur holds them; None when the read carried none."""
+    limits = _value(getattr(resource, "limits", None))
+    if limits is None:
+        return None
+    if isinstance(limits, dict):
+        return dict(limits)
+    to_dict = getattr(limits, "to_dict", None)
+    data = to_dict() if callable(to_dict) else None
+    return dict(data) if isinstance(data, dict) else None
+
+
 def _create(
     waldur_rest_client: AuthenticatedClient,
     backend,  # noqa: ANN001 - BaseBackend would be a circular import
@@ -211,22 +264,19 @@ def _create(
 ) -> None:
     try:
         reserved = _reserved_client_ids(waldur_rest_client, command.resource_uuid)
-        resource = marketplace_provider_resources_retrieve.sync(
-            uuid=command.resource_uuid,  # type: ignore[arg-type]
-            client=waldur_rest_client,
-            field=[ResourceFieldEnum.PAUSED, ResourceFieldEnum.DOWNSCALED],
-        )
     except (httpx.TransportError, errors.UnexpectedStatus) as exc:
         if isinstance(exc, errors.UnexpectedStatus) and exc.status_code < HTTP_SERVER_ERROR:
             raise
         # Waldur did not answer and nothing is applied yet: try again later.
         raise _NotYet(str(exc)) from exc
+    resource = _read_resource(waldur_rest_client, command)
     _apply_resource_pause(backend, resource, command.resource_backend_id)
     key = backend.mint_resource_key(
         command.resource_backend_id,
         reserved,
         limits=command.limits,
         allowed_models=command.allowed_models,
+        resource_limits=_resource_limits(resource),
     )
     try:
         marketplace_resource_api_keys_set_key.sync(
@@ -246,6 +296,7 @@ def _create(
         if _set_key_landed(waldur_rest_client, command, key["client_id"]) is False:
             _withdraw(backend, key["client_id"], command, "its report did not reach Waldur")
         raise
+    _sync_key_assignees_now(waldur_rest_client, backend, resource)
 
 
 def _withdraw(backend, client_id: str, command: ApiKeyCommand, why: str) -> None:  # noqa: ANN001
@@ -303,6 +354,13 @@ def _run(
         backend.pause_resource_key(command.client_id, command.resource_backend_id)
         _acknowledge(marketplace_resource_api_keys_set_paused, waldur_rest_client, command)
     elif action == RESUME:
+        # A key of a paused resource stays held, and a backend can only tell a key
+        # paused on its own from one paused with its resource if it knows the latter.
+        # It cannot always tell from its keys -- not when every one of them is paused
+        # on its own -- so Waldur's flag is applied first, as before a create.
+        _apply_resource_pause(
+            backend, _read_resource(waldur_rest_client, command), command.resource_backend_id
+        )
         backend.resume_resource_key(
             command.client_id,
             command.resource_backend_id,
@@ -311,6 +369,11 @@ def _run(
         )
         _acknowledge(marketplace_resource_api_keys_set_ok, waldur_rest_client, command)
     elif action == UPDATE:
+        # An update settles the key OK and so lifts a stale pause of its own; the same
+        # reason as for a resume to apply the resource's pause first.
+        _apply_resource_pause(
+            backend, _read_resource(waldur_rest_client, command), command.resource_backend_id
+        )
         backend.update_resource_key(
             command.client_id,
             command.resource_backend_id,
@@ -331,6 +394,94 @@ def _set_erred(
         client=waldur_rest_client,
         body=ResourceApiKeySetErredRequest(error_message=error_message),
     )
+
+
+def _rotate(
+    waldur_rest_client: AuthenticatedClient,
+    backend,  # noqa: ANN001
+    command: ApiKeyCommand,
+    expose_backend_error_details: bool,
+) -> None:
+    """Rotate one key; rotation reports its own outcome to Waldur."""
+    if not command.client_id:
+        logger.error("rotate command for key %s has no client_id", command.api_key_uuid)
+        return
+    resource = None
+    if getattr(backend, "supports_resource_api_key_lifecycle", False) is True:
+        # A rotation can mint or unblock a key too, so a backend whose keys may be
+        # paused one by one learns Waldur's resource pause first, as for a create.
+        try:
+            resource = _read_resource(waldur_rest_client, command)
+            _apply_resource_pause(backend, resource, command.resource_backend_id)
+        except _NotYet as exc:
+            logger.warning(
+                "Could not read Waldur before the rotate of API key %s, leaving it pending: %s",
+                command.api_key_uuid,
+                exc,
+            )
+            return
+        except Exception as exc:
+            logger.error("Failed to rotate API key %s: %s", command.api_key_uuid, exc)
+            error_message, _ = utils.format_waldur_error_details(exc, expose_backend_error_details)
+            _set_erred(waldur_rest_client, command.api_key_uuid, error_message)
+            return
+        key_settings = _rotation_settings(waldur_rest_client, command)
+        resource_limits = _resource_limits(resource)
+        if resource_limits is not None:
+            # The resource's limits from the read above, as on a create: a backend
+            # minting back a key it lost has no sibling to read them from when that
+            # key was the resource's only one.
+            key_settings = {**(key_settings or {}), "resource_limits": resource_limits}
+    else:
+        # A backend without the per-key lifecycle has no settings of its own per key,
+        # and keeps the rotate signature it always had.
+        key_settings = None
+    rotated = utils.rotate_resource_api_key(
+        waldur_rest_client,
+        command.api_key_uuid,
+        command.client_id,
+        backend,
+        command.resource_backend_id,
+        command.resource_uuid or None,
+        expose_backend_error_details=expose_backend_error_details,
+        key_settings=key_settings,
+    )
+    if rotated and resource is not None:
+        # Waldur rotates a key that changes hands, so the new assignee's chat moves
+        # onto it now rather than at the next membership pass.
+        _sync_key_assignees_now(waldur_rest_client, backend, resource)
+
+
+def _rotation_settings(
+    waldur_rest_client: AuthenticatedClient, command: ApiKeyCommand
+) -> Optional[dict]:
+    """The key's own limits and model list, applied to the rotated key.
+
+    Waldur rotates a key that changes hands, possibly with new settings, and a
+    backend that lost the key re-creates it on rotation, as restricted as the key
+    Waldur shows. A sweep's command carries the settings from the listing row, and a
+    STOMP rotate from a Waldur that rotates a key changing hands carries them too; an
+    older Waldur's carries none, so the key is read. ``limits`` is always a dict here,
+    so a backend can tell settings Waldur gave (``{}`` for no limits of its own) from
+    none at all. None when the key cannot be read: the rotation still goes ahead,
+    since a key the backend still holds keeps its own settings, and a backend minting
+    a lost one has to fail closed instead.
+    """
+    if command.limits is None and command.allowed_models is None:
+        try:
+            row = marketplace_resource_api_keys_retrieve.sync(
+                uuid=command.api_key_uuid,  # type: ignore[arg-type]
+                client=waldur_rest_client,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not read the settings of API key %s before rotating it: %s",
+                command.api_key_uuid,
+                exc,
+            )
+            return None
+        command = ApiKeyCommand.from_listing(row, ROTATE)
+    return {"limits": command.limits or {}, "allowed_models": command.allowed_models}
 
 
 def execute_api_key_command(
@@ -362,18 +513,7 @@ def execute_api_key_command(
         return
 
     if command.action == ROTATE:
-        if not command.client_id:
-            logger.error("rotate command for key %s has no client_id", command.api_key_uuid)
-            return
-        utils.rotate_resource_api_key(
-            waldur_rest_client,
-            command.api_key_uuid,
-            command.client_id,
-            backend,
-            command.resource_backend_id,
-            command.resource_uuid or None,
-            expose_backend_error_details=expose_backend_error_details,
-        )
+        _rotate(waldur_rest_client, backend, command, expose_backend_error_details)
         return
 
     if not getattr(backend, "supports_resource_api_key_lifecycle", False):
@@ -400,7 +540,8 @@ def execute_api_key_command(
         _run(waldur_rest_client, backend, command)
     except _NotYet as exc:
         logger.warning(
-            "Could not read Waldur before creating API key %s, leaving it pending: %s",
+            "Could not read Waldur before the %s of API key %s, leaving it pending: %s",
+            command.action,
             command.api_key_uuid,
             exc,
         )
@@ -537,6 +678,111 @@ def manages_api_keys(waldur_resource: object) -> bool:
     return bool(_plugin_option(waldur_resource, "enable_api_key_provisioning"))
 
 
+def wants_key_assignees(backend, waldur_resource: object) -> bool:  # noqa: ANN001
+    """Whether the backend is to be told who the resource's keys are assigned to."""
+    return getattr(backend, "requires_resource_key_assignees", False) is True and (
+        manages_api_keys(waldur_resource)
+    )
+
+
+def _uuid_hex(value: object) -> str:
+    value = _value(value)
+    if value is None:
+        return ""
+    return str(getattr(value, "hex", None) or str(value).replace("-", ""))
+
+
+def key_assignments(
+    keys: list[ResourceApiKeyStatus], offering_users: list
+) -> dict[str, Optional[str]]:
+    """Map the client_id of every key not deleted to its assignee's offering username.
+
+    The listing carries the assignee's user uuid; the offering users carry the uuid
+    and the username the backend knows the person by, so the join is a lookup. A key
+    assigned to nobody, or to someone with no actionable offering user or no username
+    yet, maps to None: the backend then acts for nobody, rather than for whoever held
+    the key before. A key with no client_id yet has not reached the backend and is
+    left out.
+    """
+    usernames: dict[str, str] = {}
+    for offering_user in offering_users:
+        if getattr(offering_user, "state", None) not in _ACTIONABLE_OFFERING_USER_STATES:
+            continue
+        user = _uuid_hex(getattr(offering_user, "user_uuid", None))
+        username = _value(getattr(offering_user, "username", None))
+        if user and isinstance(username, str) and username:
+            usernames[user] = username
+    assignments: dict[str, Optional[str]] = {}
+    for key in keys:
+        client_id = _value(key.client_id)
+        if not client_id or key.state == ResourceApiKeyState.DELETED:
+            continue
+        assignments[client_id] = usernames.get(_uuid_hex(key.user_uuid))
+    return assignments
+
+
+def sync_key_assignees(
+    waldur_rest_client: AuthenticatedClient,
+    backend,  # noqa: ANN001
+    waldur_resource: object,
+    offering_users: list,
+) -> None:
+    """Tell the backend who the resource's keys are assigned to (membership pass).
+
+    An assignee change sends the agent no command, so this pass is what carries a
+    reassignment to the backend. One key listing per resource, and only for a backend
+    that asks and an offering that manages its keys.
+    """
+    if not wants_key_assignees(backend, waldur_resource):
+        return
+    keys = list_all_api_keys(waldur_rest_client, _uuid_hex(getattr(waldur_resource, "uuid", "")))
+    backend.sync_resource_key_assignees(waldur_resource, key_assignments(keys, offering_users))
+
+
+def _sync_key_assignees_now(
+    waldur_rest_client: AuthenticatedClient,
+    backend,  # noqa: ANN001
+    resource: object,
+) -> None:
+    """Hand the backend the assignees right after a key is created or rotated.
+
+    Without it a new key's assignee -- or the new assignee of a key Waldur rotated
+    because it changed hands -- waits for the next membership pass. The key is live
+    and acknowledged by now, so a failure here is logged and left to that pass rather
+    than reported against the key.
+    """
+    if not wants_key_assignees(backend, resource):
+        return
+    resource_uuid = _uuid_hex(getattr(resource, "uuid", ""))
+    try:
+        keys = list_all_api_keys(waldur_rest_client, resource_uuid)
+        assignees = sorted(
+            {
+                _uuid_hex(key.user_uuid)
+                for key in keys
+                if key.state != ResourceApiKeyState.DELETED and _value(key.client_id)
+            }
+            - {""}
+        )
+        offering_users: list = []
+        for user_uuid in assignees:
+            offering_users.extend(
+                marketplace_offering_users_list.sync_all(
+                    client=waldur_rest_client,
+                    offering_uuid=[getattr(resource, "offering_uuid")],  # noqa: B009
+                    user_uuid=user_uuid,  # type: ignore[arg-type]
+                    is_restricted=False,
+                )
+            )
+        backend.sync_resource_key_assignees(resource, key_assignments(keys, offering_users))
+    except Exception:
+        logger.exception(
+            "Could not hand the key assignees of resource %s to the backend; the next "
+            "membership sync will",
+            resource_uuid,
+        )
+
+
 def report_api_key_usages(
     waldur_rest_client: AuthenticatedClient,
     backend,  # noqa: ANN001
@@ -605,7 +851,11 @@ def report_api_key_usages(
             )
         except Exception as exc:
             logger.warning("Failed to report the usage of API key %s: %s", client_id, exc)
-    unknown = sorted(set(report) - known)
+    unknown = sorted(
+        client_id
+        for client_id in set(report) - known
+        if not client_id.endswith(UNASSIGNED_USAGE_SUFFIX)
+    )
     if unknown:
         logger.warning(
             "Usage of %s came through keys Waldur does not hold: %s",
