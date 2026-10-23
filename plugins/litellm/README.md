@@ -137,25 +137,27 @@ below — therefore drives **`max_budget` only**; `tpm_limit` and `rpm_limit` st
 
 To make rate limits per-resource instead, declare `tpm` and/or `rpm` as `LIMIT` components — see
 the commented lines in the example below. They are rate caps, not meters: nothing reports usage
-against them, so they exist purely to carry a number onto the key. `budget_duration` is not
-per-resource under any configuration; it is an offering-wide setting and only applies alongside a
-`max_budget`.
+against them, so they exist purely to carry a number onto the key.
 
-> ### Set `budget_duration` whenever `token_cost` is a limit
+> ### The budget resets on the 1st, with Waldur's month
 >
-> A LiteLLM `max_budget` with **no** `budget_duration` is a *lifetime* budget: it never resets, and
-> the key's `spend` keeps accumulating against it. So on an offering that limits `token_cost` but
-> leaves `budget_duration` unset, the first billing period that exhausts the budget blocks the key
-> **permanently** — Waldur's period rolls over and un-pauses the resource, but the proxy keeps
-> answering 401, and nothing in this plugin resets `max_budget` or clears `spend`. A backstop that
-> fails closed forever is worse than no backstop, so set `budget_duration` to match the offering's
-> billing period.
+> Every `max_budget` the plugin writes carries `budget_duration: "1mo"`: LiteLLM resets the key's
+> `spend` at 00:00 on the 1st of each month, in the proxy's timezone. Waldur counts limits per
+> calendar month in UTC, so the two windows are the same month, and the proxy can only refuse a
+> key whose spend Waldur also counts as at its limit (the proxy sees less: not chat, and each key
+> alone). Between two usage reports the proxy stops a burst first; the next report pauses the key
+> in Waldur too.
 >
-> Even then the two clocks are not aligned: LiteLLM resets a key's budget on its **own** schedule,
-> counted from when the key was created, not from the start of Waldur's billing month. A key minted
-> on the 20th under `budget_duration: "30d"` resets on the 20th. This only affects the backstop —
-> Waldur's own metering and its report → pause path stay month-aligned — but it means a rotated or
-> late-minted key can carry a reset date its siblings do not share.
+> Any other window disagrees with Waldur. With a window running from the 15th, a person who spends
+> their $20 on Sep 25 is resumed by Waldur on Oct 1 but refused by the proxy until Oct 15, while
+> the portal shows the key active with nothing used. No window at all is worse: `max_budget` is then
+> a lifetime budget and blocks the key for good. So the `budget_duration` backend setting is
+> ignored, with a warning at startup when it says anything but `1mo`, and the limits
+> reconciliation moves keys holding another duration onto `1mo`.
+>
+> **Keep the proxy on UTC midnight.** `litellm_settings.timezone` and
+> `litellm_settings.budget_reset_time` move LiteLLM's reset; leave them unset (UTC, 00:00) or the
+> reset lands hours away from Waldur's month boundary. The agent cannot read them.
 
 ## Per-key API keys
 
@@ -718,7 +720,7 @@ block.
 | `api_url` | yes | — | LiteLLM proxy base URL |
 | `api_token` | yes | — | Master or admin key for the management API |
 | `models` | no | all | Model allowlist pushed onto every key |
-| `budget_duration` | no | — | Reset period for `max_budget`, e.g. `30d`. **Set it whenever `token_cost` is a limit** |
+| `budget_duration` | no | — | Ignored: `max_budget` always resets on the 1st (`1mo`); other values are logged |
 | `tpm_limit` | no | — | Default tokens-per-minute cap on each key |
 | `rpm_limit` | no | — | Default requests-per-minute cap on each key |
 | `verify_ssl` | no | `true` | Verify the proxy's TLS certificate |
@@ -754,7 +756,6 @@ offerings:
       api_url: "https://litellm.example.com"
       api_token: "sk-master-..."
       models: ["gpt-4o", "llama-3.3-70b"]   # optional allowlist
-      budget_duration: "30d"                # required in practice whenever token_cost is a limit
       tpm_limit: null
       rpm_limit: null
       verify_ssl: true
@@ -853,7 +854,7 @@ Prices on the Waldur plan:
 > is why the cap and the charge have to be two components.
 
 Otherwise `token_cost` keeps its usual job: it sets the key's `max_budget` backstop, and with
-`action_on_usage_limit: pause` it is what stops the resource. Set `budget_duration` as always.
+`action_on_usage_limit: pause` it is what stops the resource.
 
 What this gives up is per-model **invoice lines**: the customer sees one `Inference cost` figure,
 not a breakdown. Only per-model components can produce that, and they require the prices to be
@@ -918,6 +919,14 @@ using it would reintroduce the hash → alias map.
   against a key that carried all four returns 200 and leaves every one of them `null` on the
   following `/key/info` and `/key/list`. This is what makes the full-target-state backstop above
   work; if the proxy ignored nulls instead, a removed cap would stay on the key forever.
+- **`budget_duration: "1mo"` resets on the 1st.** A key given it on Oct 15 reads
+  `budget_reset_at: 2026-11-01T00:00:00+00:00`, and so does every later `/key/update` that
+  carries it: the reset is recomputed from the duration, not counted from the update. Moving a
+  key from another duration keeps its `spend`. A key at its `max_budget` answers 429.
+  Verified on LiteLLM 1.98, 2026-10-15. So the plugin's `/key/update` names `budget_duration`
+  only when the key does not carry it already: an update that names it on the 1st, before the
+  proxy's reset job has run, moves the reset to the following 1st and keeps last month's `spend`
+  (`prepare_key_update_data` in LiteLLM's key management endpoints).
 - **`/key/list` returns `total_pages` and `current_page` at the top level** of the payload
   (alongside `keys` and `total_count`), not nested under a `metadata` object — unlike
   `/user/daily/activity`, which nests them. Paging past the last page returns an empty `keys` list

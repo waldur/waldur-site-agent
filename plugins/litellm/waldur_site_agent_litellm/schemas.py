@@ -91,7 +91,10 @@ class LiteLLMBackendSettingsSchema(PluginBackendSettingsSchema):
     )
     budget_duration: Optional[str] = Field(
         default=None,
-        description="Reset period for the max_budget backstop, e.g. '30d'",
+        description=(
+            "Ignored: the max_budget backstop always resets on the 1st of the month "
+            "('1mo'), the month Waldur counts limits in. Any other value is logged"
+        ),
     )
     tpm_limit: Optional[int] = Field(
         default=None, description="Default tokens-per-minute cap applied to each key"

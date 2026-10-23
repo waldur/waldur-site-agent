@@ -53,6 +53,13 @@ _LIMIT_FIELDS = {
     "rpm": "rpm_limit",
 }
 
+# The reset period written next to every ``max_budget``. Waldur counts limits per UTC
+# calendar month, and ``1mo`` resets the key's spend at 00:00 on the 1st, in the proxy's
+# timezone. Any other window disagrees with Waldur's month: a person Waldur resumes on
+# the 1st would stay refused by the proxy until its own reset, with nothing in Waldur
+# saying why. So the offering's ``budget_duration`` setting is not consulted.
+BUDGET_DURATION = "1mo"
+
 # What the plugin records in a key's ``metadata``. The proxy has a ``blocked`` flag but
 # no reason for it, and one set of limit fields that has to hold the tighter of two
 # limits, so the inputs behind both are kept on the key they describe.
@@ -155,7 +162,15 @@ class LiteLLMBackend(backends.BaseBackend):
         # `models` that way, so it is only sent when non-empty.
         models = backend_settings.get("models") or []
         self.models = [str(model) for model in models]
-        self.budget_duration = backend_settings.get("budget_duration")
+        configured_duration = backend_settings.get("budget_duration")
+        if configured_duration not in (None, BUDGET_DURATION):
+            logger.warning(
+                "Ignoring budget_duration=%r: the max_budget backstop always resets on "
+                "the 1st of the month (%r), the month Waldur counts limits in",
+                configured_duration,
+                BUDGET_DURATION,
+            )
+        self.budget_duration = BUDGET_DURATION
         self.default_tpm_limit = backend_settings.get("tpm_limit")
         self.default_rpm_limit = backend_settings.get("rpm_limit")
 
@@ -574,6 +589,19 @@ class LiteLLMBackend(backends.BaseBackend):
         )
         return fields
 
+    @staticmethod
+    def _key_update_fields(record: dict, fields: dict) -> dict:
+        """``fields`` for a ``/key/update``, without a ``budget_duration`` the key carries.
+
+        The proxy moves ``budget_reset_at`` to the next reset whenever an update names a
+        ``budget_duration``. On the 1st, before its reset job has run, that would skip
+        the month's reset and leave the key last month's spend: so it is only sent when
+        it changes.
+        """
+        if record.get("budget_duration") == fields.get("budget_duration"):
+            return {field: value for field, value in fields.items() if field != "budget_duration"}
+        return fields
+
     def _limits_from_records(self, records: dict) -> dict:
         """Read the backstop back off the keys the proxy already holds.
 
@@ -832,7 +860,7 @@ class LiteLLMBackend(backends.BaseBackend):
             self.litellm_client.update_key(
                 token,
                 {
-                    **self._backstop_fields(key_limits),
+                    **self._key_update_fields(record, self._backstop_fields(key_limits)),
                     "models": models,
                     "blocked": blocked,
                     "metadata": metadata,
@@ -1116,7 +1144,12 @@ class LiteLLMBackend(backends.BaseBackend):
         blocked = self._resource_is_paused(resource_backend_id, records)
         self.litellm_client.update_key(
             token,
-            {**fields, "models": models, "blocked": blocked, "metadata": metadata},
+            {
+                **self._key_update_fields(record, fields),
+                "models": models,
+                "blocked": blocked,
+                "metadata": metadata,
+            },
         )
         # The holder's chat follows: reopened unless the resource holds the key, and
         # narrowed or widened to the key's models.
@@ -1409,7 +1442,7 @@ class LiteLLMBackend(backends.BaseBackend):
                 own_limits = metadata.get(META_KEY_LIMITS) or {}
                 fields = self._backstop_fields(self._tighter_limits(own_limits, resource_limits))
                 metadata[META_RESOURCE_LIMITS] = resource_limits
-                body = {**fields, "metadata": metadata}
+                body = {**self._key_update_fields(current, fields), "metadata": metadata}
                 models = self._reconciled_models(current)
                 if models is not None:
                     logger.info("Bringing the models of key %s in line: %s", alias, models)
