@@ -113,10 +113,14 @@ class LiteLLMUsageClient:
     def get_user_usage_rows(self, start_date: str, end_date: str) -> list:
         """Return one row per (day, user, key) in the inclusive ``YYYY-MM-DD`` range.
 
-        Each row is ``{"user_id", "key_alias", "input_tokens", "output_tokens",
+        Each row is ``{"date", "user_id", "key_alias", "input_tokens", "output_tokens",
         "token_cost"}``, where ``key_alias`` may be ``None``. A row with no alias also
         carries ``day_key_aliases``: the aliases of every key served on that day, from
         the ``api_keys`` breakdown, ``None`` for a key without one.
+
+        ``date`` is the proxy's UTC day (``YYYY-MM-DD``) the row was bucketed under. It
+        is what lets the caller bill the day to whoever owned the address on that day,
+        rather than to whoever owns it when the report runs.
 
         This is the chat surface's usage. Open WebUI authenticates every request with
         one shared virtual key and forwards the signed-in person's address, which the
@@ -134,6 +138,9 @@ class LiteLLMUsageClient:
         """
         rows: list = []
         for result in self._walk_results(start_date, end_date):
+            # The day alone: ownership periods are compared as ``YYYY-MM-DD`` strings,
+            # and a timestamp tail would put the last day of a period outside it.
+            date = str(result.get("date") or "")[:10]
             breakdown = result.get("breakdown") or {}
             entities = breakdown.get("entities") or {}
             day_aliases: Optional[list] = None
@@ -143,7 +150,7 @@ class LiteLLMUsageClient:
                 by_key = record.get("api_key_breakdown") or {}
                 if by_key:
                     for key_record in by_key.values():
-                        row = self._to_user_row(str(user_id), key_record)
+                        row = self._to_user_row(date, str(user_id), key_record)
                         if row is not None:
                             rows.append(row)
                     continue
@@ -153,7 +160,7 @@ class LiteLLMUsageClient:
                 # said: someone calling with their own key can name another person's.
                 # So it goes out with the day's keys, and the caller counts it only
                 # when none of them is a key it bills by alias.
-                row = self._to_user_row(str(user_id), record)
+                row = self._to_user_row(date, str(user_id), record)
                 if row is not None:
                     if day_aliases is None:
                         day_aliases = self._day_key_aliases(breakdown)
@@ -172,13 +179,14 @@ class LiteLLMUsageClient:
         return aliases
 
     @staticmethod
-    def _to_user_row(user_id: str, record: object) -> Optional[dict]:
+    def _to_user_row(date: str, user_id: str, record: object) -> Optional[dict]:
         """Map one entity (or entity-by-key) entry onto a usage row."""
         if not isinstance(record, dict):
             return None
         metrics = record.get("metrics") or {}
         alias = (record.get("metadata") or {}).get("key_alias")
         return {
+            "date": date,
             "user_id": user_id,
             "key_alias": str(alias) if alias else None,
             "input_tokens": int(metrics.get("prompt_tokens") or 0),

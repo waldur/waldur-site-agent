@@ -40,6 +40,10 @@ _MISSING_ENTITY_MARKERS = ("does not exist", "not found", "no user found")
 # them: the management one stamps them, the reporting one resolves usage through them.
 META_RESOURCE = "waldur_resource"
 META_USERNAME = "waldur_username"
+# The dated history behind ``waldur_resource``: which resource owned the address on
+# which days, so usage already recorded keeps billing where it was used after the
+# address is released or moves. See ``ownership``.
+META_OWNERSHIP = "waldur_ownership"
 # On an offering whose keys are managed one by one, the person's chat follows their
 # key: this holds the alias of the resource key assigned to them, or "" for none. Its
 # presence is what says the person's chat follows a key at all; a user without it is

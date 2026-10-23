@@ -348,10 +348,15 @@ Two consequences are built into the backend:
 ### One entitlement per person
 
 A LiteLLM `user_id` is global and here it is an address, so usage arriving under an
-address can only be billed to **one** resource. The plugin stamps the owning resource
-into the user's `metadata` and **refuses** to move an address another resource already
-owns, rather than taking it over: a silent takeover would move the first resource's chat
-billing onto the second one while the person kept chatting throughout.
+address can only be billed to **one** resource at a time. The plugin records the owning
+resource in the user's `metadata` and **refuses** to move an address another resource
+currently owns, rather than taking it over: a silent takeover would move the first
+resource's chat billing onto the second one while the person kept chatting throughout.
+
+"Currently owns" means an open ownership period (see
+[When chat usage is billed to a resource](#when-chat-usage-is-billed-to-a-resource)).
+Once the person is removed from the first resource its period closes, and another
+resource can claim the address — the move is then a new period, not a takeover.
 
 That makes the offering responsible for enforcing one chat-enabled resource per person
 at order time. The plugin can refuse the second claim; it cannot choose which should win.
@@ -529,8 +534,8 @@ Summing both double-counts, so the rollup takes each record once:
 
 1. every `api_keys` row whose alias is one of the resource's `-<n>` slots → that resource
    (the API surface, unchanged from the API-only offering);
-2. every `entities` row whose id is a managed address → the resource that owns it,
-   **skipping** the keys already counted in step 1.
+2. every `entities` row whose id is a managed address → the resource that owned that
+   address **on the row's day**, **skipping** the keys already counted in step 1.
 
 Requests on a key with no user attached — every key this plugin mints — land under
 LiteLLM's `"Unassigned"` bucket, which no managed address ever matches, so the common
@@ -544,10 +549,60 @@ plugin's keys was used (only the shared key, or keys with no slot alias); on any
 it is skipped with a warning, losing that day's chat usage rather than billing a person for
 someone else's API calls. Proxies validated with this plugin always give the split.
 
-The address-to-resource map is read from the proxy (`GET /user/list`, filtered on the
-metadata stamp), not from Waldur — the reporting backend never sees a team list, and the
-stamp is in any case what decides where an address bills. An API-only offering never
-makes that call.
+The address-to-resource history is read from the proxy (`GET /user/list`, from the
+metadata on each user), not from Waldur — the reporting backend never sees a team list,
+and the record is in any case what decides where an address bills. An API-only offering
+never makes that call.
+
+### When chat usage is billed to a resource
+
+A person's chat usage is billed to the resource that owned their address **on the day
+the usage was recorded** — the proxy's UTC day, which is how it buckets usage rows. Every
+reporting pass recomputes the whole month, so this is what keeps a figure stable once
+reported:
+
+- **Removed mid-month:** chat access ends as before, and the usage they had this month
+  stays on the resource in every later report of the month.
+- **Moved from A to B:** usage before the move stays on A, usage after it goes to B. The
+  day of the move itself is billed to A, the resource they left — usage is per day, so
+  that day cannot be split.
+- **Historical reload** of an earlier month attributes each day of it the same way.
+
+Ownership lives in the LiteLLM user's `metadata` as a list of periods, oldest first, both
+ends inclusive and `to: null` for the current owner:
+
+```json
+{
+  "waldur_username": "ada",
+  "waldur_resource": "4f1c…",
+  "waldur_ownership": [
+    {"resource": "9b2e…", "from": null,         "to": "2026-10-14"},
+    {"resource": "4f1c…", "from": "2026-10-14", "to": null}
+  ]
+}
+```
+
+- Adding a member opens a period from today; removing one closes it today. **The record
+  is kept** on removal — deleting it is not what ends chat access (demoting the Open WebUI
+  account is), and deleting it took the month's usage off the bill.
+- `waldur_resource` mirrors the current owner and is `null` once released, so an agent
+  from before this change, still running during an upgrade, stops billing a released
+  address too.
+- A record written before this change has only `waldur_resource`. It is read as one open
+  period with no start, so a current member's usage is attributed exactly as before.
+- A record with no open period is **deleted** once its last period ended before the
+  retention window — `ownership_retention_months` calendar months, counting the current
+  one (default 12). Keep that at least as large as the agent's `reporting_periods`, or a
+  month the agent still reports loses a removed member's chat usage. Periods older than
+  the window are also trimmed from records that stay. Pruning walks every user on the
+  proxy, so give every agent sharing one proxy the same setting.
+- A historical reload of a month older than the window bills nothing for people removed
+  before it — their periods are gone — and, since a reload overwrites the month's figure,
+  lowers it. Raise `ownership_retention_months` before reloading that far back.
+- Upgrade every agent sharing the proxy together. An older agent reads the
+  `waldur_resource` mirror correctly, but one that writes a record replaces its periods,
+  and the record then reads as owned with no start.
+- Records an admin made by hand carry no periods and are never pruned.
 
 ### Chat that follows the key
 
@@ -658,12 +713,12 @@ that provisions and revokes people.
 | `pause_resource()` | `POST /key/block` for every key, plus Open WebUI role → `pending` per member |
 | `restore_resource()` | `POST /key/unblock` for every key, plus Open WebUI role → `user` per demoted member |
 | `downscale_resource()` | same as pause (a key has no partial-capacity state) |
-| `delete_resource()` | `POST /key/delete` for every key |
+| `delete_resource()` | releases every member as below, then `POST /key/delete` for every key |
 | `set_resource_limits()` | `POST /key/update` — full target state of the four backstop fields |
 | `sync_resource_limits()` | pushes Waldur's limits onto the keys (the base pulls them the other way) |
-| `add_users_to_resource()` | `POST /user/new` (or `/user/update` to adopt), plus Open WebUI `auths/add` |
-| `remove_users_from_resource()` | Open WebUI role → `pending` (or `DELETE`), then `POST /user/delete` |
-| `list_resource_users()` | `GET /user/list`, filtered on the `waldur_resource` metadata stamp |
+| `add_users_to_resource()` | `POST /user/new` (or `/user/update`), opening a period; plus Open WebUI `auths/add` |
+| `remove_users_from_resource()` | Open WebUI role → `pending` (or `DELETE`), then `/user/update` closing the period |
+| `list_resource_users()` | `GET /user/list`, filtered on the open period; prunes [expired][ownership] records |
 | `get_resource_metadata()` | `active` = any key not blocked |
 | `mint_resource_key()` | `POST /key/generate` as the next free slot, with the key's own limits, models and records |
 | `pause_resource_key()` | `POST /key/update`: `blocked: true` and `waldur_key_paused`, plus the holder's chat closed |
@@ -726,6 +781,7 @@ block.
 | `verify_ssl` | no | `true` | Verify the proxy's TLS certificate |
 | `timeout` | no | `30` | Per-request timeout in seconds |
 | `resource_backend_id_source` | no | `slug` | `slug` or `uuid`; see [below](#where-the-backend_id-comes-from) |
+| `ownership_retention_months` | no | `12` | Months, incl. the current one, a removed member is kept; see [ownership] |
 | `openwebui` | no | — | Chat surface; see [The chat surface](#the-chat-surface-open-webui) |
 
 ### Usage reporting backend settings (`litellm-usage`)
@@ -988,3 +1044,4 @@ general_settings:
 ```
 
 [billing]: #billing-many-models-from-one-offering
+[ownership]: #when-chat-usage-is-billed-to-a-resource
