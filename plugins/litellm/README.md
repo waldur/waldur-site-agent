@@ -36,6 +36,8 @@ warehouse to deploy.
   401 at the proxy and unblocking restores it without new key material
 - **Usage reporting**: report per-resource input/output tokens and USD spend from LiteLLM's own
   daily spend table — no sidecar collector
+- **Per-model pricing**: bill LiteLLM's own per-model spend, under a spending cap the customer
+  chooses — see [Pricing](#pricing)
 - **Enforcement backstop**: mirror Waldur's limits onto each key (`max_budget`, `tpm_limit`,
   `rpm_limit`) so a burst between reporting cycles cannot outrun metering
 - **Model allowlist**: restrict every key of an offering to a set of models, and one key to a
@@ -130,10 +132,11 @@ per-resource when the offering **declares a component of that name**:
 | `tpm` | `tpm_limit` | the offering's `tpm_limit` backend setting |
 | `rpm` | `rpm_limit` | the offering's `rpm_limit` backend setting |
 
-`waldur_resource.limits` only ever carries components the offering declares. An offering that
-declares just `input_tokens`, `output_tokens` and `token_cost` — the common case, and the example
-below — therefore drives **`max_budget` only**; `tpm_limit` and `rpm_limit` stay at whatever the
+`waldur_resource.limits` only ever carries `LIMIT` components the offering declares. An offering
+priced as in [Pricing](#pricing) — `token_cost` as its only limit, and the example below —
+therefore drives **`max_budget` only**; `tpm_limit` and `rpm_limit` stay at whatever the
 `tpm_limit` / `rpm_limit` backend settings say, the same value for every resource on the offering.
+An offering whose `token_cost` is a `USAGE` component drives none of them.
 
 To make rate limits per-resource instead, declare `tpm` and/or `rpm` as `LIMIT` components — see
 the commented lines in the example below. They are rate caps, not meters: nothing reports usage
@@ -736,12 +739,10 @@ that provisions and revokes people.
 ### Usage Reporting Backend (`litellm-usage`)
 
 Read-only. Reports whichever of `input_tokens`, `output_tokens` and `token_cost` the offering
-declares, so an offering that prices tokens Waldur-side and one that bills LiteLLM's upstream cost
-both work without a mode flag.
+declares, plus every component `component_metrics` maps onto one of them.
 
-`component_metrics` decouples the component name from the metric it reads, which is what an
-offering selling **several models at different prices under one offering** needs — see
-[Billing many models from one offering](#billing-many-models-from-one-offering).
+`component_metrics` decouples the component name from the metric it reads, which is what lets one
+spend figure be both the cap and the charge — see [Pricing](#pricing).
 
 **Source:** `GET /user/daily/activity`, walking `results[].breakdown.api_keys` — see
 [Why not `/global/spend/report`](#why-not-globalspendreport) below.
@@ -762,6 +763,108 @@ chat surface it is also attributed per **person** — see
 [How chat usage is billed](#how-chat-usage-is-billed). The `-<n>` slot suffix is stripped
 from the alias and the rows are summed, so rotating a key does not split a tenant's bill and a
 resource used across several days and several keys is billed for all of it.
+
+## Pricing
+
+Sell inference the way the proxy prices it: per model. This is the shape the
+[configuration example](#composed-offering-both-backends) uses, and the one to start from even
+when the offering serves a single model today — adding a second one later then changes nothing on
+the Waldur plan.
+
+### Why tokens alone cannot price it
+
+A provider selling `gpt-4o` alongside a small local model cannot price them with `input_tokens`
+and `output_tokens`: those carry one rate for every model on the offering, so a million frontier
+tokens and a million cheap ones invoice identically. Waldur has no per-model dimension to fix this
+with — `ComponentUsage` is `(resource, component, period, quantity)` and nothing more.
+
+LiteLLM has already solved it. The proxy applies its own per-model cost map and reports the result
+as `spend`, which this plugin surfaces as the `token_cost` metric. Billing that figure at a plan
+price of **1.0** charges exactly what the proxy costed, model by model, with no Waldur-side rate to
+keep in sync and no markup.
+
+### One spend figure, two components
+
+One component cannot both cap and charge. Waldur invoices a `USAGE` component on the usage
+reported against it, and a `LIMIT` component on the limit the customer set — never on usage — and
+only a `LIMIT` component carries a cap through `resource.limits`. So an offering that wants a
+spending cap and per-model billing, which is every offering selling more than one model, reports
+the same number under two names:
+
+```yaml
+    backend_settings:
+      # inference_cost is not named after a metric, so say what it reads. The other
+      # three are metered by their names alone.
+      component_metrics:
+        inference_cost: token_cost
+
+    backend_components:
+      input_tokens:   { measured_unit: "tokens", accounting_type: "usage", label: "Input tokens" }
+      output_tokens:  { measured_unit: "tokens", accounting_type: "usage", label: "Output tokens" }
+      token_cost:     { measured_unit: "USD",    accounting_type: "limit", label: "Budget" }
+      inference_cost: { measured_unit: "USD",    accounting_type: "usage", label: "Inference cost" }
+```
+
+| Component | Role |
+|---|---|
+| `token_cost` | the **cap**: the order's budget, each key's `max_budget`, what the pause fires on |
+| `inference_cost` | the **charge**: LiteLLM's per-model spend, invoiced |
+| `input_tokens`, `output_tokens` | volume, for the record |
+
+Reading `component_metrics`: the **left** side is the component name, which is the offering's own
+and means nothing to the plugin. The **right** side is the metric, and only three values are
+accepted — `input_tokens`, `output_tokens`, and `token_cost`, which is LiteLLM's per-model USD
+spend (its `spend` field). Anything else raises at startup.
+
+The mapping *adds* to the name-based default rather than replacing it: a component called
+`input_tokens`, `output_tokens` or `token_cost` is metered whether or not it appears here, so the
+mapping carries only what the names do not already say — one line, for `inference_cost`. Without
+it, `inference_cost` reports zero forever.
+
+`inference_cost` is a convention, not a keyword: nothing in the plugin knows the name, so it can be
+`cost`, `spend`, or anything else, as long as the offering, `backend_components` and
+`component_metrics` all agree on it. What makes it the charge is `accounting_type: usage` plus its
+plan price — not what it is called.
+
+`token_cost` stays the cap, under its usual name — it reads as a token count rather than the USD
+ceiling it is, but the component type is data in Waldur and existing offerings key off that string.
+
+### Plan prices
+
+| Component | Price | Why |
+|---|---|---|
+| `inference_cost` | **1.0** | Quantity is already USD, so the rate is dollars-per-dollar; 1.15 is a 15% markup |
+| `input_tokens`, `output_tokens` | **0** | Volume meters. They appear on the invoice as counts and charge nothing |
+| `token_cost` (the cap) | **0** | The customer chooses their own ceiling at order time and pays only for what they use |
+
+> ### The cap component must be priced at 0
+>
+> A `LIMIT` component is invoiced on **the limit itself** — `billing_limit.py` bills
+> `quantity = the limit value` at the plan price, independently of any usage reported against it.
+> So a non-zero price here charges the customer for the size of their cap: set a $50 budget and
+> the invoice carries $50 for the cap *plus* whatever was actually spent. Price it at 0 and the
+> limit becomes a pure ceiling the customer picks for themselves.
+>
+> This is separate from usage reporting. The `spend` figure this plugin reports against
+> `token_cost` is what drives `action_on_usage_limit: pause`, and `billing_usage.py` ignores it
+> for invoicing — only `USAGE` components bill from usage. Both statements are true at once, which
+> is why the cap and the charge have to be two components.
+
+The `max_budget` the cap sets resets on the 1st of the month (`1mo`), with Waldur's limits —
+see the note under [Which limits reach the key](#which-limits-reach-the-key).
+
+The per-model prices live in the proxy's cost map, not in Waldur: changing a model's
+`input_cost_per_token` in the LiteLLM config changes the next bill with no plan revision. And the
+customer sees one `Inference cost` line, not a breakdown by model. Only per-model components can
+produce that, and they require the prices to be declared in Waldur rather than in the proxy.
+
+### Other shapes
+
+- **No cap.** Declare `token_cost` alone as a `USAGE` component priced at 1.0, with no
+  `inference_cost`. Billing is still per model, but nothing caps spend: the keys carry no
+  `max_budget`, and `action_on_usage_limit: pause` has nothing to act on.
+- **One rate per token.** Price `input_tokens` and `output_tokens` on the plan. Right only when
+  every model on the offering costs the same per token.
 
 ## Configuration
 
@@ -792,7 +895,7 @@ block.
 | `api_token` | yes | — | Master or admin key for the spend API |
 | `verify_ssl` | no | `true` | Verify the proxy's TLS certificate |
 | `timeout` | no | `30` | Per-request timeout in seconds |
-| `component_metrics` | no | — | Extra component → metric pairs; see [Billing many models][billing] |
+| `component_metrics` | no | — | Extra component → metric pairs; see [Pricing](#pricing) |
 | `usage_cache_ttl` | no | half report period | Seconds a fetched month of rows is reused in one pass; `0` disables |
 
 ### Composed offering (both backends)
@@ -817,6 +920,10 @@ offerings:
       verify_ssl: true
       resource_backend_id_source: "uuid"    # key aliases <resource-uuid>-<n>; default "slug"
 
+      # inference_cost reads LiteLLM's per-model spend, the figure token_cost caps.
+      component_metrics:
+        inference_cost: token_cost
+
       # Optional chat surface. Omit the whole block for an API-only offering.
       openwebui:
         api_url: "https://chat.example.com"
@@ -825,10 +932,13 @@ offerings:
         account_provisioning: "sso"          # or "managed_password" + initial_password
         delete_accounts_on_removal: false
 
+    # Per-model pricing with a cap; see Pricing for why there are two cost components
+    # and what to price them at on the plan.
     backend_components:
-      input_tokens:  { measured_unit: "tokens", accounting_type: "usage", label: "Input tokens" }
-      output_tokens: { measured_unit: "tokens", accounting_type: "usage", label: "Output tokens" }
-      token_cost:    { measured_unit: "USD",    accounting_type: "usage", label: "Inference cost" }
+      input_tokens:   { measured_unit: "tokens", accounting_type: "usage", label: "Input tokens" }
+      output_tokens:  { measured_unit: "tokens", accounting_type: "usage", label: "Output tokens" }
+      token_cost:     { measured_unit: "USD",    accounting_type: "limit", label: "Budget" }
+      inference_cost: { measured_unit: "USD",    accounting_type: "usage", label: "Inference cost" }
 
       # Optional: declare these only to drive tpm_limit / rpm_limit per resource rather
       # than from the offering-wide backend_settings above. They carry a cap onto the
@@ -837,84 +947,9 @@ offerings:
       # rpm:         { measured_unit: "requests/min", accounting_type: "limit", label: "Requests per minute" }
 ```
 
-Enforcement is configured on the Waldur **offering**, not here: the component must be
-`billing_type: LIMIT` and the offering must set `plugin_options.action_on_usage_limit: pause`.
-
-## Billing many models from one offering
-
-A provider selling `gpt-4o` alongside a small local model cannot price them with `input_tokens`
-and `output_tokens`: those carry one rate for every model on the offering, so a million frontier
-tokens and a million cheap ones invoice identically. Waldur has no per-model dimension to fix this
-with — `ComponentUsage` is `(resource, component, period, quantity)` and nothing more.
-
-LiteLLM has already solved it. The proxy applies its own per-model cost map and reports the result
-as `spend`, which this plugin surfaces as the `token_cost` metric. Billing that figure at a plan
-price of **1.0** charges exactly what the proxy costed, model by model, with no Waldur-side rate to
-keep in sync and no markup.
-
-The obstacle is that one component cannot both cap and charge. Waldur invoices `USAGE` components
-and ignores `LIMIT` ones, and only a `LIMIT` component can carry a cap through `resource.limits` —
-so an offering that wants both a spending cap and cost-passthrough billing needs the same number
-under two names:
-
-```yaml
-    backend_settings:
-      # inference_cost is not named after a metric, so say what it reads. The other
-      # three are metered by their names alone.
-      component_metrics:
-        inference_cost: token_cost
-
-    backend_components:
-      token_cost:     { measured_unit: "USD", accounting_type: "limit", label: "Budget" }
-      inference_cost: { measured_unit: "USD", accounting_type: "usage", label: "Inference cost" }
-      input_tokens:   { measured_unit: "tokens", accounting_type: "usage", label: "Input tokens" }
-      output_tokens:  { measured_unit: "tokens", accounting_type: "usage", label: "Output tokens" }
-```
-
-Reading `component_metrics`: the **left** side is the component name, which is the offering's own
-and means nothing to the plugin. The **right** side is the metric, and only three values are
-accepted — `input_tokens`, `output_tokens`, and `token_cost`, which is LiteLLM's per-model USD
-spend (its `spend` field). Anything else raises at startup.
-
-The mapping *adds* to the name-based default rather than replacing it: a component called
-`input_tokens`, `output_tokens` or `token_cost` is metered whether or not it appears here, so the
-mapping carries only what the names do not already say — one line, for `inference_cost`.
-
-`inference_cost` is a convention, not a keyword: nothing in the plugin knows the name, so it can be
-`cost`, `spend`, or anything else, as long as the offering, `backend_components` and
-`component_metrics` all agree on it. What makes it the charge is `accounting_type: usage` plus its
-plan price — not what it is called.
-
-`token_cost` stays the cap, under its usual name — it reads as a token count rather than the USD
-ceiling it is, but the component type is data in Waldur and existing offerings key off that string.
-
-Prices on the Waldur plan:
-
-| Component | Price | Why |
-|---|---|---|
-| `inference_cost` | **1.0** | Quantity is already USD, so the rate is dollars-per-dollar; else a flat markup |
-| `input_tokens`, `output_tokens` | **0** | Volume meters. They appear on the invoice as counts and charge nothing |
-| `token_cost` (the cap) | **0** | The customer chooses their own ceiling at order time and pays only for what they use |
-
-> ### The cap component must be priced at 0
->
-> A `LIMIT` component is invoiced on **the limit itself** — `billing_limit.py` bills
-> `quantity = the limit value` at the plan price, independently of any usage reported against it.
-> So a non-zero price here charges the customer for the size of their cap: set a $50 budget and
-> the invoice carries $50 for the cap *plus* whatever was actually spent. Price it at 0 and the
-> limit becomes a pure ceiling the customer picks for themselves.
->
-> This is separate from usage reporting. The `spend` figure this plugin reports against
-> `token_cost` is what drives `action_on_usage_limit: pause`, and `billing_usage.py` ignores it
-> for invoicing — only `USAGE` components bill from usage. Both statements are true at once, which
-> is why the cap and the charge have to be two components.
-
-Otherwise `token_cost` keeps its usual job: it sets the key's `max_budget` backstop, and with
-`action_on_usage_limit: pause` it is what stops the resource.
-
-What this gives up is per-model **invoice lines**: the customer sees one `Inference cost` figure,
-not a breakdown. Only per-model components can produce that, and they require the prices to be
-declared in Waldur rather than in the proxy.
+Enforcement is configured on the Waldur **offering**, not here: the offering's `token_cost`
+component must be `billing_type: LIMIT`, as above, and the offering must set
+`plugin_options.action_on_usage_limit: pause`. Price the plan as in [Plan prices](#plan-prices).
 
 ## LiteLLM API behaviour
 
@@ -1043,5 +1078,4 @@ general_settings:
   master_key: sk-master-local
 ```
 
-[billing]: #billing-many-models-from-one-offering
 [ownership]: #when-chat-usage-is-billed-to-a-resource
