@@ -148,6 +148,57 @@ def test_a_key_used_on_several_days_yields_a_row_per_day(mock_client_cls: mock.M
 
 
 @mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")
+def test_each_person_row_carries_the_day_it_was_recorded_on(mock_client_cls: mock.Mock) -> None:
+    # The day is what lets the reporting backend bill a row to whoever owned the address
+    # then, rather than to whoever owns it when the report runs.
+    instance = mock_client_cls.return_value
+    by_key = {
+        "entities": {
+            "ada@example.com": {"api_key_breakdown": {"hash-s": _entry("shared", 10, 20, 0.5)}}
+        }
+    }
+    no_key_split = {
+        "entities": {
+            "ada@example.com": {"metrics": {"prompt_tokens": 5, "completion_tokens": 6}}
+        }
+    }
+    instance.get.return_value = _ok(
+        {
+            "results": [
+                _day("2026-08-01", {}, by_key),
+                _day("2026-08-02", {}, no_key_split),
+            ],
+            "metadata": {"total_pages": 1, "has_more": False},
+        }
+    )
+
+    rows = _client().get_user_usage_rows("2026-08-01", "2026-08-31")
+
+    assert [(row["date"], row["user_id"], row["input_tokens"]) for row in rows] == [
+        ("2026-08-01", "ada@example.com", 10),
+        ("2026-08-02", "ada@example.com", 5),
+    ]
+
+
+@mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")
+def test_a_timestamped_day_is_cut_to_the_date(mock_client_cls: mock.Mock) -> None:
+    # Ownership periods compare plain dates; a time tail would put a period's last day
+    # outside it.
+    instance = mock_client_cls.return_value
+    entities = {"entities": {"ada@example.com": {"metrics": {"prompt_tokens": 1}}}}
+    instance.get.return_value = _ok(
+        {
+            "results": [_day("2026-08-01T00:00:00", {}, entities)],
+            "metadata": {"total_pages": 1, "has_more": False},
+        }
+    )
+
+    rows = _client().get_user_usage_rows("2026-08-01", "2026-08-31")
+
+    assert rows[0]["date"] == "2026-08-01"
+
+
+@mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")
 def test_a_key_with_no_alias_is_skipped(mock_client_cls: mock.Mock) -> None:
     instance = mock_client_cls.return_value
     instance.get.return_value = _ok(

@@ -307,8 +307,11 @@ def _user(email: str, resource: str) -> dict:
     return {"user_id": email, "metadata": {"waldur_resource": resource}}
 
 
-def _user_row(email: str, alias: object, prompt: int, completion: int, cost: float) -> dict:
+def _user_row(
+    email: str, alias: object, prompt: int, completion: int, cost: float, date: str = "2026-08-10"
+) -> dict:
     return {
+        "date": date,
         "user_id": email,
         "key_alias": alias,
         "input_tokens": prompt,
@@ -515,6 +518,137 @@ def test_api_usage_on_a_key_only_resource_is_not_billed_to_the_address_owner() -
     ]
 
     assert backend.get_usage_report_for_period([RID], 2026, 8) == {}
+
+
+# --- dated ownership: each day bills to whoever owned the address that day ------
+
+
+def _dated_user(email: str, *periods: tuple) -> dict:
+    return {
+        "user_id": email,
+        "metadata": {
+            "waldur_ownership": [
+                {"resource": resource, "from": start, "to": end}
+                for resource, start, end in periods
+            ]
+        },
+    }
+
+
+def _chat_totals(report: dict, resource: str) -> object:
+    return report.get(resource, {}).get("TOTAL_ACCOUNT_USAGE", {}).get("token_cost")
+
+
+def _chat_rows() -> list:
+    """Ada's chat this month: 2.5 on the 5th, 7.5 on the 20th, on Open WebUI's key."""
+    return [
+        _user_row("ada@example.com", "openwebui-shared", 10, 10, 2.5, date="2026-08-05"),
+        _user_row("ada@example.com", "openwebui-shared", 30, 30, 7.5, date="2026-08-20"),
+    ]
+
+
+def test_a_removed_members_chat_usage_stays_on_the_resource_in_every_later_pass() -> None:
+    # The proxy's rows are the same on both passes; only the user record changes.
+    before = _chat_backend()
+    before.litellm_client.list_users.return_value = [_dated_user("ada@example.com", (RID, None, None))]
+    before.usage_client.get_user_usage_rows.return_value = _chat_rows()
+
+    after = _chat_backend()
+    after.litellm_client.list_users.return_value = [
+        _dated_user("ada@example.com", (RID, None, "2026-08-25"))
+    ]
+    after.usage_client.get_user_usage_rows.return_value = _chat_rows()
+
+    assert _chat_totals(before.get_usage_report_for_period([RID], 2026, 8), RID) == 10.0
+    assert _chat_totals(after.get_usage_report_for_period([RID], 2026, 8), RID) == 10.0
+
+
+def test_a_moved_members_usage_stays_where_it_was_used() -> None:
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [
+        _dated_user("ada@example.com", (RID, None, "2026-08-12"), ("other", "2026-08-12", None))
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = _chat_rows()
+
+    report = backend.get_usage_report_for_period([RID, "other"], 2026, 8)
+
+    assert _chat_totals(report, RID) == 2.5
+    assert _chat_totals(report, "other") == 7.5
+
+
+def test_the_day_of_a_move_bills_to_the_resource_the_person_left() -> None:
+    # Usage is bucketed per day, so the day both periods cover has to go one way.
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [
+        _dated_user("ada@example.com", (RID, None, "2026-08-05"), ("other", "2026-08-05", None))
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = _chat_rows()[:1]
+
+    report = backend.get_usage_report_for_period([RID, "other"], 2026, 8)
+
+    assert _chat_totals(report, RID) == 2.5
+    assert "other" not in report
+
+
+def test_usage_after_an_address_was_released_bills_to_nobody() -> None:
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [
+        _dated_user("ada@example.com", (RID, "2026-08-01", "2026-08-10"))
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = _chat_rows()
+
+    assert _chat_totals(backend.get_usage_report_for_period([RID], 2026, 8), RID) == 2.5
+
+
+def test_a_historical_reload_attributes_each_day_to_its_owner_then() -> None:
+    # Reloading August in October: Ada moved to "other" in September and was removed
+    # from it since. August is still RID's.
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [
+        _dated_user(
+            "ada@example.com",
+            (RID, "2026-07-15", "2026-09-02"),
+            ("other", "2026-09-02", "2026-10-03"),
+        )
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = _chat_rows()
+
+    report = backend.get_usage_report_for_period([RID, "other"], 2026, 8)
+
+    assert _chat_totals(report, RID) == 10.0
+    assert "other" not in report
+
+
+def test_a_record_from_before_dated_ownership_bills_every_day_to_its_owner() -> None:
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [_user("ada@example.com", RID)]
+    backend.usage_client.get_user_usage_rows.return_value = _chat_rows()
+
+    assert _chat_totals(backend.get_usage_report_for_period([RID], 2026, 8), RID) == 10.0
+
+
+def test_a_released_legacy_mirror_does_not_override_the_periods() -> None:
+    # The released record keeps ``waldur_resource`` as a mirror of the current owner,
+    # which is nobody. The periods are what bill.
+    backend = _chat_backend()
+    record = _dated_user("ada@example.com", (RID, None, "2026-08-31"))
+    record["metadata"]["waldur_resource"] = None
+    backend.litellm_client.list_users.return_value = [record]
+    backend.usage_client.get_user_usage_rows.return_value = _chat_rows()
+
+    assert _chat_totals(backend.get_usage_report_for_period([RID], 2026, 8), RID) == 10.0
+
+
+def test_a_row_with_no_day_falls_back_to_the_current_owner() -> None:
+    backend = _chat_backend()
+    backend.litellm_client.list_users.return_value = [
+        _dated_user("ada@example.com", ("old", None, "2026-08-01"), (RID, "2026-08-01", None))
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _user_row("ada@example.com", "openwebui-shared", 1, 1, 1.0, date="")
+    ]
+
+    assert _chat_totals(backend.get_usage_report_for_period([RID], 2026, 8), RID) == 1.0
 
 
 def _unsplit_row(email: str, day_aliases: list, prompt: int) -> dict:

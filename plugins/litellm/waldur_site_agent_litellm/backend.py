@@ -27,9 +27,9 @@ from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES
 
+from . import ownership
 from .client import (
     META_KEY,
-    META_RESOURCE,
     META_USERNAME,
     LiteLLMBackendError,
     LiteLLMClient,
@@ -233,6 +233,18 @@ class LiteLLMBackend(backends.BaseBackend):
         # account) while keeping the person's chat history, so re-adding them later
         # restores what they had instead of handing back an empty product.
         self.remove_chat_accounts = bool(self.openwebui_settings.get("delete_accounts_on_removal"))
+
+        # How long a removed member's user record outlives their removal, in calendar
+        # months counting the current one. The record is what bills the chat usage they
+        # had before they left, so it has to cover every month the agent still reports;
+        # the default covers the largest ``reporting_periods`` the agent accepts.
+        retention = backend_settings.get("ownership_retention_months")
+        self.ownership_retention_months = (
+            ownership.DEFAULT_RETENTION_MONTHS if retention is None else int(retention)
+        )
+        if self.ownership_retention_months < 1:
+            msg = "ownership_retention_months must be at least 1 (the current month)"
+            raise BackendError(msg)
 
         # ``/user/list`` results, cached for part of a pass -- see _USER_CACHE_TTL.
         self._users_cache: Optional[tuple[float, dict]] = None
@@ -1250,16 +1262,19 @@ class LiteLLMBackend(backends.BaseBackend):
                 self._revoke_chat_access(email, permanent=True)
             except BackendError:
                 logger.exception("Unable to revoke chat access for %s", email)
-        try:
-            self.litellm_client.delete_users(sorted(owned.values()))
-        except BackendError:
-            logger.exception(
-                "Unable to delete the LiteLLM users of resource %s", resource_backend_id
-            )
-        else:
-            logger.info(
-                "Removed %d user(s) from resource %s", len(owned), resource_backend_id
-            )
+        released = 0
+        for email in sorted(owned.values()):
+            try:
+                self._release_litellm_user(email, resource_backend_id)
+            except BackendError:
+                logger.exception(
+                    "Unable to release LiteLLM user %s from resource %s",
+                    email,
+                    resource_backend_id,
+                )
+            else:
+                released += 1
+        logger.info("Removed %d user(s) from resource %s", released, resource_backend_id)
         self._invalidate_users_cache()
 
     # --- state transitions ------------------------------------------------------
@@ -1548,6 +1563,13 @@ class LiteLLMBackend(backends.BaseBackend):
     # has never seen is not rejected; it accrues daily spend rows against a user row
     # that does not exist. Revocation therefore has to happen in Open WebUI, which is
     # why every removal path here touches both systems.
+    #
+    # Third, the record outlives the membership. The reporting backend recomputes the
+    # month on every pass and attributes each day's chat usage through the ownership
+    # recorded here, so removing a member *releases* the record -- closes their period
+    # on it -- rather than deleting it. Deleting took the month's usage they already
+    # had off the resource's bill. The record goes once its last period is older than
+    # any month the agent still reports (``_prune_expired_users``).
 
     @staticmethod
     def _email_of(record: dict) -> str:
@@ -1575,8 +1597,59 @@ class LiteLLMBackend(backends.BaseBackend):
             email = self._email_of(record)
             if email:
                 users[email] = record
+        self._prune_expired_users(users)
         self._users_cache = (now, users)
         return users
+
+    def _prune_expired_users(self, users: dict) -> None:
+        """Delete released records that can no longer bill any reportable month.
+
+        Runs on a fresh listing, so at most once per membership pass. Without it every
+        member ever removed would keep a record on the proxy forever. A record is only
+        deleted once it is released and its last period ended before the oldest month
+        in the retention window; a hand-made user, which carries no periods, never is.
+
+        Each candidate is read again just before the delete. The listing can be most of
+        a pass old by now, and an address re-claimed in the meantime -- the person
+        re-added to some resource -- has an open period again; deleting it on the
+        strength of the stale listing would take that resource's chat billing with it.
+
+        Pruned records are dropped from ``users`` in place. A failed delete is logged and
+        retried on the next pass: the record is released, so leaving it costs nothing but
+        the space.
+        """
+        cutoff = ownership.retention_cutoff(ownership.today(), self.ownership_retention_months)
+
+        def is_expired(record: Optional[dict]) -> bool:
+            if record is None:
+                return False
+            return ownership.expired(ownership.periods_of(self._user_metadata(record)), cutoff)
+
+        candidates = sorted(email for email, record in users.items() if is_expired(record))
+        if not candidates:
+            return
+        try:
+            expired = [
+                email for email in candidates if is_expired(self.litellm_client.get_user(email))
+            ]
+        except BackendError:
+            logger.exception("Unable to re-read expired LiteLLM users; pruning skipped")
+            return
+        if not expired:
+            return
+        try:
+            self.litellm_client.delete_users(expired)
+        except BackendError:
+            logger.exception("Unable to delete %d expired LiteLLM user(s)", len(expired))
+            return
+        logger.info(
+            "Deleted %d LiteLLM user(s) released before %s: %s",
+            len(expired),
+            cutoff,
+            ", ".join(expired),
+        )
+        for email in expired:
+            users.pop(email, None)
 
     def _invalidate_users_cache(self) -> None:
         """Drop the cached listing after a write that changes it.
@@ -1596,6 +1669,11 @@ class LiteLLMBackend(backends.BaseBackend):
         of the mapping are needed and both are read back out of the user's metadata
         rather than recomputed -- a person can change their address in Waldur, and the
         record on the proxy is the one that says which address is actually billing.
+
+        Only the open ownership period counts. A removed member's record stays on the
+        proxy with their period closed, so it still bills what they used, but they are
+        no longer provisioned: listing them would have the membership diff remove them
+        again on every pass, and pause and restore act on them.
         """
         found = {}
         for email, record in self._resource_user_records(resource_backend_id).items():
@@ -1605,11 +1683,12 @@ class LiteLLMBackend(backends.BaseBackend):
         return found
 
     def _resource_user_records(self, resource_backend_id: str) -> dict:
-        """Return ``{email: record}`` for the users this resource owns."""
+        """Return ``{email: record}`` for the users this resource holds open."""
         return {
             email: record
             for email, record in self._managed_users().items()
-            if self._user_metadata(record).get(META_RESOURCE) == resource_backend_id
+            if ownership.current_owner(ownership.periods_of(self._user_metadata(record)))
+            == resource_backend_id
         }
 
     def list_resource_users(self, resource_backend_id: str) -> list:
@@ -1708,25 +1787,31 @@ class LiteLLMBackend(backends.BaseBackend):
         left behind by an interrupted add, and in both cases the alternative is a
         resource that can never provision its own member.
 
+        "Owned" means an open ownership period. A record whose period on another
+        resource has closed -- the person was removed there -- is free to claim: the
+        claim opens a new period from today, and the closed one keeps billing the days
+        before it to the resource the person left.
+
         ``chat_follows_key`` stamps an empty ``META_KEY``: chat follows a key here and
-        none is assigned yet. An existing stamp is kept -- the metadata is merged, not
-        replaced, so a re-add never loses the key the person holds.
+        none is assigned yet. An existing stamp is kept -- the metadata is carried over,
+        not replaced, so a re-add never loses the key the person holds.
         """
+        day = ownership.today()
         existing = self.litellm_client.get_user(email)
         if existing is None:
-            metadata = {META_RESOURCE: backend_id, META_USERNAME: username}
-            if chat_follows_key:
-                metadata[META_KEY] = ""
+            initial = {META_KEY: ""} if chat_follows_key else {}
             self.litellm_client.create_user(
                 email,
                 user_email=email,
                 user_alias=full_name,
-                metadata=metadata,
+                metadata=ownership.stamp(initial, ownership.claim([], backend_id, day), username),
             )
             logger.info("Created LiteLLM user %s for resource %s", email, backend_id)
             return True
 
-        owner = self._user_metadata(existing).get(META_RESOURCE)
+        metadata = self._user_metadata(existing)
+        periods = ownership.periods_of(metadata)
+        owner = ownership.current_owner(periods)
         if owner and owner != backend_id:
             logger.error(
                 "LiteLLM user %s is already owned by resource %s; refusing to move it "
@@ -1742,15 +1827,18 @@ class LiteLLMBackend(backends.BaseBackend):
         # Re-stamped on every add, not only on adoption: the offering username can
         # change (Waldur regenerates it under some policies), and the membership diff
         # is keyed on it, so a stale one would report the member as absent forever.
-        metadata = {
-            **self._user_metadata(existing),
-            META_RESOURCE: backend_id,
-            META_USERNAME: username,
-        }
-        if chat_follows_key:
-            metadata.setdefault(META_KEY, "")
+        # The same write trims periods too old to bill anything, so a person who comes
+        # and goes does not grow their record without bound.
+        periods = ownership.claim(self._trim_ownership(periods, day), backend_id, day)
+        if chat_follows_key and META_KEY not in metadata:
+            metadata = {**metadata, META_KEY: ""}
         self.litellm_client.update_user(
-            email, {"user_email": email, "user_alias": full_name, "metadata": metadata}
+            email,
+            {
+                "user_email": email,
+                "user_alias": full_name,
+                "metadata": ownership.stamp(metadata, periods, username),
+            },
         )
         logger.info("Adopted existing LiteLLM user %s for resource %s", email, backend_id)
         return True
@@ -1803,12 +1891,15 @@ class LiteLLMBackend(backends.BaseBackend):
     def remove_users_from_resource(
         self, waldur_resource: WaldurResource, usernames: set, **kwargs: object
     ) -> list:
-        """Revoke a member's LiteLLM record and their chat access.
+        """Revoke a member's chat access and release their LiteLLM record.
 
-        Both halves matter and in this order they are both required: deleting only the
+        Both halves matter and in this order they are both required: releasing only the
         LiteLLM user leaves the person chatting through the shared key with their usage
-        landing on rows nothing reconciles, and demoting only the chat account leaves a
-        billing record for someone who is no longer entitled.
+        landing on rows nothing reconciles, and demoting only the chat account leaves the
+        address owned by a resource the person is no longer entitled to.
+
+        The record is released, not deleted: its closed period is what keeps billing the
+        chat usage the person had on this resource before they left.
         """
         del kwargs
         backend_id = waldur_resource.backend_id
@@ -1833,7 +1924,7 @@ class LiteLLMBackend(backends.BaseBackend):
                 continue
             try:
                 self._revoke_chat_access(email, permanent=True)
-                self.litellm_client.delete_users([email])
+                self._release_litellm_user(email, backend_id)
             except BackendError:
                 logger.exception(
                     "Unable to remove user %s (%s) from resource %s", username, email, backend_id
@@ -1844,6 +1935,40 @@ class LiteLLMBackend(backends.BaseBackend):
         if removed:
             self._invalidate_users_cache()
         return removed
+
+    def _trim_ownership(self, periods: list, day: str) -> list:
+        """Drop the periods that ended before the retention window."""
+        return ownership.trim(
+            periods, ownership.retention_cutoff(day, self.ownership_retention_months)
+        )
+
+    def _release_litellm_user(self, email: str, backend_id: str) -> None:
+        """Close the resource's ownership period on the address's record, as of today.
+
+        Read fresh rather than from the cached listing: the write replaces the whole
+        metadata, so writing back a stale copy would drop a period opened since.
+
+        A record that is gone, or that this resource no longer holds open, needs nothing:
+        the end state -- not owned by this resource -- already holds.
+        """
+        existing = self.litellm_client.get_user(email)
+        if existing is None:
+            return
+        metadata = self._user_metadata(existing)
+        periods = ownership.periods_of(metadata)
+        if ownership.current_owner(periods) != backend_id:
+            logger.info(
+                "LiteLLM user %s is not held open by resource %s; nothing to release",
+                email,
+                backend_id,
+            )
+            return
+        day = ownership.today()
+        periods = ownership.release(self._trim_ownership(periods, day), backend_id, day)
+        self.litellm_client.update_user(
+            email, {"metadata": ownership.stamp(metadata, periods)}
+        )
+        logger.info("Released LiteLLM user %s from resource %s on %s", email, backend_id, day)
 
     def _revoke_chat_access(self, email: str, *, permanent: bool = False) -> None:
         """End one person's access to the chat surface.

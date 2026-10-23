@@ -119,6 +119,16 @@ class LiteLLMBackendSettingsSchema(PluginBackendSettingsSchema):
             "resources keep the backend id they were provisioned with"
         ),
     )
+    ownership_retention_months: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Calendar months, counting the current one, that a removed member's LiteLLM "
+            "user record is kept so the chat usage they had keeps billing to the "
+            "resource. Default 12; keep it at least the agent's reporting_periods, and "
+            "the same on every agent sharing the proxy"
+        ),
+    )
     openwebui: Optional[OpenWebUISettingsSchema] = Field(
         default=None,
         description=(

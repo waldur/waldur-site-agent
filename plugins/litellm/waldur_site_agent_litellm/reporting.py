@@ -21,7 +21,8 @@ from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common import WALDUR_SITE_AGENT_REPORT_PERIOD_MINUTES
 from waldur_site_agent.common.structures import normalize_backend_components
 
-from .client import META_KEY, META_RESOURCE, LiteLLMClient
+from . import ownership
+from .client import META_KEY, LiteLLMClient
 from .usage_client import LiteLLMUsageClient
 
 logger = logging.getLogger(__name__)
@@ -122,8 +123,8 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         self.usage_client = LiteLLMUsageClient(backend_settings)
 
         # Chat usage is attributed to a person, not to a key, so rolling it up onto a
-        # resource needs the address-to-resource map -- which lives in the metadata this
-        # plugin stamps on each LiteLLM user. That is a management-API read, not a spend
+        # resource needs the address-to-resource history -- which lives in the metadata
+        # this plugin stamps on each LiteLLM user. That is a management-API read, not a spend
         # one, hence the second client rather than a new method on the usage client. It
         # is the same proxy and the same token: on a composed offering both backends
         # share one ``backend_settings`` block.
@@ -273,8 +274,8 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         self._rows_cache[key] = (now, rows)
         return rows
 
-    def _user_resource_map(self) -> dict:
-        """Return ``{email: resource_backend_id}`` for every user the plugin manages.
+    def _user_ownership_map(self) -> dict:
+        """Return ``{email: ownership periods}`` for every user the plugin manages.
 
         Read from the proxy rather than from Waldur: this backend never sees a team
         list, and the ownership stamp on the user record is in any case the thing that
@@ -296,12 +297,17 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
             return {}, {}
 
     def _read_user_maps(self) -> tuple:
-        """``({email: resource}, {email: key alias})`` from one ``/user/list`` walk.
+        """``({email: ownership periods}, {email: key alias})`` from one ``/user/list`` walk.
 
         The alias is the one the management backend stamped as the key assigned to the
         person; "" when their chat follows a key but none is assigned. A user with no
         stamp at all is on membership-based chat and is left out of the second map.
         Raises when the listing fails.
+
+        The periods, not the current owner: a pass recomputes the whole month, so each
+        day has to go to the resource that owned the address that day. Reading only
+        today's owner took a removed member's month off the resource that had them, and
+        billed a moved member's earlier usage to the resource they moved to.
 
         Cached on the same TTL as the usage rows, and for the same reason -- one
         reporting pass asks per resource, and the listing does not depend on which
@@ -320,9 +326,9 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
             email = str(record.get("user_id") or "").strip().lower()
             metadata = record.get("metadata")
             metadata = metadata if isinstance(metadata, dict) else {}
-            resource_id = metadata.get(META_RESOURCE)
-            if email and resource_id:
-                resources[email] = str(resource_id)
+            periods = ownership.periods_of(metadata)
+            if email and periods:
+                resources[email] = periods
                 if META_KEY in metadata:
                     keys[email] = str(metadata.get(META_KEY) or "")
         self._user_map_cache = (now, (resources, keys))
@@ -346,17 +352,21 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
 
         # 2. The chat surface: usage that arrived on Open WebUI's shared key, which
         #    belongs to no resource, and is identifiable only by the address the proxy
-        #    stamped onto it. Attributed to whichever resource owns that address.
+        #    stamped onto it. Attributed to whichever resource owned that address on the
+        #    day the row was recorded.
         #
         #    The two breakdowns cover the same records, so a row served on a key this
         #    plugin minted -- already attributed by alias -- is dropped here.
         #    Without that, every request a person makes with their own API key would be
         #    billed twice, once by alias and once by address.
-        user_map = self._user_resource_map()
+        user_map = self._user_ownership_map()
         if not user_map:
             return report
         for row in self._user_usage_rows(start_date, end_date):
-            owner = user_map.get(str(row["user_id"]).strip().lower())
+            periods = user_map.get(str(row["user_id"]).strip().lower())
+            if not periods:
+                continue
+            owner = self._owner_of(periods, row)
             if owner is None or owner not in wanted:
                 continue
             # Dropped when the key it was served on, or may have been served on, belongs
@@ -378,6 +388,19 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
                 continue
             self._accumulate(report, owner, row)
         return report
+
+    @staticmethod
+    def _owner_of(periods: list, row: dict) -> Optional[str]:
+        """The resource that owned the row's address on the row's day.
+
+        A row with no day -- the proxy always sends one, so only a malformed response --
+        falls back to the current owner, which is how every row was attributed before
+        ownership had dates.
+        """
+        day = row.get("date")
+        if not day:
+            return ownership.current_owner(periods)
+        return ownership.owner_on(periods, str(day))
 
     def get_resource_key_usage_report(self, resource_backend_ids: list) -> dict:
         """The current month's usage per key: ``{resource: {alias: {component: usage}}}``.
@@ -420,7 +443,10 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         if resources:
             for row in self._user_usage_rows(start, end):
                 email = str(row["user_id"]).strip().lower()
-                owner = resources.get(email)
+                periods = resources.get(email)
+                if not periods:
+                    continue
+                owner = self._owner_of(periods, row)
                 if owner is None or owner not in wanted:
                     continue
                 # Served on a key this plugin minted: counted above, by alias. See
