@@ -191,6 +191,7 @@ offerings: # Settings for offerings
           block_hardlimit: 6442450944
           inode_softlimit: 5000000
           inode_hardlimit: 7000000
+          # project_id_offset: 1000000000  # Lustre project ID = LDAP GID + offset
     backend_components:
       cpu:
         limit: 120000
