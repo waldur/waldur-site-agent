@@ -161,7 +161,9 @@ class QosManagementConfig(PluginBackendSettingsSchema):
 class LustreQuotaConfig(PluginBackendSettingsSchema):
     """Lustre filesystem quota configuration."""
 
-    model_config = ConfigDict(extra="allow")
+    # Forbid unknown keys so a misspelt project_id_offset is reported instead of
+    # silently leaving project IDs on the raw GID. The backend reads no other keys.
+    model_config = ConfigDict(extra="forbid")
 
     mount_point: str = Field(default="/valhalla", description="Lustre mount point")
     block_softlimit: Optional[int] = Field(

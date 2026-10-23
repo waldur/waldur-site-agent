@@ -15,7 +15,9 @@ normal agent operation:
   offset).
 
 The two are independent — you can enable either, both, or neither. Failures
-in either are logged but do not abort agent operation.
+in either are logged but do not abort agent operation. The one exception is
+an invalid `project_id_offset`, which is a configuration error (see
+[Choosing a project ID offset](#choosing-a-project-id-offset)).
 
 ## Subsystem A — Per-user home directory quota
 
@@ -213,7 +215,10 @@ three** of the following are true:
 If any of these is missing the directory is still created but the Lustre
 quota is silently skipped. No warning is emitted today — if you intend to
 use Lustre project quotas, make sure the offering has `ldap:` configured
-and that the project group exists in LDAP before the resource is created.
+with a `posixGroup` project group class: the agent creates the project group
+just before the directory, and only a `posixGroup` gets a `gidNumber`. If
+`group_name` points at a group the agent does not create, that group must
+already exist with a `gidNumber`.
 
 If the prerequisites are met, the agent runs:
 
@@ -247,19 +252,26 @@ a range nothing else uses; for example, with an offset of `1000000000` the
 group with GID `10136` gets project ID `1000010136`.
 
 - Project IDs are 32-bit: the largest usable one is `4294967294`
-  (`4294967295` is reserved and rejected by `lfs` and the kernel). The agent
-  refuses to start when the offset itself is negative, not an integer, or
-  above that limit, and skips the quota (logging an error) for a group whose
-  GID plus the offset exceeds it.
+  (`4294967295` is reserved and rejected by `lfs` and the kernel). An offset
+  that is negative, not an integer, or above that limit is a configuration
+  error: the offering's SLURM backend cannot be built, so the agent logs the
+  error (naming `project_id_offset`) and does not process that offering until
+  it is fixed. Other offerings are unaffected. A group whose GID plus the
+  offset exceeds the limit gets its directory but no quota, with an error
+  logged.
 - The offset applies only to project directories created after it is set:
   the agent never re-tags existing directories. To move an existing one, tag
-  it and set its quota under the new ID, then remove the old ID's limits:
+  it and set its quota under the new ID:
 
   ```bash
   lfs project  -p <new_id> -r -s <project_path>
   lfs setquota -p <new_id> -b <soft> -B <hard> [-i <soft> -I <hard>] <mount_point>
-  lfs setquota -p <old_id> --delete <mount_point>
   ```
+
+  Do not simply remove the old ID's limits afterwards: if that ID is also
+  used by another tree (a home directory tagged with a matching UID — the
+  collision the offset exists to avoid), those limits are that tree's quota.
+  Leave them, or reset them to what the other tree should have.
 
 ## Examples
 

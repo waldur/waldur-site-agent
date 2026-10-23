@@ -704,8 +704,9 @@ host before creating an association.
 `SlurmBackend` extends `BaseBackend`:
 
 - **Lifecycle**: `create_resource` / `delete_resource` (inherited);
-  `_pre_create_resource` builds the account tree, LDAP group, QoS and project
-  directory; `post_create_resource` creates home directories;
+  `_pre_create_resource` builds the account tree; `_on_backend_resource_created`
+  creates the LDAP group, QoS and project directory once SLURM has accepted the
+  account ID; `post_create_resource` creates home directories;
   `_pre_delete_resource` cancels jobs, removes users, QoS and LDAP group.
 - **Limits**: `_collect_resource_limits`, `set_resource_limits`,
   `get_resource_limits`, `set_resource_user_limits`.

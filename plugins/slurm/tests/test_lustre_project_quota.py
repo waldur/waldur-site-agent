@@ -82,6 +82,10 @@ class TestLustreQuotaSchema:
         with pytest.raises(ValidationError, match="project_id_offset"):
             LustreQuotaConfig(project_id_offset=offset)
 
+    def test_misspelt_offset_reported(self):
+        with pytest.raises(ValidationError, match="project_id_ofset"):
+            ProjectDirectoryConfig(lustre_quota={"project_id_ofset": 1000000000})
+
 
 class TestLustreProjectId:
     def test_gid_is_the_project_id_by_default(self):
