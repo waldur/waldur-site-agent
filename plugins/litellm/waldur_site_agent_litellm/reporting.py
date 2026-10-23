@@ -12,6 +12,7 @@ import datetime
 import logging
 import re
 import time
+from collections.abc import Iterator
 from typing import ClassVar, Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -83,6 +84,10 @@ def chat_spend_by_user(rows: list) -> dict:
     return spend
 
 
+class _HoldersUnreadable(Exception):  # noqa: N818 - a signal, not an error
+    """The user list, which says whose chat goes on which key, could not be read."""
+
+
 _REPORT_ONLY = "LiteLLM usage backend is reporting-only and does not manage resources"
 
 # Where per-key usage puts chat that no key can take: someone with no key assigned now,
@@ -114,6 +119,8 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
     # API usage arrives on the key itself; chat usage under the person's address,
     # which the management backend links to the key assigned to them (``META_KEY``).
     supports_resource_api_key_usage: bool = True
+    # Every usage row is one UTC day's, so the same rows give the usage per day.
+    supports_daily_usage: bool = True
 
     def __init__(self, backend_settings: dict, backend_components: dict) -> None:
         """Initialize the backend, normalizing component objects to plain dicts."""
@@ -381,16 +388,22 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
     ) -> dict:
         if not resource_backend_ids or not self._usage_metrics:
             return {}
-        wanted = set(resource_backend_ids)
         report: dict = {}
+        for resource_id, row in self._resource_rows(
+            set(resource_backend_ids), start_date, end_date
+        ):
+            self._accumulate(report, resource_id, row)
+        return report
 
+    def _resource_rows(self, wanted: set, start_date: str, end_date: str) -> Iterator[tuple]:
+        """``(resource, row)`` for every usage row that bills a resource in ``wanted``."""
         # 1. The API surface: usage on the keys this offering minted, attributed by
         #    alias. Every key row that lands on one of the resources in scope.
         for row in self._usage_rows(start_date, end_date):
             resource_id = self._resource_id_for(row["key_alias"])
             if resource_id not in wanted:
                 continue
-            self._accumulate(report, resource_id, row)
+            yield resource_id, row
 
         # 2. The chat surface: usage that arrived on Open WebUI's shared key, which
         #    belongs to no resource, and is identifiable only by the address the proxy
@@ -403,7 +416,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         #    billed twice, once by alias and once by address.
         user_map = self._user_ownership_map()
         if not user_map:
-            return report
+            return
         for row in self._user_usage_rows(start_date, end_date):
             periods = user_map.get(str(row["user_id"]).strip().lower())
             if not periods:
@@ -428,8 +441,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
             # resource here and to itself by alias on its own pass.
             if self._billed_by_alias(row):
                 continue
-            self._accumulate(report, owner, row)
-        return report
+            yield owner, row
 
     @staticmethod
     def _owner_of(periods: list, row: dict) -> Optional[str]:
@@ -461,45 +473,78 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         charging the usage to a key it did not come through, and without taking per-key
         reporting away from every other key of the resource for the rest of the month.
         """
-        today = datetime.datetime.now(tz=datetime.timezone.utc)
-        start, end = self._month_range(today.year, today.month)
         wanted = set(resource_backend_ids)
         report: dict = {resource_id: {} for resource_id in wanted}
         if not wanted or not self._usage_metrics:
             return report
-
-        for row in self._usage_rows(start, end):
-            alias = row["key_alias"]
-            resource_id = self._resource_id_for(alias)
-            if resource_id in wanted:
-                self._accumulate_into(report[resource_id], alias, row)
-
         try:
-            resources, keys = self._read_user_maps()
-        except BackendError:
+            for resource_id, key, row in self._key_rows(wanted):
+                self._accumulate_into(report[resource_id], key, row)
+        except _HoldersUnreadable:
             # Reporting the keys without their holders' chat would drop a key paused at
             # its limit by chat back under it, and Waldur would resume it. None tells the
             # core to skip per-key usage for this round instead.
             logger.exception("Unable to read the LiteLLM user list; per-key usage not reported")
             return dict.fromkeys(wanted)
-        if resources:
-            for row in self._user_usage_rows(start, end):
-                email = str(row["user_id"]).strip().lower()
-                periods = resources.get(email)
-                if not periods:
-                    continue
-                owner = self._owner_of(periods, row)
-                if owner is None or owner not in wanted:
-                    continue
-                # Served on a key this plugin minted: counted above, by alias. See
-                # ``_collect_usage`` for why the shape of the alias decides.
-                if self._billed_by_alias(row):
-                    continue
-                key = keys.get(email)
-                if not key or self._resource_id_for(key) != owner:
-                    key = f"{owner}{UNASSIGNED_CHAT_SUFFIX}"
-                self._accumulate_into(report[owner], key, row)
         return report
+
+    def get_resource_key_daily_usage_report(self, resource_backend_ids: list) -> dict:
+        """The current month's usage per key and UTC day: ``{resource: {alias: {day: usage}}}``.
+
+        The rows of ``get_resource_key_usage_report``, attributed to keys the same way,
+        and bucketed by the day each was recorded on. Days with no usage are left out.
+        """
+        wanted = set(resource_backend_ids)
+        report: dict = {resource_id: {} for resource_id in wanted}
+        if not wanted or not self._usage_metrics:
+            return report
+        try:
+            for resource_id, key, row in self._key_rows(wanted):
+                if row.get("date"):
+                    days = report[resource_id].setdefault(key, {})
+                    self._accumulate_into(days, str(row["date"]), row)
+        except _HoldersUnreadable:
+            # As for the month report: no per-key usage this round.
+            logger.exception("Unable to read the LiteLLM user list; per-key usage not reported")
+            return dict.fromkeys(wanted)
+        return report
+
+    def _key_rows(self, wanted: set) -> Iterator[tuple]:
+        """``(resource, key, row)`` for this month's usage rows of the resources in ``wanted``.
+
+        Raises ``_HoldersUnreadable`` when the user list, which says whose chat goes on
+        which key, cannot be read; a failing spend API raises as it is.
+        """
+        today = datetime.datetime.now(tz=datetime.timezone.utc)
+        start, end = self._month_range(today.year, today.month)
+        for row in self._usage_rows(start, end):
+            alias = row["key_alias"]
+            resource_id = self._resource_id_for(alias)
+            if resource_id in wanted:
+                yield resource_id, alias, row
+
+        try:
+            resources, keys = self._read_user_maps()
+        except BackendError as exc:
+            raise _HoldersUnreadable(str(exc)) from exc
+        if not resources:
+            return
+        for row in self._user_usage_rows(start, end):
+            email = str(row["user_id"]).strip().lower()
+            periods = resources.get(email)
+            if not periods:
+                continue
+            owner = self._owner_of(periods, row)
+            if owner is None or owner not in wanted:
+                continue
+            # Served on a key this plugin minted: counted above, by alias. See
+            # ``_resource_rows`` for why the shape of the alias decides.
+            if self._billed_by_alias(row):
+                continue
+            key = keys.get(email)
+            if not key or self._resource_id_for(key) != owner:
+                key = f"{owner}{UNASSIGNED_CHAT_SUFFIX}"
+            yield owner, key, row
 
     def _accumulate_into(self, totals_by_name: dict, name: str, row: dict) -> None:
         """Add one usage row onto ``totals_by_name[name]``, starting it at zero."""
@@ -543,6 +588,24 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         del waldur_resource
         start, end = self._month_range(year, month)
         return self._collect_usage(resource_backend_ids, start, end)
+
+    def get_daily_usage_report_for_period(
+        self, resource_backend_ids: list, year: int, month: int
+    ) -> dict:
+        """A month's usage per UTC day: ``{resource: {"YYYY-MM-DD": {component: usage}}}``.
+
+        The rows of the month's total, attributed the same way and bucketed by the day
+        each was recorded on, so the days sum to the total. Days with no usage are
+        left out.
+        """
+        if not resource_backend_ids or not self._usage_metrics:
+            return {}
+        start, end = self._month_range(year, month)
+        report: dict = {}
+        for resource_id, row in self._resource_rows(set(resource_backend_ids), start, end):
+            if row.get("date"):
+                self._accumulate_into(report.setdefault(resource_id, {}), str(row["date"]), row)
+        return report
 
     def pull_resource(
         self, waldur_resource: WaldurResource

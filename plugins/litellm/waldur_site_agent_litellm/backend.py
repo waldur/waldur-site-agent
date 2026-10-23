@@ -28,6 +28,7 @@ from waldur_site_agent.backend import ALL_MODELS, DEFAULT_RESOURCE_KEY_COUNT, ba
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES
+from waldur_site_agent.common.spending_limits import resource_spending_limits
 
 from . import ownership
 from .client import (
@@ -64,6 +65,23 @@ _LIMIT_FIELDS = {
 # saying why. So the offering's ``budget_duration`` setting is not consulted.
 BUDGET_DURATION = "1mo"
 
+# The proxy windows a key's spend is capped in beside ``max_budget``, one per Waldur
+# spending-limit period: ``budget_limits`` on the key, each ``{max_budget,
+# budget_duration}``. ``1d`` resets at 00:00 UTC and ``7d`` on Monday at 00:00 UTC,
+# with Waldur's day and week (checked on LiteLLM 1.98 and 1.106). The month stays on
+# ``max_budget`` with BUDGET_DURATION. A quarter or a year has no duration that resets
+# with Waldur's -- ``3mo`` is refused, ``90d`` runs from the day it was written, ``1y``
+# silently resets daily -- so those limits are Waldur's pause alone.
+BUDGET_WINDOWS = {"day": "1d", "week": "7d"}
+
+# What a spending limit on the proxy's spend is mapped to, by period, beside the
+# ``_LIMIT_FIELDS`` names: the month joins ``token_cost``'s ``max_budget``, a day or a
+# week becomes a window. Kept apart from ``token_cost`` because a limit-based
+# ``token_cost`` arrives with an order and a spending limit without one, so each can
+# be replaced while the other is kept.
+_SPEND_LIMITS = {"month": "spend/month", "day": "spend/day", "week": "spend/week"}
+_BUDGET_NAMES = (*_LIMIT_FIELDS, *_SPEND_LIMITS.values())
+
 # What the plugin records in a key's ``metadata``. The proxy has a ``blocked`` flag but
 # no reason for it, and one set of limit fields that has to hold the tighter of two
 # limits, so the inputs behind both are kept on the key they describe.
@@ -81,11 +99,14 @@ BUDGET_DURATION = "1mo"
 # ``waldur_holder_chat_spend``: the holder's chat this month, taken off the key's
 # ``max_budget`` when it was last written. A pass that cannot read chat spend keeps it
 # rather than dropping it, so a failed read never loosens the cap.
+# ``waldur_holder_chat_spend_windows``: the same for the day and week windows,
+# ``{period: spend}``.
 META_KEY_PAUSED = "waldur_key_paused"
 META_KEY_LIMITS = "waldur_key_limits"
 META_RESOURCE_LIMITS = "waldur_resource_limits"
 META_KEY_MODELS = "waldur_key_models"
 META_HOLDER_CHAT = "waldur_holder_chat_spend"
+META_HOLDER_CHAT_WINDOWS = "waldur_holder_chat_spend_windows"
 
 # Held across each read-modify-write of a key's metadata. ``/key/update`` replaces
 # ``metadata`` whole, and in event mode the hourly status pass rewrites budgets on the
@@ -153,6 +174,8 @@ class LiteLLMBackend(backends.BaseBackend):
     # reconfigured and deleted alone. Its model list is enforced by the proxy; of its
     # limits, those with a proxy field (``_LIMIT_FIELDS``) become a backstop on it.
     supports_resource_api_key_lifecycle = True
+    # A key's per-period limits reach the proxy as budget windows (BUDGET_WINDOWS).
+    supports_spending_limit_periods = True
     # On an offering with both a chat surface and per-key management, a person's chat
     # follows the key assigned to them: open while it serves, limited to its models.
     # The plugin learns who holds which key from the core -- set per instance below,
@@ -186,6 +209,15 @@ class LiteLLMBackend(backends.BaseBackend):
                 BUDGET_DURATION,
             )
         self.budget_duration = BUDGET_DURATION
+        # The components metered by the proxy's own spend, whose spending limits the
+        # key's budgets mirror: ``token_cost``, and any component ``component_metrics``
+        # feeds from it (``inference_cost: token_cost``). A spending limit on another
+        # component has no proxy field and is Waldur's to enforce.
+        self.spend_components = {"token_cost"} | {
+            str(name)
+            for name, metric in dict(backend_settings.get("component_metrics") or {}).items()
+            if metric == "token_cost"
+        }
         self.default_tpm_limit = backend_settings.get("tpm_limit")
         self.default_rpm_limit = backend_settings.get("rpm_limit")
 
@@ -392,14 +424,63 @@ class LiteLLMBackend(backends.BaseBackend):
         """Whether the key is paused on its own, rather than with its resource."""
         return bool(cls._key_metadata(record).get(META_KEY_PAUSED))
 
-    @staticmethod
-    def _mapped_limits(limits: Optional[dict]) -> dict:
-        """The limits the proxy has a field for, by Waldur component name."""
-        return {
+    def _mapped_limits(
+        self, limits: Optional[dict], spending_limits: Optional[dict] = None
+    ) -> dict:
+        """The limits the proxy has a field for, by Waldur component name (``_BUDGET_NAMES``).
+
+        ``limits`` is flat, ``{component: amount}``, as a resource's limit-based
+        components and a key's month limits come. ``spending_limits`` is per period,
+        ``{component: {period: amount}}``; only the components metered by the proxy's
+        spend reach it, the tightest of them per period, and only the periods it has a
+        window for (``_SPEND_LIMITS``).
+        """
+        mapped = {
             name: value
             for name, value in (limits or {}).items()
             if name in _LIMIT_FIELDS and value is not None
         }
+        for component, periods in (spending_limits or {}).items():
+            if component not in self.spend_components:
+                continue
+            for period, amount in periods.items():
+                name = _SPEND_LIMITS.get(period)
+                if name is not None and amount is not None:
+                    mapped[name] = amount if name not in mapped else min(mapped[name], amount)
+        return mapped
+
+    def _key_own_limits(self, limits: Optional[dict], spending_limits: Optional[dict]) -> dict:
+        """A key's own limits from its command: per period where Waldur sends them.
+
+        A Waldur with per-period key limits sends them as ``spending_limits`` and the
+        month alone again as ``limits``; ``spending_limits`` is the whole of it then.
+        One without sends ``limits`` only, where a 0 means no limit of the key's own.
+        """
+        if spending_limits is None:
+            return self._mapped_limits(limits)
+        monthly = {
+            component: periods["month"]
+            for component, periods in spending_limits.items()
+            if periods.get("month") is not None
+        }
+        return self._mapped_limits(monthly, spending_limits)
+
+    def _resource_budget_limits(
+        self, records: dict, limits: Optional[dict], spending_limits: Optional[dict]
+    ) -> dict:
+        """The resource's limits for its keys, keeping its spending limits when not given.
+
+        ``spending_limits`` None means they are not at hand -- an order carries the
+        limit-based components only, and a listing from a client that predates the
+        field leaves them out -- so the ones last stamped on the keys stay.
+        """
+        mapped = self._mapped_limits(limits, spending_limits)
+        if spending_limits is None:
+            stamped = self._resource_limits_from_records(records)
+            mapped.update(
+                {name: value for name, value in stamped.items() if name in _SPEND_LIMITS.values()}
+            )
+        return mapped
 
     def _resource_is_paused(self, resource_backend_id: str, records: dict) -> bool:
         """Whether the resource itself is paused, as opposed to some of its keys.
@@ -442,7 +523,12 @@ class LiteLLMBackend(backends.BaseBackend):
         limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
         # Handed to the keys minted right after this, so a resource does not spend its
         # first cycle on the offering-wide defaults alone.
-        self._pending_limits = (backend_id, limits)
+        self._pending_limits = (
+            backend_id,
+            self._mapped_limits(
+                limits, resource_spending_limits(waldur_resource) or {}
+            ),
+        )
         logger.info("Registered LiteLLM resource %s", waldur_resource.uuid)
         return BackendResourceInfo(
             backend_id=backend_id,
@@ -566,7 +652,7 @@ class LiteLLMBackend(backends.BaseBackend):
         """
         existing = self._resource_keys(resource_backend_id)
         blocked = self._resource_is_paused(resource_backend_id, existing)
-        limits = self._mapped_limits(self._take_pending_limits(resource_backend_id))
+        limits = self._take_pending_limits(resource_backend_id)
         free = self._free_aliases(resource_backend_id, set(existing))
         for _ in range(count):
             alias = next(free)
@@ -587,7 +673,7 @@ class LiteLLMBackend(backends.BaseBackend):
                 yield alias
 
     def _take_pending_limits(self, resource_backend_id: str) -> dict:
-        """Consume the limits parked by ``_provision`` for this resource, if any."""
+        """Consume the limits parked by ``_provision`` for this resource, if any, mapped."""
         pending = self._pending_limits
         if pending is None or pending[0] != resource_backend_id:
             return {}
@@ -619,25 +705,99 @@ class LiteLLMBackend(backends.BaseBackend):
         for name, field in _LIMIT_FIELDS.items():
             value = limits.get(name)
             fields[field] = defaults[field] if value is None else value
+        # A month spending limit is the same budget as a limit-based ``token_cost``.
+        month = limits.get(_SPEND_LIMITS["month"])
+        if month is not None:
+            budget = fields["max_budget"]
+            fields["max_budget"] = month if budget is None else min(budget, month)
         # Only meaningful alongside a budget, and a stale duration on a key that no
         # longer has one would outlive the budget it belonged to.
         fields["budget_duration"] = (
             self.budget_duration if fields["max_budget"] is not None else None
         )
+        # ``[]`` where there is no window, so a removed one is cleared too.
+        fields["budget_limits"] = [
+            {"max_budget": limits[_SPEND_LIMITS[period]], "budget_duration": duration}
+            for period, duration in BUDGET_WINDOWS.items()
+            if limits.get(_SPEND_LIMITS[period]) is not None
+        ]
         return fields
 
     @staticmethod
-    def _key_update_fields(record: dict, fields: dict) -> dict:
+    def _windows(value: object) -> list:
+        """A key's ``budget_limits`` as ``[(duration, amount)]``, to compare with a target."""
+        if not isinstance(value, list):
+            return []
+        return sorted(
+            (str(window.get("budget_duration")), float(window.get("max_budget") or 0.0))
+            for window in value
+            if isinstance(window, dict)
+        )
+
+    @classmethod
+    def _fields_match(cls, record: dict, fields: dict) -> bool:
+        """Whether the key already carries these backstop fields."""
+        return all(
+            cls._windows(record.get(field)) == cls._windows(value)
+            if field == "budget_limits"
+            else record.get(field) == value
+            for field, value in fields.items()
+        )
+
+    @staticmethod
+    def _awaiting_reset(record: dict) -> bool:
+        """Whether a window of the key has passed its reset and the proxy has not reset it yet.
+
+        The proxy resets an expired window from a job that runs every ten minutes or
+        so, and until then counts the old window's spend. Any ``budget_limits`` write
+        sets each window's reset to the next one from now while keeping that spend:
+        written at 00:03, a key that spent its day's budget yesterday would be refused
+        until the following midnight -- a week, for a weekly window. The windows are
+        left as they are until the job has run; the next write puts them right.
+        """
+        now = datetime.datetime.now(tz=datetime.timezone.utc)
+        for window in record.get("budget_limits") or []:
+            reset_at = window.get("reset_at") if isinstance(window, dict) else None
+            if not reset_at:
+                continue
+            try:
+                moment = datetime.datetime.fromisoformat(str(reset_at).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=datetime.timezone.utc)
+            if moment <= now:
+                return True
+        return False
+
+    @classmethod
+    def _key_update_fields(cls, record: dict, fields: dict) -> dict:
         """``fields`` for a ``/key/update``, without a ``budget_duration`` the key carries.
 
         The proxy moves ``budget_reset_at`` to the next reset whenever an update names a
         ``budget_duration``. On the 1st, before its reset job has run, that would skip
         the month's reset and leave the key last month's spend: so it is only sent when
         it changes.
+
+        ``budget_limits`` moves every window's reset the same way, so it is only sent
+        when a window changes, and not while one awaits its reset (``_awaiting_reset``).
+        A key that has no window and is to have none is never sent the field, which a
+        proxy that predates windows may not take.
         """
+        dropped = set()
         if record.get("budget_duration") == fields.get("budget_duration"):
-            return {field: value for field, value in fields.items() if field != "budget_duration"}
-        return fields
+            dropped.add("budget_duration")
+        if "budget_limits" in fields:
+            if cls._windows(record.get("budget_limits")) == cls._windows(fields["budget_limits"]):
+                dropped.add("budget_limits")
+            elif cls._awaiting_reset(record):
+                logger.info(
+                    "Leaving the budget windows of key %s as they are until the proxy "
+                    "has reset the one past its reset time",
+                    record.get("key_alias"),
+                )
+                dropped.add("budget_limits")
+        return {field: value for field, value in fields.items() if field not in dropped}
 
     def _limits_from_records(self, records: dict) -> dict:
         """Read the backstop back off the keys the proxy already holds.
@@ -650,6 +810,10 @@ class LiteLLMBackend(backends.BaseBackend):
         are the authority that is actually in hand here.
         """
         limits: dict = {}
+        # A window's name by its duration: ``1d`` is ``spend/day``.
+        window_names = {
+            duration: _SPEND_LIMITS[period] for period, duration in BUDGET_WINDOWS.items()
+        }
         for record in records.values():
             if not isinstance(record, dict):
                 continue
@@ -657,6 +821,12 @@ class LiteLLMBackend(backends.BaseBackend):
                 value = record.get(field)
                 if name not in limits and value is not None:
                     limits[name] = value
+            for window in record.get("budget_limits") or []:
+                if not isinstance(window, dict) or window.get("max_budget") is None:
+                    continue
+                window_name = window_names.get(str(window.get("budget_duration")))
+                if window_name is not None and window_name not in limits:
+                    limits[window_name] = window["max_budget"]
         return limits
 
     def _resource_limits_from_records(self, records: dict) -> dict:
@@ -672,24 +842,42 @@ class LiteLLMBackend(backends.BaseBackend):
                 return dict(stamped)
         return self._limits_from_records(records)
 
-    def _waldur_or_stamped_limits(self, records: dict, resource_limits: Optional[dict]) -> dict:
+    def _waldur_or_stamped_limits(
+        self,
+        records: dict,
+        resource_limits: Optional[dict],
+        resource_spending_limits: Optional[dict] = None,
+    ) -> dict:
         """The resource's limits for a key being minted or rotated.
 
         Waldur's, when the core read them, win over the ones the last reconciliation
         stamped on the resource's keys: Waldur is the authority, the stamp lags a limit
         change by up to a membership-sync period, and a key that was its resource's
-        only one leaves no sibling to read a stamp from. Without them (an older core,
-        or a read that carried none) the stamp is used.
+        only one leaves no sibling to read a stamp from. Without either (an older
+        core, or a read that carried none) the stamp is used.
+
+        ``resource_limits`` are the limit-based components, ``resource_spending_limits``
+        the resource's day/week/month windows. Each part Waldur did not send stays as
+        last stamped (``_resource_budget_limits``); ``{}`` is a resource with no windows
+        and clears them.
         """
-        if resource_limits is None:
+        if resource_limits is None and resource_spending_limits is None:
             return self._resource_limits_from_records(records)
-        return self._mapped_limits(resource_limits)
+        if resource_limits is None:
+            # The windows from Waldur, the flat limits as stamped.
+            resource_limits = {
+                name: value
+                for name, value in self._resource_limits_from_records(records).items()
+                if name in _LIMIT_FIELDS
+            }
+        return self._resource_budget_limits(records, resource_limits, resource_spending_limits)
 
     @staticmethod
     def _tighter_limits(key_limits: dict, resource_limits: dict) -> dict:
         """The limit each proxy field enforces: the tighter of the key's and the resource's.
 
-        Both map a Waldur component name (``token_cost``, ``tpm``, ``rpm``) to a value.
+        Both map a name of ``_BUDGET_NAMES`` (``token_cost``, ``tpm``, ``rpm`` and the
+        spending limits on the proxy's spend, per period) to a value.
         The result is what ``_backstop_fields`` turns into the key's proxy fields; a
         name neither side limits is left out, so the field falls back to the
         offering-wide default.
@@ -699,7 +887,7 @@ class LiteLLMBackend(backends.BaseBackend):
         stays a cap of 0, as it always has on this plugin.
         """
         combined: dict = {}
-        for name in _LIMIT_FIELDS:
+        for name in _BUDGET_NAMES:
             own = key_limits.get(name)
             if not own:
                 own = None
@@ -715,50 +903,89 @@ class LiteLLMBackend(backends.BaseBackend):
         return combined
 
     def _key_fields(
-        self, own_limits: dict, resource_limits: dict, chat_spend: float
-    ) -> tuple[dict, float]:
-        """The key's backstop fields with its holder's chat taken off, and the amount taken.
+        self, own_limits: dict, resource_limits: dict, chat_spend: dict
+    ) -> tuple[dict, dict]:
+        """The key's backstop fields with its holder's chat taken off, and the amounts taken.
 
         Waldur counts a key's usage as its API spend plus its holder's chat, but the proxy
         checks ``max_budget`` against the key's own spend only: chat arrives on Open
         WebUI's shared key. Writing the budget net of the chat already made this month
         lets the proxy refuse the key once the two together reach the limit. Never below
         0, which refuses the key's next call. A key with no budget has nothing taken off.
+
+        Each window is netted the same way, of the chat in its own period:
+        ``chat_spend`` is ``{period: spend}`` for ``month`` and the ``BUDGET_WINDOWS``.
+        The amounts taken come back the same way, the periods with none left out.
         """
         fields = self._backstop_fields(self._tighter_limits(own_limits, resource_limits))
-        if not chat_spend or fields["max_budget"] is None:
-            return fields, 0.0
-        fields["max_budget"] = max(0.0, round(fields["max_budget"] - chat_spend, 6))
-        return fields, chat_spend
+        taken: dict = {}
+        month = chat_spend.get("month")
+        if month and fields["max_budget"] is not None:
+            fields["max_budget"] = max(0.0, round(fields["max_budget"] - month, 6))
+            taken["month"] = month
+        periods = {duration: period for period, duration in BUDGET_WINDOWS.items()}
+        for window in fields["budget_limits"]:
+            period = periods[window["budget_duration"]]
+            spend = chat_spend.get(period)
+            if spend:
+                window["max_budget"] = max(0.0, round(window["max_budget"] - spend, 6))
+                taken[period] = spend
+        return fields, taken
 
     @staticmethod
-    def _chat_deduction(alias: str, chat_spend: Optional[dict], metadata: dict) -> float:
-        """What to take off the key's budget: its holder's chat, or the last amount taken.
+    def _recorded_chat(metadata: dict) -> dict:
+        """The chat last taken off the key's budgets, ``{period: spend}``."""
+        recorded: dict = {}
+        month = float(metadata.get(META_HOLDER_CHAT) or 0.0)
+        if month:
+            recorded["month"] = month
+        windows = metadata.get(META_HOLDER_CHAT_WINDOWS)
+        if isinstance(windows, dict):
+            recorded.update(
+                {
+                    period: float(spend)
+                    for period, spend in windows.items()
+                    if period in BUDGET_WINDOWS and spend
+                }
+            )
+        return recorded
+
+    @classmethod
+    def _chat_deduction(cls, alias: str, chat_spend: Optional[dict], metadata: dict) -> dict:
+        """What to take off the key's budgets: its holder's chat, or the last amounts taken.
 
         ``chat_spend`` is ``None`` when it could not be read. Falling back to no deduction
         would hand a key its holder's chat back as budget until the next pass.
         """
         if chat_spend is None:
-            return float(metadata.get(META_HOLDER_CHAT) or 0.0)
-        return round(chat_spend.get(alias, 0.0), 6)
+            return cls._recorded_chat(metadata)
+        return {
+            period: round(spend, 6) for period, spend in chat_spend.get(alias, {}).items() if spend
+        }
 
     @staticmethod
-    def _record_chat_deduction(metadata: dict, deduction: float) -> None:
-        """Note the deduction on the key, and only when there is one to note."""
-        if deduction:
-            metadata[META_HOLDER_CHAT] = deduction
+    def _record_chat_deduction(metadata: dict, deduction: dict) -> None:
+        """Note the deductions on the key, and only those there are to note."""
+        if deduction.get("month"):
+            metadata[META_HOLDER_CHAT] = deduction["month"]
         else:
             metadata.pop(META_HOLDER_CHAT, None)
+        windows = {period: spend for period, spend in deduction.items() if period in BUDGET_WINDOWS}
+        if windows:
+            metadata[META_HOLDER_CHAT_WINDOWS] = windows
+        else:
+            metadata.pop(META_HOLDER_CHAT_WINDOWS, None)
 
     def _holder_chat_spend(self, resource_backend_id: str) -> Optional[dict]:
-        """``{alias: spend}``: this month's chat of each key's holder, ``None`` if unreadable.
+        """``{alias: {period: spend}}``: each key's holder's chat, ``None`` if unreadable.
 
-        The holder is whoever the key's alias is stamped on (``META_KEY``), the same person
-        the usage report bills the key's chat to. Only the days their address belonged to
-        this resource count, as in the report: chat from before they moved here is billed
-        to the resource they left, so taking it off this key would refuse the key at an
-        amount Waldur does not show. Only read when the resource has holders, so an
-        offering whose chat runs by membership never asks.
+        Per period: the month, and the day and week the key's windows cover. The holder
+        is whoever the key's alias is stamped on (``META_KEY``), the same person the usage
+        report bills the key's chat to. Only the days their address belonged to this
+        resource count, as in the report: chat from before they moved here is billed to the
+        resource they left, so taking it off this key would refuse the key at an amount
+        Waldur does not show. Only read when the resource has holders, so an offering whose
+        chat runs by membership never asks.
         """
         if self.usage_client is None:
             return {}
@@ -770,7 +997,9 @@ class LiteLLMBackend(backends.BaseBackend):
                     holders[email] = (str(metadata[META_KEY]), ownership.periods_of(metadata))
             if not holders:
                 return {}
-            by_user = self._chat_spend_by_user()
+            # Read once, so the periods and the rows they are cut from agree at midnight.
+            starts = self._chat_period_starts()
+            by_user = self._chat_spend_by_user(starts)
         except BackendError:
             logger.exception(
                 "Unable to read the chat spend of resource %s's key holders; keeping the "
@@ -780,27 +1009,43 @@ class LiteLLMBackend(backends.BaseBackend):
             return None
         spend: dict = {}
         for email, (alias, periods) in holders.items():
-            amount = sum(
-                day_spend
-                for day, day_spend in by_user.get(email, {}).items()
-                # A row with no day goes to the current owner, as in the report.
-                if (ownership.owner_on(periods, day) if day else ownership.current_owner(periods))
-                == resource_backend_id
-            )
-            if amount:
-                spend[alias] = spend.get(alias, 0.0) + amount
+            for day, amount in by_user.get(email, {}).items():
+                # A row with no day goes to the current owner's month, as in the report.
+                if day:
+                    owner = ownership.owner_on(periods, day)
+                else:
+                    owner = ownership.current_owner(periods)
+                if not amount or owner != resource_backend_id:
+                    continue
+                totals = spend.setdefault(alias, {})
+                for name, start in starts.items():
+                    if (day >= start) if day else name == "month":
+                        totals[name] = totals.get(name, 0.0) + amount
         return spend
 
-    def _chat_spend_by_user(self) -> dict:
-        """``{email: {day: spend}}`` of this month's chat on the proxy, cached for part of a pass.
+    @staticmethod
+    def _chat_period_starts() -> dict:
+        """``{period: YYYY-MM-DD}``: the first day of this month and of the ``BUDGET_WINDOWS``.
 
+        Today, and the week from Monday, which can reach into last month.
+        """
+        today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+        return {
+            "month": today.replace(day=1).isoformat(),
+            "week": (today - datetime.timedelta(days=today.weekday())).isoformat(),
+            "day": today.isoformat(),
+        }
+
+    def _chat_spend_by_user(self, starts: dict) -> dict:
+        """``{email: {day: spend}}`` of chat on the proxy, cached for part of a pass.
+
+        From the start of the earliest of ``starts`` (``_chat_period_starts``) to today.
         One spend-API walk covers every resource, so the membership pass, which asks per
         resource, makes it once. Raises ``BackendError`` when the proxy cannot be read.
         """
         if self.usage_client is None:
             return {}
-        today = datetime.datetime.now(tz=datetime.timezone.utc)
-        period = (f"{today:%Y-%m}-01", f"{today:%Y-%m-%d}")
+        period = (min(starts.values()), starts["day"])
         now = time.monotonic()
         cached = self._chat_spend_cache
         if cached is not None and cached[1] == period and now - cached[0] < _USER_CACHE_TTL:
@@ -915,6 +1160,7 @@ class LiteLLMBackend(backends.BaseBackend):
             blocked=blocked,
             max_budget=fields["max_budget"],
             budget_duration=fields["budget_duration"],
+            budget_limits=fields["budget_limits"],
             tpm_limit=fields["tpm_limit"],
             rpm_limit=fields["rpm_limit"],
             metadata=metadata,
@@ -928,6 +1174,8 @@ class LiteLLMBackend(backends.BaseBackend):
         limits: Optional[dict] = None,
         allowed_models: Optional[list] = None,
         resource_limits: Optional[dict] = None,
+        spending_limits: Optional[dict] = None,
+        resource_spending_limits: Optional[dict] = None,
     ) -> str:
         """Replace one key's material, keeping its alias, and return the new plaintext.
 
@@ -955,7 +1203,9 @@ class LiteLLMBackend(backends.BaseBackend):
 
         ``resource_limits``, Waldur's limits of the resource, win over the stamp on its
         keys as on a mint: a lost key that was the resource's only one has no sibling
-        to read them from.
+        to read them from; ``resource_spending_limits`` are its windows, as on a mint.
+        ``spending_limits`` are the key's own per period, as on a mint
+        (``_key_own_limits``).
         """
         del known_client_ids
         records = self._resource_keys(resource_backend_id)
@@ -967,7 +1217,10 @@ class LiteLLMBackend(backends.BaseBackend):
                 records,
                 limits,
                 allowed_models,
-                self._waldur_or_stamped_limits(records, resource_limits),
+                self._waldur_or_stamped_limits(
+                    records, resource_limits, resource_spending_limits
+                ),
+                spending_limits,
             )
 
         token = self._require_token(client_id, record)
@@ -981,8 +1234,10 @@ class LiteLLMBackend(backends.BaseBackend):
         self_paused = self._is_self_paused(record)
         key_limits: Optional[dict] = None
         if has_settings:
-            own_limits = self._mapped_limits(limits)
-            key_resource_limits = self._waldur_or_stamped_limits(records, resource_limits)
+            own_limits = self._key_own_limits(limits, spending_limits)
+            key_resource_limits = self._waldur_or_stamped_limits(
+                records, resource_limits, resource_spending_limits
+            )
             # Read before the key's metadata, which is re-read to be written back whole.
             chat_spend = self._holder_chat_spend(resource_backend_id)
         # The delete-and-mint below carries this metadata over outside the lock; a
@@ -1091,6 +1346,7 @@ class LiteLLMBackend(backends.BaseBackend):
         limits: Optional[dict],
         allowed_models: Optional[list],
         resource_limits: dict,
+        spending_limits: Optional[dict] = None,
     ) -> str:
         """Mint a slot the proxy lost back, as restricted as the key Waldur shows.
 
@@ -1118,7 +1374,7 @@ class LiteLLMBackend(backends.BaseBackend):
         else:
             # Checked before anything is created: a refused list leaves nothing behind.
             models = self._key_models(allowed_models)
-            own_limits = self._mapped_limits(limits)
+            own_limits = self._key_own_limits(limits, spending_limits)
             blocked = self._resource_is_paused(resource_backend_id, records)
             # Net of the holder's chat, as on a rotation: the full budget would let the
             # new key spend what its holder already used in chat until the next pass.
@@ -1185,6 +1441,8 @@ class LiteLLMBackend(backends.BaseBackend):
         limits: Optional[dict] = None,
         allowed_models: Optional[list] = None,
         resource_limits: Optional[dict] = None,
+        spending_limits: Optional[dict] = None,
+        resource_spending_limits: Optional[dict] = None,
     ) -> dict:
         """Add one key to the resource, as its next free ``<backend_id>-<n>`` slot.
 
@@ -1196,14 +1454,19 @@ class LiteLLMBackend(backends.BaseBackend):
         last reconciliation stamped on its keys: Waldur is the authority, and the
         stamp lags a limit change by up to a membership-sync period. They are also the
         only source for a resource's first key, which has no siblings to read them
-        from. Without them (an older core) the stamp is used as before.
+        from. ``resource_spending_limits`` are the resource's day/week/month windows
+        from the same read, so a first key is held to them from its mint rather than
+        from the next membership sync. Without them (an older core) the stamp is used
+        as before.
         """
         # Checked before anything is created: a refused list leaves nothing behind.
         models = self._key_models(allowed_models)
         records = self._resource_keys(resource_backend_id)
         blocked = self._resource_is_paused(resource_backend_id, records)
-        own_limits = self._mapped_limits(limits)
-        resource_limits = self._waldur_or_stamped_limits(records, resource_limits)
+        own_limits = self._key_own_limits(limits, spending_limits)
+        resource_limits = self._waldur_or_stamped_limits(
+            records, resource_limits, resource_spending_limits
+        )
         alias = next(
             self._free_aliases(resource_backend_id, set(records) | set(reserved_client_ids))
         )
@@ -1256,9 +1519,12 @@ class LiteLLMBackend(backends.BaseBackend):
         resource_backend_id: str,
         limits: Optional[dict] = None,
         allowed_models: Optional[list] = None,
+        spending_limits: Optional[dict] = None,
     ) -> None:
         """Lift a key's own pause and apply its settings; a paused resource still holds it."""
-        self._configure_key(client_id, resource_backend_id, limits, allowed_models)
+        self._configure_key(
+            client_id, resource_backend_id, limits, allowed_models, spending_limits
+        )
         logger.info("Resumed LiteLLM key %s", client_id)
 
     def update_resource_key(
@@ -1267,9 +1533,12 @@ class LiteLLMBackend(backends.BaseBackend):
         resource_backend_id: str,
         limits: Optional[dict] = None,
         allowed_models: Optional[list] = None,
+        spending_limits: Optional[dict] = None,
     ) -> None:
         """Apply a key's own limits and model list."""
-        self._configure_key(client_id, resource_backend_id, limits, allowed_models)
+        self._configure_key(
+            client_id, resource_backend_id, limits, allowed_models, spending_limits
+        )
         logger.info("Updated LiteLLM key %s", client_id)
 
     def _configure_key(
@@ -1278,6 +1547,7 @@ class LiteLLMBackend(backends.BaseBackend):
         resource_backend_id: str,
         limits: Optional[dict],
         allowed_models: Optional[list],
+        spending_limits: Optional[dict] = None,
     ) -> None:
         """Write a key's own settings and lift its own pause, in one ``/key/update``.
 
@@ -1296,7 +1566,7 @@ class LiteLLMBackend(backends.BaseBackend):
             )
             raise LiteLLMBackendError(msg)
         token = self._require_token(client_id, record)
-        own_limits = self._mapped_limits(limits)
+        own_limits = self._key_own_limits(limits, spending_limits)
         resource_limits = self._resource_limits_from_records(records)
         # Read before the key's metadata, which is re-read to be written back whole.
         chat_spend = self._holder_chat_spend(resource_backend_id)
@@ -1600,14 +1870,16 @@ class LiteLLMBackend(backends.BaseBackend):
         its holder's chat this month is taken off its budget (``_key_fields``); this
         pass is what keeps that current as they chat and as the key changes hands.
 
+        ``limits`` are the limit-based components, which is all an order carries; the
+        resource's spending limits stay as last reconciled (``sync_resource_limits``).
+
         Each key's model list is brought in line with the offering's ``models`` in the
         same write (``_reconciled_models``): a model dropped from the offering stops
         being callable on the keys that had it, without an update from Waldur.
         """
+        records = self._resource_keys(resource_backend_id)
         self._write_key_budgets(
-            resource_backend_id,
-            self._resource_keys(resource_backend_id),
-            self._mapped_limits(limits),
+            resource_backend_id, records, self._resource_budget_limits(records, limits, None)
         )
 
     def _write_key_budgets(
@@ -1638,8 +1910,8 @@ class LiteLLMBackend(backends.BaseBackend):
             )
             if (
                 (metadata.get(META_RESOURCE_LIMITS) or {}) == key_resource_limits
-                and float(metadata.get(META_HOLDER_CHAT) or 0.0) == deduction
-                and all(record.get(field) == value for field, value in fields.items())
+                and self._recorded_chat(metadata) == deduction
+                and self._fields_match(record, fields)
                 and self._reconciled_models(record) is None
             ):
                 # Reconciliation runs every membership-sync cycle; writing values the
@@ -1739,7 +2011,14 @@ class LiteLLMBackend(backends.BaseBackend):
         # resource whose limits were cleared gets its keys back to the offering
         # defaults. Skipping it would leave the removed caps in place indefinitely.
         limits = waldur_resource.limits.to_dict() if waldur_resource.limits else {}
-        self.set_resource_limits(backend_id, limits)
+        records = self._resource_keys(backend_id)
+        self._write_key_budgets(
+            backend_id,
+            records,
+            self._resource_budget_limits(
+                records, limits, resource_spending_limits(waldur_resource)
+            ),
+        )
 
     def get_resource_metadata(self, resource_backend_id: str) -> dict:
         """Report whether any of the resource's keys is currently serving."""

@@ -126,13 +126,13 @@ def test_the_slug_derived_backend_id_is_kept_by_default() -> None:
 
 def test_uuid_source_provisions_under_the_resource_uuid() -> None:
     backend = _make_backend({**SETTINGS, "resource_backend_id_source": "uuid"})
-    resource = _make_resource(limits={"input_tokens": 100})
+    resource = _make_resource(limits={"token_cost": 100})
 
     info = backend.create_resource_with_id(resource, "inference")
 
     assert info.backend_id == resource.uuid.hex
     # The limits parked for the minting call follow the id that was actually used.
-    assert backend._take_pending_limits(resource.uuid.hex) == {"input_tokens": 100}
+    assert backend._take_pending_limits(resource.uuid.hex) == {"token_cost": 100}
 
 
 def test_uuid_source_keeps_the_backend_id_a_restored_resource_already_has() -> None:
@@ -249,6 +249,7 @@ def test_generate_applies_the_model_allowlist_and_backstops() -> None:
         # No budget, so no reset period: a duration outliving the budget it belonged
         # to is meaningless.
         budget_duration=None,
+        budget_limits=[],
         tpm_limit=100,
         rpm_limit=10,
         metadata={"waldur_resource_limits": {}},

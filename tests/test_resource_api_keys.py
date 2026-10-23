@@ -221,6 +221,48 @@ class TestCreate(unittest.TestCase):
             backend.mint_resource_key.call_args.kwargs["resource_limits"], {"token_cost": 50}
         )
 
+    def test_hands_a_backend_with_periods_the_resources_windows(
+        self, mock_list, mock_set_key, mock_erred, mock_retrieve
+    ):
+        """A first key is held to its resource's day and week limits from its mint."""
+        mock_list.return_value = []
+        mock_retrieve.sync.return_value = SimpleNamespace(
+            paused=False,
+            downscaled=False,
+            limits=SimpleNamespace(to_dict=lambda: {"token_cost": 50}),
+            spending_limits={"token_cost": {"day": 5, "week": 20}},
+        )
+        backend = self._backend()
+        backend.supports_spending_limit_periods = True
+
+        resource_api_keys.execute_api_key_command(
+            mock.sentinel.client, backend, _command("create", client_id="")
+        )
+
+        self.assertEqual(
+            backend.mint_resource_key.call_args.kwargs["resource_spending_limits"],
+            {"token_cost": {"day": 5.0, "week": 20.0}},
+        )
+
+    def test_a_backend_without_periods_gets_no_windows(
+        self, mock_list, mock_set_key, mock_erred, mock_retrieve
+    ):
+        """It keeps the signature it was written against."""
+        mock_list.return_value = []
+        mock_retrieve.sync.return_value = SimpleNamespace(
+            paused=False, downscaled=False, spending_limits={"token_cost": {"day": 5}}
+        )
+        backend = self._backend()
+        backend.supports_spending_limit_periods = False
+
+        resource_api_keys.execute_api_key_command(
+            mock.sentinel.client, backend, _command("create", client_id="")
+        )
+
+        self.assertNotIn(
+            "resource_spending_limits", backend.mint_resource_key.call_args.kwargs
+        )
+
     def test_waits_when_the_known_ids_cannot_be_read(
         self, mock_list, mock_set_key, mock_erred, mock_retrieve
     ):
@@ -1215,6 +1257,39 @@ class TestRotationCarriesTheKeysSettings(unittest.TestCase):
             mock_rotate.call_args.kwargs["key_settings"], {"resource_limits": {"token_cost": 2}}
         )
 
+    def test_the_resources_windows_travel_with_the_rotation_to_a_backend_with_periods(
+        self, mock_read, mock_rotate, mock_erred, mock_retrieve
+    ):
+        """A lost key minted back keeps its resource's day and week limits from Waldur."""
+        backend = _backend()
+        backend.supports_spending_limit_periods = True
+        mock_read.return_value = SimpleNamespace(
+            paused=False, limits={"token_cost": 2}, spending_limits={"token_cost": {"day": 1}}
+        )
+
+        resource_api_keys.execute_api_key_command(
+            mock.sentinel.client, backend, _command("rotate", limits={}, allowed_models=["*"])
+        )
+
+        settings = mock_rotate.call_args.kwargs["key_settings"]
+        self.assertEqual(settings["resource_limits"], {"token_cost": 2})
+        self.assertEqual(settings["resource_spending_limits"], {"token_cost": {"day": 1.0}})
+
+    def test_a_resource_without_windows_clears_them_on_rotation(
+        self, mock_read, mock_rotate, mock_erred, mock_retrieve
+    ):
+        backend = _backend()
+        backend.supports_spending_limit_periods = True
+        mock_read.return_value = SimpleNamespace(paused=False, spending_limits=None)
+
+        resource_api_keys.execute_api_key_command(
+            mock.sentinel.client, backend, _command("rotate", limits={}, allowed_models=["*"])
+        )
+
+        self.assertEqual(
+            mock_rotate.call_args.kwargs["key_settings"]["resource_spending_limits"], {}
+        )
+
     def test_unreadable_settings_still_rotate_without_them(
         self, mock_read, mock_rotate, mock_erred, mock_retrieve
     ):
@@ -1319,6 +1394,15 @@ class TestReadingTheResource(unittest.TestCase):
         resource_api_keys._read_resource(mock.sentinel.client, _command("create"))
 
         self.assertIn("limits", [f.value for f in mock_retrieve.sync.call_args.kwargs["field"]])
+
+    def test_the_read_asks_for_the_resources_spending_limits(
+        self, mock_retrieve, mock_post, mock_erred
+    ):
+        resource_api_keys._read_resource(mock.sentinel.client, _command("create"))
+
+        self.assertIn(
+            "spending_limits", [f.value for f in mock_retrieve.sync.call_args.kwargs["field"]]
+        )
 
     def test_a_refused_read_errs_a_resume_rather_than_leaving_it_pending(
         self, mock_retrieve, mock_post, mock_erred

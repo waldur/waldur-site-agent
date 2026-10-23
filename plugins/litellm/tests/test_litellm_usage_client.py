@@ -87,6 +87,7 @@ def test_rows_are_keyed_by_alias_not_by_hash(mock_client_cls: mock.Mock) -> None
     # alias, so attributing by hash would split a slot's month in two.
     assert rows == [
         {
+            "date": "2026-08-01",
             "key_alias": "res-1",
             "input_tokens": 10,
             "output_tokens": 20,

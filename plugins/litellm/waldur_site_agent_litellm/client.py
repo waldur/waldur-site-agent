@@ -249,11 +249,16 @@ class LiteLLMClient:
         blocked: bool = False,
         max_budget: Optional[float] = None,
         budget_duration: Optional[str] = None,
+        budget_limits: Optional[list] = None,
         tpm_limit: Optional[int] = None,
         rpm_limit: Optional[int] = None,
         metadata: Optional[dict] = None,
     ) -> dict:
         """Mint a key and return the proxy's response.
+
+        ``budget_limits`` are the key's budget windows, ``[{max_budget,
+        budget_duration}]``; sent only when there are some, since a proxy that
+        predates windows may refuse the field.
 
         No ``key`` is sent, so LiteLLM generates the material itself. That keeps the
         plugin working against a proxy with ``disable_custom_api_keys`` set, and
@@ -272,6 +277,8 @@ class LiteLLMClient:
             body["max_budget"] = max_budget
         if budget_duration is not None:
             body["budget_duration"] = budget_duration
+        if budget_limits:
+            body["budget_limits"] = [dict(window) for window in budget_limits]
         if tpm_limit is not None:
             body["tpm_limit"] = tpm_limit
         if rpm_limit is not None:

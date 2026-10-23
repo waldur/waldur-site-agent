@@ -26,7 +26,7 @@ warehouse to deploy.
 | Add / remove members | LiteLLM users (and Open WebUI accounts when configured) |
 | Pause / downscale / restore | Blocks / unblocks every key; a key paused on its own stays blocked |
 | Per-key commands | Create, pause, resume, update and delete one key; see [Per-key API keys](#per-key-api-keys) |
-| Usage reporting | `litellm`: **No-op**. `litellm-usage`: tokens and spend, per resource and per key |
+| Usage reporting | `litellm`: **No-op**. `litellm-usage`: tokens and spend, per resource, key and day |
 
 ## Features
 
@@ -35,11 +35,13 @@ warehouse to deploy.
 - **Native block/unblock pause**: suspend access with `POST /key/block`; a blocked key returns
   401 at the proxy and unblocking restores it without new key material
 - **Usage reporting**: report per-resource input/output tokens and USD spend from LiteLLM's own
-  daily spend table — no sidecar collector
+  daily spend table — no sidecar collector — per day to a Waldur with
+  [spending limits](#spending-limits-per-period)
 - **Per-model pricing**: bill LiteLLM's own per-model spend, under a spending cap the customer
   chooses — see [Pricing](#pricing)
 - **Enforcement backstop**: mirror Waldur's limits onto each key (`max_budget`, `tpm_limit`,
-  `rpm_limit`) so a burst between reporting cycles cannot outrun metering
+  `rpm_limit`, and day and week [spending limits](#spending-limits-per-period) as budget
+  windows) so a burst between reporting cycles cannot outrun metering
 - **Model allowlist**: restrict every key of an offering to a set of models, and one key to a
   subset of them
 - **Per-key API keys**: with `enable_api_key_provisioning` on the Waldur offering, each key is
@@ -133,10 +135,11 @@ per-resource when the offering **declares a component of that name**:
 | `rpm` | `rpm_limit` | the offering's `rpm_limit` backend setting |
 
 `waldur_resource.limits` only ever carries `LIMIT` components the offering declares. An offering
-priced as in [Pricing](#pricing) — `token_cost` as its only limit, and the example below —
-therefore drives **`max_budget` only**; `tpm_limit` and `rpm_limit` stay at whatever the
-`tpm_limit` / `rpm_limit` backend settings say, the same value for every resource on the offering.
-An offering whose `token_cost` is a `USAGE` component drives none of them.
+priced as in [Pricing](#pricing) declares none, and its `token_cost` drives `max_budget` and the
+budget windows through its [spending limits](#spending-limits-per-period) instead; one on the
+[two-component shape](#before-spending-limits-two-components) drives `max_budget` from its
+`token_cost` limit. Either way `tpm_limit` and `rpm_limit` stay at whatever the `tpm_limit` /
+`rpm_limit` backend settings say, the same value for every resource on the offering.
 
 To make rate limits per-resource instead, declare `tpm` and/or `rpm` as `LIMIT` components — see
 the commented lines in the example below. They are rate caps, not meters: nothing reports usage
@@ -161,6 +164,63 @@ against them, so they exist purely to carry a number onto the key.
 > **Keep the proxy on UTC midnight.** `litellm_settings.timezone` and
 > `litellm_settings.budget_reset_time` move LiteLLM's reset; leave them unset (UTC, 00:00) or the
 > reset lands hours away from Waldur's month boundary. The agent cannot read them.
+
+#### Spending limits per period
+
+A Waldur with spending limits (waldur/waldur-mastermind#789, #817) lets a customer cap a
+usage-based component per calendar period in UTC, on a resource and on each of its keys: day,
+week (from Monday), month, quarter and year. The limits on the proxy's spend — `token_cost`,
+or a component [`component_metrics`](#pricing) feeds from it — reach every key of the resource:
+
+| Period | On the key | Resets |
+|---|---|---|
+| day | a budget window, `{max_budget, budget_duration: "1d"}` in `budget_limits` | 00:00 UTC |
+| week | a budget window, `budget_duration: "7d"` | Monday, 00:00 UTC |
+| month | `max_budget` with `1mo`, the lower of it and a limit-based `token_cost` | the 1st, 00:00 UTC |
+| quarter, year | nothing: **Waldur's pause alone** | — |
+
+The proxy checks every window on each request, beside `max_budget`, and refuses the key at the
+first one reached. Quarter and year have no duration that resets when Waldur's period does:
+`3mo` is refused, `90d` and `365d` count from the day they were written, and `1y` silently
+resets every night. Writing one would let the proxy refuse a key that Waldur shows under its
+limit, so they are left out. A spending limit on any other component, `input_tokens` say, has no
+proxy field either; Waldur enforces it from the usage reports.
+
+**Turn on `api_key_daily_usage` to offer day and week limits on keys.** Waldur offers a key
+its day and week limits only where the offering's `plugin_options.api_key_daily_usage` is on,
+because it checks them against the key's usage per day; without it a key takes month limits
+alone (and none of its own where `api_key_limits` is off; it is on unless set). `litellm-usage`
+reports each key's usage per day (see [Per-key usage](#per-key-usage)), so turn the option on
+for a LiteLLM offering. While it is off the agent logs a warning for the offering on every
+report cycle; nothing about what it reports changes. A resource's own day and week limits do
+not depend on it.
+
+Each window is the tighter of the key's limit and the resource's for that period, as
+`max_budget` is (see [Limits](#limits)). Windows need a proxy with `budget_limits` (checked on
+LiteLLM 1.98 and 1.106); an offering that offers no day or week limit never sends the field.
+
+**After midnight the proxy lags.** It resets an expired window from its budget reset job, which
+runs about every ten minutes (`proxy_budget_rescheduler_min_time` and `_max_time` under
+`general_settings`, 597 and 605 seconds by default). Until it has run, a key refused by
+yesterday's window stays refused, though Waldur resumes it within five minutes. Lower both
+settings (say, to 60 and 120) to shorten that. LiteLLM 1.98 adds up to a minute more while it
+serves the key from its cache (a key refused by its window served again 71 seconds after the
+reset with the job at 10 seconds; on 1.106, 5 seconds). The plugin writes `budget_limits` only when a
+window changes, and leaves it alone while a window is past its reset time: every write moves
+each window's reset to the next one from now and keeps the spend it counted, so a write at
+00:03 would keep yesterday's spend against today's budget until the following midnight, or a
+whole week for a weekly window. A key's update or resume in that gap is applied without its
+new windows, which the next limits pass writes: the membership sync when polling, the hourly
+resource status pass under STOMP.
+
+A refusal is `budget_exceeded`, `ExceededBudget: Key over 1d budget`: status 429 on LiteLLM
+1.98, 422 from 1.106.
+
+The membership sync reads a resource's spending limits on every pass when polling. An order
+carries the limit-based components only, so the spending limits on the keys stay as last read
+until then. Under STOMP membership sync they are read with the next message for the resource.
+A key's create and rotation read them from Waldur too, so a new key starts with them (see
+[Per-key API keys](#per-key-api-keys)).
 
 ## Per-key API keys
 
@@ -208,10 +268,14 @@ paused with no models until an update or a resume from Waldur applies them, rath
 the offering's.
 
 Under key management the agent mints no keys when a resource is created: every key comes from
-a request in Waldur (waldur/waldur-site-agent#71, waldur/waldur-site-agent!619). A resource's
-first key takes the resource's limits from Waldur, since it has no sibling to read them from,
-and so does a key the proxy lost when a rotation mints it back: it may have been the resource's
-only one.
+a request in Waldur (waldur/waldur-site-agent#71, waldur/waldur-site-agent!619). Every key
+created or rotated takes its resource's limits from Waldur, read with the command: the
+limit-based components and the day, week and month spending limits (an empty set clears the
+windows). That matters most for a resource's first key, which has no sibling to read them from,
+and for a key the proxy lost when a rotation mints it back, which may have been the resource's
+only one. Where Waldur sends no spending limits (a Waldur or `waldur-api-client` that predates
+them), a key takes them as the last membership sync stamped them on its siblings; a first key
+then has none until the next sync.
 
 ### What is recorded on the key
 
@@ -221,10 +285,11 @@ them are kept in the key's `metadata`:
 | Metadata | Meaning |
 |---|---|
 | `waldur_key_paused` | Paused on its own, not with its resource: a resource restore leaves it blocked |
-| `waldur_key_limits` | The key's own limits, by Waldur component name |
+| `waldur_key_limits` | The key's own limits, by Waldur component name; spending limits per period as `spend/<period>` |
 | `waldur_resource_limits` | The resource's limits as last reconciled, for a key created before the next |
 | `waldur_key_models` | The key's model list as Waldur sent it: `["*"]`, names, or `[]` |
 | `waldur_holder_chat_spend` | The holder's chat this month, taken off the key's `max_budget` (see [Limits](#limits)) |
+| `waldur_holder_chat_spend_windows` | The same for the day and week windows, `{period: spend}` |
 
 A key's `models` on the proxy is Waldur's list resolved against the offering's `models`
 setting when the key was written, and Waldur sends nothing when that setting changes. So the
@@ -250,27 +315,37 @@ the resource limits the same component, the tighter of the two applies, field by
 in the key's limits means it has none of its own. The membership-sync reconciliation keeps it
 that way, and removing the key's limit returns the key to the resource's.
 
-Where chat follows the key, the key's `max_budget` is that limit **minus its holder's chat
-this month**. Waldur counts a key's usage as its API spend plus its holder's chat, but the
-proxy checks `max_budget` against the key's own spend only, since chat arrives on Open WebUI's
-shared key. With the chat taken off, the proxy refuses the key once the two together reach
-the limit; chat alone at or past it leaves a budget of 0. The chat is the same figure the
-per-key report puts on the key: the month's chat of whoever the key is stamped on, on the
-days their address belonged to this resource, without the requests they made with a minted
-key. Chat from before someone moved here is billed to the resource they left, so it stays
-off this key's budget too. The membership sync recomputes it every pass, and so do a key's
-update, resume and rotation, and the mint of a key the proxy lost; it is read from
-`/user/daily/activity` only for a resource whose keys have holders. When it cannot be read, the amount last taken off
-(`waldur_holder_chat_spend`) stays off, so a failed read never loosens the cap.
+From a Waldur with per-period key limits, a key's limit on the proxy's spend comes per period
+(`spending_limits` on the command) and lands as for a resource: the day and the week as
+windows, the month on `max_budget` (see
+[Spending limits per period](#spending-limits-per-period)). Each is the tighter of the key's
+and the resource's for the period.
 
-The chat is the calendar month's, the month the budget resets on (see
-[The budget resets on the 1st](#which-limits-reach-the-key)). The chat read is the UTC month's,
+Where chat follows the key, the key's `max_budget` is that limit **minus its holder's chat this
+month**, and each window its own limit minus their chat that day or that week. Waldur counts a
+key's usage as its API spend plus its holder's chat, but the proxy checks the key's budgets
+against its own spend only, since chat arrives on Open WebUI's shared key. With the chat taken
+off, the proxy refuses the key once the two together reach the limit; chat alone at or past it
+leaves a budget of 0. The chat is the same figure the per-key report puts on the key: the
+month's chat of whoever the key is stamped on, on the days their address belonged to this
+resource, without the requests they made with a minted key. Chat from before someone moved
+here is billed to the resource they left, so it stays off this key's budgets too. The
+membership sync recomputes it every pass, and so do a key's update, resume and rotation, and
+the mint of a key the proxy lost; it is read from `/user/daily/activity`, from the 1st or from
+Monday, whichever is earlier, only for a resource whose keys have holders. When it cannot be
+read, the amounts last taken off (`waldur_holder_chat_spend` and
+`waldur_holder_chat_spend_windows`) stay off, so a failed read never loosens the cap.
+
+The chat taken off `max_budget` is the calendar month's, the month the budget resets on (see
+[The budget resets on the 1st](#which-limits-reach-the-key)); a window's is its UTC day or week,
+from Monday. The chat read is the UTC month's,
 so it matches the proxy's default reset. A proxy set to another `timezone` or `budget_reset_time`
 resets up to a day off it: between the two resets, a key's budget is netted against the wrong
 month's chat, too tight east of UTC and too loose west of it.
 
 It lags both ways by up to one pass: chat since the last pass is not taken off yet, and on the
-1st the proxy resets the key's spend while last month's chat is still taken off. When polling,
+1st the proxy resets the key's spend while last month's chat is still taken off (at midnight,
+a window's, while yesterday's chat is). When polling,
 the pass is the membership sync (5 minutes by default). Under STOMP membership sync there is no
 periodic limits pass, so the resource status reconciliation
 (`WALDUR_SITE_AGENT_RESOURCE_STATUS_RECONCILIATION_MINUTES`, 60 by default) recomputes it on
@@ -283,9 +358,10 @@ It covers the key's own budget only. Each key still carries the whole resource b
 its siblings' spend or other members' chat; the offering's *Action on usage limit* is what
 holds the resource total.
 
-Limits on `input_tokens` and `output_tokens` have no proxy field. Waldur enforces them, and
-every key limit, from the per-key usage report: a key whose usage reaches its limit is paused,
-and resumed when it is under the limit again in a new month.
+Limits on `input_tokens` and `output_tokens` have no proxy field, nor have quarter and year
+limits. Waldur enforces them, and every key limit, from the per-key usage report: a key whose
+usage reaches its limit is paused, and resumed when it is under the limit again, at the
+latest once the limit's period resets.
 
 ### Models
 
@@ -305,7 +381,8 @@ model in it.
 
 ### Per-key usage
 
-`litellm-usage` reports each key's figure for the month. API usage lands on the key it was
+`litellm-usage` reports each key's figure for the month, and to a Waldur with per-day key usage
+each day of it instead, every day of the month so far, zeros included. API usage lands on the key it was
 served on, whatever address the request carried. On an offering with a chat surface, a
 person's chat usage lands on the key assigned to them (see below). Chat usage from someone with
 no key assigned now -- their key was deleted or reassigned this month, say -- lands on
@@ -316,7 +393,10 @@ Either way the keys of a resource sum to its total.
 A person's chat for the whole month counts against the key stamped on them **now**, so
 reassigning or deleting a key mid-month moves that month's chat with it: the new holder's
 chat lands on the key, the previous holder's leaves it. A key paused at its limit by chat
-can come back under it that way, and Waldur then resumes it.
+can come back under it that way, and Waldur then resumes it. Reported per day, the days that
+chat left are set back to zero, so the key's day and week usage drop at once, but Waldur never
+lowers a key's month figure within the month: a key paused at its month limit stays paused
+until the month turns or its limit is raised.
 
 ## The chat surface (Open WebUI)
 
@@ -358,7 +438,7 @@ path, *after* `user_api_key_auth`:
 |---|---|
 | chat request under an address the proxy has never seen | **200**, served |
 | `GET /user/info` for that address afterwards | **404**, no user was created |
-| over-budget user (spend 0.00045, `max_budget` 1e-7) via **their own key** | **429** |
+| over-budget user (spend 0.00045, `max_budget` 1e-7) via **their own key** | **429** (422 from LiteLLM 1.106) |
 | the same over-budget user via the **shared key + header** | **200** |
 
 So a LiteLLM user is an **attribution record, not a gate**. Its `max_budget`,
@@ -681,14 +761,15 @@ How the two request paths are governed:
 | Authenticates as | the person's key | Open WebUI's shared key |
 | Usage reported on | the key it was served on | the key assigned to the person |
 | Model list | the proxy, on the key | Open WebUI, by group membership |
-| Monthly limit | Waldur (report → pause), plus `max_budget` net of the holder's chat | Waldur (report → pause) |
+| Day, week and month limits | Waldur (report → pause), plus the key's budgets net of chat | Waldur (report → pause) |
+| Quarter and year limits | Waldur (report → pause) | Waldur (report → pause) |
 | Per-minute limits | the proxy, on the key | **not enforced** |
 | Pause | the key is blocked | the chat account is disabled |
 
 Two limits of this design are accepted:
 
-- **Chat can overshoot a monthly limit** until the next usage report (30 minutes by
-  default): only Waldur enforces it there.
+- **Chat can overshoot a limit** until the next usage report (30 minutes by default): only
+  Waldur enforces it there.
 - **Per-minute limits do not apply in chat.** Chat authenticates as the shared key, which
   the proxy checks instead.
 
@@ -794,6 +875,15 @@ period would keep an entry alive into the next pass, which is exactly when fresh
 **Per key:** `get_resource_key_usage_report()` reports the same rows one level finer, for an
 offering with [per-key API keys](#per-key-api-keys).
 
+**Per day:** every row is one UTC day's, so the same rows also give the usage per day
+(`get_daily_usage_report_for_period()`, `get_resource_key_daily_usage_report()`). A Waldur with
+[spending limits](#spending-limits-per-period) takes it (`daily_usages`), and needs it to check day
+and week limits; the agent then sends every day of the month so far, a day with no usage as zero,
+and Waldur derives the month from the days. Only usage-based components go per day; a
+limit-based one keeps its month total. A Waldur without per-day usage gets month totals, as
+before. The first report after the upgrade sends the whole month so far, which is what Waldur
+needs from an integration that switches to days mid-month.
+
 **Rollup:** the resource total is attributed per **resource**, not per key. On an offering with a
 chat surface it is also attributed per **person** — see
 [How chat usage is billed](#how-chat-usage-is-billed). The `-<n>` slot suffix is stripped
@@ -819,18 +909,54 @@ as `spend`, which this plugin surfaces as the `token_cost` metric. Billing that 
 price of **1.0** charges exactly what the proxy costed, model by model, with no Waldur-side rate to
 keep in sync and no markup.
 
-### One spend figure, two components
+### One spend figure, capped by spending limits
 
-One component cannot both cap and charge. Waldur invoices a `USAGE` component on the usage
-reported against it, and a `LIMIT` component on the limit the customer set — never on usage — and
-only a `LIMIT` component carries a cap through `resource.limits`. So an offering that wants a
-spending cap and per-model billing, which is every offering selling more than one model, reports
-the same number under two names:
+With [spending limits](#spending-limits-per-period), a usage-based component carries its own
+cap, so one component is both the charge and the cap:
+
+```yaml
+    backend_components:
+      input_tokens:  { measured_unit: "tokens", accounting_type: "usage", label: "Input tokens" }
+      output_tokens: { measured_unit: "tokens", accounting_type: "usage", label: "Output tokens" }
+      token_cost:    { measured_unit: "USD",    accounting_type: "usage", label: "Inference cost" }
+```
+
+On the Waldur offering, let customers set spending limits on `token_cost` ("Customers can set
+spending limits" in the component dialog, with the periods to offer and a default and a maximum
+for each), and set `plugin_options.action_on_usage_limit: pause`. No `component_metrics` is
+needed: all three components are named after their metric.
+
+| Component | Price | Role |
+|---|---|---|
+| `token_cost` | **1.0** | the **charge**, LiteLLM's per-model spend; its spending limits are the keys' budgets |
+| `input_tokens`, `output_tokens` | **0** | volume meters. They appear on the invoice as counts and charge nothing |
+
+`token_cost`'s quantity is already USD, so its rate is dollars-per-dollar: 1.15 is a 15% markup.
+A spending limit is never billed; the customer pays for what they use.
+
+Offer day, week and month to have the proxy refuse a key at its limit between two usage reports;
+quarter and year are Waldur's pause alone (see
+[Spending limits per period](#spending-limits-per-period)). Day and week need usage per day,
+which this plugin reports.
+
+`token_cost` keeps its name although it reads as a token count rather than USD: the component
+type is data in Waldur, and existing offerings key off that string.
+
+The per-model prices live in the proxy's cost map, not in Waldur: changing a model's
+`input_cost_per_token` in the LiteLLM config changes the next bill with no plan revision. And the
+customer sees one `Inference cost` line, not a breakdown by model. Only per-model components can
+produce that, and they require the prices to be declared in Waldur rather than in the proxy.
+
+### Before spending limits: two components
+
+A Waldur without spending limits can only cap a `LIMIT` component, and invoices a `LIMIT`
+component on the limit the customer set, never on usage. So an offering that wanted a cap and
+per-model billing reported the same spend under two names, and offerings set up that way keep
+working unchanged:
 
 ```yaml
     backend_settings:
-      # inference_cost is not named after a metric, so say what it reads. The other
-      # three are metered by their names alone.
+      # inference_cost is not named after a metric, so say what it reads.
       component_metrics:
         inference_cost: token_cost
 
@@ -841,64 +967,42 @@ the same number under two names:
       inference_cost: { measured_unit: "USD",    accounting_type: "usage", label: "Inference cost" }
 ```
 
-| Component | Role |
-|---|---|
-| `token_cost` | the **cap**: the order's budget, each key's `max_budget`, what the pause fires on |
-| `inference_cost` | the **charge**: LiteLLM's per-model spend, invoiced |
-| `input_tokens`, `output_tokens` | volume, for the record |
+| Component | Price | Role |
+|---|---|---|
+| `token_cost` | **0** | the **cap**: the order's budget, each key's `max_budget`, what the pause fires on |
+| `inference_cost` | **1.0** | the **charge**: LiteLLM's per-model spend, invoiced |
+| `input_tokens`, `output_tokens` | **0** | volume, for the record |
+
+> **The cap component must be priced at 0.** `billing_limit.py` bills a `LIMIT` component at
+> `quantity = the limit value`, independently of any usage reported against it, so a non-zero
+> price charges the customer for the size of their cap: set a $50 budget and the invoice carries
+> $50 for the cap *plus* whatever was actually spent. The `spend` reported against `token_cost`
+> drives `action_on_usage_limit: pause`, and `billing_usage.py` ignores it for invoicing.
 
 Reading `component_metrics`: the **left** side is the component name, which is the offering's own
 and means nothing to the plugin. The **right** side is the metric, and only three values are
 accepted — `input_tokens`, `output_tokens`, and `token_cost`, which is LiteLLM's per-model USD
-spend (its `spend` field). Anything else raises at startup.
+spend (its `spend` field). Anything else raises at startup. The mapping *adds* to the name-based
+default: a component called `input_tokens`, `output_tokens` or `token_cost` is metered whether or
+not it appears here. Without the line for `inference_cost`, it reports zero forever.
 
-The mapping *adds* to the name-based default rather than replacing it: a component called
-`input_tokens`, `output_tokens` or `token_cost` is metered whether or not it appears here, so the
-mapping carries only what the names do not already say — one line, for `inference_cost`. Without
-it, `inference_cost` reports zero forever.
+**Moving an offering off it.** `inference_cost` is fed from the proxy's spend, so its spending
+limits reach the keys as `token_cost`'s would, and the offering can move without renaming
+anything:
 
-`inference_cost` is a convention, not a keyword: nothing in the plugin knows the name, so it can be
-`cost`, `spend`, or anything else, as long as the offering, `backend_components` and
-`component_metrics` all agree on it. What makes it the charge is `accounting_type: usage` plus its
-plan price — not what it is called.
+1. Let customers set spending limits on `inference_cost`, with at least a month period.
+2. Give each resource a month spending limit on `inference_cost` equal to its `token_cost`
+   limit (*Set spending limits*), or ask its customer to. While both are set, the keys carry the
+   lower of the two.
+3. Clear the `token_cost` limits, then remove `token_cost` from the offering and from
+   `backend_components`. Keep `component_metrics`: `inference_cost` still needs it.
 
-`token_cost` stays the cap, under its usual name — it reads as a token count rather than the USD
-ceiling it is, but the component type is data in Waldur and existing offerings key off that string.
-
-### Plan prices
-
-| Component | Price | Why |
-|---|---|---|
-| `inference_cost` | **1.0** | Quantity is already USD, so the rate is dollars-per-dollar; 1.15 is a 15% markup |
-| `input_tokens`, `output_tokens` | **0** | Volume meters. They appear on the invoice as counts and charge nothing |
-| `token_cost` (the cap) | **0** | The customer chooses their own ceiling at order time and pays only for what they use |
-
-> ### The cap component must be priced at 0
->
-> A `LIMIT` component is invoiced on **the limit itself** — `billing_limit.py` bills
-> `quantity = the limit value` at the plan price, independently of any usage reported against it.
-> So a non-zero price here charges the customer for the size of their cap: set a $50 budget and
-> the invoice carries $50 for the cap *plus* whatever was actually spent. Price it at 0 and the
-> limit becomes a pure ceiling the customer picks for themselves.
->
-> This is separate from usage reporting. The `spend` figure this plugin reports against
-> `token_cost` is what drives `action_on_usage_limit: pause`, and `billing_usage.py` ignores it
-> for invoicing — only `USAGE` components bill from usage. Both statements are true at once, which
-> is why the cap and the charge have to be two components.
-
-The `max_budget` the cap sets resets on the 1st of the month (`1mo`), with Waldur's limits —
-see the note under [Which limits reach the key](#which-limits-reach-the-key).
-
-The per-model prices live in the proxy's cost map, not in Waldur: changing a model's
-`input_cost_per_token` in the LiteLLM config changes the next bill with no plan revision. And the
-customer sees one `Inference cost` line, not a breakdown by model. Only per-model components can
-produce that, and they require the prices to be declared in Waldur rather than in the proxy.
+New offerings start from the single-component shape above.
 
 ### Other shapes
 
-- **No cap.** Declare `token_cost` alone as a `USAGE` component priced at 1.0, with no
-  `inference_cost`. Billing is still per model, but nothing caps spend: the keys carry no
-  `max_budget`, and `action_on_usage_limit: pause` has nothing to act on.
+- **No cap.** `token_cost` as above with no spending limit periods offered: billing is per
+  model, the keys carry no `max_budget`, and `action_on_usage_limit: pause` has nothing to act on.
 - **One rate per token.** Price `input_tokens` and `output_tokens` on the plan. Right only when
   every model on the offering costs the same per token.
 
@@ -956,10 +1060,6 @@ offerings:
       verify_ssl: true
       resource_backend_id_source: "uuid"    # key aliases <resource-uuid>-<n>; default "slug"
 
-      # inference_cost reads LiteLLM's per-model spend, the figure token_cost caps.
-      component_metrics:
-        inference_cost: token_cost
-
       # Optional chat surface. Omit the whole block for an API-only offering.
       openwebui:
         api_url: "https://chat.example.com"
@@ -968,13 +1068,12 @@ offerings:
         account_provisioning: "sso"          # or "managed_password" + initial_password
         delete_accounts_on_removal: false
 
-    # Per-model pricing with a cap; see Pricing for why there are two cost components
-    # and what to price them at on the plan.
+    # Per-model pricing, capped by the customer's spending limits on token_cost; see
+    # Pricing for what to price each at on the plan.
     backend_components:
-      input_tokens:   { measured_unit: "tokens", accounting_type: "usage", label: "Input tokens" }
-      output_tokens:  { measured_unit: "tokens", accounting_type: "usage", label: "Output tokens" }
-      token_cost:     { measured_unit: "USD",    accounting_type: "limit", label: "Budget" }
-      inference_cost: { measured_unit: "USD",    accounting_type: "usage", label: "Inference cost" }
+      input_tokens:  { measured_unit: "tokens", accounting_type: "usage", label: "Input tokens" }
+      output_tokens: { measured_unit: "tokens", accounting_type: "usage", label: "Output tokens" }
+      token_cost:    { measured_unit: "USD",    accounting_type: "usage", label: "Inference cost" }
 
       # Optional: declare these only to drive tpm_limit / rpm_limit per resource rather
       # than from the offering-wide backend_settings above. They carry a cap onto the
@@ -983,9 +1082,10 @@ offerings:
       # rpm:         { measured_unit: "requests/min", accounting_type: "limit", label: "Requests per minute" }
 ```
 
-Enforcement is configured on the Waldur **offering**, not here: the offering's `token_cost`
-component must be `billing_type: LIMIT`, as above, and the offering must set
-`plugin_options.action_on_usage_limit: pause`. Price the plan as in [Plan prices](#plan-prices).
+Enforcement is configured on the Waldur **offering**, not here: customers must be able to set
+spending limits on its `token_cost` component, and the offering must set
+`plugin_options.action_on_usage_limit: pause`. Price the plan as in
+[Pricing](#one-spend-figure-capped-by-spending-limits).
 
 ## LiteLLM API behaviour
 
@@ -1049,11 +1149,19 @@ using it would reintroduce the hash → alias map.
 - **`budget_duration: "1mo"` resets on the 1st.** A key given it on Oct 15 reads
   `budget_reset_at: 2026-11-01T00:00:00+00:00`, and so does every later `/key/update` that
   carries it: the reset is recomputed from the duration, not counted from the update. Moving a
-  key from another duration keeps its `spend`. A key at its `max_budget` answers 429.
-  Verified on LiteLLM 1.98, 2026-10-15. So the plugin's `/key/update` names `budget_duration`
-  only when the key does not carry it already: an update that names it on the 1st, before the
-  proxy's reset job has run, moves the reset to the following 1st and keeps last month's `spend`
-  (`prepare_key_update_data` in LiteLLM's key management endpoints).
+  key from another duration keeps its `spend`. A key at its `max_budget` answers 429 (422 from
+  1.106). Verified on LiteLLM 1.98, 2026-10-15. So the plugin's `/key/update` names
+  `budget_duration` only when the key does not carry it already: an update that names it on the
+  1st, before the proxy's reset job has run, moves the reset to the following 1st and keeps last
+  month's `spend` (`prepare_key_update_data` in LiteLLM's key management endpoints).
+- **`budget_limits` holds a key's budget windows**, each `{"max_budget", "budget_duration"}`;
+  the proxy adds `reset_at`. The field names in LiteLLM's docstring, `budget_limit` and
+  `time_period`, are refused with 422. `1d` resets at the next 00:00, `7d`, `1w` and `weekly`
+  on the next Monday, `1mo` and `30d` on the 1st; any other `Nd` counts from today, `3mo` and
+  `12mo` answer 500, and an unknown unit such as `1y` falls back to daily. Each window's spend
+  is counted by its duration, so a `/key/update` with new amounts keeps it, and it survives a
+  restart without Redis. A `/key/update` that carries `budget_limits` recomputes every window's
+  `reset_at` from now; `[]` clears them. Verified on LiteLLM 1.98 and 1.106.1, 2026-10-21.
 - **`/key/list` returns `total_pages` and `current_page` at the top level** of the payload
   (alongside `keys` and `total_count`), not nested under a `metadata` object — unlike
   `/user/daily/activity`, which nests them. Paging past the last page returns an empty `keys` list

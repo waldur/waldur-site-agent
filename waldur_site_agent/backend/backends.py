@@ -165,6 +165,19 @@ class BaseBackend(ABC):
     # on a backend that has no budget primitive of its own.
     supports_resource_api_key_usage: bool = False
 
+    # Whether this (reporting) backend can report usage per UTC day, through
+    # get_daily_usage_report_for_period and, with supports_resource_api_key_usage,
+    # get_resource_key_daily_usage_report. A Waldur with per-day usage needs it for day
+    # and week spending limits; to a Waldur without it the agent sends month totals.
+    supports_daily_usage: bool = False
+
+    # Whether the backend takes a key's limits per period. Its mint_resource_key,
+    # resume_resource_key, update_resource_key and rotate_resource_key are then also
+    # handed ``spending_limits``: ``{component: {period: amount}}`` from a Waldur with
+    # per-period key limits, or None from one without, beside the month-only
+    # ``limits`` every Waldur sends.
+    supports_spending_limit_periods: bool = False
+
     # Capability flag: Set to True for backends that depend on a remote API during
     # order processing. The processor calls run_preflight() once per offering
     # cycle before handling orders.
@@ -366,6 +379,23 @@ class BaseBackend(ABC):
             resource backend ID with per-user and TOTAL_ACCOUNT_USAGE entries.
             Return ``{}`` if historical reporting is not supported.
         """
+        return {}
+
+    def get_daily_usage_report_for_period(
+        self,
+        resource_backend_ids: list[str],
+        year: int,
+        month: int,
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Collect a month's usage per UTC day (``supports_daily_usage``).
+
+        Returns ``{resource_backend_id: {"YYYY-MM-DD": {component: usage}}}`` in
+        Waldur units. A day with no usage may be left out; the agent reports it as
+        zero. Summed over the days, the figures equal the month's
+        ``TOTAL_ACCOUNT_USAGE``. Only components Waldur bills by usage are reported
+        per day; the others keep their month total.
+        """
+        del resource_backend_ids, year, month
         return {}
 
     @abstractmethod
@@ -1576,6 +1606,20 @@ class BaseBackend(ABC):
         Summed over the keys, the figures equal the resource total that report holds.
         A resource whose usage the backend cannot attribute to keys maps to None,
         which is different from ``{}`` — no usage at all this month.
+        """
+        del resource_backend_ids
+        return {}
+
+    def get_resource_key_daily_usage_report(
+        self, resource_backend_ids: list[str]
+    ) -> dict[str, Optional[dict[str, dict[str, dict[str, float]]]]]:
+        """The current month's usage per API key and UTC day (``supports_daily_usage``).
+
+        Maps a resource backend id to ``{client_id: {"YYYY-MM-DD": {component: usage}}}``,
+        days with no usage left out or not, as for ``get_daily_usage_report_for_period``.
+        Summed over the days, a key's figures are those of
+        ``get_resource_key_usage_report``, and None means the same: the resource's usage
+        cannot be attributed to its keys.
         """
         del resource_backend_ids
         return {}
