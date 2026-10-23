@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+import threading
 import uuid
 from types import SimpleNamespace
 from typing import Optional
@@ -9,7 +11,16 @@ from unittest import mock
 
 import pytest
 
-from waldur_site_agent_litellm.backend import META_KEY_PAUSED, NO_MODELS, LiteLLMBackend
+from waldur_site_agent_litellm import ownership
+from waldur_site_agent_litellm.backend import (
+    META_HOLDER_CHAT,
+    META_KEY_LIMITS,
+    META_KEY_PAUSED,
+    META_RESOURCE_LIMITS,
+    NO_MODELS,
+    _KEY_METADATA_LOCK,
+    LiteLLMBackend,
+)
 from waldur_site_agent_litellm.client import META_KEY, META_RESOURCE, META_USERNAME
 from waldur_site_agent_litellm.openwebui import ROLE_ACTIVE, ROLE_DISABLED
 
@@ -29,6 +40,8 @@ SETTINGS = {
         "initial_password": "ChangeMe-123",
     },
 }
+# A budget that resets on the 1st, the only kind the holder's chat is taken off.
+MONTHLY = {**SETTINGS, "budget_duration": "1mo"}
 RID = "abc123"
 ADA = "ada@example.com"
 BOB = "bob@example.com"
@@ -44,6 +57,9 @@ def _make_backend(settings: Optional[dict] = None) -> LiteLLMBackend:
     backend.litellm_client = mock.MagicMock()
     backend.litellm_client.list_users.return_value = []
     backend.litellm_client.list_keys.return_value = []
+    if backend.usage_client is not None:
+        backend.usage_client = mock.MagicMock()
+        backend.usage_client.get_user_usage_rows.return_value = []
     if backend.openwebui_client is not None:
         owui = mock.MagicMock()
         owui.find_user.side_effect = lambda email: _account(email, ROLE_DISABLED)
@@ -770,3 +786,616 @@ def test_a_chat_failure_does_not_fail_the_rotation() -> None:
     backend.litellm_client.regenerate_key.return_value = "sk-rotated"
 
     assert backend.rotate_resource_key(f"{RID}-1", RID) == "sk-rotated"
+
+
+# --- the key's budget counts its holder's chat --------------------------------
+
+
+def _chat(
+    email: str, spend: float, *, alias: Optional[str] = None, date: Optional[str] = None
+) -> dict:
+    """One per-person usage row, as ``get_user_usage_rows`` returns it."""
+    return {
+        "date": date,
+        "user_id": email,
+        "key_alias": alias,
+        "input_tokens": 10,
+        "output_tokens": 10,
+        "token_cost": spend,
+    }
+
+
+def _budget_writes(backend: LiteLLMBackend) -> dict:
+    """``{token: (max_budget, metadata)}`` of every key update that wrote a budget."""
+    return {
+        call.args[0]: (call.args[1]["max_budget"], call.args[1].get("metadata", {}))
+        for call in backend.litellm_client.update_key.call_args_list
+        if "max_budget" in call.args[1]
+    }
+
+
+def test_the_holders_chat_comes_off_the_keys_budget() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 1.0), _chat(ADA, 2.0)]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 7.0
+    assert metadata[META_HOLDER_CHAT] == 3.0
+
+
+def _moved_here(email: str, key: str, moved_on: str) -> dict:
+    """A holder whose address belonged to resource ``other`` until ``moved_on``."""
+    member = _member(email, key=key)
+    periods = ownership.release(ownership.claim([], "other", "2026-10-01"), "other", moved_on)
+    periods = ownership.claim(periods, RID, moved_on)
+    member["metadata"] = ownership.stamp(member["metadata"], periods)
+    return member
+
+
+def test_chat_from_before_the_holder_moved_here_stays_on_the_keys_budget() -> None:
+    # The report bills Oct 1 to the resource Ada left, so Waldur shows the key at 0.
+    # Taking it off here would refuse the key at $5 with nothing in Waldur saying why.
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_moved_here(ADA, f"{RID}-1", "2026-10-22")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 5.0, date="2026-10-01")]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 10
+    assert META_HOLDER_CHAT not in metadata
+
+
+def test_only_chat_from_the_days_the_holder_was_here_comes_off() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_moved_here(ADA, f"{RID}-1", "2026-10-22")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _chat(ADA, 5.0, date="2026-10-01"),
+        # The day of the move stays with the resource left, as in the report.
+        _chat(ADA, 1.0, date="2026-10-22"),
+        _chat(ADA, 2.0, date="2026-10-23"),
+    ]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    assert _budget_writes(backend)[f"h-{RID}-1"][0] == 8.0
+
+
+def test_a_rotation_takes_the_holders_chat_off_the_keys_budget() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-1"),
+        _key(f"{RID}-2", **{META_RESOURCE_LIMITS: {"token_cost": 50}}),
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 3.0)]
+    backend.litellm_client.regenerate_key.return_value = "sk-rotated"
+
+    backend.rotate_resource_key(
+        f"{RID}-1", RID, limits={"token_cost": 10}, allowed_models=["gpt-4o"]
+    )
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 7.0
+    assert metadata[META_HOLDER_CHAT] == 3.0
+
+
+def test_a_key_the_proxy_lost_is_minted_back_net_of_its_holders_chat() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-2", **{META_RESOURCE_LIMITS: {"token_cost": 50}}),
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 3.0)]
+
+    backend.rotate_resource_key(
+        f"{RID}-1", RID, limits={"token_cost": 10}, allowed_models=["gpt-4o"]
+    )
+
+    minted = backend.litellm_client.generate_key.call_args.kwargs
+    assert minted["max_budget"] == 7.0
+    assert minted["metadata"][META_HOLDER_CHAT] == 3.0
+
+
+def test_the_deduction_applies_to_the_tighter_of_the_key_and_the_resource() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(BOB, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-1", **{META_KEY_LIMITS: {"token_cost": 7}}),
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(BOB, 3.78)]
+
+    backend.set_resource_limits(RID, {"token_cost": 30})
+
+    assert _budget_writes(backend)[f"h-{RID}-1"][0] == 3.22
+
+
+def test_chat_past_the_limit_leaves_a_budget_of_zero() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 12.5)]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    update = backend.litellm_client.update_key.call_args.args[1]
+    # Still a budget, and still one that resets: 0 refuses the key's next call.
+    assert update["max_budget"] == 0.0
+    assert update["budget_duration"] == "1mo"
+
+
+def test_api_calls_under_the_holders_address_are_not_counted_as_chat() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    # Served on a key this plugin minted: the key's own spend, which the proxy counts.
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _chat(ADA, 2.0),
+        _chat(ADA, 5.0, alias=f"{RID}-1"),
+    ]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    assert _budget_writes(backend)[f"h-{RID}-1"][0] == 8.0
+
+
+def test_each_key_loses_only_its_own_holders_chat() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [
+        _member(ADA, key=f"{RID}-1"),
+        _member(BOB, key=f"{RID}-2"),
+    ]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1"), _key(f"{RID}-2")]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 1.0), _chat(BOB, 4.0)]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    writes = _budget_writes(backend)
+    assert writes[f"h-{RID}-1"][0] == 9.0
+    assert writes[f"h-{RID}-2"][0] == 6.0
+
+
+def test_a_key_with_no_holder_keeps_its_whole_budget_and_nothing_is_read() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key="")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 10
+    assert META_HOLDER_CHAT not in metadata
+    backend.usage_client.get_user_usage_rows.assert_not_called()
+
+
+def test_an_unreadable_chat_spend_keeps_the_amount_last_taken_off() -> None:
+    from waldur_site_agent_litellm.usage_client import LiteLLMUsageBackendError  # noqa: PLC0415
+
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-1", **{META_HOLDER_CHAT: 2.0, META_RESOURCE_LIMITS: {"token_cost": 10}}),
+    ]
+    backend.usage_client.get_user_usage_rows.side_effect = LiteLLMUsageBackendError("down")
+
+    backend.set_resource_limits(RID, {"token_cost": 20})
+
+    # The resource's new limit still lands; the chat already taken off stays off.
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 18.0
+    assert metadata[META_HOLDER_CHAT] == 2.0
+
+
+def test_an_unchanged_deduction_is_not_written_again() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    record = _key(
+        f"{RID}-1", **{META_HOLDER_CHAT: 3.0, META_RESOURCE_LIMITS: {"token_cost": 10}}
+    )
+    record.update(max_budget=7.0, tpm_limit=None, rpm_limit=None, budget_duration="1mo")
+    backend.litellm_client.list_keys.return_value = [record]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 3.0)]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    backend.litellm_client.update_key.assert_not_called()
+
+
+def test_new_chat_since_the_last_pass_lowers_the_budget() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    record = _key(
+        f"{RID}-1", **{META_HOLDER_CHAT: 3.0, META_RESOURCE_LIMITS: {"token_cost": 10}}
+    )
+    record.update(max_budget=7.0, tpm_limit=None, rpm_limit=None, budget_duration="1mo")
+    backend.litellm_client.list_keys.return_value = [record]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 3.0), _chat(ADA, 1.5)]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 5.5
+    assert metadata[META_HOLDER_CHAT] == 4.5
+
+
+def test_a_key_update_takes_its_holders_chat_off_too() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-1", **{META_RESOURCE_LIMITS: {"token_cost": 30}}),
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 2.5)]
+
+    backend.update_resource_key(f"{RID}-1", RID, limits={"token_cost": 7})
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 4.5
+    assert metadata[META_HOLDER_CHAT] == 2.5
+    assert metadata[META_KEY_LIMITS] == {"token_cost": 7}
+
+
+def test_the_chat_spend_is_read_once_per_pass() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 1.0)]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    backend.usage_client.get_user_usage_rows.assert_called_once()
+
+
+def test_an_api_only_offering_reads_no_chat_spend() -> None:
+    api_only = {key: value for key, value in MONTHLY.items() if key != "openwebui"}
+    assert _make_backend(api_only).usage_client is None
+
+
+@pytest.mark.parametrize("duration", ["1mo", "7d", None])
+def test_chat_is_read_whatever_budget_duration_says(duration: Optional[str]) -> None:
+    # The backstop always resets on the 1st, so a month of chat always fits it.
+    backend = _make_backend({**SETTINGS, "budget_duration": duration})
+
+    assert backend.usage_client is not None
+
+
+@pytest.mark.parametrize(
+    ("now", "period"),
+    [
+        (datetime.datetime(2026, 10, 31, 23, 59, tzinfo=datetime.timezone.utc),
+         ("2026-10-01", "2026-10-31")),
+        (datetime.datetime(2026, 11, 1, 0, 0, 30, tzinfo=datetime.timezone.utc),
+         ("2026-11-01", "2026-11-01")),
+    ],
+)
+def test_the_chat_read_is_this_utc_months(now: datetime.datetime, period: tuple) -> None:
+    # The proxy resets a monthly budget on the 1st at 00:00 UTC, so the chat taken off
+    # it is the UTC month's: on an agent east of UTC, a local date would read the new
+    # month for hours while the proxy still counts the old one.
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+
+    with mock.patch("waldur_site_agent_litellm.backend.datetime") as clock:
+        clock.timezone.utc = datetime.timezone.utc
+        clock.datetime.now.return_value = now
+        backend.set_resource_limits(RID, {"token_cost": 10})
+
+    clock.datetime.now.assert_called_with(tz=datetime.timezone.utc)
+    backend.usage_client.get_user_usage_rows.assert_called_once_with(*period)
+
+
+def test_a_new_month_reads_the_chat_again() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    times = [
+        datetime.datetime(2026, 10, 31, 23, 59, tzinfo=datetime.timezone.utc),
+        datetime.datetime(2026, 11, 1, 0, 1, tzinfo=datetime.timezone.utc),
+    ]
+
+    with mock.patch("waldur_site_agent_litellm.backend.datetime") as clock:
+        clock.timezone.utc = datetime.timezone.utc
+        clock.datetime.now.side_effect = times
+        backend.set_resource_limits(RID, {"token_cost": 10})
+        backend.set_resource_limits(RID, {"token_cost": 10})
+
+    # Within the cache's lifetime, but a cached October is not November's chat.
+    assert [call.args for call in backend.usage_client.get_user_usage_rows.call_args_list] == [
+        ("2026-10-01", "2026-10-31"),
+        ("2026-11-01", "2026-11-01"),
+    ]
+
+
+def test_a_key_without_a_budget_records_no_deduction() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    record = _key(f"{RID}-1", **{META_RESOURCE_LIMITS: {"tpm": 1000}})
+    record.update(max_budget=None, tpm_limit=1000, rpm_limit=None, budget_duration=None)
+    backend.litellm_client.list_keys.return_value = [record]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 3.0)]
+
+    backend.set_resource_limits(RID, {"tpm": 1000})
+
+    # Nothing was taken off, so nothing is noted, and the key is not rewritten each pass.
+    backend.litellm_client.update_key.assert_not_called()
+
+
+def test_a_reassigned_key_loses_its_new_holders_chat() -> None:
+    backend = _make_backend(MONTHLY)
+    # The key was Ada's, with her 1.0 of chat taken off; it is stamped on Bob now.
+    backend.litellm_client.list_users.return_value = [
+        _member(ADA, key=""),
+        _member(BOB, key=f"{RID}-1"),
+    ]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-1", **{META_HOLDER_CHAT: 1.0, META_RESOURCE_LIMITS: {"token_cost": 10}}),
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 1.0), _chat(BOB, 4.0)]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 6.0
+    assert metadata[META_HOLDER_CHAT] == 4.0
+
+
+def test_a_resumed_key_takes_its_holders_chat_off() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-1", **{META_KEY_PAUSED: True, META_RESOURCE_LIMITS: {"token_cost": 10}}),
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 2.0)]
+
+    backend.resume_resource_key(f"{RID}-1", RID)
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 8.0
+    assert metadata[META_HOLDER_CHAT] == 2.0
+    assert metadata[META_KEY_PAUSED] is False
+
+
+def test_an_update_with_unreadable_chat_keeps_the_amount_last_taken_off() -> None:
+    from waldur_site_agent_litellm.usage_client import LiteLLMUsageBackendError  # noqa: PLC0415
+
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-1", **{META_HOLDER_CHAT: 2.0, META_RESOURCE_LIMITS: {"token_cost": 30}}),
+    ]
+    backend.usage_client.get_user_usage_rows.side_effect = LiteLLMUsageBackendError("down")
+
+    backend.update_resource_key(f"{RID}-1", RID, limits={"token_cost": 7})
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 5.0
+    assert metadata[META_HOLDER_CHAT] == 2.0
+
+
+def test_the_status_pass_puts_last_months_chat_back_on_the_1st() -> None:
+    # Under STOMP no limits pass runs on a schedule; the hourly status pass restores
+    # every serving resource, and that recomputes the chat taken off from the stamps.
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    record = _key(
+        f"{RID}-1", **{META_HOLDER_CHAT: 6.5, META_RESOURCE_LIMITS: {"token_cost": 7}}
+    )
+    record.update(max_budget=0.5, tpm_limit=None, rpm_limit=None, budget_duration="1mo")
+    backend.litellm_client.list_keys.return_value = [record]
+    backend.usage_client.get_user_usage_rows.return_value = []
+
+    backend.restore_resource(RID)
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 7
+    assert META_HOLDER_CHAT not in metadata
+    assert metadata[META_RESOURCE_LIMITS] == {"token_cost": 7}
+
+
+def test_the_status_pass_takes_new_chat_off() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    record = _key(f"{RID}-1", **{META_RESOURCE_LIMITS: {"token_cost": 10}})
+    record.update(max_budget=10, tpm_limit=None, rpm_limit=None, budget_duration="1mo")
+    backend.litellm_client.list_keys.return_value = [record]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 2.0)]
+
+    backend.restore_resource(RID)
+
+    assert _budget_writes(backend)[f"h-{RID}-1"][0] == 8.0
+
+
+def test_the_status_pass_leaves_a_key_never_reconciled_to_the_limits_sync() -> None:
+    # No stamped resource limits to start from: writing would drop the key's budget.
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    record = _key(f"{RID}-1")
+    record.update(max_budget=10, tpm_limit=None, rpm_limit=None, budget_duration="1mo")
+    backend.litellm_client.list_keys.return_value = [record]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 2.0)]
+
+    backend.restore_resource(RID)
+
+    assert _budget_writes(backend) == {}
+
+
+def test_the_status_pass_writes_no_budget_where_chat_is_not_taken_off() -> None:
+    api_only = {key: value for key, value in MONTHLY.items() if key != "openwebui"}
+    backend = _make_backend(api_only)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-1", **{META_RESOURCE_LIMITS: {"token_cost": 10}}),
+    ]
+
+    backend.restore_resource(RID)
+
+    assert _budget_writes(backend) == {}
+
+
+def test_a_budget_write_on_the_1st_leaves_the_reset_alone() -> None:
+    # Naming budget_duration moves the key's budget_reset_at to the next reset; on the
+    # 1st, before the proxy's reset job, that would skip this month's reset.
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    record = _key(
+        f"{RID}-1", **{META_HOLDER_CHAT: 3.78, META_RESOURCE_LIMITS: {"token_cost": 7}}
+    )
+    record.update(max_budget=3.22, tpm_limit=None, rpm_limit=None, budget_duration="1mo")
+    backend.litellm_client.list_keys.return_value = [record]
+
+    backend.restore_resource(RID)
+
+    update = backend.litellm_client.update_key.call_args.args[1]
+    assert update["max_budget"] == 7
+    assert "budget_duration" not in update
+
+
+def test_a_key_update_names_the_budget_duration_only_when_it_changes() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    record = _key(f"{RID}-1", **{META_RESOURCE_LIMITS: {"token_cost": 30}})
+    record.update(max_budget=30, tpm_limit=None, rpm_limit=None, budget_duration="1mo")
+    backend.litellm_client.list_keys.return_value = [record]
+
+    backend.update_resource_key(f"{RID}-1", RID, limits={"token_cost": 7})
+    assert "budget_duration" not in backend.litellm_client.update_key.call_args.args[1]
+
+    # A key that had no budget gets one, and with it a reset schedule.
+    record.update(max_budget=None, budget_duration=None)
+    backend.update_resource_key(f"{RID}-1", RID, limits={"token_cost": 7})
+    assert backend.litellm_client.update_key.call_args.args[1]["budget_duration"] == "1mo"
+
+
+def _writes_under_the_lock(backend: LiteLLMBackend) -> list:
+    """Record, for each ``/key/update``, whether another thread was kept out of the lock."""
+    held_by_writer: list = []
+
+    def update_key(token: str, payload: dict) -> None:
+        def try_acquire() -> None:
+            acquired = _KEY_METADATA_LOCK.acquire(blocking=False)
+            held_by_writer.append(not acquired)
+            if acquired:
+                _KEY_METADATA_LOCK.release()
+
+        other = threading.Thread(target=try_acquire)
+        other.start()
+        other.join()
+
+    backend.litellm_client.update_key.side_effect = update_key
+    return held_by_writer
+
+
+@pytest.mark.parametrize(
+    ("self_paused", "write"),
+    [
+        (False, lambda backend: backend.restore_resource(RID)),
+        (False, lambda backend: backend.pause_resource_key(f"{RID}-1", RID)),
+        (False, lambda backend: backend.update_resource_key(f"{RID}-1", RID, limits={})),
+        (True, lambda backend: backend.resume_resource_key(f"{RID}-1", RID)),
+        (True, lambda backend: backend.rotate_resource_key(f"{RID}-1", RID)),
+    ],
+    ids=["status pass", "pause", "update", "resume", "rotate"],
+)
+def test_every_metadata_write_holds_the_lock(self_paused: bool, write) -> None:
+    # The status pass rewrites budgets on the main thread while STOMP handlers pause
+    # and update keys on theirs: a read-modify-write on either side that skipped the
+    # lock could drop the other's metadata, a key's own pause included.
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    meta = {META_RESOURCE_LIMITS: {"token_cost": 10}}
+    if self_paused:
+        meta[META_KEY_PAUSED] = True
+    record = _key(f"{RID}-1", **meta)
+    record.update(max_budget=10, tpm_limit=None, rpm_limit=None, budget_duration="1mo")
+    backend.litellm_client.list_keys.return_value = [record]
+    backend.litellm_client.regenerate_key.return_value = "sk-new"
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 2.0)]
+    held_by_writer = _writes_under_the_lock(backend)
+
+    write(backend)
+
+    assert held_by_writer
+    assert all(held_by_writer)
+
+
+def test_a_key_minted_for_someone_loses_their_chat_once_it_is_stamped() -> None:
+    # After a mint the core syncs assignees at once; the stamp is what makes the key
+    # the holder's, so the budget is netted there rather than an hour later.
+    backend = _make_backend(MONTHLY)
+    users = [_member(ADA, key="")]
+    backend.litellm_client.list_users.side_effect = lambda *args, **kwargs: list(users)
+
+    def stamp(email: str, payload: dict) -> None:
+        users[0] = {**users[0], "metadata": payload["metadata"]}
+
+    backend.litellm_client.update_user.side_effect = stamp
+    record = _key(f"{RID}-2", **{META_RESOURCE_LIMITS: {"token_cost": 7}})
+    record.update(max_budget=7, tpm_limit=None, rpm_limit=None, budget_duration="1mo")
+    backend.litellm_client.list_keys.return_value = [record]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 6.5)]
+
+    backend.sync_resource_key_assignees(_resource(), {f"{RID}-2": "ada"})
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-2"]
+    assert budget == 0.5
+    assert metadata[META_HOLDER_CHAT] == 6.5
+
+
+def test_a_rotation_with_settings_takes_the_holders_chat_off_too() -> None:
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-1", **{META_RESOURCE_LIMITS: {"token_cost": 30}}),
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 2.5)]
+    backend.litellm_client.regenerate_key.return_value = "sk-rotated"
+
+    backend.rotate_resource_key(f"{RID}-1", RID, limits={"token_cost": 7})
+
+    budget, metadata = _budget_writes(backend)[f"h-{RID}-1"]
+    assert budget == 4.5
+    assert metadata[META_HOLDER_CHAT] == 2.5
+
+
+def test_a_delete_and_mint_rotation_keeps_the_budget_net_of_chat() -> None:
+    from waldur_site_agent_litellm.client import LiteLLMEnterpriseFeatureError  # noqa: PLC0415
+
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [
+        _key(f"{RID}-1", **{META_RESOURCE_LIMITS: {"token_cost": 30}}),
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 2.5)]
+    backend.litellm_client.regenerate_key.side_effect = LiteLLMEnterpriseFeatureError("ee")
+    backend.litellm_client.generate_key.return_value = {"key": "sk-new"}
+
+    backend.rotate_resource_key(f"{RID}-1", RID, limits={"token_cost": 7})
+
+    kwargs = backend.litellm_client.generate_key.call_args.kwargs
+    assert kwargs["max_budget"] == 4.5
+    assert kwargs["metadata"][META_HOLDER_CHAT] == 2.5
+
+
+def test_chat_with_no_per_key_split_on_a_day_keys_served_is_not_taken_off() -> None:
+    # The usage report bills such a row as nobody's chat, and its address is whatever
+    # the request's header named: taking it off would let a key holder shrink
+    # another person's budget.
+    backend = _make_backend(MONTHLY)
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _chat(ADA, 2.0),
+        {**_chat(ADA, 5.0), "day_key_aliases": [f"{RID}-2", None]},
+        {**_chat(ADA, 1.0), "day_key_aliases": [None]},
+    ]
+
+    backend.set_resource_limits(RID, {"token_cost": 10})
+
+    assert _budget_writes(backend)[f"h-{RID}-1"][0] == 7.0

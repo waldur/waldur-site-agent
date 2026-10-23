@@ -224,6 +224,7 @@ them are kept in the key's `metadata`:
 | `waldur_key_limits` | The key's own limits, by Waldur component name |
 | `waldur_resource_limits` | The resource's limits as last reconciled, for a key created before the next |
 | `waldur_key_models` | The key's model list as Waldur sent it: `["*"]`, names, or `[]` |
+| `waldur_holder_chat_spend` | The holder's chat this month, taken off the key's `max_budget` (see [Limits](#limits)) |
 
 A key's `models` on the proxy is Waldur's list resolved against the offering's `models`
 setting when the key was written, and Waldur sends nothing when that setting changes. So the
@@ -248,6 +249,39 @@ A key's own limit on a component the proxy has a field for (`token_cost`, `tpm`,
 the resource limits the same component, the tighter of the two applies, field by field; a 0
 in the key's limits means it has none of its own. The membership-sync reconciliation keeps it
 that way, and removing the key's limit returns the key to the resource's.
+
+Where chat follows the key, the key's `max_budget` is that limit **minus its holder's chat
+this month**. Waldur counts a key's usage as its API spend plus its holder's chat, but the
+proxy checks `max_budget` against the key's own spend only, since chat arrives on Open WebUI's
+shared key. With the chat taken off, the proxy refuses the key once the two together reach
+the limit; chat alone at or past it leaves a budget of 0. The chat is the same figure the
+per-key report puts on the key: the month's chat of whoever the key is stamped on, on the
+days their address belonged to this resource, without the requests they made with a minted
+key. Chat from before someone moved here is billed to the resource they left, so it stays
+off this key's budget too. The membership sync recomputes it every pass, and so do a key's
+update, resume and rotation, and the mint of a key the proxy lost; it is read from
+`/user/daily/activity` only for a resource whose keys have holders. When it cannot be read, the amount last taken off
+(`waldur_holder_chat_spend`) stays off, so a failed read never loosens the cap.
+
+The chat is the calendar month's, the month the budget resets on (see
+[The budget resets on the 1st](#which-limits-reach-the-key)). The chat read is the UTC month's,
+so it matches the proxy's default reset. A proxy set to another `timezone` or `budget_reset_time`
+resets up to a day off it: between the two resets, a key's budget is netted against the wrong
+month's chat, too tight east of UTC and too loose west of it.
+
+It lags both ways by up to one pass: chat since the last pass is not taken off yet, and on the
+1st the proxy resets the key's spend while last month's chat is still taken off. When polling,
+the pass is the membership sync (5 minutes by default). Under STOMP membership sync there is no
+periodic limits pass, so the resource status reconciliation
+(`WALDUR_SITE_AGENT_RESOURCE_STATUS_RECONCILIATION_MINUTES`, 60 by default) recomputes it on
+every resource that is neither paused nor downscaled; with that set to 0, it waits for the next
+message for the resource. A paused resource's keys are blocked anyway, and its resume recomputes
+them. These writes leave the key's `budget_duration` out unless it changes: naming it moves the
+proxy's next reset, which on the 1st would skip the month's.
+
+It covers the key's own budget only. Each key still carries the whole resource budget, without
+its siblings' spend or other members' chat; the offering's *Action on usage limit* is what
+holds the resource total.
 
 Limits on `input_tokens` and `output_tokens` have no proxy field. Waldur enforces them, and
 every key limit, from the per-key usage report: a key whose usage reaches its limit is paused,
@@ -626,7 +660,9 @@ not by project membership:
   plugin's, so people leave the groups of retired models on the next membership sync. An
   Open WebUI with such groups therefore serves one key-managed offering only.
 - **Chat counts against the key.** The person's chat usage is reported on their key, so
-  Waldur pauses the key, and with it the chat, at the key's limit.
+  Waldur pauses the key, and with it the chat, at the key's limit. Their chat this month is
+  also taken off the key's `max_budget` (see [Limits](#limits)), so the proxy stops the key's
+  API calls once API spend and chat together reach the limit.
 - **One key carries a person's chat.** Waldur lets a person hold several keys on a resource;
   their chat follows the lowest-numbered one, whatever its state, and is closed while that key
   is paused. Moving chat to another key while one is paused at its limit would let chat
@@ -645,7 +681,7 @@ How the two request paths are governed:
 | Authenticates as | the person's key | Open WebUI's shared key |
 | Usage reported on | the key it was served on | the key assigned to the person |
 | Model list | the proxy, on the key | Open WebUI, by group membership |
-| Monthly limit | Waldur (report → pause), plus the key's `max_budget` | Waldur (report → pause) |
+| Monthly limit | Waldur (report → pause), plus `max_budget` net of the holder's chat | Waldur (report → pause) |
 | Per-minute limits | the proxy, on the key | **not enforced** |
 | Pause | the key is blocked | the chat account is disabled |
 

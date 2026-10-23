@@ -41,6 +41,48 @@ USAGE_COMPONENTS = USAGE_METRICS
 # is attributed to the resource.
 _SLOT_SUFFIX = re.compile(r"-\d+$")
 
+
+def served_on_minted_key(alias: Optional[str]) -> bool:
+    """Whether a usage row was served on a key this plugin minted, read off its alias.
+
+    Every alias the plugin mints is ``<resource backend id>-<slot>``. A key with no slot
+    suffix -- Open WebUI's own shared key is exactly that -- is not one, and its rows under
+    a person's address are their chat.
+    """
+    return bool(alias) and _SLOT_SUFFIX.search(str(alias)) is not None
+
+
+def chat_spend_by_user(rows: list) -> dict:
+    """``{email: {day: spend}}`` of the chat in per-person usage rows.
+
+    Per day, because the report bills each day to the resource that owned the address
+    that day (``ownership.owner_on``); a row with no day is keyed ``""``.
+
+    A row served on a minted key is that key's API usage, billed by alias, so it is left
+    out: counting it here too would charge it twice. So is a row with no key on it from a
+    day a minted key was in use, or with no key breakdown to tell from: the usage report
+    bills it as nobody's chat (``LiteLLMUsageReportingBackend._billed_by_alias``), and
+    the address on it is whatever the request's header named.
+    """
+    spend: dict = {}
+    for row in rows:
+        alias = row["key_alias"]
+        if alias:
+            if served_on_minted_key(alias):
+                continue
+        else:
+            day_aliases = row.get("day_key_aliases")
+            if day_aliases is not None and (
+                not day_aliases or any(served_on_minted_key(other) for other in day_aliases)
+            ):
+                continue
+        email = str(row["user_id"]).strip().lower()
+        days = spend.setdefault(email, {})
+        day = str(row.get("date") or "")
+        days[day] = days.get(day, 0.0) + row["token_cost"]
+    return spend
+
+
 _REPORT_ONLY = "LiteLLM usage backend is reporting-only and does not manage resources"
 
 # Where per-key usage puts chat that no key can take: someone with no key assigned now,
