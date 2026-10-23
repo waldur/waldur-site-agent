@@ -13,8 +13,10 @@ the proxy needs through ``/key/list``.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterator
 from typing import Optional
@@ -36,6 +38,8 @@ from .client import (
     LiteLLMEnterpriseFeatureError,
 )
 from .openwebui import ROLE_ACTIVE, ROLE_DISABLED, OpenWebUIClient, OpenWebUIError
+from .reporting import chat_spend_by_user
+from .usage_client import LiteLLMUsageClient
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +78,21 @@ BUDGET_DURATION = "1mo"
 # ``[]``). The key's ``models`` is that list resolved against the offering's ``models``
 # setting at the time, and Waldur sends nothing when the setting changes -- the key's
 # list in Waldur is still the same -- so the membership sync resolves it again from this.
+# ``waldur_holder_chat_spend``: the holder's chat this month, taken off the key's
+# ``max_budget`` when it was last written. A pass that cannot read chat spend keeps it
+# rather than dropping it, so a failed read never loosens the cap.
 META_KEY_PAUSED = "waldur_key_paused"
 META_KEY_LIMITS = "waldur_key_limits"
 META_RESOURCE_LIMITS = "waldur_resource_limits"
 META_KEY_MODELS = "waldur_key_models"
+META_HOLDER_CHAT = "waldur_holder_chat_spend"
+
+# Held across each read-modify-write of a key's metadata. ``/key/update`` replaces
+# ``metadata`` whole, and in event mode the hourly status pass rewrites budgets on the
+# main thread while STOMP handlers pause and update keys on theirs: a pause landing
+# between another writer's read and write would be dropped, and the next restore would
+# unblock the key. Separate agent processes are not covered.
+_KEY_METADATA_LOCK = threading.RLock()
 
 # The proxy reads an empty ``models`` on a key as every model, so a key Waldur allows
 # no model gets this name, the proxy's reserved one, as its only model. No deployment
@@ -245,6 +260,16 @@ class LiteLLMBackend(backends.BaseBackend):
         if self.ownership_retention_months < 1:
             msg = "ownership_retention_months must be at least 1 (the current month)"
             raise BackendError(msg)
+
+        # Where chat runs on Open WebUI's shared key, the proxy never counts it against a
+        # person's own key, so the key's budget is written net of their chat: read from
+        # the spend API, like the usage report. An API-only offering has no chat to read.
+        # The chat is the calendar month's, the window the budget resets on.
+        self.usage_client = (
+            LiteLLMUsageClient(backend_settings) if self.openwebui_client is not None else None
+        )
+        # ``(fetched at, (start, end), {email: spend})``, cached like the user listing.
+        self._chat_spend_cache: Optional[tuple[float, tuple, dict]] = None
 
         # ``/user/list`` results, cached for part of a pass -- see _USER_CACHE_TTL.
         self._users_cache: Optional[tuple[float, dict]] = None
@@ -689,6 +714,101 @@ class LiteLLMBackend(backends.BaseBackend):
                 combined[name] = value
         return combined
 
+    def _key_fields(
+        self, own_limits: dict, resource_limits: dict, chat_spend: float
+    ) -> tuple[dict, float]:
+        """The key's backstop fields with its holder's chat taken off, and the amount taken.
+
+        Waldur counts a key's usage as its API spend plus its holder's chat, but the proxy
+        checks ``max_budget`` against the key's own spend only: chat arrives on Open
+        WebUI's shared key. Writing the budget net of the chat already made this month
+        lets the proxy refuse the key once the two together reach the limit. Never below
+        0, which refuses the key's next call. A key with no budget has nothing taken off.
+        """
+        fields = self._backstop_fields(self._tighter_limits(own_limits, resource_limits))
+        if not chat_spend or fields["max_budget"] is None:
+            return fields, 0.0
+        fields["max_budget"] = max(0.0, round(fields["max_budget"] - chat_spend, 6))
+        return fields, chat_spend
+
+    @staticmethod
+    def _chat_deduction(alias: str, chat_spend: Optional[dict], metadata: dict) -> float:
+        """What to take off the key's budget: its holder's chat, or the last amount taken.
+
+        ``chat_spend`` is ``None`` when it could not be read. Falling back to no deduction
+        would hand a key its holder's chat back as budget until the next pass.
+        """
+        if chat_spend is None:
+            return float(metadata.get(META_HOLDER_CHAT) or 0.0)
+        return round(chat_spend.get(alias, 0.0), 6)
+
+    @staticmethod
+    def _record_chat_deduction(metadata: dict, deduction: float) -> None:
+        """Note the deduction on the key, and only when there is one to note."""
+        if deduction:
+            metadata[META_HOLDER_CHAT] = deduction
+        else:
+            metadata.pop(META_HOLDER_CHAT, None)
+
+    def _holder_chat_spend(self, resource_backend_id: str) -> Optional[dict]:
+        """``{alias: spend}``: this month's chat of each key's holder, ``None`` if unreadable.
+
+        The holder is whoever the key's alias is stamped on (``META_KEY``), the same person
+        the usage report bills the key's chat to. Only the days their address belonged to
+        this resource count, as in the report: chat from before they moved here is billed
+        to the resource they left, so taking it off this key would refuse the key at an
+        amount Waldur does not show. Only read when the resource has holders, so an
+        offering whose chat runs by membership never asks.
+        """
+        if self.usage_client is None:
+            return {}
+        try:
+            holders = {}
+            for email, record in self._resource_user_records(resource_backend_id).items():
+                metadata = self._user_metadata(record)
+                if metadata.get(META_KEY):
+                    holders[email] = (str(metadata[META_KEY]), ownership.periods_of(metadata))
+            if not holders:
+                return {}
+            by_user = self._chat_spend_by_user()
+        except BackendError:
+            logger.exception(
+                "Unable to read the chat spend of resource %s's key holders; keeping the "
+                "amounts last taken off their keys' budgets",
+                resource_backend_id,
+            )
+            return None
+        spend: dict = {}
+        for email, (alias, periods) in holders.items():
+            amount = sum(
+                day_spend
+                for day, day_spend in by_user.get(email, {}).items()
+                # A row with no day goes to the current owner, as in the report.
+                if (ownership.owner_on(periods, day) if day else ownership.current_owner(periods))
+                == resource_backend_id
+            )
+            if amount:
+                spend[alias] = spend.get(alias, 0.0) + amount
+        return spend
+
+    def _chat_spend_by_user(self) -> dict:
+        """``{email: {day: spend}}`` of this month's chat on the proxy, cached for part of a pass.
+
+        One spend-API walk covers every resource, so the membership pass, which asks per
+        resource, makes it once. Raises ``BackendError`` when the proxy cannot be read.
+        """
+        if self.usage_client is None:
+            return {}
+        today = datetime.datetime.now(tz=datetime.timezone.utc)
+        period = (f"{today:%Y-%m}-01", f"{today:%Y-%m-%d}")
+        now = time.monotonic()
+        cached = self._chat_spend_cache
+        if cached is not None and cached[1] == period and now - cached[0] < _USER_CACHE_TTL:
+            return cached[2]
+        spend = chat_spend_by_user(self.usage_client.get_user_usage_rows(*period))
+        self._chat_spend_cache = (now, period, spend)
+        return spend
+
     def _key_models(self, allowed_models: Optional[list]) -> list:
         """The ``models`` to write on a key for the list Waldur sent.
 
@@ -858,30 +978,49 @@ class LiteLLMBackend(backends.BaseBackend):
         # the listing, and a resource whose only other key is blocked would otherwise
         # look unpaused and get a live replacement.
         blocked = self._resource_is_paused(resource_backend_id, records)
-        metadata = {**self._current_metadata(token, record), META_KEY_PAUSED: False}
+        self_paused = self._is_self_paused(record)
         key_limits: Optional[dict] = None
         if has_settings:
             own_limits = self._mapped_limits(limits)
-            resource_limits = self._waldur_or_stamped_limits(records, resource_limits)
-            key_limits = self._tighter_limits(own_limits, resource_limits)
-            metadata[META_KEY_LIMITS] = own_limits
-            metadata[META_RESOURCE_LIMITS] = resource_limits
-            metadata[META_KEY_MODELS] = self._models_stamp(allowed_models)
-            # Written before the regenerate, which changes the hash this write needs,
-            # and lifting the key's own pause as an update does.
-            self.litellm_client.update_key(
-                token,
-                {
-                    **self._key_update_fields(record, self._backstop_fields(key_limits)),
-                    "models": models,
-                    "blocked": blocked,
-                    "metadata": metadata,
-                },
-            )
+            key_resource_limits = self._waldur_or_stamped_limits(records, resource_limits)
+            # Read before the key's metadata, which is re-read to be written back whole.
+            chat_spend = self._holder_chat_spend(resource_backend_id)
+        # The delete-and-mint below carries this metadata over outside the lock; a
+        # budget written meanwhile is recomputed by the next pass.
+        with _KEY_METADATA_LOCK:
+            metadata = {**self._current_metadata(token, record), META_KEY_PAUSED: False}
+            if has_settings:
+                fields, deduction = self._key_fields(
+                    own_limits,
+                    key_resource_limits,
+                    self._chat_deduction(client_id, chat_spend, metadata),
+                )
+                metadata[META_KEY_LIMITS] = own_limits
+                metadata[META_RESOURCE_LIMITS] = key_resource_limits
+                metadata[META_KEY_MODELS] = self._models_stamp(allowed_models)
+                self._record_chat_deduction(metadata, deduction)
+                # What a delete-and-mint below mints with: these fields, read back as
+                # limits, so the new key keeps the budget net of its holder's chat.
+                key_limits = self._limits_from_records({client_id: fields})
+                # Written before the regenerate, which changes the hash this write needs,
+                # and lifting the key's own pause as an update does.
+                self.litellm_client.update_key(
+                    token,
+                    {
+                        **self._key_update_fields(record, fields),
+                        "models": models,
+                        "blocked": blocked,
+                        "metadata": metadata,
+                    },
+                )
+            elif self_paused:
+                # Lifted before the regenerate, which changes the hash this write needs.
+                self.litellm_client.update_key(
+                    token, {"blocked": blocked, "metadata": metadata}
+                )
+        if has_settings:
             self._follow_key_chat(resource_backend_id, client_id, None if blocked else models)
-        elif self._is_self_paused(record):
-            # Lifted before the regenerate, which changes the hash this write needs.
-            self.litellm_client.update_key(token, {"blocked": blocked, "metadata": metadata})
+        elif self_paused:
             # The core's restore ran while the key was still paused, so it skipped the
             # holder; their chat comes back with the key. A chat-side failure must not
             # fail the rotation: the next membership sync reopens it.
@@ -981,12 +1120,24 @@ class LiteLLMBackend(backends.BaseBackend):
             models = self._key_models(allowed_models)
             own_limits = self._mapped_limits(limits)
             blocked = self._resource_is_paused(resource_backend_id, records)
-            limits_to_apply = self._tighter_limits(own_limits, resource_limits)
+            # Net of the holder's chat, as on a rotation: the full budget would let the
+            # new key spend what its holder already used in chat until the next pass.
+            # Unreadable chat takes nothing off; the lost key's last deduction went
+            # with it.
+            fields, deduction = self._key_fields(
+                own_limits,
+                resource_limits,
+                self._chat_deduction(
+                    client_id, self._holder_chat_spend(resource_backend_id), {}
+                ),
+            )
+            limits_to_apply = self._limits_from_records({client_id: fields})
             metadata = {
                 META_KEY_LIMITS: own_limits,
                 META_RESOURCE_LIMITS: resource_limits,
                 META_KEY_MODELS: self._models_stamp(allowed_models),
             }
+            self._record_chat_deduction(metadata, deduction)
             logger.warning("Key %s is missing from the proxy; minting a replacement", client_id)
         new_key = self._mint(
             client_id,
@@ -1087,10 +1238,12 @@ class LiteLLMBackend(backends.BaseBackend):
                 self._apply_key_chat(email, None)
             return
         token = self._require_token(client_id, record)
-        metadata = {**self._current_metadata(token, record), META_KEY_PAUSED: True}
-        # One write for both, so the key is never blocked without the record that keeps
-        # a resource restore from unblocking it, nor recorded paused while serving.
-        self.litellm_client.update_key(token, {"blocked": True, "metadata": metadata})
+        with _KEY_METADATA_LOCK:
+            metadata = {**self._current_metadata(token, record), META_KEY_PAUSED: True}
+            # One write for both, so the key is never blocked without the record that
+            # keeps a resource restore from unblocking it, nor recorded paused while
+            # serving.
+            self.litellm_client.update_key(token, {"blocked": True, "metadata": metadata})
         logger.info("Paused LiteLLM key %s", client_id)
         # A key paused at its limit has to stop its holder's chat too, or the limit
         # holds for API calls only.
@@ -1145,24 +1298,31 @@ class LiteLLMBackend(backends.BaseBackend):
         token = self._require_token(client_id, record)
         own_limits = self._mapped_limits(limits)
         resource_limits = self._resource_limits_from_records(records)
-        fields = self._backstop_fields(self._tighter_limits(own_limits, resource_limits))
-        metadata = {
-            **self._current_metadata(token, record),
-            META_KEY_PAUSED: False,
-            META_KEY_LIMITS: own_limits,
-            META_RESOURCE_LIMITS: resource_limits,
-            META_KEY_MODELS: self._models_stamp(allowed_models),
-        }
+        # Read before the key's metadata, which is re-read to be written back whole.
+        chat_spend = self._holder_chat_spend(resource_backend_id)
         blocked = self._resource_is_paused(resource_backend_id, records)
-        self.litellm_client.update_key(
-            token,
-            {
-                **self._key_update_fields(record, fields),
-                "models": models,
-                "blocked": blocked,
-                "metadata": metadata,
-            },
-        )
+        with _KEY_METADATA_LOCK:
+            current = self._current_metadata(token, record)
+            fields, deduction = self._key_fields(
+                own_limits, resource_limits, self._chat_deduction(client_id, chat_spend, current)
+            )
+            metadata = {
+                **current,
+                META_KEY_PAUSED: False,
+                META_KEY_LIMITS: own_limits,
+                META_RESOURCE_LIMITS: resource_limits,
+                META_KEY_MODELS: self._models_stamp(allowed_models),
+            }
+            self._record_chat_deduction(metadata, deduction)
+            self.litellm_client.update_key(
+                token,
+                {
+                    **self._key_update_fields(record, fields),
+                    "models": models,
+                    "blocked": blocked,
+                    "metadata": metadata,
+                },
+            )
         # The holder's chat follows: reopened unless the resource holds the key, and
         # narrowed or widened to the key's models.
         for email, holder in self._key_holders(resource_backend_id, client_id).items():
@@ -1340,6 +1500,9 @@ class LiteLLMBackend(backends.BaseBackend):
         runs every membership-sync cycle, and a per-key pause landing between the listing
         and the unblock would otherwise be undone -- after Waldur had already been told
         the key is paused, so nothing would ever pause it again.
+
+        Where key budgets have their holders' chat taken off, they are recomputed here
+        too (``_write_key_budgets``), from the limits stamped on each key.
         """
         self._paused_resources.discard(resource_backend_id)
         records = self._resource_keys(resource_backend_id)
@@ -1393,6 +1556,12 @@ class LiteLLMBackend(backends.BaseBackend):
             except LiteLLMBackendError as exc:
                 logger.warning("Unable to restore (unblock) key %s: %s", alias, exc)
                 restored = False
+        if self.usage_client is not None:
+            # Event-based membership sync runs no periodic limits pass, but this runs on
+            # every serving resource from the hourly status pass (and every polling
+            # cycle): it keeps the chat taken off each key's budget current, and puts it
+            # back once the month turns.
+            self._write_key_budgets(resource_backend_id, records, None)
         return restored
 
     def downscale_resource(self, resource_backend_id: str) -> bool:
@@ -1427,22 +1596,49 @@ class LiteLLMBackend(backends.BaseBackend):
 
         A key with limits of its own gets the tighter of its own and the resource's,
         field by field, and the resource's limits are stamped on every key so a key
-        minted before the next cycle can start from them.
+        minted before the next cycle can start from them. Where chat follows the key,
+        its holder's chat this month is taken off its budget (``_key_fields``); this
+        pass is what keeps that current as they chat and as the key changes hands.
 
         Each key's model list is brought in line with the offering's ``models`` in the
         same write (``_reconciled_models``): a model dropped from the offering stops
         being callable on the keys that had it, without an update from Waldur.
         """
-        resource_limits = self._mapped_limits(limits)
-        for alias, record in self._resource_keys(resource_backend_id).items():
+        self._write_key_budgets(
+            resource_backend_id,
+            self._resource_keys(resource_backend_id),
+            self._mapped_limits(limits),
+        )
+
+    def _write_key_budgets(
+        self, resource_backend_id: str, records: dict, resource_limits: Optional[dict]
+    ) -> None:
+        """Write each key's backstop fields, net of its holder's chat, where they changed.
+
+        ``resource_limits`` ``None`` takes each key's stamped resource limits: the status
+        pass refreshes the chat taken off without Waldur's limits at hand.
+        """
+        chat_spend = self._holder_chat_spend(resource_backend_id) if records else {}
+        for alias, record in records.items():
             token = self._token(record)
             if not token:
                 continue
             metadata = self._key_metadata(record)
+            if resource_limits is None and META_RESOURCE_LIMITS not in metadata:
+                # Never reconciled: its budget is the next limits sync's to write.
+                continue
             own_limits = metadata.get(META_KEY_LIMITS) or {}
-            fields = self._backstop_fields(self._tighter_limits(own_limits, resource_limits))
+            key_resource_limits = (
+                (metadata.get(META_RESOURCE_LIMITS) or {})
+                if resource_limits is None
+                else resource_limits
+            )
+            fields, deduction = self._key_fields(
+                own_limits, key_resource_limits, self._chat_deduction(alias, chat_spend, metadata)
+            )
             if (
-                (metadata.get(META_RESOURCE_LIMITS) or {}) == resource_limits
+                (metadata.get(META_RESOURCE_LIMITS) or {}) == key_resource_limits
+                and float(metadata.get(META_HOLDER_CHAT) or 0.0) == deduction
                 and all(record.get(field) == value for field, value in fields.items())
                 and self._reconciled_models(record) is None
             ):
@@ -1450,20 +1646,30 @@ class LiteLLMBackend(backends.BaseBackend):
                 # key already carries would be one /key/update per key per cycle.
                 continue
             try:
-                current = self.litellm_client.get_key(token)
-                if not isinstance(current, dict):
-                    current = record
-                metadata = self._key_metadata(current)
-                own_limits = metadata.get(META_KEY_LIMITS) or {}
-                fields = self._backstop_fields(self._tighter_limits(own_limits, resource_limits))
-                metadata[META_RESOURCE_LIMITS] = resource_limits
-                body = {**self._key_update_fields(current, fields), "metadata": metadata}
-                models = self._reconciled_models(current)
-                if models is not None:
-                    logger.info("Bringing the models of key %s in line: %s", alias, models)
-                    body["models"] = models
-                self.litellm_client.update_key(token, body)
-                self._keep_concurrent_pause(alias, token, metadata, bool(current.get("blocked")))
+                with _KEY_METADATA_LOCK:
+                    current = self.litellm_client.get_key(token)
+                    if not isinstance(current, dict):
+                        current = record
+                    metadata = self._key_metadata(current)
+                    own_limits = metadata.get(META_KEY_LIMITS) or {}
+                    if resource_limits is None:
+                        key_resource_limits = metadata.get(META_RESOURCE_LIMITS) or {}
+                    fields, deduction = self._key_fields(
+                        own_limits,
+                        key_resource_limits,
+                        self._chat_deduction(alias, chat_spend, metadata),
+                    )
+                    metadata[META_RESOURCE_LIMITS] = key_resource_limits
+                    self._record_chat_deduction(metadata, deduction)
+                    body = {**self._key_update_fields(current, fields), "metadata": metadata}
+                    models = self._reconciled_models(current)
+                    if models is not None:
+                        logger.info("Bringing the models of key %s in line: %s", alias, models)
+                        body["models"] = models
+                    self.litellm_client.update_key(token, body)
+                    self._keep_concurrent_pause(
+                        alias, token, metadata, bool(current.get("blocked"))
+                    )
             except LiteLLMBackendError as exc:
                 # The backstop failing is not the same as enforcement failing: Waldur
                 # still pauses on the reported usage, so this does not fail the order.
@@ -2175,6 +2381,11 @@ class LiteLLMBackend(backends.BaseBackend):
                 logger.exception("Unable to apply the API key of %s to their chat", email)
         if stamped:
             self._invalidate_users_cache()
+            if self.usage_client is not None:
+                # A new stamp changes whose chat a key's budget is net of, and a key
+                # minted for someone is stamped here, right after the mint: nothing
+                # else recomputes it before the next status or limits pass.
+                self._write_key_budgets(backend_id, records, None)
         provisioned = {
             str(self._user_metadata(record).get(META_USERNAME) or "") for record in members.values()
         }
