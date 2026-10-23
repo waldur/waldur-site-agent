@@ -46,6 +46,13 @@ class TestReportingPeriodsConfig(unittest.TestCase):
         with self.assertRaises(ValidationError):
             WaldurAgentConfiguration(reporting_periods=13)
 
+    def test_api_key_final_report_days(self) -> None:
+        assert WaldurAgentConfiguration().api_key_final_report_days == 3
+        assert WaldurAgentConfiguration(api_key_final_report_days=0).api_key_final_report_days == 0
+        for invalid in (-1, 29):
+            with self.assertRaises(ValidationError):
+                WaldurAgentConfiguration(api_key_final_report_days=invalid)
+
     def test_root_config_threads_through(self) -> None:
         raw_config = RootConfiguration(
             offerings=[
@@ -59,9 +66,11 @@ class TestReportingPeriodsConfig(unittest.TestCase):
                 }
             ],
             reporting_periods=3,
+            api_key_final_report_days=5,
         )
         agent_config = raw_config.to_agent_configuration()
         assert agent_config.reporting_periods == 3
+        assert agent_config.api_key_final_report_days == 5
 
     def test_root_config_default(self) -> None:
         raw_config = RootConfiguration(

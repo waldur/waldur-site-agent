@@ -426,6 +426,15 @@ class WaldurAgentConfiguration(BaseModel):
         le=12,
         description="Number of billing periods to report (1=current, 2=current+previous)",
     )
+    api_key_final_report_days: int = Field(
+        default=3,
+        ge=0,
+        le=28,
+        description=(
+            "Days into a month during which each API key's usage for the previous month "
+            "is reported once more (0=off)"
+        ),
+    )
     expose_backend_error_details: bool = Field(
         default=True,
         description=(
@@ -537,6 +546,15 @@ class RootConfiguration(BaseModel):
         ge=1,
         le=12,
         description="Number of billing periods to report (1=current, 2=current+previous)",
+    )
+    api_key_final_report_days: int = Field(
+        default=3,
+        ge=0,
+        le=28,
+        description=(
+            "Days into a month during which each API key's usage for the previous month "
+            "is reported once more (0=off)"
+        ),
     )
     expose_backend_error_details: bool = Field(
         default=True,
@@ -661,6 +679,7 @@ class RootConfiguration(BaseModel):
             global_proxy=self.global_proxy,
             log_level=self.log_level,
             reporting_periods=self.reporting_periods,
+            api_key_final_report_days=self.api_key_final_report_days,
             expose_backend_error_details=self.expose_backend_error_details,
             log_shipping=self.log_shipping,
         )

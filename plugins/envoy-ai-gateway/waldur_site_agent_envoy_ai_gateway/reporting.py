@@ -132,12 +132,22 @@ class EnvoyUsageReportingBackend(backends.BaseBackend):
         before the shipper recorded keys, say — maps to None: splitting only part of
         the total across keys would under-count against their limits.
         """
+        return self._key_usage(resource_backend_ids, self._current_month())
+
+    def get_resource_key_usage_report_for_period(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, Optional[dict[str, dict[str, float]]]]:
+        """A closed month's usage per key, read as ``get_resource_key_usage_report`` reads it."""
+        return self._key_usage(resource_backend_ids, f"{year:04d}-{month:02d}")
+
+    def _key_usage(
+        self, resource_backend_ids: list[str], month: str
+    ) -> dict[str, Optional[dict[str, dict[str, float]]]]:
         report: dict[str, Optional[dict[str, dict[str, float]]]] = {
             backend_id: {} for backend_id in resource_backend_ids
         }
         if not resource_backend_ids or not self._token_keys:
             return report
-        month = self._current_month()
         patterns = {
             backend_id: re.compile(rf"^{re.escape(backend_id)}-\d+$")
             for backend_id in resource_backend_ids

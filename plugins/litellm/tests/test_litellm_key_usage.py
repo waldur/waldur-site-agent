@@ -239,3 +239,31 @@ def test_a_failed_user_listing_reports_no_key_this_round() -> None:
     assert backend.get_resource_key_usage_report([RID]) == {RID: None}
     # The resource total keeps its API half, as before.
     assert backend._get_usage_report([RID])[RID]["TOTAL_ACCOUNT_USAGE"]["input_tokens"] == 10
+
+
+def test_a_closed_month_is_read_from_its_own_range() -> None:
+    # The final report of a month, sent in the first days of the next one.
+    backend = _make_backend()
+    backend.usage_client.get_usage_rows.return_value = [_key_row(f"{RID}-1", 10, 20, 0.5)]
+    backend.litellm_client.list_users.return_value = [_user("ada@example.com", key=f"{RID}-1")]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _user_row("ada@example.com", "openwebui", 1, 2, 0.25)
+    ]
+
+    assert backend.get_resource_key_usage_report_for_period([RID], 2026, 9) == {
+        RID: {f"{RID}-1": _usage(11, 22, 0.75)}
+    }
+    backend.usage_client.get_usage_rows.assert_called_once_with("2026-09-01", "2026-09-30")
+    backend.usage_client.get_user_usage_rows.assert_called_once_with("2026-09-01", "2026-09-30")
+
+
+def test_a_closed_month_is_read_per_day_from_its_own_range() -> None:
+    backend = _make_backend({"api_url": "http://litellm:4000", "api_token": "sk-master"})
+    backend.usage_client.get_usage_rows.return_value = [
+        {**_key_row(f"{RID}-1", 10, 20, 0.5), "date": "2026-09-30"}
+    ]
+
+    assert backend.get_resource_key_daily_usage_report_for_period([RID], 2026, 9) == {
+        RID: {f"{RID}-1": {"2026-09-30": _usage(10, 20, 0.5)}}
+    }
+    backend.usage_client.get_usage_rows.assert_called_once_with("2026-09-01", "2026-09-30")

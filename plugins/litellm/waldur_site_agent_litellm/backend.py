@@ -71,7 +71,13 @@ BUDGET_DURATION = "1mo"
 # with Waldur's day and week (checked on LiteLLM 1.98 and 1.106). The month stays on
 # ``max_budget`` with BUDGET_DURATION. A quarter or a year has no duration that resets
 # with Waldur's -- ``3mo`` is refused, ``90d`` runs from the day it was written, ``1y``
-# silently resets daily -- so those limits are Waldur's pause alone.
+# silently resets daily -- so those limits are Waldur's pause alone. So is ``total``,
+# which never resets. ``budget_limits`` takes no window without a duration (LiteLLM
+# 1.106 refuses a missing or null one and never enforces ``""``). The key's one
+# ``max_budget`` and ``spend`` already carry the month with BUDGET_DURATION, and that
+# ``spend`` returns to 0 on the 1st. And ``spend`` is per key: delete-and-mint rotation
+# starts it at 0 (an enterprise regenerate keeps it), while Waldur's total is per
+# resource, or per key across rotations.
 BUDGET_WINDOWS = {"day": "1d", "week": "7d"}
 
 # What a spending limit on the proxy's spend is mapped to, by period, beside the

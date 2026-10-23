@@ -186,3 +186,15 @@ def test_per_key_usage_is_empty_with_no_usage_this_month() -> None:
     backend = _make_backend()
     backend.usage_client.get_usage.return_value = []
     assert backend.get_resource_key_usage_report(["res", "other"]) == {"res": {}, "other": {}}
+
+
+def test_per_key_usage_of_a_closed_month() -> None:
+    backend = _make_backend()
+    backend.usage_client.get_usage.return_value = [
+        {"client_id": "res", "key_client_id": "res-1", "input_tokens": 10, "output_tokens": 1},
+    ]
+
+    assert backend.get_resource_key_usage_report_for_period(["res"], 2026, 9) == {
+        "res": {"res-1": {"input_tokens": 10, "output_tokens": 1}}
+    }
+    backend.usage_client.get_usage.assert_called_once_with(["res"], "2026-09", "2026-09")

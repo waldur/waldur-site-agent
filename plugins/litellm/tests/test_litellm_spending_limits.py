@@ -131,6 +131,41 @@ def test_quarter_and_year_are_left_to_waldur() -> None:
     assert "budget_limits" not in fields
 
 
+def test_a_total_limit_is_left_to_waldur() -> None:
+    # A total never resets (waldur/waldur-mastermind#841): no proxy budget can follow it.
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+
+    backend.update_resource_key(f"{RID}-1", RID, spending_limits={"token_cost": {"total": 500}})
+
+    fields = _writes(backend)[f"h-{RID}-1"]
+    assert fields["max_budget"] is None
+    assert "budget_limits" not in fields
+
+
+def test_a_total_limit_leaves_the_other_periods_windows_as_they_are() -> None:
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+
+    backend.update_resource_key(
+        f"{RID}-1",
+        RID,
+        limits={"token_cost": 50},
+        spending_limits={"token_cost": {"day": 5, "week": 20, "month": 50, "total": 500}},
+    )
+
+    fields = _writes(backend)[f"h-{RID}-1"]
+    assert fields["max_budget"] == 50
+    assert fields["budget_duration"] == "1mo"
+    assert fields["budget_limits"] == [DAY, WEEK]
+    assert fields["metadata"][META_KEY_LIMITS] == {
+        "token_cost": 50,
+        "spend/day": 5,
+        "spend/week": 20,
+        "spend/month": 50,
+    }
+
+
 def test_a_limit_on_a_component_the_proxy_does_not_spend_is_waldurs() -> None:
     backend = _make_backend()
     backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
@@ -295,6 +330,22 @@ def test_a_resources_first_key_gets_its_windows_at_mint() -> None:
     }
 
 
+def test_a_resources_total_limit_gives_its_first_key_no_window() -> None:
+    backend = _make_backend()
+
+    backend.mint_resource_key(
+        RID,
+        [],
+        resource_limits={"token_cost": 100},
+        resource_spending_limits={"token_cost": {"day": 5, "total": 500}},
+    )
+
+    kwargs = backend.litellm_client.generate_key.call_args.kwargs
+    assert kwargs["max_budget"] == 100
+    assert kwargs["budget_limits"] == [DAY]
+    assert kwargs["metadata"][META_RESOURCE_LIMITS] == {"token_cost": 100, "spend/day": 5}
+
+
 def test_waldurs_windows_on_a_mint_win_over_the_stamp() -> None:
     backend = _make_backend()
     backend.litellm_client.list_keys.return_value = [
@@ -376,6 +427,20 @@ def test_the_resources_spending_limits_reach_its_keys() -> None:
     for alias in (f"{RID}-1", f"{RID}-2"):
         assert writes[f"h-{alias}"]["max_budget"] == 50
         assert writes[f"h-{alias}"]["budget_limits"] == [DAY]
+
+
+def test_a_resources_total_limit_reaches_no_key() -> None:
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+
+    backend.sync_resource_limits(
+        _resource(spending_limits={"token_cost": {"day": 5, "month": 50, "total": 500}}),
+        mock.Mock(),
+    )
+
+    fields = _writes(backend)[f"h-{RID}-1"]
+    assert fields["max_budget"] == 50
+    assert fields["budget_limits"] == [DAY]
 
 
 def test_an_order_keeps_the_spending_limits_last_reconciled() -> None:

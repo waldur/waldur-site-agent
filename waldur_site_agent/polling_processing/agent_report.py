@@ -50,6 +50,7 @@ def _process_offerings(configuration: common_structures.WaldurAgentConfiguration
                 resource_backend=resource_backend,
                 resource_backend_version=resource_backend_version,
                 reporting_periods=configuration.reporting_periods,
+                api_key_final_report_days=configuration.api_key_final_report_days,
                 expose_backend_error_details=configuration.expose_backend_error_details,
             )
             processor.register(agent_service)

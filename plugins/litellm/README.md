@@ -156,10 +156,12 @@ against them, so they exist purely to carry a number onto the key.
 >
 > Any other window disagrees with Waldur. With a window running from the 15th, a person who spends
 > their $20 on Sep 25 is resumed by Waldur on Oct 1 but refused by the proxy until Oct 15, while
-> the portal shows the key active with nothing used. No window at all is worse: `max_budget` is then
-> a lifetime budget and blocks the key for good. So the `budget_duration` backend setting is
-> ignored, with a warning at startup when it says anything but `1mo`, and the limits
-> reconciliation moves keys holding another duration onto `1mo`.
+> the portal shows the key active with nothing used. No window at all is worse: `spend` then never
+> resets, so a key that reaches its month budget once is refused in every later month, although
+> Waldur resumes it on the 1st, until the budget is raised above all the key has ever spent or
+> cleared. So the `budget_duration` backend setting is ignored, with a warning at startup when it
+> says anything but `1mo`, and the limits reconciliation moves keys holding another duration onto
+> `1mo`.
 >
 > **Keep the proxy on UTC midnight.** `litellm_settings.timezone` and
 > `litellm_settings.budget_reset_time` move LiteLLM's reset; leave them unset (UTC, 00:00) or the
@@ -169,7 +171,8 @@ against them, so they exist purely to carry a number onto the key.
 
 A Waldur with spending limits (waldur/waldur-mastermind#789, #817) lets a customer cap a
 usage-based component per calendar period in UTC, on a resource and on each of its keys: day,
-week (from Monday), month, quarter and year. The limits on the proxy's spend — `token_cost`,
+week (from Monday), month, quarter and year, or for all time (`total`, which never resets;
+waldur/waldur-mastermind#841). The limits on the proxy's spend — `token_cost`,
 or a component [`component_metrics`](#pricing) feeds from it — reach every key of the resource:
 
 | Period | On the key | Resets |
@@ -178,18 +181,34 @@ or a component [`component_metrics`](#pricing) feeds from it — reach every key
 | week | a budget window, `budget_duration: "7d"` | Monday, 00:00 UTC |
 | month | `max_budget` with `1mo`, the lower of it and a limit-based `token_cost` | the 1st, 00:00 UTC |
 | quarter, year | nothing: **Waldur's pause alone** | — |
+| total | nothing: **Waldur's pause alone** | never |
 
 The proxy checks every window on each request, beside `max_budget`, and refuses the key at the
 first one reached. Quarter and year have no duration that resets when Waldur's period does:
 `3mo` is refused, `90d` and `365d` count from the day they were written, and `1y` silently
 resets every night. Writing one would let the proxy refuse a key that Waldur shows under its
-limit, so they are left out. A spending limit on any other component, `input_tokens` say, has no
-proxy field either; Waldur enforces it from the usage reports.
+limit, so they are left out. A total has no proxy budget to follow it either:
+
+- `budget_limits` takes no window without a duration. LiteLLM 1.106 refuses a missing or null
+  `budget_duration` (422) and accepts an empty one, but never counts or enforces that window.
+- A key has one `max_budget` and one `spend` counter, and the month budget already holds them
+  with `1mo`: the proxy sets `spend` back to 0 on the 1st, so a key with a month limit keeps no
+  lifetime counter to cap.
+- The proxy's `spend` is per key. Rotating a key by deleting it and minting a replacement (the
+  only way without an enterprise licence, where `/key/regenerate` is refused) starts the new key
+  at 0; an enterprise regenerate keeps the old `spend`. Waldur's total runs per resource, or per
+  key across rotations.
+
+Waldur reads the total from its own usage records and pauses the resource or the key; the pause
+lifts only when the limit is raised or cleared. Until the next usage report (30 minutes by
+default) calls can overshoot a total, unless a day, week or month budget on the key stops them
+first. A spending limit on any other component, `input_tokens` say, has no proxy field either;
+Waldur enforces it from the usage reports.
 
 **Turn on `api_key_daily_usage` to offer day and week limits on keys.** Waldur offers a key
 its day and week limits only where the offering's `plugin_options.api_key_daily_usage` is on,
-because it checks them against the key's usage per day; without it a key takes month limits
-alone (and none of its own where `api_key_limits` is off; it is on unless set). `litellm-usage`
+because it checks them against the key's usage per day; without it a key takes month and total
+limits alone (and none of its own where `api_key_limits` is off; it is on unless set). `litellm-usage`
 reports each key's usage per day (see [Per-key usage](#per-key-usage)), so turn the option on
 for a LiteLLM offering. While it is off the agent logs a warning for the offering on every
 report cycle; nothing about what it reports changes. A resource's own day and week limits do
@@ -358,10 +377,11 @@ It covers the key's own budget only. Each key still carries the whole resource b
 its siblings' spend or other members' chat; the offering's *Action on usage limit* is what
 holds the resource total.
 
-Limits on `input_tokens` and `output_tokens` have no proxy field, nor have quarter and year
-limits. Waldur enforces them, and every key limit, from the per-key usage report: a key whose
-usage reaches its limit is paused, and resumed when it is under the limit again, at the
-latest once the limit's period resets.
+Limits on `input_tokens` and `output_tokens` have no proxy field, nor have quarter, year and
+total limits. Waldur enforces them, and every key limit, from the per-key usage report: a key
+whose usage reaches its limit is paused, and resumed when it is under the limit again, at the
+latest once the limit's period resets. A total never resets, so a key paused by one resumes only
+when the limit is raised or cleared.
 
 ### Models
 
@@ -397,6 +417,17 @@ can come back under it that way, and Waldur then resumes it. Reported per day, t
 chat left are set back to zero, so the key's day and week usage drop at once, but Waldur never
 lowers a key's month figure within the month: a key paused at its month limit stays paused
 until the month turns or its limit is raised.
+
+**A month's last figures go out after it ends.** The report covers the current UTC month, so it
+stops at the agent's last round before midnight. In the first days of a month, three by default
+(the agent's [`api_key_final_report_days`](../../docs/configuration.md#api_key_final_report_days)),
+every round also sends each key's figures for the month before, per day where the key takes days.
+Without them the usage between that last round and midnight, or of an agent outage over the month
+end, would never count towards a total limit, which never resets. Waldur keeps the higher of the
+figures it holds and the ones reported, so the repeats change nothing. A key with no usage in that
+month, or whose figures this agent already sent, is skipped. Its chat lands on the key assigned to
+the person at the time of the final report, as for the current month. A Waldur that predates
+closed-month key reports refuses them; the agent logs that once per key and carries on.
 
 ## The chat surface (Open WebUI)
 
@@ -762,7 +793,7 @@ How the two request paths are governed:
 | Usage reported on | the key it was served on | the key assigned to the person |
 | Model list | the proxy, on the key | Open WebUI, by group membership |
 | Day, week and month limits | Waldur (report → pause), plus the key's budgets net of chat | Waldur (report → pause) |
-| Quarter and year limits | Waldur (report → pause) | Waldur (report → pause) |
+| Quarter, year and total limits | Waldur (report → pause) | Waldur (report → pause) |
 | Per-minute limits | the proxy, on the key | **not enforced** |
 | Pause | the key is blocked | the chat account is disabled |
 
@@ -935,7 +966,7 @@ needed: all three components are named after their metric.
 A spending limit is never billed; the customer pays for what they use.
 
 Offer day, week and month to have the proxy refuse a key at its limit between two usage reports;
-quarter and year are Waldur's pause alone (see
+quarter, year and total are Waldur's pause alone (see
 [Spending limits per period](#spending-limits-per-period)). Day and week need usage per day,
 which this plugin reports.
 

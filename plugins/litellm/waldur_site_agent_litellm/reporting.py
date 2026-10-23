@@ -473,12 +473,25 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         charging the usage to a key it did not come through, and without taking per-key
         reporting away from every other key of the resource for the rest of the month.
         """
+        today = datetime.datetime.now(tz=datetime.timezone.utc)
+        return self.get_resource_key_usage_report_for_period(
+            resource_backend_ids, today.year, today.month
+        )
+
+    def get_resource_key_usage_report_for_period(
+        self, resource_backend_ids: list, year: int, month: int
+    ) -> dict:
+        """A month's usage per key, attributed as ``get_resource_key_usage_report`` does.
+
+        For a closed month, chat lands on the key assigned to its holder now: the
+        proxy keeps no history of the assignment.
+        """
         wanted = set(resource_backend_ids)
         report: dict = {resource_id: {} for resource_id in wanted}
         if not wanted or not self._usage_metrics:
             return report
         try:
-            for resource_id, key, row in self._key_rows(wanted):
+            for resource_id, key, row in self._key_rows(wanted, year, month):
                 self._accumulate_into(report[resource_id], key, row)
         except _HoldersUnreadable:
             # Reporting the keys without their holders' chat would drop a key paused at
@@ -494,12 +507,21 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         The rows of ``get_resource_key_usage_report``, attributed to keys the same way,
         and bucketed by the day each was recorded on. Days with no usage are left out.
         """
+        today = datetime.datetime.now(tz=datetime.timezone.utc)
+        return self.get_resource_key_daily_usage_report_for_period(
+            resource_backend_ids, today.year, today.month
+        )
+
+    def get_resource_key_daily_usage_report_for_period(
+        self, resource_backend_ids: list, year: int, month: int
+    ) -> dict:
+        """A month's usage per key and UTC day, as ``get_resource_key_daily_usage_report``."""
         wanted = set(resource_backend_ids)
         report: dict = {resource_id: {} for resource_id in wanted}
         if not wanted or not self._usage_metrics:
             return report
         try:
-            for resource_id, key, row in self._key_rows(wanted):
+            for resource_id, key, row in self._key_rows(wanted, year, month):
                 if row.get("date"):
                     days = report[resource_id].setdefault(key, {})
                     self._accumulate_into(days, str(row["date"]), row)
@@ -509,14 +531,13 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
             return dict.fromkeys(wanted)
         return report
 
-    def _key_rows(self, wanted: set) -> Iterator[tuple]:
-        """``(resource, key, row)`` for this month's usage rows of the resources in ``wanted``.
+    def _key_rows(self, wanted: set, year: int, month: int) -> Iterator[tuple]:
+        """``(resource, key, row)`` for a month's usage rows of the resources in ``wanted``.
 
         Raises ``_HoldersUnreadable`` when the user list, which says whose chat goes on
         which key, cannot be read; a failing spend API raises as it is.
         """
-        today = datetime.datetime.now(tz=datetime.timezone.utc)
-        start, end = self._month_range(today.year, today.month)
+        start, end = self._month_range(year, month)
         for row in self._usage_rows(start, end):
             alias = row["key_alias"]
             resource_id = self._resource_id_for(alias)

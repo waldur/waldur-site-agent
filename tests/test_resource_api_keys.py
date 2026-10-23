@@ -731,6 +731,237 @@ class TestReportApiKeyUsages(unittest.TestCase):
         mock_logger.warning.assert_not_called()
 
 
+@mock.patch(f"{KEYS}.marketplace_resource_api_keys_report_usage")
+@mock.patch(f"{KEYS}.list_all_api_keys")
+class TestFinalPreviousMonthReport(unittest.TestCase):
+    """In the first days of a month each key's figures for the month before go out once more.
+
+    The current month's report stops at the agent's last round before midnight; without
+    a final report the usage after it never counts for a total limit, which never resets.
+    """
+
+    COMPONENTS = ["token_cost"]
+
+    def setUp(self) -> None:
+        resource_api_keys._final_reports.clear()
+        self.addCleanup(resource_api_keys._final_reports.clear)
+
+    def _at(self, today: datetime.date) -> None:
+        """Fake the UTC clock: both the month reported and today."""
+        for target, value in (
+            ("_current_period", today.replace(day=1)),
+            ("spending_limits.utc_today", today),
+        ):
+            patcher = mock.patch(f"{KEYS}.{target}", return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _backend(current: object, previous: object, daily: bool = False) -> mock.Mock:
+        backend = mock.Mock(supports_daily_usage=daily)
+        backend.get_resource_key_usage_report.return_value = {"res-1": current}
+        backend.get_resource_key_usage_report_for_period.return_value = {"res-1": previous}
+        return backend
+
+    def _run(self, mock_list, backend, keys, **kwargs) -> None:  # noqa: ANN001
+        mock_list.return_value = [api_key_row(**key) for key in keys]
+        resource_api_keys.report_api_key_usages(
+            mock.sentinel.client, backend, "res-uuid", "res-1", self.COMPONENTS, **kwargs
+        )
+
+    @staticmethod
+    def _sent(mock_report: mock.Mock) -> list[tuple[str, datetime.date, dict]]:
+        return [
+            (
+                str(call.kwargs["uuid"]),
+                call.kwargs["body"].billing_period,
+                call.kwargs["body"].usages.additional_properties,
+            )
+            for call in mock_report.sync.call_args_list
+        ]
+
+    def test_on_the_first_the_previous_month_goes_out_before_the_new_one(
+        self, mock_list, mock_report
+    ):
+        """First, so a key Waldur still holds in the old month takes it as that month."""
+        self._at(datetime.date(2026, 11, 1))
+        backend = self._backend({"res-1-1": {"token_cost": 0.5}}, {"res-1-1": {"token_cost": 9.25}})
+        self._run(mock_list, backend, [{"uuid": K1, "client_id": "res-1-1"}])
+
+        backend.get_resource_key_usage_report_for_period.assert_called_once_with(
+            ["res-1"], 2026, 10
+        )
+        self.assertEqual(
+            self._sent(mock_report),
+            [
+                (K1, datetime.date(2026, 10, 1), {"token_cost": 9.25}),
+                (K1, datetime.date(2026, 11, 1), {"token_cost": 0.5}),
+            ],
+        )
+        mock_list.assert_called_once_with(mock.sentinel.client, "res-uuid")
+
+    def test_january_reports_december_of_the_year_before(self, mock_list, mock_report):
+        self._at(datetime.date(2027, 1, 2))
+        backend = self._backend({}, {"res-1-1": {"token_cost": 1}})
+        self._run(mock_list, backend, [{"uuid": K1, "client_id": "res-1-1"}])
+
+        backend.get_resource_key_usage_report_for_period.assert_called_once_with(
+            ["res-1"], 2026, 12
+        )
+        self.assertEqual(self._sent(mock_report)[0][1], datetime.date(2026, 12, 1))
+
+    def test_due_through_the_last_configured_day_only(self, mock_list, mock_report):
+        self._at(datetime.date(2026, 11, 3))
+        backend = self._backend({}, {"res-1-1": {"token_cost": 1}})
+        self._run(mock_list, backend, [{"uuid": K1, "client_id": "res-1-1"}])
+        self.assertIn(datetime.date(2026, 10, 1), [sent[1] for sent in self._sent(mock_report)])
+
+        mock_report.reset_mock()
+        backend.reset_mock()
+        resource_api_keys._final_reports.clear()
+        self._at(datetime.date(2026, 11, 4))
+        self._run(mock_list, backend, [{"uuid": K1, "client_id": "res-1-1"}])
+        backend.get_resource_key_usage_report_for_period.assert_not_called()
+        self.assertEqual(
+            [sent[1] for sent in self._sent(mock_report)], [datetime.date(2026, 11, 1)]
+        )
+
+    def test_zero_days_turns_it_off(self, mock_list, mock_report):
+        self._at(datetime.date(2026, 11, 1))
+        backend = self._backend({}, {"res-1-1": {"token_cost": 1}})
+        self._run(mock_list, backend, [{"uuid": K1, "client_id": "res-1-1"}], final_report_days=0)
+        backend.get_resource_key_usage_report_for_period.assert_not_called()
+
+    def test_figures_already_sent_are_not_sent_again_and_grown_ones_are(
+        self, mock_list, mock_report
+    ):
+        """Waldur keeps the higher figure, so repeats are harmless but pointless."""
+        self._at(datetime.date(2026, 11, 1))
+        keys = [{"uuid": K1, "client_id": "res-1-1", "usage_period": "2026-11-01"}]
+        backend = self._backend({}, {"res-1-1": {"token_cost": 9.25}})
+        self._run(mock_list, backend, keys)
+        self._run(mock_list, backend, keys)
+        october = [sent for sent in self._sent(mock_report) if sent[1].month == 10]
+        self.assertEqual(len(october), 1)
+
+        # The proxy's records of the month's last minutes arrived late.
+        backend.get_resource_key_usage_report_for_period.return_value = {
+            "res-1": {"res-1-1": {"token_cost": 9.75}}
+        }
+        self._run(mock_list, backend, keys)
+        october = [sent for sent in self._sent(mock_report) if sent[1].month == 10]
+        self.assertEqual(october[-1][2], {"token_cost": 9.75})
+
+    def test_a_key_waldur_already_holds_the_month_for_is_skipped(self, mock_list, mock_report):
+        self._at(datetime.date(2026, 11, 1))
+        backend = self._backend(None, {"res-1-1": {"token_cost": 9.25}})
+        self._run(
+            mock_list,
+            backend,
+            [
+                {
+                    "uuid": K1,
+                    "client_id": "res-1-1",
+                    "usage_period": "2026-10-01",
+                    "current_usages": {"token_cost": 9.25},
+                }
+            ],
+        )
+        mock_report.sync.assert_not_called()
+
+    def test_a_key_with_no_usage_in_the_month_is_skipped(self, mock_list, mock_report):
+        """A zero raises nothing, and the listing holds every key ever deleted."""
+        self._at(datetime.date(2026, 11, 1))
+        backend = self._backend(None, {"res-1-1": {"token_cost": 0}})
+        self._run(
+            mock_list,
+            backend,
+            [
+                {"uuid": K1, "client_id": "res-1-1"},
+                {"uuid": K2, "client_id": "res-1-2", "state": "Deleted"},
+            ],
+        )
+        mock_report.sync.assert_not_called()
+
+    def test_a_refusal_from_an_older_waldur_is_logged_once_and_the_month_goes_on(
+        self, mock_list, mock_report
+    ):
+        """A Waldur keeping the latest month only answers 409; retrying repeats it."""
+        self._at(datetime.date(2026, 11, 2))
+        refused = errors.UnexpectedStatus(
+            409, b"already holds its usage for 2026-11", httpx.URL("http://waldur/report_usage/")
+        )
+        mock_report.sync.side_effect = [refused, None, None]
+        keys = [{"uuid": K1, "client_id": "res-1-1", "usage_period": "2026-11-01"}]
+        backend = self._backend({"res-1-1": {"token_cost": 0.5}}, {"res-1-1": {"token_cost": 9}})
+
+        with mock.patch(f"{KEYS}.logger") as mock_logger:
+            self._run(mock_list, backend, keys)
+            self._run(mock_list, backend, keys)
+
+        months = [sent[1] for sent in self._sent(mock_report)]
+        self.assertEqual(months.count(datetime.date(2026, 10, 1)), 1)
+        self.assertEqual(months.count(datetime.date(2026, 11, 1)), 2)
+        mock_logger.info.assert_called_once()
+        mock_logger.warning.assert_not_called()
+
+    def test_a_failure_to_reach_waldur_is_retried_next_round(self, mock_list, mock_report):
+        self._at(datetime.date(2026, 11, 1))
+        mock_report.sync.side_effect = [httpx.ConnectError("down"), None, None]
+        keys = [{"uuid": K1, "client_id": "res-1-1", "usage_period": "2026-11-01"}]
+        backend = self._backend(None, {"res-1-1": {"token_cost": 9}})
+        self._run(mock_list, backend, keys)
+        self._run(mock_list, backend, keys)
+        self.assertEqual(
+            [sent[1] for sent in self._sent(mock_report)],
+            [datetime.date(2026, 10, 1), datetime.date(2026, 10, 1)],
+        )
+
+    def test_a_backend_that_cannot_read_a_closed_month_reports_the_current_one(
+        self, mock_list, mock_report
+    ):
+        """The base implementation returns no resource: nothing is sent for it."""
+        self._at(datetime.date(2026, 11, 1))
+        backend = self._backend({"res-1-1": {"token_cost": 0.5}}, None)
+        backend.get_resource_key_usage_report_for_period.return_value = {}
+        self._run(mock_list, backend, [{"uuid": K1, "client_id": "res-1-1"}])
+        self.assertEqual(
+            [sent[1] for sent in self._sent(mock_report)], [datetime.date(2026, 11, 1)]
+        )
+
+    def test_a_failing_collection_does_not_stop_the_current_month(self, mock_list, mock_report):
+        self._at(datetime.date(2026, 11, 1))
+        backend = self._backend({"res-1-1": {"token_cost": 0.5}}, None)
+        backend.get_resource_key_usage_report_for_period.side_effect = RuntimeError("down")
+        self._run(mock_list, backend, [{"uuid": K1, "client_id": "res-1-1"}])
+        self.assertEqual(
+            [sent[1] for sent in self._sent(mock_report)], [datetime.date(2026, 11, 1)]
+        )
+
+    def test_a_key_taking_days_gets_every_day_of_the_closed_month(self, mock_list, mock_report):
+        self._at(datetime.date(2026, 11, 1))
+        backend = mock.Mock(supports_daily_usage=True)
+        backend.get_resource_key_daily_usage_report.return_value = {"res-1": {}}
+        backend.get_resource_key_daily_usage_report_for_period.return_value = {
+            "res-1": {"res-1-1": {"2026-10-31": {"token_cost": 2.5}}}
+        }
+        self._run(
+            mock_list,
+            backend,
+            [{"uuid": K1, "client_id": "res-1-1", "spending_limits": None}],
+        )
+
+        backend.get_resource_key_daily_usage_report_for_period.assert_called_once_with(
+            ["res-1"], 2026, 10
+        )
+        body = mock_report.sync.call_args_list[0].kwargs["body"].to_dict()
+        self.assertEqual(body["billing_period"], "2026-10-01")
+        self.assertEqual(body["usages"], {})
+        days = body["daily_usages"]
+        self.assertEqual(len(days), 31)
+        self.assertEqual(days[-1], {"type": "token_cost", "date": "2026-10-31", "amount": "2.50"})
+
+
 class TestManagesApiKeys(unittest.TestCase):
     def test_reads_the_plugin_option_from_additional_properties(self):
         resource = SimpleNamespace(
@@ -797,7 +1028,15 @@ class TestReportProcessorHook(unittest.TestCase):
             "res-uuid",
             "res-1",
             ["input_tokens", "output_tokens"],
+            final_report_days=resource_api_keys.FINAL_REPORT_DAYS,
         )
+
+    @mock.patch(f"{KEYS}.report_api_key_usages")
+    def test_passes_the_configured_final_report_days(self, mock_report):
+        processor = self._processor(supports=True)
+        processor.api_key_final_report_days = 0
+        processor._report_api_key_usages(self._resource(managed=True), self._offering())
+        self.assertEqual(mock_report.call_args.kwargs["final_report_days"], 0)
 
     @mock.patch(f"{KEYS}.report_api_key_usages")
     def test_skipped_when_waldur_does_not_govern_the_keys(self, mock_report):

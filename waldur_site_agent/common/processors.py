@@ -3946,6 +3946,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         resource_backend_version: Optional[str] = None,
         reporting_periods: int = 1,
         expose_backend_error_details: bool = True,
+        api_key_final_report_days: int = resource_api_keys.FINAL_REPORT_DAYS,
     ) -> None:
         """Initialize the report processor.
 
@@ -3959,6 +3960,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 (1 = current month only, 2 = current + previous).
             expose_backend_error_details: Whether to forward raw exception
                 details to Waldur when marking objects as ERRED.
+            api_key_final_report_days: Days into a month during which each API
+                key's usage for the previous month is reported once more.
         """
         super().__init__(
             offering,
@@ -3969,6 +3972,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             expose_backend_error_details=expose_backend_error_details,
         )
         self.reporting_periods = reporting_periods
+        self.api_key_final_report_days = api_key_final_report_days
 
     @staticmethod
     def _compute_reporting_periods(
@@ -4660,7 +4664,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         Waldur offers day and week limits on an offering's API keys only where its
         ``api_key_daily_usage`` plugin option is on, since they are enforced against
-        usage per key per day; without it a key gets month limits alone. Nothing about
+        usage per key per day; without it a key gets month and total limits alone. Nothing about
         the report changes: this only tells the provider what turning it on would give.
         Skipped for a Waldur that takes no usage per day, which has no such option, and
         for an offering whose keys take no limits of their own (``api_key_limits`` off).
@@ -4679,14 +4683,18 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             return
         logger.warning(
             "Offering %s does not declare api_key_daily_usage, so Waldur offers only "
-            "monthly limits on its API keys; turn it on to offer day and week limits.",
+            "month and total limits on its API keys; turn it on to offer day and week "
+            "limits.",
             self.offering.uuid,
         )
 
     def _report_api_key_usages(
         self, waldur_resource: WaldurResource, waldur_offering: ProviderOfferingDetails
     ) -> None:
-        """Report the current month's usage per API key, where both sides support it.
+        """Report the usage per API key, where both sides support it.
+
+        The current month's, and in the first ``api_key_final_report_days`` days of a
+        month the previous month's final figures too.
 
         Waldur enforces a key's limits against this. Best-effort: the resource's own
         usage is already reported, and a failure here must not re-run it.
@@ -4709,6 +4717,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 waldur_resource.uuid.hex,
                 waldur_resource.backend_id,
                 component_types,
+                final_report_days=getattr(
+                    self, "api_key_final_report_days", resource_api_keys.FINAL_REPORT_DAYS
+                ),
             )
         except Exception:
             logger.exception(

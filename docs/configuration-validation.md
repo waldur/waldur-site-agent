@@ -32,6 +32,7 @@ them one place at a time.
 | `timezone` | must be a known IANA zone name |
 | `log_level` | one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (any case) |
 | `reporting_periods` | integer from 1 to 12 |
+| `api_key_final_report_days` | integer from 0 to 28 |
 | `sentry_dsn`, `elastic_apm_server_url` | a valid URL when set (an empty string means unset) |
 | `log_shipping` | `ship_interval_seconds` ≥ 10, `buffer_size_mb` ≥ 1 |
 
