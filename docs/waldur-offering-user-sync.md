@@ -390,9 +390,9 @@ stateDiagram-v2
     OK --> REQUESTED_DELETION : User loses project access
     OK --> OK : Username synced from Waldur B
 
-    note right of CREATING : Non-BackendError keeps state\nas CREATING for retry
-    note right of ERROR_CREATING : Visible to admins.\nRetried on next cycle.
-    note right of PENDING_ACCOUNT_LINKING : User action required.\ncomment + comment_url set.
+    note right of CREATING : Non-BackendError keeps state<br/>as CREATING for retry
+    note right of ERROR_CREATING : Visible to admins.<br/>Retried on next cycle.
+    note right of PENDING_ACCOUNT_LINKING : User action required.<br/>comment + comment_url set.
 ```
 
 ## Troubleshooting
