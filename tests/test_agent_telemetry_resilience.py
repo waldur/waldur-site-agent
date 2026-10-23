@@ -160,6 +160,7 @@ class TestPollingAgentsSurviveRejectedIdentity(unittest.TestCase):
         self.config.waldur_site_agent_mode = "membership-sync"
         self.config.timezone = "UTC"
         self.config.reporting_periods = 1
+        self.config.api_key_final_report_days = 3
         self.config.global_proxy = None
         self.config.expose_backend_error_details = True
         self.config.log_shipping = mock.Mock(spec=structures.LogShippingConfig)

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 from waldur_api_client import AuthenticatedClient, errors
@@ -75,6 +75,16 @@ ALL_STATES = list(ResourceApiKeyState)
 
 HTTP_BAD_REQUEST = 400
 HTTP_SERVER_ERROR = 500
+
+# How many days into a month the agent still sends each key's figures for the month
+# before (``api_key_final_report_days``); 0 turns the final report off.
+FINAL_REPORT_DAYS = 3
+
+# The previous month's figures each key was last sent with, by ``(key uuid, month)``,
+# or _REFUSED where Waldur refused that month. In memory only: a restarted agent sends
+# them again, which Waldur takes as it took them the first time.
+_final_reports: dict[tuple[str, datetime.date], object] = {}
+_REFUSED = object()
 
 # Offering users in these states hold an entitlement. The membership pass filters on
 # the same set (``OfferingMembershipProcessor._get_waldur_offering_users``); a key
@@ -712,6 +722,17 @@ def _current_period() -> datetime.date:
     return datetime.datetime.now(tz=datetime.timezone.utc).date().replace(day=1)
 
 
+def _previous_month(period: datetime.date, final_report_days: int) -> Optional[datetime.date]:
+    """The month before ``period`` while its final report is due, else None.
+
+    Due in the first ``final_report_days`` UTC days of ``period``.
+    """
+    today = spending_limits.utc_today()
+    if final_report_days <= 0 or today.replace(day=1) != period or today.day > final_report_days:
+        return None
+    return (period - datetime.timedelta(days=1)).replace(day=1)
+
+
 def manages_api_keys(waldur_resource: object) -> bool:
     """Whether the resource's offering has per-key governance turned on in Waldur."""
     return bool(_plugin_option(waldur_resource, "enable_api_key_provisioning"))
@@ -822,12 +843,130 @@ def _sync_key_assignees_now(
         )
 
 
+def _report_previous_month(
+    waldur_rest_client: AuthenticatedClient,
+    backend,  # noqa: ANN001
+    resource_backend_id: str,
+    component_types: list[str],
+    month: datetime.date,
+    list_keys: Callable[[], list[ResourceApiKeyStatus]],
+) -> None:
+    """Send each key's final figures for ``month``, the one that just ended.
+
+    The current month's report stops at the agent's last round before midnight, and
+    the usage after it would never reach Waldur: lost for good to a total limit, which
+    never resets. Waldur takes a report for a closed month as raising that month's
+    figures, never lowering them, so sending it again is harmless, and it is sent on
+    every round while due (``_previous_month``), as late as the backend's own records
+    of the month's last minutes may arrive. A key whose figures this agent already
+    sent, or that has no usage in the month, is skipped: a zero raises nothing.
+
+    A Waldur that predates closed-month reports refuses them (409 once the key holds
+    the new month); that key is then left alone for the month, with no effect on the
+    current month's report.
+    """
+    daily: Optional[dict] = None
+    if getattr(backend, "supports_daily_usage", False) is True:
+        result = backend.get_resource_key_daily_usage_report_for_period(
+            [resource_backend_id], month.year, month.month
+        )
+        if not isinstance(result, dict) or resource_backend_id not in result:
+            return
+        daily = result[resource_backend_id]
+        report = (
+            None
+            if daily is None
+            else {
+                client_id: spending_limits.month_totals(days) for client_id, days in daily.items()
+            }
+        )
+    else:
+        result = backend.get_resource_key_usage_report_for_period(
+            [resource_backend_id], month.year, month.month
+        )
+        if not isinstance(result, dict) or resource_backend_id not in result:
+            return
+        report = result[resource_backend_id]
+    if report is None:
+        logger.info(
+            "Usage of %s in %s cannot be attributed to its keys; no final per-key report",
+            resource_backend_id,
+            f"{month:%Y-%m}",
+        )
+        return
+    for stale in [entry for entry in _final_reports if entry[1] != month]:
+        del _final_reports[stale]
+    for key in list_keys():
+        client_id = _value(key.client_id)
+        if not client_id:
+            continue
+        key_usage = report.get(client_id, {})
+        usages = {
+            component: round(float(key_usage.get(component, 0)), 2) for component in component_types
+        }
+        if not any(usages.values()):
+            continue
+        current = key.current_usages.additional_properties if key.current_usages else {}
+        if _value(key.usage_period) == month and all(
+            float(current.get(component, -1)) == value for component, value in usages.items()
+        ):
+            continue
+        body_usages = ResourceApiKeyUsageRequestUsages()
+        body = ResourceApiKeyUsageRequest(usages=body_usages, billing_period=month)
+        if daily is not None and spending_limits.key_accepts_daily_usage(key):
+            # Every day of the month: Waldur replaces a day reported again, and a
+            # component with days in the month takes no month total.
+            days = spending_limits.fill_days(
+                daily.get(client_id, {}),
+                month.year,
+                month.month,
+                set(component_types),
+                spending_limits.utc_today(),
+            )
+            items = spending_limits.daily_usage_items(days)
+            body.additional_properties["daily_usages"] = items
+            sent: object = tuple((item["type"], item["date"], item["amount"]) for item in items)
+        else:
+            body_usages.additional_properties = usages
+            sent = tuple(sorted(usages.items()))
+        entry = (str(key.uuid), month)
+        if _final_reports.get(entry) in (sent, _REFUSED):
+            continue
+        try:
+            marketplace_resource_api_keys_report_usage.sync(
+                uuid=key.uuid,
+                client=waldur_rest_client,
+                body=body,
+            )
+        except Exception as exc:
+            if _is_refusal(exc):
+                # An older Waldur keeps the latest month only. Retrying every round
+                # would only repeat the refusal.
+                _final_reports[entry] = _REFUSED
+                logger.info(
+                    "Waldur refused the final %s usage of API key %s: %s",
+                    f"{month:%Y-%m}",
+                    client_id,
+                    exc,
+                )
+            else:
+                logger.warning(
+                    "Failed to report the final %s usage of API key %s: %s",
+                    f"{month:%Y-%m}",
+                    client_id,
+                    exc,
+                )
+            continue
+        _final_reports[entry] = sent
+
+
 def report_api_key_usages(
     waldur_rest_client: AuthenticatedClient,
     backend,  # noqa: ANN001
     resource_uuid: str,
     resource_backend_id: str,
     component_types: list[str],
+    final_report_days: int = FINAL_REPORT_DAYS,
 ) -> None:
     """Report the current month's usage of each of the resource's keys to Waldur.
 
@@ -848,8 +987,40 @@ def report_api_key_usages(
     day of the month so far goes out (``daily_usages``), so that day and week limits
     hold; Waldur derives the month from them. The month figures still decide whether
     a key is reported at all.
+
+    In the first ``final_report_days`` days of a month, each key's figures for the
+    month before go out first (``_report_previous_month``), so that the usage after
+    the last report before midnight still counts for a total limit. First, so that a
+    key whose Waldur has not moved on to the new month yet takes them as the month
+    it holds.
     """
     period = _current_period()
+    listed: list[list[ResourceApiKeyStatus]] = []
+
+    def list_keys() -> list[ResourceApiKeyStatus]:
+        # One listing serves both months.
+        if not listed:
+            listed.append(list_all_api_keys(waldur_rest_client, resource_uuid))
+        return listed[0]
+
+    previous = _previous_month(period, final_report_days)
+    if previous is not None:
+        try:
+            _report_previous_month(
+                waldur_rest_client,
+                backend,
+                resource_backend_id,
+                component_types,
+                previous,
+                list_keys,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to report the final per-key usage of %s for %s",
+                resource_backend_id,
+                f"{previous:%Y-%m}",
+                exc_info=True,
+            )
     daily: Optional[dict] = None
     if getattr(backend, "supports_daily_usage", False) is True:
         # The month figures are the sum of the days, so one collection gives both.
@@ -880,7 +1051,7 @@ def report_api_key_usages(
         )
         return
     known = set()
-    for key in list_all_api_keys(waldur_rest_client, resource_uuid):
+    for key in list_keys():
         client_id = _value(key.client_id)
         if not client_id:
             continue

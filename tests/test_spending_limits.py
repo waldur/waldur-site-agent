@@ -40,6 +40,14 @@ class TestReadingFields(unittest.TestCase):
             "token_cost": {"day": 5.0}
         })
 
+    def test_a_total_limit_is_read_beside_the_calendar_periods(self) -> None:
+        resource = Resource.from_dict(
+            {"spending_limits": {"token_cost": {"month": "50", "total": "500"}}}
+        )
+        self.assertEqual(spending_limits.resource_spending_limits(resource), {
+            "token_cost": {"month": 50.0, "total": 500.0}
+        })
+
     def test_a_resource_listed_without_the_field_has_none(self) -> None:
         self.assertIsNone(spending_limits.resource_spending_limits(Resource.from_dict({})))
 
@@ -230,8 +238,8 @@ class TestApiKeyDailyUsageWarning(unittest.TestCase):
             self._warnings(mock_logger),
             [
                 "Offering offering-uuid does not declare api_key_daily_usage, so Waldur "
-                "offers only monthly limits on its API keys; turn it on to offer day and "
-                "week limits."
+                "offers only month and total limits on its API keys; turn it on to offer "
+                "day and week limits."
             ],
         )
 

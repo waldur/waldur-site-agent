@@ -1624,6 +1624,31 @@ class BaseBackend(ABC):
         del resource_backend_ids
         return {}
 
+    def get_resource_key_usage_report_for_period(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, Optional[dict[str, dict[str, float]]]]:
+        """A closed month's usage per API key, as ``get_resource_key_usage_report`` gives it.
+
+        The agent sends each key's figures for the previous month once more in the
+        first days of a new one, so that the usage after its last report before
+        midnight still counts for a total limit. A resource left out of the result --
+        everything, by default -- is not reported for that month; ``{}`` is a resource
+        with no usage in it, and None one whose usage cannot be attributed to keys.
+        """
+        del resource_backend_ids, year, month
+        return {}
+
+    def get_resource_key_daily_usage_report_for_period(
+        self, resource_backend_ids: list[str], year: int, month: int
+    ) -> dict[str, Optional[dict[str, dict[str, dict[str, float]]]]]:
+        """A closed month's usage per API key and UTC day (``supports_daily_usage``).
+
+        As ``get_resource_key_daily_usage_report``, for the month given; a resource left
+        out is not reported for it, as for ``get_resource_key_usage_report_for_period``.
+        """
+        del resource_backend_ids, year, month
+        return {}
+
     def _get_resource_backend_id(self, resource_slug: str, prefix: str = "") -> str:
         prefix = self.backend_settings.get("allocation_prefix", "")
         return f"{prefix}{resource_slug}".lower()

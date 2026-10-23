@@ -2,10 +2,11 @@
 
 A Waldur with spending limits (waldur/waldur-mastermind#789, #817) lets a customer
 cap a usage-based component per calendar period in UTC -- day, week, month,
-quarter, year -- on a resource (``Resource.spending_limits``) and on each of its
-API keys (``spending_limits`` on the key), both ``{component: {period: amount}}``.
-Day and week limits need usage per UTC day, which ``set_usage`` and a key's
-``report_usage`` take as ``daily_usages``.
+quarter, year -- or for all time (``total``, which never resets), on a resource
+(``Resource.spending_limits``) and on each of its API keys (``spending_limits``
+on the key), both ``{component: {period: amount}}``. Day and week limits need
+usage per UTC day, which ``set_usage`` and a key's ``report_usage`` take as
+``daily_usages``.
 
 A Waldur that predates them sends none of these fields and refuses nothing for
 their absence, so the agent reports month totals to it exactly as before. Which
@@ -26,13 +27,15 @@ from waldur_api_client.models.billing_type_enum import BillingTypeEnum
 from waldur_api_client.models.resource_field_enum import ResourceFieldEnum
 from waldur_api_client.types import UNSET, Unset
 
-# The periods a limit can be set for, shortest first, as Waldur names them.
+# The periods a limit can be set for, shortest first, as Waldur names them. ``total``
+# never resets (waldur/waldur-mastermind#841).
 DAY = "day"
 WEEK = "week"
 MONTH = "month"
 QUARTER = "quarter"
 YEAR = "year"
-PERIODS = (DAY, WEEK, MONTH, QUARTER, YEAR)
+TOTAL = "total"
+PERIODS = (DAY, WEEK, MONTH, QUARTER, YEAR, TOTAL)
 
 
 def generated_field(model: object, name: str) -> Any:  # noqa: ANN401 - any JSON value
