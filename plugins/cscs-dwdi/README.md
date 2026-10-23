@@ -84,7 +84,8 @@ records the amount as-is.
 
 ### Compute Backend Configuration
 
-Fragment of an offering (complete files are in [`examples/`](examples/)):
+Fragment of an offering (complete files are in
+[`examples/`](https://github.com/waldur/waldur-site-agent/tree/main/plugins/cscs-dwdi/examples)):
 
 ```yaml
 backend_type: "cscs-dwdi-compute"
@@ -113,7 +114,8 @@ backend_components:
 
 ### Storage Backend Configuration
 
-Fragment of an offering (complete files are in [`examples/`](examples/)):
+Fragment of an offering (complete files are in
+[`examples/`](https://github.com/waldur/waldur-site-agent/tree/main/plugins/cscs-dwdi/examples)):
 
 ```yaml
 backend_type: "cscs-dwdi-storage"
@@ -151,7 +153,8 @@ backend_components:
 
 ### Inference Backend Configuration
 
-Fragment of an offering (complete files are in [`examples/`](examples/)):
+Fragment of an offering (complete files are in
+[`examples/`](https://github.com/waldur/waldur-site-agent/tree/main/plugins/cscs-dwdi/examples)):
 
 ```yaml
 backend_type: "cscs-dwdi-inference"
