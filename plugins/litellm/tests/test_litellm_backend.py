@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from types import SimpleNamespace
 from typing import Optional
@@ -233,7 +234,7 @@ def test_generate_yields_each_key_before_minting_the_next() -> None:
 
 def test_generate_applies_the_model_allowlist_and_backstops() -> None:
     backend = _make_backend(
-        {**SETTINGS, "budget_duration": "30d", "tpm_limit": 100, "rpm_limit": 10}
+        {**SETTINGS, "tpm_limit": 100, "rpm_limit": 10}
     )
     backend.litellm_client.list_keys.return_value = []
     backend.litellm_client.generate_key.return_value = {"key": "sk-1"}
@@ -256,7 +257,7 @@ def test_generate_applies_the_model_allowlist_and_backstops() -> None:
 
 def test_a_new_key_carries_the_resource_limits_not_only_the_offering_defaults() -> None:
     backend = _make_backend(
-        {**SETTINGS, "budget_duration": "30d", "tpm_limit": 100, "rpm_limit": 10}
+        {**SETTINGS, "tpm_limit": 100, "rpm_limit": 10}
     )
     backend.litellm_client.list_keys.return_value = []
     backend.litellm_client.generate_key.return_value = {"key": "sk-1"}
@@ -273,7 +274,7 @@ def test_a_new_key_carries_the_resource_limits_not_only_the_offering_defaults() 
     assert kwargs["max_budget"] == 50
     assert kwargs["tpm_limit"] == 5000
     assert kwargs["rpm_limit"] == 10
-    assert kwargs["budget_duration"] == "30d"
+    assert kwargs["budget_duration"] == "1mo"
 
 
 def test_the_parked_limits_are_not_reused_by_another_resource() -> None:
@@ -288,7 +289,7 @@ def test_the_parked_limits_are_not_reused_by_another_resource() -> None:
 
 
 def test_limits_are_reconciled_from_waldur_onto_the_keys() -> None:
-    backend = _make_backend({**SETTINGS, "budget_duration": "30d"})
+    backend = _make_backend()
     backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1", "h1")]
 
     backend.sync_resource_limits(
@@ -305,7 +306,7 @@ def test_limits_are_reconciled_from_waldur_onto_the_keys() -> None:
             "max_budget": 50,
             "tpm_limit": None,
             "rpm_limit": None,
-            "budget_duration": "30d",
+            "budget_duration": "1mo",
             # Stamped so a key minted before the next cycle starts from them.
             "metadata": {"waldur_resource_limits": {"token_cost": 50}},
         },
@@ -357,6 +358,7 @@ def test_reconciliation_skips_a_key_that_already_carries_the_limits() -> None:
         {
             **_key(f"{RID}-1", "h1"),
             "max_budget": 50,
+            "budget_duration": "1mo",
             "metadata": {"waldur_resource_limits": {"token_cost": 50}},
         }
     ]
@@ -372,14 +374,14 @@ def test_reconciliation_skips_a_key_that_already_carries_a_budget_duration() -> 
     # The skip compares every backstop field, budget_duration included, against the
     # /key/list record. Verified against a live proxy: return_full_object=true does
     # carry budget_duration, and the duration round-trips verbatim rather than being
-    # normalised to a canonical unit -- so a configured duration still matches and
-    # does not turn reconciliation into one /key/update per key per cycle.
-    backend = _make_backend({**SETTINGS, "budget_duration": "30d"})
+    # normalised to a canonical unit -- so "1mo" still matches and does not turn
+    # reconciliation into one /key/update per key per cycle.
+    backend = _make_backend()
     backend.litellm_client.list_keys.return_value = [
         {
             **_key(f"{RID}-1", "h1"),
             "max_budget": 50,
-            "budget_duration": "30d",
+            "budget_duration": "1mo",
             "metadata": {"waldur_resource_limits": {"token_cost": 50}},
         }
     ]
@@ -390,15 +392,52 @@ def test_reconciliation_skips_a_key_that_already_carries_a_budget_duration() -> 
 
 
 def test_reconciliation_rewrites_a_key_whose_budget_duration_drifted() -> None:
-    backend = _make_backend({**SETTINGS, "budget_duration": "30d"})
+    backend = _make_backend()
     backend.litellm_client.list_keys.return_value = [
-        {**_key(f"{RID}-1", "h1"), "max_budget": 50, "budget_duration": "7d"}
+        {**_key(f"{RID}-1", "h1"), "max_budget": 50, "budget_duration": "30d"}
     ]
 
     backend.set_resource_limits(RID, {"token_cost": 50})
 
-    # A duration changed on the offering has to reach keys minted under the old one.
-    assert backend.litellm_client.update_key.call_args.args[1]["budget_duration"] == "30d"
+    # A key minted under another window, such as the 30d the setting used to carry,
+    # moves onto Waldur's month.
+    assert backend.litellm_client.update_key.call_args.args[1]["budget_duration"] == "1mo"
+
+
+def test_reconciliation_of_a_changed_budget_leaves_the_months_reset_alone() -> None:
+    # Naming budget_duration in a /key/update moves the proxy's reset to a month from
+    # now: a limit raised on the 15th would push the key's reset past the 1st.
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = [
+        {**_key(f"{RID}-1", "h1"), "max_budget": 50, "budget_duration": "1mo"}
+    ]
+
+    backend.set_resource_limits(RID, {"token_cost": 80})
+
+    body = backend.litellm_client.update_key.call_args.args[1]
+    assert body["max_budget"] == 80
+    assert "budget_duration" not in body
+
+
+def test_a_configured_budget_duration_is_ignored_and_logged(caplog) -> None:
+    # Waldur counts limits per calendar month. A proxy window running from the 15th
+    # would keep refusing a key Waldur resumed on the 1st, with nothing in Waldur
+    # saying why, so the setting cannot move the reset.
+    with caplog.at_level(logging.WARNING, logger="waldur_site_agent_litellm.backend"):
+        backend = _make_backend({**SETTINGS, "budget_duration": "15d"})
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1", "h1")]
+
+    backend.set_resource_limits(RID, {"token_cost": 50})
+
+    assert backend.litellm_client.update_key.call_args.args[1]["budget_duration"] == "1mo"
+    assert "Ignoring budget_duration='15d'" in caplog.text
+
+
+def test_a_monthly_budget_duration_setting_is_not_warned_about(caplog) -> None:
+    with caplog.at_level(logging.WARNING, logger="waldur_site_agent_litellm.backend"):
+        _make_backend({**SETTINGS, "budget_duration": "1mo"})
+
+    assert "budget_duration" not in caplog.text
 
 
 def test_a_key_minted_onto_a_paused_resource_lands_blocked() -> None:
@@ -677,7 +716,7 @@ def test_delete_without_a_backend_id_touches_nothing() -> None:
 
 
 def test_limits_are_mirrored_onto_every_key_in_full() -> None:
-    backend = _make_backend({**SETTINGS, "budget_duration": "30d"})
+    backend = _make_backend()
     backend.litellm_client.list_keys.return_value = [
         _key(f"{RID}-1", "h1"),
         _key(f"{RID}-2", "h2"),
@@ -689,7 +728,7 @@ def test_limits_are_mirrored_onto_every_key_in_full() -> None:
         "max_budget": 40,
         "tpm_limit": 900,
         "rpm_limit": 60,
-        "budget_duration": "30d",
+        "budget_duration": "1mo",
         "metadata": {"waldur_resource_limits": {"token_cost": 40, "tpm": 900, "rpm": 60}},
     }
     # Each key carries the resource's whole budget: the keys are alternatives for one

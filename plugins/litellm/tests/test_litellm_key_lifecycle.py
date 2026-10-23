@@ -228,6 +228,58 @@ def test_resuming_a_key_the_proxy_lost_fails() -> None:
         backend.resume_resource_key(f"{RID}-1", RID)
 
 
+# --- the month's budget reset --------------------------------------------------
+
+
+def _carrying_a_budget(alias: str, token: str, **fields: object) -> dict:
+    """A key that already carries a $20 budget resetting monthly."""
+    return _key(alias, token, max_budget=20, budget_duration="1mo", **fields)
+
+
+@pytest.mark.parametrize("command", ["resume_resource_key", "update_resource_key"])
+def test_resume_and_update_leave_the_months_reset_alone(command: str) -> None:
+    # Naming budget_duration in a /key/update moves the proxy's budget_reset_at to a
+    # month from now and keeps the spend. Resumed at 00:02 on the 1st, before the
+    # proxy's reset job has run, the key would keep last month's spend all month.
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = [
+        _carrying_a_budget(f"{RID}-1", "h1", blocked=True, metadata={META_KEY_PAUSED: True})
+    ]
+
+    getattr(backend, command)(
+        f"{RID}-1", RID, limits={"token_cost": 20}, allowed_models=[ALL_MODELS]
+    )
+
+    body = _update_for(backend, "h1")
+    assert body["max_budget"] == 20
+    assert "budget_duration" not in body
+
+
+def test_rotation_leaves_the_months_reset_alone() -> None:
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = [_carrying_a_budget(f"{RID}-1", "h1")]
+    backend.litellm_client.regenerate_key.return_value = "sk-rotated"
+
+    backend.rotate_resource_key(
+        f"{RID}-1", RID, limits={"token_cost": 20}, allowed_models=["gpt-4o"]
+    )
+
+    body = _update_for(backend, "h1")
+    assert body["max_budget"] == 20
+    assert "budget_duration" not in body
+
+
+def test_a_key_given_its_first_budget_gets_the_monthly_reset() -> None:
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = [_self_paused(f"{RID}-1", "h1")]
+
+    backend.resume_resource_key(
+        f"{RID}-1", RID, limits={"token_cost": 20}, allowed_models=[ALL_MODELS]
+    )
+
+    assert _update_for(backend, "h1")["budget_duration"] == "1mo"
+
+
 # --- delete -------------------------------------------------------------------
 
 
