@@ -794,9 +794,9 @@ def test_a_chat_failure_does_not_fail_the_rotation() -> None:
 def _chat(
     email: str, spend: float, *, alias: Optional[str] = None, date: Optional[str] = None
 ) -> dict:
-    """One per-person usage row, as ``get_user_usage_rows`` returns it."""
+    """One per-person usage row, as ``get_user_usage_rows`` returns it: today's by default."""
     return {
-        "date": date,
+        "date": date or datetime.datetime.now(tz=datetime.timezone.utc).date().isoformat(),
         "user_id": email,
         "key_alias": alias,
         "input_tokens": 10,
@@ -827,22 +827,27 @@ def test_the_holders_chat_comes_off_the_keys_budget() -> None:
     assert metadata[META_HOLDER_CHAT] == 3.0
 
 
+def _days_ago(days: int) -> str:
+    today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+    return (today - datetime.timedelta(days=days)).isoformat()
+
+
 def _moved_here(email: str, key: str, moved_on: str) -> dict:
     """A holder whose address belonged to resource ``other`` until ``moved_on``."""
     member = _member(email, key=key)
-    periods = ownership.release(ownership.claim([], "other", "2026-10-01"), "other", moved_on)
+    periods = ownership.release(ownership.claim([], "other", _days_ago(30)), "other", moved_on)
     periods = ownership.claim(periods, RID, moved_on)
     member["metadata"] = ownership.stamp(member["metadata"], periods)
     return member
 
 
 def test_chat_from_before_the_holder_moved_here_stays_on_the_keys_budget() -> None:
-    # The report bills Oct 1 to the resource Ada left, so Waldur shows the key at 0.
-    # Taking it off here would refuse the key at $5 with nothing in Waldur saying why.
+    # The report bills the day of the move to the resource Ada left, so Waldur shows the
+    # key at 0. Taking it off here would refuse the key with nothing in Waldur saying why.
     backend = _make_backend(MONTHLY)
-    backend.litellm_client.list_users.return_value = [_moved_here(ADA, f"{RID}-1", "2026-10-22")]
+    backend.litellm_client.list_users.return_value = [_moved_here(ADA, f"{RID}-1", _days_ago(0))]
     backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
-    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 5.0, date="2026-10-01")]
+    backend.usage_client.get_user_usage_rows.return_value = [_chat(ADA, 5.0)]
 
     backend.set_resource_limits(RID, {"token_cost": 10})
 
@@ -853,13 +858,13 @@ def test_chat_from_before_the_holder_moved_here_stays_on_the_keys_budget() -> No
 
 def test_only_chat_from_the_days_the_holder_was_here_comes_off() -> None:
     backend = _make_backend(MONTHLY)
-    backend.litellm_client.list_users.return_value = [_moved_here(ADA, f"{RID}-1", "2026-10-22")]
+    backend.litellm_client.list_users.return_value = [_moved_here(ADA, f"{RID}-1", _days_ago(1))]
     backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
     backend.usage_client.get_user_usage_rows.return_value = [
-        _chat(ADA, 5.0, date="2026-10-01"),
+        _chat(ADA, 5.0, date=_days_ago(2)),
         # The day of the move stays with the resource left, as in the report.
-        _chat(ADA, 1.0, date="2026-10-22"),
-        _chat(ADA, 2.0, date="2026-10-23"),
+        _chat(ADA, 1.0, date=_days_ago(1)),
+        _chat(ADA, 2.0),
     ]
 
     backend.set_resource_limits(RID, {"token_cost": 10})
@@ -1070,20 +1075,23 @@ def test_chat_is_read_whatever_budget_duration_says(duration: Optional[str]) -> 
     [
         (datetime.datetime(2026, 10, 31, 23, 59, tzinfo=datetime.timezone.utc),
          ("2026-10-01", "2026-10-31")),
+        # A Sunday: the week's window reaches back to Monday, in October.
         (datetime.datetime(2026, 11, 1, 0, 0, 30, tzinfo=datetime.timezone.utc),
-         ("2026-11-01", "2026-11-01")),
+         ("2026-10-26", "2026-11-01")),
     ],
 )
 def test_the_chat_read_is_this_utc_months(now: datetime.datetime, period: tuple) -> None:
     # The proxy resets a monthly budget on the 1st at 00:00 UTC, so the chat taken off
     # it is the UTC month's: on an agent east of UTC, a local date would read the new
-    # month for hours while the proxy still counts the old one.
+    # month for hours while the proxy still counts the old one. The read starts at the
+    # month or the week, whichever is earlier, for the weekly window.
     backend = _make_backend(MONTHLY)
     backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
     backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
 
     with mock.patch("waldur_site_agent_litellm.backend.datetime") as clock:
         clock.timezone.utc = datetime.timezone.utc
+        clock.timedelta = datetime.timedelta
         clock.datetime.now.return_value = now
         backend.set_resource_limits(RID, {"token_cost": 10})
 
@@ -1102,6 +1110,7 @@ def test_a_new_month_reads_the_chat_again() -> None:
 
     with mock.patch("waldur_site_agent_litellm.backend.datetime") as clock:
         clock.timezone.utc = datetime.timezone.utc
+        clock.timedelta = datetime.timedelta
         clock.datetime.now.side_effect = times
         backend.set_resource_limits(RID, {"token_cost": 10})
         backend.set_resource_limits(RID, {"token_cost": 10})
@@ -1109,7 +1118,7 @@ def test_a_new_month_reads_the_chat_again() -> None:
     # Within the cache's lifetime, but a cached October is not November's chat.
     assert [call.args for call in backend.usage_client.get_user_usage_rows.call_args_list] == [
         ("2026-10-01", "2026-10-31"),
-        ("2026-11-01", "2026-11-01"),
+        ("2026-10-26", "2026-11-01"),
     ]
 
 

@@ -238,6 +238,7 @@ backend needs custom behavior.
 | `evaluate_pending_order` | Returns `ACCEPT` | Custom approval logic for pending orders (see below) |
 | `setup_target_event_subscriptions` | Returns `[]` | STOMP subscriptions to target systems |
 | `get_usage_report_for_period` | Returns `{}` | Historical usage queries for past billing periods |
+| `get_daily_usage_report_for_period` | Returns `{}` | A month's usage per UTC day (see `supports_daily_usage`) |
 | `has_prepaid_components` | Returns `False` | Enable duration-aware limit calculation for prepaid billing |
 | `sync_resource_end_date` | No-op | Synchronise `end_date` between source and target Waldur instances |
 | `sync_project_end_date` | No-op | Synchronise the project's `end_date` (receives the pre-fetched source project) |
@@ -673,6 +674,13 @@ key the backend already accepts.
 | `supports_resource_api_keys` | `generate_resource_keys` at provisioning, and `rotate_resource_key` |
 | `supports_resource_api_key_lifecycle` | Single keys: `mint_`, `pause_`, `resume_`, `delete_`, `update_resource_key` |
 | `supports_resource_api_key_usage` | Reporting backend: `get_resource_key_usage_report` |
+| `supports_spending_limit_periods` | The per-key methods also take `spending_limits`, `{component: {period: amount}}` |
+
+`supports_daily_usage` on a reporting backend means it reports usage per UTC day:
+`get_daily_usage_report_for_period`, and `get_resource_key_daily_usage_report` per key. A
+Waldur with spending limits then gets usage-based components as `daily_usages`, every day of
+the month so far with zeros filled in, which it needs to check day and week limits. A Waldur
+without them gets month totals as before.
 
 Each per-key method changes the backend and returns. The core then sends
 Waldur the acknowledgement for that command: `set_key`, `set_paused`,

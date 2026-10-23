@@ -219,7 +219,8 @@ class LiteLLMUsageClient:
     def get_usage_rows(self, start_date: str, end_date: str) -> list:
         """Return one usage row per (day, key) in the inclusive ``YYYY-MM-DD`` range.
 
-        Each row is ``{"key_alias", "input_tokens", "output_tokens", "token_cost"}``.
+        Each row is ``{"date", "key_alias", "input_tokens", "output_tokens",
+        "token_cost"}``, ``date`` being the proxy's UTC day the row was bucketed under.
         Rows are *not* aggregated here — a key appears once per day it was used, and
         the caller sums them.
 
@@ -230,11 +231,12 @@ class LiteLLMUsageClient:
         """
         rows: list = []
         for result in self._walk_results(start_date, end_date):
+            date = str(result.get("date") or "")[:10]
             api_keys = (result.get("breakdown") or {}).get("api_keys") or {}
             for record in api_keys.values():
                 row = self._to_row(record)
                 if row is not None:
-                    rows.append(row)
+                    rows.append({"date": date, **row})
         return rows
 
     @staticmethod

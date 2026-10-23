@@ -58,7 +58,7 @@ from waldur_api_client.models.resource_field_enum import ResourceFieldEnum
 from waldur_api_client.types import UNSET, Unset
 
 from waldur_site_agent.backend import UNASSIGNED_USAGE_SUFFIX, logger
-from waldur_site_agent.common import structures, utils
+from waldur_site_agent.common import spending_limits, structures, utils
 from waldur_site_agent.common.healthz import touch_heartbeat
 
 # The command vocabulary, mirroring mastermind's ResourceApiKeyActions.
@@ -119,6 +119,9 @@ class ApiKeyCommand:
     client_id: str = ""
     limits: Optional[dict] = None
     allowed_models: Optional[list] = field(default=None)
+    # Per period, ``{component: {period: amount}}``; None from a Waldur whose keys
+    # have only the month limits in ``limits``, or for a key with no limits.
+    spending_limits: Optional[dict] = None
 
     @classmethod
     def from_message(cls, message: dict) -> ApiKeyCommand:
@@ -131,6 +134,7 @@ class ApiKeyCommand:
             client_id=message.get("client_id") or "",
             limits=message.get("limits"),
             allowed_models=message.get("allowed_models"),
+            spending_limits=spending_limits.key_spending_limits(message.get("spending_limits")),
         )
 
     @classmethod
@@ -144,7 +148,22 @@ class ApiKeyCommand:
             client_id=_value(row.client_id) or "",
             limits=row.limits.additional_properties if row.limits else None,
             allowed_models=_effective_models(row),
+            spending_limits=spending_limits.key_spending_limits(
+                spending_limits.generated_field(row, "spending_limits")
+            ),
         )
+
+
+def _key_settings(backend, command: ApiKeyCommand) -> dict:  # noqa: ANN001
+    """The settings a create, resume or update hands the backend.
+
+    ``spending_limits`` only to a backend that takes limits per period: the others
+    keep the signature they were written against.
+    """
+    settings: dict = {"limits": command.limits, "allowed_models": command.allowed_models}
+    if getattr(backend, "supports_spending_limit_periods", False) is True:
+        settings["spending_limits"] = command.spending_limits
+    return settings
 
 
 def _value(field: Any) -> Any:  # noqa: ANN401 - any optional field of a generated model
@@ -231,6 +250,10 @@ def _read_resource(waldur_rest_client: AuthenticatedClient, command: ApiKeyComma
                 # The resource's share of a new key's limits, for a resource with no
                 # keys yet to read them back from.
                 ResourceFieldEnum.LIMITS,
+                # And its day/week/month windows, for the same reason: without them a
+                # first key would serve past the resource's day limit until the next
+                # membership sync stamped it.
+                *spending_limits.resource_fields(),
                 # For the backend's assignee hook, after a key is created.
                 ResourceFieldEnum.UUID,
                 ResourceFieldEnum.BACKEND_ID,
@@ -257,6 +280,21 @@ def _resource_limits(resource: object) -> Optional[dict]:
     return dict(data) if isinstance(data, dict) else None
 
 
+def _resource_key_limits(backend, resource: object) -> dict:  # noqa: ANN001
+    """The resource's limits a mint or rotation hands the backend.
+
+    ``resource_spending_limits`` only to a backend that takes limits per period, as
+    ``spending_limits`` in ``_key_settings``: the others keep the signature they were
+    written against. None in either means the read did not carry it.
+    """
+    settings: dict = {"resource_limits": _resource_limits(resource)}
+    if getattr(backend, "supports_spending_limit_periods", False) is True:
+        settings["resource_spending_limits"] = spending_limits.resource_spending_limits(
+            resource
+        )
+    return settings
+
+
 def _create(
     waldur_rest_client: AuthenticatedClient,
     backend,  # noqa: ANN001 - BaseBackend would be a circular import
@@ -274,9 +312,8 @@ def _create(
     key = backend.mint_resource_key(
         command.resource_backend_id,
         reserved,
-        limits=command.limits,
-        allowed_models=command.allowed_models,
-        resource_limits=_resource_limits(resource),
+        **_resource_key_limits(backend, resource),
+        **_key_settings(backend, command),
     )
     try:
         marketplace_resource_api_keys_set_key.sync(
@@ -362,10 +399,7 @@ def _run(
             backend, _read_resource(waldur_rest_client, command), command.resource_backend_id
         )
         backend.resume_resource_key(
-            command.client_id,
-            command.resource_backend_id,
-            limits=command.limits,
-            allowed_models=command.allowed_models,
+            command.client_id, command.resource_backend_id, **_key_settings(backend, command)
         )
         _acknowledge(marketplace_resource_api_keys_set_ok, waldur_rest_client, command)
     elif action == UPDATE:
@@ -375,10 +409,7 @@ def _run(
             backend, _read_resource(waldur_rest_client, command), command.resource_backend_id
         )
         backend.update_resource_key(
-            command.client_id,
-            command.resource_backend_id,
-            limits=command.limits,
-            allowed_models=command.allowed_models,
+            command.client_id, command.resource_backend_id, **_key_settings(backend, command)
         )
         _acknowledge(marketplace_resource_api_keys_set_ok, waldur_rest_client, command)
     elif action == DELETE:
@@ -425,13 +456,17 @@ def _rotate(
             error_message, _ = utils.format_waldur_error_details(exc, expose_backend_error_details)
             _set_erred(waldur_rest_client, command.api_key_uuid, error_message)
             return
-        key_settings = _rotation_settings(waldur_rest_client, command)
-        resource_limits = _resource_limits(resource)
-        if resource_limits is not None:
-            # The resource's limits from the read above, as on a create: a backend
-            # minting back a key it lost has no sibling to read them from when that
-            # key was the resource's only one.
-            key_settings = {**(key_settings or {}), "resource_limits": resource_limits}
+        key_settings = _rotation_settings(waldur_rest_client, backend, command)
+        resource_settings = {
+            name: value
+            for name, value in _resource_key_limits(backend, resource).items()
+            if value is not None
+        }
+        if resource_settings:
+            # The resource's limits and windows from the read above, as on a create: a
+            # backend minting back a key it lost has no sibling to read them from when
+            # that key was the resource's only one.
+            key_settings = {**(key_settings or {}), **resource_settings}
     else:
         # A backend without the per-key lifecycle has no settings of its own per key,
         # and keeps the rotate signature it always had.
@@ -453,7 +488,9 @@ def _rotate(
 
 
 def _rotation_settings(
-    waldur_rest_client: AuthenticatedClient, command: ApiKeyCommand
+    waldur_rest_client: AuthenticatedClient,
+    backend,  # noqa: ANN001
+    command: ApiKeyCommand,
 ) -> Optional[dict]:
     """The key's own limits and model list, applied to the rotated key.
 
@@ -465,7 +502,9 @@ def _rotation_settings(
     so a backend can tell settings Waldur gave (``{}`` for no limits of its own) from
     none at all. None when the key cannot be read: the rotation still goes ahead,
     since a key the backend still holds keeps its own settings, and a backend minting
-    a lost one has to fail closed instead.
+    a lost one has to fail closed instead. A backend that takes limits per period gets
+    ``spending_limits`` too (``_key_settings``), so a rotation keeps the key's day and
+    week limits.
     """
     if command.limits is None and command.allowed_models is None:
         try:
@@ -481,7 +520,7 @@ def _rotation_settings(
             )
             return None
         command = ApiKeyCommand.from_listing(row, ROTATE)
-    return {"limits": command.limits or {}, "allowed_models": command.allowed_models}
+    return {**_key_settings(backend, command), "limits": command.limits or {}}
 
 
 def execute_api_key_command(
@@ -804,11 +843,30 @@ def report_api_key_usages(
     their limit. The backend reports the current UTC month, so a collection that
     straddles the turn of a month cannot say which month it covers and is dropped;
     the next round reports the new month.
+
+    Where the backend reports per day and Waldur takes a key's usage per day, every
+    day of the month so far goes out (``daily_usages``), so that day and week limits
+    hold; Waldur derives the month from them. The month figures still decide whether
+    a key is reported at all.
     """
     period = _current_period()
-    report = backend.get_resource_key_usage_report([resource_backend_id]).get(
-        resource_backend_id, {}
-    )
+    daily: Optional[dict] = None
+    if getattr(backend, "supports_daily_usage", False) is True:
+        # The month figures are the sum of the days, so one collection gives both.
+        daily = backend.get_resource_key_daily_usage_report([resource_backend_id]).get(
+            resource_backend_id, {}
+        )
+        report = (
+            None
+            if daily is None
+            else {
+                client_id: spending_limits.month_totals(days) for client_id, days in daily.items()
+            }
+        )
+    else:
+        report = backend.get_resource_key_usage_report([resource_backend_id]).get(
+            resource_backend_id, {}
+        )
     if _current_period() != period:
         logger.info(
             "The month turned while collecting per-key usage of %s; reporting it next round",
@@ -835,19 +893,34 @@ def report_api_key_usages(
         }
         # Waldur keeps one month per key: figures it holds for an earlier month say
         # nothing about this one, so the first report of a month always goes out, even
-        # when it repeats them (typically zero).
+        # when it repeats them (typically zero). Reported per day, Waldur never lowers a
+        # key's month figure within the month, so a key whose usage moved elsewhere is
+        # sent again every round until the month turns; the days then stay right.
         current = key.current_usages.additional_properties if key.current_usages else {}
         if _value(key.usage_period) == period and all(
             float(current.get(component, -1)) == value for component, value in usages.items()
         ):
             continue
         body_usages = ResourceApiKeyUsageRequestUsages()
-        body_usages.additional_properties = usages
+        body = ResourceApiKeyUsageRequest(usages=body_usages, billing_period=period)
+        if daily is not None and spending_limits.key_accepts_daily_usage(key):
+            # No month totals beside the days, which Waldur would refuse; a client that
+            # predates daily_usages sends usages all the same, so it goes out empty.
+            days = spending_limits.fill_days(
+                daily.get(client_id, {}),
+                period.year,
+                period.month,
+                set(component_types),
+                spending_limits.utc_today(),
+            )
+            body.additional_properties["daily_usages"] = spending_limits.daily_usage_items(days)
+        else:
+            body_usages.additional_properties = usages
         try:
             marketplace_resource_api_keys_report_usage.sync(
                 uuid=key.uuid,
                 client=waldur_rest_client,
-                body=ResourceApiKeyUsageRequest(usages=body_usages, billing_period=period),
+                body=body,
             )
         except Exception as exc:
             logger.warning("Failed to report the usage of API key %s: %s", client_id, exc)

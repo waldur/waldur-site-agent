@@ -180,6 +180,7 @@ from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import (
     agent_identity_management,
     resource_api_keys,
+    spending_limits,
     structures,
     utils,
 )
@@ -1969,6 +1970,8 @@ def fetch_offering_resources(
             ResourceFieldEnum.END_DATE,
             ResourceFieldEnum.END_DATE_UPDATED_AT,
             ResourceFieldEnum.PROJECT_END_DATE,
+            # For backends that mirror per-period spending limits onto the backend.
+            *spending_limits.resource_fields(),
         ],
     }
 
@@ -4025,6 +4028,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             uuid=self.offering.uuid,
             field=[ProviderOfferingDetailsFieldEnum.COMPONENTS],
         )
+        self._warn_without_api_key_daily_usage(waldur_offering)
         waldur_resources = marketplace_provider_resources_list.sync_all(
             client=self.waldur_rest_client,
             offering_uuid=[self.offering.uuid],
@@ -4156,6 +4160,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_components: list[OfferingComponent],
         report_date: Optional[datetime.datetime] = None,
         billing_period_start: Optional[datetime.date] = None,
+        daily_usage: Optional[dict[str, dict[str, float]]] = None,
     ) -> list[str]:
         """Reports total usage for a backend resource to Waldur.
 
@@ -4177,6 +4182,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             report_date: Datetime to use as the report date. Defaults to current time.
             billing_period_start: Date of the billing period start. Defaults to
                 first day of report_date's month.
+            daily_usage: The period's usage per UTC day, ``{date: {component: usage}}``,
+                when both the backend and Waldur take it per day. Usage-based components
+                in it are then reported per day (``daily_usages``) instead of as a month
+                total: Waldur derives their month from the days, and refuses a month total
+                beside them. The comparisons above still use the month totals.
 
         Returns:
             Component types omitted from ``set_usage`` because they decreased.
@@ -4342,14 +4352,35 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         # inventing a zero would be accurate. A later client release replaces
         # `recurring` with an explicit `missing_usage_policy` enum, where `none`
         # stays the intended value.
+        by_day: set[str] = set()
+        if daily_usage is not None:
+            # Only usage-based components take days, and only those the days cover:
+            # one the backend reported no days for keeps its month total.
+            by_day = (
+                spending_limits.usage_based_types(waldur_components)
+                & set(total_usage)
+                & {component for usages in daily_usage.values() for component in usages}
+            )
         usage_objects = [
             ComponentUsageItemRequest(type_=component, amount=f"{amount:.2f}")
             for component, amount in total_usage.items()
-            if component in component_types
+            if component in component_types and component not in by_day
         ]
         request_body = ComponentUsageCreateRequest(
             usages=usage_objects, resource=resource_uuid, date=report_date
         )
+        if by_day and daily_usage is not None:
+            days = spending_limits.fill_days(
+                daily_usage,
+                billing_period_start.year,
+                billing_period_start.month,
+                by_day,
+                spending_limits.utc_today(),
+            )
+            # Sent as extra JSON, which a client that predates the field still writes.
+            request_body.additional_properties["daily_usages"] = (
+                spending_limits.daily_usage_items(days)
+            )
         marketplace_component_usages_set_usage.sync_detailed(
             client=self.waldur_rest_client, body=request_body
         )
@@ -4573,10 +4604,17 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 # A past-period 400 is expected when the backend refuses to
                 # backfill usage-based components (their usage would create
                 # retroactive invoice items) — that is benign, skip the period.
+                # Reported per day, Waldur takes a past month's days from the
+                # service provider while that month's invoice can still change, and
+                # refuses them with the second message once it cannot.
                 # Any other 400 (e.g. components not present on the offering)
                 # is a real misconfiguration and must be surfaced, not masked.
                 response_text = e.content.decode(errors="ignore")
-                if "backfilling past billing periods" in response_text:
+                # The second is the same refusal for usage reported per day.
+                if (
+                    "backfilling past billing periods" in response_text
+                    or "Usage of a past month can only be reported" in response_text
+                ):
                     logger.info(
                         "Past period %04d-%02d skipped for resource %s: backend "
                         "does not allow backfilling usage-based components",
@@ -4617,6 +4655,34 @@ class OfferingReportProcessor(OfferingBaseProcessor):
 
         self._report_api_key_usages(waldur_resource, waldur_offering)
 
+    def _warn_without_api_key_daily_usage(self, waldur_offering: ProviderOfferingDetails) -> None:
+        """Say so when the backend reports per-key usage per day but the offering does not.
+
+        Waldur offers day and week limits on an offering's API keys only where its
+        ``api_key_daily_usage`` plugin option is on, since they are enforced against
+        usage per key per day; without it a key gets month limits alone. Nothing about
+        the report changes: this only tells the provider what turning it on would give.
+        Skipped for a Waldur that takes no usage per day, which has no such option, and
+        for an offering whose keys take no limits of their own (``api_key_limits`` off).
+        """
+        backend = self.resource_backend
+        if getattr(backend, "supports_daily_usage", False) is not True:
+            return
+        if getattr(backend, "supports_resource_api_key_usage", False) is not True:
+            return
+        if not spending_limits.accepts_daily_usage(waldur_offering.components):
+            return
+        plugin_options = getattr(self.waldur_offering, "plugin_options", None)
+        if spending_limits.generated_field(plugin_options, "api_key_limits") is False:
+            return
+        if spending_limits.generated_field(plugin_options, "api_key_daily_usage") is True:
+            return
+        logger.warning(
+            "Offering %s does not declare api_key_daily_usage, so Waldur offers only "
+            "monthly limits on its API keys; turn it on to offer day and week limits.",
+            self.offering.uuid,
+        )
+
     def _report_api_key_usages(
         self, waldur_resource: WaldurResource, waldur_offering: ProviderOfferingDetails
     ) -> None:
@@ -4648,6 +4714,27 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             logger.exception(
                 "Failed to report per-key usage for resource %s", waldur_resource.backend_id
             )
+
+    def _daily_usage(
+        self,
+        resource_backend_id: str,
+        waldur_offering: ProviderOfferingDetails,
+        year: int,
+        month: int,
+    ) -> Optional[dict[str, dict[str, float]]]:
+        """The period's usage per UTC day where the backend and Waldur both take it; else None.
+
+        Day and week spending limits are checked against it. A Waldur without per-day
+        usage keeps getting month totals, as before.
+        """
+        if getattr(self.resource_backend, "supports_daily_usage", False) is not True:
+            return None
+        if not spending_limits.accepts_daily_usage(waldur_offering.components):
+            return None
+        report = self.resource_backend.get_daily_usage_report_for_period(
+            [resource_backend_id], year, month
+        )
+        return report.get(resource_backend_id, {})
 
     def _process_resource_period(
         self,
@@ -4708,6 +4795,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             waldur_offering.components,
             report_date=report_date,
             billing_period_start=billing_period_start,
+            daily_usage=self._daily_usage(resource_backend_id, waldur_offering, year, month),
         )
 
         # Skip per-user usage if the dict is empty
