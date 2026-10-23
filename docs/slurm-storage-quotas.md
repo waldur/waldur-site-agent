@@ -9,9 +9,10 @@ normal agent operation:
   CephFS xattrs, XFS user quotas, or Lustre user quotas.
 - **Per-project directory + Lustre group/project quota**
   (`project_directory`) — runs in `order_process` mode during resource
-  creation (`_pre_create_resource`). Creates a shared project directory,
-  applies ownership / permissions / ACLs, and optionally sets a Lustre
-  *project* quota keyed on the LDAP group GID.
+  creation (`_on_backend_resource_created`). Creates a shared project
+  directory, applies ownership / permissions / ACLs, and optionally sets a
+  Lustre *project* quota keyed on the LDAP group GID (plus an optional
+  offset).
 
 The two are independent — you can enable either, both, or neither. Failures
 in either are logged but do not abort agent operation.
@@ -174,13 +175,14 @@ backend_settings:
       block_hardlimit: 6442450944
       inode_softlimit: 5000000
       inode_hardlimit: 7000000
+      project_id_offset: 0             # Lustre project ID = LDAP GID + offset
 ```
 
 ### What the agent does on resource creation
 
-When `project_directory.enabled: true`, `_pre_create_resource` calls
-`_setup_project_directory(resource_backend_id)` after the SLURM account
-hierarchy is created. It executes (in order):
+When `project_directory.enabled: true`, `_on_backend_resource_created` calls
+`_setup_project_directory(resource_backend_id)` once SLURM has accepted the
+new account, after the LDAP project group is created. It executes (in order):
 
 ```bash
 mkdir -p   <base_path>/<resource_backend_id>
@@ -216,20 +218,48 @@ and that the project group exists in LDAP before the resource is created.
 If the prerequisites are met, the agent runs:
 
 ```bash
-lfs setquota -p <gid> [-b <block_softlimit>] [-B <block_hardlimit>] \
-                      [-i <inode_softlimit>] [-I <inode_hardlimit>] <mount_point>
-lfs project -p <gid> -r -s <project_path>
+lfs setquota -p <project_id> [-b <block_softlimit>] [-B <block_hardlimit>] \
+                             [-i <inode_softlimit>] [-I <inode_hardlimit>] <mount_point>
+lfs project -p <project_id> -r -s <project_path>
 ```
 
-Each `-b/-B/-i/-I` flag is included only if the corresponding limit is set
-in the configuration. `mount_point` defaults to `/valhalla`.
+where `<project_id>` is the group's GID plus `project_id_offset` (default
+`0`, so the GID itself). Each `-b/-B/-i/-I` flag is included only if the
+corresponding limit is set in the configuration. `mount_point` defaults to
+`/valhalla`.
 
 Note that this is a **project quota** (`-p`), not a group or user quota. The
-GID coming from LDAP is reused as the Lustre project ID, and the directory
-tree is tagged with that project ID via `lfs project -r -s`.
+quota is set on the project ID, and the directory tree is tagged with the
+same project ID via `lfs project -r -s` (`-s` makes new files and
+subdirectories inherit it).
 
 Unlike subsystem A, no verification step is run. Failures from
 `lfs setquota` are logged but do not abort resource creation.
+
+### Choosing a project ID offset
+
+Lustre project IDs are a namespace of their own, but every tree tagged with
+the same project ID shares one quota. If the site also tags other trees with
+project IDs — typically home directories tagged with the owner's UID — and
+UIDs and GIDs overlap, a project directory can land on the ID of somebody's
+home directory. Set `project_id_offset` to move the project directories into
+a range nothing else uses; for example, with an offset of `1000000000` the
+group with GID `10136` gets project ID `1000010136`.
+
+- Project IDs are 32-bit: the largest usable one is `4294967294`
+  (`4294967295` is reserved and rejected by `lfs` and the kernel). The agent
+  refuses to start when the offset itself is negative, not an integer, or
+  above that limit, and skips the quota (logging an error) for a group whose
+  GID plus the offset exceeds it.
+- The offset applies only to project directories created after it is set:
+  the agent never re-tags existing directories. To move an existing one, tag
+  it and set its quota under the new ID, then remove the old ID's limits:
+
+  ```bash
+  lfs project  -p <new_id> -r -s <project_path>
+  lfs setquota -p <new_id> -b <soft> -B <hard> [-i <soft> -I <hard>] <mount_point>
+  lfs setquota -p <old_id> --delete <mount_point>
+  ```
 
 ## Examples
 
@@ -256,7 +286,7 @@ A complete reference example showing both subsystems is in
   implementation choice — the quota requires the GID and the GID lookup goes
   through the LDAP client.
 - **No verification** is run after `lfs setquota -p` (the homedir-quota path
-  *does* verify). Operators should spot-check with `lfs quota -p <gid>
+  *does* verify). Operators should spot-check with `lfs quota -p <project_id>
   <mount>` after onboarding the first project.
 
 ## Operator troubleshooting
@@ -275,7 +305,7 @@ lfs quota -u alice /home
 Verify a project directory's Lustre quota / project ID:
 
 ```bash
-lfs quota   -p <gid>     /valhalla
+lfs quota   -p <project_id> /valhalla    # project_id = GID + project_id_offset
 lfs project -d /valhalla/projects/<resource_backend_id>
 ```
 

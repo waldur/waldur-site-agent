@@ -23,7 +23,11 @@ from waldur_site_agent.common.component_mapping import ComponentMapper
 from waldur_site_agent_slurm import utils
 from waldur_site_agent_slurm.client import SlurmClient
 from waldur_site_agent_slurm.interface import SlurmClientInterface
-from waldur_site_agent_slurm.schemas import ExecutionMode, UsageTresSource
+from waldur_site_agent_slurm.schemas import (
+    LUSTRE_MAX_PROJECT_ID,
+    ExecutionMode,
+    UsageTresSource,
+)
 
 # Accepted values for the ``default_account_policy`` backend setting. An
 # unrecognized value (e.g. a typo) must fail loudly at construction rather than
@@ -166,6 +170,7 @@ class SlurmBackend(backends.BaseBackend):
 
         # Optional project directory management
         self._project_dir_config = self.backend_settings.get("project_directory", {})
+        self._lustre_project_id_offset = self._validated_lustre_project_id_offset()
 
         # Account under which the top-tier account of the default hierarchy is created.
         # This is the real root of the SLURM account tree and is distinct from
@@ -1001,6 +1006,27 @@ class SlurmBackend(backends.BaseBackend):
 
     # ===== QOS AND FILESYSTEM MANAGEMENT =====
 
+    def _validated_lustre_project_id_offset(self) -> int:
+        """Return ``project_directory.lustre_quota.project_id_offset`` (default 0).
+
+        Schema validation only warns, so an unusable offset is refused here:
+        quietly falling back to the raw GID would tag project directories with
+        exactly the IDs the offset is meant to avoid.
+        """
+        lustre_config = (self._project_dir_config or {}).get("lustre_quota") or {}
+        offset = lustre_config.get("project_id_offset", 0)
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or not 0 <= offset <= LUSTRE_MAX_PROJECT_ID
+        ):
+            msg = (
+                "project_directory.lustre_quota.project_id_offset must be an integer "
+                f"between 0 and {LUSTRE_MAX_PROJECT_ID}, got {offset!r}"
+            )
+            raise BackendError(msg)
+        return offset
+
     def _validate_qos_management_runtime_flags(self) -> None:
         """Re-assert the QoS management runtime invariants.
 
@@ -1171,10 +1197,23 @@ class SlurmBackend(backends.BaseBackend):
         if lustre_config and self._ldap_client:
             gid = self._ldap_client.get_group_gid(group_name)
             if gid is not None:
-                self._set_lustre_quota(gid, project_path, lustre_config)
+                lustre_project_id = gid + self._lustre_project_id_offset
+                if lustre_project_id > LUSTRE_MAX_PROJECT_ID:
+                    logger.error(
+                        "Skipping Lustre quota for %s: GID %d + project_id_offset %d "
+                        "exceeds the largest Lustre project ID %d",
+                        project_path,
+                        gid,
+                        self._lustre_project_id_offset,
+                        LUSTRE_MAX_PROJECT_ID,
+                    )
+                    return
+                self._set_lustre_quota(lustre_project_id, gid, project_path, lustre_config)
 
-    def _set_lustre_quota(self, gid: int, project_path: str, config: dict) -> None:
-        """Set Lustre filesystem quota for a project."""
+    def _set_lustre_quota(
+        self, lustre_project_id: int, gid: int, project_path: str, config: dict
+    ) -> None:
+        """Set Lustre filesystem quota for a project and tag its directory tree."""
         mount_point = config.get("mount_point", "/valhalla")
         block_soft = config.get("block_softlimit")
         block_hard = config.get("block_hardlimit")
@@ -1182,7 +1221,7 @@ class SlurmBackend(backends.BaseBackend):
         inode_hard = config.get("inode_hardlimit")
 
         try:
-            quota_cmd = ["lfs", "setquota", "-p", str(gid)]
+            quota_cmd = ["lfs", "setquota", "-p", str(lustre_project_id)]
             if block_soft is not None:
                 quota_cmd.extend(["-b", str(block_soft)])
             if block_hard is not None:
@@ -1200,15 +1239,22 @@ class SlurmBackend(backends.BaseBackend):
                     "lfs",
                     "project",
                     "-p",
-                    str(gid),
+                    str(lustre_project_id),
                     "-r",
                     "-s",
                     project_path,
                 ]
             )
-            logger.info("Set Lustre quota for GID %d on %s", gid, mount_point)
+            logger.info(
+                "Set Lustre quota for project ID %d (GID %d) on %s",
+                lustre_project_id,
+                gid,
+                mount_point,
+            )
         except BackendError:
-            logger.exception("Failed to set Lustre quota for GID %d", gid)
+            logger.exception(
+                "Failed to set Lustre quota for project ID %d (GID %d)", lustre_project_id, gid
+            )
 
     def _use_grp_submit_jobs_lever(self) -> bool:
         """True when pause/downscale/restore must not overwrite account QoS.

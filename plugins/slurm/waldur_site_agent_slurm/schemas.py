@@ -17,6 +17,10 @@ from waldur_site_agent.common.plugin_schemas import (
     PluginComponentSchema,
 )
 
+# Lustre stores project IDs as u32, and both lfs and the kernel reject
+# 2**32 - 1 (INVALID_PROJID), so this is the largest usable project ID.
+LUSTRE_MAX_PROJECT_ID = 2**32 - 2
+
 
 class SlurmLimitType(Enum):
     """Enumeration of SLURM limit types for periodic limits."""
@@ -168,6 +172,17 @@ class LustreQuotaConfig(PluginBackendSettingsSchema):
     )
     inode_softlimit: Optional[int] = Field(default=None, description="Inode soft limit")
     inode_hardlimit: Optional[int] = Field(default=None, description="Inode hard limit")
+    project_id_offset: int = Field(
+        default=0,
+        ge=0,
+        le=LUSTRE_MAX_PROJECT_ID,
+        strict=True,
+        description=(
+            "Added to the project group's LDAP GID to form the Lustre project ID, "
+            "so project directories stay clear of project IDs the site assigns "
+            "elsewhere (e.g. home directories tagged by UID). Default 0 uses the GID."
+        ),
+    )
 
 
 class ProjectDirectoryConfig(PluginBackendSettingsSchema):
