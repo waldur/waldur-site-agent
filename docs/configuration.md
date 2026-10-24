@@ -46,7 +46,7 @@ Generated from the code by `scripts/generate_reference_docs.py`; each key has it
 section below.
 
 <!-- BEGIN GENERATED: global-settings -->
-<!-- pyml disable-num-lines 10 line-length -->
+<!-- pyml disable-num-lines 11 line-length -->
 | Key | Type | Required | Default | Description |
 |---|---|---|---|---|
 | [`sentry_dsn`](#sentry_dsn) | `str` | no | — | Sentry DSN for error reporting (URL) |
@@ -55,6 +55,7 @@ section below.
 | [`global_proxy`](#global_proxy) | `str` | no | `""` | Global proxy URL for API connections |
 | [`log_level`](#log_level) | `str` | no | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
 | [`reporting_periods`](#reporting_periods) | `int` | no | `2` | Number of billing periods to report (1=current, 2=current+previous) |
+| [`api_key_final_report_days`](#api_key_final_report_days) | `int` | no | `3` | Days into a month during which each API key's usage for the previous month is reported once more (0=off) |
 | [`expose_backend_error_details`](#expose_backend_error_details) | `bool` | no | `true` | If True (default), the agent forwards exception messages and tracebacks to Waldur error details when marking objects as ERRED (current behaviour). If False, only BackendError messages are exposed and tracebacks are kept in site-agent logs. |
 | [`log_shipping`](#log_shipping) | `LogShippingConfig` | no | see below | Configuration for shipping agent logs to Waldur |
 <!-- END GENERATED: global-settings -->
@@ -99,6 +100,18 @@ otherwise usage near a month boundary can be filed against the wrong billing per
 - **Description**: Number of billing periods `report` mode sends usage for, counting back from
   the current one: `1` reports only the current month, `2` also re-sends the previous month so late
   accounting data lands in the right period.
+
+### `api_key_final_report_days`
+
+- **Type**: Integer, 0–28
+- **Default**: `3`
+- **Description**: For a backend that reports usage per resource API key, the number of UTC days
+  into a month during which `report` mode also sends each key's usage for the previous month. The
+  current month's report stops at the agent's last round before midnight; this final report adds the
+  usage after it, which a total spending limit would otherwise never count. Waldur keeps the higher
+  of the figures it holds and the ones reported, so sending them on several rounds is harmless.
+  `0` turns it off. A Waldur that predates closed-month key reports refuses them; the agent logs
+  that and carries on.
 
 ### `expose_backend_error_details`
 

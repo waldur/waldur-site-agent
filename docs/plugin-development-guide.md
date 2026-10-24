@@ -238,12 +238,14 @@ backend needs custom behavior.
 | `evaluate_pending_order` | Returns `ACCEPT` | Custom approval logic for pending orders (see below) |
 | `setup_target_event_subscriptions` | Returns `[]` | STOMP subscriptions to target systems |
 | `get_usage_report_for_period` | Returns `{}` | Historical usage queries for past billing periods |
+| `get_daily_usage_report_for_period` | Returns `{}` | A month's usage per UTC day (see `supports_daily_usage`) |
 | `has_prepaid_components` | Returns `False` | Enable duration-aware limit calculation for prepaid billing |
 | `sync_resource_end_date` | No-op | Synchronise `end_date` between source and target Waldur instances |
 | `sync_project_end_date` | No-op | Synchronise the project's `end_date` (receives the pre-fetched source project) |
 | `sync_resource_limits` | Pulls backend limits into Waldur | Change the limits source of truth |
 | `sync_resource_effective_id` | No-op | Reflect downstream `backend_id` as `effective_id` on the source resource |
 | `sync_resource_project` | No-op | Push project metadata to backends that manage their own projects |
+| `sync_resource_key_assignees` | No-op | Act on API key assignees (see `requires_resource_key_assignees`) |
 | `update_user_attributes` | No-op | Forward `OFFERING_USER` attribute updates to the backend |
 | `sync_offering_user_usernames` | Returns `False` | Pull backend-assigned usernames into Waldur (federation) |
 | `create_user_homedirs` | Provided | Customise homedir quota or path logic (see `supports_user_homedirs`) |
@@ -672,6 +674,13 @@ key the backend already accepts.
 | `supports_resource_api_keys` | `generate_resource_keys` at provisioning, and `rotate_resource_key` |
 | `supports_resource_api_key_lifecycle` | Single keys: `mint_`, `pause_`, `resume_`, `delete_`, `update_resource_key` |
 | `supports_resource_api_key_usage` | Reporting backend: `get_resource_key_usage_report` |
+| `supports_spending_limit_periods` | The per-key methods also take `spending_limits`, `{component: {period: amount}}` |
+
+`supports_daily_usage` on a reporting backend means it reports usage per UTC day:
+`get_daily_usage_report_for_period`, and `get_resource_key_daily_usage_report` per key. A
+Waldur with spending limits then gets usage-based components as `daily_usages`, every day of
+the month so far with zeros filled in, which it needs to check day and week limits. A Waldur
+without them gets month totals as before.
 
 Each per-key method changes the backend and returns. The core then sends
 Waldur the acknowledgement for that command: `set_key`, `set_paused`,
@@ -697,6 +706,22 @@ command left pending for 30 minutes, in case the message was lost.
   cannot apply, such as a model allowlist on a gateway with no per-key model
   rule, it must raise. Accepting the setting silently would show the key in
   Waldur as restricted when it is not.
+- **Three model lists.** `allowed_models` is `["*"]` for every model, `[]` for
+  no model, or a list of names; `None`, which a Waldur older than `["*"]`
+  sends, also means every model. An empty list is a restriction like any
+  other: a backend without per-key model rules refuses it too, or Waldur
+  would show "No models" for a key that can call all of them. The list is the
+  key's effective one: Waldur narrows the key's own list by its resource's
+  model selection, in commands and in the listing's `effective_models`, which
+  is what the reconciliation sweep replays.
+
+Before `mint_resource_key`, `rotate_resource_key`, `resume_resource_key` and
+`update_resource_key`, the core reads the resource from Waldur and calls
+`pause_resource`, `downscale_resource` or `restore_resource` on the same
+backend instance, so a backend that cannot tell its resource's pause from its
+keys alone (all of them paused on their own, or none left) still knows it.
+Those three methods therefore run once per such command, and must be cheap
+and safe to repeat.
 
 A backend without `supports_resource_api_key_lifecycle` keeps generation and
 rotation only. The core answers any other command for its keys with
@@ -709,6 +734,15 @@ option `enable_api_key_provisioning`. The report maps each resource to
 resource total. Map a resource to `None` when its usage cannot be attributed
 to keys; the core then skips per-key reporting for that resource. Waldur
 pauses a key once its reported usage reaches the key's limit.
+
+At provisioning, the core asks `generate_resource_keys` for two keys, so one
+keeps working while the other is rotated. It asks for none when the offering
+sets `enable_api_key_provisioning` and the backend declares
+`supports_resource_api_key_lifecycle`: users then request keys one at a time
+through `mint_resource_key`. `generate_resource_keys` must therefore accept
+`count=0`. `prune_unknown_resource_keys` runs before it either way. A restored
+resource follows the same rule, and existing resources are never topped up or
+trimmed when the option changes.
 
 ### `supports_user_homedirs: bool = False`
 
@@ -808,6 +842,21 @@ Set to `True` for backends that mirror project metadata. Membership sync
 then pre-fetches the source project from Waldur and passes it to
 `sync_resource_project` and `sync_project_end_date`, so the plugin never
 calls Waldur for it.
+
+### `requires_resource_key_assignees: bool = False`
+
+Set to `True` for backends that need to know who each of a resource's API
+keys is assigned to, such as a chat surface that follows the person's key.
+On an offering with `enable_api_key_provisioning`, the core then calls
+`sync_resource_key_assignees(waldur_resource, assignments)` on every
+membership sync of the resource (except one restricted for its members) and
+right after a key is created. Keys not yet minted are left out.
+`assignments` maps the client_id of every key not deleted to its assignee's
+offering username (the name membership sync adds them under), or to `None`
+when the key is assigned to nobody, or to someone with no actionable offering
+user or no username yet. Waldur
+sends no command when a key is reassigned, so the membership sync is what
+carries a reassignment to the backend.
 
 ### `shared_project_membership: bool = False`
 

@@ -4,8 +4,8 @@ The fastest path from a fresh install to a running, verified agent. This page de
 options and edge cases — it links out to the full [Configuration Reference](configuration.md) and
 [Deployment Guide](deployment.md) for everything beyond a first working setup. Written around the
 SLURM backend, since it's the most common first deployment; other backends follow the same shape
-with a different `backend_type` and `backend_settings` block (see your plugin's README under
-[`plugins/`](../plugins/)).
+with a different `backend_type` and `backend_settings` block (see your plugin's README, linked
+from the [plugin table](../README.md#plugins)).
 
 Budget about 15-20 minutes if the offering side is already set up in Waldur.
 
