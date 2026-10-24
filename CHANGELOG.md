@@ -1,8 +1,9 @@
 # Changelog
 
-## 1.0.8-rc.11 - 2026-10-21
+## 1.0.8-rc.12 - 2026-10-24
 
 - **SLURM**: Report the same usage in CLI and REST mode, and keep limits and associations intact against a real slurmrestd (#77, #76).
+- **SLURM**: Add a configurable offset for Lustre project quota IDs, and report unknown Lustre quota keys (gh-24).
 - **SLURM**: Move the account's DefaultQOS along with the QoS swap (#16).
 - **SLURM**: Name LDAP project groups after the resolved backend ID (gh-23).
 - **SLURM**: Build the account diagnostics client from the offering's backend settings, and read SDK limits correctly (#65, #60).
@@ -12,10 +13,13 @@
 - **LDAP roles**: Add a new ldap-roles backend and extract the LDAP client into a shared `ldap-client` package.
 - **Azure**: Move the Azure plugin into the agent workspace (#8).
 - **Rancher KC CRD**: Import existing Rancher project and cluster access into Waldur, match Keycloak members by civil code, and send the organization and project slug to the operator (#70, waldur/waldur-mastermind#702).
-- **Envoy AI Gateway**: Manage resource API keys one by one: request, assign, cap, pause, resume and delete (#30).
-- **LiteLLM**: Add Open WebUI integration and an option to derive a key's backend_id from the resource UUID instead of its slug (#15, #22).
+- **Envoy AI Gateway**: Manage resource API keys one by one: request, assign, cap, pause, resume and delete. Commands that would give a key any model list other than All models are refused (#30, waldur/waldur-mastermind#745).
+- **LiteLLM**: Support per-key API keys with their own usage reporting, and let a person's chat follow the key assigned to them. A holder's chat now counts in their key's proxy budget and is billed to the resource that owned the address on that day (#66, #75, #72).
+- **LiteLLM**: Copy Waldur's day, week and month spending limits onto keys, and report key usage per day. Key budgets reset on the 1st of the month to match Waldur's limits, so the `budget_duration` setting is now ignored (#85, #73).
+- **LiteLLM**: Add Open WebUI integration and an option to derive a key's backend_id from the resource UUID instead of its slug. The docs now lead with per-model pricing (#15, #22, #74).
 - **DigitalOcean/Harbor**: Run the plugin create logic on the order path, and adopt the agent's own droplet or project when an order is retried (#47, #56).
 - **OKD**: Pass the CA bundle path to the Kubernetes client as `ssl_ca_cert` (#62).
+- **Core**: Stop creating default API keys on offerings that manage keys one by one, and leave all-time spending limits to Waldur's pause. The new `api_key_final_report_days` setting re-sends each key's previous-month usage during the first days of a month (#71, waldur/waldur-mastermind#841).
 - **Core**: Add settings schemas for every backend with per-role validation, mark secret settings, and export a plugin catalogue for Waldur (#53, #79).
 - **Core**: Honour `global_proxy` in event mode, including the STOMP WebSocket, and support SOCKS proxies (#44, #57).
 - **Core**: Process STOMP messages off the receiver thread and ack them after handling. Dropped consumers now reconnect, and the liveness check fails while they stay down. The default STOMP port now comes from `websocket_use_tls` (#38, #45, #61).
@@ -27,10 +31,11 @@
 - **Core**: Fix `get_client` stripping hostname characters instead of the `/api` suffix.
 - **Core**: Report a rejected token in diagnostics instead of crashing (#59).
 - **Testing**: Keep supplied UUIDs in order templates and generate a new UUID per render (#63).
+- **Docker**: Build the image on `python:3.13-alpine3.24`, which ships Brotli 1.2.1 (#88).
 - **Dependencies**: Upgrade waldur-api-client to 8.1.3rc10, and bump certifi, anyio, oauthlib, pyjwt and urllib3 for security fixes.
-- **Docs**: Bring the install, deployment, configuration, architecture, SLURM and offering-user docs in line with the code. Config reference tables are now generated, and every config example in the docs is validated in CI (#48, #49, #50, #51, #52, #54).
+- **Docs**: Bring the install, deployment, configuration, architecture, SLURM and offering-user docs in line with the code, and fix dead links. Config reference tables are now generated, and every config example in the docs is validated in CI (#48, #49, #50, #51, #52, #54, waldur/waldur-docs#31).
 
-> 78 commits, 367 files changed (+49338/-8609 lines)
+> 92 commits, 380 files changed (+59452/-8759 lines)
 
 ---
 
