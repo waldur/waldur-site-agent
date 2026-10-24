@@ -5,7 +5,9 @@
 # to Docker Hub under astral/uv.
 ARG DOCKER_REGISTRY=docker.io/
 FROM ${DOCKER_REGISTRY}astral/uv:0.9.4 AS uv
-FROM ${DOCKER_REGISTRY}python:3.13.0-alpine3.20
+# The Alpine minor is pinned and the Python patch floats, so a rebuild picks up
+# security releases; 3.13.0-alpine3.20 had frozen both, Brotli 1.1.0 included.
+FROM ${DOCKER_REGISTRY}python:3.13-alpine3.24
 
 # Install system dependencies
 RUN apk add --no-cache \
