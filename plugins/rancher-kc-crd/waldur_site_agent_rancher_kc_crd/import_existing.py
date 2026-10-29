@@ -50,6 +50,8 @@ from typing import Any, Optional
 import httpx
 import yaml
 
+from waldur_site_agent.common import static_token_prefix
+
 from .translator import IdentitySettings, mask_civil_code, resolve_identity_settings
 
 logger = logging.getLogger(__name__)
@@ -401,7 +403,10 @@ class WaldurApi:
         """Client for the Waldur API at ``url`` (``/api`` is appended if missing)."""
         self.client = httpx.Client(
             base_url=waldur_api_root(url),
-            headers={"Authorization": f"Token {token}", "Accept": "application/json"},
+            headers={
+                "Authorization": f"{static_token_prefix(token)} {token}",
+                "Accept": "application/json",
+            },
             verify=verify,
             timeout=60.0,
         )

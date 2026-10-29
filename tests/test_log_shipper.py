@@ -150,6 +150,16 @@ class TestShipBatch(unittest.TestCase):
         assert request.headers["Authorization"] == f"Token {_TOKEN}"
 
     @respx.mock
+    def test_post_sends_personal_access_token_as_bearer(self):
+        route = respx.post(_ENDPOINT).mock(return_value=httpx.Response(200))
+
+        shipper = _make_shipper(_make_buffer("check-auth"), api_token="w_1789000000_abc")
+        shipper._ship_logs()
+
+        request = route.calls.last.request
+        assert request.headers["Authorization"] == "Bearer w_1789000000_abc"
+
+    @respx.mock
     def test_post_sends_json_payload(self):
         """The request body must be valid JSON with expected fields."""
         import json

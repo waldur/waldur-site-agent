@@ -552,6 +552,20 @@ class TestBaseClientMethods:
         assert "/api/api/" not in c.get_customer_url("aabb0000-0000-0000-0000-000000000000")
 
 
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [("test-token", "Token test-token"), ("w_1789000000_abc", "Bearer w_1789000000_abc")],
+)
+def test_api_client_sends_token_with_matching_scheme(token, expected):
+    """A personal access token for Waldur B is sent as Bearer, an API token as Token."""
+    c = WaldurClient(
+        api_url="https://waldur-b.example.com/api/",
+        api_token=token,
+        offering_uuid="abcdef01-0000-0000-0000-000000000001",
+    )
+    assert c._api_client.get_httpx_client().headers["Authorization"] == expected
+
+
 class TestIdentityBridgePayloadFiltering:
     """Empty/None attribute values must be stripped before POSTing."""
 

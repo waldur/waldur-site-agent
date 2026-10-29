@@ -26,6 +26,9 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+# The package itself is already imported to reach this module, so this costs nothing.
+from waldur_site_agent.common import static_token_prefix
+
 if TYPE_CHECKING:
     import httpx
 
@@ -66,7 +69,7 @@ def _offering_auth_header(offering: dict, client: httpx.Client) -> str:
     """Return the Authorization header value for *offering*, fetching a JWT if needed."""
     token = offering.get("waldur_api_token")
     if token:
-        return f"Token {token}"
+        return f"{static_token_prefix(token)} {token}"
     response = client.post(
         offering["oidc_token_url"],
         data={
