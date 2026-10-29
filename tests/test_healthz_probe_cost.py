@@ -125,6 +125,17 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(request.url.params["field"], "uuid")
 
     @respx.mock
+    def test_personal_access_token(self):
+        route = respx.get("https://waldur.example.com/api/users/me/").mock(
+            return_value=httpx.Response(200, json={"uuid": "u"})
+        )
+        config = self.write_config(
+            [{"waldur_api_url": "https://waldur.example.com/api/", "waldur_api_token": "w_1_x"}]
+        )
+        self.assertTrue(check_readiness(config))
+        self.assertEqual(route.calls.last.request.headers["Authorization"], "Bearer w_1_x")
+
+    @respx.mock
     def test_oidc_token(self):
         respx.post("https://idp.example.com/token").mock(
             return_value=httpx.Response(200, json={"access_token": "jwt"})

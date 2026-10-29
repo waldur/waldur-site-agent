@@ -118,6 +118,28 @@ class TestGetClientForOffering:
         assert args[1] == "static"
         assert args[5] == "Token"
 
+    def test_personal_access_token_uses_bearer_prefix(self):
+        offering = Offering(**self.BASE, waldur_api_token="w_1789000000_abc")  # noqa: S106
+        with (
+            mock.patch.object(utils, "fetch_oidc_token") as mock_fetch,
+            mock.patch.object(utils, "get_client") as mock_get_client,
+        ):
+            utils.get_client_for_offering(offering, "agent")
+
+        mock_fetch.assert_not_called()
+        args, _ = mock_get_client.call_args
+        assert args[1] == "w_1789000000_abc"
+        assert args[5] == "Bearer"
+
+    @pytest.mark.parametrize(
+        ("token", "expected"),
+        [("static", "Token static"), ("w_1789000000_abc", "Bearer w_1789000000_abc")],
+    )
+    def test_offering_auth_header_for_static_tokens(self, token, expected):
+        offering = Offering(**self.BASE, waldur_api_token=token)
+
+        assert utils.OfferingAuth(offering).authorization() == expected
+
     def test_oidc_uses_bearer_prefix_and_forwards_verify_and_proxy(self):
         offering = Offering(
             **self.BASE,

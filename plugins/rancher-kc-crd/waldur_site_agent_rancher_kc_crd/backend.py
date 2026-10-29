@@ -28,6 +28,7 @@ from waldur_api_client.models.resource_project_error_message_request import (
 from waldur_site_agent.backend import backends
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import BackendResourceInfo
+from waldur_site_agent.common import static_token_prefix
 
 from .crd_client import CrdClient
 from .status_reader import (
@@ -248,7 +249,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
             self.waldur_client = AuthenticatedClient(
                 base_url=api_url.rstrip("/").removesuffix("/api"),
                 token=api_token,
-                prefix="Token",
+                prefix=static_token_prefix(api_token),
                 verify_ssl=backend_settings.get("waldur_verify_ssl", True),
             )
 

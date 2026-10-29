@@ -116,7 +116,11 @@ from waldur_site_agent.backend.backends import (
     UnknownUsernameManagementBackend,
 )
 from waldur_site_agent.backend.exceptions import BackendError
-from waldur_site_agent.common import WALDUR_SITE_AGENT_VERSION, structures
+from waldur_site_agent.common import (
+    WALDUR_SITE_AGENT_VERSION,
+    static_token_prefix,
+    structures,
+)
 from waldur_site_agent.common.log_shipper import LogShipper
 
 # Handle different Python versions
@@ -225,7 +229,7 @@ def get_client(
     agent_header: Optional[str] = None,
     verify_ssl: bool = True,
     proxy: Optional[str] = None,
-    token_prefix: str = "Token",  # noqa: S107
+    token_prefix: Optional[str] = None,
     timeout: float = DEFAULT_CLIENT_TIMEOUT,
     auth: Optional[httpx.Auth] = None,
 ) -> AuthenticatedClient:
@@ -237,7 +241,8 @@ def get_client(
         agent_header: Optional User-Agent string for HTTP requests
         verify_ssl: Whether or not to verify SSL certificates
         proxy: Optional proxy URL (e.g., 'socks5://localhost:12345')
-        token_prefix: Authorization header prefix ('Token' for static tokens, 'Bearer' for JWTs)
+        token_prefix: Authorization header prefix ('Token' for API tokens, 'Bearer' for JWTs and
+            personal access tokens); derived from access_token when omitted
         timeout: HTTP timeout in seconds for requests made with this client
         auth: Optional httpx auth that sets the Authorization header per request,
             overriding the static one built from access_token
@@ -258,7 +263,7 @@ def get_client(
     return AuthenticatedClient(
         base_url=url,
         token=access_token,
-        prefix=token_prefix,
+        prefix=token_prefix if token_prefix is not None else static_token_prefix(access_token),
         timeout=timeout,
         headers=headers,
         verify_ssl=verify_ssl,
@@ -349,7 +354,8 @@ def fetch_oidc_token(
 class OfferingAuth(httpx.Auth):
     """Authorization header for an offering, resolved on every request.
 
-    Static tokens are sent as ``Token <token>``. For OIDC-only offerings the
+    Static tokens are sent as ``Token <token>``, personal access tokens as
+    ``Bearer <token>``. For OIDC-only offerings the
     bearer JWT is looked up per request through ``fetch_oidc_token``, so a
     long-lived client keeps working after the token it started with expires;
     a cache hit costs only a dictionary lookup.
@@ -368,8 +374,9 @@ class OfferingAuth(httpx.Auth):
 
     def authorization(self) -> str:
         """Return the current Authorization header value."""
-        if self.offering.waldur_api_token:
-            return f"Token {self.offering.waldur_api_token}"
+        token = self.offering.waldur_api_token
+        if token:
+            return f"{static_token_prefix(token)} {token}"
         token = fetch_oidc_token(
             self.offering.oidc_token_url,  # type: ignore[arg-type]
             self.offering.oidc_client_id,  # type: ignore[arg-type]
@@ -395,8 +402,9 @@ def get_client_for_offering(
     """Create an authenticated Waldur API client from an Offering configuration.
 
     If waldur_api_token is set, uses it directly as a static token (``Token``
-    prefix). Otherwise obtains a JWT from the configured OIDC provider (``Bearer``
-    prefix), reusing a cached token until it nears expiry.
+    prefix, or ``Bearer`` for a personal access token). Otherwise obtains a JWT
+    from the configured OIDC provider (``Bearer`` prefix), reusing a cached token
+    until it nears expiry.
 
     Args:
         offering: Offering configuration containing API URL and auth settings
@@ -414,7 +422,7 @@ def get_client_for_offering(
     auth: Optional[OfferingAuth] = None
     if offering.waldur_api_token:
         token = offering.waldur_api_token
-        token_prefix = "Token"  # noqa: S105
+        token_prefix = static_token_prefix(token)
     else:
         # Fetch once up front so a misconfigured provider fails here, then let
         # OfferingAuth refresh the JWT per request for long-lived clients.

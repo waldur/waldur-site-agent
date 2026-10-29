@@ -14,6 +14,7 @@ from typing import Optional, Union
 
 import httpx
 
+from . import static_token_prefix
 from .log_buffer import CircularLogBuffer, LogEntry
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ class LogShipper:
             retry_delay: Base delay between retry attempts in seconds (uses exponential backoff)
             auth: Optional httpx auth resolving the Authorization header per request
                 (e.g. a refreshed OIDC bearer token); when unset, api_token is sent
-                as a static ``Token`` header
+                as a static ``Token`` header (``Bearer`` for a personal access token)
         """
         self.buffer = buffer
         self.api_url = api_url.rstrip("/") + "/"
@@ -84,7 +85,7 @@ class LogShipper:
         """Static request headers; Authorization comes from ``auth`` when set."""
         headers = {"Content-Type": "application/json"}
         if self.auth is None:
-            headers["Authorization"] = f"Token {self.api_token}"
+            headers["Authorization"] = f"{static_token_prefix(self.api_token)} {self.api_token}"
         return headers
 
     def start(self) -> None:

@@ -382,6 +382,15 @@ class OfferingBaseProcessor(abc.ABC):
                 client=self.waldur_rest_client,
                 field=[ServiceProviderFieldEnum.UUID],
             )
+            if not service_providers:
+                # Typically a personal access token bound to the offering only:
+                # Waldur hides the offering's service provider from it.
+                raise backend_exceptions.ConfigurationError(
+                    f"No service provider of offering {self.offering.name} is visible to "
+                    "the configured Waldur API token. If it is a personal access token, "
+                    "bind it to the service provider or leave it unbound; a binding on "
+                    "the offering alone is not enough."
+                )
             service_provider = service_providers[0]
 
         self.service_provider = service_provider

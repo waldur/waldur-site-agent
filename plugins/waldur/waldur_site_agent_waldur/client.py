@@ -56,6 +56,7 @@ from waldur_api_client.types import UNSET, Unset
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import Association, ClientResource
+from waldur_site_agent.common import static_token_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,7 @@ class WaldurClient(BaseClient):
         self._api_client = AuthenticatedClient(
             base_url=base_url,
             token=api_token,
+            prefix=static_token_prefix(api_token),
         )
         self._role_uuid_cache: dict[str, str] = {}
         # Per-cycle cache of the Waldur B project keyed by backend_id, to avoid

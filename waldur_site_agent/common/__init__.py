@@ -11,6 +11,7 @@ and provide default values that can be overridden via environment variables.
 
 import os
 import sys
+from typing import Optional
 
 # Handle different Python versions
 if sys.version_info >= (3, 10):
@@ -52,5 +53,15 @@ WALDUR_SITE_AGENT_STOMP_HANDLER_STUCK_AFTER_MINUTES = float(
 WALDUR_SITE_AGENT_RESOURCE_STATUS_RECONCILIATION_MINUTES = float(
     os.environ.get("WALDUR_SITE_AGENT_RESOURCE_STATUS_RECONCILIATION_MINUTES", "60")
 )
+
+# Waldur personal access tokens start with this prefix and are accepted only as
+# ``Authorization: Bearer``; a user's API token is sent as ``Token``.
+WALDUR_PAT_PREFIX = "w_"
+
+
+def static_token_prefix(token: Optional[str]) -> str:
+    """Return the Authorization scheme Waldur expects for a static API token."""
+    return "Bearer" if token and token.startswith(WALDUR_PAT_PREFIX) else "Token"
+
 
 WALDUR_SITE_AGENT_VERSION = version("waldur-site-agent")

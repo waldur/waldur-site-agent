@@ -25,6 +25,7 @@ from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
+from waldur_site_agent.common import static_token_prefix
 
 if TYPE_CHECKING:
     from waldur_site_agent.common.structures import Offering
@@ -102,6 +103,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
         self._http_client = AuthenticatedClient(
             base_url=base_url,
             token=target_api_token,
+            prefix=static_token_prefix(target_api_token),
         )
         self._previous_offering_usernames: set[str] | None = None
         self._allowed_fields_cache: Optional[set[str]] = None
