@@ -26,7 +26,7 @@ from waldur_site_agent_slurm import backend
 
 from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent.backend.structures import BackendResourceInfo
-from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.common import MARKETPLACE_SITE_AGENT_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingMembershipProcessor
 
 
@@ -140,7 +140,7 @@ class MembershipSyncTest(unittest.TestCase):
             name="test-alloc-01",
             backend_id="test-allocation-01",
             resource_uuid=uuid.uuid4(),
-            offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+            offering_type=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             downscaled=False,
             state=ResourceState.OK,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -169,7 +169,7 @@ class MembershipSyncTest(unittest.TestCase):
             name=self.offering.name,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             state=OfferingState.ACTIVE,
-            type_=MARKETPLACE_SLURM_OFFERING_TYPE,
+            type_=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             plugin_options=models.MergedPluginOptions(
                 latest_date_for_resource_termination=datetime(2024, 12, 31, tzinfo=timezone.utc),
                 storage_mode=StorageModeEnum.FIXED,

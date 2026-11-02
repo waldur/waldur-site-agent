@@ -23,7 +23,7 @@ from waldur_api_client.models.username_generation_policy_enum import UsernameGen
 
 from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent.backend.structures import ClientResource
-from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.common import MARKETPLACE_SITE_AGENT_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingOrderProcessor
 
 
@@ -162,7 +162,7 @@ class CreationOrderTest(unittest.TestCase):
             name=OFFERING.name,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             state=OfferingState.ACTIVE,
-            type_=MARKETPLACE_SLURM_OFFERING_TYPE,
+            type_=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             plugin_options=MergedPluginOptions(
                 username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
             ),
@@ -172,7 +172,7 @@ class CreationOrderTest(unittest.TestCase):
         self.waldur_resource = models.Resource(
             uuid=self.resource_uuid,
             name="sample-resource-1",
-            offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+            offering_type=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             project_slug="project-1",
             customer_slug="customer-1",
             customer_name="test-allocation-01",
@@ -427,7 +427,7 @@ class TerminationOrderTest(unittest.TestCase):
             customer_name="Test customer",
             resource_uuid=self.resource_uuid,
             state=OrderState.EXECUTING,
-            offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+            offering_type=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             project_slug="project-1",
             customer_slug="customer-1",
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -440,7 +440,7 @@ class TerminationOrderTest(unittest.TestCase):
             backend_id=f"hpc_{self.resource_uuid[:5]}_test-allocation-01"[:34],
             resource_uuid=uuid.UUID(self.resource_uuid),
             project_uuid=uuid.UUID(self.project_uuid),
-            offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+            offering_type=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             state=ResourceState.OK,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
         ).to_dict()
@@ -454,7 +454,7 @@ class TerminationOrderTest(unittest.TestCase):
             name=OFFERING.name,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             state=OfferingState.ACTIVE,
-            type_=MARKETPLACE_SLURM_OFFERING_TYPE,
+            type_=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             plugin_options=MergedPluginOptions(
                 username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
             ),
@@ -588,7 +588,7 @@ class RestoreOrderTest(unittest.TestCase):
             name=OFFERING.name,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             state=OfferingState.ACTIVE,
-            type_=MARKETPLACE_SLURM_OFFERING_TYPE,
+            type_=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             plugin_options=MergedPluginOptions(
                 username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
             ),
@@ -597,7 +597,7 @@ class RestoreOrderTest(unittest.TestCase):
         self.waldur_resource = models.Resource(
             uuid=self.resource_uuid,
             name="sample-resource-1",
-            offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+            offering_type=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             project_slug="project-1",
             customer_slug="customer-1",
             customer_name="test-allocation-01",
@@ -788,7 +788,7 @@ class UpdateOrderTest(unittest.TestCase):
                 }
             ),
             state=OrderState.EXECUTING,
-            offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+            offering_type=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
         ).to_dict()
 
@@ -799,7 +799,7 @@ class UpdateOrderTest(unittest.TestCase):
             backend_id=self.backend_id,
             resource_uuid=uuid.UUID(self.resource_uuid),
             project_uuid=uuid.UUID(self.project_uuid),
-            offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+            offering_type=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             state=ResourceState.UPDATING,
             limits=ResourceLimits.from_dict(
                 {
@@ -819,7 +819,7 @@ class UpdateOrderTest(unittest.TestCase):
             name=OFFERING.name,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             state=OfferingState.ACTIVE,
-            type_=MARKETPLACE_SLURM_OFFERING_TYPE,
+            type_=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             plugin_options=MergedPluginOptions(
                 username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
             ),
@@ -910,7 +910,7 @@ class DuplicateResourceCreationTest(unittest.TestCase):
             name=OFFERING.name,
             created=datetime(2024, 1, 1, tzinfo=timezone.utc),
             state=OfferingState.ACTIVE,
-            type_=MARKETPLACE_SLURM_OFFERING_TYPE,
+            type_=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             plugin_options=MergedPluginOptions(
                 username_generation_policy=UsernameGenerationPolicyEnum.SERVICE_PROVIDER,
             ),
@@ -954,7 +954,7 @@ class DuplicateResourceCreationTest(unittest.TestCase):
         return models.Resource(
             uuid=self.resource_uuid,
             name="sample-resource-1",
-            offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+            offering_type=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             project_slug="project-1",
             customer_slug="customer-1",
             customer_name="test-customer",

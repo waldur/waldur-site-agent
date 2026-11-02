@@ -1,7 +1,7 @@
 # Azure plugin for Waldur Site Agent
 
 Provisions and meters Microsoft Azure virtual machines through the Azure
-Resource Manager SDKs, for a Site Agent offering (`Marketplace.Slurm`). Azure
+Resource Manager SDKs, for a Site Agent offering (`Marketplace.SiteAgent`). Azure
 credentials and the Azure client libraries live at the provider site, with the
 agent.
 

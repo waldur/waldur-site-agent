@@ -590,7 +590,7 @@ DJANGO_SETTINGS_MODULE=waldur_core.server.settings uv run python setup_ceph_s3_o
 
 The created Waldur offering will have:
 
-- **Type**: `SITE_AGENT_OFFERING` ("Marketplace.Slurm")
+- **Type**: `SITE_AGENT_OFFERING` ("Marketplace.SiteAgent")
 - **Components**: `s3_storage` only (usage-based, billed in GB-days)
 - **Options**: `max_storage_limit` and `max_object_limit` for user input (safety limits)
 - **Pricing**: €0.0010 per GB-day for storage; objects are not billed

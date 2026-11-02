@@ -29,7 +29,7 @@ offering:
     Deploy a large language model as an inference service. A VM boots the vLLM
     engine with your selected model attached as a disk and serves it over an
     OpenAI-compatible API endpoint.
-  type: "Marketplace.Slurm"
+  type: "Marketplace.SiteAgent"
   shared: true
   billable: true
   category_name: "AI / Inference"

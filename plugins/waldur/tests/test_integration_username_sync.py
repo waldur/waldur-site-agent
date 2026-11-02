@@ -1,7 +1,7 @@
 """Integration tests for username sync and identity manager event routing.
 
 Uses the same Waldur instance as both Waldur A (source) and Waldur B (target).
-Both offerings use Marketplace.Slurm to support STOMP event subscriptions.
+Both offerings use Marketplace.SiteAgent to support STOMP event subscriptions.
 
 Three dedicated users are created (no staff token in data paths):
   - user_a: Offering manager on offering A (source side)
@@ -733,7 +733,7 @@ def env(request):
     """Create test entities and dedicated users on the Waldur instance.
 
     Creates:
-      - Two customers (A, B), two offerings (both Marketplace.Slurm), one project
+      - Two customers (A, B), two offerings (both Marketplace.SiteAgent), one project
       - A third non-SP customer (C) for user_b
       - user_a: offering manager on offering A (source side token)
       - user_b: customer C owner (non-SP, separate from offering B's SP)
@@ -742,7 +742,7 @@ def env(request):
       - subject_user: regular user with active_isds, offering users on both sides
     """
     test_setup = WaldurTestSetup(WALDUR_API_URL, WALDUR_API_TOKEN)
-    result = test_setup.setup_passthrough(target_offering_type="Marketplace.Slurm")
+    result = test_setup.setup_passthrough(target_offering_type="Marketplace.SiteAgent")
     staff = test_setup.client
     run_id = test_setup._run_id
 

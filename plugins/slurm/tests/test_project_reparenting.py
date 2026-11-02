@@ -15,7 +15,7 @@ from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_slurm.backend import SlurmBackend
 from waldur_site_agent_slurm.client import SlurmClient
 
-from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.common import MARKETPLACE_SITE_AGENT_OFFERING_TYPE
 
 _SLURM_SETTINGS = {
     "default_account": "root",
@@ -46,7 +46,7 @@ def _make_waldur_resource(
         name="test-alloc",
         backend_id="hpc_test-alloc",
         resource_uuid=uuid.uuid4(),
-        offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+        offering_type=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
         downscaled=False,
         state=ResourceState.OK,
         created=datetime(2024, 1, 1, tzinfo=timezone.utc),

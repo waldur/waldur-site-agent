@@ -2,7 +2,7 @@
 
 These tests exercise the full OfferingOrderProcessor pipeline with
 non-blocking order creation:
-  1. Test creates an order on Waldur A (source, Marketplace.Slurm offering)
+  1. Test creates an order on Waldur A (source, Marketplace.SiteAgent offering)
   2. OfferingOrderProcessor.process_offering() picks it up from Waldur A
   3. WaldurBackend submits order on Waldur B (target, non-blocking)
   4. check_pending_order() tracks completion on subsequent cycles
