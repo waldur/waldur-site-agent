@@ -20,7 +20,7 @@ else:
     from importlib_metadata import version
 
 # Marketplace offering type constants
-MARKETPLACE_SLURM_OFFERING_TYPE = "Marketplace.Slurm"
+MARKETPLACE_SITE_AGENT_OFFERING_TYPE = "Marketplace.SiteAgent"
 # Agent processing intervals (in minutes) - configurable via environment variables
 WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES = float(
     os.environ.get("WALDUR_SITE_AGENT_ORDER_PROCESS_PERIOD_MINUTES", "5")

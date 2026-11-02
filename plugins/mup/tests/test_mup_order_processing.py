@@ -11,7 +11,7 @@ from waldur_api_client.models.offering_user_state import OfferingUserState
 
 from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent_mup.client import MUPError
-from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.common import MARKETPLACE_SITE_AGENT_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingOrderProcessor
 from waldur_site_agent.common.utils import get_client
 
@@ -207,7 +207,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             "type": "Create",
             "state": "pending-provider",
             "attributes": {"name": "sample_resource"},
-            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "offering_type": MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             "project_slug": "project-1",
             "customer_slug": "customer-1",
         }
@@ -224,7 +224,7 @@ class MUPCreationOrderTest(BaseMUPOrderTest):
             "limits": {"cpu": 10},
             "state": "Creating",
             "slug": "sample-resource-1",
-            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "offering_type": MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             "offering_plugin_options": {},
             "backend_id": "",
             "offering": {"uuid": uuid.uuid4().hex, "name": "MUP Offering"},
@@ -538,7 +538,7 @@ class MUPTerminationOrderTest(BaseMUPOrderTest):
             "resource_uuid": str(self.resource_uuid),
             "attributes": {"name": "test-allocation-01"},
             "state": "executing",
-            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "offering_type": MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             "project_slug": "project-1",
             "customer_slug": "customer-1",
         }
@@ -559,7 +559,7 @@ class MUPTerminationOrderTest(BaseMUPOrderTest):
             "name": "test-allocation-01",
             "backend_id": "1",
             "state": "OK",
-            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "offering_type": MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
         }
         self._setup_resource_mocks(str(self.marketplace_resource_uuid), resource_data)
 
@@ -609,7 +609,7 @@ class MUPUpdateOrderTest(BaseMUPOrderTest):
                 "name": "test-allocation-01",
             },
             "state": "executing",
-            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "offering_type": MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
         }
 
         self.waldur_resource = {
@@ -624,7 +624,7 @@ class MUPUpdateOrderTest(BaseMUPOrderTest):
             "limits": {"cpu": 10},
             "state": "Updating",
             "backend_id": self.backend_id,
-            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "offering_type": MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
         }
 
         self.waldur_allocation = {

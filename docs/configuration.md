@@ -274,7 +274,8 @@ offerings:
 - **Description**: UUID of the offering in Waldur
 - **Note**: Found in Waldur UI under Integration -> Credentials
 - **Supported offering types**: Waldur accepts an agent identity only for an offering whose type
-  is `Waldur site agent` (`Marketplace.Slurm`), `Script` (`Marketplace.Script`), `Basic`
+  is `Waldur site agent` (`Marketplace.SiteAgent`; Waldur still accepts the former name
+  `Marketplace.Slurm` as input), `Script` (`Marketplace.Script`), `Basic`
   (`Marketplace.Basic`) or `OpenStack tenant` (`OpenStack.Tenant`). Point an agent at any other
   type — a service desk offering, say — and identity registration is refused with a misleading
   `400 Object with uuid=... does not exist`, even though the offering is there. The agent logs a
@@ -571,7 +572,7 @@ backend_settings:
   passthrough_attributes: []                 # Offering attribute keys forwarded verbatim to B
   fetch_consented_users_only: false          # Only sync users with data-sharing consent
   # Optional: target STOMP for instant async order completion
-  # Requires target_offering_uuid to be a Marketplace.Slurm offering
+  # Requires target_offering_uuid to be a Marketplace.SiteAgent offering
   target_stomp_enabled: false
 ```
 

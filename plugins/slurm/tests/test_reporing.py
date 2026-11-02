@@ -11,7 +11,7 @@ from waldur_site_agent_slurm import backend
 
 from tests.fixtures import OFFERING, user_me_api_response
 from waldur_site_agent.backend.structures import BackendResourceInfo
-from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.common import MARKETPLACE_SITE_AGENT_OFFERING_TYPE
 from waldur_site_agent.common.processors import OfferingReportProcessor
 
 waldur_client_mock = mock.Mock()
@@ -48,7 +48,7 @@ class ReportingTest(unittest.TestCase):
             "uuid": "10a0f810be1c43bbb651e8cbdbb90198",
             "name": "test-alloc-01",
             "backend_id": "test-allocation-01",
-            "offering_type": MARKETPLACE_SLURM_OFFERING_TYPE,
+            "offering_type": MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
             "state": "OK",
         }
         self.waldur_user_uuid = uuid.uuid4()

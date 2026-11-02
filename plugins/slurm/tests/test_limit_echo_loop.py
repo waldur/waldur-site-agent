@@ -71,7 +71,7 @@ def _make_resource(limits: dict[str, int]) -> models.Resource:
         name="test-resource",
         backend_id="s1328",
         resource_uuid=uuid.uuid4(),
-        offering_type="Marketplace.Slurm",
+        offering_type="Marketplace.SiteAgent",
         downscaled=False,
         state=ResourceState.OK,
         created=datetime(2026, 5, 1, tzinfo=timezone.utc),

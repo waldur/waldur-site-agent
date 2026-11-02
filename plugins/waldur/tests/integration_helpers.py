@@ -218,7 +218,7 @@ class WaldurTestSetup:
     ) -> str:
         """Create a marketplace Resource in OK state via Django ORM.
 
-        Marketplace.Slurm offerings can't create orders via API without a real
+        Marketplace.SiteAgent offerings can't create orders via API without a real
         SLURM backend (no service_settings scope). This bypasses the order flow
         and creates the resource directly, which is sufficient to trigger
         offering user auto-creation when a user is added to the project.
@@ -355,12 +355,12 @@ class WaldurTestSetup:
         - 1 category
         - 2 customers (A and B)
         - 1 project under customer A
-        - Offering A (Marketplace.Slurm) with cpu, mem components
+        - Offering A (Marketplace.SiteAgent) with cpu, mem components
         - Offering B (target_offering_type, default Marketplace.Basic) with cpu, mem components
 
         Args:
             target_offering_type: Marketplace type for offering B.
-                Use "Marketplace.Slurm" when STOMP event subscriptions are needed.
+                Use "Marketplace.SiteAgent" when STOMP event subscriptions are needed.
         """
         prefix = f"inttest-pt-{self._run_id}"
 
@@ -376,9 +376,9 @@ class WaldurTestSetup:
 
         proj_a_uuid, proj_a_url = self._create_project(cust_a_url, f"{prefix}-project-a")
 
-        # Offering A: Marketplace.Slurm (source side)
+        # Offering A: Marketplace.SiteAgent (source side)
         off_a_uuid, off_a_url = self._create_offering(
-            f"{prefix}-offering-a", category_url, cust_a_url, "Marketplace.Slurm"
+            f"{prefix}-offering-a", category_url, cust_a_url, "Marketplace.SiteAgent"
         )
         # Components with billing_type=limit to allow setting limits on orders
         components = [("cpu", "CPU Hours", "Hours"), ("mem", "Memory GB", "GB")]
@@ -475,7 +475,7 @@ class WaldurTestSetup:
 
         # Offering A: source with node_hours
         off_a_uuid, off_a_url = self._create_offering(
-            f"{prefix}-offering-a", category_url, cust_a_url, "Marketplace.Slurm"
+            f"{prefix}-offering-a", category_url, cust_a_url, "Marketplace.SiteAgent"
         )
         self._add_component(
             off_a_uuid, "node_hours", "Node Hours",
@@ -576,9 +576,9 @@ class WaldurTestSetup:
             ("one_comp", "One-time Component", BillingTypeEnum.ONE, "Units"),
         ]
 
-        # Offering A: Marketplace.Slurm (source side)
+        # Offering A: Marketplace.SiteAgent (source side)
         off_a_uuid, off_a_url = self._create_offering(
-            f"{prefix}-offering-a", category_url, cust_a_url, "Marketplace.Slurm"
+            f"{prefix}-offering-a", category_url, cust_a_url, "Marketplace.SiteAgent"
         )
         for comp_type, comp_name, billing_type, unit in mixed_components:
             self._add_component(
@@ -686,7 +686,7 @@ class WaldurTestSetup:
 
         # Offering A
         off_a_uuid, off_a_url = self._create_offering(
-            f"{prefix}-offering-a", category_url, cust_a_url, "Marketplace.Slurm"
+            f"{prefix}-offering-a", category_url, cust_a_url, "Marketplace.SiteAgent"
         )
         for comp_type, comp_name, unit in components:
             self._add_component(

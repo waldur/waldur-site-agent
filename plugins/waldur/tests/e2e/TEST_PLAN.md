@@ -8,7 +8,7 @@ and memberships.
 
 ```text
 Waldur A (source)                     Site Agent                     Waldur B (target)
-Marketplace.Slurm offering      <-->  OfferingOrderProcessor   <-->  Marketplace.Slurm offering
+Marketplace.SiteAgent offering      <-->  OfferingOrderProcessor   <-->  Marketplace.SiteAgent offering
                                       WaldurBackend
 ```
 
@@ -33,8 +33,8 @@ The tests exercise both operational modes:
 
 | Instance | Requirements |
 |---|---|
-| Waldur A (source) | Active `Marketplace.Slurm` offering with plan; see Step 2 for token permissions |
-| Waldur B (target) | Active `Marketplace.Slurm` offering with matching components; see Step 1 for token permissions |
+| Waldur A (source) | Active `Marketplace.SiteAgent` offering with plan; see Step 2 for token permissions |
+| Waldur B (target) | Active `Marketplace.SiteAgent` offering with matching components; see Step 1 for permissions |
 
 ### Setup Instructions
 
@@ -49,8 +49,8 @@ agent config.
 1. **Create or choose an organization** on Waldur B.
    Note its UUID — this becomes `target_customer_uuid`.
 
-2. **Create a `Marketplace.Slurm` offering** under that organization:
-   - Offering type: `Marketplace.Slurm` (required for STOMP event signals
+2. **Create a `Marketplace.SiteAgent` offering** under that organization:
+   - Offering type: `Marketplace.SiteAgent` (required for STOMP event signals
      and agent identity registration)
    - Add components that match your source offering. For each component:
      - **Type**: `limit` (billing type)
@@ -74,8 +74,8 @@ agent config.
 
 #### Step 2: Waldur A (Source) — Offering and Project
 
-1. **Create a `Marketplace.Slurm` offering** on Waldur A:
-   - Offering type: `Marketplace.Slurm`
+1. **Create a `Marketplace.SiteAgent` offering** on Waldur A:
+   - Offering type: `Marketplace.SiteAgent`
    - Add components that map to B's components. For each component:
      - **Type**: `limit` (billing type)
      - **Billing type**: `limit`
@@ -160,7 +160,7 @@ curl -sI https://<waldur-a-host>/rmqws-stomp
 **On Waldur B (target STOMP):**
 
 - Verify `/rmqws-stomp` WebSocket endpoint is available (same curl test)
-- The target offering must be `Marketplace.Slurm` for STOMP to work
+- The target offering must be `Marketplace.SiteAgent` for STOMP to work
   (`Marketplace.Basic` does not support STOMP event signals)
 - Set `target_stomp_enabled: true` in backend settings
 

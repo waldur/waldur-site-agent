@@ -75,7 +75,7 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
         default=False,
         description="Enable STOMP event subscription on Waldur B "
         "for instant order completion notifications. "
-        "Requires target_offering_uuid to be a Marketplace.Slurm offering.",
+        "Requires target_offering_uuid to be a Marketplace.SiteAgent offering.",
     )
     identity_bridge_source: str = Field(
         default="",

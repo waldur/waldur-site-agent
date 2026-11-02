@@ -23,7 +23,7 @@ from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_site_agent_slurm.backend import SlurmBackend
 
-from waldur_site_agent.common import MARKETPLACE_SLURM_OFFERING_TYPE
+from waldur_site_agent.common import MARKETPLACE_SITE_AGENT_OFFERING_TYPE
 
 _SACCTMGR = shutil.which("sacctmgr")
 
@@ -79,7 +79,7 @@ def _make_waldur_resource(
         name="test-alloc",
         backend_id=backend_id,
         resource_uuid=uuid.uuid4(),
-        offering_type=MARKETPLACE_SLURM_OFFERING_TYPE,
+        offering_type=MARKETPLACE_SITE_AGENT_OFFERING_TYPE,
         downscaled=False,
         state=ResourceState.OK,
         created=datetime(2024, 1, 1, tzinfo=timezone.utc),

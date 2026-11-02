@@ -1,9 +1,9 @@
 """End-to-end tests for Waldur A -> Waldur B federation.
 
 Tests the full pipeline that the real agent runs in REST polling mode:
-  1. Test creates an order on Waldur A (source, Marketplace.Slurm offering)
+  1. Test creates an order on Waldur A (source, Marketplace.SiteAgent offering)
   2. OfferingOrderProcessor picks it up from Waldur A
-  3. WaldurBackend forwards to Waldur B (target, Marketplace.Slurm offering)
+  3. WaldurBackend forwards to Waldur B (target, Marketplace.SiteAgent offering)
   4. Non-blocking: order submitted on B, tracked via check_pending_order()
   5. Order completes on B, processor marks it done on A
 
