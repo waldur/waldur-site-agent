@@ -10,6 +10,7 @@ from waldur_site_agent_litellm.usage_client import (
     DEFAULT_TIMEOUT,
     LiteLLMUsageBackendError,
     LiteLLMUsageClient,
+    usage_metrics,
 )
 
 SETTINGS = {"api_url": "http://litellm:4000/", "api_token": "sk-master"}
@@ -92,8 +93,123 @@ def test_rows_are_keyed_by_alias_not_by_hash(mock_client_cls: mock.Mock) -> None
             "input_tokens": 10,
             "output_tokens": 20,
             "token_cost": 0.5,
+            "uncached_input_tokens": 10,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
         }
     ]
+
+
+def test_cached_prompt_tokens_are_split_out_of_input_tokens() -> None:
+    # LiteLLM counts cache reads and writes inside prompt_tokens. input_tokens keeps
+    # that total, so existing offerings bill exactly as before; the split is extra.
+
+    # Assign
+    proxy_metrics = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 50,
+        "spend": 0.25,
+        "cache_read_input_tokens": 900,
+        "cache_creation_input_tokens": 40,
+    }
+
+    # Act
+    metrics = usage_metrics(proxy_metrics)
+
+    # Assert
+    assert metrics == {
+        "input_tokens": 1000,
+        "output_tokens": 50,
+        "token_cost": 0.25,
+        "uncached_input_tokens": 60,
+        "cache_read_input_tokens": 900,
+        "cache_creation_input_tokens": 40,
+    }
+
+
+def test_uncached_input_tokens_never_go_negative() -> None:
+    # A provider reporting cache counts outside prompt_tokens must not produce
+    # negative usage, which Waldur refuses.
+
+    # Assign
+    proxy_metrics = {"prompt_tokens": 10, "cache_read_input_tokens": 25}
+
+    # Act
+    metrics = usage_metrics(proxy_metrics)
+
+    # Assert
+    assert metrics["uncached_input_tokens"] == 0
+    assert metrics["cache_read_input_tokens"] == 25
+
+
+def test_missing_metrics_read_as_zero() -> None:
+    # Assign
+    proxy_metrics = None
+
+    # Act
+    metrics = usage_metrics(proxy_metrics)
+
+    # Assert
+    assert metrics == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "token_cost": 0.0,
+        "uncached_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+
+
+def test_null_cache_counts_read_as_zero() -> None:
+    # A proxy that has no cache data for a row sends null rather than 0.
+
+    # Assign
+    proxy_metrics = {"prompt_tokens": 7, "cache_read_input_tokens": None}
+
+    # Act
+    metrics = usage_metrics(proxy_metrics)
+
+    # Assert
+    assert metrics["cache_read_input_tokens"] == 0
+    assert metrics["uncached_input_tokens"] == 7
+
+
+@mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")
+def test_key_and_person_rows_both_carry_the_cache_split(mock_client_cls: mock.Mock) -> None:
+    # Assign
+    cached = {
+        "metadata": {"key_alias": "res-1"},
+        "metrics": {
+            "prompt_tokens": 100,
+            "completion_tokens": 5,
+            "spend": 0.1,
+            "cache_read_input_tokens": 80,
+        },
+    }
+    person = {**cached, "api_key_breakdown": {"h-1": cached}}
+    instance = mock_client_cls.return_value
+    instance.get.return_value = _ok(
+        {
+            "results": [
+                _day("2026-08-01", {"h-1": cached}, {"entities": {"ada@example.com": person}})
+            ],
+            "metadata": {"total_pages": 1, "has_more": False},
+        }
+    )
+
+    # Act
+    key_rows = _client().get_usage_rows("2026-08-01", "2026-08-31")
+    user_rows = _client().get_user_usage_rows("2026-08-01", "2026-08-31")
+
+    # Assert
+    assert len(key_rows) == 1
+    assert len(user_rows) == 1
+    for row in (*key_rows, *user_rows):
+        assert (
+            row["input_tokens"],
+            row["uncached_input_tokens"],
+            row["cache_read_input_tokens"],
+        ) == (100, 20, 80)
 
 
 @mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")

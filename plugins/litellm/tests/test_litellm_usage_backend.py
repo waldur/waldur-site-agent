@@ -127,6 +127,75 @@ def test_a_cost_only_offering_works_without_a_mode_flag() -> None:
     assert usage == {"token_cost": 0.5}
 
 
+def _cached_row(alias: str, prompt: int, cache_read: int, completion: int) -> dict:
+    return {
+        **_row(alias, prompt, completion, 0.0),
+        "uncached_input_tokens": prompt - cache_read,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": 0,
+    }
+
+
+def test_a_cache_aware_token_offering_meters_the_split_by_name() -> None:
+    # An offering that prices tokens Waldur-side and charges cache reads at their own
+    # rate declares the split instead of input_tokens; no component_metrics needed.
+
+    # Assign
+    tokens = {"measured_unit": "tokens", "accounting_type": "usage"}
+    backend = _make_backend(
+        {
+            "uncached_input_tokens": tokens,
+            "cache_read_input_tokens": tokens,
+            "output_tokens": tokens,
+        }
+    )
+    backend.usage_client.get_usage_rows.return_value = [
+        _cached_row(f"{RID}-1", 1000, 900, 50),
+        _cached_row(f"{RID}-2", 200, 0, 10),
+    ]
+
+    # Act
+    usage = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    # Assert
+    assert usage == {
+        "uncached_input_tokens": 300,
+        "cache_read_input_tokens": 900,
+        "output_tokens": 60,
+    }
+
+
+def test_component_metrics_can_name_a_cache_metric() -> None:
+    # Assign
+    tokens = {"measured_unit": "tokens", "accounting_type": "usage"}
+    backend = _make_backend(
+        {"cached_tokens": tokens},
+        {**SETTINGS, "component_metrics": {"cached_tokens": "cache_read_input_tokens"}},
+    )
+    backend.usage_client.get_usage_rows.return_value = [_cached_row(f"{RID}-1", 1000, 900, 50)]
+
+    # Act
+    usage = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    # Assert
+    assert usage == {"cached_tokens": 900}
+
+
+def test_existing_offerings_report_input_tokens_unchanged() -> None:
+    # The historical three-component offering must bill exactly as before: input_tokens
+    # stays the whole prompt, cached tokens included, and no new component appears.
+
+    # Assign
+    backend = _make_backend()
+    backend.usage_client.get_usage_rows.return_value = [_cached_row(f"{RID}-1", 1000, 900, 50)]
+
+    # Act
+    usage = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    # Assert
+    assert usage == {"input_tokens": 1000, "output_tokens": 50, "token_cost": 0.0}
+
+
 def test_no_matching_components_warns_and_reports_nothing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
