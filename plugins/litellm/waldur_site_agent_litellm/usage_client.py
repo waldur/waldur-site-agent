@@ -32,6 +32,33 @@ class LiteLLMUsageBackendError(BackendError):
     """Error raised for LiteLLM spend API failures."""
 
 
+def usage_metrics(metrics: object) -> dict:
+    """Map one ``/user/daily/activity`` ``metrics`` block onto the usage-row metrics.
+
+    ``input_tokens`` is the proxy's ``prompt_tokens``, which **includes** prompt-cache
+    reads and writes: LiteLLM folds Anthropic's top-level cache counts into it, and an
+    OpenAI-shaped usage already counts ``prompt_tokens_details.cached_tokens`` in it. A
+    cache read is typically priced at a fraction of a fresh input token, so one input
+    rate applied to ``input_tokens`` over-bills every cached token. The cache counts are
+    therefore carried as their own metrics, and ``uncached_input_tokens`` is the rest:
+    the prompt tokens billed at the model's full input rate.
+    """
+    values: dict = metrics if isinstance(metrics, dict) else {}
+    prompt = int(values.get("prompt_tokens") or 0)
+    cache_read = int(values.get("cache_read_input_tokens") or 0)
+    cache_creation = int(values.get("cache_creation_input_tokens") or 0)
+    return {
+        "input_tokens": prompt,
+        "output_tokens": int(values.get("completion_tokens") or 0),
+        "token_cost": float(values.get("spend") or 0.0),
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_creation,
+        # Clamped: a provider that reports cache counts outside ``prompt_tokens``
+        # would otherwise drive it negative, and Waldur refuses negative usage.
+        "uncached_input_tokens": max(prompt - cache_read - cache_creation, 0),
+    }
+
+
 class LiteLLMUsageClient:
     """Reads per-key token usage and spend from a LiteLLM proxy."""
 
@@ -113,8 +140,8 @@ class LiteLLMUsageClient:
     def get_user_usage_rows(self, start_date: str, end_date: str) -> list:
         """Return one row per (day, user, key) in the inclusive ``YYYY-MM-DD`` range.
 
-        Each row is ``{"date", "user_id", "key_alias", "input_tokens", "output_tokens",
-        "token_cost"}``, where ``key_alias`` may be ``None``. A row with no alias also
+        Each row is ``{"date", "user_id", "key_alias"}`` plus the metrics of
+        ``usage_metrics``, where ``key_alias`` may be ``None``. A row with no alias also
         carries ``day_key_aliases``: the aliases of every key served on that day, from
         the ``api_keys`` breakdown, ``None`` for a key without one.
 
@@ -183,15 +210,12 @@ class LiteLLMUsageClient:
         """Map one entity (or entity-by-key) entry onto a usage row."""
         if not isinstance(record, dict):
             return None
-        metrics = record.get("metrics") or {}
         alias = (record.get("metadata") or {}).get("key_alias")
         return {
             "date": date,
             "user_id": user_id,
             "key_alias": str(alias) if alias else None,
-            "input_tokens": int(metrics.get("prompt_tokens") or 0),
-            "output_tokens": int(metrics.get("completion_tokens") or 0),
-            "token_cost": float(metrics.get("spend") or 0.0),
+            **usage_metrics(record.get("metrics")),
         }
 
     def _walk_results(self, start_date: str, end_date: str) -> list:
@@ -219,8 +243,8 @@ class LiteLLMUsageClient:
     def get_usage_rows(self, start_date: str, end_date: str) -> list:
         """Return one usage row per (day, key) in the inclusive ``YYYY-MM-DD`` range.
 
-        Each row is ``{"date", "key_alias", "input_tokens", "output_tokens",
-        "token_cost"}``, ``date`` being the proxy's UTC day the row was bucketed under.
+        Each row is ``{"date", "key_alias"}`` plus the metrics of ``usage_metrics``,
+        ``date`` being the proxy's UTC day the row was bucketed under.
         Rows are *not* aggregated here — a key appears once per day it was used, and
         the caller sums them.
 
@@ -254,10 +278,4 @@ class LiteLLMUsageClient:
             # A key deleted before the sweep, or one minted outside the agent, has no
             # alias to attribute usage to. Counting it against nothing is correct.
             return None
-        metrics = record.get("metrics") or {}
-        return {
-            "key_alias": str(alias),
-            "input_tokens": int(metrics.get("prompt_tokens") or 0),
-            "output_tokens": int(metrics.get("completion_tokens") or 0),
-            "token_cost": float(metrics.get("spend") or 0.0),
-        }
+        return {"key_alias": str(alias), **usage_metrics(record.get("metrics"))}

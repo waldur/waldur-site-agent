@@ -32,7 +32,17 @@ logger = logging.getLogger(__name__)
 # right-hand side of ``component_metrics``. ``token_cost`` is LiteLLM's own USD spend
 # (its ``spend`` field) -- already differentiated per model by the proxy's cost map --
 # for offerings that price upstream rather than applying a Waldur-side rate per token.
-USAGE_METRICS = ("input_tokens", "output_tokens", "token_cost")
+# ``input_tokens`` includes prompt-cache reads and writes; the last three split it, for
+# an offering that prices tokens in Waldur and charges cached ones at their own rate
+# (see ``usage_client.usage_metrics``).
+USAGE_METRICS = (
+    "input_tokens",
+    "output_tokens",
+    "token_cost",
+    "uncached_input_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
 
 # Component name -> metric, for offerings that name their components after these
 # metrics. The historical shape, and still the default.
@@ -128,7 +138,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         self.backend_type = "litellm-usage"
 
         # What this backend meters: component name -> the usage-row metric it is fed.
-        # The metrics are the three in ``USAGE_METRICS`` and nothing else; the component
+        # The metrics are those in ``USAGE_METRICS`` and nothing else; the component
         # names are the offering's own and are never interpreted here.
         #
         # A component named after a metric is metered without configuration.
@@ -189,9 +199,11 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
 
         A component named after a metric is metered without any configuration, which is
         the historical shape and covers ``input_tokens``, ``output_tokens`` and
-        ``token_cost``. ``component_metrics`` *adds* to that rather than replacing it,
-        so an offering that bills upstream cost alongside its budget cap names only the
-        component the default cannot infer:
+        ``token_cost`` -- and the cache split of ``input_tokens``
+        (``uncached_input_tokens``, ``cache_read_input_tokens``,
+        ``cache_creation_input_tokens``). ``component_metrics`` *adds* to that rather
+        than replacing it, so an offering that bills upstream cost alongside its budget
+        cap names only the component the default cannot infer:
 
             component_metrics:
               inference_cost: token_cost

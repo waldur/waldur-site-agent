@@ -886,8 +886,23 @@ that provisions and revokes people.
 
 ### Usage Reporting Backend (`litellm-usage`)
 
-Read-only. Reports whichever of `input_tokens`, `output_tokens` and `token_cost` the offering
-declares, plus every component `component_metrics` maps onto one of them.
+Read-only. Reports whichever of `input_tokens`, `output_tokens`, `token_cost` and the cache split
+of `input_tokens` (`uncached_input_tokens`, `cache_read_input_tokens`,
+`cache_creation_input_tokens`) the offering declares, plus every component `component_metrics`
+maps onto one of them.
+
+| Metric | From `/user/daily/activity` | Note |
+|---|---|---|
+| `input_tokens` | `prompt_tokens` | **includes** prompt-cache reads and writes |
+| `output_tokens` | `completion_tokens` | |
+| `token_cost` | `spend` | the proxy's per-model cost, cache discounts applied |
+| `cache_read_input_tokens` | `cache_read_input_tokens` | prompt tokens served from the cache |
+| `cache_creation_input_tokens` | `cache_creation_input_tokens` | prompt tokens written to the cache (Anthropic-style) |
+| `uncached_input_tokens` | `prompt_tokens` − the two above | billed at the full input rate; never below 0 |
+
+LiteLLM folds both cache counts into `prompt_tokens` (Anthropic's top-level ones and OpenAI's
+`prompt_tokens_details.cached_tokens` alike), so `input_tokens` is the whole prompt and the last
+three split it. See [Per-token prices with prompt caching](#per-token-prices-with-prompt-caching).
 
 `component_metrics` decouples the component name from the metric it reads, which is what lets one
 spend figure be both the cap and the charge — see [Pricing](#pricing).
@@ -1011,11 +1026,13 @@ working unchanged:
 > drives `action_on_usage_limit: pause`, and `billing_usage.py` ignores it for invoicing.
 
 Reading `component_metrics`: the **left** side is the component name, which is the offering's own
-and means nothing to the plugin. The **right** side is the metric, and only three values are
-accepted — `input_tokens`, `output_tokens`, and `token_cost`, which is LiteLLM's per-model USD
-spend (its `spend` field). Anything else raises at startup. The mapping *adds* to the name-based
-default: a component called `input_tokens`, `output_tokens` or `token_cost` is metered whether or
-not it appears here. Without the line for `inference_cost`, it reports zero forever.
+and means nothing to the plugin. The **right** side is the metric, and only the six in the
+[metric table](#usage-reporting-backend-litellm-usage) are accepted — `input_tokens`,
+`output_tokens`, `token_cost` (LiteLLM's per-model USD spend, its `spend` field),
+`uncached_input_tokens`, `cache_read_input_tokens` and `cache_creation_input_tokens`. Anything
+else raises at startup. The mapping *adds* to the name-based default: a component named after a
+metric is metered whether or not it appears here. Without the line for `inference_cost`, it
+reports zero forever.
 
 **Moving an offering off it.** `inference_cost` is fed from the proxy's spend, so its spending
 limits reach the keys as `token_cost`'s would, and the offering can move without renaming
@@ -1035,7 +1052,34 @@ New offerings start from the single-component shape above.
 - **No cap.** `token_cost` as above with no spending limit periods offered: billing is per
   model, the keys carry no `max_budget`, and `action_on_usage_limit: pause` has nothing to act on.
 - **One rate per token.** Price `input_tokens` and `output_tokens` on the plan. Right only when
-  every model on the offering costs the same per token.
+  every model on the offering costs the same per token, **and** no prompt is served from the
+  cache: `input_tokens` counts cached tokens too, so its rate is charged on every one of them.
+  With caching, use the shape below.
+
+#### Per-token prices with prompt caching
+
+A cache read usually costs a fraction of a fresh input token (LiteLLM's
+`cache_read_input_token_cost` against `input_cost_per_token`). An agentic or RAG workload can
+send most of its prompt from the cache, so a single input rate on `input_tokens` over-bills it
+several times over. Declare the split instead and price each part:
+
+```yaml
+    backend_components:
+      uncached_input_tokens:   { measured_unit: "tokens", accounting_type: "usage", label: "Input tokens" }
+      cache_read_input_tokens: { measured_unit: "tokens", accounting_type: "usage", label: "Cached input tokens" }
+      output_tokens:           { measured_unit: "tokens", accounting_type: "usage", label: "Output tokens" }
+```
+
+| Component | Price |
+|---|---|
+| `uncached_input_tokens` | the model's input price per token |
+| `cache_read_input_tokens` | the model's cache-read price per token |
+| `output_tokens` | the model's output price per token |
+
+Add `cache_creation_input_tokens` at its own rate if the upstream bills cache writes (Anthropic
+does; vLLM and SGLang do not). This is still one rate per token for the whole offering, so it
+fits only an offering whose models share their prices; with several prices, bill `token_cost` at
+**1.0** as above, which already applies each model's cache discount.
 
 ## Configuration
 
