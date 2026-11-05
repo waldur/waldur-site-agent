@@ -156,11 +156,13 @@ class LiteLLMUsageBackendSettingsSchema(PluginBackendSettingsSchema):
         description=(
             "Extra Waldur component -> usage metric pairs, for components not named "
             "after the metric they read. Components called input_tokens, "
-            "output_tokens or token_cost are metered without being listed here. The "
-            "metric must be one of those three; token_cost is LiteLLM's own per-model "
-            "USD spend. Two components may read the same metric, which is how an "
-            "offering caps cost on a LIMIT component and bills it on a USAGE one: "
-            "{inference_cost: token_cost}"
+            "output_tokens, uncached_input_tokens, cache_read_tokens, "
+            "cache_write_tokens or token_cost are metered without being listed here. "
+            "The metric must be one of those six; token_cost is LiteLLM's own "
+            "per-model USD spend, and uncached_input_tokens plus the two cache metrics "
+            "split input_tokens. Two components may read the same "
+            "metric, which is how an offering caps cost on a LIMIT component and "
+            "bills it on a USAGE one: {inference_cost: token_cost}"
         ),
     )
     usage_cache_ttl: Optional[float] = Field(

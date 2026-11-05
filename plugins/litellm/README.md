@@ -377,10 +377,10 @@ It covers the key's own budget only. Each key still carries the whole resource b
 its siblings' spend or other members' chat; the offering's *Action on usage limit* is what
 holds the resource total.
 
-Limits on `input_tokens` and `output_tokens` have no proxy field, nor have quarter, year and
-total limits. Waldur enforces them, and every key limit, from the per-key usage report: a key
-whose usage reaches its limit is paused, and resumed when it is under the limit again, at the
-latest once the limit's period resets. A total never resets, so a key paused by one resumes only
+Limits on `input_tokens`, `output_tokens` and the three input-split metrics have no proxy
+field, nor have quarter, year and total limits. Waldur enforces them, and every key limit, from the per-key
+usage report: a key whose usage reaches its limit is paused, and resumed when it is under the
+limit again, at the latest once the limit's period resets. A total never resets, so a key paused by one resumes only
 when the limit is raised or cleared.
 
 ### Models
@@ -886,8 +886,32 @@ that provisions and revokes people.
 
 ### Usage Reporting Backend (`litellm-usage`)
 
-Read-only. Reports whichever of `input_tokens`, `output_tokens` and `token_cost` the offering
-declares, plus every component `component_metrics` maps onto one of them.
+Read-only. Reports whichever of `input_tokens`, `output_tokens`, `uncached_input_tokens`,
+`cache_read_tokens`, `cache_write_tokens` and `token_cost` the offering declares, plus every
+component `component_metrics` maps onto one of them.
+
+| Metric | LiteLLM field | What it counts |
+|---|---|---|
+| `input_tokens` | `prompt_tokens` | every input token, cached ones included |
+| `output_tokens` | `completion_tokens` | generated tokens |
+| `uncached_input_tokens` | `prompt_tokens` − the two below | input charged at the full input rate; never below 0 |
+| `cache_read_tokens` | `cache_read_input_tokens` | input served from the provider's prompt cache |
+| `cache_write_tokens` | `cache_creation_input_tokens` | input written into the provider's prompt cache |
+| `token_cost` | `spend` | the proxy's per-model USD cost, cache discounts applied |
+
+**Prompt caching.** Providers cache repeated prompt prefixes — OpenAI and Gemini automatically for
+long prompts, Anthropic when the request asks for it — and bill a cached read at a fraction of the
+input rate, a cache write at somewhat more than it. LiteLLM counts both **inside** `prompt_tokens`,
+so the two cache metrics are a part of `input_tokens`, not an addition to it, and
+`uncached_input_tokens` is the rest: 1,000 input tokens of which 600 came from cache report as
+`input_tokens: 1000`, `cache_read_tokens: 600` and `uncached_input_tokens: 400`.
+
+On the recommended [`token_cost` shape](#pricing), caching needs nothing: the proxy's `spend`
+already prices each part at the model's own cache rate, and the cache components are volume
+meters priced at 0 that show customers how much of their input the cache served. Only an offering
+that prices tokens in Waldur needs the split — see
+[Per-token prices with prompt caching](#per-token-prices-with-prompt-caching). A proxy that
+predates the cache fields reports them as 0, and `uncached_input_tokens` as the whole prompt.
 
 `component_metrics` decouples the component name from the metric it reads, which is what lets one
 spend figure be both the cap and the charge — see [Pricing](#pricing).
@@ -922,6 +946,10 @@ from the alias and the rows are summed, so rotating a key does not split a tenan
 resource used across several days and several keys is billed for all of it.
 
 ## Pricing
+
+**Prices live in LiteLLM, not in Waldur.** Set each model's prices in the proxy's cost map, bill
+`token_cost` at **1.0** (or a markup), and price every token component at **0**. Price tokens in
+Waldur only when every model on the offering costs the same per token.
 
 Sell inference the way the proxy prices it: per model. This is the shape the
 [configuration example](#composed-offering-both-backends) uses, and the one to start from even
@@ -1011,11 +1039,11 @@ working unchanged:
 > drives `action_on_usage_limit: pause`, and `billing_usage.py` ignores it for invoicing.
 
 Reading `component_metrics`: the **left** side is the component name, which is the offering's own
-and means nothing to the plugin. The **right** side is the metric, and only three values are
-accepted — `input_tokens`, `output_tokens`, and `token_cost`, which is LiteLLM's per-model USD
-spend (its `spend` field). Anything else raises at startup. The mapping *adds* to the name-based
-default: a component called `input_tokens`, `output_tokens` or `token_cost` is metered whether or
-not it appears here. Without the line for `inference_cost`, it reports zero forever.
+and means nothing to the plugin. The **right** side is the metric, and only the six in the
+[metrics table](#usage-reporting-backend-litellm-usage) are accepted — `token_cost` being
+LiteLLM's per-model USD spend (its `spend` field). Anything else raises at startup. The mapping
+*adds* to the name-based default: a component named after a metric is metered whether or not it
+appears here. Without the line for `inference_cost`, it reports zero forever.
 
 **Moving an offering off it.** `inference_cost` is fed from the proxy's spend, so its spending
 limits reach the keys as `token_cost`'s would, and the offering can move without renaming
@@ -1035,7 +1063,35 @@ New offerings start from the single-component shape above.
 - **No cap.** `token_cost` as above with no spending limit periods offered: billing is per
   model, the keys carry no `max_budget`, and `action_on_usage_limit: pause` has nothing to act on.
 - **One rate per token.** Price `input_tokens` and `output_tokens` on the plan. Right only when
-  every model on the offering costs the same per token.
+  every model on the offering costs the same per token, **and** no prompt is served from the
+  cache: `input_tokens` counts cached tokens too, so its rate is charged on every one of them.
+  With caching, use the shape below.
+
+#### Per-token prices with prompt caching
+
+Only for an offering whose models all cost the same per token; otherwise bill `token_cost` at
+**1.0** as above, which already applies each model's cache discount.
+
+A cache read usually costs a fraction of a fresh input token (LiteLLM's
+`cache_read_input_token_cost` against `input_cost_per_token`). An agentic or RAG workload can
+send most of its prompt from the cache, so a single input rate on `input_tokens` over-bills it
+several times over. Declare the split instead and price each part:
+
+```yaml
+    backend_components:
+      uncached_input_tokens: { measured_unit: "tokens", accounting_type: "usage", label: "Input tokens" }
+      cache_read_tokens:     { measured_unit: "tokens", accounting_type: "usage", label: "Cached input tokens" }
+      output_tokens:         { measured_unit: "tokens", accounting_type: "usage", label: "Output tokens" }
+```
+
+| Component | Price |
+|---|---|
+| `uncached_input_tokens` | the model's input price per token |
+| `cache_read_tokens` | the model's cache-read price per token |
+| `output_tokens` | the model's output price per token |
+
+Add `cache_write_tokens` at its own rate if the upstream bills cache writes (Anthropic does;
+vLLM and SGLang do not); without it, cache writes are in neither component and go unbilled.
 
 ## Configuration
 

@@ -10,6 +10,7 @@ from waldur_site_agent_litellm.usage_client import (
     DEFAULT_TIMEOUT,
     LiteLLMUsageBackendError,
     LiteLLMUsageClient,
+    _metric_values,
 )
 
 SETTINGS = {"api_url": "http://litellm:4000/", "api_token": "sk-master"}
@@ -91,6 +92,9 @@ def test_rows_are_keyed_by_alias_not_by_hash(mock_client_cls: mock.Mock) -> None
             "key_alias": "res-1",
             "input_tokens": 10,
             "output_tokens": 20,
+            "uncached_input_tokens": 10,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
             "token_cost": 0.5,
         }
     ]
@@ -146,6 +150,92 @@ def test_a_key_used_on_several_days_yields_a_row_per_day(mock_client_cls: mock.M
     )
     rows = _client().get_usage_rows("2026-08-01", "2026-08-31")
     assert [row["input_tokens"] for row in rows] == [10, 5]
+
+
+@mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")
+def test_rows_carry_the_prompt_cache_figures(mock_client_cls: mock.Mock) -> None:
+    # LiteLLM counts both cache figures inside prompt_tokens. They are passed on as they
+    # are, input_tokens keeps the whole of it, and uncached_input_tokens is the rest.
+    instance = mock_client_cls.return_value
+    entry = _entry("res-1", 1000, 20, 0.5)
+    entry["metrics"].update(cache_read_input_tokens=600, cache_creation_input_tokens=300)
+    entities = {"entities": {"ada@example.com": {"api_key_breakdown": {"hash-a": entry}}}}
+    instance.get.return_value = _ok(
+        {
+            "results": [_day("2026-08-01", {"hash-a": entry}, entities)],
+            "metadata": {"total_pages": 1, "has_more": False},
+        }
+    )
+    client = _client()
+
+    (key_row,) = client.get_usage_rows("2026-08-01", "2026-08-31")
+    (user_row,) = client.get_user_usage_rows("2026-08-01", "2026-08-31")
+
+    for row in (key_row, user_row):
+        assert (
+            row["input_tokens"],
+            row["uncached_input_tokens"],
+            row["cache_read_tokens"],
+            row["cache_write_tokens"],
+        ) == (1000, 100, 600, 300)
+
+
+@mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")
+def test_a_proxy_without_cache_figures_reports_them_as_zero(mock_client_cls: mock.Mock) -> None:
+    # Covers all three row builders: key rows, person rows split by key, and the
+    # person total used when a day has no key split.
+    instance = mock_client_cls.return_value
+    by_key = {
+        "entities": {
+            "ada@example.com": {"api_key_breakdown": {"hash-a": _entry("res-1", 10, 20, 0.5)}}
+        }
+    }
+    no_key_split = {
+        "entities": {
+            "ada@example.com": {"metrics": {"prompt_tokens": 5, "completion_tokens": 6}}
+        }
+    }
+    instance.get.return_value = _ok(
+        {
+            "results": [
+                _day("2026-08-01", {"hash-a": _entry("res-1", 10, 20, 0.5)}, by_key),
+                _day("2026-08-02", {}, no_key_split),
+            ],
+            "metadata": {"total_pages": 1, "has_more": False},
+        }
+    )
+    client = _client()
+
+    rows = client.get_usage_rows("2026-08-01", "2026-08-31") + client.get_user_usage_rows(
+        "2026-08-01", "2026-08-31"
+    )
+
+    assert len(rows) == 3
+    for row in rows:
+        assert (row["cache_read_tokens"], row["cache_write_tokens"]) == (0, 0)
+        # With nothing cached, the whole prompt is uncached.
+        assert row["uncached_input_tokens"] == row["input_tokens"]
+
+
+def test_uncached_input_tokens_never_go_negative() -> None:
+    # A provider reporting cache counts outside prompt_tokens must not produce negative
+    # usage, which Waldur refuses.
+    metrics = _metric_values(
+        {"prompt_tokens": 10, "cache_read_input_tokens": 25, "cache_creation_input_tokens": 5}
+    )
+
+    assert metrics["uncached_input_tokens"] == 0
+    assert (metrics["cache_read_tokens"], metrics["cache_write_tokens"]) == (25, 5)
+
+
+def test_null_cache_figures_read_as_zero() -> None:
+    # A proxy with no cache data for a row may send null rather than omit the field.
+    metrics = _metric_values(
+        {"prompt_tokens": 7, "cache_read_input_tokens": None, "cache_creation_input_tokens": None}
+    )
+
+    assert (metrics["cache_read_tokens"], metrics["cache_write_tokens"]) == (0, 0)
+    assert metrics["uncached_input_tokens"] == 7
 
 
 @mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")

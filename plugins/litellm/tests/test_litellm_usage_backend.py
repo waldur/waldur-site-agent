@@ -33,11 +33,21 @@ def _make_backend(
     return backend
 
 
-def _row(alias: str, prompt: int, completion: int, cost: float) -> dict:
+def _row(
+    alias: str,
+    prompt: int,
+    completion: int,
+    cost: float,
+    cache_read: int = 0,
+    cache_write: int = 0,
+) -> dict:
     return {
         "key_alias": alias,
         "input_tokens": prompt,
         "output_tokens": completion,
+        "uncached_input_tokens": max(prompt - cache_read - cache_write, 0),
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
         "token_cost": cost,
     }
 
@@ -308,7 +318,14 @@ def _user(email: str, resource: str) -> dict:
 
 
 def _user_row(
-    email: str, alias: object, prompt: int, completion: int, cost: float, date: str = "2026-08-10"
+    email: str,
+    alias: object,
+    prompt: int,
+    completion: int,
+    cost: float,
+    date: str = "2026-08-10",
+    cache_read: int = 0,
+    cache_write: int = 0,
 ) -> dict:
     return {
         "date": date,
@@ -316,6 +333,9 @@ def _user_row(
         "key_alias": alias,
         "input_tokens": prompt,
         "output_tokens": completion,
+        "uncached_input_tokens": max(prompt - cache_read - cache_write, 0),
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
         "token_cost": cost,
     }
 
@@ -518,6 +538,115 @@ def test_api_usage_on_a_key_only_resource_is_not_billed_to_the_address_owner() -
     ]
 
     assert backend.get_usage_report_for_period([RID], 2026, 8) == {}
+
+
+# --- prompt-cache figures -----------------------------------------------------
+
+CACHE_COMPONENTS = {
+    **COMPONENTS,
+    "uncached_input_tokens": {"measured_unit": "tokens", "accounting_type": "usage"},
+    "cache_read_tokens": {"measured_unit": "tokens", "accounting_type": "usage"},
+    "cache_write_tokens": {"measured_unit": "tokens", "accounting_type": "usage"},
+}
+
+
+def test_cache_figures_are_summed_per_resource_like_input_tokens() -> None:
+    backend = _make_backend(CACHE_COMPONENTS)
+    backend.usage_client.get_usage_rows.return_value = [
+        _row(f"{RID}-1", 1000, 20, 0.5, cache_read=600, cache_write=300),
+        _row(f"{RID}-2", 500, 10, 0.25, cache_read=400),
+        _row("other-1", 9999, 99, 9.0, cache_read=9999, cache_write=9999),
+    ]
+
+    totals = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    # input_tokens still counts the cached part: the cache figures are a part of it.
+    assert totals == {
+        "input_tokens": 1500,
+        "output_tokens": 30,
+        "uncached_input_tokens": 200,
+        "cache_read_tokens": 1000,
+        "cache_write_tokens": 300,
+        "token_cost": pytest.approx(0.75),
+    }
+
+
+def test_chat_cache_figures_are_not_billed_twice() -> None:
+    # The same de-duplication as for the other metrics: a person's request on the
+    # resource's own key is counted by alias only.
+    backend = _chat_backend(CACHE_COMPONENTS)
+    backend.litellm_client.list_users.return_value = [_user("ada@example.com", RID)]
+    backend.usage_client.get_usage_rows.return_value = [
+        _row(f"{RID}-1", 10, 20, 0.5, cache_read=6, cache_write=2)
+    ]
+    backend.usage_client.get_user_usage_rows.return_value = [
+        _user_row("ada@example.com", f"{RID}-1", 10, 20, 0.5, cache_read=6, cache_write=2),
+        _user_row(
+            "ada@example.com", "openwebui-shared", 100, 200, 1.5, cache_read=40, cache_write=30
+        ),
+    ]
+
+    totals = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    assert totals["input_tokens"] == 110
+    assert totals["uncached_input_tokens"] == 32
+    assert totals["cache_read_tokens"] == 46
+    assert totals["cache_write_tokens"] == 32
+
+
+def test_component_metrics_accepts_the_cache_metrics() -> None:
+    backend = _make_backend(
+        {
+            "fresh_input": {"measured_unit": "tokens", "accounting_type": "usage"},
+            "cached_input": {"measured_unit": "tokens", "accounting_type": "usage"},
+            "cache_fill": {"measured_unit": "tokens", "accounting_type": "usage"},
+        },
+        {
+            **SETTINGS,
+            "component_metrics": {
+                "fresh_input": "uncached_input_tokens",
+                "cached_input": "cache_read_tokens",
+                "cache_fill": "cache_write_tokens",
+            },
+        },
+    )
+    assert backend._usage_metrics == {
+        "fresh_input": "uncached_input_tokens",
+        "cached_input": "cache_read_tokens",
+        "cache_fill": "cache_write_tokens",
+    }
+
+
+def test_a_cache_aware_token_offering_meters_the_split_by_name() -> None:
+    # An offering that prices tokens in Waldur and charges cache reads at their own rate
+    # declares the split instead of input_tokens; no component_metrics needed.
+    tokens = {"measured_unit": "tokens", "accounting_type": "usage"}
+    backend = _make_backend(
+        {"uncached_input_tokens": tokens, "cache_read_tokens": tokens, "output_tokens": tokens}
+    )
+    backend.usage_client.get_usage_rows.return_value = [
+        _row(f"{RID}-1", 1000, 50, 0.5, cache_read=900),
+        _row(f"{RID}-2", 200, 10, 0.25),
+    ]
+
+    totals = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    assert totals == {
+        "uncached_input_tokens": 300,
+        "cache_read_tokens": 900,
+        "output_tokens": 60,
+    }
+
+
+def test_an_offering_without_cache_components_reports_what_it_did_before() -> None:
+    backend = _make_backend()
+    backend.usage_client.get_usage_rows.return_value = [
+        _row(f"{RID}-1", 1000, 20, 0.5, cache_read=600, cache_write=300)
+    ]
+
+    totals = backend.get_usage_report_for_period([RID], 2026, 8)[RID]["TOTAL_ACCOUNT_USAGE"]
+
+    assert totals == {"input_tokens": 1000, "output_tokens": 20, "token_cost": 0.5}
 
 
 # --- dated ownership: each day bills to whoever owned the address that day ------

@@ -32,7 +32,18 @@ logger = logging.getLogger(__name__)
 # right-hand side of ``component_metrics``. ``token_cost`` is LiteLLM's own USD spend
 # (its ``spend`` field) -- already differentiated per model by the proxy's cost map --
 # for offerings that price upstream rather than applying a Waldur-side rate per token.
-USAGE_METRICS = ("input_tokens", "output_tokens", "token_cost")
+# ``cache_read_tokens`` and ``cache_write_tokens`` are the provider prompt-cache figures;
+# both are already counted in ``input_tokens``. ``uncached_input_tokens`` is the rest of
+# it, so the three split ``input_tokens`` for an offering that prices tokens in Waldur
+# and charges cached ones at their own rate.
+USAGE_METRICS = (
+    "input_tokens",
+    "output_tokens",
+    "uncached_input_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "token_cost",
+)
 
 # Component name -> metric, for offerings that name their components after these
 # metrics. The historical shape, and still the default.
@@ -128,7 +139,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         self.backend_type = "litellm-usage"
 
         # What this backend meters: component name -> the usage-row metric it is fed.
-        # The metrics are the three in ``USAGE_METRICS`` and nothing else; the component
+        # The metrics are the ones in ``USAGE_METRICS`` and nothing else; the component
         # names are the offering's own and are never interpreted here.
         #
         # A component named after a metric is metered without configuration.
@@ -188,10 +199,10 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         """Pair each declared component with the usage-row metric that feeds it.
 
         A component named after a metric is metered without any configuration, which is
-        the historical shape and covers ``input_tokens``, ``output_tokens`` and
-        ``token_cost``. ``component_metrics`` *adds* to that rather than replacing it,
-        so an offering that bills upstream cost alongside its budget cap names only the
-        component the default cannot infer:
+        the historical shape and covers every name in ``USAGE_METRICS``.
+        ``component_metrics`` *adds* to that rather than replacing it, so an offering that
+        bills upstream cost alongside its budget cap names only the component the default
+        cannot infer:
 
             component_metrics:
               inference_cost: token_cost
