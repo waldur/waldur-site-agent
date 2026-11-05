@@ -28,6 +28,33 @@ DAILY_PAGE_SIZE = 100
 MAX_PAGES = 1000
 
 
+def _metric_values(metrics: dict) -> dict:
+    """Map one breakdown entry's ``metrics`` onto the usage-row metrics.
+
+    The two cache figures are provider prompt caching -- reads served from a cached
+    prefix and writes that fill it -- and LiteLLM counts both **inside**
+    ``prompt_tokens``, so they are a part of ``input_tokens``, never an addition to it.
+    ``uncached_input_tokens`` is the rest: the prompt tokens charged at the model's full
+    input rate. With it an offering can price uncached input, cache reads and output each
+    at its own rate, splitting the input rather than discounting it. A proxy that
+    predates the cache fields omits them, they read as zero, and ``uncached_input_tokens``
+    is the whole prompt.
+    """
+    prompt = int(metrics.get("prompt_tokens") or 0)
+    cache_read = int(metrics.get("cache_read_input_tokens") or 0)
+    cache_write = int(metrics.get("cache_creation_input_tokens") or 0)
+    return {
+        "input_tokens": prompt,
+        "output_tokens": int(metrics.get("completion_tokens") or 0),
+        # Clamped: a provider that reports cache counts outside ``prompt_tokens``
+        # would otherwise drive it negative, and Waldur refuses negative usage.
+        "uncached_input_tokens": max(prompt - cache_read - cache_write, 0),
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
+        "token_cost": float(metrics.get("spend") or 0.0),
+    }
+
+
 class LiteLLMUsageBackendError(BackendError):
     """Error raised for LiteLLM spend API failures."""
 
@@ -113,8 +140,8 @@ class LiteLLMUsageClient:
     def get_user_usage_rows(self, start_date: str, end_date: str) -> list:
         """Return one row per (day, user, key) in the inclusive ``YYYY-MM-DD`` range.
 
-        Each row is ``{"date", "user_id", "key_alias", "input_tokens", "output_tokens",
-        "token_cost"}``, where ``key_alias`` may be ``None``. A row with no alias also
+        Each row is ``{"date", "user_id", "key_alias"}`` plus the metrics
+        ``_metric_values`` reads, where ``key_alias`` may be ``None``. A row with no alias also
         carries ``day_key_aliases``: the aliases of every key served on that day, from
         the ``api_keys`` breakdown, ``None`` for a key without one.
 
@@ -183,15 +210,12 @@ class LiteLLMUsageClient:
         """Map one entity (or entity-by-key) entry onto a usage row."""
         if not isinstance(record, dict):
             return None
-        metrics = record.get("metrics") or {}
         alias = (record.get("metadata") or {}).get("key_alias")
         return {
             "date": date,
             "user_id": user_id,
             "key_alias": str(alias) if alias else None,
-            "input_tokens": int(metrics.get("prompt_tokens") or 0),
-            "output_tokens": int(metrics.get("completion_tokens") or 0),
-            "token_cost": float(metrics.get("spend") or 0.0),
+            **_metric_values(record.get("metrics") or {}),
         }
 
     def _walk_results(self, start_date: str, end_date: str) -> list:
@@ -219,8 +243,8 @@ class LiteLLMUsageClient:
     def get_usage_rows(self, start_date: str, end_date: str) -> list:
         """Return one usage row per (day, key) in the inclusive ``YYYY-MM-DD`` range.
 
-        Each row is ``{"date", "key_alias", "input_tokens", "output_tokens",
-        "token_cost"}``, ``date`` being the proxy's UTC day the row was bucketed under.
+        Each row is ``{"date", "key_alias"}`` plus the metrics ``_metric_values`` reads,
+        ``date`` being the proxy's UTC day the row was bucketed under.
         Rows are *not* aggregated here — a key appears once per day it was used, and
         the caller sums them.
 
@@ -254,10 +278,7 @@ class LiteLLMUsageClient:
             # A key deleted before the sweep, or one minted outside the agent, has no
             # alias to attribute usage to. Counting it against nothing is correct.
             return None
-        metrics = record.get("metrics") or {}
         return {
             "key_alias": str(alias),
-            "input_tokens": int(metrics.get("prompt_tokens") or 0),
-            "output_tokens": int(metrics.get("completion_tokens") or 0),
-            "token_cost": float(metrics.get("spend") or 0.0),
+            **_metric_values(record.get("metrics") or {}),
         }
