@@ -19,6 +19,8 @@ VALID_SETTINGS: dict[str, Any] = {
     "role_mapping": {
         "PROJECT.ADMIN": "admin"
     },
+    "quota_enabled": True,
+    "allow_quota_override": False,
     "keycloak_enabled": True,
     "keycloak": {
         "keycloak_url": "https://kc.example.com/auth/",
@@ -77,6 +79,15 @@ def test_misspelt_keycloak_key_is_reported(backend, caplog):
     with caplog.at_level(logging.WARNING):
         _load(settings, backend)
     assert any("keycloak_relm" in m for m in _schema_warnings(caplog))
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_non_boolean_quota_override_is_reported(backend, caplog):
+    settings = copy.deepcopy(VALID_SETTINGS)
+    settings["allow_quota_override"] = "sometimes"
+    with caplog.at_level(logging.WARNING):
+        _load(settings, backend)
+    assert any("allow_quota_override" in m for m in _schema_warnings(caplog))
 
 
 def test_mixed_names_report_a_problem_once(caplog):

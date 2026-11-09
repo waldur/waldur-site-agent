@@ -37,6 +37,17 @@ class K8sUtNamespaceBackendSettingsSchema(CommonBackendSettingsSchema):
     namespace_annotations: Optional[dict[str, str]] = Field(
         default=None, description="Annotations set on managed namespaces"
     )
+    quota_enabled: Optional[bool] = Field(
+        default=None,
+        description="Enforce the namespace ResourceQuota (default true)",
+    )
+    allow_quota_override: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Let the order's 'quota_enabled' attribute differ from 'quota_enabled' "
+            "(default false)"
+        ),
+    )
     sync_users_to_cr: Optional[bool] = Field(
         default=None, description="Write member identities into the CR (default false)"
     )

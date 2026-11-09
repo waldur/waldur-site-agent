@@ -16,13 +16,13 @@ nothing (see [Usage reporting](#usage-reporting)).
 
 | Operation | Behaviour |
 |---|---|
-| Create resource | Three Keycloak groups (when enabled) and a `ManagedNamespace` CR with quotas |
+| Create resource | Three Keycloak groups (when enabled) and a `ManagedNamespace` CR with quotas (`spec.quota.enabled`) |
 | Terminate resource | Deletes the CR and the Keycloak groups |
-| Update limits | Updates the quotas in the CR spec |
+| Update limits | Patches the quota quantities in the CR spec; `spec.quota.enabled` is left as it is |
 | Add / remove members | Keycloak group membership; optionally user lists in the CR (`sync_users_to_cr`) |
-| Downscale | Quota set to cpu=1, memory=1Gi, storage=1Gi |
-| Pause | Quota set to zero |
-| Restore | **No-op** — returns `True`; limits come back with the next limit update |
+| Downscale | Quota set to cpu=1, memory=1Gi, storage=1Gi, and enforced |
+| Pause | Quota set to zero, and enforced |
+| Restore | Puts back the whole quota (quantities and `enabled`) that pause or downscale recorded |
 | Usage reporting | **No-op** — reports nothing; billing is by limits |
 
 ### Backend names
@@ -52,7 +52,8 @@ name. Neither name is written into resource metadata. The Python package and the
 ## Features
 
 - **ManagedNamespace Lifecycle**: Creates, updates, and deletes `ManagedNamespace` custom resources
-- **Resource Quotas**: Sets CPU, memory, storage, and GPU limits as namespace quotas
+- **Resource Quotas**: Sets CPU, memory, storage, and GPU limits as namespace quotas, with an offering
+  switch (and, where the offering allows it, a per-order one) to record them without enforcing them
 - **Role-Based Access Control**: Creates 3 Keycloak groups per namespace (admin, readwrite, readonly)
 - **Waldur Role Mapping**: Maps Waldur roles to namespace access levels automatically
 - **User Management**: Adds/removes users from Keycloak groups, reconciles role changes
@@ -228,6 +229,10 @@ offerings:
       namespace_prefix: "waldur-"
       default_role: "readwrite"
 
+      # Enforce the ResourceQuota; orders may not change it (see Quota enforcement)
+      quota_enabled: true
+      allow_quota_override: false
+
       keycloak_enabled: true
       keycloak_use_user_id: true
       keycloak:
@@ -277,6 +282,8 @@ offerings:
 | `default_role` | string | No | `readwrite` | Default namespace role for users without explicit role |
 | `role_mapping` | object | No | See Role Mapping | Custom Waldur role to namespace role mapping (merged with defaults) |
 | `component_quota_mapping` | object | No | See Component Mapping | Custom component to K8s quota field mapping |
+| `quota_enabled` | boolean | No | `true` | Enforce the namespace's `ResourceQuota` (`spec.quota.enabled`) |
+| `allow_quota_override` | boolean | No | `false` | Let the order's `quota_enabled` attribute differ from the setting |
 | `keycloak_use_user_id` | boolean | No | `true` | Use Keycloak user ID for lookup (false = use username) |
 | `sync_users_to_cr` | boolean | No | `false` | Sync user identities to CR `adminUsers`/`rwUsers`/`roUsers` fields |
 | `cr_user_identity_field` | string | No | `email` | User attribute for CR user fields |
@@ -301,6 +308,107 @@ The settings are validated by
 `waldur_site_agent_k8s_ut_namespace.schemas.K8sUtNamespaceBackendSettingsSchema` (the
 `keycloak:` block by the [keycloak-client](../keycloak-client/README.md) schema); a
 misspelt key is logged as a warning when the agent loads its configuration.
+
+## Quota enforcement (`quota_enabled`)
+
+The CRD's `spec.quota.enabled` decides whether the operator enforces the namespace's `ResourceQuota`.
+An offering that bills by consumption may not want a cap: a quota sized to the limits blocks rolling
+updates, which need headroom above steady state.
+
+This requires ManagedNamespace operator 1.4.3 or later, the first version with `spec.quota.enabled`. An
+older operator's CRD does not declare the field and prunes it on admission, so the quota stays enforced
+without any error; on those versions the setting has to be made through namespace labels instead. The plugin
+does not manage those labels, so pause and downscale cannot cap a namespace whose quota was turned off that
+way: they force `spec.quota.enabled`, which such an operator ignores.
+
+The plugin resolves the switch per resource when it is created:
+
+1. When the order carries a `quota_enabled` attribute equal to the offering's `quota_enabled` setting, that
+   value is used.
+2. When the attribute differs from the setting, it is used if the offering sets `allow_quota_override: true`;
+   otherwise the order **fails** with a `BackendError` that names the attribute and says the offering does not
+   allow it. The request is never silently dropped.
+3. When the attribute is absent (or `null`, or a whitespace-only string), the offering's `quota_enabled`
+   setting is used, which defaults to `true`.
+
+A refused order is refused before any Keycloak group or CR is created, so nothing is left behind.
+
+Values are accepted as Waldur's own boolean fields accept them: a JSON boolean, `0`/`1` (also `0.0`/`1.0`),
+or the strings `true`/`t`/`yes`/`y`/`on`/`1` and `false`/`f`/`no`/`n`/`off`/`0` (case-insensitive,
+surrounding whitespace ignored). Anything else fails the order with a message naming the attribute or setting
+and the rejected value. An empty `quota_enabled:` in the YAML keeps the default of `true`.
+
+`enabled` is always sent explicitly, because the CRD defaults it to `true` and an omitted field would
+silently re-enable a quota that was turned off. The quantities are sent even when it is off: they are the
+entitlement, and the switch only decides whether it is enforced, so turning it back on later needs no
+second write.
+
+The attribute is resolved at creation only. A limit update is a merge patch of the quota quantities, so it
+leaves `enabled` as it is. Changing the offering's settings later does not touch namespaces that already
+exist either; see [Why the gate exists](#why-the-gate-exists) for finding and re-capping them.
+
+### Pause, downscale and restore
+
+Pause and downscale work by shrinking the quota, which restricts nothing while the quota is not enforced. So
+both also set `spec.quota.enabled: true`. A namespace with `quota_enabled: false` cannot escape a pause that
+way. The whole `spec.quota` in force before (quantities and `enabled`) is recorded as JSON in the CR annotation
+`waldur.io/quota-before-pause`; a second pause or downscale keeps the first snapshot, so downscale followed by
+pause still restores the original quota.
+
+Restore writes the snapshot back and removes the annotation; without the annotation it is a no-op. Quantities
+the namespace did not have before the pause are removed again, so a namespace without quantities has none
+after a restore. The quantities have to come back from the snapshot: an offering billed by usage never sends a
+limit update that would restore them. A limit update that arrives while the namespace is paused or
+downscaled is written into the snapshot, not the spec, so it neither lifts the pause nor gets undone by the
+restore. The recorded `enabled` is re-checked against the offering's settings as
+they are at restore time: if the offering no longer allows orders to differ from its default
+(`allow_quota_override` turned off since), the offering's current `quota_enabled` is restored instead, with a
+warning. Likewise, re-creating a resource resolves its attributes afresh against the current settings.
+
+A namespace paused by an agent that wrote the earlier `waldur.io/quota-enabled-before-pause` annotation (which
+recorded only `enabled`) gets `enabled` back on restore; its pre-pause quantities were not recorded and come
+back with the next limit update.
+
+### Why the gate exists
+
+Waldur stores order attributes that the offering's order form does not declare: it validates the declared
+options and passes every other key through. Leaving `quota_enabled` out of the form therefore does not stop
+an orderer from sending it through the API. Without `allow_quota_override`, any orderer could get an
+uncapped namespace on a limit-billed offering, so the plugin honours the attribute only where the offering
+says so, and refuses the order otherwise rather than silently ignoring the request.
+
+Turning `allow_quota_override` off stops new uncapped orders; it does not re-cap namespaces created while it
+was on. List them and re-enable their quota by hand where needed:
+
+```bash
+kubectl get managednamespaces -n waldur-system \
+  -o jsonpath='{range .items[?(@.spec.quota.enabled==false)]}{.metadata.name}{"\n"}{end}'
+kubectl patch managednamespace <name> -n waldur-system --type merge -p '{"spec":{"quota":{"enabled":true}}}'
+```
+
+### Order-form option
+
+To let customers choose, set `allow_quota_override: true` and declare the option on the offering
+(`options` in the offering's order form, set through the offering editor or the API):
+
+```json
+{
+  "order": ["quota_enabled"],
+  "options": {
+    "quota_enabled": {
+      "type": "select_string",
+      "label": "Enforce resource quota",
+      "help_text": "Leave empty for the offering default",
+      "required": false,
+      "choices": ["true", "false"]
+    }
+  }
+}
+```
+
+A `select_string` records the choice as a string in either direction, which the plugin parses. Waldur
+validates the declared choices, and an unanswered optional field is left out of the order entirely, which
+keeps the offering default.
 
 ## Usage
 
@@ -333,10 +441,12 @@ uv run waldur_site_diagnostics -c k8s-namespace-config.yaml
 When a Waldur resource order is processed:
 
 1. Resource slug is validated (required for naming)
-2. Three Keycloak groups are created: `ns_{slug}_admin`, `ns_{slug}_readwrite`, `ns_{slug}_readonly`
-3. A `ManagedNamespace` CR is created with quota and group references in the spec
-4. The namespace name is `{namespace_prefix}{slug}` (e.g., `waldur-my-project`)
-5. If CR creation fails, Keycloak groups are cleaned up (compensating transaction)
+2. The `quota_enabled` order attribute is resolved against the offering; an invalid or disallowed value
+   fails the order before anything is created
+3. Three Keycloak groups are created: `ns_{slug}_admin`, `ns_{slug}_readwrite`, `ns_{slug}_readonly`
+4. A `ManagedNamespace` CR is created with quota (including `enabled`) and group references in the spec
+5. The namespace name is `{namespace_prefix}{slug}` (e.g., `waldur-my-project`)
+6. If CR creation fails, Keycloak groups are cleaned up (compensating transaction)
 
 ### Namespace Deletion
 
@@ -351,6 +461,8 @@ When resource limits are updated in Waldur:
 
 1. Limits are converted to K8s resource quantities
 2. The CR's `spec.quota` is patched with the new values
+
+The patch is a merge patch, so `spec.quota.enabled` keeps the value it was created with.
 
 ### User Management
 
@@ -438,9 +550,12 @@ backend_settings:
 
 | Operation | Effect |
 |-----------|--------|
-| Downscale | Quota set to minimal: cpu=1, memory=1Gi, storage=1Gi |
-| Pause | Quota set to zero: cpu=0, memory=0Gi, storage=0Gi |
-| Restore | **No-op** (limits come back with the next limit update) |
+| Downscale | Quota set to minimal: cpu=1, memory=1Gi, storage=1Gi; `spec.quota.enabled` forced to `true` |
+| Pause | Quota set to zero: cpu=0, memory=0Gi, storage=0Gi; `spec.quota.enabled` forced to `true` |
+| Restore | Writes back the quota recorded by pause/downscale (quantities and `enabled`); no-op without it |
+
+The quota in force before pause or downscale is kept in the `waldur.io/quota-before-pause` annotation on the CR
+(see [Pause, downscale and restore](#pause-downscale-and-restore)).
 
 ## Error Handling
 
@@ -449,6 +564,8 @@ backend_settings:
 - CR creation failure triggers automatic Keycloak group cleanup
 - Missing users in Keycloak are logged as warnings and skipped
 - Missing backend ID on deletion is logged and skipped gracefully
+- An invalid `quota_enabled` value, or one the offering does not allow the order to set, fails the order
+  and leaves no Keycloak groups or CR behind
 
 ## Development
 
