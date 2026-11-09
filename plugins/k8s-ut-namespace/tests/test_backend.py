@@ -554,32 +554,62 @@ class TestK8sUtNamespaceBackendPullResource:
 class TestK8sUtNamespaceBackendStatusOps:
     """Tests for downscale, pause, restore operations."""
 
+    @staticmethod
+    def _cr(enabled=True, annotations=None):
+        return {
+            "metadata": {"name": "waldur-test-ns", "annotations": annotations or {}},
+            "spec": {"quota": {"cpu": "4", "enabled": enabled}},
+        }
+
     def test_downscale(self, backend_settings, backend_components):
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
 
         assert backend.downscale_resource("waldur-test-ns") is True
         mock_k8s.patch_managed_namespace.assert_called_once_with(
             "waldur-test-ns",
-            {"spec": {"quota": {"cpu": "1", "memory": "1Gi", "storage": "1Gi"}}},
+            {
+                "spec": {
+                    "quota": {"cpu": "1", "memory": "1Gi", "storage": "1Gi", "enabled": True}
+                },
+                "metadata": {
+                    "annotations": {
+                        "waldur.io/quota-before-pause": '{"cpu": "4", "enabled": true}'
+                    }
+                },
+            },
         )
 
     def test_pause(self, backend_settings, backend_components):
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
 
         assert backend.pause_resource("waldur-test-ns") is True
         mock_k8s.patch_managed_namespace.assert_called_once_with(
             "waldur-test-ns",
-            {"spec": {"quota": {"cpu": "0", "memory": "0Gi", "storage": "0Gi"}}},
+            {
+                "spec": {
+                    "quota": {"cpu": "0", "memory": "0Gi", "storage": "0Gi", "enabled": True}
+                },
+                "metadata": {
+                    "annotations": {
+                        "waldur.io/quota-before-pause": '{"cpu": "4", "enabled": true}'
+                    }
+                },
+            },
         )
 
     def test_restore(self, backend_settings, backend_components):
+        """Nothing was paused: no annotation, nothing to put back."""
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
 
         assert backend.restore_resource("waldur-test-ns") is True
         mock_k8s.patch_managed_namespace.assert_not_called()
 
     def test_downscale_failure(self, backend_settings, backend_components):
         backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
         mock_k8s.patch_managed_namespace.side_effect = Exception("API error")
 
         assert backend.downscale_resource("waldur-test-ns") is False

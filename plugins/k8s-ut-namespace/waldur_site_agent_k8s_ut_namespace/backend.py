@@ -1,10 +1,13 @@
 """K8s UT ManagedNamespace backend for Waldur Site Agent."""
 
+import json
 import pprint
 import re
+import reprlib
 from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.types import Unset
 from waldur_site_agent_keycloak_client import KeycloakClient
 
 from waldur_site_agent.backend import backends, logger
@@ -43,6 +46,36 @@ NS_ROLE_TO_CR_USER_FIELD = {
 _NS_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 _NS_NAME_MAX_LEN = 63
 
+# Order-form attribute names, read from ``attributes`` on the resource, which is
+# what the order form records.
+QUOTA_ENABLED_ATTRIBUTE = "quota_enabled"
+
+# Spellings a boolean may arrive in: what Waldur's own BooleanField (DRF) and
+# the settings schema (pydantic, lax mode) accept, so a value either of them
+# took is not refused here. Strings are matched case-insensitively and trimmed.
+_TRUE_STRINGS = frozenset({"true", "t", "yes", "y", "on", "1"})
+_FALSE_STRINGS = frozenset({"false", "f", "no", "n", "off", "0"})
+
+# Annotation on the CR holding, as JSON, the whole ``spec.quota`` (quantities
+# and ``enabled``) in force before a pause or downscale; restore writes it back.
+QUOTA_BEFORE_PAUSE_ANNOTATION = "waldur.io/quota-before-pause"
+# Its predecessor, holding only ``enabled`` as "true"/"false". Still read, so a
+# namespace paused by an agent that wrote it can be restored.
+LEGACY_QUOTA_ENABLED_ANNOTATION = "waldur.io/quota-enabled-before-pause"
+
+# Order attributes are orderer-supplied and may be arbitrarily long: quote them
+# in error messages through this, not with a bare ``!r``.
+_short_repr = reprlib.Repr()
+_short_repr.maxstring = 60
+_short_repr.maxother = 60
+_short_repr.maxlist = 4
+_short_repr.maxdict = 4
+
+
+def _is_blank(value: object) -> bool:
+    """Whether a value means "not given": ``None`` or a whitespace-only string."""
+    return value is None or (isinstance(value, str) and not value.strip())
+
 
 class K8sUtNamespaceBackend(backends.BaseBackend):
     """Backend for managing Kubernetes ManagedNamespace CRs and Keycloak RBAC groups."""
@@ -77,6 +110,14 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         self.cr_user_identity_lowercase = backend_settings.get(
             "cr_user_identity_lowercase", False
         )
+
+        # Defaults the order may override where the offering allows it. A
+        # resource created before these existed carries no attribute, so it
+        # resolves to what the offering says: quotas managed. Kept raw here and
+        # parsed when a resource is created, so a malformed setting is reported
+        # against the order that hits it.
+        self.quota_enabled = backend_settings.get("quota_enabled")
+        self.allow_quota_override = backend_settings.get("allow_quota_override")
 
         self.namespace_labels: dict[str, str] = backend_settings.get(
             "namespace_labels", {}
@@ -168,6 +209,108 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             if group:
                 group_ids[role] = group["id"]
         return group_ids
+
+    # ── Order-form attributes ──────────────────────────────────────────────
+
+    @staticmethod
+    def _resource_attributes(waldur_resource: WaldurResource) -> dict:
+        """A resource's order attributes as a plain dict.
+
+        The generated client holds ``UNSET`` for a resource without attributes
+        and a ``ResourceAttributes`` otherwise, which supports ``[]`` but not
+        ``.get()``.
+        """
+        attributes = waldur_resource.attributes
+        if isinstance(attributes, Unset):
+            return {}
+        return attributes.to_dict()
+
+    @staticmethod
+    def _parse_bool_attribute(source: str, value: object) -> bool:
+        """Read a boolean switch, refusing anything ambiguous.
+
+        A non-empty string is truthy in Python, so reading ``"false"`` straight
+        out of the attributes bag would enable what the user turned off. Only
+        the spellings a form can actually produce are accepted; anything else
+        fails the order rather than being guessed at.
+
+        Args:
+            source: what the value came from, named in the error.
+            value: the switch as the order form or the setting recorded it.
+
+        Raises:
+            BackendError: naming the source and the value it rejected.
+        """
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str):
+            normalised = value.strip().lower()
+            if normalised in _TRUE_STRINGS:
+                return True
+            if normalised in _FALSE_STRINGS:
+                return False
+        msg = f"{source} must be true or false, got {_short_repr.repr(value)}"
+        raise BackendError(msg)
+
+    def _offering_quota_enabled(self) -> bool:
+        """The offering's ``quota_enabled`` setting; unset or empty means true."""
+        if _is_blank(self.quota_enabled):
+            return True
+        return self._parse_bool_attribute(
+            f"The '{QUOTA_ENABLED_ATTRIBUTE}' backend setting", self.quota_enabled
+        )
+
+    def _quota_override_allowed(self) -> bool:
+        """The offering's ``allow_quota_override`` setting; unset or empty means false."""
+        if _is_blank(self.allow_quota_override):
+            return False
+        return self._parse_bool_attribute(
+            "The 'allow_quota_override' backend setting", self.allow_quota_override
+        )
+
+    def _resolve_quota_enabled(self, waldur_resource: WaldurResource) -> bool:
+        """Whether the ManagedNamespace should enforce this namespace's quota.
+
+        The offering's ``quota_enabled`` setting is the default, and an offering
+        that never mentioned quotas keeps them enforced. The order's
+        ``quota_enabled`` attribute may differ from it only where the offering
+        sets ``allow_quota_override``: Waldur stores order attributes the form
+        does not declare, so without the gate any orderer could switch off the
+        cap on a limit-billed offering through the API.
+
+        An attribute equal to the default is accepted either way. An absent,
+        ``null`` or whitespace-only attribute is no request at all and gets the
+        default. An explicit ``null`` setting means ``true`` rather than off.
+
+        Raises:
+            BackendError: if a value cannot be read as a boolean, or the order
+                asks for a value other than the default on an offering that does
+                not allow it.
+        """
+        default = self._offering_quota_enabled()
+
+        attributes = self._resource_attributes(waldur_resource)
+        value = attributes.get(QUOTA_ENABLED_ATTRIBUTE)
+        if _is_blank(value):
+            return default
+
+        requested = self._parse_bool_attribute(
+            f"Attribute '{QUOTA_ENABLED_ATTRIBUTE}'", value
+        )
+        if requested == default:
+            return requested
+
+        if not self._quota_override_allowed():
+            msg = (
+                f"Attribute '{QUOTA_ENABLED_ATTRIBUTE}' is {_short_repr.repr(value)}, but "
+                "this offering does not allow orders to change quota enforcement "
+                f"(offering default: {QUOTA_ENABLED_ATTRIBUTE}={str(default).lower()}, "
+                "allow_quota_override is off)"
+            )
+            raise BackendError(msg)
+        return requested
 
     # ── Quota conversion ───────────────────────────────────────────────────
 
@@ -401,6 +544,16 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             waldur_resource.uuid.hex,
         )
 
+        # Resolve the order attributes first: they can reject the order, and
+        # refusing it before any group is created leaves nothing to undo.
+        #
+        # The switch is always sent explicitly. The CRD defaults it to true, so
+        # omitting it would silently re-enable a quota that was turned off. The
+        # quantities go along even when it is off: they are what the namespace
+        # is entitled to, and the switch is what decides whether they are
+        # enforced. A later re-enable then needs no second write to be correct.
+        quota_enabled = self._resolve_quota_enabled(waldur_resource)
+
         # 1. Create Keycloak groups (3 roles)
         self._create_keycloak_groups(resource_slug)
 
@@ -410,7 +563,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
 
         spec: dict = {
             "name": ns_name,
-            "quota": quota,
+            "quota": {**quota, "enabled": quota_enabled},
         }
 
         # Add group references per role (CRD uses adminGroups/rwGroups/roGroups)
@@ -480,13 +633,44 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         resource_backend_id: str,
         limits: dict[str, int],
     ) -> None:
-        """Patch ManagedNamespace CR spec.quota."""
+        """Patch ManagedNamespace CR spec.quota.
+
+        While a pause or downscale is in force, the new quantities go into the
+        quota it saved, not into the spec: patching the spec would lift the pause
+        until the next status sync, and the restore would later bring back the
+        quantities from before the update. The patch carries the CR's
+        ``resourceVersion``, so a restore that removed the saved quota in the
+        meantime makes it fail instead of leaving the update in a dropped
+        annotation.
+        """
         quota = self._waldur_limits_to_quota(limits)
         try:
-            self.k8s_client.patch_managed_namespace(
-                resource_backend_id,
-                {"spec": {"quota": quota}},
-            )
+            cr = self.k8s_client.get_managed_namespace(resource_backend_id)
+            metadata = (cr.get("metadata") or {}) if isinstance(cr, dict) else {}
+            annotations = metadata.get("annotations") or {}
+            saved = self._saved_quota(annotations)
+            if saved is None:
+                patch: dict = {"spec": {"quota": quota}}
+            else:
+                patch = {
+                    "metadata": {
+                        "annotations": {
+                            QUOTA_BEFORE_PAUSE_ANNOTATION: json.dumps(
+                                {**saved, **quota}, sort_keys=True
+                            ),
+                            LEGACY_QUOTA_ENABLED_ANNOTATION: None,
+                        }
+                    }
+                }
+                if metadata.get("resourceVersion"):
+                    patch["metadata"]["resourceVersion"] = metadata["resourceVersion"]
+                logger.info(
+                    "Namespace %s is paused or downscaled; new limits %s are saved "
+                    "for the restore",
+                    resource_backend_id,
+                    quota,
+                )
+            self.k8s_client.patch_managed_namespace(resource_backend_id, patch)
         except Exception as e:
             logger.error("Failed to set limits for %s: %s", resource_backend_id, e)
             raise BackendError(f"Failed to set limits: {e}") from e
@@ -782,14 +966,43 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
 
     # ── Status operations ──────────────────────────────────────────────────
 
+    def _force_quota(self, resource_backend_id: str, quota: dict[str, str]) -> None:
+        """Patch reduced quantities in and switch quota enforcement on.
+
+        Pause and downscale work by shrinking the quota, which does nothing on a
+        namespace whose quota is not enforced -- so an order allowed
+        ``quota_enabled: false`` would escape both. Enforcement is therefore
+        forced on, and the whole quota in force before is kept in an annotation
+        for ``restore_resource``: on a usage-billed offering no limit update ever
+        follows a restore, so the quantities must come back from there too.
+
+        A second pause or downscale keeps the snapshot the first one took, which
+        is the quota from before either of them.
+        """
+        cr = self.k8s_client.get_managed_namespace(resource_backend_id)
+        if cr is None:
+            msg = f"ManagedNamespace {resource_backend_id} not found"
+            raise BackendError(msg)
+
+        patch: dict = {"spec": {"quota": {**quota, "enabled": True}}}
+        annotations = (cr.get("metadata") or {}).get("annotations") or {}
+        if (
+            QUOTA_BEFORE_PAUSE_ANNOTATION not in annotations
+            and LEGACY_QUOTA_ENABLED_ANNOTATION not in annotations
+        ):
+            snapshot = dict((cr.get("spec") or {}).get("quota") or {})
+            patch["metadata"] = {
+                "annotations": {
+                    QUOTA_BEFORE_PAUSE_ANNOTATION: json.dumps(snapshot, sort_keys=True)
+                }
+            }
+        self.k8s_client.patch_managed_namespace(resource_backend_id, patch)
+
     def downscale_resource(self, resource_backend_id: str) -> bool:
-        """Downscale by patching CR quota to minimal values."""
+        """Downscale by patching CR quota to minimal values, enforced."""
         try:
             minimal_quota = {"cpu": "1", "memory": "1Gi", "storage": "1Gi"}
-            self.k8s_client.patch_managed_namespace(
-                resource_backend_id,
-                {"spec": {"quota": minimal_quota}},
-            )
+            self._force_quota(resource_backend_id, minimal_quota)
             logger.info("Downscaled namespace %s", resource_backend_id)
             return True
         except Exception as e:
@@ -797,23 +1010,110 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             return False
 
     def pause_resource(self, resource_backend_id: str) -> bool:
-        """Pause by patching CR quota to zero."""
+        """Pause by patching CR quota to zero, enforced."""
         try:
             zero_quota = {"cpu": "0", "memory": "0Gi", "storage": "0Gi"}
-            self.k8s_client.patch_managed_namespace(
-                resource_backend_id,
-                {"spec": {"quota": zero_quota}},
-            )
+            self._force_quota(resource_backend_id, zero_quota)
             logger.info("Paused namespace %s", resource_backend_id)
             return True
         except Exception as e:
             logger.error("Failed to pause %s: %s", resource_backend_id, e)
             return False
 
+    def _saved_quota(self, annotations: dict) -> Optional[dict]:
+        """The quota a pause or downscale recorded, or None if nothing was recorded.
+
+        The legacy annotation recorded only ``enabled``; the quantities from
+        before such a pause are not known, so they are left as they are.
+        """
+        raw = annotations.get(QUOTA_BEFORE_PAUSE_ANNOTATION)
+        if raw is not None:
+            snapshot = json.loads(raw)
+            if not isinstance(snapshot, dict):
+                msg = (
+                    f"Annotation '{QUOTA_BEFORE_PAUSE_ANNOTATION}' must hold a JSON "
+                    f"object, got {_short_repr.repr(raw)}"
+                )
+                raise BackendError(msg)
+            return snapshot
+        legacy = annotations.get(LEGACY_QUOTA_ENABLED_ANNOTATION)
+        if legacy is not None:
+            return {
+                "enabled": self._parse_bool_attribute(
+                    f"Annotation '{LEGACY_QUOTA_ENABLED_ANNOTATION}'", legacy
+                )
+            }
+        return None
+
     def restore_resource(self, resource_backend_id: str) -> bool:
-        """Restore is a no-op; limits should be re-set via set_resource_limits."""
-        logger.info("Restore for namespace %s is a no-op", resource_backend_id)
-        return True
+        """Write back the quota a pause or downscale recorded.
+
+        The quantities and ``enabled`` are both restored, and a quantity the
+        namespace did not have before the pause is removed again (a merge patch
+        with ``null``), so the quota ends up as it was. Without the annotation --
+        nothing was paused -- this is a no-op.
+
+        The saved ``enabled`` is checked against the offering's settings as they
+        are now: if the offering has since stopped allowing orders to differ from
+        its default, the default is restored instead.
+        """
+        try:
+            cr = self.k8s_client.get_managed_namespace(resource_backend_id)
+            annotations = ((cr or {}).get("metadata") or {}).get("annotations") or {}
+            snapshot = self._saved_quota(annotations)
+            if snapshot is None:
+                logger.info("Restore for namespace %s is a no-op", resource_backend_id)
+                return True
+
+            # The CRD defaults the field to true, so absent means enforced.
+            saved_enabled = snapshot.get("enabled")
+            enabled = (
+                True
+                if saved_enabled is None
+                else self._parse_bool_attribute(
+                    f"Annotation '{QUOTA_BEFORE_PAUSE_ANNOTATION}' enabled", saved_enabled
+                )
+            )
+            default = self._offering_quota_enabled()
+            if enabled != default and not self._quota_override_allowed():
+                logger.warning(
+                    "Namespace %s had quota enforcement %s before it was paused, but "
+                    "the offering no longer allows that; restoring the default (%s)",
+                    resource_backend_id,
+                    "on" if enabled else "off",
+                    "on" if default else "off",
+                )
+                enabled = default
+
+            quota: dict = {}
+            if QUOTA_BEFORE_PAUSE_ANNOTATION in annotations:
+                current = ((cr or {}).get("spec") or {}).get("quota") or {}
+                quota = {key: None for key in current if key not in snapshot}
+                quota.update({k: v for k, v in snapshot.items() if k != "enabled"})
+            quota["enabled"] = enabled
+
+            self.k8s_client.patch_managed_namespace(
+                resource_backend_id,
+                {
+                    "metadata": {
+                        "annotations": {
+                            QUOTA_BEFORE_PAUSE_ANNOTATION: None,
+                            LEGACY_QUOTA_ENABLED_ANNOTATION: None,
+                        }
+                    },
+                    "spec": {"quota": quota},
+                },
+            )
+            logger.info(
+                "Restored namespace %s: quota %s, enforcement %s",
+                resource_backend_id,
+                {k: v for k, v in quota.items() if k != "enabled"},
+                "on" if enabled else "off",
+            )
+            return True
+        except Exception as e:
+            logger.error("Failed to restore %s: %s", resource_backend_id, e)
+            return False
 
 
 class K8sNamespaceBackend(K8sUtNamespaceBackend):
