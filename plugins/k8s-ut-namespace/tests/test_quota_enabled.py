@@ -28,7 +28,12 @@ def _prepare(settings, components, resource, attributes=None):
 
     mock_kc.get_group_by_name.return_value = None
     mock_kc.create_group.side_effect = ["g-admin", "g-rw", "g-ro"]
-    mock_k8s.create_managed_namespace.return_value = {"metadata": {"name": CR_NAME}}
+    # The API server echoes the stored object; a CRD that prunes a field is
+    # simulated by tests that override this.
+    mock_k8s.create_managed_namespace.side_effect = lambda name, spec: {
+        "metadata": {"name": name},
+        "spec": spec,
+    }
     return backend, mock_k8s, mock_kc
 
 

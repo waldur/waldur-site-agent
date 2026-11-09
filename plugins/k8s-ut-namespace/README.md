@@ -16,9 +16,9 @@ nothing (see [Usage reporting](#usage-reporting)).
 
 | Operation | Behaviour |
 |---|---|
-| Create resource | Three Keycloak groups (when enabled) and a `ManagedNamespace` CR with quotas (`spec.quota.enabled`) |
+| Create resource | Keycloak groups (when enabled) and a `ManagedNamespace` CR with quotas and optional `spec.security` |
 | Terminate resource | Deletes the CR and the Keycloak groups |
-| Update limits | Patches the quota quantities in the CR spec; `spec.quota.enabled` is left as it is |
+| Update limits | Patches the quota quantities; `spec.quota.enabled` and the security level are left as they are |
 | Add / remove members | Keycloak group membership; optionally user lists in the CR (`sync_users_to_cr`) |
 | Downscale | Quota set to cpu=1, memory=1Gi, storage=1Gi, and enforced |
 | Pause | Quota set to zero, and enforced |
@@ -54,6 +54,8 @@ name. Neither name is written into resource metadata. The Python package and the
 - **ManagedNamespace Lifecycle**: Creates, updates, and deletes `ManagedNamespace` custom resources
 - **Resource Quotas**: Sets CPU, memory, storage, and GPU limits as namespace quotas, with an offering
   switch (and, where the offering allows it, a per-order one) to record them without enforcing them
+- **Pod Security**: Applies a Pod Security Admission level per namespace, from the offering or, within the
+  levels the offering allows, from the order
 - **Role-Based Access Control**: Creates 3 Keycloak groups per namespace (admin, readwrite, readonly)
 - **Waldur Role Mapping**: Maps Waldur roles to namespace access levels automatically
 - **User Management**: Adds/removes users from Keycloak groups, reconciles role changes
@@ -232,6 +234,9 @@ offerings:
       # Enforce the ResourceQuota; orders may not change it (see Quota enforcement)
       quota_enabled: true
       allow_quota_override: false
+      # Pod Security level of new namespaces; orders may not pick another (see Pod Security level)
+      default_security_level: "restricted"
+      allowed_security_levels: []
 
       keycloak_enabled: true
       keycloak_use_user_id: true
@@ -284,6 +289,8 @@ offerings:
 | `component_quota_mapping` | object | No | See Component Mapping | Custom component to K8s quota field mapping |
 | `quota_enabled` | boolean | No | `true` | Enforce the namespace's `ResourceQuota` (`spec.quota.enabled`) |
 | `allow_quota_override` | boolean | No | `false` | Let the order's `quota_enabled` attribute differ from the setting |
+| `default_security_level` | string | No | - | Pod Security level of new namespaces; unset leaves it to the operator |
+| `allowed_security_levels` | list | No | `[]` | Levels the order's `security_level` attribute may choose |
 | `keycloak_use_user_id` | boolean | No | `true` | Use Keycloak user ID for lookup (false = use username) |
 | `sync_users_to_cr` | boolean | No | `false` | Sync user identities to CR `adminUsers`/`rwUsers`/`roUsers` fields |
 | `cr_user_identity_field` | string | No | `email` | User attribute for CR user fields |
@@ -369,7 +376,7 @@ A namespace paused by an agent that wrote the earlier `waldur.io/quota-enabled-b
 recorded only `enabled`) gets `enabled` back on restore; its pre-pause quantities were not recorded and come
 back with the next limit update.
 
-### Why the gate exists
+### Why the quota switch is gated
 
 Waldur stores order attributes that the offering's order form does not declare: it validates the declared
 options and passes every other key through. Leaving `quota_enabled` out of the form therefore does not stop
@@ -386,7 +393,7 @@ kubectl get managednamespaces -n waldur-system \
 kubectl patch managednamespace <name> -n waldur-system --type merge -p '{"spec":{"quota":{"enabled":true}}}'
 ```
 
-### Order-form option
+### Quota order-form option
 
 To let customers choose, set `allow_quota_override: true` and declare the option on the offering
 (`options` in the offering's order form, set through the offering editor or the API):
@@ -409,6 +416,92 @@ To let customers choose, set `allow_quota_override: true` and declare the option
 A `select_string` records the choice as a string in either direction, which the plugin parses. Waldur
 validates the declared choices, and an unanswered optional field is left out of the order entirely, which
 keeps the offering default.
+
+## Pod Security level
+
+`spec.security.level` sets the namespace's Pod Security Admission level, one of `privileged`, `baseline` and
+`restricted`. This requires ManagedNamespace operator 1.4.3 or later, the first version that supports
+`spec.security.level` and reports the applied level in `status.securityLevel`. On older operators the level
+has to be set through namespace labels instead (see [Namespace Labels & Annotations](#namespace-labels--annotations)).
+Remove such `pod-security.kubernetes.io/*` labels when moving to `spec.security.level`: which of the two wins
+is up to the operator, not the agent.
+
+The plugin resolves the level per resource when it is created:
+
+1. When the order carries a `security_level` attribute that equals `default_security_level` or is listed in
+   `allowed_security_levels`, that level is used.
+2. When the attribute names any other level, the order **fails** with a `BackendError` naming the attribute
+   and the levels the offering allows. The request is never silently dropped.
+3. When the attribute is absent (or `null`, or a whitespace-only string), the offering's
+   `default_security_level` is used.
+4. When there is no default either, `spec.security` is left out and the operator applies the installation's
+   own default, which the agent does not know and does not guess.
+
+The allow-list is empty by default, so an order cannot choose a level unless the offering says so, and
+`privileged` is never implied: an offering that wants to offer it lists it. `default_security_level` is the
+offering's own choice and needs no allow-list entry. Values are matched case-insensitively after trimming
+whitespace. An offering with an allow-list should also set `default_security_level`: otherwise an order that
+leaves the attribute out gets the operator's default, which may be looser than anything on the list.
+
+A refused order is refused before any Keycloak group or CR is created. A `default_security_level` or
+`allowed_security_levels` entry that is not one of the three levels fails the order with a message naming
+the setting (the agent also warns about it when it loads its configuration; case and surrounding whitespace
+are normalised first, so `Restricted` is fine). A blank `default_security_level` means unset.
+
+After creating the CR the plugin checks the stored object. If the cluster's CRD dropped a requested
+`spec.security.level`, or `spec.quota.enabled: false`, the operator is older than 1.4.3: the plugin deletes the
+CR and the Keycloak groups it just created and fails the order with an error saying the operator does not
+support the field. (`enabled: true` is not checked, since a CRD without the field enforces the quota anyway.)
+If removing the CR fails too, the error says so and names the CR to delete by hand.
+
+That check only sees the CRD. A CRD upgraded ahead of its controller stores `spec.security.level`, but the old
+controller ignores it; the agent then logs a warning for every ready namespace that requests a level and has
+no `status.securityLevel`.
+
+The level actually in force is read back from the CR's `status.securityLevel` and published as
+`security_level` in the resource's `backend_metadata`; the key is absent while the operator has not set it.
+When it differs from a requested `spec.security.level`, the agent logs a warning.
+
+The level is a creation-time choice. A limit update patches `spec.quota` only, and changing
+`default_security_level` affects only namespaces created afterwards.
+
+### Why the security level is gated
+
+Waldur stores order attributes that the offering's order form does not declare, so leaving `security_level`
+out of the form does not stop an orderer from sending it through the API. An ungated
+`security_level: privileged` would let any orderer run privileged pods, hostPath mounts and host networking in
+their namespace, which is effectively node-level access to a shared cluster. The plugin therefore honours the
+attribute only for the levels the offering lists, and refuses the order otherwise.
+
+### Security level order-form option
+
+To let customers choose, list the levels in `allowed_security_levels` and declare the option on the offering
+with `choices` limited to those levels and the default. Waldur validates the declared choices, so the form
+cannot submit any other level; the plugin's check covers orders that bypass the form. For example, to let
+orders loosen the default `restricted` to `baseline`:
+
+```yaml
+    backend_settings:
+      default_security_level: "restricted"
+      allowed_security_levels: ["baseline"]
+```
+
+and the matching order-form option:
+
+```json
+{
+  "order": ["security_level"],
+  "options": {
+    "security_level": {
+      "type": "select_string",
+      "label": "Pod Security level",
+      "help_text": "Leave empty for the offering default (restricted)",
+      "required": false,
+      "choices": ["restricted", "baseline"]
+    }
+  }
+}
+```
 
 ## Usage
 
@@ -441,10 +534,11 @@ uv run waldur_site_diagnostics -c k8s-namespace-config.yaml
 When a Waldur resource order is processed:
 
 1. Resource slug is validated (required for naming)
-2. The `quota_enabled` order attribute is resolved against the offering; an invalid or disallowed value
-   fails the order before anything is created
+2. The `quota_enabled` and `security_level` order attributes are resolved against the offering; an invalid
+   or disallowed value fails the order before anything is created
 3. Three Keycloak groups are created: `ns_{slug}_admin`, `ns_{slug}_readwrite`, `ns_{slug}_readonly`
-4. A `ManagedNamespace` CR is created with quota (including `enabled`) and group references in the spec
+4. A `ManagedNamespace` CR is created with quota (including `enabled`) and group references in the spec,
+   and `spec.security` when a level was resolved
 5. The namespace name is `{namespace_prefix}{slug}` (e.g., `waldur-my-project`)
 6. If CR creation fails, Keycloak groups are cleaned up (compensating transaction)
 
@@ -462,7 +556,8 @@ When resource limits are updated in Waldur:
 1. Limits are converted to K8s resource quantities
 2. The CR's `spec.quota` is patched with the new values
 
-The patch is a merge patch, so `spec.quota.enabled` keeps the value it was created with.
+The patch is a merge patch, so `spec.quota.enabled` keeps the value it was created with and
+`spec.security` is not touched.
 
 ### User Management
 
@@ -564,8 +659,8 @@ The quota in force before pause or downscale is kept in the `waldur.io/quota-bef
 - CR creation failure triggers automatic Keycloak group cleanup
 - Missing users in Keycloak are logged as warnings and skipped
 - Missing backend ID on deletion is logged and skipped gracefully
-- An invalid `quota_enabled` value, or one the offering does not allow the order to set, fails the order
-  and leaves no Keycloak groups or CR behind
+- An invalid `quota_enabled` or `security_level` value, or one the offering does not allow the order to set,
+  fails the order and leaves no Keycloak groups or CR behind
 
 ## Development
 

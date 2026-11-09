@@ -2,12 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Annotated, Literal, Optional, get_args
 
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 from waldur_site_agent_keycloak_client.schemas import KeycloakSettingsSchema
 
 from waldur_site_agent.common.plugin_schemas import CommonBackendSettingsSchema
+
+# Pod Security Admission levels the ManagedNamespace CRD accepts, in ascending
+# order of restriction. The backend refuses an order that names any other value,
+# and the CRD itself would reject it, so the two lists are one list.
+SecurityLevel = Literal["privileged", "baseline", "restricted"]
+SECURITY_LEVELS: tuple[SecurityLevel, ...] = get_args(SecurityLevel)
+
+
+def _normalise_security_level(value: object) -> object:
+    """Trim and lowercase a level, as the backend does, before it is validated.
+
+    Without this ``default_security_level: "Restricted"`` would be reported as
+    a schema problem at load time and then accepted by the backend anyway. A
+    blank value reads as unset.
+    """
+    if isinstance(value, str):
+        return value.strip().lower() or None
+    return value
+
+
+SecurityLevelSetting = Annotated[SecurityLevel, BeforeValidator(_normalise_security_level)]
 
 
 class K8sUtNamespaceBackendSettingsSchema(CommonBackendSettingsSchema):
@@ -46,6 +67,19 @@ class K8sUtNamespaceBackendSettingsSchema(CommonBackendSettingsSchema):
         description=(
             "Let the order's 'quota_enabled' attribute differ from 'quota_enabled' "
             "(default false)"
+        ),
+    )
+    default_security_level: Optional[SecurityLevelSetting] = Field(
+        default=None,
+        description=(
+            "Pod Security level of new namespaces (default: the operator's own default)"
+        ),
+    )
+    allowed_security_levels: Optional[list[SecurityLevelSetting]] = Field(
+        default=None,
+        description=(
+            "Levels the order's 'security_level' attribute may choose besides "
+            "'default_security_level' (default: none)"
         ),
     )
     sync_users_to_cr: Optional[bool] = Field(
