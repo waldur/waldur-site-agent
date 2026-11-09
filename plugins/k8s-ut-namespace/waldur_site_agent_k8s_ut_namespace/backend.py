@@ -814,3 +814,30 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         """Restore is a no-op; limits should be re-set via set_resource_limits."""
         logger.info("Restore for namespace %s is a no-op", resource_backend_id)
         return True
+
+
+class K8sNamespaceBackend(K8sUtNamespaceBackend):
+    """The same backend under the deployment-neutral ``k8s-namespace`` name.
+
+    The ManagedNamespace operator is not specific to one deployment, so an
+    offering should not have to name one site to use it. Settings, settings
+    schema and behaviour are the parent's, unchanged. The subclass changes two
+    things only:
+
+    - the raw processor class path the agent registers in Waldur
+      (``module.ClassName``) reads ``...backend.K8sNamespaceBackend`` instead
+      of ``...backend.K8sUtNamespaceBackend``;
+    - ``backend_type``, the name the core's ``BaseBackend`` log lines use for
+      the backend (the paths that log it today -- the base create/delete and
+      the cycle preflight -- are overridden or unused by this plugin).
+
+    Anything Waldur derives from the reported class path (its
+    ``reported_backend_name``, used e.g. by the limit-precision advisory) takes
+    only the plugin package, so under either name Waldur's derived backend name
+    is ``k8s-ut-namespace``. ``backend_type`` itself is not sent to Waldur.
+    """
+
+    def __init__(self, backend_settings: dict, backend_components: dict[str, dict]) -> None:
+        """Initialize the backend and report the ``k8s-namespace`` type."""
+        super().__init__(backend_settings, backend_components)
+        self.backend_type = "k8s-namespace"

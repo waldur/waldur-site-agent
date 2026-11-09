@@ -8,7 +8,8 @@ RBAC group integration.
 
 | Entry point | Group | Role |
 |---|---|---|
-| `k8s-ut-namespace` | `waldur_site_agent.backends` | order processing, membership sync |
+| `k8s-namespace` | `waldur_site_agent.backends` | order processing, membership sync (preferred name) |
+| `k8s-ut-namespace` | `waldur_site_agent.backends` | the same backend under its former name |
 
 **Modes:** `order_process`, `membership_sync`, `event_process`. `report` runs but reports
 nothing (see [Usage reporting](#usage-reporting)).
@@ -23,6 +24,30 @@ nothing (see [Usage reporting](#usage-reporting)).
 | Pause | Quota set to zero |
 | Restore | **No-op** — returns `True`; limits come back with the next limit update |
 | Usage reporting | **No-op** — reports nothing; billing is by limits |
+
+### Backend names
+
+The plugin registers one backend under two names, `k8s-namespace` and `k8s-ut-namespace`, in both
+`waldur_site_agent.backends` and `waldur_site_agent.backend_settings_schemas`. **Use `k8s-namespace` for new
+offerings**: the ManagedNamespace operator is not specific to one deployment. Existing configurations that use
+`k8s-ut-namespace` keep working and need no change.
+
+Both names share one settings schema (`K8sUtNamespaceBackendSettingsSchema`), so settings are validated the same
+way under either, and only once when an offering mixes the two names. `k8s-namespace` loads
+`K8sNamespaceBackend`, a subclass of `K8sUtNamespaceBackend` whose only change is `backend_type`. Settings,
+components and behaviour are identical. The two names differ only in how the backend identifies itself:
+
+- the raw processor class path the agent registers in Waldur is
+  `waldur_site_agent_k8s_ut_namespace.backend.K8sNamespaceBackend` or `...K8sUtNamespaceBackend`;
+- `backend.backend_type` is `k8s-namespace` or `k8s-ut-namespace`, which is the name the core's generic log
+  lines use for the backend;
+- the plugin catalogue (`plugin_catalogue.build_catalogue()`) lists `k8s-namespace` and `k8s-ut-namespace` as two
+  separate backends with identical roles and settings. Pick `k8s-namespace`.
+
+Waldur's own backend name for the offering does **not** change: anything Waldur derives from the reported class path
+(for example the limit-precision advisory) reads only the plugin package, so it is `k8s-ut-namespace` under either
+name. Neither name is written into resource metadata. The Python package and the PyPI distribution keep the
+`k8s-ut-namespace` name.
 
 ## Features
 
@@ -145,10 +170,10 @@ offerings:
     waldur_api_token: "your-waldur-api-token"
     waldur_offering_uuid: "your-offering-uuid"
 
-    backend_type: "k8s-ut-namespace"
-    order_processing_backend: "k8s-ut-namespace"
-    membership_sync_backend: "k8s-ut-namespace"
-    reporting_backend: "k8s-ut-namespace"
+    backend_type: "k8s-namespace"
+    order_processing_backend: "k8s-namespace"
+    membership_sync_backend: "k8s-namespace"
+    reporting_backend: "k8s-namespace"
 
     backend_settings:
       kubeconfig_path: "/path/to/kubeconfig"
@@ -192,10 +217,10 @@ offerings:
     waldur_api_token: "your-waldur-api-token"
     waldur_offering_uuid: "your-offering-uuid"
 
-    backend_type: "k8s-ut-namespace"
-    order_processing_backend: "k8s-ut-namespace"
-    membership_sync_backend: "k8s-ut-namespace"
-    reporting_backend: "k8s-ut-namespace"
+    backend_type: "k8s-namespace"
+    order_processing_backend: "k8s-namespace"
+    membership_sync_backend: "k8s-namespace"
+    reporting_backend: "k8s-namespace"
 
     backend_settings:
       kubeconfig_path: "/path/to/kubeconfig"

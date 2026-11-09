@@ -1,7 +1,7 @@
 [project]
 name = "waldur-site-agent-k8s-ut-namespace"
 version = "1.0.8rc12"
-description = "Kubernetes UT ManagedNamespace plugin for Waldur Site Agent"
+description = "Kubernetes ManagedNamespace plugin (backends `k8s-namespace`, `k8s-ut-namespace`) for Waldur Site Agent"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.9.2, <4"
 dependencies = [
@@ -21,9 +21,20 @@ waldur-site-agent-keycloak-client = { workspace = true }
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]
 k8s-ut-namespace = "waldur_site_agent_k8s_ut_namespace.backend:K8sUtNamespaceBackend"
+# The same backend under a deployment-neutral name: the ManagedNamespace operator is
+# not specific to one site. A subclass rather than the same class, so the raw
+# processor class path stored in Waldur (module.ClassName) and the backend_type in
+# core log lines name the entry point the offering chose. Anything Waldur derives
+# from that path uses only the package, so it still reads k8s-ut-namespace. The old name stays registered, so
+# existing configurations keep working untouched.
+k8s-namespace = "waldur_site_agent_k8s_ut_namespace.backend:K8sNamespaceBackend"
 
 [project.entry-points."waldur_site_agent.backend_settings_schemas"]
 k8s-ut-namespace = "waldur_site_agent_k8s_ut_namespace.schemas:K8sUtNamespaceBackendSettingsSchema"
+# Both names read the same settings, so they share one schema class: the core
+# validates each distinct schema class once per offering, however many names
+# register it.
+k8s-namespace = "waldur_site_agent_k8s_ut_namespace.schemas:K8sUtNamespaceBackendSettingsSchema"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

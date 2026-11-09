@@ -1,4 +1,4 @@
-"""The k8s-ut-namespace settings schema is applied when the agent loads its configuration."""
+"""The k8s namespace settings schema is applied under either entry point name."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 
 from waldur_site_agent.common.structures import RootConfiguration
 
-BACKENDS = ['k8s-ut-namespace']
+BACKENDS = ['k8s-ut-namespace', 'k8s-namespace']
 
 VALID_SETTINGS: dict[str, Any] = {
     "kubeconfig_path": "/etc/kube/config",
@@ -29,7 +29,7 @@ VALID_SETTINGS: dict[str, Any] = {
 }
 
 
-def _load(settings: dict[str, Any], backend: str):
+def _load(settings: dict[str, Any], backend: str, **roles: str):
     offering = {
         "name": "Schema test",
         "waldur_api_url": "https://waldur.example.com/api/",
@@ -38,6 +38,7 @@ def _load(settings: dict[str, Any], backend: str):
         "backend_type": backend,
         "order_processing_backend": backend,
         "backend_settings": settings,
+        **roles,
     }
     return RootConfiguration(offerings=[offering]).to_agent_configuration().waldur_offerings[0]
 
@@ -76,3 +77,29 @@ def test_misspelt_keycloak_key_is_reported(backend, caplog):
     with caplog.at_level(logging.WARNING):
         _load(settings, backend)
     assert any("keycloak_relm" in m for m in _schema_warnings(caplog))
+
+
+def test_mixed_names_report_a_problem_once(caplog):
+    """Both names share one schema class, so an offering using both is checked once."""
+    settings = copy.deepcopy(VALID_SETTINGS)
+    settings['namespace_prefx'] = 'waldur-'
+    with caplog.at_level(logging.WARNING):
+        _load(
+            settings,
+            'k8s-ut-namespace',
+            membership_sync_backend='k8s-namespace',
+            reporting_backend='k8s-namespace',
+        )
+    warnings = [m for m in _schema_warnings(caplog) if 'namespace_prefx' in m]
+    assert len(warnings) == 1
+    assert 'k8s-ut-namespace, k8s-namespace' in warnings[0]
+
+
+def test_mixed_names_with_valid_settings_load_without_warnings(caplog):
+    with caplog.at_level(logging.WARNING):
+        _load(
+            copy.deepcopy(VALID_SETTINGS),
+            'k8s-namespace',
+            membership_sync_backend='k8s-ut-namespace',
+        )
+    assert _schema_warnings(caplog) == []

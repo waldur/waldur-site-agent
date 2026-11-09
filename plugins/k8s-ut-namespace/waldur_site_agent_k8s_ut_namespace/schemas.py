@@ -1,4 +1,4 @@
-"""Backend settings schema for the k8s-ut-namespace backend."""
+"""Backend settings schema for the k8s-ut-namespace and k8s-namespace backends."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from waldur_site_agent.common.plugin_schemas import CommonBackendSettingsSchema
 
 
 class K8sUtNamespaceBackendSettingsSchema(CommonBackendSettingsSchema):
-    """Settings for the ``k8s-ut-namespace`` backend."""
+    """Settings for the ``k8s-namespace`` and ``k8s-ut-namespace`` backends."""
 
     kubeconfig_path: Optional[str] = Field(
         default=None, description="Kubeconfig file; in-cluster config when unset"

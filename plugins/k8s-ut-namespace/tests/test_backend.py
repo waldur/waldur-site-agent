@@ -12,26 +12,7 @@ from waldur_site_agent_k8s_ut_namespace.backend import (
 )
 from waldur_site_agent.backend.exceptions import BackendError
 
-from conftest import MockResourceLimits
-
-
-def _make_backend(settings, components):
-    """Create a backend with mocked K8s and Keycloak clients."""
-    with (
-        patch(
-            "waldur_site_agent_k8s_ut_namespace.backend.K8sUtNamespaceClient"
-        ) as mock_k8s,
-        patch(
-            "waldur_site_agent_k8s_ut_namespace.backend.KeycloakClient"
-        ) as mock_kc,
-    ):
-        mock_k8s_instance = MagicMock()
-        mock_k8s.return_value = mock_k8s_instance
-        mock_kc_instance = MagicMock()
-        mock_kc.return_value = mock_kc_instance
-
-        backend = K8sUtNamespaceBackend(settings, components)
-        return backend, mock_k8s_instance, mock_kc_instance
+from conftest import MockResourceLimits, make_backend as _make_backend
 
 
 class TestK8sUtNamespaceBackendInit:
