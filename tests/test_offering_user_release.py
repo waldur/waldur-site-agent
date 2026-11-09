@@ -1111,6 +1111,33 @@ class TestIncludeUsageThreading:
         assert seen == [False, True]
         assert backends_module._pull_include_usage() is True
 
+    def test_an_override_of_pull_resource_can_read_the_flag(self):
+        """The contract for a plugin whose own ``pull_resource`` fetches usage.
+
+        Only the default ``_pull_backend_resource`` honours the flag by itself, so an
+        override that replaces ``pull_resource`` has to ask.
+        """
+        from waldur_site_agent.backend.backends import BaseBackend
+
+        seen = []
+
+        class _Plugin(BaseBackend):
+            def __init__(self):
+                self.client = mock.Mock()
+
+            def pull_resource(self, waldur_resource):
+                del waldur_resource
+                seen.append(self.include_usage_requested())
+                return BackendResourceInfo()
+
+        _Plugin.__abstractmethods__ = frozenset()
+        plugin = _Plugin()
+        plugin.pull_resources([_make_waldur_resource()], include_usage=False)
+        plugin.pull_resources([_make_waldur_resource()])
+        assert seen == [False, True]
+        # Outside a pull the answer is the default: usage is wanted.
+        assert plugin.include_usage_requested() is True
+
     def test_flag_is_per_thread(self):
         """Two threads pulling the same instance never see each other's flag."""
         import threading

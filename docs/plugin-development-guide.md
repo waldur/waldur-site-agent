@@ -256,6 +256,13 @@ backend needs custom behavior.
 | `remote_waldur_base_urls` | Returns `[]` | Waldur-to-Waldur: return the target's base URL (see below) |
 | `expects_target_event_subscriptions` | Returns `False` | `True` if you override `setup_target_event_subscriptions` |
 
+`get_usage_report_for_period` serves both the reporting processor's past periods
+and `waldur_site_load_historical_usage`, which sets `self.historical_load = True`
+and `self.timezone` on the backend first. Return `{}` only when the backend has no
+usage for the period: the loader reads `{}` with `--reconcile-stale` as "no usage"
+and zeroes the period, so raise when the period cannot be measured. The processor
+logs an exception from a past period and skips that period.
+
 For `create_resource_with_id`, `recreate_missing_resource` and
 `remote_waldur_base_urls` see [Resource identifiers](#resource-identifiers) and
 [Error handling and ERRED](#error-handling-and-erred). `sync_resource_limits` backs
@@ -1017,6 +1024,19 @@ The entry point name (e.g., `mycustom`) is what users put in
 `username_management_backend` in the config YAML. The four entry-point
 groups are independent — a single distribution may register some or all
 of them.
+
+### Nested settings models
+
+`scripts/generate_reference_docs.py --check` (run by `tests/test_reference_docs.py`)
+fails when a top-level field of your settings schema is not mentioned in the
+plugin README. It does not descend into a nested model: a
+`prometheus: Optional[PrometheusSettingsSchema]` field is checked as the single
+name `prometheus`, and the nested model's own fields are invisible to it.
+Document those by hand in the plugin README, and give the nested model
+`model_config = ConfigDict(extra="forbid")` so a misspelt key is reported against
+the block that holds it rather than ignored. The k8s-ut-namespace plugin's
+`PrometheusSettingsSchema` and the keycloak-client's `KeycloakSettingsSchema` are
+examples.
 
 ### Two names for one backend
 

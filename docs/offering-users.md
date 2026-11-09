@@ -249,7 +249,10 @@ call (a thread is synchronous through one pull, and STOMP subscriptions each
 run on their own thread), so plugin overrides of `pull_resource` and
 `_pull_backend_resource` keep their signatures and are called exactly as before;
 only the default `_pull_backend_resource` honours it, and a backend instance
-reached from several threads never sees another thread's flag.
+reached from several threads never sees another thread's flag. An override of
+`pull_resource` that fetches usage itself reads the flag through
+`include_usage_requested()` (the k8s-ut-namespace plugin does, so membership
+sync makes no Prometheus queries).
 
 The teardown asks for that same pull with `strict=True`. It decides by
 *absence* — a resource missing from the report means "the user holds no
