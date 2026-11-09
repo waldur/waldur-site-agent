@@ -14,6 +14,7 @@ from waldur_site_agent.backend import backends, logger
 from waldur_site_agent.backend.exceptions import BackendError, UserNotProvisionedError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent_k8s_ut_namespace.k8s_client import K8sUtNamespaceClient
+from waldur_site_agent_k8s_ut_namespace.schemas import SECURITY_LEVELS
 
 # Default Waldur role -> namespace access level mapping
 DEFAULT_ROLE_MAPPING = {
@@ -49,6 +50,7 @@ _NS_NAME_MAX_LEN = 63
 # Order-form attribute names, read from ``attributes`` on the resource, which is
 # what the order form records.
 QUOTA_ENABLED_ATTRIBUTE = "quota_enabled"
+SECURITY_LEVEL_ATTRIBUTE = "security_level"
 
 # Spellings a boolean may arrive in: what Waldur's own BooleanField (DRF) and
 # the settings schema (pydantic, lax mode) accept, so a value either of them
@@ -113,11 +115,14 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
 
         # Defaults the order may override where the offering allows it. A
         # resource created before these existed carries no attribute, so it
-        # resolves to what the offering says: quotas managed. Kept raw here and
-        # parsed when a resource is created, so a malformed setting is reported
-        # against the order that hits it.
+        # resolves to what the offering says: quotas managed, security level
+        # left to the operator. Kept raw here and parsed when a resource is
+        # created, so a malformed setting is reported against the order that
+        # hits it.
         self.quota_enabled = backend_settings.get("quota_enabled")
         self.allow_quota_override = backend_settings.get("allow_quota_override")
+        self.default_security_level = backend_settings.get("default_security_level")
+        self.allowed_security_levels = backend_settings.get("allowed_security_levels")
 
         self.namespace_labels: dict[str, str] = backend_settings.get(
             "namespace_labels", {}
@@ -312,6 +317,118 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             raise BackendError(msg)
         return requested
 
+    @staticmethod
+    def _normalise_security_level(source: str, value: object) -> str:
+        """Trim and lowercase a level, refusing anything the CRD would not accept.
+
+        Raises:
+            BackendError: naming the source and the value it rejected.
+        """
+        level = value.strip().lower() if isinstance(value, str) else None
+        if level is None or level not in SECURITY_LEVELS:
+            msg = (
+                f"{source} must be one of {', '.join(SECURITY_LEVELS)}, "
+                f"got {_short_repr.repr(value)}"
+            )
+            raise BackendError(msg)
+        return level
+
+    def _resolve_security_level(self, waldur_resource: WaldurResource) -> Optional[str]:
+        """The Pod Security level to apply, or None to leave it to the operator.
+
+        The offering's ``default_security_level`` applies unless the order's
+        ``security_level`` attribute names another level, which it may do only
+        for a level in ``allowed_security_levels``. The default allow-list is
+        empty, and ``privileged`` is never implied. Waldur stores order
+        attributes the form does not declare, so without the gate any orderer
+        could ask for ``privileged`` -- node-level access on a shared cluster.
+
+        The default level is offering-admin configuration and is only checked
+        for being a level at all. An attribute equal to it is always accepted.
+        Returns None when neither names a level: the operator then applies the
+        installation's own default, which the agent cannot know and must not
+        guess.
+
+        Raises:
+            BackendError: if a setting is not a valid level, or the order names
+                a level the offering does not allow.
+        """
+        default: Optional[str] = None
+        if not _is_blank(self.default_security_level):
+            default = self._normalise_security_level(
+                "The 'default_security_level' backend setting",
+                self.default_security_level,
+            )
+
+        attributes = self._resource_attributes(waldur_resource)
+        value = attributes.get(SECURITY_LEVEL_ATTRIBUTE)
+        if _is_blank(value):
+            return default
+
+        # A non-string value matches no level and falls through to the refusal.
+        requested = value.strip().lower() if isinstance(value, str) else None
+        if requested is not None and requested == default:
+            return default
+
+        configured = self.allowed_security_levels or []
+        if not isinstance(configured, list):
+            msg = (
+                "The 'allowed_security_levels' backend setting must be a list of "
+                f"{', '.join(SECURITY_LEVELS)}, got {_short_repr.repr(configured)}"
+            )
+            raise BackendError(msg)
+        allowed = {
+            self._normalise_security_level(
+                "Each entry of the 'allowed_security_levels' backend setting", level
+            )
+            for level in configured
+        }
+        if requested is not None and requested in allowed:
+            return requested
+
+        if default is not None:
+            allowed.add(default)
+        if allowed:
+            allowed_text = ", ".join(level for level in SECURITY_LEVELS if level in allowed)
+            msg = (
+                f"Attribute '{SECURITY_LEVEL_ATTRIBUTE}' is {_short_repr.repr(value)}, "
+                "but this offering "
+                f"allows only these security levels: {allowed_text}"
+            )
+        else:
+            msg = (
+                f"Attribute '{SECURITY_LEVEL_ATTRIBUTE}' is {_short_repr.repr(value)}, "
+                "but this offering "
+                "does not let orders choose a security level (allowed levels: none)"
+            )
+        raise BackendError(msg)
+
+    @staticmethod
+    def _unsupported_spec_fields(
+        created: object, quota_enabled: bool, security_level: Optional[str]
+    ) -> list[str]:
+        """Fields the API server dropped from the CR the agent just created.
+
+        A CRD that does not declare a field prunes it on admission without an
+        error, so an operator too old for these switches would silently enforce
+        a quota the order turned off, or apply its default level instead of the
+        one requested. Only the persisted object can tell.
+
+        ``enabled: true`` is not checked: a CRD without the field enforces the
+        quota anyway, which is what was asked for.
+        """
+        spec = created.get("spec") if isinstance(created, dict) else None
+        spec = spec if isinstance(spec, dict) else {}
+        missing = []
+        if quota_enabled is False and (spec.get("quota") or {}).get("enabled") is not False:
+            missing.append("spec.quota.enabled")
+        if (
+            security_level is not None
+            and (spec.get("security") or {}).get("level") != security_level
+        ):
+            missing.append("spec.security.level")
+        return missing
+
     # ── Quota conversion ───────────────────────────────────────────────────
 
     @staticmethod
@@ -500,9 +617,34 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             if cr:
                 metadata["name"] = cr.get("metadata", {}).get("name", "")
                 metadata["quota"] = cr.get("spec", {}).get("quota", {})
-                metadata["status"] = self._parse_ready_condition(
-                    cr.get("status", {})
-                )
+                status = cr.get("status") or {}
+                metadata["status"] = self._parse_ready_condition(status)
+                # The level the operator actually applied, not the one asked
+                # for: the operator resolves an unset spec.security.level to the
+                # installation default, so only status can say what is in force.
+                security_level = status.get("securityLevel")
+                requested = ((cr.get("spec") or {}).get("security") or {}).get("level")
+                if not security_level and requested and metadata["status"]["ready"]:
+                    # A ready namespace whose operator never reports the level:
+                    # its controller predates spec.security.level (the CRD may
+                    # have been upgraded ahead of it) and applies its default.
+                    logger.warning(
+                        "ManagedNamespace %s requests security level %s but the "
+                        "operator reports no applied level; it may be older than "
+                        "1.4.3 and running the namespace at its own default",
+                        resource_backend_id,
+                        requested,
+                    )
+                if security_level:
+                    metadata["security_level"] = security_level
+                    if requested and requested != security_level:
+                        logger.warning(
+                            "ManagedNamespace %s requests security level %s but the "
+                            "operator applied %s",
+                            resource_backend_id,
+                            requested,
+                            security_level,
+                        )
         except Exception as e:
             logger.warning("Failed to get metadata for %s: %s", resource_backend_id, e)
         return metadata
@@ -553,6 +695,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         # is entitled to, and the switch is what decides whether they are
         # enforced. A later re-enable then needs no second write to be correct.
         quota_enabled = self._resolve_quota_enabled(waldur_resource)
+        security_level = self._resolve_security_level(waldur_resource)
 
         # 1. Create Keycloak groups (3 roles)
         self._create_keycloak_groups(resource_slug)
@@ -565,6 +708,8 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             "name": ns_name,
             "quota": {**quota, "enabled": quota_enabled},
         }
+        if security_level is not None:
+            spec["security"] = {"level": security_level}
 
         # Add group references per role (CRD uses adminGroups/rwGroups/roGroups)
         if self.keycloak_client:
@@ -590,12 +735,40 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
 
         # 3. Create ManagedNamespace CR
         try:
-            self.k8s_client.create_managed_namespace(ns_name, spec)
+            created = self.k8s_client.create_managed_namespace(ns_name, spec)
         except BackendError:
             # Cleanup Keycloak groups on failure
             logger.error("Failed to create CR, cleaning up Keycloak groups")
             self._delete_keycloak_groups(resource_slug)
             raise
+
+        # 4. Fail closed if the CRD pruned a switch the order relies on.
+        unsupported = self._unsupported_spec_fields(created, quota_enabled, security_level)
+        if unsupported:
+            fields = ", ".join(unsupported)
+            logger.error(
+                "ManagedNamespace %s was stored without %s; removing it again",
+                ns_name,
+                fields,
+            )
+            outcome = "so the namespace was removed again"
+            try:
+                self.k8s_client.delete_managed_namespace(ns_name)
+            except Exception as e:
+                logger.error("Failed to delete ManagedNamespace %s: %s", ns_name, e)
+                # Left behind, it runs without the requested setting -- possibly at
+                # a looser security level -- so whoever reads the error must know.
+                outcome = (
+                    f"and removing it failed ({e}): delete ManagedNamespace {ns_name} "
+                    f"in {self.cr_namespace} by hand"
+                )
+            self._delete_keycloak_groups(resource_slug)
+            msg = (
+                f"The ManagedNamespace operator does not support {fields}: the "
+                f"cluster's CRD dropped it from {ns_name}, {outcome}. Upgrade the "
+                "operator, or order without that setting."
+            )
+            raise BackendError(msg)
 
         return BackendResourceInfo(
             backend_id=ns_name,

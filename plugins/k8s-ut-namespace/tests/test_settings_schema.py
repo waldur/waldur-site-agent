@@ -21,6 +21,8 @@ VALID_SETTINGS: dict[str, Any] = {
     },
     "quota_enabled": True,
     "allow_quota_override": False,
+    "default_security_level": "baseline",
+    "allowed_security_levels": ["baseline", "restricted"],
     "keycloak_enabled": True,
     "keycloak": {
         "keycloak_url": "https://kc.example.com/auth/",
@@ -113,4 +115,29 @@ def test_mixed_names_with_valid_settings_load_without_warnings(caplog):
             'k8s-namespace',
             membership_sync_backend='k8s-ut-namespace',
         )
+    assert _schema_warnings(caplog) == []
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("default_security_level", "unconfined"), ("allowed_security_levels", ["root"])],
+)
+def test_unknown_security_level_is_reported(backend, key, value, caplog):
+    """The levels are the CRD's, so a typo is caught at load time."""
+    settings = copy.deepcopy(VALID_SETTINGS)
+    settings[key] = value
+    with caplog.at_level(logging.WARNING):
+        _load(settings, backend)
+    assert any(key in m for m in _schema_warnings(caplog))
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_security_levels_are_normalised_before_validation(backend, caplog):
+    """The backend accepts "Restricted", so loading it must not warn."""
+    settings = copy.deepcopy(VALID_SETTINGS)
+    settings["default_security_level"] = " Restricted "
+    settings["allowed_security_levels"] = ["BASELINE"]
+    with caplog.at_level(logging.WARNING):
+        _load(settings, backend)
     assert _schema_warnings(caplog) == []
