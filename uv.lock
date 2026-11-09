@@ -2539,6 +2539,7 @@ name = "waldur-site-agent-k8s-ut-namespace"
 version = "1.0.8rc12"
 source = { editable = "plugins/k8s-ut-namespace" }
 dependencies = [
+    { name = "httpx" },
     { name = "kubernetes" },
     { name = "waldur-site-agent" },
     { name = "waldur-site-agent-keycloak-client" },
@@ -2546,6 +2547,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.25.0" },
     { name = "kubernetes", specifier = ">=28.0.0,<32.0.0" },
     { name = "waldur-site-agent", editable = "." },
     { name = "waldur-site-agent-keycloak-client", editable = "plugins/keycloak-client" },

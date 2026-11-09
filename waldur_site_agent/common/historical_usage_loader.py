@@ -142,6 +142,7 @@ def load_historical_usage_for_month(
     dry_run: bool = False,
     reconcile_stale: bool = False,
     resource_backend_ids: Optional[list[str]] = None,
+    timezone: str = "",
 ) -> None:
     """Load historical usage data for a specific month.
 
@@ -157,6 +158,9 @@ def load_historical_usage_for_month(
         reconcile_stale: If True, zero out totals for resources absent from
             backend data and per-user records for users absent from it
         resource_backend_ids: If set, process only resources with these backend IDs
+        timezone: The agent's configured timezone, which the billing months are
+            computed in -- as the reporting processor does, so a month loaded here
+            covers the same instants as the one the processor reported
     """
     logger.info(
         "Processing month %d/%d: %04d-%02d for offering '%s' (%s)",
@@ -175,6 +179,8 @@ def load_historical_usage_for_month(
 
     # Get backend for this offering - reuse existing backend creation logic
     resource_backend, _ = utils.get_backend_for_offering(offering, "reporting_backend")
+    resource_backend.timezone = timezone
+    resource_backend.historical_load = True
 
     # Get all resources for this offering from Waldur
     waldur_resources = marketplace_provider_resources_list.sync_all(
@@ -879,6 +885,7 @@ Examples:
                 dry_run=args.dry_run,
                 reconcile_stale=args.reconcile_stale,
                 resource_backend_ids=args.resource_backend_ids,
+                timezone=configuration.timezone,
             )
 
         logger.info("Historical usage loading completed successfully!")

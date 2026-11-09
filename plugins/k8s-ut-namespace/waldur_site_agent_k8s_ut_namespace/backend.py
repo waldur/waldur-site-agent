@@ -1,19 +1,31 @@
 """K8s UT ManagedNamespace backend for Waldur Site Agent."""
 
+import datetime
 import json
 import pprint
 import re
 import reprlib
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.types import Unset
 from waldur_site_agent_keycloak_client import KeycloakClient
 
 from waldur_site_agent.backend import backends, logger
+from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError, UserNotProvisionedError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent_k8s_ut_namespace.k8s_client import K8sUtNamespaceClient
+from waldur_site_agent_k8s_ut_namespace.prometheus_billing import (
+    PrometheusClient,
+    PrometheusCoverageError,
+    PrometheusError,
+    PrometheusPeriodClosedError,
+    PrometheusQueryError,
+    PrometheusUnavailableError,
+    collect_usage,
+)
 from waldur_site_agent_k8s_ut_namespace.schemas import SECURITY_LEVELS
 
 # Default Waldur role -> namespace access level mapping
@@ -100,6 +112,24 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             except Exception as e:
                 logger.warning(f"Failed to initialize Keycloak client: {e}")
                 self.keycloak_client = None
+
+        # Consumption billing is opt-in. An offering without a ``prometheus`` block
+        # keeps the old behaviour: no usage reported, nothing queried.
+        #
+        # A block that is present but unusable -- empty, or without ``url`` -- raises
+        # rather than degrading to no billing: silently reporting nothing is the one
+        # failure mode that looks exactly like an idle month.
+        self.prometheus_client: Optional[PrometheusClient] = None
+        if "prometheus" in backend_settings:
+            self.prometheus_client = PrometheusClient(backend_settings["prometheus"])
+            logger.info(
+                "Prometheus billing enabled for K8s UT namespace backend (%s)",
+                self.prometheus_client.url,
+            )
+        # Per backend instance, which is per reporting cycle: once Prometheus failed
+        # to answer, the rest of the cycle does not wait for it again.
+        self._prometheus_unavailable = False
+        self._coverage_reported = False
 
         self.namespace_prefix = backend_settings.get("namespace_prefix", "waldur-")
         self.cr_namespace = backend_settings.get("cr_namespace", "waldur-system")
@@ -483,7 +513,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
     # ── BaseBackend abstract methods ───────────────────────────────────────
 
     def ping(self, raise_exception: bool = False) -> bool:
-        """Check K8s cluster and Keycloak connectivity."""
+        """Check K8s cluster, Keycloak and Prometheus connectivity."""
         try:
             k8s_ok = self.k8s_client.ping()
             if not k8s_ok:
@@ -500,6 +530,17 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                         raise BackendError(msg)  # noqa: TRY301
                     return False
 
+            # Billing reads from Prometheus, so diagnostics should show an unreachable
+            # or rejecting one. This does not hold orders back: the backend does not
+            # set supports_cycle_preflight, and nothing else gates on ping().
+            if self.prometheus_client:
+                prometheus_ok = self.prometheus_client.ping()
+                if not prometheus_ok:
+                    if raise_exception:
+                        msg = "Failed to ping Prometheus server"
+                        raise BackendError(msg)  # noqa: TRY301
+                    return False
+
             return True
         except BackendError:
             if raise_exception:
@@ -508,7 +549,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         except Exception as e:
             if raise_exception:
                 raise
-            logger.error("Failed to ping K8s/Keycloak: %s", e)
+            logger.error("Failed to ping K8s/Keycloak/Prometheus: %s", e)
             return False
 
     def diagnostics(self) -> bool:
@@ -524,6 +565,11 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         logger.info(
             fmt.format("Keycloak enabled", "Yes" if self.keycloak_client else "No")
         )
+        logger.info(
+            fmt.format("Prometheus billing", "Yes" if self.prometheus_client else "No")
+        )
+        if self.prometheus_client:
+            logger.info(fmt.format("Prometheus URL", self.prometheus_client.url))
         if self.namespace_labels:
             logger.info(fmt.format("Namespace labels", str(self.namespace_labels)))
         if self.namespace_annotations:
@@ -546,9 +592,30 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             if self.keycloak_client:
                 logger.info("Keycloak connection successful")
 
+            if self.prometheus_client:
+                logger.info("Prometheus connection successful")
+                now = self._now()
+                start, _ = self._period_bounds(now.year, now.month)
+                floor, reason = self.prometheus_client.covered_since(now)
+                logger.info(
+                    fmt.format(
+                        "Prometheus holds data from",
+                        "unlimited"
+                        if floor is None
+                        else datetime.datetime.fromtimestamp(
+                            floor, datetime.timezone.utc
+                        ).isoformat(),
+                    )
+                )
+                logger.info("  (by %s)", reason)
+                self._check_coverage(start, now)
+
             return True
+        except PrometheusCoverageError as err:
+            logger.error("Prometheus cannot bill the current period: %s", err)
+            return False
         except BackendError as err:
-            logger.error("Unable to connect to K8s/Keycloak: %s", err)
+            logger.error("Unable to connect to K8s/Keycloak/Prometheus: %s", err)
             return False
         except Exception as e:
             logger.error("Unexpected error during diagnostics: %s", e)
@@ -567,13 +634,281 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         backend_limits = dict(waldur_limits)
         return backend_limits, waldur_limits
 
-    def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
-        """Return empty report — usage reporting is not supported.
+    # ── Usage reporting ────────────────────────────────────────────────────
 
-        Billing is based on limits (allocation), not actual consumption.
+    def _reporting_tz(self) -> datetime.tzinfo:
+        """The timezone the billing period is computed in.
+
+        Injected by the reporting processor from the agent's global configuration, so
+        the month boundary here cannot drift from the one the processor uses to decide
+        which period a report lands in. The configuration validator rejects a timezone
+        that does not parse, so the UTC fallback is unreachable in a configured agent.
         """
-        del resource_backend_ids
+        if self.timezone:
+            try:
+                return ZoneInfo(self.timezone)
+            except Exception:
+                logger.warning(
+                    "Unknown timezone %r, falling back to UTC for the billing period",
+                    self.timezone,
+                )
+        return datetime.timezone.utc
+
+    def _now(self) -> datetime.datetime:
+        """The current instant, aware, in the reporting timezone.
+
+        Read through the same helper the reporting processor uses. It returns a naive
+        local time when no timezone is set, which ``astimezone`` reads as local time
+        and converts, so the instant is right either way.
+        """
+        now = backend_utils.get_current_time_in_timezone(self.timezone)
+        return now.astimezone(self._reporting_tz())
+
+    def _period_bounds(
+        self, year: int, month: int
+    ) -> tuple[datetime.datetime, datetime.datetime]:
+        """The half-open bounds of one calendar month in the reporting timezone.
+
+        The end is the first instant of the next month rather than its last, so no
+        second of the month falls outside the window and consecutive periods tile
+        without a gap.
+        """
+        tz = self._reporting_tz()
+        start = datetime.datetime(year, month, 1, tzinfo=tz)
+        # December rolls both the month and the year over.
+        end = datetime.datetime(year + month // 12, month % 12 + 1, 1, tzinfo=tz)
+        return start, end
+
+    def _usage_components(self) -> dict[str, str]:
+        """Name to type of the components Waldur bills by usage.
+
+        Only those are measured and reported. A limit-billed component is priced from
+        its limit, and a consumption figure under its name -- 1488 core-hours against a
+        two-core limit -- would only mislead whoever reads it.
+
+        Component *names* are what Waldur sees; component *types* are what the queries
+        are keyed on. The two differ whenever an offering renames a component.
+        """
+        components = {}
+        for name, config in self.backend_components.items():
+            accounting_type = config.get("accounting_type")
+            accounting_type = getattr(accounting_type, "value", accounting_type)
+            if str(accounting_type).lower() == "usage":
+                components[name] = config.get("type", name)
+        return components
+
+    @staticmethod
+    def _measurable_namespaces(resource_backend_ids: list[str]) -> list[str]:
+        """The backend ids that are valid namespace names; the rest are logged and skipped.
+
+        A namespace name is an RFC 1123 label, and only such a name goes into a query.
+        """
+        valid = []
+        for backend_id in resource_backend_ids:
+            if (
+                isinstance(backend_id, str)
+                and len(backend_id) <= _NS_NAME_MAX_LEN
+                and _NS_NAME_RE.match(backend_id)
+            ):
+                valid.append(backend_id)
+            else:
+                logger.warning(
+                    "Not measuring %r: it is not a valid namespace name (RFC 1123 label)",
+                    backend_id,
+                )
+        return valid
+
+    def _check_coverage(self, start: datetime.datetime, now: datetime.datetime) -> None:
+        """Refuse a period Prometheus does not hold in full.
+
+        A period measured from the part of it that is left is reported low. For a
+        closed month that is caught by the anomaly guard only when a higher figure was
+        stored before; for the current one a retention shorter than the month turns
+        the window into a sliding one, and the guard then freezes the figure at
+        whatever the retention covers.
+
+        Raises:
+            PrometheusCoverageError: if the period starts before what Prometheus holds.
+            PrometheusUnavailableError: if Prometheus cannot be asked.
+        """
+        client = self.prometheus_client
+        if client is None:
+            return
+        floor, reason = client.covered_since(now)
+        if floor is not None and start.timestamp() < floor:
+            held_from = datetime.datetime.fromtimestamp(floor, datetime.timezone.utc)
+            msg = (
+                f"Prometheus does not hold all of the period starting {start.isoformat()}: "
+                f"it holds data only from {held_from.isoformat()}, by {reason}"
+            )
+            raise PrometheusCoverageError(msg)
+
+    def _collect_period_usage(
+        self,
+        resource_backend_ids: list[str],
+        start: datetime.datetime,
+        end: datetime.datetime,
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Measure one period's consumption for every requested namespace.
+
+        A namespace that some query returned a series for is reported with every
+        usage-billed component, because ``TOTAL_ACCOUNT_USAGE`` is the resource's whole
+        bill and a component left out of it keeps whatever it last held. A component
+        its queries found nothing for is then a real zero: a namespace with running
+        pods but no GPU request used no GPU. The value is the native figure divided by
+        the component's ``unit_factor``.
+
+        A namespace that *no* query returned a series for is left out. Prometheus
+        holds nothing for it in the period, and a zero would be a claim the backend
+        cannot make.
+
+        Raises:
+            PrometheusQueryError: if any component's query failed. One query covers
+                every namespace, so none of them is reported: a resource reported from
+                some of its components would contradict what Waldur holds for the rest.
+            PrometheusUnavailableError: if Prometheus could not be reached.
+        """
+        client = self.prometheus_client
+        components = self._usage_components()
+        if client is None or not components:
+            return {}
+        namespaces = self._measurable_namespaces(resource_backend_ids)
+        if not namespaces:
+            return {}
+
+        measured, failed = collect_usage(
+            client, sorted(set(components.values())), namespaces, start, end
+        )
+        if failed:
+            msg = (
+                f"Prometheus could not measure component type(s) {', '.join(sorted(failed))}; "
+                f"usage of {len(namespaces)} namespace(s) is not reported, since a partial "
+                "report would contradict the period's figures in Waldur"
+            )
+            raise PrometheusQueryError(msg)
+
+        report: dict[str, dict[str, dict[str, float]]] = {}
+        for backend_id in namespaces:
+            if not any(backend_id in per_namespace for per_namespace in measured.values()):
+                logger.info(
+                    "Prometheus holds no samples for namespace %s between %s and %s; "
+                    "not reporting it",
+                    backend_id,
+                    start.isoformat(),
+                    end.isoformat(),
+                )
+                continue
+            total: dict[str, float] = {}
+            for name, component_type in components.items():
+                native = measured.get(component_type, {}).get(backend_id, 0.0)
+                unit_factor = self.backend_components[name].get("unit_factor") or 1
+                total[name] = round(native / float(unit_factor), 2)
+            report[backend_id] = {"TOTAL_ACCOUNT_USAGE": total}
+        return report
+
+    def _get_usage_report(
+        self, resource_backend_ids: list[str]
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Collect consumption for the current billing period, up to now.
+
+        Returns ``{}`` when no ``prometheus`` block is configured: billing is opt-in,
+        and an offering that never asked for it must keep behaving as it did.
+
+        Returns ``{}`` too, after logging an error, when the period cannot be measured
+        -- Prometheus does not hold all of it, a query failed, or Prometheus is
+        unreachable. ``pull_resource`` then reports an empty total, which changes
+        nothing in Waldur. After a transport error or timeout, Prometheus is not asked
+        again for the rest of the cycle: every resource would wait out the same timeout.
+        """
+        if self.prometheus_client is None or self._prometheus_unavailable:
+            return {}
+        now = self._now()
+        start, _ = self._period_bounds(now.year, now.month)
+        try:
+            self._check_coverage(start, now)
+            return self._collect_period_usage(resource_backend_ids, start, now)
+        except PrometheusCoverageError as exc:
+            if not self._coverage_reported:
+                self._coverage_reported = True
+                logger.error("No usage is reported for the current period: %s", exc)
+        except PrometheusUnavailableError as exc:
+            self._prometheus_unavailable = True
+            logger.error(
+                "Prometheus is unavailable; no usage is reported for the rest of this "
+                "cycle: %s",
+                exc,
+            )
+        except PrometheusError as exc:
+            logger.error(
+                "No usage is reported for %s in the current period: %s",
+                ", ".join(resource_backend_ids),
+                exc,
+            )
         return {}
+
+    def get_usage_report_for_period(
+        self,
+        resource_backend_ids: list[str],
+        year: int,
+        month: int,
+        waldur_resource: Optional[WaldurResource] = None,
+    ) -> dict:
+        """Measure a closed month again with both window ends pinned.
+
+        The current-period report stops at the last pass before rollover, so the last
+        stretch of a month is counted only by measuring it again after it ended. That
+        is done only within ``closed_period_hours`` of the month's end: Waldur takes
+        usage for a past month only while that month's invoice is open, which lasts
+        ``INVOICE_FINALIZATION_GRACE_PERIOD_HOURS``. Outside that window the reporting
+        cycle gets ``{}`` without a query, and the processor skips the month.
+
+        ``{}`` means "Prometheus holds no series for these namespaces", nothing else.
+        Everything that is not that answer raises, because the historical loader reads
+        ``{}`` with ``--reconcile-stale`` as "no usage" and zeroes the month.
+
+        Raises:
+            PrometheusPeriodClosedError: outside ``closed_period_hours``, when
+                called by ``waldur_site_load_historical_usage``.
+            PrometheusCoverageError: if Prometheus does not hold all of the month.
+            PrometheusQueryError: if a component's query failed.
+            PrometheusUnavailableError: if Prometheus is unreachable, now or earlier
+                in this cycle.
+        """
+        del waldur_resource
+        client = self.prometheus_client
+        if client is None or not resource_backend_ids:
+            return {}
+        start, end = self._period_bounds(year, month)
+        now = self._now()
+        if end.timestamp() <= now.timestamp():
+            closed_for = now.timestamp() - end.timestamp()
+            if closed_for > client.closed_period_seconds:
+                msg = (
+                    f"{year:04d}-{month:02d} ended {closed_for / 3600:.0f} h ago, longer "
+                    f"than closed_period_hours ({client.closed_period_seconds / 3600:g} h) "
+                    "ago: Waldur no longer takes usage for it unless its invoice is still "
+                    "open; raise closed_period_hours to measure it anyway"
+                )
+                if getattr(self, "historical_load", False):
+                    raise PrometheusPeriodClosedError(msg)
+                logger.debug("Not measuring %s", msg)
+                return {}
+        else:
+            # A month asked for before it has ended is measured up to now, like the
+            # current period, not up to an end that has not happened yet.
+            end = now
+        if self._prometheus_unavailable:
+            msg = "Prometheus was unavailable earlier in this cycle"
+            raise PrometheusUnavailableError(msg)
+        try:
+            self._check_coverage(start, now)
+            return self._collect_period_usage(resource_backend_ids, start, end)
+        except PrometheusCoverageError as exc:
+            logger.error("No usage is reported for %04d-%02d: %s", year, month, exc)
+            raise
+        except PrometheusUnavailableError:
+            self._prometheus_unavailable = True
+            raise
 
     @staticmethod
     def _parse_k8s_quantity(value: str) -> int:
@@ -1093,8 +1428,16 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             # Collect users from all Keycloak groups
             users = self._list_all_keycloak_users(waldur_resource)
 
-            # Get usage report
-            report = self._get_usage_report([ns_name])
+            # Get usage report. Skipped when the caller said it does not want it --
+            # membership sync never reads usage, and a Prometheus query per
+            # component on every sync cycle is work thrown away. The empty report
+            # then falls through to the same empty usage as an unmeasured
+            # namespace.
+            report = (
+                self._get_usage_report([ns_name])
+                if self.include_usage_requested()
+                else {}
+            )
             usage = report.get(ns_name, {"TOTAL_ACCOUNT_USAGE": {}})
 
             return BackendResourceInfo(

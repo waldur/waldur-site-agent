@@ -611,6 +611,75 @@ class TestHistoricalUsageLoader:
             mock_reconcile.assert_called_once()
             assert mock_reconcile.call_args[0][2] == set()
 
+    @staticmethod
+    def _load_month_with_backend(mock_backend, **kwargs):
+        mock_offering = Mock()
+        mock_offering.api_url = "https://waldur.example.com/api/"
+        mock_offering.uuid = "offering-uuid"
+        mock_offering.verify_ssl = True
+        mock_resource = Mock()
+        mock_resource.name = "test_resource"
+        mock_resource.backend_id = "test_account_123"
+        mock_resource.uuid = Mock()
+        with (
+            patch(f"{MODULE}.utils.get_client"),
+            patch(
+                f"{MODULE}.marketplace_provider_resources_list.sync_all",
+                return_value=[mock_resource],
+            ),
+            patch(f"{MODULE}.marketplace_offering_users_list.sync_all", return_value=[]),
+            patch(
+                f"{MODULE}.utils.get_backend_for_offering",
+                return_value=(mock_backend, "1.0.0"),
+            ),
+            patch(f"{MODULE}._submit_resource_usage") as mock_submit_resource,
+            patch(f"{MODULE}._reconcile_stale_user_usages") as mock_reconcile,
+        ):
+            load_historical_usage_for_month(
+                mock_offering, "staff-token", 2026, 10, 1, 1, **kwargs
+            )
+        return mock_submit_resource, mock_reconcile
+
+    def test_load_month_measures_in_the_configured_timezone(self):
+        """The backend sees the agent's timezone, as it does under the processor.
+
+        Without it a backend computing month bounds from ``timezone`` measured UTC
+        months and overwrote the processor's local-time figures.
+        """
+        seen = {}
+        mock_backend = Mock()
+        mock_backend.backend_components = {"cpu": {"unit_factor": 1}}
+
+        def report(*args, **kwargs):
+            seen["timezone"] = mock_backend.timezone
+            seen["historical_load"] = mock_backend.historical_load
+            return {}
+
+        mock_backend.get_usage_report_for_period.side_effect = report
+
+        self._load_month_with_backend(mock_backend, timezone="Europe/Tallinn")
+
+        assert seen == {"timezone": "Europe/Tallinn", "historical_load": True}
+
+    def test_load_month_backend_error_zeroes_nothing(self):
+        """A backend that cannot measure the month must not be read as "no usage".
+
+        With --reconcile-stale an empty report zeroes every resource; an exception
+        is logged and the month is left as it is.
+        """
+        mock_backend = Mock()
+        mock_backend.backend_components = {"cpu": {"unit_factor": 1}}
+        mock_backend.get_usage_report_for_period.side_effect = RuntimeError(
+            "Prometheus does not hold all of the period"
+        )
+
+        mock_submit_resource, mock_reconcile = self._load_month_with_backend(
+            mock_backend, reconcile_stale=True
+        )
+
+        mock_submit_resource.assert_not_called()
+        mock_reconcile.assert_not_called()
+
     def test_load_month_resource_backend_id_filter(self):
         """Test that --resource-backend-id restricts processing to matching resources."""
         mock_offering = Mock()
