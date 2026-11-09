@@ -748,6 +748,19 @@ class BaseBackend(ABC):
         """
         return _pull_strict()
 
+    def include_usage_requested(self) -> bool:
+        """Whether the pull running right now wants the usage report.
+
+        An override of ``pull_resource`` that fetches usage has to consult this,
+        for the same reason ``strict_pull_requested`` exists: the flag cannot travel
+        through the signature without breaking every existing override. Membership
+        sync passes ``include_usage=False`` and never reads what it asked to skip,
+        so a backend that ignores the flag spends its accounting calls -- a
+        Prometheus query per component, an API round trip -- on every sync cycle
+        for nothing.
+        """
+        return _pull_include_usage()
+
     def pull_resource(
         self, waldur_resource: WaldurResource
     ) -> Optional[structures.BackendResourceInfo]:

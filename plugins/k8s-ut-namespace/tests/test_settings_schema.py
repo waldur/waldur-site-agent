@@ -1,4 +1,4 @@
-"""The k8s-ut-namespace settings schema is applied when the agent loads its configuration."""
+"""The k8s namespace settings schema is applied under either entry point name."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 
 from waldur_site_agent.common.structures import RootConfiguration
 
-BACKENDS = ['k8s-ut-namespace']
+BACKENDS = ['k8s-ut-namespace', 'k8s-namespace']
 
 VALID_SETTINGS: dict[str, Any] = {
     "kubeconfig_path": "/etc/kube/config",
@@ -19,6 +19,8 @@ VALID_SETTINGS: dict[str, Any] = {
     "role_mapping": {
         "PROJECT.ADMIN": "admin"
     },
+    "quota_enabled": True,
+    "default_security_level": "baseline",
     "keycloak_enabled": True,
     "keycloak": {
         "keycloak_url": "https://kc.example.com/auth/",
@@ -76,3 +78,13 @@ def test_misspelt_keycloak_key_is_reported(backend, caplog):
     with caplog.at_level(logging.WARNING):
         _load(settings, backend)
     assert any("keycloak_relm" in m for m in _schema_warnings(caplog))
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_unknown_security_level_is_reported(backend, caplog):
+    """The allowed levels are the CRD's, so a typo is caught at load time."""
+    settings = copy.deepcopy(VALID_SETTINGS)
+    settings["default_security_level"] = "unconfined"
+    with caplog.at_level(logging.WARNING):
+        _load(settings, backend)
+    assert any("default_security_level" in m for m in _schema_warnings(caplog))

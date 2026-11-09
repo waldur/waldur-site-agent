@@ -397,7 +397,7 @@ username_management_backend: "base"  # Backend for username management (default 
 **Processing backends** (entry point group `waldur_site_agent.backends`; names as installed by the
 plugins in this repository):
 
-<!-- pyml disable-num-lines 20 line-length -->
+<!-- pyml disable-num-lines 21 line-length -->
 | Name | Plugin package | Purpose |
 | ---- | -------------- | ------- |
 | `slurm` | `waldur-site-agent-slurm` | SLURM accounts, limits, usage |
@@ -406,7 +406,8 @@ plugins in this repository):
 | `waldur` | `waldur-site-agent-waldur` | Waldur-to-Waldur federation |
 | `rancher` | `waldur-site-agent-rancher` | Rancher projects via the Rancher API |
 | `rancher-kc-crd` | `waldur-site-agent-rancher-kc-crd` | Rancher + Keycloak via `ManagedRancherProject` CRDs |
-| `k8s-ut-namespace` | `waldur-site-agent-k8s-ut-namespace` | Kubernetes UT `ManagedNamespace` resources |
+| `k8s-ut-namespace` | `waldur-site-agent-k8s-ut-namespace` | Kubernetes `ManagedNamespace` resources (former name) |
+| `k8s-namespace` | `waldur-site-agent-k8s-ut-namespace` | Kubernetes `ManagedNamespace` resources |
 | `okd` | `waldur-site-agent-okd` | OKD / OpenShift projects |
 | `opennebula` | `waldur-site-agent-opennebula` | OpenNebula VDCs and VMs |
 | `azure` | `waldur-site-agent-azure` | Azure virtual machines |

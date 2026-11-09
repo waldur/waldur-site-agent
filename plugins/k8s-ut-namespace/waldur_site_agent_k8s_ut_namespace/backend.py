@@ -1,16 +1,24 @@
 """K8s UT ManagedNamespace backend for Waldur Site Agent."""
 
+import datetime
 import pprint
 import re
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_site_agent_keycloak_client import KeycloakClient
 
 from waldur_site_agent.backend import backends, logger
+from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError, UserNotProvisionedError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent_k8s_ut_namespace.k8s_client import K8sUtNamespaceClient
+from waldur_site_agent_k8s_ut_namespace.prometheus_billing import (
+    PrometheusClient,
+    collect_usage,
+)
+from waldur_site_agent_k8s_ut_namespace.schemas import SECURITY_LEVELS
 
 # Default Waldur role -> namespace access level mapping
 DEFAULT_ROLE_MAPPING = {
@@ -43,6 +51,16 @@ NS_ROLE_TO_CR_USER_FIELD = {
 _NS_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 _NS_NAME_MAX_LEN = 63
 
+# Order-form attribute names. Both are read from ``attributes`` on the resource,
+# which is what the order form records, and both fall back to backend_settings.
+QUOTA_ENABLED_ATTRIBUTE = "quota_enabled"
+SECURITY_LEVEL_ATTRIBUTE = "security_level"
+
+# Spellings a boolean order attribute may arrive in. The form can record the
+# value as a JSON boolean or, once it has been through a text field, as a string.
+_TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
+_FALSE_STRINGS = frozenset({"false", "0", "no", "off"})
+
 
 class K8sUtNamespaceBackend(backends.BaseBackend):
     """Backend for managing Kubernetes ManagedNamespace CRs and Keycloak RBAC groups."""
@@ -66,6 +84,22 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 logger.warning(f"Failed to initialize Keycloak client: {e}")
                 self.keycloak_client = None
 
+        # Consumption billing is opt-in. An offering without a ``prometheus`` block
+        # keeps the old behaviour -- no usage reported, nothing probed -- because a
+        # cluster without a metrics stack must not have its orders held pending.
+        #
+        # A block that is present but unusable raises rather than degrading to no
+        # billing: silently reporting nothing is the one failure mode that looks
+        # exactly like an idle month.
+        self.prometheus_client: Optional[PrometheusClient] = None
+        prometheus_settings = backend_settings.get("prometheus")
+        if prometheus_settings:
+            self.prometheus_client = PrometheusClient(prometheus_settings)
+            logger.info(
+                "Prometheus billing enabled for K8s UT namespace backend (%s)",
+                self.prometheus_client.url,
+            )
+
         self.namespace_prefix = backend_settings.get("namespace_prefix", "waldur-")
         self.cr_namespace = backend_settings.get("cr_namespace", "waldur-system")
         self.default_role = backend_settings.get("default_role", "readwrite")
@@ -76,6 +110,16 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         )
         self.cr_user_identity_lowercase = backend_settings.get(
             "cr_user_identity_lowercase", False
+        )
+
+        # Defaults the order may override. A resource created before these
+        # existed carries neither attribute, so both resolve to what the offering
+        # said at the time: quotas managed, security level left to the operator.
+        # Kept raw here and parsed when a resource is created, so a malformed
+        # setting is reported against the order that hits it.
+        self.quota_enabled = backend_settings.get("quota_enabled", True)
+        self.default_security_level: Optional[str] = backend_settings.get(
+            "default_security_level"
         )
 
         self.namespace_labels: dict[str, str] = backend_settings.get(
@@ -169,6 +213,110 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 group_ids[role] = group["id"]
         return group_ids
 
+    # ── Order-form attributes ──────────────────────────────────────────────
+
+    @staticmethod
+    def _resource_attributes(waldur_resource: WaldurResource) -> dict:
+        """Read a resource's order attributes as a plain dict.
+
+        The generated client models ``attributes`` as an attrs class that supports
+        ``[]`` but not ``.get()``, and is truthy even when empty -- so treating it
+        as a mapping raises, and testing it for emptiness lies. A resource that
+        carries no attributes at all holds ``UNSET``, which has neither
+        ``to_dict`` nor items.
+        """
+        raw = getattr(waldur_resource, "attributes", None)
+        if raw is None:
+            return {}
+        to_dict = getattr(raw, "to_dict", None)
+        attributes = to_dict() if callable(to_dict) else raw
+        return attributes if isinstance(attributes, dict) else {}
+
+    @staticmethod
+    def _parse_bool_attribute(source: str, value: object) -> bool:
+        """Read a boolean switch, refusing anything ambiguous.
+
+        A non-empty string is truthy in Python, so reading ``"false"`` straight
+        out of the attributes bag would enable what the user turned off. Only
+        the spellings a form can actually produce are accepted; anything else
+        fails the order rather than being guessed at.
+
+        Args:
+            source: what the value came from, named in the error.
+            value: the switch as the order form or the setting recorded it.
+
+        Raises:
+            BackendError: naming the source and the value it rejected.
+        """
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str):
+            normalised = value.strip().lower()
+            if normalised in _TRUE_STRINGS:
+                return True
+            if normalised in _FALSE_STRINGS:
+                return False
+        msg = f"{source} must be true or false, got {value!r}"
+        raise BackendError(msg)
+
+    def _resolve_quota_enabled(self, waldur_resource: WaldurResource) -> bool:
+        """Whether the ManagedNamespace should manage this namespace's quota.
+
+        The order wins when it names the attribute; otherwise the offering's
+        ``quota_enabled`` setting applies, and it defaults to on so an offering
+        that never mentioned quotas keeps them managed. The setting goes through
+        the same parser as the attribute: an explicit ``null`` falls back to the
+        default rather than reading as off, and a stray string is refused instead
+        of being taken as truthy.
+        """
+        attributes = self._resource_attributes(waldur_resource)
+        value = attributes.get(QUOTA_ENABLED_ATTRIBUTE)
+        source = f"Attribute '{QUOTA_ENABLED_ATTRIBUTE}'"
+        if value is None:
+            value = self.quota_enabled
+            source = f"The '{QUOTA_ENABLED_ATTRIBUTE}' backend setting"
+        if value is None:
+            return True
+        return self._parse_bool_attribute(source, value)
+
+    def _resolve_security_level(self, waldur_resource: WaldurResource) -> Optional[str]:
+        """The Pod Security level to apply, or None to leave it to the operator.
+
+        Returns None when neither the order nor the offering names a level: the
+        CRD then falls back to the installation's own default, which the agent
+        cannot know and must not guess.
+
+        Raises:
+            BackendError: if the level is not one the CRD accepts. The CRD would
+                reject it too, but an order that fails here says what was wrong
+                instead of surfacing an admission error.
+        """
+        attributes = self._resource_attributes(waldur_resource)
+        value = attributes.get(SECURITY_LEVEL_ATTRIBUTE)
+        from_attribute = value not in (None, "")
+        if not from_attribute:
+            value = self.default_security_level
+        if value in (None, ""):
+            return None
+
+        level = str(value).strip().lower()
+        if level not in SECURITY_LEVELS:
+            allowed = ", ".join(SECURITY_LEVELS)
+            if from_attribute:
+                msg = (
+                    f"Attribute '{SECURITY_LEVEL_ATTRIBUTE}' must be one of "
+                    f"{allowed}, got {value!r}"
+                )
+            else:
+                msg = (
+                    "The 'default_security_level' backend setting must be one of "
+                    f"{allowed}, got {value!r}"
+                )
+            raise BackendError(msg)
+        return level
+
     # ── Quota conversion ───────────────────────────────────────────────────
 
     @staticmethod
@@ -223,7 +371,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
     # ── BaseBackend abstract methods ───────────────────────────────────────
 
     def ping(self, raise_exception: bool = False) -> bool:
-        """Check K8s cluster and Keycloak connectivity."""
+        """Check K8s cluster, Keycloak and Prometheus connectivity."""
         try:
             k8s_ok = self.k8s_client.ping()
             if not k8s_ok:
@@ -240,6 +388,18 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                         raise BackendError(msg)  # noqa: TRY301
                     return False
 
+            # Billing reads from Prometheus, so an unreachable one means the cycle
+            # cannot report anything. Failing here keeps orders pending instead of
+            # letting them run and error, and does nothing at all when billing is
+            # not configured.
+            if self.prometheus_client:
+                prometheus_ok = self.prometheus_client.ping()
+                if not prometheus_ok:
+                    if raise_exception:
+                        msg = "Failed to ping Prometheus server"
+                        raise BackendError(msg)  # noqa: TRY301
+                    return False
+
             return True
         except BackendError:
             if raise_exception:
@@ -248,7 +408,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         except Exception as e:
             if raise_exception:
                 raise
-            logger.error("Failed to ping K8s/Keycloak: %s", e)
+            logger.error("Failed to ping K8s/Keycloak/Prometheus: %s", e)
             return False
 
     def diagnostics(self) -> bool:
@@ -264,6 +424,13 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         logger.info(
             fmt.format("Keycloak enabled", "Yes" if self.keycloak_client else "No")
         )
+        logger.info(
+            fmt.format(
+                "Prometheus billing", "Yes" if self.prometheus_client else "No"
+            )
+        )
+        if self.prometheus_client:
+            logger.info(fmt.format("Prometheus URL", self.prometheus_client.url))
         if self.namespace_labels:
             logger.info(fmt.format("Namespace labels", str(self.namespace_labels)))
         if self.namespace_annotations:
@@ -286,9 +453,12 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             if self.keycloak_client:
                 logger.info("Keycloak connection successful")
 
+            if self.prometheus_client:
+                logger.info("Prometheus connection successful")
+
             return True
         except BackendError as err:
-            logger.error("Unable to connect to K8s/Keycloak: %s", err)
+            logger.error("Unable to connect to K8s/Keycloak/Prometheus: %s", err)
             return False
         except Exception as e:
             logger.error("Unexpected error during diagnostics: %s", e)
@@ -307,13 +477,136 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         backend_limits = dict(waldur_limits)
         return backend_limits, waldur_limits
 
-    def _get_usage_report(self, resource_backend_ids: list[str]) -> dict:
-        """Return empty report — usage reporting is not supported.
+    # ── Usage reporting ────────────────────────────────────────────────────
 
-        Billing is based on limits (allocation), not actual consumption.
+    def _reporting_tz(self) -> datetime.tzinfo:
+        """The timezone the billing period is computed in.
+
+        Injected by the reporting processor from the agent's global configuration, so
+        the month boundary here cannot drift from the one the processor uses to decide
+        which period a report lands in. The configuration validator rejects a timezone
+        that does not parse, so the UTC fallback is unreachable in a configured agent.
         """
-        del resource_backend_ids
-        return {}
+        if self.timezone:
+            try:
+                return ZoneInfo(self.timezone)
+            except Exception:
+                logger.warning(
+                    "Unknown timezone %r, falling back to UTC for the billing period",
+                    self.timezone,
+                )
+        return datetime.timezone.utc
+
+    def _period_bounds(self, year: int, month: int) -> tuple[datetime.datetime, datetime.datetime]:
+        """The half-open bounds of one calendar month in the reporting timezone.
+
+        The end is the first instant of the next month rather than its last, so no
+        second of the month falls outside the window and consecutive periods tile
+        without a gap.
+        """
+        tz = self._reporting_tz()
+        start = datetime.datetime(year, month, 1, tzinfo=tz)
+        # December rolls both the month and the year over.
+        end = datetime.datetime(
+            year + month // 12, month % 12 + 1, 1, tzinfo=tz
+        )
+        return start, end
+
+    def _collect_period_usage(
+        self, resource_backend_ids: list[str], start: datetime.datetime, end: datetime.datetime
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Measure one period's consumption for every requested namespace.
+
+        Every component Waldur declares is reported for every resource the backend
+        could measure, because ``TOTAL_ACCOUNT_USAGE`` is the resource's whole bill and
+        a component left out of it keeps whatever it last held rather than dropping to
+        zero. The value is the native figure divided by the component's ``unit_factor``,
+        which is what turns core-hours into the Waldur unit the price list is written
+        in.
+
+        A failed measurement leaves the affected resources out of the report rather than
+        reporting them as zero, and never aborts the pass: the processor's missing-entry
+        path then fills zeros, and the rest of the offering is still billed. One query
+        covers every namespace, so a query failure costs the whole pass -- reporting a
+        resource from some of its components would submit a figure that contradicts the
+        one Waldur already holds for the others.
+        """
+        if not resource_backend_ids:
+            return {}
+
+        client = self.prometheus_client
+        if client is None:
+            return {}
+
+        # Component *names* are what Waldur sees; component *types* are what the
+        # queries are keyed on. The two differ whenever an offering renames a
+        # component, and both the query and the mapping use the type.
+        components = {
+            name: config.get("type", name)
+            for name, config in self.backend_components.items()
+        }
+        component_types = sorted(set(components.values()))
+
+        measured, failed = collect_usage(
+            client, component_types, resource_backend_ids, start, end
+        )
+
+        # The queries cover every namespace at once, so a component that failed failed
+        # for all of them: no resource is billed on a partial reading.
+        unmeasured = sorted(set(components.values()) & failed)
+        if unmeasured:
+            logger.warning(
+                "Usage for %d namespace(s) is not being reported: Prometheus could not "
+                "measure component type(s) %s, and a partial report would overwrite the "
+                "period's accrued usage",
+                len(resource_backend_ids),
+                ", ".join(unmeasured),
+            )
+            return {}
+
+        report: dict[str, dict[str, dict[str, float]]] = {}
+        for backend_id in resource_backend_ids:
+            total: dict[str, float] = {}
+            for name, component_type in components.items():
+                native = measured.get(component_type, {}).get(backend_id, 0.0)
+                unit_factor = self.backend_components[name].get("unit_factor") or 1
+                total[name] = round(native / float(unit_factor), 2)
+            report[backend_id] = {"TOTAL_ACCOUNT_USAGE": total}
+        return report
+
+    def _get_usage_report(
+        self, resource_backend_ids: list[str]
+    ) -> dict[str, dict[str, dict[str, float]]]:
+        """Collect consumption for the current billing period.
+
+        Returns ``{}`` when no ``prometheus`` block is configured: billing is opt-in,
+        and an offering that never asked for it must keep behaving as it did.
+        """
+        if self.prometheus_client is None:
+            return {}
+        now = backend_utils.get_current_time_in_timezone(self.timezone)
+        start, _ = self._period_bounds(now.year, now.month)
+        return self._collect_period_usage(resource_backend_ids, start, now)
+
+    def get_usage_report_for_period(
+        self,
+        resource_backend_ids: list[str],
+        year: int,
+        month: int,
+        waldur_resource: Optional[WaldurResource] = None,
+    ) -> dict:
+        """Recompute a closed month's consumption with both window ends pinned.
+
+        The current-period report is capped at the last pass before rollover, so a month
+        is only complete once it has ended. Prometheus still holds the series, so the
+        period is simply measured again -- which also repairs a month an agent outage
+        left half-reported.
+        """
+        del waldur_resource
+        if self.prometheus_client is None or not resource_backend_ids:
+            return {}
+        start, end = self._period_bounds(year, month)
+        return self._collect_period_usage(resource_backend_ids, start, end)
 
     @staticmethod
     def _parse_k8s_quantity(value: str) -> int:
@@ -360,6 +653,12 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                 metadata["status"] = self._parse_ready_condition(
                     cr.get("status", {})
                 )
+                # The level the operator actually applied, not the one asked
+                # for: the operator resolves an unset spec.security.level to the
+                # installation default, so only status can say what is in force.
+                security_level = cr.get("status", {}).get("securityLevel")
+                if security_level:
+                    metadata["security_level"] = security_level
         except Exception as e:
             logger.warning("Failed to get metadata for %s: %s", resource_backend_id, e)
         return metadata
@@ -401,6 +700,17 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             waldur_resource.uuid.hex,
         )
 
+        # Resolve the order attributes first: both parsers can reject the order,
+        # and refusing it before any group is created leaves nothing to undo.
+        #
+        # The switch is always sent explicitly. The CRD defaults it to true, so
+        # omitting it would silently re-enable a quota the user turned off. The
+        # quantities go along even when it is off: they are what the namespace
+        # is entitled to, and the switch is what decides whether they are
+        # enforced. A later re-enable then needs no second write to be correct.
+        quota_enabled = self._resolve_quota_enabled(waldur_resource)
+        security_level = self._resolve_security_level(waldur_resource)
+
         # 1. Create Keycloak groups (3 roles)
         self._create_keycloak_groups(resource_slug)
 
@@ -410,8 +720,10 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
 
         spec: dict = {
             "name": ns_name,
-            "quota": quota,
+            "quota": {**quota, "enabled": quota_enabled},
         }
+        if security_level is not None:
+            spec["security"] = {"level": security_level}
 
         # Add group references per role (CRD uses adminGroups/rwGroups/roGroups)
         if self.keycloak_client:
@@ -733,11 +1045,19 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
                     ready_info["message"],
                 )
 
-            # Collect users from all Keycloak groups
+            # Collect users from all 3 Keycloak groups
             users = self._list_all_keycloak_users(waldur_resource)
 
-            # Get usage report
-            report = self._get_usage_report([ns_name])
+            # Get usage report. Skipped when the caller said it does not want it --
+            # membership sync never reads usage, and a Prometheus query per
+            # component on every sync cycle is work thrown away. The empty report
+            # then falls through to the same zero-filled usage as an unmeasured
+            # namespace, which is what a caller that skips usage expects to see.
+            report = (
+                self._get_usage_report([ns_name])
+                if self.include_usage_requested()
+                else {}
+            )
             usage = report.get(ns_name, {"TOTAL_ACCOUNT_USAGE": {}})
 
             return BackendResourceInfo(
@@ -814,3 +1134,19 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         """Restore is a no-op; limits should be re-set via set_resource_limits."""
         logger.info("Restore for namespace %s is a no-op", resource_backend_id)
         return True
+
+
+class K8sNamespaceBackend(K8sUtNamespaceBackend):
+    """The same backend under the deployment-neutral ``k8s-namespace`` name.
+
+    The ManagedNamespace operator is not specific to one deployment, so an
+    offering should not have to be called "UT" to use it. This subclass exists
+    only to report that name: ``backend_type`` reaches Waldur in resource
+    metadata, so both names cannot share one class. Settings, entry-point schema
+    and behaviour are the parent's, unchanged.
+    """
+
+    def __init__(self, backend_settings: dict, backend_components: dict[str, dict]) -> None:
+        """Initialize the backend and report the ``k8s-namespace`` type."""
+        super().__init__(backend_settings, backend_components)
+        self.backend_type = "k8s-namespace"

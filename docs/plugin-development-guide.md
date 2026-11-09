@@ -1018,6 +1018,34 @@ The entry point name (e.g., `mycustom`) is what users put in
 groups are independent — a single distribution may register some or all
 of them.
 
+### Two names for one backend
+
+A plugin may register the same implementation under two entry-point names —
+for example a historical name kept for existing offerings and a
+deployment-neutral one for new ones. Register both names in
+`waldur_site_agent.backends` and both in `waldur_site_agent.backend_settings_schemas`,
+pointing at the same schema class. Validation de-duplicates by schema class, so
+one class reached through two names is checked once, not twice.
+
+The backend classes cannot be the same object when `backend_type` reaches
+Waldur in resource metadata, because the value reported has to match the name
+the offering was configured with. Subclass and override `backend_type` only;
+inherit everything else.
+
+Both names must appear in the **Processing backends** table in
+`docs/configuration.md`, or `tests/test_reference_docs.py` fails.
+
+### Nested settings models
+
+`scripts/generate_reference_docs.py` checks that every top-level field of your
+settings schema is mentioned in the plugin README, and generates the
+offering/component tables in `docs/configuration.md`. It does not descend into a
+nested model: a `prometheus: PrometheusSettingsSchema` field is checked as the
+single name `prometheus`, and its own fields are invisible to the checker. Document
+those fields by hand in the plugin README, and give the nested model
+`model_config = ConfigDict(extra="forbid")` so a misspelt key is reported
+against the block that holds it rather than ignored.
+
 ## Processor-plugin data flow
 
 Plugins generally do not have direct access to the Waldur API client.

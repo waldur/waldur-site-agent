@@ -8,6 +8,8 @@ dependencies = [
     "waldur-site-agent>=1.0.8rc12",
     "waldur-site-agent-keycloak-client>=1.0.8rc12",
     "kubernetes>=28.0.0,<32.0.0",
+    # Prometheus consumption billing talks to the HTTP API directly.
+    "httpx>=0.25.0",
 ]
 
 [build-system]
@@ -21,9 +23,16 @@ waldur-site-agent-keycloak-client = { workspace = true }
 # Entry points for exporting backends
 [project.entry-points."waldur_site_agent.backends"]
 k8s-ut-namespace = "waldur_site_agent_k8s_ut_namespace.backend:K8sUtNamespaceBackend"
+# The same backend under a deployment-neutral name: the operator is not UT-only,
+# and an offering should not have to call itself "UT" to use it. Both names stay
+# registered so existing configurations keep working untouched.
+k8s-namespace = "waldur_site_agent_k8s_ut_namespace.backend:K8sNamespaceBackend"
 
 [project.entry-points."waldur_site_agent.backend_settings_schemas"]
 k8s-ut-namespace = "waldur_site_agent_k8s_ut_namespace.schemas:K8sUtNamespaceBackendSettingsSchema"
+# Both names read the same settings, so they share one schema class: the core
+# validates a class once per offering however many names register it.
+k8s-namespace = "waldur_site_agent_k8s_ut_namespace.schemas:K8sUtNamespaceBackendSettingsSchema"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
