@@ -1,10 +1,34 @@
 """Shared fixtures for K8s UT namespace plugin tests."""
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from waldur_api_client.models.resource import Resource as WaldurResource
+
+from waldur_site_agent_k8s_ut_namespace.backend import K8sUtNamespaceBackend
+
+
+def make_backend(settings, components, backend_class=K8sUtNamespaceBackend):
+    """Create a backend with mocked K8s and Keycloak clients.
+
+    Returns ``(backend, mock_k8s_client, mock_keycloak_client)``.
+    """
+    with (
+        patch(
+            "waldur_site_agent_k8s_ut_namespace.backend.K8sUtNamespaceClient"
+        ) as mock_k8s,
+        patch(
+            "waldur_site_agent_k8s_ut_namespace.backend.KeycloakClient"
+        ) as mock_kc,
+    ):
+        mock_k8s_instance = MagicMock()
+        mock_k8s.return_value = mock_k8s_instance
+        mock_kc_instance = MagicMock()
+        mock_kc.return_value = mock_kc_instance
+
+        backend = backend_class(settings, components)
+        return backend, mock_k8s_instance, mock_kc_instance
 
 
 class MockResourceLimits:
