@@ -255,6 +255,59 @@ class TestOnlyRestartFixableFailuresWithholdLiveness(unittest.TestCase):
         self.assertTrue(log.error.called)
 
 
+class TestIdentityRefusedDuringUpgrade(unittest.TestCase):
+    """A Waldur mid-upgrade refuses the agent identity; the agent recovers once it stops.
+
+    Seen on a rolling mastermind upgrade that renamed the offering type: pods still
+    on the old build answered identity registration with a 400 for every offering.
+    An agent that gives up there runs without consumers until restarted (#92).
+    """
+
+    def _refusal(self):
+        return UnexpectedStatus(
+            400,
+            b'{"offering":["Offering type Marketplace.SiteAgent is not supported '
+            b'by site agents."]}',
+            httpx.URL("https://waldur/api/"),
+        )
+
+    def test_consumer_is_set_up_once_the_refusal_clears(self):
+        offering = _offering()
+        key = (offering.name, offering.uuid)
+        stack = _Stack(broker_up=True)
+        stack.manager.register_identity.side_effect = self._refusal()
+
+        with stack.active(), mock.patch.object(watchdog_module, "logger") as log:
+            consumers_map = event_utils.start_stomp_consumers([offering], "test-agent")
+            self.assertNotIn(key, consumers_map)
+
+            watchdog = _watchdog(consumers_map, [offering])
+            now = 1000.0
+            results = []
+            for _ in range(30):
+                results.append(watchdog.check(now))
+                now += TICK
+
+            # A refusal is not something a restart fixes: liveness stays up and
+            # the refusal is reported once, not on every retry.
+            self.assertTrue(all(results))
+            log.error.assert_called_once()
+            stack.manager.register_queue.assert_not_called()
+
+            # The upgrade finishes: the next retry, no later than SETUP_RETRY_MAX
+            # after the last attempt, sets the consumer up.
+            stack.manager.register_identity.side_effect = None
+            deadline = now + watchdog_module.SETUP_RETRY_MAX
+            while key not in consumers_map and now <= deadline:
+                self.assertTrue(watchdog.check(now))
+                now += TICK
+
+        self.assertIn(key, consumers_map)
+        stack.manager.register_queue.assert_called_once()
+        connection = consumers_map[key][0][0]
+        self.assertTrue(connection.is_connected())
+
+
 # ---------------------------------------------------------------------------
 # 3. A flapping connection is not "recovered"; a lost queue is re-registered
 # ---------------------------------------------------------------------------
