@@ -226,11 +226,98 @@ section below.
 
 - **Type**: String
 - **Required**: Yes, unless OIDC client credentials are configured (see below)
-- **Description**: Token for Waldur API authentication
+- **Description**: Token for Waldur API authentication: the API token of a Waldur user, or a
+  personal access token (`w_…`, see below)
 - **Permissions**: The token user must have **OFFERING.MANAGER** role on the offering specified by
   `waldur_offering_uuid`. This grants the permissions needed for order processing, usage reporting,
   membership sync, and event subscriptions.
 - **Security**: Keep this secret and secure
+
+##### Using a personal access token
+
+A personal access token (PAT) survives the logouts that delete a user's API token, expires on a
+date you choose (up to Waldur's `PAT_MAX_LIFETIME_DAYS`), and can be limited to the permissions the
+agent needs. The agent sends a token
+starting with `w_` as `Authorization: Bearer`; this needs a site agent release that includes
+[#89](https://code.opennodecloud.com/waldur/waldur-site-agent/-/issues/89). Older releases send it
+as `Token` and Waldur answers `401 Invalid token.` STOMP event processing works with a PAT too:
+Waldur uses the PAT as the RabbitMQ password.
+
+A PAT's scopes only narrow what its user may do; they grant nothing on their own. The user still
+needs the **OFFERING.MANAGER** role above, and each scope applies only where that role holds the
+permission. Scopes are checked wherever Waldur checks a permission: on every action that changes
+state, and on the few reads listed below. Other lists and reads are limited by the user's roles and
+the PAT's binding only.
+
+Scopes for order processing, membership sync and usage reporting:
+
+| Scope | Used for |
+|-------|----------|
+| `ORDER.APPROVE` | Approving orders, marking them done or erred |
+| `ORDER.REJECT` | Rejecting orders |
+| `RESOURCE.SET_BACKEND_ID` | Setting the backend ID of orders and resources |
+| `RESOURCE.SET_STATE` | Marking resources OK or erred, setting limits, recording the last sync |
+| `RESOURCE.SET_BACKEND_METADATA` | Setting backend metadata, endpoints and membership sync status |
+| `RESOURCE.SET_USAGE` | Reporting total and per-user usage |
+| `OFFERING.UPDATE_USER` | Offering user state changes and updates, the user attribute config |
+| `OFFERING.UPDATE` | Agent identity and STOMP registration, `check_backend_id_uniqueness`, agent status |
+
+Without `OFFERING.UPDATE` the agent cannot register its identity. In polling mode it still processes
+orders, but the offering's agent status in Waldur stops updating. In event mode it opens no STOMP
+connection, so orders and membership changes are picked up only by the periodic reconciliation
+(every 60 minutes by default).
+
+Scopes for optional features:
+
+| Scope | Needed when |
+|-------|-------------|
+| `RESOURCE.MANAGE_API_KEY` | The backend manages resource API keys (for example LiteLLM) |
+| `OFFERING.MANAGE_BACKEND_RESOURCES` | `resource_import_enabled` is on |
+| `OFFERING.UPDATE_COMPONENTS` | Running `waldur_site_load_components` with the PAT |
+| `OFFERING.UPDATE_INTEGRATION` | The backend reads the offering's `secret_options` or `service_attributes` |
+| `SERVICE_PROVIDER.LIST_PROJECTS` | The backend mirrors source project metadata (see the limits below) |
+| `SERVICE_PROVIDER.LIST_KEYS` | The backend resolves SSH keys from resource attributes (see the limits below) |
+| `OFFERING.CREATE` | The token user owns the provider organization instead of managing the offering |
+
+Plugins can call further endpoints (for example the Waldur-to-Waldur and Rancher plugins); check a
+plugin's own documentation for what its token needs.
+
+Without `OFFERING.UPDATE_INTEGRATION` Waldur leaves `secret_options` and `service_attributes` out of
+the offering it returns, without an error. `OFFERING.CREATE` replaces `OFFERING.UPDATE` for agent
+identity and STOMP registration when the token user is an organization owner.
+
+Binding: a binding limits the PAT to the bound entity and what lies below it. Which one works
+depends on where the token user's role is:
+
+- **Leave the PAT unbound** unless you need a binding. This always works: its scopes and the user's
+  roles still limit it.
+- **Do not bind it to the offering alone.** At startup the agent looks up the offering's service
+  provider, and an offering-bound PAT cannot list it, so the agent stops before processing
+  anything.
+- **Offering manager who also manages the service provider**: from the Waldur release that includes
+  [waldur-mastermind#907](https://code.opennodecloud.com/waldur/waldur-mastermind/-/issues/907),
+  binding the PAT to the service provider works. Creating that binding needs a role on the service
+  provider or its organization that holds one of the requested scopes. On earlier releases such a
+  binding authorises nothing on the provider's offerings.
+- **Owner of the provider organization**: leave the PAT unbound. Waldur checks the binding on the
+  organization, where the owner's role is, so a binding on the offering or the service provider is
+  refused on provider actions, and a binding on the organization does not cover resources ordered
+  by other organizations
+  ([waldur-mastermind#919](https://code.opennodecloud.com/waldur/waldur-mastermind/-/issues/919)).
+- A binding on the provider organization reaches **less** than one on its service provider, even
+  though the organization owns the provider: it covers the organization's own offerings and
+  projects, but not resources that other organizations ordered from those offerings.
+
+Limits no PAT scope can lift:
+
+- Reporting SLURM periodic usage policy command results needs a staff user
+  ([waldur-mastermind#917](https://code.opennodecloud.com/waldur/waldur-mastermind/-/issues/917)).
+- `SERVICE_PROVIDER.LIST_KEYS` and `SERVICE_PROVIDER.LIST_PROJECTS` are checked on the service
+  provider or its organization, so an offering manager needs a role there too
+  ([waldur-mastermind#918](https://code.opennodecloud.com/waldur/waldur-mastermind/-/issues/918)).
+  Use an unbound PAT for them: with any binding, including one on the service provider, the
+  provider's project list currently comes back empty. Without them the agent logs a warning and
+  continues without SSH keys or source project metadata.
 
 #### OIDC client credentials: `oidc_token_url`, `oidc_client_id`, `oidc_client_secret`
 
@@ -274,7 +361,8 @@ offerings:
 - **Description**: UUID of the offering in Waldur
 - **Note**: Found in Waldur UI under Integration -> Credentials
 - **Supported offering types**: Waldur accepts an agent identity only for an offering whose type
-  is `Waldur site agent` (`Marketplace.Slurm`), `Script` (`Marketplace.Script`), `Basic`
+  is `Waldur site agent` (`Marketplace.SiteAgent`; Waldur still accepts the former name
+  `Marketplace.Slurm` as input), `Script` (`Marketplace.Script`), `Basic`
   (`Marketplace.Basic`) or `OpenStack tenant` (`OpenStack.Tenant`). Point an agent at any other
   type — a service desk offering, say — and identity registration is refused with a misleading
   `400 Object with uuid=... does not exist`, even though the offering is there. The agent logs a
@@ -309,7 +397,7 @@ username_management_backend: "base"  # Backend for username management (default 
 **Processing backends** (entry point group `waldur_site_agent.backends`; names as installed by the
 plugins in this repository):
 
-<!-- pyml disable-num-lines 20 line-length -->
+<!-- pyml disable-num-lines 21 line-length -->
 | Name | Plugin package | Purpose |
 | ---- | -------------- | ------- |
 | `slurm` | `waldur-site-agent-slurm` | SLURM accounts, limits, usage |
@@ -318,7 +406,8 @@ plugins in this repository):
 | `waldur` | `waldur-site-agent-waldur` | Waldur-to-Waldur federation |
 | `rancher` | `waldur-site-agent-rancher` | Rancher projects via the Rancher API |
 | `rancher-kc-crd` | `waldur-site-agent-rancher-kc-crd` | Rancher + Keycloak via `ManagedRancherProject` CRDs |
-| `k8s-ut-namespace` | `waldur-site-agent-k8s-ut-namespace` | Kubernetes UT `ManagedNamespace` resources |
+| `k8s-namespace` | `waldur-site-agent-k8s-ut-namespace` | Kubernetes `ManagedNamespace` resources |
+| `k8s-ut-namespace` | `waldur-site-agent-k8s-ut-namespace` | Kubernetes `ManagedNamespace` resources (former name of `k8s-namespace`) |
 | `okd` | `waldur-site-agent-okd` | OKD / OpenShift projects |
 | `opennebula` | `waldur-site-agent-opennebula` | OpenNebula VDCs and VMs |
 | `azure` | `waldur-site-agent-azure` | Azure virtual machines |
@@ -571,7 +660,7 @@ backend_settings:
   passthrough_attributes: []                 # Offering attribute keys forwarded verbatim to B
   fetch_consented_users_only: false          # Only sync users with data-sharing consent
   # Optional: target STOMP for instant async order completion
-  # Requires target_offering_uuid to be a Marketplace.Slurm offering
+  # Requires target_offering_uuid to be a Marketplace.SiteAgent offering
   target_stomp_enabled: false
 ```
 

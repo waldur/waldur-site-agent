@@ -256,6 +256,13 @@ backend needs custom behavior.
 | `remote_waldur_base_urls` | Returns `[]` | Waldur-to-Waldur: return the target's base URL (see below) |
 | `expects_target_event_subscriptions` | Returns `False` | `True` if you override `setup_target_event_subscriptions` |
 
+`get_usage_report_for_period` serves both the reporting processor's past periods
+and `waldur_site_load_historical_usage`, which sets `self.historical_load = True`
+and `self.timezone` on the backend first. Return `{}` only when the backend has no
+usage for the period: the loader reads `{}` with `--reconcile-stale` as "no usage"
+and zeroes the period, so raise when the period cannot be measured. The processor
+logs an exception from a past period and skips that period.
+
 For `create_resource_with_id`, `recreate_missing_resource` and
 `remote_waldur_base_urls` see [Resource identifiers](#resource-identifiers) and
 [Error handling and ERRED](#error-handling-and-erred). `sync_resource_limits` backs
@@ -1017,6 +1024,48 @@ The entry point name (e.g., `mycustom`) is what users put in
 `username_management_backend` in the config YAML. The four entry-point
 groups are independent — a single distribution may register some or all
 of them.
+
+### Nested settings models
+
+`scripts/generate_reference_docs.py --check` (run by `tests/test_reference_docs.py`)
+fails when a top-level field of your settings schema is not mentioned in the
+plugin README. It does not descend into a nested model: a
+`prometheus: Optional[PrometheusSettingsSchema]` field is checked as the single
+name `prometheus`, and the nested model's own fields are invisible to it.
+Document those by hand in the plugin README, and give the nested model
+`model_config = ConfigDict(extra="forbid")` so a misspelt key is reported against
+the block that holds it rather than ignored. The k8s-ut-namespace plugin's
+`PrometheusSettingsSchema` and the keycloak-client's `KeycloakSettingsSchema` are
+examples.
+
+### Two names for one backend
+
+A plugin may register the same implementation under two entry-point names —
+for example a historical name kept for existing offerings and a
+deployment-neutral one for new ones. Register both names in
+`waldur_site_agent.backends` and both in `waldur_site_agent.backend_settings_schemas`,
+pointing at the same schema class. Validation groups the names an offering
+uses by schema class (`_check_against_schemas` in
+`waldur_site_agent/common/plugin_schemas.py`), so one class reached through two
+names is checked once and any warning is logged once, labelled with both names.
+
+Point the second name at a subclass that overrides `backend_type` and inherits
+everything else. Both names would work with the same class, but the backend
+would then identify itself the same way under either. A subclass changes two
+things: the raw processor class path the agent registers in Waldur (the
+backend's `module.ClassName`, see `OfferingBaseProcessor.register`), and
+`backend_type`, the name the core's `BaseBackend` log lines use for the
+backend. `backend_type` itself is not sent to Waldur. Anything Waldur derives
+from the reported class path takes only the plugin package
+(`waldur_site_agent_<name>` read as `<name>` with dashes), so Waldur's derived
+backend name is the same under both entry-point names — the package's. Keep
+that in mind if the old name is one Waldur treats specially. Both names also
+appear as separate backends in the plugin catalogue.
+
+Both names must appear in the **Processing backends** table in
+`docs/configuration.md`, or `tests/test_reference_docs.py` fails. The
+`k8s-ut-namespace` plugin (`k8s-namespace` and `k8s-ut-namespace`) is a worked
+example.
 
 ## Processor-plugin data flow
 
