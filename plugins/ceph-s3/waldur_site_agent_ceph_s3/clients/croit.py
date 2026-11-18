@@ -37,12 +37,16 @@ STORAGE_GRAPH_TEMPLATE = "template-s3-user-name"
 BUCKET_STORAGE_GRAPH = "s3-bucket-data"
 BUCKET_STORAGE_GRAPH_TEMPLATE = "template-s3-bucket-name"
 BUCKET_STORAGE_PLOT = "Data"
-# Native resolution is 180s and croit returns min(maxDataPoints, native), so this
-# reaches native fidelity on windows up to ~4 days. croit consolidates by average
-# -- measured: coarsening the buckets moves the integral monotonically *down* on a
-# rising series, which rules out both max and last -- so the integral is preserved
-# rather than approximated, and lowering this trades accuracy for nothing.
-STORAGE_MAX_DATA_POINTS = 2000
+# croit samples storage every 180 s and returns min(maxDataPoints, native) points,
+# but never more than 10,000 per request (measured on v2611.1: asked for 15,000 to
+# 50,000 over 31 days, it answers 10,000 at 267 s). Past that it averages into
+# steps placed relative to the requested window, so the same past hours integrate
+# to a slightly different total whenever the window's end moves -- and a month
+# recomputed from its start every pass could then come out lower than before.
+# A long window is therefore read in chunks small enough to stay at native
+# resolution, whose samples sit on croit's fixed 180 s grid and never move.
+STATS_NATIVE_STEP_SECONDS = 180
+STATS_CHUNK_POINTS = 9000
 # A session token is renewed this long before croit says it expires, so a request
 # never starts with a token that lapses on the way.
 SESSION_TOKEN_RENEW_MARGIN_SECONDS = 60
@@ -606,31 +610,12 @@ class CroitClient(BaseS3AdminClient):
             # Unmeasured, not zero: the reporter skips an empty series, where a
             # zero would overwrite the period's accrued total.
             return []
-        try:
-            response = self._request(
-                "GET",
-                "/stats",
-                params={
-                    "graph": STORAGE_GRAPH,
-                    STORAGE_GRAPH_TEMPLATE: query_name,
-                    "startTime": start_time,
-                    "endTime": end_time,
-                    "maxDataPoints": STORAGE_MAX_DATA_POINTS,
-                },
-            )
-        except CephS3UserNotFoundError as e:
-            # /stats answers 404 for an unknown graph, and _request cannot tell
-            # that apart from an unknown user. Re-raise as its own type so the
-            # reporting loop does not read a renamed graph as a gone resource.
-            raise CroitS3GraphNotFoundError(
-                f"Storage graph {STORAGE_GRAPH!r} not found on the croit API: {e}"
-            )
-
-        plots = response.json().get("axis1", {}).get("graphs", [])
-        if not plots:
+        points = self._storage_series(
+            STORAGE_GRAPH, STORAGE_GRAPH_TEMPLATE, query_name, None, start_time, end_time
+        )
+        if not points:
             logger.warning("No storage series for S3 user %s", uid)
-            return []
-        return plots[0].get("datapoints", [])
+        return points
 
     def get_bucket_storage_series(
         self, bucket: str, tenant: str, start_time: int, end_time: int = 0
@@ -655,35 +640,92 @@ class CroitClient(BaseS3AdminClient):
             CephS3APIError: If the request fails
         """
         name = self._validate_uid(f"{tenant}_{bucket}" if tenant else bucket)
-        try:
-            response = self._request(
-                "GET",
-                "/stats",
-                params={
-                    "graph": BUCKET_STORAGE_GRAPH,
-                    BUCKET_STORAGE_GRAPH_TEMPLATE: name,
-                    "startTime": start_time,
-                    "endTime": end_time,
-                    "maxDataPoints": STORAGE_MAX_DATA_POINTS,
-                },
+        return self._storage_series(
+            BUCKET_STORAGE_GRAPH,
+            BUCKET_STORAGE_GRAPH_TEMPLATE,
+            name,
+            BUCKET_STORAGE_PLOT,
+            start_time,
+            end_time,
+        )
+
+    @staticmethod
+    def _stats_windows(start_time: int, end_time: int) -> list[tuple[int, int]]:
+        """Split [start, end] into consecutive windows of STATS_CHUNK_POINTS
+        native samples, after resolving croit's relative times (negative = that
+        many seconds ago, 0 = now) against one clock reading."""
+        now = int(time.time())
+        start = now + start_time if start_time < 0 else start_time
+        end = now + end_time if end_time <= 0 else end_time
+        span = STATS_CHUNK_POINTS * STATS_NATIVE_STEP_SECONDS
+        windows = []
+        while True:
+            windows.append((start, min(start + span, end)))
+            start += span
+            if start >= end:
+                return windows
+
+    def _storage_series(
+        self,
+        graph: str,
+        template_key: str,
+        name: str,
+        plot_name: Optional[str],
+        start_time: int,
+        end_time: int,
+    ) -> list[dict]:
+        """One storage series at croit's native resolution, read window by window
+        and joined. ``plot_name`` picks a plot by name; None takes the first.
+
+        Raises:
+            CroitS3GraphNotFoundError: If the graph name no longer exists
+            CephS3APIError: If a request fails
+        """
+        points: list[dict] = []
+        for start, end in self._stats_windows(start_time, end_time):
+            try:
+                response = self._request(
+                    "GET",
+                    "/stats",
+                    params={
+                        "graph": graph,
+                        template_key: name,
+                        "startTime": start,
+                        "endTime": end,
+                        # +1: a window holds both of its edge samples.
+                        "maxDataPoints": STATS_CHUNK_POINTS + 1,
+                    },
+                )
+            except CephS3UserNotFoundError as e:
+                # /stats answers 404 for an unknown graph, and _request cannot
+                # tell that apart from an unknown user. Re-raise as its own type
+                # so the reporting loop does not read a renamed graph as a gone
+                # resource.
+                raise CroitS3GraphNotFoundError(
+                    f"Storage graph {graph!r} not found on the croit API: {e}"
+                )
+            plots = response.json().get("axis1", {}).get("graphs", [])
+            chosen = (
+                plots[:1]
+                if plot_name is None
+                else [plot for plot in plots if plot.get("name") == plot_name]
             )
-        except CephS3UserNotFoundError as e:
-            raise CroitS3GraphNotFoundError(
-                f"Storage graph {BUCKET_STORAGE_GRAPH!r} not found on the croit API: {e}"
+            if plots and not chosen:
+                logger.warning(
+                    "croit's %s answer for %s has no %r plot (got %s)",
+                    graph,
+                    name,
+                    plot_name,
+                    [plot.get("name") for plot in plots],
+                )
+            last = points[-1]["t"] if points else None
+            # Adjacent windows share their edge sample; keep it once.
+            points.extend(
+                point
+                for point in (chosen[0].get("datapoints", []) if chosen else [])
+                if last is None or point.get("t", 0) > last
             )
-        plots = response.json().get("axis1", {}).get("graphs", [])
-        for plot in plots:
-            if plot.get("name") == BUCKET_STORAGE_PLOT:
-                return plot.get("datapoints", [])
-        if plots:
-            logger.warning(
-                "croit's %s answer for bucket %s has no %r plot (got %s)",
-                BUCKET_STORAGE_GRAPH,
-                name,
-                BUCKET_STORAGE_PLOT,
-                [plot.get("name") for plot in plots],
-            )
-        return []
+        return points
 
     @staticmethod
     def _stats_query_name(uid: str) -> Optional[str]:

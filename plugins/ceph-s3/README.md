@@ -377,16 +377,18 @@ allows in a tenant name; the rendered tenant is at most 64 characters.
 
 ## Usage Reporting
 
-**Croit flavour only, and it needs its own backend.** Set
+**On a croit cluster only, and it needs its own backend.** Set
 
 ```yaml
     reporting_backend: "croit_usage"
 ```
 
-Metering reads croit's statistics subsystem, which has no RadosGW equivalent, so
-it lives in a separate backend class rather than as a method that works on one
-flavour and fails on the other. `croit_usage` refuses to start on a
-radosgw-flavoured offering.
+Metering reads croit's statistics subsystem, which plain Ceph does not have, so it
+lives in a separate backend class. It works for both flavours: a croit-flavoured
+offering reads croit with its own API settings, and a radosgw-flavoured offering
+needs croit's address and credentials in `croit_reporting` (see
+[Reporting for a radosgw-managed offering](#reporting-for-a-radosgw-managed-offering-on-a-croit-cluster)).
+On plain Ceph, leave `reporting_backend` unset.
 
 Leaving `reporting_backend` at `ceph_s3` reports **nothing** — deliberately, not
 zeros. A zero is a legitimate usage value and would overwrite the period's
@@ -456,7 +458,16 @@ which takes a few minutes after its first write.
 
 `GET /api/stats?graph=s3-user-data&template-s3-user-name=<uid>` returns croit's
 per-user storage series as `{"t": unix seconds, "v": bytes}` datapoints at 180 s
-native resolution. Each pass asks for the period so far and integrates:
+native resolution.
+
+croit answers at most 10,000 points per request and averages the series beyond
+that, on steps placed relative to the requested window. Read whole, a month would
+come back averaged differently on every pass, and the same past days would
+integrate to a slightly different total each time — enough to make a
+month-to-date figure drop. The period is therefore read in windows of 9,000 native
+samples (18.75 days) and joined, so every pass integrates the same 180 s samples.
+
+Each pass asks for the period so far and integrates:
 
 ```text
 GB-days = Σ  (bytes_i / unit_factor) × (t_i+1 − t_i) / 86400
