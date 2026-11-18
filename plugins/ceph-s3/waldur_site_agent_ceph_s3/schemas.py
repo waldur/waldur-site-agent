@@ -34,7 +34,18 @@ class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
         default=None, description="croit API token, instead of username/password",
         json_schema_extra=SECRET
     )
-    default_tenant: Optional[str] = Field(default=None, description="RGW tenant for new users")
+    tenant_template: Optional[str] = Field(
+        default=None,
+        description=(
+            "RGW tenant for new users, rendered per resource (croit flavour), e.g. "
+            "'{customer_slug}_{customer_uuid:.8}'. Fields: resource_slug, "
+            "resource_uuid, customer_slug, customer_uuid, project_slug, "
+            "project_uuid, offering_slug, offering_uuid"
+        ),
+    )
+    default_tenant: Optional[str] = Field(
+        default=None, description="Fixed RGW tenant for new users; older form of tenant_template"
+    )
     default_storage_class: Optional[str] = Field(
         default=None, description="Default storage class for new users"
     )

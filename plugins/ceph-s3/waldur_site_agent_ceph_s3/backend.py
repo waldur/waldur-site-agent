@@ -39,6 +39,13 @@ from .settings import (
     validate_components,
     validate_settings,
 )
+from .tenant import (
+    qualify,
+    render_tenant,
+    split,
+    validate_fixed_tenant,
+    validate_tenant_template,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +87,9 @@ def _ownership_stamp(resource_uuid: object, uid: str) -> str:
     old user lingers, would fail on the address rather than provision. No two users
     can share a uid, so no two can share a stamp.
     """
-    return f"{_STAMP_PREFIX}{resource_uuid}-{uid}{_STAMP_SUFFIX}"
+    # A tenanted uid carries "$", which has no business in an email address.
+    local_uid = uid.replace("$", ".")
+    return f"{_STAMP_PREFIX}{resource_uuid}-{local_uid}{_STAMP_SUFFIX}"
 
 
 def _is_waldur_stamp(email: object) -> bool:
@@ -257,7 +266,17 @@ class CephS3Backend(backends.BaseBackend):
             )
 
         # Backend-specific settings
-        self.default_tenant = backend_settings.get("default_tenant", "")
+        # tenant_template renders a tenant per resource. default_tenant is the
+        # older, literal form: one fixed tenant, passed through as written, so it
+        # keeps croit's character rule rather than the template's lower-case one.
+        self.tenant_template = backend_settings.get("tenant_template") or ""
+        self.fixed_tenant = (
+            "" if self.tenant_template else backend_settings.get("default_tenant") or ""
+        )
+        if self.tenant_template:
+            validate_tenant_template(self.tenant_template)
+        elif self.fixed_tenant:
+            validate_fixed_tenant(self.fixed_tenant)
         self.default_placement = backend_settings.get("default_placement", "")
         self.default_storage_class = backend_settings.get("default_storage_class", "")
 
@@ -346,6 +365,9 @@ class CephS3Backend(backends.BaseBackend):
             "s3_endpoint": self.s3_endpoint,
             "s3_region": self.s3_region,
             "s3_user": username,
+            # Empty rather than absent for an untenanted user: a Getting started
+            # text that names the key would otherwise render "undefined".
+            "s3_tenant": username.rpartition("$")[0],
         }
 
     def _backend_resource_info(self, username: str) -> structures.BackendResourceInfo:
@@ -384,7 +406,28 @@ class CephS3Backend(backends.BaseBackend):
             Backend resource info with created S3 username
         """
         del user_context
-        return self._create_s3_user(waldur_resource, resource_backend_id)
+        return self._create_s3_user(
+            waldur_resource, self._qualified_uid(waldur_resource, resource_backend_id)
+        )
+
+    def _qualified_uid(self, waldur_resource: WaldurResource, uid: str) -> str:
+        """The id the user is created and from then on addressed by.
+
+        RGW knows a tenanted user only as ``tenant$uid``; addressing the bare uid
+        reaches the global tenant's user of that name instead — someone else's, or
+        nobody. The qualified form is what ends up as the backend id, so the
+        tenant is rendered here, once, and never recomputed.
+        """
+        if split(uid)[0]:
+            # Already qualified: a re-create of a terminated resource passes its
+            # stored backend id. That id is authoritative -- rendering again would
+            # prefix the tenant twice, or move the user if a slug changed since.
+            return uid
+        if self.fixed_tenant:
+            return qualify(self.fixed_tenant, uid)
+        if not self.tenant_template:
+            return uid
+        return qualify(render_tenant(self.tenant_template, waldur_resource), uid)
 
     def _create_s3_user(
         self, waldur_resource: WaldurResource, username: str
@@ -434,8 +477,6 @@ class CephS3Backend(backends.BaseBackend):
             "name": waldur_resource.name or f"User for {waldur_resource.uuid}",
             "email": _ownership_stamp(waldur_resource.uuid, username),
         }
-        if self.default_tenant:
-            user_data["tenant"] = self.default_tenant
         if self.default_placement:
             user_data["default_placement"] = self.default_placement
         if self.default_storage_class:

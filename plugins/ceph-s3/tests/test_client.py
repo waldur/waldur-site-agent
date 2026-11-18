@@ -21,10 +21,11 @@ class TestCroitClient:
     @pytest.fixture
     def client(self):
         """Create test client."""
+        # A token, not a password: these tests script the transport call by call,
+        # and a password would add a login request in front of each.
         return CroitClient(
             api_url="https://test.example.com",
-            username="test_user",
-            password="test_pass",
+            token="test_token",
             verify_ssl=False,
         )
 

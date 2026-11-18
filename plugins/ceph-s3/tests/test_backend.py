@@ -595,7 +595,6 @@ class TestCephS3Backend:
         mock_client_class.return_value = mock_client
         settings = dict(backend_settings)
         settings.update(
-            default_tenant="acme",
             default_placement="fast-pool",
             default_storage_class="STANDARD_IA",
         )
@@ -612,7 +611,6 @@ class TestCephS3Backend:
             "uid": "waldur_u",
             "name": "Test S3 Storage",
             "email": "waldur-12345678-1234-5678-9abc-123456789abc-waldur_u@invalid",
-            "tenant": "acme",
             "default_placement": "fast-pool",
             "default_storage_class": "STANDARD_IA",
         }
@@ -1267,6 +1265,7 @@ class TestCephS3Backend:
             "s3_endpoint": "https://s3.test.croit.io",
             "s3_region": "default",
             "s3_user": "waldur_u",
+            "s3_tenant": "",
         }
         # Flat, so the one-level-deep template interpolation reaches every value.
         assert all(
