@@ -563,6 +563,9 @@ def create_ceph_s3_offering():
                     'backend_type': 'ceph_s3',
                     'service_provider_can_create_offering_user': False,
                     'auto_create_admin_user': False,
+                    # A ceiling change becomes an UPDATE order the agent applies,
+                    # rather than a value Waldur records and croit never sees.
+                    'create_orders_on_resource_option_change': True,
                 },
                 'options': {
                     'order': ['max_storage_limit', 'max_object_limit'],
@@ -579,15 +582,29 @@ def create_ceph_s3_offering():
                         'max_object_limit': {
                             'type': 'integer',
                             'label': 'Object Count Limit',
-                            'help_text': 'Maximum number of objects (optional)',
+                            'help_text': 'Maximum number of objects; 0 means no limit',
                             'required': False,
                             'min': 0,
                         }
                     }
                 },
-                # resource_options is deliberately not set: it would surface an
-                # "update options" action the agent cannot honour, since it does
-                # not act on new_options and applies quotas only at creation.
+                # The same two ceilings, editable on the resource after creation.
+                # Only together with create_orders_on_resource_option_change:
+                # without it Waldur stores an edit directly and the quota stays.
+                'resource_options': {
+                    'order': ['max_storage_limit', 'max_object_limit'],
+                    'options': {
+                        'max_storage_limit': {
+                            'type': 'integer', 'label': 'Storage Limit (GB)',
+                            'required': True, 'min': 1, 'max': 10000,
+                        },
+                        'max_object_limit': {
+                            'type': 'integer', 'label': 'Object Count Limit',
+                            'help_text': '0 means no limit',
+                            'required': False, 'min': 0,
+                        },
+                    },
+                },
             }
         )
 
@@ -750,10 +767,16 @@ Set the top-level `log_level: DEBUG` in the agent configuration.
 4. **Key Provisioning**: Two access keys minted, applied, and reported to Waldur encrypted;
    RadosGW's auto-generated key is removed
 5. **Usage Tracking**: storage integrated into GB-days per billing period
-6. **Limit Updates**: **not supported.** The ceiling is an order attribute, fixed at
-   creation. Waldur can carry an `update_options` order, but the agent does not act
-   on `new_options`, and quotas are applied only on the create path — so changing a
-   ceiling today means terminating and re-ordering
+6. **Ceiling Updates**: editing `max_storage_limit` or `max_object_limit` on the
+   resource creates an UPDATE order carrying `new_options`, when the offering has both
+   `resource_options` and `plugin_options.create_orders_on_resource_option_change`.
+   The agent re-applies both quotas from the order attributes, overlaid by the current
+   options, overlaid by the new ones, before Waldur records the change. A ceiling set
+   to `0` is lifted: it is sent as `-1`, never as `0` (croit stores 0 as unlimited,
+   RadosGW as a cap of nothing) and never left out (RadosGW keeps a left-out limit).
+   Waldur refuses `null` for an integer option, so `0` is how a consumer clears one.
+   Without `create_orders_on_resource_option_change`, Waldur stores an edit directly
+   and the quota is not touched
 7. **Resource Deletion**: the S3 user is removed — but only once it owns no
    buckets. croit refuses to delete a user that still holds data
    (`500 Unable to remove user with buckets.`), so termination of a tenant with

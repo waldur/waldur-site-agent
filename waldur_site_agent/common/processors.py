@@ -1774,6 +1774,25 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
 
         waldur_resource_backend_id = waldur_resource.backend_id
         new_limits = order.limits.to_dict() if order.limits else {}
+
+        new_options = _order_new_options(order)
+        if new_options:
+            if self.resource_backend.update_resource_options(waldur_resource, new_options):
+                logger.info(
+                    "Applied options %s to resource %s", new_options, waldur_resource.name
+                )
+            else:
+                logger.info(
+                    "The backend does not act on resource options; options %s of "
+                    "resource %s are recorded by Waldur only",
+                    new_options,
+                    waldur_resource.name,
+                )
+            # An options-only order carries no limits and keeps the plan, so the
+            # plan-quota fallback below would only re-read unchanged limits.
+            if not new_limits:
+                return True
+
         if not new_limits:
             # For plan-based updates (FIXED components), the order carries
             # a new plan but no explicit limits.  Resolve the plan's
@@ -5000,3 +5019,18 @@ class OfferingImportableResourcesProcessor(OfferingBaseProcessor):
                 client=self.waldur_rest_client,
                 body=payload,
             )
+
+
+def _order_new_options(order: OrderDetails) -> dict:
+    """The options an UPDATE order sets, or {} for an order that sets none.
+
+    Waldur puts them under ``new_options`` in the order's attributes, which the
+    generated client models as an attrs class rather than a mapping.
+    """
+    attributes = getattr(order, "attributes", None)
+    if attributes is None or isinstance(attributes, Unset):
+        return {}
+    to_dict = getattr(attributes, "to_dict", None)
+    raw = to_dict() if callable(to_dict) else attributes
+    new_options = raw.get("new_options") if isinstance(raw, dict) else None
+    return new_options if isinstance(new_options, dict) else {}

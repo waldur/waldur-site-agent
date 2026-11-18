@@ -19,6 +19,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Iterator, Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.types import Unset
 
 from waldur_site_agent.backend import (
     DEFAULT_RESOURCE_KEY_COUNT,
@@ -160,16 +161,31 @@ def _as_attribute_dict(waldur_resource: WaldurResource) -> dict:
     return raw or {}
 
 
+def _as_options_dict(waldur_resource: WaldurResource) -> dict:
+    """Read a resource's current options as a plain dict.
+
+    Same shape problem as the attributes: the generated client gives an attrs
+    class, None, or UNSET depending on whether the offering defines options.
+    """
+    raw = getattr(waldur_resource, "options", None)
+    to_dict = getattr(raw, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    return raw if isinstance(raw, dict) else {}
+
+
 def _first_limit(resource_options: dict, *keys: str) -> int:
     """Read the first ceiling present among ``keys``, defaulting to 0.
 
     Resources ordered before the rename carry the old key, and their quotas must
-    survive a restore or a re-provision, so both spellings are accepted.
+    survive a restore or a re-provision, so both spellings are accepted. The
+    first key that is present wins even when it is empty: an update that clears
+    the ceiling must not fall back to a legacy value left in the attributes.
     """
     for key in keys:
-        value = resource_options.get(key)
-        if value:
-            return int(value)
+        if key in resource_options:
+            value = resource_options[key]
+            return int(value) if value else 0
     return 0
 
 
@@ -816,12 +832,49 @@ class CephS3Backend(backends.BaseBackend):
             if config.get("backend_name") == "storage"
         }
 
-    def _apply_bucket_quotas(self, username: str, resource_options: dict) -> None:
+    def update_resource_options(
+        self, waldur_resource: WaldurResource, new_options: dict
+    ) -> bool:
+        """Re-apply both quotas from the options an UPDATE order sets.
+
+        The ceilings are the only options this plugin enforces, and setting a
+        quota is an idempotent PUT, so the update is the create-time quota step
+        run again over the effective options: what the order set at creation,
+        overlaid by the resource's current options, overlaid by the new ones. An
+        option the order clears is sent as "no limit" rather than left out.
+
+        Raises:
+            CephS3Error: when the resource has no backend id, or its user was not
+                provisioned by Waldur, or croit refuses the quota.
+        """
+        username = waldur_resource.backend_id
+        if not username or isinstance(username, Unset):
+            raise CephS3Error(
+                f"Resource {waldur_resource.uuid} has no backend id, so there is no "
+                "S3 user to apply its options to"
+            )
+        self._refuse_foreign_user(username)
+        effective = {
+            **_as_attribute_dict(waldur_resource),
+            **_as_options_dict(waldur_resource),
+            **new_options,
+        }
+        logger.info("Applying options %s to S3 user %s", effective, username)
+        self._apply_bucket_quotas(username, effective, clear_missing=True)
+        return True
+
+    def _apply_bucket_quotas(
+        self, username: str, resource_options: dict, clear_missing: bool = False
+    ) -> None:
         """Apply safety limits from resource options as bucket quotas.
 
         Args:
             username: S3 username
             resource_options: Resource options containing safety limits
+            clear_missing: Send -1 ("no limit") for a dimension the options do not
+                set, instead of leaving it out. An update needs this: RadosGW
+                merges a quota PUT, so a left-out dimension would keep the limit
+                the consumer just removed. croit would clear it either way.
 
         Raises:
             CephS3Error: If quota setting fails
@@ -871,6 +924,23 @@ class CephS3Backend(backends.BaseBackend):
             quota_request["max_objects"] = object_limit
             quota_applied = True
             logger.debug("Setting object quota: %d objects", object_limit)
+
+        if clear_missing:
+            # -1 is "no limit" to both flavours. 0 is not: croit stores it as -1
+            # too, but RadosGW would read it as a ceiling of nothing.
+            quota_request.setdefault("max_size_bytes", -1)
+            quota_request.setdefault("max_objects", -1)
+            if not quota_applied:
+                logger.warning(
+                    "Removing every capacity ceiling of user %s: options %s set "
+                    "none; the resource has no cap on what it can hold, nor on "
+                    "what it bills",
+                    username,
+                    resource_options,
+                )
+                self.client.set_user_quota(username, quota_request)
+                self.client.set_user_bucket_quota(username, quota_request)
+                return
 
         # Apply quota if any limits were configured
         if quota_applied:
