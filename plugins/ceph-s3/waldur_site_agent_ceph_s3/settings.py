@@ -17,18 +17,21 @@ FLAVOURS = (CROIT, RADOSGW)
 # would run, authenticate somewhere else entirely, and only the provisioning
 # failure would say so.
 _CROIT_ONLY: Tuple[str, ...] = ("api_url", "username", "password", "token")
-_RADOSGW_ONLY: Tuple[str, ...] = ("admin_access_key", "admin_secret_key", "admin_path")
-
-# Settings the radosgw flavour has no implementation for. Tenanted uids are
-# "tenant$uid"; only the croit client's validator accepts that form (widening the
-# radosgw one is security-relevant and needs its own review). Admin Ops
-# user-create takes a placement but no storage class. Rejected rather than ignored, for the same
-# reason as the foreign settings above: a dropped setting reads as configured.
-_UNIMPLEMENTED_ON_RADOSGW: Tuple[str, ...] = (
-    "tenant_template",
-    "default_tenant",
-    "default_storage_class",
+# rgw_accounts is radosgw-only too: croit's API has no account endpoints, so the
+# mode exists only where the agent talks Admin Ops itself.
+_RADOSGW_ONLY: Tuple[str, ...] = (
+    "admin_access_key",
+    "admin_secret_key",
+    "admin_path",
+    "rgw_accounts",
 )
+
+# Settings the radosgw flavour has no implementation for. Admin Ops user-create
+# takes a placement but no storage class. Rejected rather than ignored, for the
+# same reason as the foreign settings above: a dropped setting reads as
+# configured. (Tenants are supported on both flavours: tenanted uids are
+# "tenant$uid", validated half by half in clients.base.)
+_UNIMPLEMENTED_ON_RADOSGW: Tuple[str, ...] = ("default_storage_class",)
 
 
 def resolve_flavour(backend_settings: dict) -> str:

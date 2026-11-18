@@ -4,7 +4,6 @@ Endpoint shapes verified against croit 2503 (OpenAPI 3.1).
 """
 
 import logging
-import re
 import time
 from typing import Any, Optional
 from urllib.parse import urlencode
@@ -21,7 +20,7 @@ from ..exceptions import (
     CroitS3GraphNotFoundError,
 )
 from ..tenant import split
-from .base import _SAFE_PATH_SEGMENT_RE, BaseS3AdminClient
+from .base import BaseS3AdminClient
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +38,6 @@ STORAGE_MAX_DATA_POINTS = 2000
 # A session token is renewed this long before croit says it expires, so a request
 # never starts with a token that lapses on the way.
 SESSION_TOKEN_RENEW_MARGIN_SECONDS = 60
-
-# The tenant half of a tenanted uid. RGW allows letters, digits and '_' in a
-# tenant name; nothing that could end or navigate a path segment.
-_TENANT_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 
 
 class CroitClient(BaseS3AdminClient):
@@ -102,20 +97,6 @@ class CroitClient(BaseS3AdminClient):
         if params:
             return str(httpx.URL(url, params=params))
         return url
-
-    @staticmethod
-    def _validate_uid(uid: str) -> str:
-        """Accept a bare uid, or a tenanted one as RGW spells it: ``tenant$uid``.
-
-        Each half is held to its own alphabet, and neither can contain "/" or be a
-        dot-segment, so the widened form still cannot address another endpoint.
-        """
-        if isinstance(uid, str):
-            tenant, bare = split(uid)
-            tenant_ok = _TENANT_RE.match(tenant) if "$" in uid else True
-            if tenant_ok and _SAFE_PATH_SEGMENT_RE.match(bare):
-                return uid
-        raise CephS3APIError(f"Refusing to build a request for the user id {uid!r}")
 
     @classmethod
     def _user_path(cls, uid: str, suffix: str = "") -> str:

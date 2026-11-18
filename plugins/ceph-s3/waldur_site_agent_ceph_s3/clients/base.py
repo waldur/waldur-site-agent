@@ -45,6 +45,10 @@ RETRY_BACKOFF_FACTOR = 1.0
 # credential unmanageable — a worse failure than the one being prevented.
 _SAFE_PATH_SEGMENT_RE = re.compile(r"^(?!\.{1,2}$)[A-Za-z0-9._-]{1,255}$")
 
+# The tenant half of a tenanted uid, ``tenant$uid``. RGW allows letters, digits
+# and '_' in a tenant name; nothing that could end or navigate a path segment.
+_TENANT_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
+
 
 class BaseS3AdminClient(BaseClient):
     """Retries, identifier validation and error classification."""
@@ -210,10 +214,17 @@ class BaseS3AdminClient(BaseClient):
 
     @staticmethod
     def _validate_uid(uid: str) -> str:
-        """Reject an S3 user id that would resolve to a different endpoint."""
-        if not isinstance(uid, str) or not _SAFE_PATH_SEGMENT_RE.match(uid):
-            raise CephS3APIError(f"Refusing to build a request for the user id {uid!r}")
-        return uid
+        """Accept a bare uid, or a tenanted one as RGW spells it: ``tenant$uid``.
+
+        Each half is held to its own alphabet, and neither can contain "/" or be a
+        dot-segment, so the tenanted form still cannot address another endpoint.
+        """
+        if isinstance(uid, str):
+            tenant, _, bare = uid.rpartition("$")
+            tenant_ok = _TENANT_RE.match(tenant) if "$" in uid else True
+            if tenant_ok and _SAFE_PATH_SEGMENT_RE.match(bare):
+                return uid
+        raise CephS3APIError(f"Refusing to build a request for the user id {uid!r}")
 
     @staticmethod
     def _validate_access_key(access_key: str) -> str:

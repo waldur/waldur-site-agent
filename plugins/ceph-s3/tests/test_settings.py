@@ -97,8 +97,10 @@ class TestRadosGWValidation:
             validate_settings(
                 dict(RADOSGW_SETTINGS, default_storage_class="STANDARD_IA"), RADOSGW
             )
-        with pytest.raises(ValueError, match="default_tenant"):
-            validate_settings(dict(RADOSGW_SETTINGS, default_tenant="acme"), RADOSGW)
+
+    def test_radosgw_takes_tenants(self):
+        validate_settings(dict(RADOSGW_SETTINGS, default_tenant="acme"), RADOSGW)
+        validate_settings(dict(RADOSGW_SETTINGS, tenant_template="{resource_uuid}"), RADOSGW)
 
     def test_a_complete_configuration_passes(self):
         validate_settings(RADOSGW_SETTINGS, RADOSGW)

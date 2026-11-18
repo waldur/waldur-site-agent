@@ -59,6 +59,14 @@ class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
     admin_path: Optional[str] = Field(
         default=None, description="RGW admin API path (default 'admin')"
     )
+    rgw_accounts: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Provision an RGW account with its own root user per resource, so "
+            "consumers manage IAM users and policies themselves (radosgw flavour, "
+            "Ceph 20.2.2 or later)"
+        ),
+    )
     # both
     default_placement: Optional[str] = Field(
         default=None, description="Default placement target for new users"
