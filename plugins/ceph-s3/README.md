@@ -188,6 +188,23 @@ What changes compared with user mode:
   ones the consumer created through IAM, and finally the account. Finding them
   means listing every user on the gateway, because Admin Ops cannot filter by
   account.
+- **IAM roles, groups and OIDC providers are removed at termination too.** RGW
+  will not delete an account that still holds them, and Admin Ops cannot see
+  them. Before deleting any user, the agent gives the root user a temporary key,
+  removes them through the account's IAM API, and drops the key again. If that
+  fails, nothing is deleted and the order error says why. (Without this step, a
+  role was enough to leave an account without users, which only
+  `radosgw-admin role delete` on a cluster node could clean up.)
+- **What the consumer creates with the root key is theirs.** The root key can
+  create IAM users, access keys, roles and groups inside the account. Waldur's
+  key rotation replaces only the keys Waldur issued: IAM users and their keys
+  keep working after a rotation. Removing someone's access therefore means
+  removing their IAM user, or terminating the resource.
+- **Pause suspends every user of the account.** Pausing a resource in Waldur
+  suspends the root user and every IAM user (RGW suspends per user, so the root
+  alone would not stop the others); restoring reinstates them all. A plain user,
+  on either flavour, is suspended the same way. Downscaling has no S3 meaning and
+  changes nothing.
 - **Existing offerings.** Resources provisioned before the switch stay plain
   users. Account membership cannot be added without moving a user's buckets.
 

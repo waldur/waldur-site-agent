@@ -411,6 +411,14 @@ class CroitClient(BaseS3AdminClient):
 
         return data if isinstance(data, list) else []
 
+    def set_user_suspended(self, uid: str, suspended: bool) -> None:
+        """Suspend or reinstate an S3 user through croit."""
+        self._request(
+            "PATCH",
+            self._user_path(self._validate_uid(uid)),
+            json_data={"suspended": suspended},
+        )
+
     def create_user_key(self, uid: str, access_key: str, secret_key: str) -> None:
         """Add one access/secret pair to an S3 user.
 

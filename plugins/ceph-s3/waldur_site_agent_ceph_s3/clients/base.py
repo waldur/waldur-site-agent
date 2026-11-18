@@ -119,6 +119,10 @@ class BaseS3AdminClient(BaseClient):
         """Drop one key; an already-absent one is a no-op."""
 
     @abc.abstractmethod
+    def set_user_suspended(self, uid: str, suspended: bool) -> None:
+        """Suspend the user (every request with its keys is refused) or lift it."""
+
+    @abc.abstractmethod
     def get_user_quota(self, uid: str) -> dict:
         """Both ceilings, as {user_quota, bucket_quota} of neutral dicts."""
 

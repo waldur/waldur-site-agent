@@ -87,7 +87,8 @@ class RadosGWClient(BaseS3AdminClient):
             timeout: Request timeout in seconds
         """
         super().__init__(timeout=timeout, verify_ssl=verify_ssl)
-        self.base_url = endpoint.rstrip("/") + "/" + admin_path.strip("/")
+        self.gateway_url = endpoint.rstrip("/")
+        self.base_url = self.gateway_url + "/" + admin_path.strip("/")
         self._credentials = Credentials(access_key, secret_key)
         self._region = region
         self.session = httpx.Client(
@@ -322,6 +323,19 @@ class RadosGWClient(BaseS3AdminClient):
             },
         )
 
+    def set_user_suspended(self, uid: str, suspended: bool) -> None:
+        """Suspend or reinstate a user: a suspended user's keys are refused
+        (UserSuspended) on every request, IAM users of an account included."""
+        self._request(
+            "POST",
+            "/user",
+            params={
+                "uid": self._validate_uid(uid),
+                "suspended": "True" if suspended else "False",
+                "format": "json",
+            },
+        )
+
     def delete_user_key(self, uid: str, access_key: str) -> None:
         """Drop one access key, treating an unknown one as already dropped."""
         uid = self._validate_uid(uid)
@@ -547,6 +561,16 @@ class RadosGWClient(BaseS3AdminClient):
             )
         except CephS3AccountNotFoundError:
             logger.info("RGW account %s already absent", account_id)
+        except CephS3APIError as e:
+            if "BucketNotEmpty" not in str(e):
+                raise
+            # RGW answers ENOTEMPTY, spelled BucketNotEmpty, for anything the
+            # account still holds -- users, buckets, but also IAM roles, groups
+            # and OIDC providers, which Admin Ops cannot list.
+            raise CephS3APIError(
+                f"RGW refused to delete account {account_id}: it still holds "
+                "users, buckets or IAM resources (roles, groups, OIDC providers)"
+            ) from e
 
     def _iter_user_ids(self) -> Iterator[str]:
         marker = ""

@@ -43,6 +43,18 @@ def quota(enabled=False, size=-1, objects=-1):
     return {"enabled": enabled, "max_size_bytes": size, "max_objects": objects}
 
 
+@pytest.fixture(autouse=True)
+def account_iam():
+    """The IAM client the backend builds to clear an account before deletion."""
+    with patch("waldur_site_agent_ceph_s3.backend.AccountIamClient") as cls:
+        cls.return_value.clear.return_value = {
+            "roles": 0,
+            "groups": 0,
+            "oidc_providers": 0,
+        }
+        yield cls
+
+
 def make_backend(settings=SETTINGS):
     with patch("waldur_site_agent_ceph_s3.backend.RadosGWClient"):
         backend = CephS3Backend(dict(settings), COMPONENTS)
@@ -453,3 +465,124 @@ class TestTenantedClient:
             return httpx.Response(200, json={"user_id": params["uid"], "account_id": ACCOUNT})
 
         assert make_client(handler).list_account_users(ACCOUNT) == ["a"]
+
+
+
+class TestSuspension:
+    """Pause must stop every key of the resource; RGW suspends per user. The
+    core calls pause or restore on every sync, so the steady state is one read."""
+
+    def test_pause_suspends_every_iam_user_then_the_root(self):
+        backend = make_backend()
+        backend.client.list_account_users.return_value = [UID, "3f1c-iam-user"]
+
+        assert backend.pause_resource(UID)
+
+        calls = [c.args for c in backend.client.set_user_suspended.call_args_list]
+        assert calls == [("3f1c-iam-user", True), (UID, True)]
+
+    def test_restore_reinstates_them(self):
+        backend = make_backend()
+        backend.client.get_user_info.return_value = {
+            **backend.client.get_user_info.return_value,
+            "suspended": True,
+        }
+        backend.client.list_account_users.return_value = [UID, "3f1c-iam-user"]
+
+        assert backend.restore_resource(UID)
+
+        calls = [c.args for c in backend.client.set_user_suspended.call_args_list]
+        assert calls == [("3f1c-iam-user", False), (UID, False)]
+
+    def test_a_resource_already_in_that_state_costs_one_read(self):
+        backend = make_backend()
+
+        backend.restore_resource(UID)
+
+        backend.client.list_account_users.assert_not_called()
+        backend.client.set_user_suspended.assert_not_called()
+
+    def test_a_plain_user_is_suspended_alone(self):
+        backend = make_backend()
+        backend.client.get_user_info.return_value = {"uid": UID, "account_id": ""}
+
+        backend.pause_resource(UID)
+
+        backend.client.set_user_suspended.assert_called_once_with(UID, True)
+
+
+class TestAccountIamCleanup:
+    """IAM roles, groups and OIDC providers block an account's deletion and
+    Admin Ops cannot reach them: they go first, as the root user."""
+
+    def test_iam_is_cleared_with_a_temporary_root_key_before_any_user_goes(
+        self, account_iam
+    ):
+        backend = make_backend()
+        order = []
+        account_iam.return_value.clear.side_effect = lambda: order.append("iam") or {}
+        backend.client.delete_user.side_effect = lambda uid: order.append(uid)
+        backend.client.list_account_users.return_value = [UID]
+
+        backend.delete_resource(make_resource())
+
+        assert order == ["iam", UID]
+        created = backend.client.create_user_key.call_args.args
+        assert created[0] == UID
+        backend.client.delete_user_key.assert_any_call(UID, created[1])
+
+    def test_a_failed_iam_cleanup_deletes_nothing(self, account_iam):
+        backend = make_backend()
+        account_iam.return_value.clear.side_effect = CephS3APIError(
+            "IAM DeleteRole answered 403"
+        )
+
+        with pytest.raises(CephS3APIError, match="nothing was deleted"):
+            backend.delete_resource(make_resource())
+
+        backend.client.delete_user.assert_not_called()
+        backend.client.delete_account.assert_not_called()
+        # The temporary key does not outlive the attempt.
+        temp = backend.client.create_user_key.call_args.args[1]
+        backend.client.delete_user_key.assert_any_call(UID, temp)
+
+    def test_a_root_at_its_key_limit_gives_up_a_key(self, account_iam):
+        backend = make_backend()
+        backend.client.create_user_key.side_effect = [
+            CephS3APIError("LimitExceeded"),
+            None,
+        ]
+        backend.client.list_user_keys.return_value = [{"access_key": "OLDKEY"}]
+
+        backend.delete_resource(make_resource())
+
+        backend.client.delete_user_key.assert_any_call(UID, "OLDKEY")
+        assert backend.client.create_user_key.call_count == 2
+
+
+
+class TestClientSuspensionAndAccountDelete:
+    def _client(self, handler):
+        client = RadosGWClient("https://rgw.example.org", "AK", "SK")
+        client.session = httpx.Client(transport=httpx.MockTransport(handler))
+        return client
+
+    def test_suspension_is_a_user_modify(self):
+        seen = []
+
+        def handler(request):
+            seen.append((request.method, parse_qs(request.url.query.decode())))
+            return httpx.Response(200, json={})
+
+        self._client(handler).set_user_suspended("t1$u1", True)
+
+        method, query = seen[0]
+        assert method == "POST"
+        assert query["uid"] == ["t1$u1"] and query["suspended"] == ["True"]
+
+    def test_a_refused_account_delete_names_what_rgw_means(self):
+        def handler(request):
+            return httpx.Response(409, json={"Code": "BucketNotEmpty"})
+
+        with pytest.raises(CephS3APIError, match="IAM resources"):
+            self._client(handler).delete_account(ACCOUNT)
