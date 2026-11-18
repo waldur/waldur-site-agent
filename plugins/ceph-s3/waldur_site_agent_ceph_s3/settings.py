@@ -20,11 +20,15 @@ _CROIT_ONLY: Tuple[str, ...] = ("api_url", "username", "password", "token")
 _RADOSGW_ONLY: Tuple[str, ...] = ("admin_access_key", "admin_secret_key", "admin_path")
 
 # Settings the radosgw flavour has no implementation for. Tenanted uids are
-# "tenant$uid" and the client's path validator refuses "$" (widening it is
-# security-relevant and needs its own review); Admin Ops user-create takes a
-# placement but no storage class. Rejected rather than ignored, for the same
+# "tenant$uid"; only the croit client's validator accepts that form (widening the
+# radosgw one is security-relevant and needs its own review). Admin Ops
+# user-create takes a placement but no storage class. Rejected rather than ignored, for the same
 # reason as the foreign settings above: a dropped setting reads as configured.
-_UNIMPLEMENTED_ON_RADOSGW: Tuple[str, ...] = ("default_tenant", "default_storage_class")
+_UNIMPLEMENTED_ON_RADOSGW: Tuple[str, ...] = (
+    "tenant_template",
+    "default_tenant",
+    "default_storage_class",
+)
 
 
 def resolve_flavour(backend_settings: dict) -> str:

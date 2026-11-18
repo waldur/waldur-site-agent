@@ -4,7 +4,10 @@ Endpoint shapes verified against croit 2503 (OpenAPI 3.1).
 """
 
 import logging
+import re
+import time
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -17,7 +20,8 @@ from ..exceptions import (
     CephS3UserNotFoundError,
     CroitS3GraphNotFoundError,
 )
-from .base import BaseS3AdminClient
+from ..tenant import split
+from .base import _SAFE_PATH_SEGMENT_RE, BaseS3AdminClient
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,13 @@ STORAGE_GRAPH_TEMPLATE = "template-s3-user-name"
 # rising series, which rules out both max and last -- so the integral is preserved
 # rather than approximated, and lowering this trades accuracy for nothing.
 STORAGE_MAX_DATA_POINTS = 2000
+# A session token is renewed this long before croit says it expires, so a request
+# never starts with a token that lapses on the way.
+SESSION_TOKEN_RENEW_MARGIN_SECONDS = 60
+
+# The tenant half of a tenanted uid. RGW allows letters, digits and '_' in a
+# tenant name; nothing that could end or navigate a path segment.
+_TENANT_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 
 
 class CroitClient(BaseS3AdminClient):
@@ -50,8 +61,8 @@ class CroitClient(BaseS3AdminClient):
 
         Args:
             api_url: Base URL of croit API (e.g. https://192.168.240.34)
-            username: API username (for Basic Auth)
-            password: API password (for Basic Auth)
+            username: API username, exchanged for a session token
+            password: API password, exchanged for a session token
             token: Bearer token (alternative to username/password)
             verify_ssl: Whether to verify SSL certificates
             timeout: Request timeout in seconds
@@ -61,23 +72,21 @@ class CroitClient(BaseS3AdminClient):
         self.username = username
         self.password = password
         self.token = token
+        self._session_token: Optional[str] = None
+        self._session_token_expires_at = 0.0
 
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        auth = None
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        elif username and password:
-            auth = httpx.BasicAuth(username, password)
-        else:
+        elif not (username and password):
             raise ValueError("Either token or username/password must be provided")
 
         # Transport-level retries cover connection errors;
         # 5xx responses are retried in _request
         self.session = httpx.Client(
-            auth=auth,
             headers=headers,
             timeout=timeout,
             transport=httpx.HTTPTransport(verify=verify_ssl, retries=3),
@@ -94,10 +103,108 @@ class CroitClient(BaseS3AdminClient):
             return str(httpx.URL(url, params=params))
         return url
 
+    @staticmethod
+    def _validate_uid(uid: str) -> str:
+        """Accept a bare uid, or a tenanted one as RGW spells it: ``tenant$uid``.
+
+        Each half is held to its own alphabet, and neither can contain "/" or be a
+        dot-segment, so the widened form still cannot address another endpoint.
+        """
+        if isinstance(uid, str):
+            tenant, bare = split(uid)
+            tenant_ok = _TENANT_RE.match(tenant) if "$" in uid else True
+            if tenant_ok and _SAFE_PATH_SEGMENT_RE.match(bare):
+                return uid
+        raise CephS3APIError(f"Refusing to build a request for the user id {uid!r}")
+
+    @classmethod
+    def _user_path(cls, uid: str, suffix: str = "") -> str:
+        """``/s3/users/{uid}{suffix}``, with the uid validated and its "$" escaped.
+
+        A literal "$" is legal in a path, but %24 is the form no proxy or router
+        between here and croit can read as anything other than data.
+        """
+        return f"/s3/users/{cls._validate_uid(uid).replace('$', '%24')}{suffix}"
+
     def _auth_headers(self, method: str, url: str, body: Optional[bytes]) -> dict:
-        """No per-request headers: the session carries the auth and content type."""
+        """A session token for username/password auth; an API token rides the session.
+
+        croit answers HTTP Basic on its API endpoints with 401: Basic is accepted
+        only by its login endpoint. A username and password are therefore
+        exchanged for a session token, which expires (an hour on croit 2503) and
+        is renewed ahead of that.
+        """
         del method, url, body
-        return {}
+        if self.token:
+            return {}
+        if (
+            self._session_token is None
+            or time.monotonic() >= self._session_token_expires_at
+        ):
+            self._log_in()
+        return {"Authorization": f"Bearer {self._session_token}"}
+
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        json_data: Optional[dict] = None,
+        params: Optional[dict] = None,
+    ) -> httpx.Response:
+        """Send one request, logging in again once if croit dropped the session.
+
+        croit can invalidate a session token before its stated expiry (a restart,
+        a logout elsewhere). Without the retry, the first call after that fails a
+        real operation -- an order, or a resource's usage for the pass -- and only
+        the call after it logs in afresh. Retried only when the refused token was
+        a cached one: a token this very call just obtained being refused is a
+        credentials problem, and repeating it would only hide that.
+        """
+        cached_session = (
+            not self.token
+            and self._session_token is not None
+            and time.monotonic() < self._session_token_expires_at
+        )
+        try:
+            return super()._request(method, endpoint, json_data=json_data, params=params)
+        except CephS3AuthenticationError:
+            if not cached_session:
+                raise
+            logger.info("croit refused the cached session token; logging in again")
+            return super()._request(method, endpoint, json_data=json_data, params=params)
+
+    def _log_in(self) -> None:
+        """Exchange the username and password for a croit session token."""
+        try:
+            response = self.session.request(
+                "POST",
+                self._build_url("/auth/login-form"),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                content=urlencode(
+                    {
+                        "grant_type": "password",
+                        "username": self.username,
+                        "password": self.password,
+                    }
+                ).encode(),
+            )
+        except httpx.HTTPError as e:
+            raise CephS3APIError(f"croit login failed: {e}") from e
+        if response.status_code >= 400:
+            raise self._classify_error(response)
+        try:
+            payload = response.json()
+            access_token = payload["access_token"]
+        except (ValueError, KeyError, TypeError) as e:
+            raise CephS3AuthenticationError(
+                f"croit login for user {self.username!r} returned no access token"
+            ) from e
+        expires_in = payload.get("expires_in")
+        lifetime = float(expires_in) if isinstance(expires_in, (int, float)) else 3600.0
+        self._session_token = str(access_token)
+        self._session_token_expires_at = time.monotonic() + max(
+            lifetime - SESSION_TOKEN_RENEW_MARGIN_SECONDS, 0.0
+        )
 
     def _classify_error(self, response: httpx.Response) -> Exception:
         """Map croit's status codes onto the plugin's exceptions.
@@ -115,6 +222,9 @@ class CroitClient(BaseS3AdminClient):
             # look. The token itself is never interpolated — this string reaches
             # the Waldur order.
             credential = "the API token" if self.token else f"user {self.username!r}"
+            # A session token croit dropped early (restart, logout) is fetched
+            # afresh on the next call rather than replayed until it expires.
+            self._session_token = None
             return CephS3AuthenticationError(
                 f"croit rejected {credential}: check that it is valid and, for a "
                 "token, that it has not expired"
@@ -167,10 +277,22 @@ class CroitClient(BaseS3AdminClient):
             CephS3UserExistsError: If user already exists
             CephS3APIError: If creation fails
         """
+        uid = self._validate_uid(uid)
+        # croit takes the tenant beside the uid on create, and only there; every
+        # later call addresses the user as tenant$uid.
+        tenant, bare_uid = split(uid)
+        if tenant and kwargs.get("tenant") and kwargs["tenant"] != tenant:
+            raise CephS3APIError(
+                f"User id {uid!r} names tenant {tenant!r}, but {kwargs['tenant']!r} "
+                "was passed alongside it"
+            )
+        tenant = tenant or kwargs.get("tenant") or ""
         user_data = {
-            "uid": uid,
+            "uid": bare_uid,
             "name": name,
         }
+        if tenant:
+            user_data["tenant"] = tenant
 
         if email:
             user_data["email"] = email
@@ -180,14 +302,12 @@ class CroitClient(BaseS3AdminClient):
         # flavours — which is what stops a setting being dropped by whichever
         # client happens to be wired in.
         for neutral, croit_name in (
-            ("tenant", "tenant"),
             ("default_placement", "defaultPlacement"),
             ("default_storage_class", "defaultStorageClass"),
         ):
             if kwargs.get(neutral):
                 user_data[croit_name] = kwargs[neutral]
 
-        uid = self._validate_uid(uid)
         logger.info("Creating S3 user: %s", uid)
         response = self._request("POST", "/s3/users", json_data=user_data)
 
@@ -211,9 +331,8 @@ class CroitClient(BaseS3AdminClient):
             CephS3UserNotFoundError: If user doesn't exist
             CephS3APIError: If deletion fails
         """
-        uid = self._validate_uid(uid)
         logger.info("Deleting S3 user: %s", uid)
-        response = self._request("DELETE", f"/s3/users/{uid}")
+        response = self._request("DELETE", self._user_path(uid))
 
         # Croit API returns 204 for successful deletion
         if response.status_code == 204:
@@ -235,10 +354,25 @@ class CroitClient(BaseS3AdminClient):
 
         data = response.json()
         users = data if isinstance(data, list) else []
-        matching = [user for user in users if user.get("uid") == uid]
+        matching = [user for user in users if self._is_user(user, uid)]
         if not matching:
             raise CephS3UserNotFoundError(f"User {uid} not found")
         return matching[0]
+
+    @staticmethod
+    def _is_user(user: dict, uid: str) -> bool:
+        """Whether a listed croit user is the one ``uid`` names.
+
+        croit's user object has no documented tenant field, so a tenanted user may
+        come back either as ``tenant$uid`` or as the bare uid beside a ``tenant``
+        key. Both are matched. A bare uid with no tenant key never matches a
+        tenanted id: that is the global tenant's user of the same name.
+        """
+        listed = user.get("uid")
+        if listed == uid:
+            return True
+        tenant, bare = split(uid)
+        return bool(tenant) and listed == bare and user.get("tenant") == tenant
 
     def get_user_info(self, uid: str) -> dict:
         """Get S3 user information.
@@ -279,8 +413,7 @@ class CroitClient(BaseS3AdminClient):
             CephS3UserNotFoundError: If user doesn't exist
             CephS3APIError: If request fails
         """
-        uid = self._validate_uid(uid)
-        response = self._request("GET", f"/s3/users/{uid}/keys")
+        response = self._request("GET", self._user_path(uid, "/keys"))
         data = response.json()
 
         return data if isinstance(data, list) else []
@@ -303,12 +436,11 @@ class CroitClient(BaseS3AdminClient):
             CephS3UserNotFoundError: If user doesn't exist
             CephS3APIError: If creation fails
         """
-        uid = self._validate_uid(uid)
         access_key = self._validate_access_key(access_key)
         logger.info("Adding S3 key %s to user %s", access_key, uid)
         response = self._request(
             "PUT",
-            f"/s3/users/{uid}/keys/{access_key}",
+            self._user_path(uid, f"/keys/{access_key}"),
             params={"secretKey": secret_key},
         )
 
@@ -332,7 +464,6 @@ class CroitClient(BaseS3AdminClient):
         Raises:
             CephS3APIError: If deletion fails
         """
-        uid = self._validate_uid(uid)
         access_key = self._validate_access_key(access_key)
         logger.info("Removing S3 key %s from user %s", access_key, uid)
 
@@ -346,7 +477,9 @@ class CroitClient(BaseS3AdminClient):
             return
 
         try:
-            response = self._request("DELETE", f"/s3/users/{uid}/keys/{access_key}")
+            response = self._request(
+                "DELETE", self._user_path(uid, f"/keys/{access_key}")
+            )
         except CephS3UserNotFoundError:
             # _request maps every 404 to this; here it means the key is already gone.
             logger.info("S3 key %s was already absent from user %s", access_key, uid)
@@ -375,8 +508,7 @@ class CroitClient(BaseS3AdminClient):
             CephS3UserNotFoundError: If user doesn't exist
             CephS3APIError: If request fails
         """
-        uid = self._validate_uid(uid)
-        response = self._request("GET", f"/s3/users/{uid}/buckets")
+        response = self._request("GET", self._user_path(uid, "/buckets"))
         response.raise_for_status()
 
         normalised = []
@@ -397,9 +529,10 @@ class CroitClient(BaseS3AdminClient):
     def _to_croit_quota(quota: dict) -> dict:
         """Translate the neutral ceiling dict into croit's own body.
 
-        Dimensions the order did not ask for are left out rather than sent as 0:
-        croit reads 0 as "allow nothing", so emitting an unordered dimension
-        would cap a tenant at zero bytes instead of leaving it unbounded.
+        Dimensions the order did not ask for are left out, and croit stores a
+        left-out dimension as -1, "no limit" — measured on croit v2611.1, as is
+        that it stores 0 as -1 too. A 0 must therefore never be sent to mean
+        "allow nothing": croit would answer 204 and leave the user unbounded.
         """
         body: dict[str, Any] = {"enabled": bool(quota.get("enabled", True))}
         if quota.get("max_size_bytes") is not None:
@@ -419,10 +552,11 @@ class CroitClient(BaseS3AdminClient):
             CephS3UserNotFoundError: If user doesn't exist
             CephS3APIError: If quota setting fails
         """
-        uid = self._validate_uid(uid)
         logger.info("Setting bucket quota for user %s: %s", uid, quota)
         response = self._request(
-            "PUT", f"/s3/users/{uid}/bucket-quota", json_data=self._to_croit_quota(quota)
+            "PUT",
+            self._user_path(uid, "/bucket-quota"),
+            json_data=self._to_croit_quota(quota),
         )
 
         # Croit API returns 204 for successful quota update
@@ -448,10 +582,9 @@ class CroitClient(BaseS3AdminClient):
             CephS3UserNotFoundError: If user doesn't exist
             CephS3APIError: If quota setting fails
         """
-        uid = self._validate_uid(uid)
         logger.info("Setting user quota for user %s: %s", uid, quota)
         response = self._request(
-            "PUT", f"/s3/users/{uid}/quota", json_data=self._to_croit_quota(quota)
+            "PUT", self._user_path(uid, "/quota"), json_data=self._to_croit_quota(quota)
         )
 
         # Croit API returns 204 for successful quota update
@@ -479,13 +612,18 @@ class CroitClient(BaseS3AdminClient):
             CephS3APIError: If the request fails
         """
         uid = self._validate_uid(uid)
+        query_name = self._stats_query_name(uid)
+        if query_name is None:
+            # Unmeasured, not zero: the reporter skips an empty series, where a
+            # zero would overwrite the period's accrued total.
+            return []
         try:
             response = self._request(
                 "GET",
                 "/stats",
                 params={
                     "graph": STORAGE_GRAPH,
-                    STORAGE_GRAPH_TEMPLATE: uid,
+                    STORAGE_GRAPH_TEMPLATE: query_name,
                     "startTime": start_time,
                     "endTime": end_time,
                     "maxDataPoints": STORAGE_MAX_DATA_POINTS,
@@ -504,6 +642,29 @@ class CroitClient(BaseS3AdminClient):
             logger.warning("No storage series for S3 user %s", uid)
             return []
         return plots[0].get("datapoints", [])
+
+    @staticmethod
+    def _stats_query_name(uid: str) -> Optional[str]:
+        """The value croit's statistics know a user by, for the graph template.
+
+        For an untenanted user that is the uid itself, as measured. croit refuses
+        a tenanted ``tenant$uid`` there outright (400, "$" is not a valid template
+        character), every spelling without the "$" tried against a live croit
+        returned no series, and croit's published API (its own /api/openapi.json)
+        offers no way to look the name up. So a tenanted user is reported as
+        unmeasurable rather than sent in a form croit rejects.
+
+        Returns:
+            The template value, or None when croit offers no way to name the user.
+        """
+        if not split(uid)[0]:
+            return uid
+        logger.warning(
+            "croit offers no statistics name for tenanted S3 user %s, so its "
+            "storage cannot be metered; it is reported as unmeasured",
+            uid,
+        )
+        return None
 
     def get_user_quota(self, uid: str) -> dict:
         """Get current user quota settings.

@@ -86,7 +86,7 @@ offerings:
       s3_region: "default"                     # RadosGW zonegroup api_name
       token: "your-bearer-token"
       verify_ssl: false
-      default_tenant: ""
+      tenant_template: "{customer_slug}_{customer_uuid:.8}"   # optional, croit only
 
     # Component mapping. label and measured_unit are required by the config
     # validator for every component — the agent refuses to start without them.
@@ -157,7 +157,9 @@ the flavour and is checked when the backend starts.
   Maps to the RadosGW zonegroup's `api_name`; croit exposes no endpoint to read it back,
   and `"default"` is Ceph's out-of-the-box zonegroup name. Set it if yours was named
 - **`token`** (croit only): bearer token for API authentication
-- **`username`** (croit only): API username (alternative to token)
+- **`username`** (croit only): API username (alternative to token). croit refuses
+  HTTP Basic on its API, so the pair is exchanged at `/auth/login-form` for a session
+  token, which the client renews before it expires
 - **`password`** (croit only): API password (alternative to token)
 - **`admin_access_key`** (radosgw only, required): access key of the RGW user
   holding `users=*;buckets=read`
@@ -171,9 +173,12 @@ the flavour and is checked when the backend starts.
   core setting, but the core defaults it to `""`, which this plugin overrides: an
   empty namespace puts a consumer-chosen resource name straight into the cluster's
   global one. See Username Generation
-- **`default_tenant`** (croit only, optional): Default RadosGW tenant. Rejected on
-  the radosgw flavour: a tenanted uid is `tenant$uid`, and the client's path
-  validator refuses `$`
+- **`tenant_template`** (croit only, optional): RadosGW tenant for each new user,
+  rendered from the resource at creation. See [Tenants](#tenants). Rejected on the
+  radosgw flavour, whose client does not address tenanted users
+- **`default_tenant`** (croit only, optional): a fixed tenant — the older form of
+  `tenant_template`, read as a template with no fields. Ignored when
+  `tenant_template` is set
 - **`default_placement`** (optional): Default placement rule. Honoured by both
   flavours
 - **`default_storage_class`** (croit only, optional): Default storage class.
@@ -236,11 +241,57 @@ collision. So a resource named `cust-0-proj-0-ceph-s3-of` becomes the uid
 
 **Format**: `{allocation_prefix}{resource_slug}` — **Example**: `waldur-cust-0-pro`
 
+With a [tenant](#tenants) configured, the backend id is `tenant$uid`, e.g.
+`acme_corp_aaaabbbb$waldur-cust-0-pro`.
+
 This is the only naming scheme the plugin has. A second one — `user_prefix`,
 `slug_separator`, `max_username_length` and a `create_resource()` that read them —
 existed alongside it and was never reached, since the order processor calls
 `create_resource_with_id()`. It has been removed; an offering still carrying those
 three keys is unaffected, they are simply ignored.
+
+## Tenants
+
+A RadosGW tenant gives its users their own bucket namespace: two organisations can
+each own a bucket called `data`, where without tenants the first to create it takes
+the name cluster-wide. `tenant_template` (croit flavour) puts each new S3 user into
+a tenant rendered from the resource being provisioned:
+
+```yaml
+      tenant_template: "{customer_slug}_{customer_uuid:.8}"
+```
+
+| Field | Rendered as |
+|---|---|
+| `resource_slug`, `customer_slug`, `project_slug`, `offering_slug` | lower-cased, `-` → `_` |
+| `resource_uuid`, `customer_uuid`, `project_uuid`, `offering_uuid` | 32 hex characters, no hyphens |
+
+A format spec truncates: `{customer_uuid:.8}` is the first eight hex characters.
+Literal text may use lower-case letters, digits and `_`, the only characters RGW
+allows in a tenant name; the rendered tenant is at most 64 characters.
+
+- **Pick the scope deliberately.** `customer_*` gives one namespace per organisation,
+  `project_*` one per project, `resource_*` one per S3 user (full isolation, but a
+  user then shares its namespace with nobody, so cross-user bucket policies need
+  `tenant:bucket` spelling).
+- **Prefer a UUID, or a slug plus a short UUID.** Slugs can be edited, and `a-b`
+  and `a_b` render to the same tenant; the UUID suffix keeps two organisations
+  from landing in one namespace.
+- **The tenant is rendered once.** RGW addresses a tenanted user only as
+  `tenant$uid`, so that is what the backend id holds, and every later call (keys,
+  quotas, deletion, reporting) uses it as stored. Renaming a slug or editing the
+  template affects new resources only; existing ones stay where they were created.
+- **A field the resource lacks fails the order** rather than falling back to the
+  global namespace. A malformed template fails at agent start.
+- **Reporting cannot meter tenanted users.** croit's statistics refuse `tenant$uid`
+  as the user parameter (400), no spelling without the `$` returned a series on a
+  live croit, and croit's published API (`/api/openapi.json`) has no way to look
+  the name up. A tenanted user is therefore reported as **unmeasured** — no
+  figure, not zero — with a warning. Do not bill GB-days on a tenanted offering
+  until croit supports it.
+- **Clients** reaching a bucket in another tenant address it as `tenant:bucket`;
+  their own buckets need no change. The tenant is published as the
+  `s3_tenant` metadata key (empty when untenanted), next to `s3_user`.
 
 ## Usage Reporting
 
