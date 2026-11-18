@@ -422,8 +422,11 @@ class TestCroitClient:
         }
 
         with patch.object(client, "_request", return_value=mock_response) as request:
-            points = client.get_user_storage_series("waldur_u", 1785542400, 0)
+            points = client.get_user_storage_series(
+                "waldur_u", 1785542400, 1785542400 + 86400
+            )
 
+        # A day fits one window: one request, at native resolution.
         request.assert_called_once_with(
             "GET",
             "/stats",
@@ -431,8 +434,8 @@ class TestCroitClient:
                 "graph": "s3-user-data",
                 "template-s3-user-name": "waldur_u",
                 "startTime": 1785542400,
-                "endTime": 0,
-                "maxDataPoints": 2000,
+                "endTime": 1785542400 + 86400,
+                "maxDataPoints": 9001,
             },
         )
         assert points == [{"t": 1785542400, "v": 15728640.0}]
@@ -618,3 +621,73 @@ class TestClientLayering:
         assert exceptions.CephS3UserNotFoundError is exceptions.CephS3UserNotFoundError
         assert exceptions.CephS3UserExistsError is exceptions.CephS3UserExistsError
         assert issubclass(exceptions.CephS3APIError, exceptions.CephS3Error)
+
+
+class TestCroitNativeResolution:
+    """croit returns at most 10,000 points per request and averages past that,
+    on steps that move with the window; a long window is read in chunks that
+    stay on its fixed 180 s grid, so recomputing a month never changes the past."""
+
+    START = 1793491200  # 2026-11-01T00:00:00Z
+    CHUNK = 9000 * 180
+
+    @pytest.fixture
+    def client(self):
+        return CroitClient(api_url="https://croit.example.com", token="test-token")
+
+    def _answer(self, plot_name=None):
+        """A fake /stats that answers every native sample in the asked window."""
+
+        def request(method, path, params):
+            response = Mock()
+            points = [
+                {"t": t, "v": 1.0}
+                for t in range(params["startTime"], params["endTime"] + 1, 180)
+            ]
+            graph = {"datapoints": points}
+            if plot_name:
+                graph["name"] = plot_name
+            response.json.return_value = {"axis1": {"graphs": [graph]}}
+            return response
+
+        return request
+
+    def test_a_month_is_read_in_native_chunks_and_joined_once(self, client):
+        end = self.START + 31 * 86400
+        with patch.object(client, "_request", side_effect=self._answer()) as request:
+            points = client.get_user_storage_series("waldur_u", self.START, end)
+
+        windows = [
+            (c.kwargs["params"]["startTime"], c.kwargs["params"]["endTime"])
+            for c in request.call_args_list
+        ]
+        assert windows == [
+            (self.START, self.START + self.CHUNK),
+            (self.START + self.CHUNK, end),
+        ]
+        assert all(
+            c.kwargs["params"]["maxDataPoints"] <= 10000 for c in request.call_args_list
+        )
+        times = [p["t"] for p in points]
+        assert times == list(range(self.START, end + 1, 180))  # no gap, no repeat
+
+    def test_bucket_series_is_chunked_and_picks_its_plot(self, client):
+        end = self.START + 20 * 86400
+        with patch.object(
+            client, "_request", side_effect=self._answer("Data")
+        ) as request:
+            points = client.get_bucket_storage_series("b", "t1", self.START, end)
+
+        assert request.call_count == 2
+        assert request.call_args_list[0].kwargs["params"]["template-s3-bucket-name"] == "t1_b"
+        assert [p["t"] for p in points] == list(range(self.START, end + 1, 180))
+
+    def test_relative_times_are_resolved_before_chunking(self, client):
+        with patch("time.time", return_value=self.START + 25 * 86400), patch.object(
+            client, "_request", side_effect=self._answer()
+        ) as request:
+            client.get_user_storage_series("waldur_u", -25 * 86400, 0)
+
+        first, second = (c.kwargs["params"] for c in request.call_args_list)
+        assert first["startTime"] == self.START
+        assert second["endTime"] == self.START + 25 * 86400
