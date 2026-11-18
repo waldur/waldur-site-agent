@@ -86,7 +86,7 @@ offerings:
       s3_region: "default"                     # RadosGW zonegroup api_name
       token: "your-bearer-token"
       verify_ssl: false
-      tenant_template: "{customer_slug}_{customer_uuid:.8}"   # optional, croit only
+      tenant_template: "{customer_slug}_{customer_uuid:.8}"   # optional
 
     # Component mapping. label and measured_unit are required by the config
     # validator for every component — the agent refuses to start without them.
@@ -138,6 +138,79 @@ operator did not intend.
   answering `QuotaExceeded`. The ceiling bounds the invoice approximately, not
   exactly.
 
+#### Account mode: an RGW account per resource
+
+With `rgw_accounts: true` each resource becomes an
+[RGW account](https://docs.ceph.com/en/latest/radosgw/account/) with its own root
+user, instead of a plain S3 user. The root user's keys are the resource's API keys,
+as in user mode. With them the consumer can use the IAM API, which RGW serves on the
+same endpoint as S3, to create their own users, access keys, groups and policies
+inside the account. A key that can only read one bucket is then the consumer's own
+business, not a support request.
+
+```yaml
+    backend_settings:
+      flavour: "radosgw"
+      rgw_accounts: true
+      s3_endpoint: "https://s3.example.com"
+      admin_access_key: "ADMINACCESSKEY000000"
+      admin_secret_key: "..."
+```
+
+Requires **Ceph 20.2.2 or later**.
+- Earlier gateways check `GET`/`DELETE /admin/account` against a cap that cannot
+  be granted, so both are refused for everyone.
+- They also have no account quota endpoint. 19.2.x answers the quota `PUT` with
+  `200` and changes nothing.
+- The agent reads every quota back, so an older gateway fails the order with an
+  error naming the version, rather than leaving an account uncapped.
+
+What changes compared with user mode:
+
+- **Ceilings apply to the account.** Account users' buckets belong to the
+  account, and RGW stores a per-user quota on an account user without enforcing
+  it. So the ordered ceiling is the account quota, with the same figure as the
+  account's per-bucket quota, and it caps the consumer's IAM users too.
+- **The backend id is still the root user's uid.** The account is named after it
+  and carries the same ownership stamp, so an interrupted create is adopted on
+  retry, and an account of that name that is not this resource's is refused. The
+  account id is published as `s3_account_id`, which is what the consumer's IAM
+  policy ARNs name.
+- **Display names are uids.** The root user's display name is its IAM
+  `UserName`, held to `[\w+=,.@-]{1,64}`, so the uid is used in place of the
+  resource name.
+- **Termination refuses while the account owns any bucket.** In user mode RGW
+  enforces this itself. For an account root user it does not: the user deletes
+  with `200` while the account still owns buckets. The agent therefore checks
+  before deleting anyone. It then removes every user in the account, including
+  ones the consumer created through IAM, and finally the account. Finding them
+  means listing every user on the gateway, because Admin Ops cannot filter by
+  account.
+- **Existing offerings.** Resources provisioned before the switch stay plain
+  users. Account membership cannot be added without moving a user's buckets.
+
+Cluster preparation (from a shell with `radosgw-admin`):
+
+1. Check `ceph versions` shows 20.2.2 or later on every RGW.
+2. Check the IAM API is enabled: `ceph config get client.rgw rgw_enable_apis`
+   must list `iam`, which is the default.
+3. Create the agent's user. It needs no `metadata` cap and must not be a
+   `--system` user:
+
+   ```bash
+   radosgw-admin user create --uid=waldur-agent --display-name="Waldur site agent"
+   radosgw-admin caps add --uid=waldur-agent --caps="users=*;buckets=*;accounts=*"
+   ```
+
+4. In a multisite setup, point `s3_endpoint` at the metadata master zone.
+5. Optional: to let consumers use IAM roles with `AssumeRole`, enable STS with
+   `rgw_s3_auth_use_sts = true` and an `rgw_sts_key` (16 hex characters, the same
+   on every RGW in the zone). The agent itself does not use STS.
+
+On croit-managed clusters, accounts and IAM are not shown in the croit UI. They are
+standard RGW objects in the cluster and live alongside what croit manages. Mention
+them when raising a croit support ticket about S3.
+
 ### Configuration Options
 
 #### Backend Settings
@@ -173,11 +246,11 @@ the flavour and is checked when the backend starts.
   core setting, but the core defaults it to `""`, which this plugin overrides: an
   empty namespace puts a consumer-chosen resource name straight into the cluster's
   global one. See Username Generation
-- **`tenant_template`** (croit only, optional): RadosGW tenant for each new user,
-  rendered from the resource at creation. See [Tenants](#tenants). Rejected on the
-  radosgw flavour, whose client does not address tenanted users
-- **`default_tenant`** (croit only, optional): a fixed tenant — the older form of
-  `tenant_template`, read as a template with no fields. Ignored when
+- **`tenant_template`** (optional, either flavour): RadosGW tenant for each new
+  user, rendered from the resource at creation. In account mode the account is
+  created in that tenant too. See [Tenants](#tenants)
+- **`default_tenant`** (optional, either flavour): one fixed tenant, the older form
+  of `tenant_template`, taken as written (letters, digits and `_`). Ignored when
   `tenant_template` is set
 - **`default_placement`** (optional): Default placement rule. Honoured by both
   flavours
@@ -254,7 +327,7 @@ three keys is unaffected, they are simply ignored.
 
 A RadosGW tenant gives its users their own bucket namespace: two organisations can
 each own a bucket called `data`, where without tenants the first to create it takes
-the name cluster-wide. `tenant_template` (croit flavour) puts each new S3 user into
+the name cluster-wide. `tenant_template` (either flavour) puts each new S3 user into
 a tenant rendered from the resource being provisioned:
 
 ```yaml
@@ -289,6 +362,13 @@ allows in a tenant name; the rendered tenant is at most 64 characters.
   the name up. A tenanted user is therefore reported as **unmeasured** — no
   figure, not zero — with a warning. Do not bill GB-days on a tenanted offering
   until croit supports it.
+- **Account mode** (radosgw, `rgw_accounts: true`) creates the resource's RGW
+  account in the same tenant, with its root user as `tenant$uid`. RGW keeps an
+  account's users in the account's tenant, so the consumer's IAM users and every
+  bucket they create stay in that namespace too. `tenant_template:
+  "{resource_uuid}"` gives each resource a namespace of its own (verified on Ceph
+  20.2.5: two tenants each own a bucket called `data`, and neither sees the
+  other's).
 - **Clients** reaching a bucket in another tenant address it as `tenant:bucket`;
   their own buckets need no change. The tenant is published as the
   `s3_tenant` metadata key (empty when untenanted), next to `s3_user`.

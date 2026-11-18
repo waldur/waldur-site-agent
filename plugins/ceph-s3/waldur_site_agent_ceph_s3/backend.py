@@ -13,6 +13,7 @@ Key Features:
 """
 
 import logging
+import re
 import secrets
 import string
 from decimal import ROUND_HALF_UP, Decimal
@@ -32,7 +33,14 @@ from waldur_site_agent.backend.exceptions import DuplicateResourceError
 from .clients.base import BaseS3AdminClient
 from .clients.croit import CroitClient
 from .clients.radosgw import RadosGWClient
-from .exceptions import CephS3Error, CephS3UserExistsError, CephS3UserNotFoundError
+from .exceptions import (
+    CephS3AccountExistsError,
+    CephS3AccountNotFoundError,
+    CephS3AuthenticationError,
+    CephS3Error,
+    CephS3UserExistsError,
+    CephS3UserNotFoundError,
+)
 from .settings import (
     CROIT,
     RADOSGW,
@@ -105,6 +113,10 @@ def _is_waldur_stamp(email: object) -> bool:
         and email.startswith(_STAMP_PREFIX)
         and email.endswith(_STAMP_SUFFIX)
     )
+
+# An account user's display name is its IAM UserName, which RGW holds to the IAM
+# rules: anything else is refused with a bare 400 InvalidArgument.
+_IAM_USER_NAME_RE = re.compile(r"^[\w+=,.@-]{1,64}$")
 
 # Two places is what the reporter's "%.2f" formatting preserves on the wire.
 _USAGE_PRECISION = Decimal("0.01")
@@ -293,6 +305,9 @@ class CephS3Backend(backends.BaseBackend):
             validate_tenant_template(self.tenant_template)
         elif self.fixed_tenant:
             validate_fixed_tenant(self.fixed_tenant)
+        # One RGW account per resource, with the resource's user as its root.
+        # radosgw-only; settings.validate_settings rejects it for croit.
+        self.rgw_accounts = bool(backend_settings.get("rgw_accounts"))
         self.default_placement = backend_settings.get("default_placement", "")
         self.default_storage_class = backend_settings.get("default_storage_class", "")
 
@@ -369,7 +384,7 @@ class CephS3Backend(backends.BaseBackend):
         """
         return list(self.backend_components.keys())
 
-    def _connection_info(self, username: str) -> dict:
+    def _connection_info(self, username: str, account_id: str = "") -> dict:
         """Non-secret details a tenant needs to point an S3 client at this resource.
 
         Flat keys: an offering's Getting started text interpolates
@@ -384,9 +399,14 @@ class CephS3Backend(backends.BaseBackend):
             # Empty rather than absent for an untenanted user: a Getting started
             # text that names the key would otherwise render "undefined".
             "s3_tenant": username.rpartition("$")[0],
+            # The account id is what IAM ARNs name, so a consumer writing
+            # policies for their own users needs it.
+            **({"s3_account_id": account_id} if self.rgw_accounts else {}),
         }
 
-    def _backend_resource_info(self, username: str) -> structures.BackendResourceInfo:
+    def _backend_resource_info(
+        self, username: str, account_id: str = ""
+    ) -> structures.BackendResourceInfo:
         """Describe a provisioned S3 user for Waldur.
 
         Connection info goes out as backend_metadata as well as an access endpoint.
@@ -398,7 +418,7 @@ class CephS3Backend(backends.BaseBackend):
         """
         return structures.BackendResourceInfo(
             backend_id=username,
-            backend_metadata=self._connection_info(username),
+            backend_metadata=self._connection_info(username, account_id),
             endpoints=[{"name": "S3 endpoint", "url": self.s3_endpoint}],
         )
 
@@ -457,7 +477,12 @@ class CephS3Backend(backends.BaseBackend):
         Returns:
             Backend resource info carrying the S3 access endpoint
         """
-        created = self._create_or_adopt_user(waldur_resource, username)
+        account_id = (
+            self._create_or_adopt_account(waldur_resource, username)
+            if self.rgw_accounts
+            else ""
+        )
+        created = self._create_or_adopt_user(waldur_resource, username, account_id)
 
         if created:
             # Only a user this call created can have its keys swept: on an adopted
@@ -475,10 +500,67 @@ class CephS3Backend(backends.BaseBackend):
         self._apply_bucket_quotas(username, _as_attribute_dict(waldur_resource))
 
         logger.info("S3 user %s is provisioned", username)
-        return self._backend_resource_info(username)
+        return self._backend_resource_info(username, account_id)
+
+    def _create_or_adopt_account(
+        self, waldur_resource: WaldurResource, username: str
+    ) -> str:
+        """Create the resource's RGW account, or adopt the one an earlier attempt made.
+
+        The account is named after the uid and carries the same ownership stamp as
+        its root user, so a retried create finds it by name and can tell it apart
+        from an account someone else made.
+
+        Returns:
+            The account id.
+
+        Raises:
+            DuplicateResourceError: when an account of that name is not this
+                resource's.
+        """
+        tenant, bare = split(username)
+        if not _IAM_USER_NAME_RE.match(bare):
+            # The root user's display name is the uid, and RGW holds it to the IAM
+            # UserName rules; failing here names the reason, the gateway would not.
+            raise CephS3Error(
+                f"S3 user id {bare!r} cannot name an RGW account user: it must "
+                "be 1-64 characters of letters, digits and _+=,.@-"
+            )
+        stamp = _ownership_stamp(waldur_resource.uuid, username)
+        try:
+            # A tenanted resource gets a tenanted account: its users and buckets
+            # then live in the tenant's namespace, apart from every other
+            # resource's. The account is named after the bare uid, which is unique
+            # within the tenant.
+            account = self.client.create_account(name=bare, email=stamp, tenant=tenant)  # type: ignore[attr-defined]
+            logger.info("Created RGW account %s for user %s", account["id"], username)
+            return str(account["id"])
+        except CephS3AccountExistsError:
+            pass
+
+        try:
+            account = self.client.get_account(name=bare, tenant=tenant)  # type: ignore[attr-defined]
+        except CephS3Error as e:
+            # Taken, but not by that name: the stamp is already in use elsewhere,
+            # or the read failed. Either way it cannot be confirmed as ours.
+            raise DuplicateResourceError(
+                f"RGW account {username} could not be created or read back, so it "
+                "cannot be confirmed as this resource's"
+            ) from e
+        if account.get("email") != stamp:
+            raise DuplicateResourceError(
+                f"RGW account {username} already exists and was not provisioned for "
+                f"resource {waldur_resource.uuid}; refusing to take it over"
+            )
+        logger.info(
+            "Adopting RGW account %s (%s): it carries this resource's stamp",
+            username,
+            account["id"],
+        )
+        return str(account["id"])
 
     def _create_or_adopt_user(
-        self, waldur_resource: WaldurResource, username: str
+        self, waldur_resource: WaldurResource, username: str, account_id: str = ""
     ) -> bool:
         """Create the S3 user, or adopt one that is already there.
 
@@ -497,6 +579,12 @@ class CephS3Backend(backends.BaseBackend):
             user_data["default_placement"] = self.default_placement
         if self.default_storage_class:
             user_data["default_storage_class"] = self.default_storage_class
+        if account_id:
+            # The display name is the user's IAM UserName inside the account, held
+            # to IAM's character rules, so the uid stands in for the resource name.
+            user_data["name"] = split(username)[1]
+            user_data["account_id"] = account_id
+            user_data["account_root"] = True
 
         logger.info(
             "Creating S3 user: %s for resource %s", username, waldur_resource.uuid
@@ -504,11 +592,11 @@ class CephS3Backend(backends.BaseBackend):
         try:
             self.client.create_user(**user_data)
         except CephS3UserExistsError:
-            return self._adopt_if_ours(waldur_resource, username)
+            return self._adopt_if_ours(waldur_resource, username, account_id)
         except CephS3Error as e:
             # croit sometimes reports a duplicate uid as a 500 rather than a 409.
             if "exists" in str(e):
-                return self._adopt_if_ours(waldur_resource, username)
+                return self._adopt_if_ours(waldur_resource, username, account_id)
             logger.error(
                 "Failed to create S3 user for resource %s: %s", waldur_resource.uuid, e
             )
@@ -522,7 +610,9 @@ class CephS3Backend(backends.BaseBackend):
             raise
         return True
 
-    def _adopt_if_ours(self, waldur_resource: WaldurResource, username: str) -> bool:
+    def _adopt_if_ours(
+        self, waldur_resource: WaldurResource, username: str, account_id: str = ""
+    ) -> bool:
         """Continue against an existing uid only when this resource owns it.
 
         "Does this uid exist?" cannot separate the two cases that reach here: our
@@ -550,6 +640,16 @@ class CephS3Backend(backends.BaseBackend):
                 "it cannot be confirmed as this resource's"
             ) from e
 
+        if existing.get("email") == expected and account_id and (
+            existing.get("account_id") != account_id
+        ):
+            # Ours, but outside the account it should be root of -- provisioned
+            # before account mode was switched on. Membership cannot be added
+            # without moving its buckets, so that is left to an operator.
+            raise CephS3Error(
+                f"S3 user {username} belongs to this resource but not to RGW account "
+                f"{account_id}; it was provisioned before account mode was enabled"
+            )
         if existing.get("email") == expected:
             logger.info(
                 "Adopting S3 user %s: it carries this resource's stamp, so an "
@@ -580,6 +680,10 @@ class CephS3Backend(backends.BaseBackend):
             logger.warning("No backend ID found for resource %s", waldur_resource.uuid)
             return
 
+        if self.rgw_accounts:
+            self._delete_account_resource(resource_backend_id)
+            return
+
         try:
             logger.info("Deleting S3 user: %s", resource_backend_id)
             self.client.delete_user(resource_backend_id)
@@ -597,6 +701,73 @@ class CephS3Backend(backends.BaseBackend):
                 "Unexpected error deleting S3 user %s: %s", resource_backend_id, e
             )
             raise
+
+    def _delete_account_resource(self, username: str) -> None:
+        """Remove the resource's account: its users first, then the account.
+
+        Refuses while the account holds any bucket. RGW would not stop it: an
+        account root user deletes with 200 while the account still owns buckets,
+        so the user-mode safety -- "a user with buckets cannot be deleted" --
+        does not carry over and is checked here instead. Checking before any
+        user goes means a refused termination leaves the account whole, rather
+        than holding data nobody can log in to.
+
+        Every member goes, including users the consumer made through the IAM API:
+        RGW will not delete an account that still has users.
+        """
+        client: RadosGWClient = self.client  # type: ignore[assignment]
+        try:
+            info = client.get_user_info(username)
+        except CephS3UserNotFoundError:
+            info = None
+
+        if info is not None:
+            if not _is_waldur_stamp(info.get("email")):
+                raise CephS3Error(
+                    f"Refusing to delete S3 user {username}: it was not provisioned "
+                    "by Waldur"
+                )
+            account_id = str(info.get("account_id") or "")
+            if not account_id:
+                # Provisioned before account mode was switched on: a plain user,
+                # removed the plain way.
+                client.delete_user(username)
+                return
+            # Listing through any member returns the account's buckets, including
+            # those its IAM users created.
+            buckets = client.get_user_buckets(username)
+            if buckets:
+                raise CephS3Error(
+                    f"Cannot delete RGW account {account_id} of user {username}: it "
+                    f"still owns {len(buckets)} bucket(s). Empty and remove them "
+                    "first, then retry the termination"
+                )
+        else:
+            # The root user is gone -- an earlier attempt got this far. The
+            # account, if any is left, is found by the name it was created with.
+            try:
+                account = client.get_account(
+                    name=split(username)[1], tenant=split(username)[0]
+                )
+            except CephS3AccountNotFoundError:
+                logger.info("RGW account of user %s already absent", username)
+                return
+            if not _is_waldur_stamp(account.get("email")):
+                raise CephS3Error(
+                    f"Refusing to delete RGW account {username}: it was not "
+                    "provisioned by Waldur"
+                )
+            account_id = str(account["id"])
+
+        members = client.list_account_users(account_id, tenant=split(username)[0])
+        # The root user last, so a retry after a partial failure can still find
+        # the account through it.
+        for uid in sorted(members, key=lambda member: member == username):
+            logger.info("Deleting user %s of RGW account %s", uid, account_id)
+            client.delete_user(uid)
+        # RGW refuses (409) if a bucket appeared since the check above.
+        client.delete_account(account_id)
+        logger.info("RGW account %s of user %s deleted", account_id, username)
 
     def _remove_auto_generated_keys(self, username: str) -> None:
         """Drop the key RadosGW mints for a user it has just created.
@@ -938,8 +1109,7 @@ class CephS3Backend(backends.BaseBackend):
                     username,
                     resource_options,
                 )
-                self.client.set_user_quota(username, quota_request)
-                self.client.set_user_bucket_quota(username, quota_request)
+                self._write_quotas(username, quota_request)
                 return
 
         # Apply quota if any limits were configured
@@ -949,8 +1119,7 @@ class CephS3Backend(backends.BaseBackend):
             # makes it true — a bucket quota caps each bucket, and croit exposes no
             # way to cap the bucket count, so on its own it bounds nothing. The
             # bucket quota is kept alongside it as a per-bucket guard.
-            self.client.set_user_quota(username, quota_request)
-            self.client.set_user_bucket_quota(username, quota_request)
+            self._write_quotas(username, quota_request)
         else:
             # Warning, not info, and it names the attributes it looked at. An
             # unbounded resource is a resource with no bound on its invoice, and
@@ -964,6 +1133,63 @@ class CephS3Backend(backends.BaseBackend):
                 sorted(resource_options),
                 sorted(self._storage_components()),
             )
+
+    def _write_quotas(self, username: str, quota_request: dict) -> None:
+        """Write the ceiling as the total quota and as the per-bucket guard.
+
+        In account mode both go on the account: buckets belong to the account, not
+        to its users, and RGW stores a per-user quota on an account user without
+        enforcing it -- measured on Ceph 20.2.5, where a two-object user quota let
+        five objects through.
+        """
+        if not self.rgw_accounts:
+            self.client.set_user_quota(username, quota_request)
+            self.client.set_user_bucket_quota(username, quota_request)
+            return
+
+        account_id = self._account_id_of(username)
+        client: RadosGWClient = self.client  # type: ignore[assignment]
+        client.set_account_quota(account_id, quota_request, "account")
+        client.set_account_quota(account_id, quota_request, "bucket")
+
+        # Ceph before 20.2.2 has no account quota endpoint, and 19.2.x answers the
+        # PUT with 200 while changing nothing. Reading back is the only way to
+        # tell, and an account left uncapped must fail the order, not pass it.
+        try:
+            account = client.get_account(account_id=account_id)
+        except CephS3AuthenticationError as e:
+            # Before 20.2.2 the read checks a cap that cannot be granted, so a
+            # correctly configured agent is refused here, after a quota PUT that
+            # changed nothing.
+            raise CephS3Error(
+                f"Cannot read back the quota of RGW account {account_id} ({e}). "
+                "Account quotas need Ceph 20.2.2 or later"
+            ) from e
+        for scope in ("quota", "bucket_quota"):
+            applied = account.get(scope) or {}
+            for field in ("enabled", "max_size_bytes", "max_objects"):
+                if field in quota_request and applied.get(field) != quota_request[field]:
+                    raise CephS3Error(
+                        f"RGW did not apply the {scope} of account {account_id}: "
+                        f"{field} reads back {applied.get(field)!r}, expected "
+                        f"{quota_request[field]!r}. Account quotas need Ceph 20.2.2 "
+                        "or later"
+                    )
+
+    def _account_id_of(self, username: str) -> str:
+        """The account the resource's root user belongs to.
+
+        Raises:
+            CephS3Error: when the user is in no account -- a resource provisioned
+                before account mode was enabled on its offering.
+        """
+        account_id = str(self.client.get_user_info(username).get("account_id") or "")
+        if not account_id:
+            raise CephS3Error(
+                f"S3 user {username} is not in an RGW account; it was provisioned "
+                "before account mode was enabled"
+            )
+        return account_id
 
     def _get_usage_report(
         self, resource_backend_ids: list[str]
@@ -1037,10 +1263,22 @@ class CephS3Backend(backends.BaseBackend):
             total_objects = sum(b.get("num_objects", 0) for b in buckets)
 
             # Get quota information
-            quota_info = self.client.get_user_quota(resource_backend_id)
+            account_id = str(user_info.get("account_id") or "")
+            if self.rgw_accounts and account_id:
+                account = self.client.get_account(account_id=account_id)  # type: ignore[attr-defined]
+                quotas = {
+                    "account_quota": account.get("quota", {}),
+                    "bucket_quota": account.get("bucket_quota", {}),
+                }
+            else:
+                quota_info = self.client.get_user_quota(resource_backend_id)
+                quotas = {
+                    "bucket_quota": quota_info.get("bucket_quota", {}),
+                    "user_quota": quota_info.get("user_quota", {}),
+                }
 
             return {
-                **self._connection_info(resource_backend_id),
+                **self._connection_info(resource_backend_id, account_id),
                 "user_info": {
                     "uid": user_info.get("uid"),
                     "name": user_info.get("name"),
@@ -1062,10 +1300,7 @@ class CephS3Backend(backends.BaseBackend):
                         for bucket in buckets
                     ],
                 },
-                "quotas": {
-                    "bucket_quota": quota_info.get("bucket_quota", {}),
-                    "user_quota": quota_info.get("user_quota", {}),
-                },
+                "quotas": quotas,
                 "backend_info": {
                     "backend_type": self.backend_type,
                     "flavour": self.flavour,

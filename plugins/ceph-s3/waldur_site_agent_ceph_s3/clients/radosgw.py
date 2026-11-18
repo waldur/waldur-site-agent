@@ -8,7 +8,8 @@ that. ``_ERROR_CODES`` below carries the measured response codes.
 """
 
 import logging
-from typing import Any, Optional
+import re
+from typing import Any, Iterator, Optional
 from urllib.parse import quote
 
 import httpx
@@ -19,12 +20,14 @@ from botocore.credentials import Credentials
 from waldur_site_agent.backend.exceptions import BackendError
 
 from ..exceptions import (
+    CephS3AccountExistsError,
+    CephS3AccountNotFoundError,
     CephS3APIError,
     CephS3AuthenticationError,
     CephS3UserExistsError,
     CephS3UserNotFoundError,
 )
-from .base import BaseS3AdminClient
+from .base import _TENANT_RE, BaseS3AdminClient
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +47,17 @@ _ERROR_CODES = {
     "BucketAlreadyExists": CephS3UserExistsError,
     "AccessDenied": CephS3AuthenticationError,
     "SignatureDoesNotMatch": CephS3AuthenticationError,
+    "AccountAlreadyExists": CephS3AccountExistsError,
 }
+
+# An RGW account id is "RGW" followed by 17 digits; the gateway refuses any other
+# shape with "account id must be 20 bytes long". Checked before it goes into a
+# query string, like every other identifier this client sends.
+_ACCOUNT_ID_RE = re.compile(r"^RGW[0-9]{17}$")
+
+# Users are listed in pages so an account's members can be found on a cluster of
+# any size; ?list answers "truncated" with a marker past this many entries.
+_USER_LIST_PAGE = 1000
 
 
 class RadosGWClient(BaseS3AdminClient):
@@ -124,6 +137,10 @@ class RadosGWClient(BaseS3AdminClient):
             code = str(payload.get("Code", "")).split(":", 1)[0].strip()
 
         message = self._format_error(response)
+        # The account endpoints report an absent account as 404/NoSuchKey, a code
+        # that elsewhere means an absent object, so it is mapped for them alone.
+        if code == "NoSuchKey" and response.request.url.path.endswith("/account"):
+            return CephS3AccountNotFoundError(message)
         return _ERROR_CODES.get(code, CephS3APIError)(message)
 
     # -- users --------------------------------------------------------------
@@ -156,9 +173,10 @@ class RadosGWClient(BaseS3AdminClient):
             name: Display name; RGW answers 400 InvalidArgument without one
             email: User email address
             **kwargs: access_key/secret_key to apply, plus optional max_buckets
-                and default_placement. tenant and default_storage_class are
-                rejected for this flavour at configuration time, so they never
-                arrive here.
+                and default_placement. account_id makes the user a member of
+                that RGW account, and account_root its root user. tenant and
+                default_storage_class are rejected for this flavour at
+                configuration time, so they never arrive here.
 
         Returns:
             The created user object as RGW reports it.
@@ -188,6 +206,12 @@ class RadosGWClient(BaseS3AdminClient):
             if kwargs.get(option):
                 params[param] = kwargs[option]
 
+        account_id = kwargs.get("account_id")
+        if account_id:
+            params["account-id"] = self._validate_account_id(str(account_id))
+            if kwargs.get("account_root"):
+                params["account-root"] = "True"
+
         logger.info("Creating S3 user: %s", uid)
         return self._request("PUT", "/user", params=params).json()
 
@@ -211,6 +235,10 @@ class RadosGWClient(BaseS3AdminClient):
             "default_placement": user.get("default_placement"),
             "default_storage_class": user.get("default_storage_class"),
             "keys": user.get("keys", []),
+            # Empty for a user outside any account; "root" marks an account's
+            # root user, "none" a user created through the IAM API.
+            "account_id": user.get("account_id") or "",
+            "type": user.get("type") or "",
         }
 
     def list_users(self) -> list:
@@ -410,3 +438,165 @@ class RadosGWClient(BaseS3AdminClient):
                 }
             )
         return normalised
+
+    # -- accounts -----------------------------------------------------------
+    #
+    # Accounts need Ceph 20.2.2 or later. Earlier gateways check GET and DELETE
+    # /admin/account against a cap named "account", which cannot be granted, and
+    # have no account quota endpoint at all -- 19.2.x answers that PUT with 200
+    # and changes nothing. Callers therefore read a quota back after writing it.
+
+    @staticmethod
+    def _validate_account_id(account_id: str) -> str:
+        if not _ACCOUNT_ID_RE.match(account_id):
+            raise CephS3APIError(f"Not an RGW account id: {account_id!r}")
+        return account_id
+
+    @staticmethod
+    def _from_rgw_account(account: dict) -> dict:
+        return {
+            "id": account.get("id"),
+            "name": account.get("name"),
+            "email": account.get("email"),
+            "tenant": account.get("tenant") or "",
+            "quota": RadosGWClient._from_rgw_quota(account.get("quota") or {}),
+            "bucket_quota": RadosGWClient._from_rgw_quota(
+                account.get("bucket_quota") or {}
+            ),
+        }
+
+    def create_account(
+        self, name: str, email: Optional[str] = None, tenant: str = ""
+    ) -> dict:
+        """Create an RGW account; the gateway picks its id.
+
+        A tenanted account holds only users of its tenant, and its buckets live in
+        that tenant's namespace. Measured on 20.2.5: RGW refuses (400) to add an
+        untenanted or other-tenant user to it.
+
+        Raises:
+            CephS3AccountExistsError: when the name or the email is taken.
+        """
+        params: dict[str, Any] = {"name": self._validate_uid(name), "format": "json"}
+        if tenant:
+            params["tenant"] = self._validate_tenant(tenant)
+        if email:
+            params["email"] = email
+        logger.info("Creating RGW account: %s", name)
+        account = self._request("POST", "/account", params=params).json()
+        return self._from_rgw_account(account)
+
+    def get_account(
+        self,
+        account_id: Optional[str] = None,
+        name: Optional[str] = None,
+        tenant: str = "",
+    ) -> dict:
+        """Read one account by id or, failing that, by name within its tenant.
+
+        Raises:
+            CephS3AccountNotFoundError: when no such account exists.
+        """
+        params: dict[str, str]
+        if account_id:
+            params = {"id": self._validate_account_id(account_id)}
+        elif name:
+            params = {"name": self._validate_uid(name)}
+            if tenant:
+                params["tenant"] = self._validate_tenant(tenant)
+        else:
+            raise CephS3APIError("An account is read by id or by name")
+        account = self._request(
+            "GET", "/account", params={**params, "format": "json"}
+        ).json()
+        return self._from_rgw_account(account)
+
+    def set_account_quota(self, account_id: str, quota: dict, quota_type: str) -> None:
+        """Write the account-wide quota ("account") or its per-bucket one ("bucket").
+
+        Like the user quota, a PUT merges: dimensions left out keep their value.
+        """
+        if quota_type not in ("account", "bucket"):
+            raise CephS3APIError(f"Unknown account quota type: {quota_type!r}")
+        params: dict[str, Any] = {
+            "quota": None,
+            "id": self._validate_account_id(account_id),
+            "quota-type": quota_type,
+            "enabled": "True" if quota.get("enabled", True) else "False",
+            "format": "json",
+        }
+        if quota.get("max_size_bytes") is not None:
+            params["max-size"] = int(quota["max_size_bytes"])
+        if quota.get("max_objects") is not None:
+            params["max-objects"] = int(quota["max_objects"])
+        logger.info(
+            "Setting %s quota for account %s: %s", quota_type, account_id, quota
+        )
+        self._request("PUT", "/account", params=params)
+
+    def delete_account(self, account_id: str) -> None:
+        """Remove an account that has no users left; an absent one is success.
+
+        RGW refuses (409) while any user remains, whatever the users own.
+        """
+        try:
+            self._request(
+                "DELETE",
+                "/account",
+                params={"id": self._validate_account_id(account_id), "format": "json"},
+            )
+        except CephS3AccountNotFoundError:
+            logger.info("RGW account %s already absent", account_id)
+
+    def _iter_user_ids(self) -> Iterator[str]:
+        marker = ""
+        while True:
+            params: dict[str, Any] = {
+                "list": None,
+                "max-entries": _USER_LIST_PAGE,
+                "format": "json",
+            }
+            if marker:
+                params["marker"] = marker
+            page = self._request("GET", "/user", params=params).json()
+            yield from page.get("keys", [])
+            marker = page.get("marker") or ""
+            if not page.get("truncated") or not marker:
+                return
+
+    @staticmethod
+    def _validate_tenant(tenant: str) -> str:
+        if not _TENANT_RE.match(tenant):
+            raise CephS3APIError(f"Not an RGW tenant name: {tenant!r}")
+        return tenant
+
+    def list_account_users(self, account_id: str, tenant: str = "") -> list:
+        """Every user id belonging to the account.
+
+        Admin Ops can neither filter the user listing by account nor list an
+        account's members, so this walks the gateway's user listing. RGW keeps an
+        account's users in the account's tenant, so only uids of that tenant are
+        read -- for a tenanted account, a small slice of the gateway. Users created
+        through the IAM API get a generated uid, which is why membership is read
+        from account_id, not from names.
+        """
+        account_id = self._validate_account_id(account_id)
+        if tenant:
+            self._validate_tenant(tenant)
+        members = []
+        for uid in self._iter_user_ids():
+            if uid.rpartition("$")[0] != tenant:
+                continue
+            try:
+                info = self.get_user_info(uid)
+            except CephS3UserNotFoundError:
+                continue
+            except CephS3APIError:
+                # A uid this client will not address, e.g. one holding "@". It is
+                # not ours -- this plugin never creates one -- and one such user on
+                # the gateway must not make every termination fail.
+                logger.debug("Skipping user %r, which this client cannot address", uid)
+                continue
+            if info.get("account_id") == account_id:
+                members.append(uid)
+        return members

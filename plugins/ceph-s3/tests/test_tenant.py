@@ -182,11 +182,12 @@ class TestBackend:
             backend.create_resource_with_id(resource, "waldur-my-bucket")
         backend.client.create_user.assert_not_called()
 
-    def test_radosgw_refuses_a_tenant_template(self):
-        with pytest.raises(ValueError, match="tenant_template"):
-            CephS3Backend(
+    def test_radosgw_takes_a_tenant_template(self):
+        with patch("waldur_site_agent_ceph_s3.backend.RadosGWClient"):
+            backend = CephS3Backend(
                 dict(RADOSGW_SETTINGS, tenant_template="{customer_slug}"), COMPONENTS
             )
+        assert backend.tenant_template == "{customer_slug}"
 
 
 class TestCroitClient:

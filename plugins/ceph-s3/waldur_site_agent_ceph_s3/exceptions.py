@@ -27,6 +27,14 @@ class CephS3UserExistsError(CephS3Error):
     """S3 user already exists, or the access key belongs to another user."""
 
 
+class CephS3AccountNotFoundError(CephS3Error):
+    """RGW account does not exist."""
+
+
+class CephS3AccountExistsError(CephS3Error):
+    """An RGW account with that name, id or email already exists."""
+
+
 class CroitS3GraphNotFoundError(CephS3Error):
     """A croit statistics graph does not exist.
 
