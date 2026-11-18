@@ -9,9 +9,29 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
+
+
+class CroitReportingSettings(BaseModel):
+    """croit's address and credentials, for reading its statistics only."""
+
+    api_url: str = Field(description="croit API URL")
+    token: Optional[str] = Field(default=None, description="croit API token", json_schema_extra=SECRET)
+    username: Optional[str] = Field(default=None, description="croit username")
+    password: Optional[str] = Field(
+        default=None, description="croit password", json_schema_extra=SECRET
+    )
+    verify_ssl: Optional[bool] = Field(default=None, description="Verify TLS (default true)")
+    timeout: Optional[float] = Field(default=None, description="HTTP timeout in seconds")
+    bucket_state_file: Optional[str] = Field(
+        default=None,
+        description=(
+            "File remembering the buckets each account resource held this billing "
+            "period, so buckets deleted before an agent restart stay billed"
+        ),
+    )
 
 
 class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
@@ -58,6 +78,13 @@ class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
     )
     admin_path: Optional[str] = Field(
         default=None, description="RGW admin API path (default 'admin')"
+    )
+    croit_reporting: Optional[CroitReportingSettings] = Field(
+        default=None,
+        description=(
+            "croit connection for croit_usage reporting when management uses the "
+            "radosgw flavour on a croit cluster"
+        ),
     )
     rgw_accounts: Optional[bool] = Field(
         default=None,

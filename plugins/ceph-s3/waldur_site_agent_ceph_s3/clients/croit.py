@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 # parameter carries the uid. Verified against croit 2503 (OpenAPI 3.1).
 STORAGE_GRAPH = "s3-user-data"
 STORAGE_GRAPH_TEMPLATE = "template-s3-user-name"
+# Per-bucket storage, the only croit series that sees what an RGW account owns:
+# an account's buckets belong to the account, so its users' series stay empty.
+# Each answer carries two plots, "Data" (logical bytes) and "Data with overhead"
+# (allocated, RGW's size_actual); "Data" is what s3-user-data reports for a
+# user, so it is the one read, keeping both kinds of resource billed alike.
+BUCKET_STORAGE_GRAPH = "s3-bucket-data"
+BUCKET_STORAGE_GRAPH_TEMPLATE = "template-s3-bucket-name"
+BUCKET_STORAGE_PLOT = "Data"
 # Native resolution is 180s and croit returns min(maxDataPoints, native), so this
 # reaches native fidelity on windows up to ~4 days. croit consolidates by average
 # -- measured: coarsening the buckets moves the integral monotonically *down* on a
@@ -623,6 +631,59 @@ class CroitClient(BaseS3AdminClient):
             logger.warning("No storage series for S3 user %s", uid)
             return []
         return plots[0].get("datapoints", [])
+
+    def get_bucket_storage_series(
+        self, bucket: str, tenant: str, start_time: int, end_time: int = 0
+    ) -> list[dict]:
+        """Read one bucket's storage-over-time series.
+
+        croit names a tenanted bucket ``tenant_bucket`` in its statistics -- the
+        "$", "/", ":" and "." spellings return nothing, measured on croit v2611.1.
+
+        Args:
+            bucket: Bucket name
+            tenant: The bucket's RGW tenant, empty for none
+            start_time: Absolute unix seconds, or negative for "N seconds ago"
+            end_time: Same form as start_time; 0 means now
+
+        Returns:
+            List of {"t", "v"} datapoints, oldest first. Empty when croit holds no
+            series for the bucket, e.g. one created since its last sample.
+
+        Raises:
+            CroitS3GraphNotFoundError: If the graph name no longer exists
+            CephS3APIError: If the request fails
+        """
+        name = self._validate_uid(f"{tenant}_{bucket}" if tenant else bucket)
+        try:
+            response = self._request(
+                "GET",
+                "/stats",
+                params={
+                    "graph": BUCKET_STORAGE_GRAPH,
+                    BUCKET_STORAGE_GRAPH_TEMPLATE: name,
+                    "startTime": start_time,
+                    "endTime": end_time,
+                    "maxDataPoints": STORAGE_MAX_DATA_POINTS,
+                },
+            )
+        except CephS3UserNotFoundError as e:
+            raise CroitS3GraphNotFoundError(
+                f"Storage graph {BUCKET_STORAGE_GRAPH!r} not found on the croit API: {e}"
+            )
+        plots = response.json().get("axis1", {}).get("graphs", [])
+        for plot in plots:
+            if plot.get("name") == BUCKET_STORAGE_PLOT:
+                return plot.get("datapoints", [])
+        if plots:
+            logger.warning(
+                "croit's %s answer for bucket %s has no %r plot (got %s)",
+                BUCKET_STORAGE_GRAPH,
+                name,
+                BUCKET_STORAGE_PLOT,
+                [plot.get("name") for plot in plots],
+            )
+        return []
 
     @staticmethod
     def _stats_query_name(uid: str) -> Optional[str]:
