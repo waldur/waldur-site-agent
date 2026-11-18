@@ -1489,6 +1489,31 @@ class BaseBackend(ABC):
         self.client.set_resource_limits(resource_backend_id, converted_limits)
         return None
 
+    def update_resource_options(
+        self, waldur_resource: WaldurResource, new_options: dict
+    ) -> bool:
+        """Apply resource options changed through an UPDATE order.
+
+        Waldur creates such an order, carrying ``new_options`` in its attributes,
+        when an offering sets ``create_orders_on_resource_option_change`` and a
+        consumer edits a resource option. Waldur writes the options onto the
+        resource only once the order is done, so a backend that enforces an
+        option has to act here, before that.
+
+        The default acts on nothing and says so, which keeps an offering whose
+        options are informational working as before.
+
+        Args:
+            waldur_resource: The resource as Waldur holds it, old options included.
+            new_options: The options the order sets, as Waldur sent them.
+
+        Returns:
+            True when the backend applied the options, False when it does not
+            act on resource options.
+        """
+        del waldur_resource, new_options
+        return False
+
     def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
         """Get limits for the resource on the backend."""
         return self.client.get_resource_limits(resource_backend_id)
