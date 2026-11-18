@@ -32,8 +32,10 @@ from waldur_site_agent.backend.exceptions import DuplicateResourceError
 
 from .clients.base import BaseS3AdminClient
 from .clients.croit import CroitClient
+from .clients.iam import AccountIamClient
 from .clients.radosgw import RadosGWClient
 from .exceptions import (
+    CephS3APIError,
     CephS3AccountExistsError,
     CephS3AccountNotFoundError,
     CephS3AuthenticationError,
@@ -713,13 +715,17 @@ class CephS3Backend(backends.BaseBackend):
         than holding data nobody can log in to.
 
         Every member goes, including users the consumer made through the IAM API:
-        RGW will not delete an account that still has users.
+        RGW will not delete an account that still has users. Roles, groups and
+        OIDC providers the consumer made go first, through the root user, since
+        RGW will not delete an account holding them either and Admin Ops cannot
+        reach them.
         """
         client: RadosGWClient = self.client  # type: ignore[assignment]
         try:
             info = client.get_user_info(username)
         except CephS3UserNotFoundError:
             info = None
+        root_present = info is not None
 
         if info is not None:
             if not _is_waldur_stamp(info.get("email")):
@@ -759,6 +765,10 @@ class CephS3Backend(backends.BaseBackend):
                 )
             account_id = str(account["id"])
 
+        if root_present:
+            # Before any user goes: what the account's IAM holds blocks the
+            # account's deletion, and only its root user can remove it.
+            self._clear_account_iam(username)
         members = client.list_account_users(account_id, tenant=split(username)[0])
         # The root user last, so a retry after a partial failure can still find
         # the account through it.
@@ -768,6 +778,53 @@ class CephS3Backend(backends.BaseBackend):
         # RGW refuses (409) if a bucket appeared since the check above.
         client.delete_account(account_id)
         logger.info("RGW account %s of user %s deleted", account_id, username)
+
+    def _clear_account_iam(self, root_uid: str) -> None:
+        """Remove the IAM roles, groups and OIDC providers of the account whose
+        root user is ``root_uid``, signing as that root with a temporary key.
+
+        The temporary key is removed again whatever happens. A root user already
+        at its key limit gives up one existing key first: termination removes
+        every key of the account anyway.
+
+        Raises:
+            CephS3APIError: if IAM refuses; no user has been deleted by then.
+        """
+        client: RadosGWClient = self.client  # type: ignore[assignment]
+        access_key = "".join(
+            secrets.choice(string.ascii_uppercase + string.digits) for _ in range(20)
+        )
+        secret_key = "".join(
+            secrets.choice(string.ascii_letters + string.digits) for _ in range(40)
+        )
+        try:
+            client.create_user_key(root_uid, access_key, secret_key)
+        except CephS3APIError:
+            keys = client.list_user_keys(root_uid)
+            if not keys:
+                raise
+            client.delete_user_key(root_uid, keys[0]["access_key"])
+            client.create_user_key(root_uid, access_key, secret_key)
+        iam = AccountIamClient(
+            client.gateway_url,
+            access_key,
+            secret_key,
+            region=client._region,
+            verify_ssl=client.verify_ssl,
+            timeout=client.timeout,
+        )
+        try:
+            removed = iam.clear()
+        except CephS3APIError as e:
+            raise CephS3APIError(
+                f"Cannot terminate {root_uid}: removing the account's IAM roles, "
+                f"groups or OIDC providers failed ({e}); nothing was deleted"
+            ) from e
+        finally:
+            iam.close()
+            client.delete_user_key(root_uid, access_key)
+        if any(removed.values()):
+            logger.info("Removed IAM resources of %s: %s", root_uid, removed)
 
     def _remove_auto_generated_keys(self, username: str) -> None:
         """Drop the key RadosGW mints for a user it has just created.
@@ -1282,10 +1339,7 @@ class CephS3Backend(backends.BaseBackend):
                 "user_info": {
                     "uid": user_info.get("uid"),
                     "name": user_info.get("name"),
-                    "email": user_info.get("email"),
                     "suspended": user_info.get("suspended", False),
-                    "default_placement": user_info.get("default_placement"),
-                    "default_storage_class": user_info.get("default_storage_class"),
                 },
                 "storage_summary": {
                     "bucket_count": len(buckets),
@@ -1301,13 +1355,10 @@ class CephS3Backend(backends.BaseBackend):
                     ],
                 },
                 "quotas": quotas,
-                "backend_info": {
-                    "backend_type": self.backend_type,
-                    "flavour": self.flavour,
-                    # api_url is croit's; every flavour has an S3 endpoint.
-                    "s3_endpoint": self.s3_endpoint,
-                    "created_via": "waldur_site_agent_ceph_s3",
-                },
+                # Consumers read this metadata. The ownership stamp (email),
+                # placement and storage-class names and the agent's own wiring are
+                # deliberately left out: they describe the provider, not the
+                # resource.
             }
 
         except Exception as e:
@@ -1321,19 +1372,65 @@ class CephS3Backend(backends.BaseBackend):
 
     # Abstract method implementations (minimal/no-op for S3 storage)
     def downscale_resource(self, resource_backend_id: str) -> bool:
-        """Downscale resource - not applicable for S3 storage."""
+        """Downscale resource - not applicable for S3 storage: S3 has no reduced
+        mode short of rewriting the consumer's own policies."""
         logger.info("Downscale not applicable for S3 user: %s", resource_backend_id)
         return True
 
     def pause_resource(self, resource_backend_id: str) -> bool:
-        """Pause resource - not applicable for S3 storage."""
-        logger.info("Pause not applicable for S3 user: %s", resource_backend_id)
+        """Suspend every user of the resource, so none of its keys works.
+
+        In account mode that is the root user and every IAM user the consumer
+        created: RGW suspends per user, and a suspended root does not stop the
+        others.
+        """
+        self._set_suspended(resource_backend_id, True)
         return True
 
     def restore_resource(self, resource_backend_id: str) -> bool:
-        """Restore resource - not applicable for S3 storage."""
-        logger.info("Restore not applicable for S3 user: %s", resource_backend_id)
+        """Lift the suspension pause_resource set, on every user of the resource."""
+        self._set_suspended(resource_backend_id, False)
         return True
+
+    def _set_suspended(self, resource_backend_id: str, suspended: bool) -> None:
+        """Bring every user of the resource to ``suspended``.
+
+        The core calls pause or restore for every resource on every sync, so the
+        common case -- already in that state -- has to cost one read: the root
+        user's flag. Only a change lists the account's members (which walks every
+        user on the gateway). The root goes last both ways, so a pass cut short
+        leaves the root unchanged and the next sync redoes it.
+
+        Waldur's pause is the source of truth: a user an operator suspended by
+        hand on the cluster is reinstated by the next restore.
+        """
+        username = resource_backend_id  # each client call validates it
+        try:
+            info = self.client.get_user_info(username)
+        except CephS3UserNotFoundError:
+            logger.warning(
+                "Cannot %s %s: no such S3 user",
+                "suspend" if suspended else "reinstate",
+                username,
+            )
+            return
+        if bool(info.get("suspended")) == suspended:
+            return
+        users = [username]
+        account_id = str(info.get("account_id") or "") if self.rgw_accounts else ""
+        if account_id:
+            members = self.client.list_account_users(  # type: ignore[attr-defined]
+                account_id, tenant=split(username)[0]
+            )
+            users = [uid for uid in members if uid != username] + [username]
+        for uid in users:
+            self.client.set_user_suspended(uid, suspended)
+        logger.info(
+            "%s %d user(s) of %s",
+            "Suspended" if suspended else "Reinstated",
+            len(users),
+            username,
+        )
 
     def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Add user to S3 resource - not applicable for individual S3 users."""

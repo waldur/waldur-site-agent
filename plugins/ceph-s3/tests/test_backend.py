@@ -429,7 +429,10 @@ class TestCephS3Backend:
         assert "user_info" in metadata
         assert "storage_summary" in metadata
         assert "quotas" in metadata
-        assert "backend_info" in metadata
+        # Consumers read this metadata: nothing about the provider's wiring, the
+        # ownership stamp or storage placement.
+        assert "backend_info" not in metadata
+        assert set(metadata["user_info"]) == {"uid", "name", "suspended"}
 
         # Connection info only — credentials are resource API keys, not metadata.
         # Flat keys, so {backend_metadata_s3_endpoint} works in a Getting started
