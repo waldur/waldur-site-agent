@@ -13,9 +13,16 @@ Wire it up alongside the management backend::
     order_processing_backend: ceph_s3
     membership_sync_backend: ceph_s3
     reporting_backend: croit_usage
+
+On a croit cluster managed natively (``flavour: radosgw``) the series still comes
+from croit, through credentials of its own in ``croit_reporting``. Resources in
+RGW account mode are metered per bucket: croit attributes an account's storage to
+its buckets and none of it to the account's users.
 """
 
 import datetime
+import json
+import os
 import zoneinfo
 from decimal import Decimal
 from typing import Optional
@@ -23,6 +30,7 @@ from typing import Optional
 from waldur_api_client.models.resource import Resource as WaldurResource
 
 from waldur_site_agent.backend import structures
+from waldur_site_agent.backend.exceptions import BackendError
 
 from .backend import (
     _SECONDS_PER_DAY,
@@ -33,6 +41,91 @@ from .backend import (
 )
 from .clients.croit import CroitClient
 from .settings import CROIT
+from .tenant import split
+
+# Months whose bucket sets are kept: a year and the current month, so a past
+# period recomputed by the historical loader still knows the buckets deleted in it.
+_LEDGER_MONTHS_KEPT = 13
+
+
+def _until_last_reading(datapoints: list) -> list:
+    """Cut a bucket series after its last real reading.
+
+    A deleted bucket keeps its series, and croit fills every interval after the
+    deletion with null. The integrator carries the previous reading across a null
+    -- right for a gap in a live user's telemetry, wrong here, where it would
+    bill a deleted bucket until the month ends. Trailing nulls are therefore
+    dropped: for a bucket that still exists they are samples croit has not taken
+    yet, and since every pass recomputes the period, they are billed as soon as
+    they arrive.
+    """
+    for index in range(len(datapoints) - 1, -1, -1):
+        if datapoints[index].get("v") is not None:
+            return datapoints[: index + 1]
+    return []
+
+
+class _BucketLedger:
+    """Every bucket an account resource has held during a billing period.
+
+    croit keeps a deleted bucket's series, but nothing lists a bucket once it is
+    gone. Without this, deleting a bucket on the 20th would drop its first nineteen
+    days from the month's total at the next report. In memory for the life of the
+    agent process, and in ``state_file`` too when one is configured, so a restart
+    does not forget the buckets deleted before it.
+    """
+
+    def __init__(self, state_file: str = "") -> None:
+        self.state_file = state_file
+        self._seen: dict = {}
+        self._dirty = False
+        if state_file and os.path.exists(state_file):
+            try:
+                with open(state_file) as handle:
+                    loaded = json.load(handle)
+                if isinstance(loaded, dict):
+                    self._seen = loaded
+            except (OSError, ValueError) as e:
+                logger.warning("Ignoring unreadable bucket ledger %s: %s", state_file, e)
+
+    def remember(self, username: str, period_start: int, buckets: list) -> list:
+        """Record the buckets listed now; return every bucket seen this period.
+
+        The answer is taken before pruning, and the period asked about is never
+        pruned: a historical recompute of a month older than those kept must still
+        get that month's buckets back, not a KeyError.
+        """
+        periods = self._seen.setdefault(username, {})
+        key = str(period_start)
+        seen = sorted(set(periods.get(key, [])) | set(buckets))
+        if seen != periods.get(key):
+            periods[key] = seen
+            self._dirty = True
+        for old in sorted(periods, key=int)[:-_LEDGER_MONTHS_KEPT]:
+            if old != key:
+                del periods[old]
+                self._dirty = True
+        return seen
+
+    def seen(self, username: str, period_start: int) -> list:
+        return list(self._seen.get(username, {}).get(str(period_start), []))
+
+    def flush(self) -> None:
+        """Write the ledger out, once per reporting pass and only if it changed."""
+        if self._dirty:
+            self._save()
+            self._dirty = False
+
+    def _save(self) -> None:
+        if not self.state_file:
+            return
+        tmp = self.state_file + ".tmp"
+        try:
+            with open(tmp, "w") as handle:
+                json.dump(self._seen, handle)
+            os.replace(tmp, self.state_file)
+        except OSError as e:
+            logger.warning("Could not save bucket ledger %s: %s", self.state_file, e)
 
 
 class CroitUsageBackend(CephS3Backend):
@@ -48,15 +141,40 @@ class CroitUsageBackend(CephS3Backend):
         nothing, and the difference only shows up on an invoice.
         """
         super().__init__(backend_settings, backend_components)
-        if self.flavour != CROIT:
-            raise ValueError(
-                "croit_usage reporting requires the croit flavour: vanilla Ceph "
-                "exposes no per-user stored-bytes series to integrate, so there "
-                "is nothing to compute GB-days from"
+        reporting = backend_settings.get("croit_reporting") or {}
+        self.croit_client: CroitClient
+        if self.flavour == CROIT:
+            if reporting:
+                raise ValueError(
+                    "croit_reporting is for a radosgw-flavour offering on a croit "
+                    "cluster; the croit flavour already reports through api_url"
+                )
+            # The management client is croit's by construction here.
+            self.croit_client = self.client  # type: ignore[assignment]
+        else:
+            if not isinstance(reporting, dict) or not reporting.get("api_url"):
+                raise ValueError(
+                    "croit_usage on the radosgw flavour reads croit's statistics, so "
+                    "it needs croit's address and credentials in croit_reporting "
+                    "(api_url plus token, or username and password). Plain Ceph has "
+                    "no stored-bytes series to integrate"
+                )
+            if not reporting.get("token") and not (
+                reporting.get("username") and reporting.get("password")
+            ):
+                raise ValueError(
+                    "croit_reporting needs either 'token' or both 'username' and "
+                    "'password'"
+                )
+            self.croit_client = CroitClient(
+                api_url=reporting["api_url"],
+                username=reporting.get("username"),
+                password=reporting.get("password"),
+                token=reporting.get("token"),
+                verify_ssl=reporting.get("verify_ssl", True),
+                timeout=reporting.get("timeout", 30),
             )
-        # The client is croit's by construction now, which is what makes
-        # get_user_storage_series available below.
-        self.croit_client: CroitClient = self.client  # type: ignore[assignment]
+        self._bucket_ledger = _BucketLedger(str(reporting.get("bucket_state_file") or ""))
 
         # Usernames whose usage the last report actually measured. See
         # _pull_backend_resource: an unread series must not become a zero.
@@ -227,7 +345,19 @@ class CroitUsageBackend(CephS3Backend):
         """
         del waldur_resource
         period_start, period_end = self._period_bounds(year, month)
-        return self._collect_usage(resource_backend_ids, period_start, period_end)
+        report = self._collect_usage(resource_backend_ids, period_start, period_end)
+        if self.historical_load:
+            # The loader reads a missing resource as "no usage" and, with
+            # --reconcile-stale, zeroes the month; the base class asks a backend
+            # that cannot measure a period to raise instead.
+            unmeasured = sorted(set(resource_backend_ids) - set(report))
+            if unmeasured:
+                raise BackendError(
+                    f"croit has no measurable storage series for {year}-{month:02d} "
+                    f"for {', '.join(unmeasured)}; refusing to report that period "
+                    "rather than have it read as zero"
+                )
+        return report
 
     def _collect_usage(
         self, resource_backend_ids: list[str], period_start: int, period_end: int
@@ -243,6 +373,19 @@ class CroitUsageBackend(CephS3Backend):
 
         for username in resource_backend_ids:
             try:
+                if self.rgw_accounts or split(username)[0]:
+                    # Per bucket: an account's storage belongs to the account, not
+                    # its users, and croit's per-user graph cannot name a tenanted
+                    # user at all -- but it names a tenanted bucket.
+                    usage = self._bucket_usage(
+                        username, period_start, period_end, storage_components
+                    )
+                    if usage:
+                        report[username] = {"TOTAL_ACCOUNT_USAGE": usage}
+                        self._reported_usernames.add(username)
+                        logger.debug("Bucket-summed usage for %s: %s", username, usage)
+                    continue
+
                 datapoints = self.croit_client.get_user_storage_series(
                     username, period_start, period_end
                 )
@@ -284,5 +427,85 @@ class CroitUsageBackend(CephS3Backend):
             except Exception as e:
                 logger.error("Failed to collect usage for user %s: %s", username, e)
 
+        self._bucket_ledger.flush()
         logger.info("Collected usage report for %d users", len(report))
         return report
+
+    def _bucket_usage(
+        self,
+        username: str,
+        period_start: int,
+        period_end: int,
+        storage_components: dict,
+    ) -> dict:
+        """GB-days as the sum over every bucket the resource held this period.
+
+        For an account resource, and for a tenanted user, whose storage croit's
+        per-user graph cannot report. Interim for accounts, until croit can report
+        an account as a whole. Integrals add, so
+        each bucket is integrated on its own and the results summed; a bucket croit
+        has not sampled yet contributes nothing until it has.
+
+        Returns:
+            Usage by component, or {} when nothing could be measured -- which the
+            caller turns into "not reported", never into a zero. That includes an
+            account with no bucket known this period: after an agent restart
+            without a state file that is indistinguishable from an account whose
+            buckets were all deleted, and a zero would wipe the period's accrual.
+        """
+        # Listing through the root user returns every bucket of the account,
+        # including those its IAM users created.
+        # croit's listing spells a tenanted bucket "tenant:bucket", RGW's gives the
+        # bare name; the ledger and the statistics both want the bare one. A
+        # bucket name cannot contain ":", so the split is unambiguous.
+        current = [
+            bucket["name"].rpartition(":")[2]
+            for bucket in self.client.get_user_buckets(username)
+        ]
+        buckets = self._bucket_ledger.remember(username, period_start, current)
+        if not buckets:
+            logger.info(
+                "%s holds no bucket this period; nothing to report",
+                username,
+            )
+            return {}
+        tenant = split(username)[0]
+
+        series = {}
+        for bucket in buckets:
+            datapoints = _until_last_reading(
+                self.croit_client.get_bucket_storage_series(
+                    bucket, tenant, period_start, period_end
+                )
+            )
+            if _is_measurable(datapoints):
+                series[bucket] = datapoints
+            else:
+                logger.info(
+                    "No measurable croit series yet for bucket %s of %s",
+                    bucket,
+                    username,
+                )
+        if not series:
+            logger.warning(
+                "None of the %d bucket(s) of %s has a measurable croit series; "
+                "skipping its usage report",
+                len(buckets),
+                username,
+            )
+            return {}
+
+        return {
+            name: _to_usage_units(
+                sum(
+                    (
+                        self._integrate_gb_days(
+                            datapoints, config.get("unit_factor", 1), period_end=period_end
+                        )
+                        for datapoints in series.values()
+                    ),
+                    Decimal(0),
+                )
+            )
+            for name, config in storage_components.items()
+        }

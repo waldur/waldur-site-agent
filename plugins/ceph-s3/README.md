@@ -128,10 +128,12 @@ operator did not intend.
 
 #### Two behaviours that differ from croit
 
-- **No GB-day metering.** Admin Ops exposes no per-user stored-bytes series:
+- **No GB-day metering of its own.** Admin Ops exposes no stored-bytes series:
   `/admin/usage` is bandwidth and operation counts, and bucket stats are a
-  point-in-time size. There is nothing to integrate, so leave `reporting_backend`
-  unset and bill this offering on a fixed component.
+  point-in-time size. On a croit cluster, `croit_usage` can still meter it from
+  croit's statistics (see
+  [Reporting for a radosgw-managed offering](#reporting-for-a-radosgw-managed-offering-on-a-croit-cluster)).
+  On plain Ceph, leave `reporting_backend` unset and bill on a fixed component.
 - **Quota enforcement overshoots.** RGW syncs bucket statistics into the
   user-quota check periodically rather than on every write. Measured on squid: a
   6 MiB ceiling against 5 MiB already stored accepted a further 7 MiB before
@@ -356,12 +358,12 @@ allows in a tenant name; the rendered tenant is at most 64 characters.
   template affects new resources only; existing ones stay where they were created.
 - **A field the resource lacks fails the order** rather than falling back to the
   global namespace. A malformed template fails at agent start.
-- **Reporting cannot meter tenanted users.** croit's statistics refuse `tenant$uid`
-  as the user parameter (400), no spelling without the `$` returned a series on a
-  live croit, and croit's published API (`/api/openapi.json`) has no way to look
-  the name up. A tenanted user is therefore reported as **unmeasured** — no
-  figure, not zero — with a warning. Do not bill GB-days on a tenanted offering
-  until croit supports it.
+- **Reporting meters tenanted users through their buckets.** croit's per-user
+  statistics cannot name a tenanted user (`tenant$uid` is refused with 400, and
+  no other spelling returns a series), but its per-bucket statistics name a
+  tenanted bucket as `tenant_bucket`. A tenanted resource is therefore metered as
+  the sum of its buckets, the same way as an account (see
+  [Reporting for a radosgw-managed offering](#reporting-for-a-radosgw-managed-offering-on-a-croit-cluster)).
 - **Account mode** (radosgw, `rgw_accounts: true`) creates the resource's RGW
   account in the same tenant, with its root user as `tenant$uid`. RGW keeps an
   account's users in the account's tenant, so the consumer's IAM users and every
@@ -396,6 +398,59 @@ billing period, not a reading taken at report time. Object counts are not billed
 Usage is metered **per resource**, not per key: the series is the S3 user's, so
 the resource's two access keys never enter the calculation and rotating one
 cannot change a bill.
+
+### Reporting for a radosgw-managed offering on a croit cluster
+
+Management can talk to RGW directly (`flavour: radosgw`, including
+[account mode](#account-mode-an-rgw-account-per-resource)) while usage still comes
+from croit's statistics. `croit_usage` then needs croit's own address and
+credentials in `croit_reporting`. The radosgw flavour keeps refusing croit's
+top-level settings, so the two credential sets stay apart:
+
+```yaml
+    reporting_backend: "croit_usage"
+    backend_settings:
+      flavour: "radosgw"
+      rgw_accounts: true
+      s3_endpoint: "https://s3.example.com"
+      admin_access_key: "ADMINACCESSKEY000000"
+      admin_secret_key: "..."
+      croit_reporting:
+        api_url: "https://croit.example.com"
+        token: "..."                      # or username + password
+        verify_ssl: true
+        bucket_state_file: "/var/lib/waldur-site-agent/ceph-s3-buckets.json"
+```
+
+**Accounts and tenanted users are metered per bucket, as an interim.**
+- croit's per-user graph has nothing for an RGW account: the account owns the
+  buckets, and its users hold no storage of their own.
+- croit does keep a per-bucket graph (`s3-bucket-data`), which covers account
+  buckets. So each pass lists the account's buckets through its root user, which
+  includes buckets the consumer's IAM users created, then integrates each
+  bucket's `Data` series and reports the sum.
+- A tenanted bucket is named `tenant_bucket` in croit's statistics.
+- This stays until croit can report an account as a whole.
+
+**Buckets deleted during the month stay billed.**
+- croit keeps a deleted bucket's series, but nothing lists the bucket any more.
+- The reporter therefore remembers every bucket it has seen, per billing month,
+  for the last 13 months. It holds the list in memory, and in `bucket_state_file`
+  too when that is set (written once per pass, when it changed), so the list
+  survives an agent restart and a historical recompute still knows a month's
+  deleted buckets.
+- A bucket series is cut after its last real reading. croit answers null for
+  every interval after a bucket is deleted, so carrying the last reading across
+  those nulls would bill the bucket until the month ends.
+- Historical loads (`waldur_site_load_historical_usage`) fail, naming the
+  resource, when a month cannot be measured, instead of letting it read as zero.
+- Without the file, a restart forgets buckets deleted before it, and their days up
+  to the deletion go unbilled.
+- An account with no bucket known this period is not reported at all, rather than
+  reported as zero, because a zero would overwrite the period's accrued total.
+
+**New buckets.** A bucket croit has not sampled yet adds nothing until it has,
+which takes a few minutes after its first write.
 
 ### Where the number comes from
 
