@@ -46,6 +46,7 @@ from waldur_api_client.api.marketplace_provider_offerings import (
     marketplace_provider_offerings_update_offering_component,
 )
 from waldur_api_client.api.marketplace_provider_resources import (
+    marketplace_provider_resources_list,
     marketplace_provider_resources_set_as_erred,
     marketplace_provider_resources_set_limits,
 )
@@ -55,7 +56,6 @@ from waldur_api_client.api.marketplace_resource_api_keys import (
     marketplace_resource_api_keys_set_erred,
     marketplace_resource_api_keys_set_key,
 )
-from waldur_api_client.api.marketplace_resources import marketplace_resources_list
 from waldur_api_client.api.users import users_me_retrieve
 from waldur_api_client.api.version import version_retrieve
 from waldur_api_client.errors import UnexpectedStatus
@@ -1870,7 +1870,7 @@ def sync_resource_limits() -> None:
         waldur_rest_client = get_client_for_offering(
             offering, configuration.waldur_user_agent, configuration.global_proxy
         )
-        resources = marketplace_resources_list.sync_all(
+        resources = marketplace_provider_resources_list.sync_all(
             client=waldur_rest_client,
             offering_uuid=[offering.uuid],
             state=[ResourceState.OK, ResourceState.ERRED],
