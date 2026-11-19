@@ -375,6 +375,29 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         del user_context
         return self._provision(self._client_id(waldur_resource), waldur_resource)
 
+    def pull_resource(self, waldur_resource: WaldurResource) -> Optional[BackendResourceInfo]:
+        """Report a resource whose keys are managed one by one as existing, keys or not.
+
+        On such an offering a resource starts with no keys and a manager can delete
+        every one of them, so the keys say nothing about whether it exists. Reading
+        "no keys" as "missing" drops it from the membership sync, which is what
+        carries Waldur's pause and limits onto the resource.
+
+        The key-based answer stays for every other offering, where ``None`` is what
+        makes the order processor re-provision a restored resource's keys. Here a
+        re-provision mints none and ``create_resource_with_id`` only registers, so
+        "existing" loses nothing. An ERRED or TERMINATING resource keeps the key-based
+        answer too; see ``exists_without_keys``.
+        """
+        # Imported here: the core module imports the backend package at load time.
+        from waldur_site_agent.common.resource_api_keys import (  # noqa: PLC0415
+            exists_without_keys,
+        )
+
+        if exists_without_keys(waldur_resource):
+            return BackendResourceInfo(backend_id=waldur_resource.backend_id)
+        return super().pull_resource(waldur_resource)
+
     def _pull_backend_resource(self, resource_backend_id: str) -> Optional[BackendResourceInfo]:
         """Report the resource as existing when it owns at least one key.
 
@@ -382,7 +405,8 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         that already has a ``backend_id``. Without this override the base goes
         through ``UnknownClient`` (always ``None``), so the processor would treat an
         existing resource as missing and re-provision. Key existence lives in the
-        Secrets, so consult those.
+        Secrets, so consult those. An offering that manages keys one by one does not
+        get here; see ``pull_resource``.
         """
         if self.list_resource_client_ids(resource_backend_id):
             return BackendResourceInfo(backend_id=resource_backend_id)

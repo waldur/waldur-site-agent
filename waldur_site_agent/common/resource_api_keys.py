@@ -55,6 +55,7 @@ from waldur_api_client.models.resource_api_key_usage_request_usages import (
     ResourceApiKeyUsageRequestUsages,
 )
 from waldur_api_client.models.resource_field_enum import ResourceFieldEnum
+from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET, Unset
 
 from waldur_site_agent.backend import UNASSIGNED_USAGE_SUFFIX, logger
@@ -235,16 +236,18 @@ def _apply_resource_pause(
     """Bring the backend's resource-wide pause up to date before a key is added.
 
     The membership sync applies it too, but only to resources the backend reports as
-    existing — and a backend can report a resource with no keys left as missing. A
-    key minted onto such a resource after Waldur paused it would otherwise go live.
+    existing — and a backend can report a resource with no keys left as missing (the
+    LiteLLM and Envoy plugins no longer do, where keys are managed one by one). A key
+    minted onto such a resource after Waldur paused it would otherwise go live, and
+    this also covers a mint that lands before the next membership pass.
     """
     if getattr(resource, "paused", None) is True:
         backend.pause_resource(resource_backend_id)
     elif getattr(resource, "downscaled", None) is True:
         backend.downscale_resource(resource_backend_id)
     else:
-        # Clears a pause recorded while the resource had no keys, which the
-        # membership sync — skipping keyless resources — never got to lift.
+        # Clears a pause recorded while the resource had no keys, which a membership
+        # sync skipping keyless resources never gets to lift -- or has not yet.
         backend.restore_resource(resource_backend_id)
 
 
@@ -736,6 +739,28 @@ def _previous_month(period: datetime.date, final_report_days: int) -> Optional[d
 def manages_api_keys(waldur_resource: object) -> bool:
     """Whether the resource's offering has per-key governance turned on in Waldur."""
     return bool(_plugin_option(waldur_resource, "enable_api_key_provisioning"))
+
+
+# A terminate that deleted the keys and then failed leaves the resource ERRED with its
+# backend_id set, and a TERMINATING one is on its way out.
+_WINDING_DOWN_STATES = (ResourceState.ERRED, ResourceState.TERMINATING)
+
+
+def exists_without_keys(waldur_resource: object) -> bool:
+    """Whether a backend may report the resource as existing even if it holds no keys.
+
+    True where the offering manages keys one by one: there a resource starts with no
+    keys and a manager can delete every one, so the keys say nothing about existence.
+    Not for an ERRED or TERMINATING resource, though. Counting one of those as existing
+    would send it through the membership sync, which re-adds its members (reopening
+    usage they bill to a resource being torn down) and then resets ERRED to OK, so a
+    failed terminate would vanish from Waldur. Those keep the key-based answer.
+    """
+    if not getattr(waldur_resource, "backend_id", None) or not manages_api_keys(
+        waldur_resource
+    ):
+        return False
+    return _value(getattr(waldur_resource, "state", None)) not in _WINDING_DOWN_STATES
 
 
 def wants_key_assignees(backend, waldur_resource: object) -> bool:  # noqa: ANN001
