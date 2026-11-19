@@ -9,6 +9,7 @@ from typing import Optional
 from unittest import mock
 
 import pytest
+from waldur_api_client.models.resource_state import ResourceState
 from waldur_site_agent_envoy_ai_gateway.backend import EnvoyAIGatewayBackend
 from waldur_site_agent_envoy_ai_gateway.client import EnvoyAIGatewayBackendError
 
@@ -193,6 +194,45 @@ def test_pull_resource_none_when_absent() -> None:
     backend = _make_backend()
     backend.gateway_client.list_client_ids.return_value = []
     assert backend.pull_resource(_make_resource(backend_id="cid-1")) is None
+
+
+def _resource_on_offering(managed: bool) -> SimpleNamespace:
+    resource = _make_resource(backend_id="cid-1")
+    resource.offering_plugin_options = SimpleNamespace(enable_api_key_provisioning=managed)
+    return resource
+
+
+def test_pull_resource_reports_a_keyless_resource_whose_keys_are_managed() -> None:
+    # It starts with no keys and can lose all of them; the membership sync, which
+    # carries Waldur's pause onto it, must still see it.
+    backend = _make_backend()
+    backend.gateway_client.list_client_ids.return_value = []
+
+    info = backend.pull_resource(_resource_on_offering(managed=True))
+
+    assert info is not None
+    assert info.backend_id == "cid-1"
+    backend.gateway_client.list_client_ids.assert_not_called()
+
+
+@pytest.mark.parametrize("state", [ResourceState.ERRED, ResourceState.TERMINATING])
+def test_pull_resource_keeps_a_keyless_managed_resource_winding_down_missing(state) -> None:
+    # A terminate that deleted the keys and then failed leaves it ERRED. Reporting it
+    # would restore it and reset it to OK, hiding the failed terminate.
+    backend = _make_backend()
+    backend.gateway_client.list_client_ids.return_value = []
+    resource = _resource_on_offering(managed=True)
+    resource.state = state
+
+    assert backend.pull_resource(resource) is None
+
+
+def test_pull_resource_keeps_a_keyless_resource_missing_without_managed_keys() -> None:
+    # None is what makes the order processor re-provision a restored resource's keys.
+    backend = _make_backend()
+    backend.gateway_client.list_client_ids.return_value = []
+
+    assert backend.pull_resource(_resource_on_offering(managed=False)) is None
 
 
 def test_recreate_missing_resource_never_recreates() -> None:

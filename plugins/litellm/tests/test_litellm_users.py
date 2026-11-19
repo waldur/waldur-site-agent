@@ -8,6 +8,7 @@ from typing import Optional
 from unittest import mock
 
 import pytest
+from waldur_api_client.models.resource_state import ResourceState
 from waldur_site_agent_litellm import ownership
 from waldur_site_agent_litellm.backend import LiteLLMBackend
 from waldur_site_agent_litellm.client import META_OWNERSHIP, META_RESOURCE, META_USERNAME
@@ -269,6 +270,97 @@ def test_a_resource_with_no_members_is_still_a_resource():
     backend.litellm_client.list_keys.return_value = [{"key_alias": f"{RID}-1", "token": "h1"}]
 
     assert backend._pull_backend_resource(RID).users == []
+
+
+# --- keyless resources on an offering that manages keys one by one -----------
+#
+# Such a resource starts with no keys and can lose all of them. The membership sync
+# still has to see it, or its members get no account and departed ones keep theirs.
+
+
+def _managed_resource(managed: bool = True) -> SimpleNamespace:
+    resource = _make_resource()
+    resource.offering_plugin_options = SimpleNamespace(enable_api_key_provisioning=managed)
+    return resource
+
+
+def _pull(backend: LiteLLMBackend, resource: SimpleNamespace, strict: bool = False) -> dict:
+    """Pull the way the membership processor does."""
+    return backend.pull_resources([resource], include_usage=False, strict=strict)
+
+
+def test_a_keyless_resource_whose_keys_are_managed_is_reported_with_its_members():
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = []
+    backend.litellm_client.list_users.return_value = [_managed_user()]
+    resource = _managed_resource()
+
+    report = _pull(backend, resource)
+
+    _, info = report[RID]
+    assert info.backend_id == RID
+    assert info.users == [USERNAME]
+
+
+def test_a_keyless_resource_without_managed_keys_is_still_missing():
+    # None is what makes the order processor re-provision a restored resource's keys.
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = []
+    backend.litellm_client.list_users.return_value = [_managed_user()]
+
+    assert backend.pull_resource(_managed_resource(managed=False)) is None
+    assert backend.pull_resource(_make_resource()) is None
+
+
+@pytest.mark.parametrize("state", [ResourceState.ERRED, ResourceState.TERMINATING])
+def test_a_keyless_managed_resource_winding_down_is_still_missing(state):
+    # A terminate that deleted the keys and then failed leaves it ERRED. Reporting it
+    # would re-add its members and reset it to OK, hiding the failed terminate.
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = []
+    backend.litellm_client.list_users.return_value = [_managed_user()]
+    resource = _managed_resource()
+    resource.state = state
+
+    assert backend.pull_resource(resource) is None
+    assert _pull(backend, resource) == {}
+
+
+def test_a_managed_resource_winding_down_with_keys_is_still_reported():
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = [{"key_alias": f"{RID}-1", "token": "h1"}]
+    resource = _managed_resource()
+    resource.state = ResourceState.ERRED
+
+    assert backend.pull_resource(resource).backend_id == RID
+
+
+def test_a_managed_resource_is_reported_without_listing_its_keys():
+    backend = _make_backend()
+
+    assert backend.pull_resource(_managed_resource()) is not None
+    backend.litellm_client.list_keys.assert_not_called()
+
+
+def test_a_failed_user_listing_on_a_keyless_managed_resource_reads_as_no_members():
+    backend = _make_backend()
+    backend.litellm_client.list_users.side_effect = BackendError("user list is down")
+
+    _, info = _pull(backend, _managed_resource())[RID]
+
+    assert info.users == []
+
+
+def test_a_failed_user_listing_fails_a_strict_pull():
+    # The teardown reads "no members" as "no association" and releases the account.
+    backend = _make_backend()
+    backend.litellm_client.list_keys.return_value = [{"key_alias": f"{RID}-1", "token": "h1"}]
+    backend.litellm_client.list_users.side_effect = BackendError("user list is down")
+
+    for resource in (_managed_resource(), _make_resource()):
+        with pytest.raises(BackendError, match="user list is down"):
+            _pull(backend, resource, strict=True)
+
 
 
 # --- removal ----------------------------------------------------------------

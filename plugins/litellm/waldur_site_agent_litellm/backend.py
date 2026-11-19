@@ -591,34 +591,73 @@ class LiteLLMBackend(backends.BaseBackend):
         del user_context
         return self._provision(self._client_id(waldur_resource), waldur_resource)
 
+    def pull_resource(self, waldur_resource: WaldurResource) -> Optional[BackendResourceInfo]:
+        """Report a resource whose keys are managed one by one as existing, keys or not.
+
+        On such an offering a resource starts with no keys and a manager can delete
+        every one of them, so the keys say nothing about whether it exists. Reading
+        "no keys" as "missing" drops it from the membership sync: its members get no
+        LiteLLM user or chat account, departed members keep theirs, and its limits
+        are not mirrored.
+
+        The key-based answer stays for every other offering, where ``None`` is what
+        makes the order processor re-provision a restored resource's keys. Here a
+        re-provision mints none (``_provision_resource_api_keys``) and
+        ``create_resource_with_id`` only registers, so "existing" loses nothing.
+        An ERRED or TERMINATING resource keeps it too; see ``exists_without_keys``.
+        """
+        # Imported here: the core module imports the backend package at load time.
+        from waldur_site_agent.common.resource_api_keys import (  # noqa: PLC0415
+            exists_without_keys,
+        )
+
+        if not exists_without_keys(waldur_resource):
+            return super().pull_resource(waldur_resource)
+        backend_id = waldur_resource.backend_id
+        try:
+            return self._resource_info(backend_id)
+        except Exception:
+            if self.strict_pull_requested():
+                raise
+            logger.exception("Error while pulling resource [%s]", backend_id)
+            return None
+
     def _pull_backend_resource(self, resource_backend_id: str) -> Optional[BackendResourceInfo]:
         """Report the resource as existing when it owns at least one key.
 
         The order processor calls ``pull_resource`` before (re)creating a resource that
         already carries a ``backend_id``. Without this the base goes through
         ``UnknownClient`` (always ``None``) and the processor re-provisions a resource
-        that is already there.
+        that is already there. An offering that manages keys one by one does not get
+        here; see ``pull_resource``.
         """
         if self._resource_keys(resource_backend_id):
-            try:
-                # The membership processor diffs this against the project team to work
-                # out who to add and who has gone stale.
-                users = self.list_resource_users(resource_backend_id)
-            except BackendError:
-                # Existence is decided by the keys alone, so a failed ``/user/list``
-                # must not read as "resource missing": ``pull_resource`` swallows the
-                # error and the order processor answers ``None`` by re-creating a live
-                # resource, minting a second full set of keys for it. An empty member
-                # list only makes the next membership pass re-add the members, which
-                # is idempotent.
-                logger.exception(
-                    "Unable to list the users of resource %s; reporting it as existing "
-                    "with no members rather than as missing",
-                    resource_backend_id,
-                )
-                users = []
-            return BackendResourceInfo(backend_id=resource_backend_id, users=users)
+            return self._resource_info(resource_backend_id)
         return None
+
+    def _resource_info(self, resource_backend_id: str) -> BackendResourceInfo:
+        """The resource with its members, for a resource already known to exist."""
+        try:
+            # The membership processor diffs this against the project team to work
+            # out who to add and who has gone stale.
+            users = self.list_resource_users(resource_backend_id)
+        except BackendError:
+            if self.strict_pull_requested():
+                # The teardown reads an empty member list as "no association here"
+                # and releases the account; it has to see the failure instead.
+                raise
+            # Existence is decided before this, so a failed ``/user/list`` must not
+            # read as "resource missing": ``pull_resource`` swallows the error and the
+            # order processor answers ``None`` by re-creating a live resource, minting
+            # a second full set of keys for it. An empty member list only makes the
+            # next membership pass re-add the members, which is idempotent.
+            logger.exception(
+                "Unable to list the users of resource %s; reporting it as existing "
+                "with no members rather than as missing",
+                resource_backend_id,
+            )
+            users = []
+        return BackendResourceInfo(backend_id=resource_backend_id, users=users)
 
     def recreate_missing_resource(self, waldur_resource: WaldurResource) -> bool:
         """No automatic recreation.
