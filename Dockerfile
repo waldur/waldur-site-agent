@@ -52,7 +52,7 @@ ENV PYTHONPATH="/app"
 
 # Add healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD waldur_site_healthz --liveness-only || exit 1
+    CMD ["waldur_site_healthz", "--liveness-only"]
 
 # Set entrypoint and default command
 ENTRYPOINT ["waldur_site_agent"]
