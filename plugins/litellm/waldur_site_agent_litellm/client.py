@@ -12,6 +12,7 @@ It also manages LiteLLM *users*, which exist for a different reason than keys: s
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Any, Optional
 
 import httpx
@@ -50,6 +51,28 @@ META_OWNERSHIP = "waldur_ownership"
 # on membership-based chat. The management backend stamps it, the reporting backend
 # puts the person's chat usage on that key.
 META_KEY = "waldur_api_key"
+
+# The LiteLLM role every member is created with. ``internal_user_viewer`` can sign in
+# to the admin UI but cannot create, edit or delete keys there. ``internal_user`` --
+# what members were created as before -- can mint keys of its own, with no budget and
+# every model, which Waldur never sees and so can neither bill, pause, rotate nor
+# revoke. That matters as soon as members can sign in, e.g. when the operator turns on
+# UI SSO against the same identity provider. Chat attribution is unaffected: the
+# forwarded-header mapping writes the address onto the request without reading the
+# role (``add_internal_user_from_user_mapping``).
+MEMBER_ROLE = "internal_user_viewer"
+# Records created before the switch still carry this; the management backend demotes
+# the ones it owns, and both backends list it so nothing it still bills goes missing.
+LEGACY_MEMBER_ROLE = "internal_user"
+# Legacy first: a record demoted while the walk runs then lists under both roles (and is
+# kept once) rather than under neither, which would drop its chat usage from a report.
+# That holds within a page; across the legacy role's pages a demotion shifts later
+# records up, so one can be skipped for that pass and is picked up on the next.
+MEMBER_ROLES = (LEGACY_MEMBER_ROLE, MEMBER_ROLE)
+# Restricts a minted key to the LLM API routes (chat, embeddings, models, ...). Keys the
+# plugin mints carry no ``user_id``, which already keeps them off the management routes;
+# this makes that the key's own policy rather than a side effect of LiteLLM's defaults.
+KEY_TYPE_LLM_API = "llm_api"
 
 
 def verify_ssl_setting(backend_settings: dict) -> bool:
@@ -267,8 +290,12 @@ class LiteLLMClient:
         No ``duration`` is sent either: the keys do not expire, because Waldur owns
         the resource lifecycle and an expiry it does not know about would revoke
         access behind its back.
+
+        ``key_type`` is always ``llm_api``, which LiteLLM turns into ``allowed_routes:
+        ["llm_api_routes"]``: a key the plugin hands out can call models and nothing on
+        the management API, whatever the proxy's defaults are.
         """
-        body: dict = {"key_alias": key_alias}
+        body: dict = {"key_alias": key_alias, "key_type": KEY_TYPE_LLM_API}
         if models:
             body["models"] = list(models)
         if blocked:
@@ -301,6 +328,18 @@ class LiteLLMClient:
         exact slot pattern — see
         :meth:`~waldur_site_agent_litellm.backend.LiteLLMBackend.list_resource_client_ids`.
         """
+        return self._walk_keys({"key_alias": alias_prefix, "substring_matching": "true"})
+
+    def list_user_keys(self, user_id: str) -> list:
+        """Return the full key records owned by ``user_id``, matched exactly.
+
+        The plugin mints its keys without a ``user_id``, so everything this returns was
+        minted by someone else on the user's behalf -- typically the user themselves
+        from the LiteLLM UI while they held a role that could.
+        """
+        return self._walk_keys({"user_id": user_id})
+
+    def _walk_keys(self, filters: dict) -> list:
         keys: list = []
         page = 1
         while page <= MAX_PAGES:
@@ -308,8 +347,7 @@ class LiteLLMClient:
                 "GET",
                 "/key/list",
                 params={
-                    "key_alias": alias_prefix,
-                    "substring_matching": "true",
+                    **filters,
                     "return_full_object": "true",
                     "page": page,
                     "size": KEY_LIST_PAGE_SIZE,
@@ -406,7 +444,10 @@ class LiteLLMClient:
         max_parallel_requests: Optional[int] = None,
         metadata: Optional[dict] = None,
     ) -> dict:
-        """Create one internal user and return the proxy's response.
+        """Create one member with the :data:`MEMBER_ROLE` and return the proxy's response.
+
+        The role is the viewer one so that a member who can sign in to the LiteLLM UI
+        still cannot mint keys of their own there -- see :data:`MEMBER_ROLE`.
 
         ``auto_create_key`` is sent as false, against LiteLLM's own default of true. A
         key minted here would be a live credential that Waldur never sees: the agent
@@ -418,7 +459,7 @@ class LiteLLMClient:
         body: dict = {
             "user_id": user_id,
             "user_email": user_email,
-            "user_role": "internal_user",
+            "user_role": MEMBER_ROLE,
             "auto_create_key": False,
         }
         if user_alias:
@@ -476,13 +517,36 @@ class LiteLLMClient:
             return
         self._request("POST", "/user/delete", json_body={"user_ids": list(user_ids)})
 
-    def list_users(self, role: str = "internal_user") -> list:
-        """Return every user record with the given role.
+    def list_users(self, roles: Sequence[str] = MEMBER_ROLES) -> list:
+        """Return every user record holding one of ``roles``, each user once.
 
         Used to rebuild the email-to-resource map from the proxy itself, so the
-        reporting backend — which never sees Waldur's team lists — can attribute chat
+        reporting backend -- which never sees Waldur's team lists -- can attribute chat
         usage without the management backend having to hand anything over.
+
+        ``/user/list`` filters on a single role (a comma-separated list matches
+        nothing), so each role is walked on its own. Both member roles are the default:
+        records created before members became viewers still bill until they are
+        demoted. The legacy role is walked first, so a user demoted between the two
+        walks is seen twice -- and kept once, as first seen -- rather than missed. The
+        walk pages by offset, so a demotion while the legacy role is still being paged
+        can push a later record past the page being read; it is seen on the next pass.
         """
+        if isinstance(roles, str):
+            roles = (roles,)
+        users: list = []
+        seen: set = set()
+        for role in roles:
+            for record in self._list_users_with_role(role):
+                user_id = record.get("user_id")
+                if user_id:
+                    if user_id in seen:
+                        continue
+                    seen.add(user_id)
+                users.append(record)
+        return users
+
+    def _list_users_with_role(self, role: str) -> list:
         users: list = []
         page = 1
         while page <= MAX_PAGES:

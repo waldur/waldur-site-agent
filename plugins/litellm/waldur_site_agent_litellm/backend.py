@@ -32,7 +32,11 @@ from waldur_site_agent.common.spending_limits import resource_spending_limits
 
 from . import ownership
 from .client import (
+    LEGACY_MEMBER_ROLE,
+    MEMBER_ROLE,
     META_KEY,
+    META_OWNERSHIP,
+    META_RESOURCE,
     META_USERNAME,
     LiteLLMBackendError,
     LiteLLMClient,
@@ -2112,7 +2116,7 @@ class LiteLLMBackend(backends.BaseBackend):
         return metadata if isinstance(metadata, dict) else {}
 
     def _managed_users(self) -> dict:
-        """Return ``{email: record}`` for every internal user on the proxy.
+        """Return ``{email: record}`` for every member-role user on the proxy.
 
         The whole listing rather than one resource's slice, because ``/user/list``
         cannot filter on metadata and ownership only lives there. It is cached for part
@@ -2128,8 +2132,84 @@ class LiteLLMBackend(backends.BaseBackend):
             if email:
                 users[email] = record
         self._prune_expired_users(users)
+        self._demote_legacy_members(users)
         self._users_cache = (now, users)
         return users
+
+    @staticmethod
+    def _stamped_by_waldur(metadata: dict) -> bool:
+        """Whether the plugin has ever written ownership onto this record.
+
+        Released records count too: a removed member keeps their record, and their
+        sign-in, for the retention window.
+        """
+        return isinstance(metadata.get(META_OWNERSHIP), list) or bool(metadata.get(META_RESOURCE))
+
+    def _demote_legacy_members(self, users: dict) -> None:
+        """Switch members created as ``internal_user`` to the viewer role.
+
+        Members used to be created as ``internal_user``, a role that can mint its own
+        uncapped keys from the LiteLLM UI (see ``MEMBER_ROLE``). Runs on every fresh
+        listing, whichever command asked for it, so each record is written once and
+        then lists as a viewer. Only records the plugin stamped are touched: an
+        ``internal_user`` an admin made by hand, and any admin role, are the operator's
+        to decide. A failed write is logged and retried on the next listing.
+
+        The write carries ``user_role`` alone, so it cannot clobber metadata another
+        write changed since the listing was read.
+        """
+        for email, record in sorted(users.items()):
+            if record.get("user_role") != LEGACY_MEMBER_ROLE:
+                continue
+            if not self._stamped_by_waldur(self._user_metadata(record)):
+                continue
+            try:
+                self.litellm_client.update_user(email, {"user_role": MEMBER_ROLE})
+            except BackendError:
+                logger.exception(
+                    "Unable to switch LiteLLM user %s from %s to %s; retrying on the "
+                    "next pass",
+                    email,
+                    LEGACY_MEMBER_ROLE,
+                    MEMBER_ROLE,
+                )
+                continue
+            record["user_role"] = MEMBER_ROLE
+            logger.info(
+                "Switched LiteLLM user %s from %s to %s, which cannot mint keys",
+                email,
+                LEGACY_MEMBER_ROLE,
+                MEMBER_ROLE,
+            )
+            self._warn_about_self_minted_keys(email)
+
+    def _warn_about_self_minted_keys(self, email: str) -> None:
+        """Log every key a just-demoted member owns, for the operator to revoke.
+
+        The role switch stops new keys, not old ones: LiteLLM lets every non-admin role
+        call the model routes, so a key the member minted while they were an
+        ``internal_user`` keeps working -- uncapped, on every model, and unbilled.
+        The plugin's own keys carry no ``user_id``, so anything listed here is one it
+        did not mint. They are reported rather than deleted: they were never Waldur's,
+        and revoking someone's credential is the operator's call. Runs on every switch,
+        so a key minted after SSO handed the role back is caught by the next one.
+        """
+        try:
+            keys = self.litellm_client.list_user_keys(email)
+        except BackendError:
+            logger.exception("Unable to list the LiteLLM keys owned by %s", email)
+            return
+        for key in keys:
+            logger.warning(
+                "LiteLLM user %s owns key %s (alias %r, token %s) that Waldur did not "
+                "mint and does not bill; it still works after the switch to %s. "
+                "Revoke it with POST /key/delete if it is not wanted",
+                email,
+                key.get("key_name") or "?",
+                key.get("key_alias"),
+                key.get("token") or "?",
+                MEMBER_ROLE,
+            )
 
     def _prune_expired_users(self, users: dict) -> None:
         """Delete released records that can no longer bill any reportable month.
@@ -2362,15 +2442,22 @@ class LiteLLMBackend(backends.BaseBackend):
         periods = ownership.claim(self._trim_ownership(periods, day), backend_id, day)
         if chat_follows_key and META_KEY not in metadata:
             metadata = {**metadata, META_KEY: ""}
-        self.litellm_client.update_user(
-            email,
-            {
-                "user_email": email,
-                "user_alias": full_name,
-                "metadata": ownership.stamp(metadata, periods, username),
-            },
-        )
+        fields = {
+            "user_email": email,
+            "user_alias": full_name,
+            "metadata": ownership.stamp(metadata, periods, username),
+        }
+        # An existing ``internal_user`` taken on by this add -- created by hand, or by an
+        # agent from before members were viewers -- could mint its own keys. Admin roles
+        # are left alone: the operator gave them on purpose, and demoting one would lock
+        # them out.
+        demoting = existing.get("user_role") == LEGACY_MEMBER_ROLE
+        if demoting:
+            fields["user_role"] = MEMBER_ROLE
+        self.litellm_client.update_user(email, fields)
         logger.info("Adopted existing LiteLLM user %s for resource %s", email, backend_id)
+        if demoting:
+            self._warn_about_self_minted_keys(email)
         return True
 
     def _ensure_chat_account(

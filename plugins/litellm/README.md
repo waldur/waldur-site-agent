@@ -493,6 +493,75 @@ Two consequences are built into the backend:
   there would destroy the person's conversations over an unpaid invoice. Restore
   re-enables a demoted account and creates nothing that is not already there.
 
+### What a member can do on the proxy itself
+
+Members are created with LiteLLM's `internal_user_viewer` role. A viewer can sign in to the
+LiteLLM admin UI and read, but cannot create, edit or delete keys there. The role members got
+before, `internal_user`, can mint keys of its own from the UI: keys with no budget and every
+model, which Waldur never sees and so cannot bill, pause, rotate or revoke, and which outlive
+the member's removal. That only matters once members can sign in to the UI, for example when
+the operator enables UI SSO against the same identity provider, but the plugin does not rely on
+that never happening. The forwarded-header mapping above writes the address onto the request
+without reading the role, so chat attribution works the same for a viewer.
+
+**Upgrading.** Records created as `internal_user` by an earlier agent are switched to
+`internal_user_viewer` the first time the management backend lists the proxy's users after
+the upgrade (normally the next membership pass), one `/user/update` each, and the member's
+existing UI session loses key creation at once. That covers every record the plugin has
+stamped with ownership, released ones included. A member's record that the agent adopts is
+switched too, if it is an `internal_user`. The agent never changes any other role: an admin
+who is also a project member keeps their role, and so does an `internal_user` an admin made
+by hand that no resource has adopted.
+
+The switch is **one-way for older agents**: they list only `internal_user`, so to them every
+viewer is gone. An older reporting agent then bills no chat usage, and an older management
+agent re-adopts every member on every pass without changing the role back. Upgrade the
+management and reporting agents sharing a proxy together, and before rolling one back, set
+the members back with `/user/update` (`{"user_id": ..., "user_role": "internal_user"}`).
+
+A member whose record carries an admin role (`proxy_admin` and the like) is outside both
+member roles, so it never appears in the listing: the membership diff adopts it again on
+every pass, and its chat usage is not attributed to the resource. Give project members a
+member role on the proxy, or keep admins out of chat-enabled projects.
+
+Keys the plugin mints carry `key_type: llm_api`, which the proxy stores as `allowed_routes:
+["llm_api_routes"]`: they can call models, and every management route answers 403. Keys minted
+before carry no `key_type`. They carry no `user_id` either, and that already keeps them off the
+management routes (401/403). The agent does not rewrite them. They pick up the restriction when
+next re-minted: a rotation by delete-and-mint does that, but an in-place `/key/regenerate`
+(enterprise licence) keeps the key's old routes. Such a key can call no info route either,
+so a client that reads its own spend from `/key/info` gets 403; `/v1/models` and `/model/info`
+still answer. If the proxy sets `default_key_generate_params.allowed_routes` to a list that
+contains `llm_api_routes`, that list is stored instead.
+
+**Keys a member minted themselves still work.** The switch stops new keys, not old ones:
+LiteLLM lets every non-admin role, the viewer included, call the model routes, so a key a
+member minted while they were an `internal_user` keeps calling models, uncapped and unbilled.
+Each time the agent switches a member it lists the keys that member owns (`/key/list?user_id=`)
+and logs a warning for each with its token hash. The plugin's own keys carry no `user_id`, so
+everything in those warnings was minted by someone else. The agent does not revoke them --
+they were never Waldur's -- so review the warnings after the upgrade and delete what is not
+wanted with `POST /key/delete` (`{"keys": ["<token hash>"]}`).
+
+**SSO can hand the role back.** On every UI SSO login LiteLLM takes the role from the identity
+provider when the provider sends a valid one, over the role stored on the proxy: the claim named
+by `GENERIC_USER_ROLE_ATTRIBUTE` (default `role`), `role_mappings` including its
+`default_role`, or `jwt_litellm_role_map` with `sync_user_role_and_teams`. A provider that says
+`internal_user` gives a member key creation back until the agent's next listing switches them
+again, and a key minted in between survives that. Send no LiteLLM role for project members
+(LiteLLM then keeps the stored one, and creates new SSO users as viewers), or map them to
+`internal_user_viewer`. To close the gap whatever the provider sends, also restrict personal
+keys to admins in the proxy config:
+
+```yaml
+litellm_settings:
+  key_generation_settings:
+    personal_key_generation:
+      allowed_user_roles: ["proxy_admin"]
+```
+
+This does not touch the agent, which mints its keys with an admin token.
+
 ### One entitlement per person
 
 A LiteLLM `user_id` is global and here it is an address, so usage arriving under an
@@ -1270,9 +1339,38 @@ using it would reintroduce the hash → alias map.
   read as truthy/falsy rather than compared against `False`.
 - **Aliases are globally unique**: a duplicate `key_alias` is rejected with 400. A delete frees the
   alias, which is what makes the delete-then-generate rotation fallback work.
+- **`key_type: "llm_api"` on `/key/generate` stores `allowed_routes: ["llm_api_routes"]`**
+  (1.109.1 live; the same mapping is in 1.105.1's source). Such a key answers 403 on
+  `/key/generate`, `/key/list` and `/user/new` and 200 on `/chat/completions`. `/key/update`
+  ignores `key_type` (the routes stay `[]`); `allowed_routes` works on an update. A non-admin
+  key minted **without** a `user_id` answers 401 on `/key/generate` and `/user/new` and 403 on
+  `/key/list` whatever its routes, and a `proxy_admin` key minting without a `user_id` does not
+  put its own id on the new key. Verified on 1.109.1, 2026-11-19.
 - **`/health/readiness` needs no auth** and returns `{"status": "healthy", "db": "connected"}`. The
   key API is useless without the database, so `db != "connected"` is treated as down.
 - Spend rows are flushed in batches, so usage lags a live request by a few seconds.
+
+### Users
+
+- **`internal_user` can mint its own keys; `internal_user_viewer` cannot.** A key held by an
+  `internal_user` (which authenticates with the user's role, as a UI session does) gets 200 on
+  `/key/generate`, for a key with no budget and every model; a viewer's gets 401 `Only proxy
+  admin can be used to generate, delete, update info for new keys/users/teams`.
+- **`/user/update` with `user_role` takes effect at once:** the demoted user's existing key is
+  refused on `/key/generate` on the next request.
+- **`/user/list` filters on one `role`.** `role=internal_user,internal_user_viewer` matches
+  nothing, so the client walks each role separately.
+- **A viewer's existing keys still call models.** The route check lets every non-admin role
+  through to the model routes; the role only decides the management routes.
+- **SSO login overwrites the stored role** when the identity provider sends a valid LiteLLM
+  role, and keeps it otherwise; a new SSO user without one is created as
+  `internal_user_viewer` (`ui_sso.py`, `apply_user_info_values_to_sso_user_defined_values`
+  and `insert_sso_user`).
+- **`key_generation_settings.personal_key_generation.allowed_user_roles`** refuses
+  `/key/generate` for a key of the caller's own to every role not listed.
+
+Verified on 1.109.1, 2026-11-19; the SSO and route-check lines from the 1.109.1 source,
+2026-11-21.
 
 ## Tests
 
