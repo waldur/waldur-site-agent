@@ -529,8 +529,38 @@ generates automatically — `waldur_username` or `identity_claim`. Leave it unse
 integration appears to work for whoever was set up by hand and silently does nothing for
 everyone who joins later.
 
-The agent logs a warning naming every team member skipped this way, so the condition is
-visible in the sync log rather than only in the absence of an account.
+The agent names every team member skipped this way in a DEBUG-level line of the sync
+log, so the condition shows there once debug logging is on, rather than only in the
+absence of an account.
+
+Set `service_provider_can_create_offering_user: true` in the same `plugin_options`. The
+username policy decides what an offering user is called; this option decides whether
+Waldur creates new ones, and it applies under every policy, not only
+`service_provider`. Without it, adding someone to the project creates no offering user.
+Membership sync still sees the project's members, but none of the new ones has an
+offering user, so it skips them and none of them — including the person who placed the
+order — gets a chat account. It reaches further than new members: while the option is
+off, Waldur hides every offering user of the offering from a non-staff token, so an agent
+running as an offering manager cannot see even the ones made by hand, and fails to
+provision those members too. The agent does not check this option under the other
+policies, so the only line naming the skipped people is the same DEBUG line as above,
+and its hint points at
+`username_generation_policy` even when that is already set.
+
+Waldur creates offering users in Celery tasks: when a member gets a project role, when
+the project gets a resource, and in a daily resync. A Waldur without a running worker
+therefore shows the same symptom. From Waldur 8.1.4, turning the option on later also
+creates the missing offering users for projects that already hold a resource; the next
+membership sync then picks them up.
+
+These are the offering's settings in Waldur (its `plugin_options`), not the agent's
+configuration file:
+
+```yaml
+plugin_options:
+  username_generation_policy: waldur_username
+  service_provider_can_create_offering_user: true
+```
 
 ### Account provisioning
 
