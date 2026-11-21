@@ -218,6 +218,37 @@ class TestWelcomeEmailSender:
             msg_str = args[0][2]
             assert "Welcome jsmith to the cluster" in msg_str
 
+    @pytest.mark.parametrize(
+        "subject",
+        [
+            "{{ lipsum.__globals__['os'].popen('echo pwned').read() }}",
+            "{{ ''.__class__.__mro__[1].__subclasses__() }}",
+        ],
+    )
+    def test_subject_cannot_reach_python_internals(
+        self, txt_template: Path, subject: str
+    ) -> None:
+        sender = WelcomeEmailSender(_settings(str(txt_template), subject=subject))
+
+        with patch("waldur_site_agent_ldap.email_sender.smtplib") as mock_smtplib, patch(
+            "os.popen"
+        ) as mock_popen:
+            mock_smtp = MagicMock()
+            mock_smtplib.SMTP.return_value = mock_smtp
+
+            sender.send_welcome_email(
+                recipient_email="user@example.com",
+                username="jsmith",
+                first_name="John",
+                last_name="Smith",
+                home_directory="/home/jsmith",
+            )
+
+        # The sandbox refuses the attribute access, the send is abandoned and
+        # logged, and nothing is executed.
+        mock_popen.assert_not_called()
+        mock_smtp.sendmail.assert_not_called()
+
     def test_from_name_in_sender(self, txt_template: Path) -> None:
         sender = WelcomeEmailSender(
             _settings(str(txt_template), from_name="HPC Admin")

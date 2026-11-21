@@ -7,7 +7,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
-from jinja2 import ChainableUndefined, Environment, FileSystemLoader
+from jinja2 import ChainableUndefined, FileSystemLoader
+from jinja2.sandbox import SandboxedEnvironment
 
 from waldur_site_agent.backend import logger
 
@@ -42,7 +43,10 @@ class WelcomeEmailSender:
                 template_path,
             )
 
-        self._env = Environment(
+        # Sandboxed: the subject comes from the offering's configuration, which
+        # Waldur may supply, and a plain Environment lets a template reach Python
+        # objects and run code on the agent host.
+        self._env = SandboxedEnvironment(
             loader=FileSystemLoader(str(template_path.parent)),
             undefined=ChainableUndefined,
             trim_blocks=True,
