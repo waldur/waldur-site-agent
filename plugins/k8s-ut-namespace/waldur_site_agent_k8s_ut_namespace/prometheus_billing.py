@@ -62,7 +62,7 @@ MIN_WINDOW_SECONDS = 60
 FALLBACK_RETENTION = "15d"
 # A closed month is measured again only this long after it ended. Waldur takes usage
 # for a past month only while that month's invoice is still open, which by default
-# it is not at all (INVOICE_FINALIZATION_GRACE_PERIOD_HOURS = 0).
+# is 2 hours (INVOICE_FINALIZATION_GRACE_PERIOD_HOURS).
 DEFAULT_CLOSED_PERIOD_HOURS = 24.0
 # A per-namespace sum is a few hundred bytes per namespace. An answer this large is
 # an override that forgot to aggregate, not a bill.

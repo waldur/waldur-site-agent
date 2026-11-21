@@ -177,8 +177,8 @@ Required only for consumption billing:
    [Security](#security)
 3. **Credential**: a bearer token, or a username and password, if the API is authenticated
 4. **Retention**: at least 31 days, and N × 31 days with `reporting_periods: N`; see [Retention](#retention)
-5. **Waldur**: `INVOICE_FINALIZATION_GRACE_PERIOD_HOURS` above 0 and at least `closed_period_hours`,
-   or the last pass before midnight is final; see [Closed months](#closed-months)
+5. **Waldur**: `INVOICE_FINALIZATION_GRACE_PERIOD_HOURS` at least `closed_period_hours`, or the last
+   pass before the grace period ends is final; see [Closed months](#closed-months)
 
 ### Waldur Marketplace Setup
 
@@ -777,9 +777,10 @@ change is measured in real seconds.
 The current-period figure stops at the last pass before midnight, so a month is measured once more
 after it ends — but only within `closed_period_hours` (default 24) of its end. Waldur takes usage for
 a past month only while that month's invoice is still open, which lasts
-`INVOICE_FINALIZATION_GRACE_PERIOD_HOURS` and is **0 by default**: with the default, Waldur refuses
-the re-measured month and the last pass before midnight is final, so up to one reporting interval
-at the end of each month goes unbilled. Set the grace period above 0 and at least as long as
+`INVOICE_FINALIZATION_GRACE_PERIOD_HOURS` and is **2 by default**. With a grace period shorter than
+`closed_period_hours`, Waldur refuses the month once the grace period has passed, and the last pass
+before then is final; with 0, the last pass before midnight is final, so up to one reporting
+interval at the end of each month goes unbilled. Set the grace period at least as long as
 `closed_period_hours`. Outside the window the month is not queried, and the processor skips it.
 
 `waldur_site_load_historical_usage` gets an error rather than an empty report for a month outside the
