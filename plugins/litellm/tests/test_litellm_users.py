@@ -777,3 +777,205 @@ def test_a_retention_window_shorter_than_the_current_month_is_refused():
         pytest.raises(BackendError, match="ownership_retention_months"),
     ):
         LiteLLMBackend(dict(SETTINGS, ownership_retention_months=0), dict(COMPONENTS))
+
+
+# --- member role ------------------------------------------------------------
+#
+# internal_user can mint its own uncapped keys from the LiteLLM UI; internal_user_viewer
+# cannot. Members are created as viewers, and records created before that are demoted.
+
+
+def _role_writes(backend: LiteLLMBackend) -> list:
+    return [
+        call.args
+        for call in backend.litellm_client.update_user.call_args_list
+        if call.args[1] == {"user_role": "internal_user_viewer"}
+    ]
+
+
+def test_a_member_created_as_internal_user_is_demoted_on_the_next_listing():
+    backend = _make_backend()
+    record = dict(_owned_user(_period(RID, "2026-09-01", None)), user_role="internal_user")
+    backend.litellm_client.list_users.return_value = [record]
+
+    users = backend._managed_users()
+
+    # The write carries the role alone, so it cannot overwrite newer metadata.
+    assert _role_writes(backend) == [(EMAIL, {"user_role": "internal_user_viewer"})]
+    assert users[EMAIL]["user_role"] == "internal_user_viewer"
+    # Still listed, so the membership diff does not re-add or remove them.
+    assert backend.list_resource_users(RID) == [USERNAME]
+
+
+def test_a_record_from_before_dated_ownership_is_demoted_too():
+    backend = _make_backend()
+    backend.litellm_client.list_users.return_value = [
+        dict(_managed_user(), user_role="internal_user")
+    ]
+
+    backend._managed_users()
+
+    assert _role_writes(backend) == [(EMAIL, {"user_role": "internal_user_viewer"})]
+
+
+def test_a_removed_member_is_demoted_because_their_record_outlives_them():
+    # A released record stays for the retention window, and so does the sign-in.
+    backend = _make_backend()
+    record = dict(_owned_user(_period(RID, "2026-09-01", "2026-10-01")), user_role="internal_user")
+    backend.litellm_client.list_users.return_value = [record]
+
+    backend._managed_users()
+
+    assert _role_writes(backend) == [(EMAIL, {"user_role": "internal_user_viewer"})]
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        # A user an admin made by hand: not the plugin's to change.
+        {"user_id": EMAIL, "user_role": "internal_user", "metadata": {}},
+        # An admin who is also a member keeps the role the operator gave them.
+        dict(_owned_user(_period(RID, "2026-09-01", None)), user_role="proxy_admin"),
+        # Already a viewer: nothing to write.
+        dict(_owned_user(_period(RID, "2026-09-01", None)), user_role="internal_user_viewer"),
+    ],
+    ids=["hand-made", "proxy-admin", "viewer"],
+)
+def test_only_stamped_internal_users_are_demoted(record):
+    backend = _make_backend()
+    backend.litellm_client.list_users.return_value = [record]
+
+    backend._managed_users()
+
+    backend.litellm_client.update_user.assert_not_called()
+
+
+def test_a_failed_demotion_does_not_fail_the_listing_and_is_retried():
+    backend = _make_backend()
+    record = dict(_owned_user(_period(RID, "2026-09-01", None)), user_role="internal_user")
+    backend.litellm_client.list_users.return_value = [record]
+    backend.litellm_client.update_user.side_effect = BackendError("proxy said no")
+
+    assert backend.list_resource_users(RID) == [USERNAME]
+    assert backend._managed_users()[EMAIL]["user_role"] == "internal_user"
+
+    backend._invalidate_users_cache()
+    backend.litellm_client.update_user.side_effect = None
+    backend._managed_users()
+
+    assert _role_writes(backend)[-1] == (EMAIL, {"user_role": "internal_user_viewer"})
+
+
+def test_an_adopted_internal_user_is_switched_to_the_viewer_role():
+    backend = _make_backend()
+    backend.litellm_client.get_user.return_value = {
+        "user_id": EMAIL,
+        "user_role": "internal_user",
+        "metadata": {},
+    }
+
+    assert _add(backend) == {USERNAME}
+
+    _, fields = backend.litellm_client.update_user.call_args.args
+    assert fields["user_role"] == "internal_user_viewer"
+
+
+def test_an_adopted_admin_keeps_their_role():
+    backend = _make_backend()
+    backend.litellm_client.get_user.return_value = {
+        "user_id": EMAIL,
+        "user_role": "proxy_admin",
+        "metadata": {},
+    }
+
+    assert _add(backend) == {USERNAME}
+
+    _, fields = backend.litellm_client.update_user.call_args.args
+    assert "user_role" not in fields
+
+
+def test_an_adopted_viewer_is_written_without_a_role():
+    backend = _make_backend()
+    backend.litellm_client.get_user.return_value = {
+        "user_id": EMAIL,
+        "user_role": "internal_user_viewer",
+        "metadata": {},
+    }
+
+    assert _add(backend) == {USERNAME}
+
+    _, fields = backend.litellm_client.update_user.call_args.args
+    assert "user_role" not in fields
+
+
+# --- keys a member minted while they could -----------------------------------
+#
+# The role switch stops new keys only: a viewer's existing key still calls models.
+
+
+def test_a_demotion_reports_the_keys_the_member_minted(caplog):
+    backend = _make_backend()
+    record = dict(_owned_user(_period(RID, "2026-09-01", None)), user_role="internal_user")
+    backend.litellm_client.list_users.return_value = [record]
+    backend.litellm_client.list_user_keys.return_value = [
+        {"token": "hash-1", "key_alias": "my-key", "key_name": "sk-...abcd"}
+    ]
+
+    with caplog.at_level("WARNING", logger="waldur_site_agent_litellm.backend"):
+        backend._managed_users()
+
+    backend.litellm_client.list_user_keys.assert_called_once_with(EMAIL)
+    assert "hash-1" in caplog.text
+    assert "sk-...abcd" in caplog.text
+    # Reported, never revoked: the key was not Waldur's to delete.
+    backend.litellm_client.delete_keys.assert_not_called()
+    backend.litellm_client.block.assert_not_called()
+    backend.litellm_client.update_key.assert_not_called()
+
+
+def test_no_key_lookup_without_a_demotion():
+    backend = _make_backend()
+    record = dict(
+        _owned_user(_period(RID, "2026-09-01", None)), user_role="internal_user_viewer"
+    )
+    backend.litellm_client.list_users.return_value = [record]
+
+    backend._managed_users()
+
+    backend.litellm_client.list_user_keys.assert_not_called()
+
+
+def test_a_failed_key_lookup_does_not_fail_the_listing():
+    backend = _make_backend()
+    record = dict(_owned_user(_period(RID, "2026-09-01", None)), user_role="internal_user")
+    backend.litellm_client.list_users.return_value = [record]
+    backend.litellm_client.list_user_keys.side_effect = BackendError("proxy said no")
+
+    assert backend.list_resource_users(RID) == [USERNAME]
+    assert backend._managed_users()[EMAIL]["user_role"] == "internal_user_viewer"
+
+
+def test_an_adopted_internal_user_has_their_keys_reported():
+    backend = _make_backend()
+    backend.litellm_client.get_user.return_value = {
+        "user_id": EMAIL,
+        "user_role": "internal_user",
+        "metadata": {},
+    }
+
+    assert _add(backend) == {USERNAME}
+
+    backend.litellm_client.list_user_keys.assert_called_once_with(EMAIL)
+
+
+def test_an_adopted_admin_has_no_key_lookup():
+    backend = _make_backend()
+    backend.litellm_client.get_user.return_value = {
+        "user_id": EMAIL,
+        "user_role": "proxy_admin",
+        "metadata": {},
+    }
+
+    assert _add(backend) == {USERNAME}
+
+    backend.litellm_client.list_user_keys.assert_not_called()

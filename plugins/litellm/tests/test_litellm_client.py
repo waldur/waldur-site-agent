@@ -82,11 +82,94 @@ def test_generate_key_omits_unset_fields(mock_client_cls: mock.Mock) -> None:
 
     assert result["key"] == "sk-new"
     body = instance.request.call_args.kwargs["json"]
-    assert body == {"key_alias": "res-1", "models": ["gpt-4o"], "blocked": True}
+    assert body == {
+        "key_alias": "res-1",
+        "key_type": "llm_api",
+        "models": ["gpt-4o"],
+        "blocked": True,
+    }
     # No `key` is sent, so the proxy mints the material -- this keeps working when it
     # sets disable_custom_api_keys. No `duration` either: the keys must not expire.
     assert "key" not in body
     assert "duration" not in body
+
+
+@mock.patch("waldur_site_agent_litellm.client.httpx.Client")
+def test_create_user_uses_the_viewer_role(mock_client_cls: mock.Mock) -> None:
+    # internal_user could mint its own uncapped keys from the LiteLLM UI.
+    instance = mock_client_cls.return_value
+    instance.request.return_value = _response(json_body={"user_id": "ada@example.com"})
+
+    _client().create_user("ada@example.com", user_email="ada@example.com")
+
+    body = instance.request.call_args.kwargs["json"]
+    assert body["user_role"] == "internal_user_viewer"
+    assert body["auto_create_key"] is False
+
+
+@mock.patch("waldur_site_agent_litellm.client.httpx.Client")
+def test_list_users_walks_each_member_role_and_keeps_each_user_once(
+    mock_client_cls: mock.Mock,
+) -> None:
+    # /user/list takes one role per request; a comma-separated list matches nothing.
+    instance = mock_client_cls.return_value
+    instance.request.side_effect = [
+        _response(json_body={"users": [{"user_id": "ada@example.com"}], "total_pages": 2}),
+        _response(json_body={"users": [{"user_id": "bob@example.com"}], "total_pages": 2}),
+        # Bob was demoted between the two walks, so he lists under both roles.
+        _response(
+            json_body={
+                "users": [{"user_id": "bob@example.com"}, {"user_id": "eve@example.com"}],
+                "total_pages": 1,
+            }
+        ),
+    ]
+
+    users = _client().list_users()
+
+    assert [user["user_id"] for user in users] == [
+        "ada@example.com",
+        "bob@example.com",
+        "eve@example.com",
+    ]
+    calls = [
+        (call.kwargs["params"]["role"], call.kwargs["params"]["page"])
+        for call in instance.request.call_args_list
+    ]
+    # Legacy role first: a demotion mid-walk shows the user twice, never zero times.
+    assert calls == [
+        ("internal_user", 1),
+        ("internal_user", 2),
+        ("internal_user_viewer", 1),
+    ]
+
+
+@mock.patch("waldur_site_agent_litellm.client.httpx.Client")
+def test_list_user_keys_filters_on_the_exact_user_id(mock_client_cls: mock.Mock) -> None:
+    # Exact, not substring: ada@example.com must not list keys of ada@example.com.au.
+    instance = mock_client_cls.return_value
+    instance.request.return_value = _response(
+        json_body={"keys": [{"token": "hash-1"}], "total_pages": 1}
+    )
+
+    keys = _client().list_user_keys("ada@example.com")
+
+    assert keys == [{"token": "hash-1"}]
+    params = instance.request.call_args.kwargs["params"]
+    assert params["user_id"] == "ada@example.com"
+    assert "substring_matching" not in params
+    assert "key_alias" not in params
+
+
+@mock.patch("waldur_site_agent_litellm.client.httpx.Client")
+def test_list_users_takes_a_single_role_as_a_string(mock_client_cls: mock.Mock) -> None:
+    instance = mock_client_cls.return_value
+    instance.request.return_value = _response(json_body={"users": [], "total_pages": 0})
+
+    _client().list_users("proxy_admin")
+
+    roles = [call.kwargs["params"]["role"] for call in instance.request.call_args_list]
+    assert roles == ["proxy_admin"]
 
 
 @mock.patch("waldur_site_agent_litellm.client.httpx.Client")
