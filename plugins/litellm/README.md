@@ -436,6 +436,154 @@ It turns the offering from "API keys" into "API keys **and** a chat product", wi
 from both surfaces billed to the same Waldur resource — the thing the customer actually
 asks for when they say they want to see one number.
 
+### Deployment checklist
+
+Everything the identity provider, LiteLLM, Open WebUI and Waldur must agree on, in the
+order it is set up. Items that have a section explaining them link to it; the sections
+below carry the reasoning, this list the settings. It assumes chat by project membership
+with `account_provisioning: sso`; the differences for
+[chat that follows the key](#chat-that-follows-the-key) are marked.
+
+**Identity provider.** Waldur and Open WebUI sign people in through the **same** OIDC
+provider, as two clients of it. The agent takes a person's address from their Waldur
+user's email and Open WebUI stores the `email` claim of their login, so the claim has to
+be present and has to be the address Waldur holds. How the provider itself is set up is
+out of scope here. See [Running behind an identity
+provider](#running-behind-an-identity-provider-sso).
+
+**LiteLLM proxy.**
+
+1. Map the forwarded header onto the user, as in
+   [How the two systems are married](#how-the-two-systems-are-married), and keep personal
+   key creation to admins, as in
+   [What a member can do on the proxy itself](#what-a-member-can-do-on-the-proxy-itself):
+
+   ```yaml
+   general_settings:
+     user_header_mappings:
+       - header_name: X-OpenWebUI-User-Email
+         litellm_user_role: internal_user
+   litellm_settings:
+     key_generation_settings:
+       personal_key_generation:
+         allowed_user_roles: ["proxy_admin"]
+   ```
+
+   `litellm_user_role: internal_user` only selects the mapping the proxy reads; it gives
+   nobody that role. If the proxy's admin UI also signs people in through the identity
+   provider, have the provider send no LiteLLM role for project members, or map them to
+   `internal_user_viewer`: a provider that says `internal_user` hands a member key creation
+   back on every UI login.
+
+2. Create the **shared key** Open WebUI calls the proxy with. The plugin neither creates
+   nor manages it, so it is the operator's. In the LiteLLM admin UI (`/ui`; by default the
+   user `admin` with the master key as password), open **Virtual Keys** → **Create New
+   Key**:
+
+   - **Owned By**: You.
+   - **Key Name**: `openwebui-shared`. This is the key's alias, see below.
+   - **Models**: empty, which allows every model.
+   - Under **Optional Settings**, leave **Max Budget (USD)**, **Tokens per minute Limit
+     (TPM)**, **Requests per minute Limit (RPM)** and **Tokens per day Limit (TPD)** empty.
+
+   **Create Key** shows the generated value once ("Save your Key"); it goes into Open
+   WebUI's connection below. To script it instead:
+
+   ```bash
+   curl -X POST "$LITELLM_URL/key/generate" -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+     -H 'Content-Type: application/json' -d '{"key_alias": "openwebui-shared"}'
+   ```
+
+   - Give it an alias (Key Name) that does **not** end in `-<digits>` (`openwebui-shared`,
+     not `openwebui-shared-2`). The plugin recognises the keys it minted by that suffix
+     alone, and [usage billing](#how-chat-usage-is-billed) skips chat served on such a key,
+     so a shared key aliased that way leaves every person's chat unbilled.
+   - A budget or rate limit on it, or on a user it belongs to, caps chat for **everyone** on
+     the instance at once, every tenant together: chat requests are checked against the
+     shared key and its owner, never the person (see "What that header does" below).
+     Limits come from Waldur instead: the resource's spending limits (report, then pause,
+     for every member at once), or per person only through their assigned key in
+     [chat that follows the key](#chat-that-follows-the-key).
+   - Through the API, a key value you pick yourself (`"key"`) must start with `sk-` and be
+     at least 16 characters long, or LiteLLM refuses it. The UI always generates one.
+
+**Open WebUI**, environment variables. None of these can be changed in the admin settings
+by default, so they are set on the container:
+
+```text
+# Bill each request to the person signed in
+ENABLE_FORWARD_USER_INFO_HEADERS=true
+# Models for everyone; set false for chat that follows the key
+BYPASS_MODEL_ACCESS_CONTROL=true
+# Sign-in through the identity provider; SSO logins create accounts
+OPENID_PROVIDER_URL=https://idp.example.org/realms/<realm>/.well-known/openid-configuration
+OAUTH_CLIENT_ID=<client id>
+OAUTH_CLIENT_SECRET=<client secret>
+OAUTH_SCOPES=openid email profile
+OPENID_REDIRECT_URI=https://chat.example.org/oauth/oidc/login/callback
+ENABLE_OAUTH_SIGNUP=true
+```
+
+- `ENABLE_FORWARD_USER_INFO_HEADERS` must be set before the first chat: without it no
+  request carries the person's address and chat goes unbilled.
+- The OIDC settings appear under Settings → Admin → **Authentication** → **OAuth / OIDC**,
+  greyed out: they are read from the environment on every start. Only with
+  `ENABLE_OAUTH_PERSISTENT_CONFIG=true` can they be edited there, and a provider change
+  then needs a restart.
+
+Then, in this order:
+
+1. **Create the admin account** before anyone else can reach the URL. The first account
+   becomes an administrator the agent can never manage, see [Running behind an identity
+   provider](#running-behind-an-identity-provider-sso).
+2. As that admin, open the user menu → **Settings**, and under **Admin**:
+   - **Authentication** → **User Access**: **Default User Role** `pending`, **API Keys**
+     on. **Save**. Check that **New Sign Ups** is off: Open WebUI turns it off itself when
+     the first account signs up, so it only needs switching back if someone enabled it.
+   - **Connections** → **OpenAI API**: **Add Connection** (or **Configure** the existing
+     one) with **URL** `https://litellm.example.org/v1`, **Auth** Bearer and **API Key** the
+     shared key. **Save**.
+3. Under **Settings** → **Account** → **API keys**, press **Show**, then **Create new secret
+   key** under **API Key**. That value is the agent's `openwebui.api_token`. Not the **JWT
+   Token** above it, which expires, see
+   [What the Open WebUI deployment must have](#what-the-open-webui-deployment-must-have).
+
+- **For an unattended deployment** the same settings can be given to the first start
+  instead: `ENABLE_SIGNUP=false`, `DEFAULT_USER_ROLE=pending`, `ENABLE_API_KEYS=true`,
+  `OPENAI_API_BASE_URL` and `OPENAI_API_KEY`. With the default
+  `ENABLE_PERSISTENT_CONFIG=true` Open WebUI copies each of them (and `DEFAULT_GROUP_ID`)
+  into its database on the first start that finds it missing there, and ignores the
+  variable from then on. That is the first boot for these; a setting a later Open WebUI
+  release introduces is copied on the first start after the upgrade, from whatever the
+  environment holds then. So on a running instance they change only in the admin
+  settings or the admin API. Starting with
+  `ENABLE_PERSISTENT_CONFIG=false` makes the environment authoritative instead, and loses
+  whatever is changed in the admin settings at the next restart.
+- **Chat that follows the key** also needs the offering's `models` setting,
+  `DEFAULT_GROUP_ID` empty (Authentication → **Default Group** None), group sync from the
+  identity provider off, and the task models unset. See [its list](#chat-that-follows-the-key).
+
+Labels verified against Open WebUI 0.13.3 and LiteLLM 1.109.1.
+
+**Waldur offering.** Set the offering's `plugin_options` listed in
+[What the Waldur offering must have](#what-the-waldur-offering-must-have), and
+`action_on_usage_limit: pause` with spending limits on `token_cost`, as in
+[Limit enforcement](#limit-enforcement); without it the uncapped shared key leaves chat
+with no limit anywhere.
+
+**Site agent.** Add the `openwebui:` block under the offering's `backend_settings` (see
+[Chat surface settings](#chat-surface-settings-openwebui-nested-under-the-management-settings)),
+configure the backends as in [Composed offering](#composed-offering-both-backends)
+(`order_processing_backend` and `membership_sync_backend: litellm`, `reporting_backend:
+litellm-usage`), and run the `order_process`, `membership_sync` and `report` modes. A
+person who signs in to Open WebUI for the first time stays `pending` until the next
+membership sync (5 minutes by default), which opens the account if they are entitled to
+chat. Under STOMP membership sync a first sign-in sends no message, so it waits for the
+resource status reconciliation instead
+(`WALDUR_SITE_AGENT_RESOURCE_STATUS_RECONCILIATION_MINUTES`, 60 by default). A resource
+that holds no API keys is the exception for now: the pass that opens the account stops
+before it on such a resource, so its members stay `pending` until it has a key.
+
 ### How the two systems are married
 
 By **email**, because nothing else is available. Open WebUI mints its own opaque user id
@@ -659,9 +807,11 @@ resource being terminated) and never on pause.
 
 ### What the Open WebUI deployment must have
 
-Verified against `ghcr.io/open-webui/open-webui:main` on 2026-09-03. Three settings on
-the Open WebUI side are load-bearing; with any of them wrong the integration fails in a
-way that looks like a Waldur bug.
+Verified against `ghcr.io/open-webui/open-webui:main` on 2026-09-03. The full list of
+settings is in the [Deployment checklist](#deployment-checklist); these three, together
+with the account settings under [Running behind an identity
+provider](#running-behind-an-identity-provider-sso), are the ones that fail in a way that
+looks like a Waldur bug.
 
 - **`ENABLE_FORWARD_USER_INFO_HEADERS=True`** — the whole design rests on it. Without
   it every request bills to the shared key's owner and per-person attribution returns
@@ -684,8 +834,11 @@ each model by hand, repeated whenever the proxy's model list changes.
 **`ENABLE_API_KEYS` is a persistent config**, stored in the database on first boot, after
 which the environment variable is ignored — setting it on an existing container does
 nothing. Change it through `POST /api/v1/auths/admin/config`, which requires the entire
-document, so read it and write it back. Many Open WebUI settings behave this way; treat
-env vars as first-boot defaults rather than as configuration.
+document, so read it and write it back. `DEFAULT_USER_ROLE` and `ENABLE_SIGNUP` are
+stored the same way and live in that document too; the proxy connection is stored as well,
+and changed under Settings → Admin → Connections. The
+[Deployment checklist](#deployment-checklist) lists which of the settings this integration
+needs are stored and which are not.
 
 Use an **API key**, not a session JWT, for `openwebui.api_token`: `JWT_EXPIRES_IN`
 defaults to `4w`, so an agent configured with a JWT works for a month and then fails
@@ -731,11 +884,15 @@ because "they can still log in" otherwise reads as a failure to revoke.
 Verified against Keycloak 26.0 on 2026-09-03: an OIDC login for an address Open WebUI
 has never seen creates the account, stores **exactly** the address the `email` claim
 asserts, and lands it in `pending`; chatting is refused with 401 until the agent
-promotes it. So the address match that the whole design rests on is structural under
-SSO rather than coincidental — provided Waldur and Open WebUI authenticate against the
-same provider.
+promotes it, on its next membership sync (under STOMP, the next resource status
+reconciliation). Until then the person sees Open WebUI's
+"awaiting approval" screen, and nothing in Waldur says why. So the address match that
+the whole design rests on is structural under SSO rather than coincidental — provided
+Waldur and Open WebUI authenticate against the same provider. Re-verified against
+Open WebUI 0.13.3 on 2026-11-15.
 
-Three things about account creation that are easy to get wrong:
+Three things about account creation that are easy to get wrong (all of them in the
+[Deployment checklist](#deployment-checklist)):
 
 - **`ENABLE_OAUTH_SIGNUP` must be on.** It governs OIDC account creation, and the agent
   cannot create SSO accounts itself. `ENABLE_SIGNUP` is a *different* flag covering only
@@ -903,7 +1060,7 @@ Two limits of this design are accepted:
 - **Per-minute limits do not apply in chat.** Chat authenticates as the shared key, which
   the proxy checks instead.
 
-What the Open WebUI deployment needs on top of the list above:
+What the Open WebUI deployment needs on top of the [Deployment checklist](#deployment-checklist):
 
 - **`BYPASS_MODEL_ACCESS_CONTROL=False`.** With it on, everyone sees every model.
 - **The offering's `models` setting.** It is the list the plugin makes groups for; without
