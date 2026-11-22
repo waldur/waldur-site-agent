@@ -20,6 +20,8 @@ import datetime
 import math
 import time as _time
 from collections.abc import Collection
+from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import Enum
 from http import HTTPStatus
 from time import sleep
@@ -110,6 +112,7 @@ from waldur_api_client.models.backend_resource_request_backend_metadata import (
 from waldur_api_client.models.backend_resource_request_set_erred_request import (
     BackendResourceRequestSetErredRequest,
 )
+from waldur_api_client.models.billing_type_enum import BillingTypeEnum
 from waldur_api_client.models.check_unique_backend_id_request import CheckUniqueBackendIDRequest
 from waldur_api_client.models.component_usage import ComponentUsage
 from waldur_api_client.models.component_usage_field_enum import ComponentUsageFieldEnum
@@ -182,6 +185,7 @@ from waldur_site_agent.common import (
     resource_api_keys,
     spending_limits,
     structures,
+    usage_accrual,
     utils,
 )
 from waldur_site_agent.common.healthz import touch_heartbeat
@@ -3935,6 +3939,67 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 )
 
 
+def _month_figure(amounts: list, summed: bool) -> float:
+    """What a component's rows for one month add up to.
+
+    A plan switch inside the month leaves one row per plan. For a usage-billed
+    component Waldur takes a report as the month's total and keeps the remainder on
+    the current plan's row, so the month is their sum; for any other component it
+    writes the full amount to each row, so the latest (largest) one is the figure.
+    """
+    return sum(amounts) if summed else max(amounts)
+
+
+def _summed_types(waldur_components: Optional[list]) -> Optional[set]:
+    """Component types whose rows sum to the month's figure (see _month_figure).
+
+    Usage-billed ones, and those whose billing type is not known here, which are
+    taken as usage-billed. None when the offering's components are not known.
+    """
+    if waldur_components is None:
+        return None
+    return {
+        component.type_
+        for component in waldur_components
+        if isinstance(getattr(component, "type_", None), str)
+        and (
+            isinstance(getattr(component, "billing_type", UNSET), type(UNSET))
+            or component.billing_type == BillingTypeEnum.USAGE
+        )
+    }
+
+
+# Past billing periods a resource needs nothing more for in this process: an
+# accrued component closed at the month's end, or a past-month write Waldur refused
+# because that month's invoice can no longer change. Rebuilt on restart.
+_SETTLED_PAST_PERIODS: set = set()
+# Months back a settled period is remembered for; older ones are never reported.
+_SETTLED_MONTHS_KEPT = 13
+
+
+def _settle_past_period(resource_uuid: str, year: int, month: int) -> None:
+    _SETTLED_PAST_PERIODS.add((resource_uuid, year, month))
+    oldest = max(y * 12 + m for _, y, m in _SETTLED_PAST_PERIODS) - _SETTLED_MONTHS_KEPT
+    for stale in [k for k in _SETTLED_PAST_PERIODS if k[1] * 12 + k[2] < oldest]:
+        _SETTLED_PAST_PERIODS.discard(stale)
+
+
+@dataclass
+class _Accrued:
+    """What accruing a period's levels produced, for the submission."""
+
+    # The totals to report: accrued components' new totals, the others as they came.
+    totals: dict
+    # The new checkpoint of each accrued component reported.
+    descriptions: dict = field(default_factory=dict)
+    # The period's usage rows as read, for the submission to reuse.
+    rows: Optional[list] = None
+    # Accrued components whose checkpoint has to be written this pass.
+    forced: set = field(default_factory=set)
+    # Accrued components left out on purpose: closed, or not measured.
+    omitted: set = field(default_factory=set)
+
+
 class OfferingReportProcessor(OfferingBaseProcessor):
     """Processor for collecting and reporting usage data from backends to Waldur.
 
@@ -4082,6 +4147,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 ResourceFieldEnum.ATTRIBUTES,
                 ResourceFieldEnum.OFFERING_PLUGIN_OPTIONS,
                 ResourceFieldEnum.OFFERING_BACKEND_ID,
+                # A backend may scope what it reads to the resource's lifetime.
+                ResourceFieldEnum.CREATED,
             ],
         )
         if not waldur_resources:
@@ -4150,7 +4217,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         self,
         component_type: str,
         current_usage: float,
-        existing_usages: list[ComponentUsage] | None,
+        existing_usages: Optional[list[ComponentUsage]],
+        summed_types: Optional[Collection[str]] = None,
     ) -> bool:
         """Check if the current usage is lower than existing usage."""
         if self.resource_backend.supports_decreasing_usage:
@@ -4163,16 +4231,18 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         if not component_usages:
             return False
 
+        summed = summed_types is None or component_type in summed_types
         if len(component_usages) > 1:
-            logger.error(
-                "Found multiple usage records for component %s in the same billing period: %d",
-                component_type,
+            # A plan switch inside the month leaves one row per plan; see
+            # _month_figure for what the report must not fall below.
+            logger.info(
+                "Found %d usage records for component %s in the billing period; "
+                "comparing against their %s",
                 len(component_usages),
+                component_type,
+                "sum" if summed else "largest",
             )
-            return True
-
-        component_usage = component_usages[0]
-        existing_usage = float(component_usage.usage)
+        existing_usage = _month_figure([float(u.usage) for u in component_usages], summed)
         if current_usage < existing_usage:
             logger.error(
                 "Usage anomaly detected for component %s: "
@@ -4193,6 +4263,10 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         report_date: Optional[datetime.datetime] = None,
         billing_period_start: Optional[datetime.date] = None,
         daily_usage: Optional[dict[str, dict[str, float]]] = None,
+        descriptions: Optional[dict[str, str]] = None,
+        existing_usages: Optional[list[ComponentUsage]] = None,
+        must_write: Collection[str] = (),
+        left_out: Collection[str] = (),
     ) -> list[str]:
         """Reports total usage for a backend resource to Waldur.
 
@@ -4219,6 +4293,15 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 in it are then reported per day (``daily_usages``) instead of as a month
                 total: Waldur derives their month from the days, and refuses a month total
                 beside them. The comparisons above still use the month totals.
+            descriptions: A description per component type, sent with its amount. The
+                accrual checkpoint of an accrued component travels in it.
+            existing_usages: The period's usage rows, when the caller has just read
+                them; read here otherwise.
+            must_write: Components to submit even when every amount is unchanged: an
+                accrual checkpoint that has to move.
+            left_out: Components deliberately absent from ``total_usage`` (an accrued
+                one that is closed or was not measured); their rows do not count as
+                a change.
 
         Returns:
             Component types omitted from ``set_usage`` because they decreased.
@@ -4259,16 +4342,17 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         # Used for two purposes:
         #   1) idempotency check below (skip set_usage when nothing changed)
         #   2) anomaly detection on non-decreasing-usage backends
-        existing_usages = marketplace_component_usages_list.sync_all(
-            client=self.waldur_rest_client,
-            resource_uuid=resource_uuid,
-            billing_period=billing_period_start,
-            field=[
-                ComponentUsageFieldEnum.UUID,
-                ComponentUsageFieldEnum.TYPE,
-                ComponentUsageFieldEnum.USAGE,
-            ],
-        )
+        if existing_usages is None:
+            existing_usages = marketplace_component_usages_list.sync_all(
+                client=self.waldur_rest_client,
+                resource_uuid=resource_uuid,
+                billing_period=billing_period_start,
+                field=[
+                    ComponentUsageFieldEnum.UUID,
+                    ComponentUsageFieldEnum.TYPE,
+                    ComponentUsageFieldEnum.USAGE,
+                ],
+            )
 
         # Idempotency: skip set_usage when the reported usage matches every
         # existing record. Avoids fanning out the marketplace post_save
@@ -4276,7 +4360,13 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         # backend reports no change. Particularly impactful for backends
         # that report on every cycle regardless of activity (e.g.
         # CSCS-DWDI reports zero usage for accounts with no jobs).
-        if self._usage_matches_existing(total_usage, existing_usages, component_types):
+        # An accrued checkpoint that has to move is written whatever the amounts.
+        descriptions = descriptions or {}
+        summed = _summed_types(waldur_components)
+        compared = [u for u in existing_usages if u.type_ not in left_out]
+        if not must_write and self._usage_matches_existing(
+            total_usage, compared, component_types, summed
+        ):
             logger.info(
                 "Usage unchanged for resource %s in billing period %s; "
                 "skipping set_usage submission.",
@@ -4334,8 +4424,13 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             )
 
             for component, amount in list(total_usage.items()):
-                if component in component_types and self._check_usage_anomaly(
-                    component, amount, aggregate_usages
+                # An accrued component is Waldur's own figure plus an increment, so
+                # it cannot fall, and after a plan switch it legitimately has one
+                # row per plan, which the check would read as an anomaly.
+                if (
+                    component in component_types
+                    and component not in descriptions
+                    and self._check_usage_anomaly(component, amount, aggregate_usages, summed)
                 ):
                     skipped_components.append(component)
 
@@ -4363,8 +4458,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 # Remaining amounts may already match Waldur. Do not use
                 # `_usage_matches_existing` here: that helper treats omitted
                 # types as disappearances and would force a resubmit.
-                if self._reported_amounts_match_existing(
-                    total_usage, existing_usages, component_types
+                if not must_write and self._reported_amounts_match_existing(
+                    total_usage, existing_usages, component_types, summed
                 ):
                     logger.info(
                         "Usage unchanged for resource %s in billing period %s "
@@ -4394,7 +4489,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 & {component for usages in daily_usage.values() for component in usages}
             )
         usage_objects = [
-            ComponentUsageItemRequest(type_=component, amount=f"{amount:.2f}")
+            ComponentUsageItemRequest(
+                type_=component,
+                amount=f"{amount:.2f}",
+                description=descriptions.get(component, UNSET),
+            )
             for component, amount in total_usage.items()
             if component in component_types and component not in by_day
         ]
@@ -4423,6 +4522,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         total_usage: dict[str, float],
         existing_usages: list[ComponentUsage],
         component_types: list[str],
+        summed_types: Optional[Collection[str]] = None,
     ) -> bool:
         """Return True when the reported usage matches what Waldur already has.
 
@@ -4440,14 +4540,15 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             # missing either field rather than treating them as a match.
             if isinstance(u.type_, type(UNSET)) or isinstance(u.usage, type(UNSET)):
                 continue
-            if u.type_ in existing_by_type:
-                # Duplicate record for the same type — unexpected; bail out
-                # and let set_usage reconcile.
-                return False
             try:
-                existing_by_type[u.type_] = float(u.usage)
+                # One row per plan after a switch; see _month_figure.
+                amount = float(u.usage)
             except (TypeError, ValueError):
                 return False
+            existing_by_type[u.type_] = _month_figure(
+                [existing_by_type[u.type_], amount] if u.type_ in existing_by_type else [amount],
+                summed_types is None or u.type_ in summed_types,
+            )
 
         if set(new_pairs) != set(existing_by_type):
             return False
@@ -4471,6 +4572,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         total_usage: dict[str, float],
         existing_usages: list[ComponentUsage],
         component_types: list[str],
+        summed_types: Optional[Collection[str]] = None,
     ) -> bool:
         """Return True when every component about to be submitted matches Waldur.
 
@@ -4486,12 +4588,15 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         for u in existing_usages:
             if isinstance(u.type_, type(UNSET)) or isinstance(u.usage, type(UNSET)):
                 continue
-            if u.type_ in existing_by_type:
-                return False
             try:
-                existing_by_type[u.type_] = float(u.usage)
+                # One row per plan after a switch; see _month_figure.
+                amount = float(u.usage)
             except (TypeError, ValueError):
                 return False
+            existing_by_type[u.type_] = _month_figure(
+                [existing_by_type[u.type_], amount] if u.type_ in existing_by_type else [amount],
+                summed_types is None or u.type_ in summed_types,
+            )
 
         for ctype, amount in new_pairs.items():
             if ctype not in existing_by_type:
@@ -4591,6 +4696,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 ResourceFieldEnum.UUID,
                 ResourceFieldEnum.NAME,
                 ResourceFieldEnum.BACKEND_ID,
+                # Where accrual of a level starts for a resource never reported.
+                ResourceFieldEnum.CREATED,
             ],
         )
 
@@ -4654,6 +4761,9 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                         month,
                         resource_backend_id,
                     )
+                    # The same write would be refused on every pass; a backend that
+                    # accrues levels skips that month from now on.
+                    _settle_past_period(waldur_resource.uuid.hex, year, month)
                 else:
                     logger.warning(
                         "Past period %04d-%02d rejected (HTTP 400) for resource %s: %s",
@@ -4775,6 +4885,219 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         )
         return report.get(resource_backend_id, {})
 
+    def _accrue_levels(
+        self,
+        waldur_resource_info: WaldurResource,
+        backend_resource_info: BackendResourceInfo,
+        total_usage: dict[str, float],
+        accrued: dict[str, int],
+        year: int,
+        month: int,
+        is_current: bool,
+    ) -> _Accrued:
+        """Turn the levels of accrued components into the period's totals.
+
+        For the current month, each component's total grows by the level its
+        checkpoint recorded times the time since that checkpoint. For a past month,
+        the month is closed: if its checkpoint stops short of the month's end, the
+        rest is accrued the same way. See ``BaseBackend.accrued_usage_components``
+        and ``common/usage_accrual.py``.
+
+        A component whose level the backend did not measure this pass is left out,
+        so its total and checkpoint stay as they are and the next pass bills the gap.
+        """
+        tz = self._get_reporting_timezone() or datetime.timezone.utc
+        period_start = datetime.datetime(year, month, 1, tzinfo=tz)
+        next_year, next_month_index = divmod(year * 12 + month, 12)
+        period_end = datetime.datetime(next_year, next_month_index + 1, 1, tzinfo=tz)
+        measured = (backend_resource_info.usage or {}).get("TOTAL_ACCOUNT_USAGE") or {}
+        levels = {c: measured[c] for c in accrued if measured.get(c) is not None}
+        outcome = _Accrued(totals={c: v for c, v in total_usage.items() if c not in accrued})
+        period_key = (waldur_resource_info.uuid.hex, year, month)
+        if not is_current and period_key in _SETTLED_PAST_PERIODS:
+            # Closed already, or refused by Waldur: nothing to read or write again.
+            outcome.omitted = set(accrued)
+            return outcome
+        # Closing a past month bills its tail at its checkpoint's level, so it does
+        # not need a measurement from this pass; the current month does.
+        if is_current:
+            outcome.omitted = set(accrued) - set(levels)
+            if not levels:
+                return outcome
+
+        # Read with every field the submission needs too, so it need not read again.
+        outcome.rows = marketplace_component_usages_list.sync_all(
+            client=self.waldur_rest_client,
+            resource_uuid=waldur_resource_info.uuid.hex,
+            billing_period=period_start.date(),
+            field=[
+                ComponentUsageFieldEnum.UUID,
+                ComponentUsageFieldEnum.TYPE,
+                ComponentUsageFieldEnum.USAGE,
+                ComponentUsageFieldEnum.DESCRIPTION,
+            ],
+        )
+        rows_by_type: dict[str, list[ComponentUsage]] = {}
+        for row in outcome.rows:
+            if isinstance(row.type_, str):
+                rows_by_type.setdefault(row.type_, []).append(row)
+
+        now = usage_accrual.utcnow()
+        until = min(now, period_end) if is_current else period_end
+        created = getattr(waldur_resource_info, "created", None)
+        if isinstance(created, datetime.datetime):
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=datetime.timezone.utc)
+            fresh_start = max(period_start, created)
+        else:
+            fresh_start = period_start
+        max_gap = self.resource_backend.max_accrual_gap_seconds
+        # A quiet resource's checkpoint may lag the last pass by up to half the gap
+        # (see the write rule below), so an outage is capped only after the full
+        # gap on top of that lag.
+        cap_from_checkpoint = max_gap + max_gap // 2
+        # Read on the first component that needs it; None when it could not be read.
+        opening_levels: Optional[dict] = None
+        opening_read = False
+        # Past-month components whose tail this pass closes.
+        closing: set = set()
+
+        for component, unit_seconds in accrued.items():
+            if is_current and component not in levels:
+                continue
+            rows = rows_by_type.get(component, [])
+            amounts = [float(row.usage) for row in rows if not isinstance(row.usage, type(UNSET))]
+            stored = sum(amounts) if amounts else None
+            checkpoint = usage_accrual.latest_checkpoint([row.description for row in rows])
+            opening_level: Optional[float] = None
+            if is_current:
+                # Without a checkpoint, a resource never reported starts where the
+                # month (or the resource) does. A figure someone else reported is
+                # kept as it stands, and accrual runs from this pass on.
+                start = until if checkpoint is None and stored is not None else fresh_start
+                if checkpoint is None and stored is None and fresh_start == period_start:
+                    # The month's opening interval was held at the level the
+                    # previous month last recorded, not at the one measured now.
+                    if not opening_read:
+                        opening_levels = self._previous_month_levels(
+                            waldur_resource_info, period_start, accrued
+                        )
+                        opening_read = True
+                    if opening_levels is None:
+                        # The previous month could not be read: leave the component
+                        # for the next pass rather than open the month at a guess.
+                        outcome.omitted.add(component)
+                        continue
+                    opening_level = opening_levels.get(component)
+            else:
+                if checkpoint is None or checkpoint.at >= period_end:
+                    outcome.omitted.add(component)
+                    continue
+                start = period_end
+                closing.add(component)
+            measured_now = levels.get(component)
+            if not is_current and checkpoint is not None and checkpoint.level is not None:
+                # Closing a past month: its tail was held at the level its checkpoint
+                # recorded, and that is what the closing checkpoint records too, for
+                # the next month to open at. The level measured now is after the
+                # boundary.
+                level = float(checkpoint.level)
+            elif measured_now is not None:
+                level = float(measured_now)
+            else:
+                outcome.omitted.add(component)
+                continue
+            accrual = usage_accrual.accrue(
+                level=level,
+                unit_seconds=unit_seconds,
+                stored_total=stored,
+                checkpoint=checkpoint,
+                start_without_checkpoint=start,
+                until=until,
+                max_gap_seconds=cap_from_checkpoint,
+                opening_level=opening_level,
+            )
+            if accrual.capped_seconds:
+                logger.warning(
+                    "%s of %s was last accrued %.1f h before this pass; billing "
+                    "only the last %.1f h",
+                    component,
+                    waldur_resource_info.backend_id,
+                    (accrual.elapsed_seconds + accrual.capped_seconds) / 3600,
+                    accrual.elapsed_seconds / 3600,
+                )
+            logger.info(
+                "Accrued %s of %s for %04d-%02d over %.0f s, total %s; recorded level %s, "
+                "measured this pass %s",
+                component,
+                waldur_resource_info.backend_id,
+                year,
+                month,
+                accrual.elapsed_seconds,
+                accrual.total,
+                level,
+                measured_now,
+            )
+            outcome.totals[component] = float(accrual.total)
+            outcome.descriptions[component] = accrual.description
+            # Writing can wait while nothing it would record has changed: the next
+            # pass bills the longer interval at the same level. Not past half the gap
+            # cap, which is meant for outages rather than for quiet resources.
+            if (
+                checkpoint is None
+                or checkpoint.level is None
+                or checkpoint.level != Decimal(str(level))
+                or stored is None
+                or round(float(accrual.total), 2) != round(stored, 2)
+                or (until - checkpoint.at).total_seconds() >= max_gap / 2
+            ):
+                outcome.forced.add(component)
+        if not is_current and not closing:
+            # Every accrued component of that month is closed (or has nothing to
+            # close): later passes need not read its rows again.
+            _settle_past_period(*period_key)
+        return outcome
+
+    def _previous_month_levels(
+        self,
+        waldur_resource_info: WaldurResource,
+        period_start: datetime.datetime,
+        accrued: dict[str, int],
+    ) -> Optional[dict[str, float]]:
+        """The level each accrued component last recorded in the month before.
+
+        Read once per resource and month, on the month's first pass. The previous
+        month's closing checkpoint records the level its tail was billed at, so the
+        new month continues from it rather than from the level measured after the
+        boundary.
+        """
+        previous = (period_start - datetime.timedelta(days=1)).date().replace(day=1)
+        try:
+            rows = marketplace_component_usages_list.sync_all(
+                client=self.waldur_rest_client,
+                resource_uuid=waldur_resource_info.uuid.hex,
+                billing_period=previous,
+                field=[ComponentUsageFieldEnum.TYPE, ComponentUsageFieldEnum.DESCRIPTION],
+            )
+        except Exception as e:
+            # Not worth failing the whole pass for, nor worth guessing the opening
+            # level permanently: the caller leaves the component for the next pass.
+            logger.warning(
+                "Could not read %s's previous month to open this one at its level; "
+                "trying again next pass: %s",
+                waldur_resource_info.backend_id,
+                e,
+            )
+            return None
+        levels: dict[str, float] = {}
+        for component in accrued:
+            checkpoint = usage_accrual.latest_checkpoint(
+                [row.description for row in rows if row.type_ == component]
+            )
+            if checkpoint is not None and checkpoint.level is not None:
+                levels[component] = float(checkpoint.level)
+        return levels
+
     def _process_resource_period(
         self,
         waldur_resource_info: WaldurResource,
@@ -4791,6 +5114,12 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         # preserving the same timezone as get_current_time_in_timezone uses.
         tz = self._get_reporting_timezone()
         report_date = datetime.datetime(year, month, 1, tzinfo=tz)
+        accrued: dict[str, int] = getattr(
+            self.resource_backend, "accrued_usage_components", dict
+        )()
+        if not isinstance(accrued, dict):
+            # A backend that predates the hook, or a test double standing in for one.
+            accrued = {}
 
         if is_current:
             # Use current-month data already fetched by pull_resource
@@ -4808,8 +5137,10 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 month,
                 waldur_resource=waldur_resource_info,
             )
-            usages = period_report.get(resource_backend_id, {})
-            if not usages:
+            usages = dict(period_report.get(resource_backend_id, {}))
+            # A backend that accrues levels may have a past month to close even when
+            # it keeps no history of its own.
+            if not usages and not accrued:
                 logger.info(
                     "No historical data for %s in %04d-%02d, skipping",
                     resource_backend_id,
@@ -4819,6 +5150,31 @@ class OfferingReportProcessor(OfferingBaseProcessor):
                 return
 
         total_usage = usages.pop("TOTAL_ACCOUNT_USAGE", None)
+        accrual = _Accrued(totals={})
+        if accrued:
+            accrual = self._accrue_levels(
+                waldur_resource_info,
+                backend_resource_info,
+                dict(total_usage or {}),
+                accrued,
+                year,
+                month,
+                is_current,
+            )
+            total_usage = accrual.totals
+            # Per-user usage is reported as it comes, and a level is not a usage.
+            usages = {
+                user: {c: v for c, v in user_usage.items() if c not in accrued}
+                for user, user_usage in usages.items()
+            }
+            if not total_usage:
+                logger.info(
+                    "Nothing to report for %s in %04d-%02d, skipping",
+                    resource_backend_id,
+                    year,
+                    month,
+                )
+                return
         if total_usage is None:
             logger.warning(
                 "No TOTAL_ACCOUNT_USAGE for %s in %04d-%02d, skipping",
@@ -4835,6 +5191,10 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             report_date=report_date,
             billing_period_start=billing_period_start,
             daily_usage=self._daily_usage(resource_backend_id, waldur_offering, year, month),
+            descriptions=accrual.descriptions,
+            existing_usages=accrual.rows,
+            must_write=accrual.forced,
+            left_out=accrual.omitted,
         )
 
         # Skip per-user usage if the dict is empty

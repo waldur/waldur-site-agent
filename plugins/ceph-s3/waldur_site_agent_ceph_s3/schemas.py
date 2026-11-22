@@ -1,4 +1,4 @@
-"""Backend settings schema for the ceph_s3 and croit_usage backends.
+"""Backend settings schema for the ceph_s3, croit_usage and rgw_usage backends.
 
 Which keys are required depends on ``flavour``; ``settings.validate_settings``
 enforces that at backend construction. The schema lists every key the plugin
@@ -38,7 +38,7 @@ class CroitReportingSettings(BaseModel):
 
 
 class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
-    """Settings for the ``ceph_s3`` (management) and ``croit_usage`` (reporting) backends."""
+    """Settings for the ``ceph_s3`` (management), ``croit_usage`` and ``rgw_usage`` (reporting) backends."""
 
     flavour: Optional[Literal["croit", "radosgw", "CROIT", "RADOSGW"]] = Field(
         default=None, description="'croit' (default) or 'radosgw'"
@@ -100,6 +100,14 @@ class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
             "Provision an RGW account with its own root user per resource, so "
             "consumers manage IAM users and policies themselves (radosgw flavour, "
             "Ceph 20.2.2 or later)"
+        ),
+    )
+    storage_size: Optional[Literal["logical", "allocated"]] = Field(
+        default=None,
+        description=(
+            "Bucket size rgw_usage bills: 'logical' (default; the bytes stored, "
+            "as croit's statistics bill them) or 'allocated' (RGW size_actual, "
+            "including allocation overhead)"
         ),
     )
     # both

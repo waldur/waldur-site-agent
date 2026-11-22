@@ -11,7 +11,8 @@ Two **flavours** reach the same RGW concepts by different routes:
 | Talks to | croit's management API | RadosGW Admin Ops on the gateway |
 | Authenticates with | bearer token or basic auth | SigV4, as an RGW user with caps |
 | Users, keys, quotas | yes | yes |
-| GB-day metering | yes | **no** — see [Usage Reporting](#usage-reporting) |
+| GB-day metering | yes, from croit's statistics (`croit_usage`) | yes, accrued from bucket statistics (`rgw_usage`) |
+| Traffic and request metering | no | yes, from the RGW usage log (`rgw_usage`) |
 
 The flavours differ only inside the client. Everything above it — key lifecycle,
 quota mapping, metadata, Waldur plumbing — is shared.
@@ -21,10 +22,11 @@ quota mapping, metadata, Waldur plumbing — is shared.
 | Entry point | Group | Role |
 |---|---|---|
 | `ceph_s3` | `waldur_site_agent.backends` | order processing, membership sync |
-| `croit_usage` | `waldur_site_agent.backends` | reporting (croit flavour only) |
+| `croit_usage` | `waldur_site_agent.backends` | reporting from croit's statistics (croit clusters) |
+| `rgw_usage` | `waldur_site_agent.backends` | reporting from RGW's Admin Ops (radosgw flavour, any Ceph) |
 
 **Modes:** `order_process`, `membership_sync`, `event_process`, and `report` with
-`reporting_backend: croit_usage`.
+`reporting_backend: croit_usage` or `rgw_usage`.
 
 | Operation | Behaviour |
 |---|---|
@@ -33,13 +35,15 @@ quota mapping, metadata, Waldur plumbing — is shared.
 | Update limits | Updates the quotas |
 | Add / remove members | **No-op** — returns `True`; one S3 user per resource, no per-member access |
 | Pause / downscale / restore | **No-op** — returns `True` without changing quotas |
-| Usage reporting | `ceph_s3`: **No-op** (reports nothing). `croit_usage`: GB-days from croit statistics |
+| Usage reporting | `ceph_s3`: none. `croit_usage`: croit's statistics. `rgw_usage`: RGW's Admin Ops |
 
 ## Features
 
 - **Automatic S3 User Creation**: One S3 user per marketplace resource with slug-based naming
 - **Usage-Based Billing**: storage billed in GB-days, integrated from croit's
-  metrics over the billing period. Object counts are not billed
+  metrics or accrued from RGW's bucket statistics over the billing period, and,
+  with `rgw_usage`, traffic and requests from the RGW usage log. Object counts are
+  not billed
 - **Safety Quota Enforcement**: an ordered ceiling is applied as both a RadosGW
   user quota (the tenant total) and a bucket quota (per bucket)
 - **Credential Management**: two S3 access keys per resource, encrypted in Waldur and
@@ -71,8 +75,8 @@ offerings:
     stomp_enabled: true
     websocket_use_tls: false
 
-    # Backend roles. Metering is a separate backend because only croit can do
-    # it; see Usage Reporting.
+    # Backend roles. Metering is a separate backend: croit_usage reads croit's
+    # statistics, rgw_usage reads RGW itself; see Usage Reporting.
     backend_type: "ceph_s3"
     order_processing_backend: "ceph_s3"
     membership_sync_backend: "ceph_s3"
@@ -109,7 +113,7 @@ Talks Admin Ops directly to the gateway, for a Ceph cluster croit does not manag
     backend_type: "ceph_s3"
     order_processing_backend: "ceph_s3"
     membership_sync_backend: "ceph_s3"
-    # No reporting_backend: this flavour cannot meter. See Usage Reporting.
+    reporting_backend: "rgw_usage"             # see Usage Reporting
 
     backend_settings:
       flavour: "radosgw"
@@ -128,12 +132,11 @@ operator did not intend.
 
 #### Two behaviours that differ from croit
 
-- **No GB-day metering of its own.** Admin Ops exposes no stored-bytes series:
-  `/admin/usage` is bandwidth and operation counts, and bucket stats are a
-  point-in-time size. On a croit cluster, `croit_usage` can still meter it from
-  croit's statistics (see
+- **Storage is accrued, not integrated.** Admin Ops exposes no stored-bytes series,
+  only a bucket's size now, so `rgw_usage` accrues GB-days pass by pass (see
+  [Reporting from RGW itself](#reporting-from-rgw-itself-rgw_usage)). On a croit
+  cluster, `croit_usage` can integrate croit's statistics instead (see
   [Reporting for a radosgw-managed offering](#reporting-for-a-radosgw-managed-offering-on-a-croit-cluster)).
-  On plain Ceph, leave `reporting_backend` unset and bill on a fixed component.
 - **Quota enforcement overshoots.** RGW syncs bucket statistics into the
   user-quota check periodically rather than on every write. Measured on squid: a
   6 MiB ceiling against 5 MiB already stored accepted a further 7 MiB before
@@ -254,7 +257,8 @@ the flavour and is checked when the backend starts.
   token, which the client renews before it expires
 - **`password`** (croit only): API password (alternative to token)
 - **`admin_access_key`** (radosgw only, required): access key of the RGW user
-  holding `users=*;buckets=read`
+  holding `users=*;buckets=read`, plus `usage=read` for traffic metering with
+  `rgw_usage`
 - **`admin_secret_key`** (radosgw only, required): its secret
 - **`admin_path`** (radosgw only, default: `"admin"`): the value of
   `rgw_admin_entry`, if the operator renamed it
@@ -276,6 +280,9 @@ the flavour and is checked when the backend starts.
 - **`default_storage_class`** (croit only, optional): Default storage class.
   Rejected on the radosgw flavour: Admin Ops user-create takes a placement but no
   storage class
+- **`storage_size`** (`rgw_usage` only, default: `"logical"`): which bucket size is
+  billed, `logical` (the bytes stored, RGW's `size`; what croit's statistics bill)
+  or `allocated` (RGW's `size_actual`, including allocation overhead)
 
 The billing period boundary for GB-day reporting follows the **agent's global**
 `timezone`, which the reporting processor injects into the backend — the same value
@@ -294,8 +301,10 @@ would not notice; GB-days move storage-hours onto the wrong invoice.
 
 ##### Usage-Based Storage (`s3_storage`)
 
-The only billed component. Reports GB-days — storage integrated over the billing
-period — with optional safety quota enforcement:
+Reports GB-days — storage integrated or accrued over the billing period — with
+optional safety quota enforcement. With `rgw_usage`, traffic and request components
+can be billed beside it (see
+[Reporting from RGW itself](#reporting-from-rgw-itself-rgw_usage)):
 
 ```yaml
 s3_storage:
@@ -394,18 +403,16 @@ allows in a tenant name; the rendered tenant is at most 64 characters.
 
 ## Usage Reporting
 
-**On a croit cluster only, and it needs its own backend.** Set
+Metering needs its own backend, one of two:
 
-```yaml
-    reporting_backend: "croit_usage"
-```
-
-Metering reads croit's statistics subsystem, which plain Ceph does not have, so it
-lives in a separate backend class. It works for both flavours: a croit-flavoured
-offering reads croit with its own API settings, and a radosgw-flavoured offering
-needs croit's address and credentials in `croit_reporting` (see
-[Reporting for a radosgw-managed offering](#reporting-for-a-radosgw-managed-offering-on-a-croit-cluster)).
-On plain Ceph, leave `reporting_backend` unset.
+- **`croit_usage`** reads croit's statistics subsystem, so it needs a croit
+  cluster. It works for both flavours: a croit-flavoured offering reads croit with
+  its own API settings, and a radosgw-flavoured offering needs croit's address and
+  credentials in `croit_reporting` (see
+  [Reporting for a radosgw-managed offering](#reporting-for-a-radosgw-managed-offering-on-a-croit-cluster)).
+- **`rgw_usage`** reads RGW's own Admin Ops, so it works on any Ceph the radosgw
+  flavour manages, croit or not, and adds traffic and request metering (see
+  [Reporting from RGW itself](#reporting-from-rgw-itself-rgw_usage)).
 
 Leaving `reporting_backend` at `ceph_s3` reports **nothing** — deliberately, not
 zeros. A zero is a legitimate usage value and would overwrite the period's
@@ -417,6 +424,131 @@ billing period, not a reading taken at report time. Object counts are not billed
 Usage is metered **per resource**, not per key: the series is the S3 user's, so
 the resource's two access keys never enter the calculation and rotating one
 cannot change a bill.
+
+### Reporting from RGW itself (`rgw_usage`)
+
+For the radosgw flavour, plain users and [account mode](#account-mode-an-rgw-account-per-resource)
+alike. No croit, no agent-side state and no volume are needed.
+
+```yaml
+    reporting_backend: "rgw_usage"
+    backend_settings:
+      flavour: "radosgw"
+      rgw_accounts: true
+      s3_endpoint: "https://s3.example.com"
+      admin_access_key: "ADMINACCESSKEY000000"   # caps: users=*;buckets=*;accounts=*;usage=read
+      admin_secret_key: "..."
+      storage_size: "logical"                    # or "allocated"
+    backend_components:
+      s3_storage:
+        accounting_type: "usage"
+        backend_name: "storage"
+        label: "Storage"
+        measured_unit: "GB-day"
+        unit_factor: 1000000000
+        accrual_unit: "day"                      # "hour" for a GB-hour price
+      s3_egress:
+        accounting_type: "usage"
+        backend_name: "bytes_sent"               # served to clients
+        label: "Data out"
+        measured_unit: "GB"
+        unit_factor: 1000000000
+      s3_ingress:
+        accounting_type: "usage"
+        backend_name: "bytes_received"           # written by clients
+        label: "Data in"
+        measured_unit: "GB"
+        unit_factor: 1000000000
+      s3_requests:
+        accounting_type: "usage"
+        backend_name: "ops"
+        label: "Requests"
+        measured_unit: "1000 requests"
+        unit_factor: 1000
+```
+
+Any of the four may be left out. A component with another `backend_name` is not
+reported.
+
+**Storage is accrued, the way Waldur bills OpenStack usage.**
+- Each pass reads what the resource stores **now**: the sum of its bucket sizes
+  (`GET /admin/bucket?uid=…&stats=true`). In account mode the call goes through the
+  root user, which lists every bucket of the account, including those the
+  consumer's IAM users created.
+- The pass adds a level times the time since the previous pass to the month's
+  GB-days, as Waldur's OpenStack accumulator does. The interval is billed at the
+  level the previous pass measured, and the level measured now is recorded for the
+  next one, so storage is billed from the pass that first sees it. An outage longer
+  than 24 hours is billed only for 24 of them, since the level may have changed
+  anywhere in it. The 24 hours are counted after the up to 12 hours a quiet
+  checkpoint may lag (see below), so an outage shorter than a day is billed whole.
+- The checkpoint (the exact total and the moment it is accrued to) is kept in
+  Waldur, in the usage row's description, for example
+  `Accrued 123.456789 to 2026-11-21T23:40:12Z, at a level of 9.01 at that moment`.
+  A restart, a retry or a second agent instance reads the same checkpoint, so
+  nothing is counted twice, and rounding to Waldur's two decimals never drifts the
+  sum. If someone changes the figure in Waldur, accrual continues from theirs.
+- The first pass of a month closes the previous month to its last instant at the
+  level it measures. That needs `reporting_periods` of 2 or more (the default) and
+  a Waldur that still accepts that month's usage; otherwise the month's last
+  interval goes unbilled. The new month starts at its first instant, at the level
+  the previous month last recorded, or at the resource's creation.
+- A pass that changes nothing (the same level, the same rounded total) does not
+  write; the next pass bills the longer interval at the same level. An idle
+  resource is still written at least every 12 hours, so its checkpoint never gets
+  near the 24-hour cap.
+- A level is held across the whole interval since the previous pass, so storage
+  that comes and goes between two passes (30 minutes by default) is not seen, and
+  a change is billed from the pass that first sees it. Over a month the error is
+  at most one pass interval's worth of each change.
+- Past months cannot be recomputed: nothing remembers the levels. The historical
+  loader refuses a storage-only offering rather than report a month as zero.
+- A pass that cannot read the buckets reports nothing for storage and keeps the
+  checkpoint, so the next pass bills the gap (up to the cap).
+- The root user's own statistics (`GET /admin/user?stats=true`) are not used: RGW
+  refreshes them once a day by default (`rgw_user_quota_sync_interval`), so they
+  read 0 or stale.
+
+**Traffic and requests come from the RGW usage log.**
+- `GET /admin/usage` totals for the billing period: bytes sent to clients, bytes
+  received from them, and operations. The gateway logs them per bucket owner and
+  hour: the account in account mode, whichever of its users made the request, and
+  the user otherwise. Deleted buckets keep their traffic.
+- The log is kept by the cluster, so every pass reports the month's absolute
+  total, and a past month is read again for the historical loader.
+- Prerequisites on the cluster: `rgw_enable_usage_log = true` on every gateway,
+  and the `usage=read` cap on the agent's admin user
+  (`radosgw-admin caps add --uid <admin> --caps "usage=read"`); without the cap the
+  agent logs an error naming it and reports the other components.
+- Ceph ships with the usage log off, and an unwritten log reads like tenants that
+  sent nothing. Zeros are still reported, since an empty log is not a failed read.
+  But when every resource reads zero, the agent checks the last day of the log
+  across every owner (at most hourly, and not while the log has been seen written
+  that day) and logs a warning naming `rgw_enable_usage_log` when it is empty. A
+  past month that every resource read as zero is checked the same way, once; the
+  historical loader refuses such a month rather than write never-measured zeros.
+- In the reporting passes, a resource's traffic is read from its creation hour, so
+  a uid freed by a deleted resource and reused by a new one does not carry the old
+  one's traffic over, and the new resource's RGW account is looked up afresh. The
+  historical loader does not pass the resource, so it reads whole months.
+- The log is kept per UTC hour. With a reporting timezone whose offset is not a
+  whole hour, the hour that straddles a month boundary is counted wholly in one
+  month.
+- Each pass reads only what is new. The agent keeps, in memory, the totals of the
+  hours that ended over an hour ago (a gateway flushes its entries every 30 s), and
+  reads the hours settled since the previous pass plus the last hour or two. A
+  finished month is read once it has settled, then kept. A restart costs one full
+  read of the month, never a wrong figure.
+- The log grows until it is trimmed (`radosgw-admin usage trim`), and the agent
+  never trims it. It holds one entry per owner, bucket and hour, spread over
+  `rgw_usage_max_shards` (32) objects, so a month adds about
+  `720 × buckets / 32` entries to each object: 112,500 for 1,000 resources of five
+  buckets. Ceph reports `LARGE_OMAP_OBJECTS` above 200,000 entries per object
+  (`osd_deep_scrub_large_omap_object_key_threshold`), so at that size trim every
+  month once its invoices are final, keeping the previous month for the historical
+  loader (`radosgw-admin usage trim --end-date <first day of last month>`).
+- IAM API calls in account mode are logged too, with an empty bucket name, and
+  count as operations.
 
 ### Reporting for a radosgw-managed offering on a croit cluster
 

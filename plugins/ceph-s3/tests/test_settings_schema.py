@@ -10,7 +10,7 @@ import pytest
 
 from waldur_site_agent.common.structures import RootConfiguration
 
-BACKENDS = ['ceph_s3', 'croit_usage']
+BACKENDS = ['ceph_s3', 'croit_usage', 'rgw_usage']
 
 VALID_SETTINGS: dict[str, Any] = {
     "api_url": "https://croit.example.com",

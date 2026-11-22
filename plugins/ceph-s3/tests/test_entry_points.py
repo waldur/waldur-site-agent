@@ -23,6 +23,12 @@ def test_croit_usage_is_the_reporting_backend():
     assert backends["croit_usage"].load() is not backends["ceph_s3"].load()
 
 
+def test_rgw_usage_is_the_reporting_backend_without_croit():
+    backends = _backends()
+    assert "rgw_usage" in backends
+    assert backends["rgw_usage"].load() is not backends["croit_usage"].load()
+
+
 def test_the_pre_rename_name_is_gone():
     """No deployment carries croit_s3, so nothing needs it kept alive.
 

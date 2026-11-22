@@ -90,10 +90,11 @@ class TestUsageMatchesExisting(unittest.TestCase):
         existing = [self._eu("cpu", "not-a-number")]
         assert self.fn({"cpu": 100}, existing, ["cpu"]) is False
 
-    def test_duplicate_existing_type_returns_false(self) -> None:
-        # Two records for the same component-type are unexpected; safer to
-        # re-submit and let the server reconcile than to skip.
-        existing = [self._eu("cpu", 100), self._eu("cpu", 100)]
+    def test_duplicate_existing_type_is_compared_as_its_sum(self) -> None:
+        # A plan switch leaves one record per plan; Waldur takes a report as the
+        # month's total across them.
+        existing = [self._eu("cpu", 100), self._eu("cpu", 60)]
+        assert self.fn({"cpu": 160}, existing, ["cpu"]) is True
         assert self.fn({"cpu": 100}, existing, ["cpu"]) is False
 
     def test_unset_fields_are_skipped(self) -> None:
@@ -638,3 +639,26 @@ class TestSubmitTotalUsagePartialAnomaly(unittest.TestCase):
         assert amounts == {"mem": "30.00"}
         assert user_usage_mem.call_count == 1
         assert user_usage_cpu.call_count == 0
+
+
+class TestAnomalyAfterPlanSwitch(unittest.TestCase):
+    """A plan switch leaves one row per plan; a report is the month's total."""
+
+    def setUp(self) -> None:
+        self.proc = OfferingReportProcessor.__new__(OfferingReportProcessor)
+        self.proc.resource_backend = mock.MagicMock(spec=BaseBackend)
+        self.proc.resource_backend.supports_decreasing_usage = False
+        self.rows = [ComponentUsage(type_="cpu", usage="40"), ComponentUsage(type_="cpu", usage="25")]
+
+    def test_a_total_at_or_above_the_sum_is_no_anomaly(self) -> None:
+        assert self.proc._check_usage_anomaly("cpu", 65.0, self.rows) is False
+
+    def test_a_total_below_the_sum_is_one(self) -> None:
+        assert self.proc._check_usage_anomaly("cpu", 60.0, self.rows) is True
+
+    def test_limit_billed_rows_are_compared_against_the_largest(self) -> None:
+        # Waldur writes the full amount to each plan's row for non-usage components.
+        rows = [ComponentUsage(type_="cpu", usage="100"), ComponentUsage(type_="cpu", usage="150")]
+        assert self.proc._check_usage_anomaly("cpu", 160.0, rows, summed_types=set()) is False
+        assert self.proc._check_usage_anomaly("cpu", 140.0, rows, summed_types=set()) is True
+        assert OfferingReportProcessor._usage_matches_existing({"cpu": 150}, rows, ["cpu"], set()) is True

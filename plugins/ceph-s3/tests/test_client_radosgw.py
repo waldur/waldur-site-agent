@@ -228,7 +228,7 @@ class TestBucketOperations:
             )
         )
         assert client.get_user_buckets("u") == [
-            {"name": "b1", "size_bytes": 5242880, "num_objects": 5}
+            {"name": "b1", "size_bytes": 5242880, "logical_bytes": 5242880, "num_objects": 5}
         ]
 
     def test_a_bucket_with_no_statistics_reads_as_zero_not_as_an_error(self):
@@ -237,7 +237,7 @@ class TestBucketOperations:
             lambda request: httpx.Response(200, json=[{"bucket": "fresh", "usage": {}}])
         )
         assert client.get_user_buckets("u") == [
-            {"name": "fresh", "size_bytes": 0, "num_objects": 0}
+            {"name": "fresh", "size_bytes": 0, "logical_bytes": 0, "num_objects": 0}
         ]
 
 
