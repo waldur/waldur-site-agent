@@ -609,10 +609,11 @@ class TestCSCSDWDIComputeBackend:
 
         result = backend._process_api_response(api_response)
 
-        # unit_factor_reporting=2 should be applied, not unit_factor=1
-        assert result["account1"]["TOTAL_ACCOUNT_USAGE"]["nodeHours"] == 200.0
-        assert result["account1"]["user1"]["nodeHours"] == 120.0
-        assert result["account1"]["user2"]["nodeHours"] == 80.0
+        # unit_factor_reporting=2 is applied, not unit_factor=1: Waldur gets
+        # node-hours / factor, the direction the rest of the agent uses.
+        assert result["account1"]["TOTAL_ACCOUNT_USAGE"]["nodeHours"] == 50.0
+        assert result["account1"]["user1"]["nodeHours"] == 30.0
+        assert result["account1"]["user2"]["nodeHours"] == 20.0
 
     def test_unit_factor_reporting_falls_back_to_unit_factor(self) -> None:
         """Test that unit_factor is used when unit_factor_reporting is not set."""
@@ -646,9 +647,9 @@ class TestCSCSDWDIComputeBackend:
 
         result = backend._process_api_response(api_response)
 
-        # No unit_factor_reporting set, so unit_factor=3 should be used
-        assert result["account1"]["TOTAL_ACCOUNT_USAGE"]["nodeHours"] == 300.0
-        assert result["account1"]["user1"]["nodeHours"] == 300.0
+        # No unit_factor_reporting set, so unit_factor=3 is used
+        assert result["account1"]["TOTAL_ACCOUNT_USAGE"]["nodeHours"] == 33.33
+        assert result["account1"]["user1"]["nodeHours"] == 33.33
 
     def test_get_usage_report_for_period(self) -> None:
         """Test historical usage report queries the correct month."""

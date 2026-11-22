@@ -2,19 +2,142 @@
 
 import calendar
 import logging
+import math
 from datetime import date
-from typing import Any, ClassVar, Optional
+from typing import Any, Callable, ClassVar, Optional
 
 from pydantic import BaseModel
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.types import Unset
 
+from waldur_site_agent.backend import exceptions as backend_exceptions
 from waldur_site_agent.backend import structures
 from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.backends import BackendRole, BaseBackend
 from waldur_site_agent.common.structures import BackendComponent
 
 from .client import CSCSDWDIClient
+
+# The DWDI fields each backend reports. A component fills one of them: the one it
+# names with ``dwdi_field``, or else the one its name points at (``_default_field``).
+COMPUTE_FIELDS = ("nodeHours",)
+STORAGE_FIELDS = ("spaceUsed", "inodesUsed")
+INFERENCE_FIELDS = ("totalCost",)
+
+
+def _reporting_factor(component: dict[str, Any]) -> Optional[float]:
+    """The factor that turns a DWDI amount into Waldur units, or None if unusable.
+
+    DWDI reports in backend units; Waldur gets ``amount / factor``, the direction
+    every backend of the agent uses (``backend_value = waldur_value * unit_factor``).
+    ``unit_factor_reporting`` overrides ``unit_factor`` when it is set.
+    """
+    factor = component.get("unit_factor_reporting")
+    if factor is None:
+        factor = component.get("unit_factor")
+    if factor is None:
+        factor = 1
+    if isinstance(factor, bool):
+        return None
+    try:
+        factor = float(factor)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(factor) or factor <= 0:
+        return None
+    return factor
+
+
+def _map_components(
+    backend_type: str,
+    components: dict[str, dict[str, Any]],
+    fields: tuple[str, ...],
+    default_field: Callable[[str], Optional[str]],
+) -> dict[str, tuple[str, float]]:
+    """Map each component this backend can fill to its DWDI field and factor.
+
+    An offering passes all its components to its reporting backend, including the
+    ones another backend handles (a SLURM offering's ``cpu`` limit, say), so a
+    component DWDI cannot fill is normal and is left out. It is logged as an error
+    when it is billed by usage, because then nothing reports it and it goes unbilled.
+    """
+    mapping: dict[str, tuple[str, float]] = {}
+    for name, component in components.items():
+        field = component.get("dwdi_field")
+        if field is not None and field not in fields:
+            logger.error(
+                "%s: component %s names dwdi_field %r; this backend reports %s. "
+                "It will not be reported.",
+                backend_type, name, field, ", ".join(fields),
+            )
+            continue
+        if field is None:
+            field = default_field(name)
+        if field is None:
+            accounting_type = component.get("accounting_type")
+            accounting_type = getattr(accounting_type, "value", accounting_type)
+            if accounting_type == "usage":
+                logger.error(
+                    "%s: usage component %s matches none of the DWDI fields this "
+                    "backend reports (%s), so it will not be reported. Set "
+                    "dwdi_field on it, or report it with another backend.",
+                    backend_type, name, ", ".join(fields),
+                )
+            continue
+        factor = _reporting_factor(component)
+        if factor is None:
+            logger.error(
+                "%s: component %s has no usable unit factor (unit_factor %r, "
+                "unit_factor_reporting %r); it must be a positive number. "
+                "It will not be reported.",
+                backend_type, name, component.get("unit_factor"),
+                component.get("unit_factor_reporting"),
+            )
+            continue
+        mapping[name] = (field, factor)
+    return mapping
+
+
+def _compute_default_field(name: str) -> Optional[str]:
+    # Any component whose name mentions nodes counts node hours, as before
+    # (case-sensitive, so a "Nodes" limit is not billed node hours).
+    return "nodeHours" if "node" in name else None
+
+
+def _storage_default_field(name: str) -> Optional[str]:
+    lowered = name.lower()
+    if lowered == "storage" or "space" in lowered:
+        return "spaceUsed"
+    if "inodes" in lowered:
+        return "inodesUsed"
+    return None
+
+
+def _inference_default_field(name: str) -> Optional[str]:
+    return "totalCost" if name.lower() == "token_cost" else None
+
+
+def _required_amount(entry: dict[str, Any], key: str, where: str) -> float:
+    """An amount a report cannot do without; raises when DWDI left it out.
+
+    Reporting it as 0, or leaving the component out of an otherwise empty report,
+    would let the caller lower usage already recorded: the historical loader with
+    ``--reconcile-stale`` zeroes a period it gets no amount for.
+    """
+    raw_value = entry.get(key)
+    if raw_value is None:
+        msg = f"DWDI returned no {key} for {where}"
+        raise backend_exceptions.BackendError(msg)
+    return raw_value
+
+
+def _user_amount(entry: dict[str, Any], key: str, factor: float, where: str) -> Optional[float]:
+    """A user's ``entry[key] / factor``, or None with a warning when DWDI left it out."""
+    raw_value = entry.get(key)
+    if raw_value is None:
+        logger.warning("DWDI returned no %s for %s; not reporting it", key, where)
+        return None
+    return raw_value / factor
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +172,9 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
         super().__init__(backend_settings, normalized_backend_components)
         self.backend_type = "cscs-dwdi-compute"
+        self.component_fields = _map_components(
+            self.backend_type, self.backend_components, COMPUTE_FIELDS, _compute_default_field
+        )
 
         # Extract CSCS-DWDI specific configuration
         self.api_url = backend_settings.get("cscs_dwdi_api_url", "")
@@ -303,17 +429,10 @@ class CSCSDWDIComputeBackend(BaseBackend):
             Dictionary mapping component names to usage values
         """
         usage = {}
-
-        for component_name, component_config in self.backend_components.items():
-            # Look for component usage in account data
-            if "node" in component_name:
-                raw_value = account_data.get("totalNodeHours")
-                # Apply unit factor conversion (use reporting-specific factor if set)
-                unit_factor = component_config.get(
-                    "unit_factor_reporting", component_config.get("unit_factor", 1)
-                )
-                converted_value = raw_value * unit_factor
-                usage[component_name] = round(converted_value, 2)
+        account = account_data.get("account")
+        for component_name, (_field, factor) in self.component_fields.items():
+            amount = _required_amount(account_data, "totalNodeHours", f"account {account}")
+            usage[component_name] = round(amount / factor, 2)
 
         return usage
 
@@ -329,18 +448,11 @@ class CSCSDWDIComputeBackend(BaseBackend):
             Dictionary mapping component names to usage values
         """
         usage = {}
-        for component_name, component_config in self.backend_components.items():
-            # Look for component usage in user data
-            # The API should return fields that match component names
-            if "node" in component_name:
-                raw_value = user_data.get("nodeHours")
-
-                # Apply unit factor conversion (use reporting-specific factor if set)
-                unit_factor = component_config.get(
-                    "unit_factor_reporting", component_config.get("unit_factor", 1)
-                )
-                converted_value = raw_value * unit_factor
-                usage[component_name] = converted_value
+        username = user_data.get("username")
+        for component_name, (_field, factor) in self.component_fields.items():
+            value = _user_amount(user_data, "nodeHours", factor, f"user {username}")
+            if value is not None:
+                usage[component_name] = value
 
         return usage
 
@@ -393,7 +505,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
                     "No data for account %s in DWDI backend, reporting zero usage",
                     account_name,
                 )
-                empty_usage = dict.fromkeys(self.backend_components, 0.0)
+                empty_usage = dict.fromkeys(self.component_fields, 0.0)
                 return structures.BackendResourceInfo(
                     users=[],
                     usage={"TOTAL_ACCOUNT_USAGE": empty_usage},
@@ -557,6 +669,9 @@ class CSCSDWDIStorageBackend(BaseBackend):
 
         super().__init__(backend_settings, normalized_backend_components)
         self.backend_type = "cscs-dwdi-storage"
+        self.component_fields = _map_components(
+            self.backend_type, self.backend_components, STORAGE_FIELDS, _storage_default_field
+        )
 
         # Extract CSCS-DWDI specific configuration
         self.api_url = backend_settings.get("cscs_dwdi_api_url", "")
@@ -672,26 +787,11 @@ class CSCSDWDIStorageBackend(BaseBackend):
 
                 resource_id = id_to_path_map.get(path, path)
 
-                space_used_bytes = storage_entry.get("spaceUsed", 0)
-                inodes_used = storage_entry.get("inodesUsed", 0)
 
                 storage_usage: dict[str, float] = {}
-                for component_name, component_config in self.backend_components.items():
-                    if (
-                        component_name.lower() == "storage"
-                        or "space" in component_name.lower()
-                    ):
-                        unit_factor = component_config.get(
-                            "unit_factor_reporting", component_config.get("unit_factor", 1)
-                        )
-                        storage_usage[component_name] = round(
-                            space_used_bytes * (1.0 / unit_factor), 2
-                        )
-                    elif "inodes_usage" in component_name.lower():
-                        unit_factor = component_config.get(
-                            "unit_factor_reporting", component_config.get("unit_factor", 1)
-                        )
-                        storage_usage[component_name] = round(inodes_used / unit_factor, 2)
+                for component_name, (field, factor) in self.component_fields.items():
+                    amount = _required_amount(storage_entry, field, f"path {path}")
+                    storage_usage[component_name] = round(amount / factor, 2)
 
                 usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE": storage_usage}
 
@@ -743,7 +843,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
         usage = self._get_usage_report([path]).get(path)
 
         if usage is None:
-            empty_usage = dict.fromkeys(self.backend_components, 0.0)
+            empty_usage = dict.fromkeys(self.component_fields, 0.0)
             usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         return structures.BackendResourceInfo(
@@ -899,6 +999,9 @@ class CSCSDWDIInferenceBackend(BaseBackend):
 
         super().__init__(backend_settings, normalized_backend_components)
         self.backend_type = "cscs-dwdi-inference"
+        self.component_fields = _map_components(
+            self.backend_type, self.backend_components, INFERENCE_FIELDS, _inference_default_field
+        )
 
         self.filesystem = backend_settings.get("storage_filesystem", "")
         self.data_type = backend_settings.get("storage_data_type", "")
@@ -989,21 +1092,13 @@ class CSCSDWDIInferenceBackend(BaseBackend):
                     continue
 
 
-                total_cost = inference_entry.get("totalCost", 0)
 
                 resource_id = inference_entry.get("waldurResourceUuid")
 
                 inference_usage: dict[str, float] = {}
-                for component_name, component_config in self.backend_components.items():
-                    if (
-                        component_name.lower() == "token_cost"
-                    ):
-                        unit_factor = component_config.get(
-                            "unit_factor_reporting", component_config.get("unit_factor", 1)
-                        )
-                        inference_usage[component_name] = round(
-                            total_cost * (1.0 / unit_factor), 2
-                        )
+                for component_name, (_field, factor) in self.component_fields.items():
+                    total_cost = _required_amount(inference_entry, "totalCost", f"resource {uuid}")
+                    inference_usage[component_name] = round(total_cost / factor, 2)
 
 
                 usage_report[resource_id] = {"TOTAL_ACCOUNT_USAGE": inference_usage}
@@ -1054,16 +1149,15 @@ class CSCSDWDIInferenceBackend(BaseBackend):
             return None
 
         logger.info("Resource UUID %s", resource_uuid)
-        usage = self._get_usage_report([resource_uuid])
-
+        usage = self._get_usage_report([resource_uuid]).get(resource_uuid)
 
         if usage is None:
-            empty_usage = dict.fromkeys(self.backend_components, 0.0)
-            usage = {resource_uuid:{"TOTAL_ACCOUNT_USAGE": empty_usage}}
+            empty_usage = dict.fromkeys(self.component_fields, 0.0)
+            usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         return structures.BackendResourceInfo(
             users=[resource_uuid],
-            usage=usage[resource_uuid],
+            usage=usage,
             backend_id=resource_uuid,
         )
 

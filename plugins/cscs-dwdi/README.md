@@ -19,7 +19,7 @@ and leave order processing and membership sync to another backend (or unset).
 |---|---|
 | Create / terminate resource | Not supported |
 | Update limits, pause, downscale, restore | Not supported — raise `NotImplementedError` |
-| Usage reporting | Compute: node and CPU hours. Storage: space and inodes. Inference: pre-priced cost |
+| Usage reporting | Compute: node hours. Storage: space and inodes. Inference: pre-priced cost |
 
 ## Features
 
@@ -33,7 +33,7 @@ and leave order processing and membership sync to another backend (or unset).
 
 The plugin implements three separate backends to handle different types of accounting data:
 
-- **Compute Backend** (`cscs-dwdi-compute`): Reports CPU and node hour usage from HPC clusters
+- **Compute Backend** (`cscs-dwdi-compute`): Reports node-hour usage from HPC clusters
 - **Storage Backend** (`cscs-dwdi-storage`): Reports storage space and inode usage from filesystems
 - **Inference Backend** (`cscs-dwdi-inference`): Reports LLM inference cost per resource
 
@@ -44,7 +44,6 @@ The plugin implements three separate backends to handle different types of accou
 The compute backend queries the DWDI API for computational resource usage and reports:
 
 - Node hours consumed by accounts and users
-- CPU hours consumed by accounts and users
 - Account-level and user-level usage aggregation
 
 **API Endpoints Used:**
@@ -104,12 +103,6 @@ backend_components:
     unit_factor: 1
     accounting_type: "usage"
     label: "Node Hours"
-
-  cpuHours:
-    measured_unit: "cpu-hours"
-    unit_factor: 1
-    accounting_type: "usage"
-    label: "CPU Hours"
 ```
 
 ### Storage Backend Configuration
@@ -140,7 +133,7 @@ backend_settings:
 backend_components:
   storage_space:
     measured_unit: "GB"
-    unit_factor: 0.000000001  # Convert bytes to GB
+    unit_factor: 1000000000  # bytes per GB: DWDI bytes / factor = GB
     accounting_type: "usage"
     label: "Storage Space (GB)"
 
@@ -179,6 +172,41 @@ The warehouse returns a per-resource `totalCost`; the backend divides it by the 
 component's `unit_factor` (or `unit_factor_reporting`) and reports the result. Because the amount is
 already priced by DWDI, set the offering plan's `token_cost` price to 1 so Waldur records the cost
 as-is.
+
+### Unit factors and components
+
+Every backend reports `DWDI amount / factor`, where the factor is the component's
+`unit_factor_reporting` if set, otherwise its `unit_factor`. That is the direction the whole agent
+uses (`backend_value = waldur_value × unit_factor`): the factor is how many DWDI units make one
+Waldur unit. Some examples:
+
+| DWDI amount | Waldur unit | Factor |
+|---|---|---|
+| node-hours | node-hours | `1` |
+| node-hours | GPU-hours on 4-GPU nodes | `unit_factor_reporting: 0.25` |
+| bytes | GB | `1000000000` |
+| `totalCost` in EUR | EUR | `1` |
+
+Waldur stores `unit_factor` as a whole number, so a fractional factor goes in
+`unit_factor_reporting`. A factor of 0 or below is refused: the component is logged as an error
+and not reported.
+
+A component is filled from the DWDI field it names with `dwdi_field`, or else by its name:
+
+| Backend | DWDI fields | Filled by name |
+|---|---|---|
+| compute | `nodeHours` | any name containing `node` |
+| storage | `spaceUsed`, `inodesUsed` | `storage` or a name containing `space`; a name containing `inodes` |
+| inference | `totalCost` | `token_cost` |
+
+An offering passes all its components to its reporting backend, so components another backend
+handles (a SLURM `cpu` limit, say) are skipped. A component billed by usage that matches no field
+is logged as an error at startup, because nothing reports it and it would go unbilled.
+
+An amount DWDI leaves out of a row (`totalNodeHours`, `spaceUsed`, `inodesUsed`, `totalCost`) fails
+that resource's report instead of reading as 0, so recorded usage is never lowered by a malformed
+response. A missing per-user `nodeHours` skips only that user, with a warning. A resource with no
+DWDI row at all reports 0 for the components the backend fills.
 
 ## Authentication
 
