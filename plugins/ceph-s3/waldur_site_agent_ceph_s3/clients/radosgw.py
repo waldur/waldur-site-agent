@@ -7,6 +7,7 @@ answers 501), and documents no way to list users when ``?list`` does exactly
 that. ``_ERROR_CODES`` below carries the measured response codes.
 """
 
+import datetime
 import logging
 import re
 from typing import Any, Iterator, Optional
@@ -58,6 +59,13 @@ _ACCOUNT_ID_RE = re.compile(r"^RGW[0-9]{17}$")
 # Users are listed in pages so an account's members can be found on a cluster of
 # any size; ?list answers "truncated" with a marker past this many entries.
 _USER_LIST_PAGE = 1000
+
+
+def _usage_time(moment: datetime.datetime) -> str:
+    """A usage-log bound as RGW parses it: a UTC "YYYY-MM-DD HH:MM:SS" string."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=datetime.timezone.utc)
+    return moment.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 class RadosGWClient(BaseS3AdminClient):
@@ -448,10 +456,94 @@ class RadosGWClient(BaseS3AdminClient):
                     "name": bucket.get("bucket"),
                     # size_actual is the on-disk figure; size is the logical one.
                     "size_bytes": usage.get("size_actual", 0),
+                    "logical_bytes": usage.get("size", 0),
                     "num_objects": usage.get("num_objects", 0),
                 }
             )
         return normalised
+
+    # -- usage log ------------------------------------------------------------
+
+    def get_usage(
+        self, uid: str, start: datetime.datetime, end: datetime.datetime
+    ) -> dict:
+        """Traffic and operations of everything an owner's buckets served in a window.
+
+        Read from the RGW usage log, which the gateway keeps per bucket owner and
+        hour, and only while ``rgw_enable_usage_log`` is on. The owner is a user's
+        uid, or an account's id for everything in an account, whichever user made
+        the request; a root user's uid finds nothing there (measured on 20.2.5).
+
+        Needs the ``usage=read`` cap: without it RGW answers AccessDenied.
+
+        Args:
+            uid: The bucket owner: a (tenant-qualified) uid or an account id.
+            start: Start of the window; the log is hourly, so whole hours count.
+            end: End of the window.
+
+        Returns:
+            ``{"bytes_sent", "bytes_received", "ops", "successful_ops"}`` summed
+            over the window; all zero when the log holds nothing for the owner.
+        """
+        if _ACCOUNT_ID_RE.match(uid):
+            owner = uid
+        else:
+            owner = self._validate_uid(uid)
+        try:
+            payload = self._request(
+                "GET",
+                "/usage",
+                params={
+                    "uid": owner,
+                    "start": _usage_time(start),
+                    "end": _usage_time(end),
+                    "show-entries": "False",
+                    "show-summary": "True",
+                    "format": "json",
+                },
+            ).json()
+        except CephS3AuthenticationError as e:
+            raise CephS3AuthenticationError(
+                "RGW refused to read its usage log; the agent's admin user needs the "
+                "'usage=read' cap (radosgw-admin caps add --uid <admin> --caps "
+                f"usage=read): {e}"
+            ) from e
+
+        return self._sum_usage(payload, owner)
+
+    def usage_log_has_entries(
+        self, start: datetime.datetime, end: datetime.datetime
+    ) -> bool:
+        """Whether the usage log holds anything at all, for any owner, in a window.
+
+        An empty log across every owner means it is not being written
+        (``rgw_enable_usage_log`` is off by default) far more often than that
+        nobody used the cluster. RGW reads every owner's entries in the window to
+        answer, so keep the window short.
+        """
+        payload = self._request(
+            "GET",
+            "/usage",
+            params={
+                "start": _usage_time(start),
+                "end": _usage_time(end),
+                "show-entries": "False",
+                "show-summary": "True",
+                "format": "json",
+            },
+        ).json()
+        return bool((payload or {}).get("summary"))
+
+    @staticmethod
+    def _sum_usage(payload: dict, owner: str) -> dict:
+        totals = dict.fromkeys(("bytes_sent", "bytes_received", "ops", "successful_ops"), 0)
+        for summary in (payload or {}).get("summary") or []:
+            if summary.get("user") not in (None, owner):
+                continue
+            total = summary.get("total") or {}
+            for key in totals:
+                totals[key] += int(total.get(key) or 0)
+        return totals
 
     # -- accounts -----------------------------------------------------------
     #

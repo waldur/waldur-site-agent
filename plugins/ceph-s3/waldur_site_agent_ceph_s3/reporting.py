@@ -20,10 +20,8 @@ RGW account mode are metered per bucket: croit attributes an account's storage t
 its buckets and none of it to the account's users.
 """
 
-import datetime
 import json
 import os
-import zoneinfo
 from decimal import Decimal
 from typing import Optional
 
@@ -40,6 +38,7 @@ from .backend import (
     logger,
 )
 from .clients.croit import CroitClient
+from .periods import BillingPeriodMixin
 from .settings import CROIT
 from .tenant import split
 
@@ -128,7 +127,7 @@ class _BucketLedger:
             logger.warning("Could not save bucket ledger %s: %s", self.state_file, e)
 
 
-class CroitUsageBackend(CephS3Backend):
+class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
     """The management backend plus the GB-day metering only croit can do."""
 
     def __init__(
@@ -207,47 +206,6 @@ class CroitUsageBackend(CephS3Backend):
 
         return info
 
-    def _reporting_tz(self) -> datetime.tzinfo:
-        """The timezone the billing period is computed in.
-
-        Injected by the reporting processor (``processors.py``:
-        ``self.resource_backend.timezone = timezone``) from the agent's global
-        configuration — the same value it uses to decide which period a report
-        lands in, so the month boundary here cannot drift from the one there. The
-        configuration validator rejects a timezone that does not parse, so the
-        fallback below is unreachable in a configured agent; it used to be the
-        thing that made the two disagree.
-        """
-        if self.timezone:
-            try:
-                return zoneinfo.ZoneInfo(self.timezone)
-            except Exception:
-                logger.warning(
-                    "Unknown timezone %r, falling back to UTC for the billing period",
-                    self.timezone,
-                )
-        return datetime.timezone.utc
-
-    def _billing_period_start(self) -> int:
-        """Unix seconds at the start of the current billing period.
-
-        Usage accrues per calendar month, so the integral restarts here.
-        """
-        now = datetime.datetime.now(self._reporting_tz())
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        return int(month_start.timestamp())
-
-    def _period_bounds(self, year: int, month: int) -> tuple:
-        """Unix seconds bounding a calendar month in the reporting timezone."""
-        tz = self._reporting_tz()
-        start = datetime.datetime(year, month, 1, tzinfo=tz)
-        end = (
-            datetime.datetime(year + 1, 1, 1, tzinfo=tz)
-            if month == 12
-            else datetime.datetime(year, month + 1, 1, tzinfo=tz)
-        )
-        return int(start.timestamp()), int(end.timestamp())
-
     @staticmethod
     def _integrate_gb_days(
         datapoints: list[dict],
@@ -324,9 +282,10 @@ class CroitUsageBackend(CephS3Backend):
             rather than present with a zero, which would overwrite the period's
             accrued total.
         """
-        now = int(datetime.datetime.now(self._reporting_tz()).timestamp())
+        # One clock reading for both ends, so they cannot straddle a month boundary.
+        instant = self._now()
         return self._collect_usage(
-            resource_backend_ids, self._billing_period_start(), now
+            resource_backend_ids, self._billing_period_start(instant), int(instant.timestamp())
         )
 
     def get_usage_report_for_period(

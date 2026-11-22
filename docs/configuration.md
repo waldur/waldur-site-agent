@@ -414,7 +414,7 @@ plugins in this repository):
 | `digitalocean` | `waldur-site-agent-digitalocean` | DigitalOcean droplets |
 | `harbor` | `waldur-site-agent-harbor` | Harbor registry projects |
 | `nextcloud` | `waldur-site-agent-nextcloud` | Nextcloud |
-| `ceph_s3`, `croit_usage` | `waldur-site-agent-ceph-s3` | Ceph S3 users and buckets; croit usage reporting |
+| `ceph_s3`, `croit_usage`, `rgw_usage` | `waldur-site-agent-ceph-s3` | Ceph S3 users and buckets; usage reporting from croit or from RGW itself |
 | `litellm`, `litellm-usage` | `waldur-site-agent-litellm` | LiteLLM virtual keys; usage reporting |
 | `envoy`, `envoy-usage` | `waldur-site-agent-envoy-ai-gateway` | Envoy AI Gateway API keys; usage reporting |
 | `cscs-dwdi-compute`, `cscs-dwdi-storage`, `cscs-dwdi-inference` | `waldur-site-agent-cscs-dwdi` | CSCS DWDI usage reporting |

@@ -178,6 +178,12 @@ class BaseBackend(ABC):
     # ``limits`` every Waldur sends.
     supports_spending_limit_periods: bool = False
 
+    # The longest interval one reporting pass may bill for a component listed by
+    # accrued_usage_components. A longer gap, such as an agent outage, is billed only
+    # this far: the level measured at its end may have been reached just before.
+    # A day, as Waldur caps its own OpenStack accumulation.
+    max_accrual_gap_seconds: int = 86400
+
     # Capability flag: Set to True for backends that depend on a remote API during
     # order processing. The processor calls run_preflight() once per offering
     # cycle before handling orders.
@@ -383,6 +389,26 @@ class BaseBackend(ABC):
             Same structure as ``_get_usage_report``: nested dict keyed by
             resource backend ID with per-user and TOTAL_ACCOUNT_USAGE entries.
             Return ``{}`` if historical reporting is not supported.
+        """
+        return {}
+
+    def accrued_usage_components(self) -> dict[str, int]:
+        """Components this backend reports as a level rather than as a period total.
+
+        A level is what the resource holds at the moment of the pass, such as stored
+        gigabytes, from a backend that keeps no history to integrate. For these
+        components the current-period ``TOTAL_ACCOUNT_USAGE`` carries the level, and
+        the reporting processor turns it into the period's total: each pass adds the
+        level times the time since the previous pass, as Waldur accrues OpenStack
+        usage, and keeps the checkpoint in the usage row's description (see
+        ``common/usage_accrual.py``). The first pass of a month closes the previous
+        month at the level then measured. Per-user usage is not accrued, so per-user
+        entries for these components are not reported.
+
+        Returns:
+            ``{component_type: seconds in one billed unit of time}``, such as 86400
+            for a component billed in GB-days. Empty by default: every component is
+            reported as the period's total.
         """
         return {}
 
