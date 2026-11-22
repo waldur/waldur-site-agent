@@ -7,7 +7,11 @@ writes it as one JSON document that Waldur vendors.
 
 Settings marked with ``plugin_schemas.SECRET`` are listed per plugin under
 ``secret_settings``: Waldur refuses to store them, and they stay in the agent's
-own configuration file.
+own configuration file. Settings marked with ``plugin_schemas.SENSITIVE`` are
+listed under ``sensitive_settings`` (and ``sensitive_component_settings`` for
+component fields): they decide where the agent connects, what it reads, writes,
+runs or installs on its host or on customers' machines, or what access it
+grants, and Waldur limits who may change them.
 """
 
 from __future__ import annotations
@@ -38,13 +42,27 @@ def secret_paths(schema: dict[str, Any]) -> list[str]:
     Nested models are followed through ``$ref``; a dict of models contributes
     ``<field>.*`` and a list of them ``<field>[]``.
     """
+    return _marked_paths(schema, "secret")
+
+
+def sensitive_paths(schema: dict[str, Any]) -> list[str]:
+    """Return the dotted paths of every property marked sensitive in a JSON Schema.
+
+    Paths take the same form as ``secret_paths``. A secret is never listed here,
+    even if marked both ways: it belongs in ``secret_settings`` only.
+    """
+    secrets = set(secret_paths(schema))
+    return [path for path in _marked_paths(schema, "sensitive") if path not in secrets]
+
+
+def _marked_paths(schema: dict[str, Any], marker: str) -> list[str]:
     defs = schema.get("$defs", {})
     found: set[str] = set()
 
     def walk(node: object, path: str, seen: frozenset[str]) -> None:
         if not isinstance(node, dict):
             return
-        if node.get("secret") is True and path:
+        if node.get(marker) is True and path:
             found.add(path)
         ref = node.get("$ref")
         if isinstance(ref, str) and ref.startswith("#/$defs/"):
@@ -94,6 +112,11 @@ def _plugin_entry(
         "settings_schema": settings_schema,
         "component_schema": component_schema,
         "secret_settings": secret_paths(settings_schema) if settings_schema else [],
+        "sensitive_settings": sensitive_paths(settings_schema) if settings_schema else [],
+        # Per-component fields (backend_components.<type>.<path>) marked the same way.
+        "sensitive_component_settings": (
+            sensitive_paths(component_schema) if component_schema else []
+        ),
     }
     errors = {
         key: error

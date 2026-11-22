@@ -6,13 +6,13 @@ from typing import Optional
 
 from pydantic import Field
 
-from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, SENSITIVE, CommonBackendSettingsSchema
 
 
 class MUPBackendSettingsSchema(CommonBackendSettingsSchema):
     """Settings for the ``mup`` backend."""
 
-    api_url: str = Field(..., description="MUP API URL")
+    api_url: str = Field(..., description="MUP API URL", json_schema_extra=SENSITIVE)
     username: str = Field(..., description="MUP API username")
     password: str = Field(..., description="MUP API password", json_schema_extra=SECRET)
     default_research_field: Optional[int] = Field(

@@ -7,7 +7,7 @@ Pydantic models for validating plugin-specific configuration fields.
 from __future__ import annotations
 
 import sys
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.fields import FieldInfo
@@ -28,10 +28,36 @@ else:
 SECRET: dict[str, Any] = {"secret": True}
 
 
+# Pass as ``json_schema_extra`` on every non-secret settings field that decides
+# - where the agent connects, and so where its credentials go (URLs, hosts,
+#   ports, endpoints, proxies, TLS verification, kubeconfig contexts);
+# - what it reads, writes, runs or installs, on its own host (file and directory
+#   paths, binary paths, the execution mode, ownership and modes it sets as root,
+#   templates it renders) or on customers' machines (cloud-init user data, SSH
+#   keys, firewall rules, VM templates);
+# - what access it grants (roles and role maps, groups and group templates, DNs
+#   and OUs it writes under, UID/GID ranges, how users are matched, partitions).
+# The marker reaches the JSON Schema as ``"sensitive": true``; the plugin
+# catalogue lists these settings so Waldur can limit who may change them. A
+# secret is marked ``SECRET`` only, never both.
+SENSITIVE: dict[str, Any] = {"sensitive": True}
+
+# A string that may not be empty, for settings where "" would silently mean
+# something else than the value being unset (no TLS verification, binaries
+# looked up on $PATH). Usable inside Optional[...] and Union[bool, ...].
+NonEmptyStr = Annotated[str, Field(min_length=1)]
+
+
 def is_secret_field(field_info: FieldInfo) -> bool:
     """Return True when a pydantic field carries the ``SECRET`` marker."""
     extra = field_info.json_schema_extra
     return isinstance(extra, dict) and extra.get("secret") is True
+
+
+def is_sensitive_field(field_info: FieldInfo) -> bool:
+    """Return True when a pydantic field carries the ``SENSITIVE`` marker."""
+    extra = field_info.json_schema_extra
+    return isinstance(extra, dict) and extra.get("sensitive") is True
 
 
 class TargetComponentConfig(BaseModel):
@@ -110,21 +136,23 @@ class CommonBackendSettingsSchema(PluginBackendSettingsSchema):
     )
 
 
-class HomedirSettingsSchema(PluginBackendSettingsSchema):
+class HomedirSettingsSchema(CommonBackendSettingsSchema):
     """Backend settings for POSIX home directory management.
 
     These settings are consumed by core code — ``BaseBackend.create_user_homedirs``
     and the standalone ``create_homedirs_for_offering_users`` command — so they
     live here rather than in any one plugin. Any backend that declares
     ``supports_user_homedirs`` should inherit this schema so its configuration
-    validates the same way.
+    validates the same way. It extends ``CommonBackendSettingsSchema``: such a
+    backend reads the core settings every backend does.
     """
 
     enable_user_homedir_account_creation: Optional[bool] = Field(
-        default=True, description="Create home directories for users"
+        default=True, description="Create home directories for users", json_schema_extra=SENSITIVE
     )
     default_homedir_umask: Optional[str] = Field(
-        default="0077", description="Umask for created home directories"
+        default="0077", description="Umask for created home directories",
+        json_schema_extra=SENSITIVE,
     )
     homedir_base_path: Optional[str] = Field(
         default=None,
@@ -133,6 +161,7 @@ class HomedirSettingsSchema(PluginBackendSettingsSchema):
             "When set, quota is applied to {homedir_base_path}/{username}. "
             "When unset, the path is looked up from the system passwd database."
         ),
+        json_schema_extra=SENSITIVE,
     )
     homedir_quota: Optional[HomedirQuotaConfig] = Field(
         default=None,

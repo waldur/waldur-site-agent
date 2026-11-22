@@ -7,7 +7,12 @@ from typing import Annotated, Literal, Optional, Union, get_args
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 from waldur_site_agent_keycloak_client.schemas import KeycloakSettingsSchema
 
-from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
+    SENSITIVE,
+    CommonBackendSettingsSchema,
+    NonEmptyStr,
+)
 
 
 class PrometheusSettingsSchema(BaseModel):
@@ -23,6 +28,7 @@ class PrometheusSettingsSchema(BaseModel):
     url: Optional[str] = Field(
         default=None,
         description="Prometheus base URL, e.g. https://prometheus.example.org; no credentials",
+        json_schema_extra=SENSITIVE,
     )
     bearer_token: Optional[str] = Field(
         default=None,
@@ -37,9 +43,10 @@ class PrometheusSettingsSchema(BaseModel):
         description="Password for basic auth, used with 'username'",
         json_schema_extra=SECRET,
     )
-    ssl_verify: Optional[Union[bool, str]] = Field(
+    ssl_verify: Optional[Union[bool, NonEmptyStr]] = Field(
         default=None,
         description="Verify Prometheus's TLS: true/false, or a CA bundle path (default true)",
+        json_schema_extra=SENSITIVE,
     )
     timeout: Optional[float] = Field(
         default=None, description="Per-request timeout in seconds (default 30)"
@@ -104,28 +111,34 @@ class K8sUtNamespaceBackendSettingsSchema(CommonBackendSettingsSchema):
     """Settings for the ``k8s-namespace`` and ``k8s-ut-namespace`` backends."""
 
     kubeconfig_path: Optional[str] = Field(
-        default=None, description="Kubeconfig file; in-cluster config when unset"
+        default=None, description="Kubeconfig file; in-cluster config when unset",
+        json_schema_extra=SENSITIVE,
     )
     cr_namespace: Optional[str] = Field(
-        default=None, description="Namespace of the ManagedNamespace CRs (default 'waldur-system')"
+        default=None, description="Namespace of the ManagedNamespace CRs (default 'waldur-system')",
+        json_schema_extra=SENSITIVE,
     )
     namespace_prefix: Optional[str] = Field(
-        default=None, description="Prefix of managed namespaces (default 'waldur-')"
+        default=None, description="Prefix of managed namespaces (default 'waldur-')",
+        json_schema_extra=SENSITIVE,
     )
     default_role: Optional[str] = Field(
-        default=None, description="Role for members without a mapping (default 'readwrite')"
+        default=None, description="Role for members without a mapping (default 'readwrite')",
+        json_schema_extra=SENSITIVE,
     )
     role_mapping: Optional[dict[str, str]] = Field(
-        default=None, description="Waldur role to namespace role, merged over the defaults"
+        default=None, description="Waldur role to namespace role, merged over the defaults",
+        json_schema_extra=SENSITIVE,
     )
     component_quota_mapping: Optional[dict[str, str]] = Field(
         default=None, description="Waldur component to ResourceQuota key, merged over the defaults"
     )
     namespace_labels: Optional[dict[str, str]] = Field(
-        default=None, description="Labels set on managed namespaces"
+        default=None, description="Labels set on managed namespaces", json_schema_extra=SENSITIVE
     )
     namespace_annotations: Optional[dict[str, str]] = Field(
-        default=None, description="Annotations set on managed namespaces"
+        default=None, description="Annotations set on managed namespaces",
+        json_schema_extra=SENSITIVE,
     )
     quota_enabled: Optional[bool] = Field(
         default=None,
@@ -143,6 +156,7 @@ class K8sUtNamespaceBackendSettingsSchema(CommonBackendSettingsSchema):
         description=(
             "Pod Security level of new namespaces (default: the operator's own default)"
         ),
+        json_schema_extra=SENSITIVE,
     )
     allowed_security_levels: Optional[list[SecurityLevelSetting]] = Field(
         default=None,
@@ -150,12 +164,14 @@ class K8sUtNamespaceBackendSettingsSchema(CommonBackendSettingsSchema):
             "Levels the order's 'security_level' attribute may choose besides "
             "'default_security_level' (default: none)"
         ),
+        json_schema_extra=SENSITIVE,
     )
     sync_users_to_cr: Optional[bool] = Field(
         default=None, description="Write member identities into the CR (default false)"
     )
     cr_user_identity_field: Optional[str] = Field(
-        default=None, description="User field written to the CR (default 'email')"
+        default=None, description="User field written to the CR (default 'email')",
+        json_schema_extra=SENSITIVE,
     )
     cr_user_identity_lowercase: Optional[bool] = Field(
         default=None, description="Lowercase identities written to the CR (default false)"
@@ -164,7 +180,9 @@ class K8sUtNamespaceBackendSettingsSchema(CommonBackendSettingsSchema):
         default=None, description="Manage members through Keycloak groups (default false)"
     )
     keycloak_use_user_id: Optional[bool] = Field(
-        default=None, description="Look Keycloak users up by id rather than username (default true)"
+        default=None,
+        description="Look Keycloak users up by id rather than username (default true)",
+        json_schema_extra=SENSITIVE,
     )
     keycloak: Optional[KeycloakSettingsSchema] = Field(
         default=None, description="Keycloak connection, see the keycloak-client README"

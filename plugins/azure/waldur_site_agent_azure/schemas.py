@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Optional
 
 from pydantic import ConfigDict, Field
-
 from waldur_site_agent.common.plugin_schemas import (
     SECRET,
-    PluginBackendSettingsSchema,
+    SENSITIVE,
+    CommonBackendSettingsSchema,
     PluginComponentSchema,
 )
 
@@ -23,7 +23,7 @@ class AzureComponentSchema(PluginComponentSchema):
     )
 
 
-class AzureBackendSettingsSchema(PluginBackendSettingsSchema):
+class AzureBackendSettingsSchema(CommonBackendSettingsSchema):
     """Azure-specific backend settings validation.
 
     The four credential fields carry the same names as the ``options`` keys of
@@ -33,8 +33,10 @@ class AzureBackendSettingsSchema(PluginBackendSettingsSchema):
 
     model_config = ConfigDict(extra="allow")
 
-    subscription_id: str = Field(..., description="Azure subscription ID")
-    tenant_id: str = Field(..., description="Azure AD tenant ID")
+    subscription_id: str = Field(
+        ..., description="Azure subscription ID", json_schema_extra=SENSITIVE
+    )
+    tenant_id: str = Field(..., description="Azure AD tenant ID", json_schema_extra=SENSITIVE)
     client_id: str = Field(..., description="Service principal client ID")
     client_secret: str = Field(
         ..., description="Service principal client secret", json_schema_extra=SECRET
@@ -48,6 +50,7 @@ class AzureBackendSettingsSchema(PluginBackendSettingsSchema):
     default_resource_group: Optional[str] = Field(
         default=None,
         description="Resource group to place resources in; created on demand when unset",
+        json_schema_extra=SENSITIVE,
     )
     default_size: Optional[str] = Field(
         default=None, description="Default virtual machine size, e.g. 'Standard_B1s'"
@@ -71,4 +74,5 @@ class AzureBackendSettingsSchema(PluginBackendSettingsSchema):
         default=None,
         description="Address ranges allowed to reach machines over SSH, as CIDR prefixes. "
         "Without any, a machine accepts no SSH connections.",
+        json_schema_extra=SENSITIVE,
     )

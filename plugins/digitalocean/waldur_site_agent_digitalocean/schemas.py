@@ -8,7 +8,8 @@ from pydantic import ConfigDict, Field
 
 from waldur_site_agent.common.plugin_schemas import (
     SECRET,
-    PluginBackendSettingsSchema,
+    SENSITIVE,
+    CommonBackendSettingsSchema,
     PluginComponentSchema,
 )
 
@@ -23,7 +24,7 @@ class DigitalOceanComponentSchema(PluginComponentSchema):
     )
 
 
-class DigitalOceanBackendSettingsSchema(PluginBackendSettingsSchema):
+class DigitalOceanBackendSettingsSchema(CommonBackendSettingsSchema):
     """DigitalOcean-specific backend settings validation."""
 
     model_config = ConfigDict(extra="allow")
@@ -41,7 +42,7 @@ class DigitalOceanBackendSettingsSchema(PluginBackendSettingsSchema):
         default=None, description="Default size slug"
     )
     default_user_data: Optional[str] = Field(
-        default=None, description="Default cloud-init user data"
+        default=None, description="Default cloud-init user data", json_schema_extra=SENSITIVE
     )
     default_tags: Optional[list[str]] = Field(
         default=None, description="Default droplet tags"
@@ -49,16 +50,16 @@ class DigitalOceanBackendSettingsSchema(PluginBackendSettingsSchema):
 
     # Default SSH key selection
     default_ssh_key_id: Optional[int] = Field(
-        default=None, description="Default SSH key ID"
+        default=None, description="Default SSH key ID", json_schema_extra=SENSITIVE
     )
     default_ssh_key_fingerprint: Optional[str] = Field(
-        default=None, description="Default SSH key fingerprint"
+        default=None, description="Default SSH key fingerprint", json_schema_extra=SENSITIVE
     )
     default_ssh_key_name: Optional[str] = Field(
-        default=None, description="Default SSH key name"
+        default=None, description="Default SSH key name", json_schema_extra=SENSITIVE
     )
     default_ssh_public_key: Optional[str] = Field(
-        default=None, description="Default SSH public key (for create)"
+        default=None, description="Default SSH public key (for create)", json_schema_extra=SENSITIVE
     )
 
     # Optional size mapping for limit-based resize

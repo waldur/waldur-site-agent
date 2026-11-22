@@ -8,7 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from waldur_site_agent.common.plugin_schemas import (
     SECRET,
-    PluginBackendSettingsSchema,
+    SENSITIVE,
+    CommonBackendSettingsSchema,
     PluginComponentSchema,
 )
 
@@ -29,7 +30,8 @@ class OpenWebUISettingsSchema(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     api_url: str = Field(
-        ..., description="Open WebUI base URL for the admin API, e.g. https://chat.example.com"
+        ..., description="Open WebUI base URL for the admin API, e.g. https://chat.example.com",
+        json_schema_extra=SENSITIVE,
     )
     api_token: str = Field(
         ..., description="Admin API token used to manage accounts", json_schema_extra=SECRET
@@ -40,6 +42,7 @@ class OpenWebUISettingsSchema(BaseModel):
             "User-facing chat URL surfaced on the resource in the portal; "
             "defaults to not advertising a chat surface at all"
         ),
+        json_schema_extra=SENSITIVE,
     )
     account_provisioning: Optional[str] = Field(
         default="sso",
@@ -48,6 +51,7 @@ class OpenWebUISettingsSchema(BaseModel):
             "provider and the agent only ever revokes. 'managed_password': the agent "
             "creates the account with 'initial_password'"
         ),
+        json_schema_extra=SENSITIVE,
     )
     initial_password: Optional[str] = Field(
         default=None,
@@ -64,22 +68,25 @@ class OpenWebUISettingsSchema(BaseModel):
             "it to 'pending'. Demotion is the default: it ends access just as "
             "completely and keeps the person's chat history"
         ),
+        json_schema_extra=SENSITIVE,
     )
     verify_ssl: Optional[bool] = Field(
-        default=None, description="Verify Open WebUI's TLS certificate (default true)"
+        default=None, description="Verify Open WebUI's TLS certificate (default true)",
+        json_schema_extra=SENSITIVE,
     )
     timeout: Optional[float] = Field(
         default=None, description="Per-request timeout in seconds (default 30)"
     )
 
 
-class LiteLLMBackendSettingsSchema(PluginBackendSettingsSchema):
+class LiteLLMBackendSettingsSchema(CommonBackendSettingsSchema):
     """LiteLLM management backend settings validation."""
 
     model_config = ConfigDict(extra="allow")
 
     api_url: str = Field(
-        ..., description="LiteLLM proxy base URL, e.g. https://litellm.example.com"
+        ..., description="LiteLLM proxy base URL, e.g. https://litellm.example.com",
+        json_schema_extra=SENSITIVE,
     )
     api_token: str = Field(
         ..., description="LiteLLM master or admin key used for the management API",
@@ -88,6 +95,7 @@ class LiteLLMBackendSettingsSchema(PluginBackendSettingsSchema):
     models: Optional[list] = Field(
         default=None,
         description="Model allowlist pushed onto every key; omit to allow every model",
+        json_schema_extra=SENSITIVE,
     )
     budget_duration: Optional[str] = Field(
         default=None,
@@ -105,6 +113,7 @@ class LiteLLMBackendSettingsSchema(PluginBackendSettingsSchema):
     verify_ssl: Optional[bool] = Field(
         default=None,
         description="Verify the proxy's TLS certificate (default true)",
+        json_schema_extra=SENSITIVE,
     )
     timeout: Optional[float] = Field(
         default=None, description="Per-request timeout in seconds (default 30)"
@@ -145,12 +154,12 @@ class LiteLLMUsageComponentSchema(PluginComponentSchema):
     model_config = ConfigDict(extra="allow")
 
 
-class LiteLLMUsageBackendSettingsSchema(PluginBackendSettingsSchema):
+class LiteLLMUsageBackendSettingsSchema(CommonBackendSettingsSchema):
     """LiteLLM usage reporting backend settings validation."""
 
     model_config = ConfigDict(extra="allow")
 
-    api_url: str = Field(..., description="LiteLLM proxy base URL")
+    api_url: str = Field(..., description="LiteLLM proxy base URL", json_schema_extra=SENSITIVE)
     component_metrics: Optional[dict] = Field(
         default=None,
         description=(
@@ -181,6 +190,7 @@ class LiteLLMUsageBackendSettingsSchema(PluginBackendSettingsSchema):
     verify_ssl: Optional[bool] = Field(
         default=None,
         description="Verify the proxy's TLS certificate (default true)",
+        json_schema_extra=SENSITIVE,
     )
     timeout: Optional[float] = Field(
         default=None, description="Per-request timeout in seconds (default 30)"

@@ -6,14 +6,20 @@ from typing import Any, Optional, Union
 
 from pydantic import Field
 
-from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
+    SENSITIVE,
+    CommonBackendSettingsSchema,
+    NonEmptyStr,
+)
 
 
 class OkdBackendSettingsSchema(CommonBackendSettingsSchema):
     """Settings for the ``okd`` backend."""
 
     api_url: Optional[str] = Field(
-        default=None, description="OpenShift/OKD API URL (default https://localhost:8443)"
+        default=None, description="OpenShift/OKD API URL (default https://localhost:8443)",
+        json_schema_extra=SENSITIVE,
     )
     token: Optional[str] = Field(
         default=None, description="Static bearer token", json_schema_extra=SECRET
@@ -26,12 +32,15 @@ class OkdBackendSettingsSchema(CommonBackendSettingsSchema):
         ),
         json_schema_extra=SECRET,
     )
-    verify_cert: Optional[Union[bool, str]] = Field(
-        default=None, description="Verify TLS: true/false, or a CA bundle path (default true)"
+    verify_cert: Optional[Union[bool, NonEmptyStr]] = Field(
+        default=None, description="Verify TLS: true/false, or a CA bundle path (default true)",
+        json_schema_extra=SENSITIVE,
     )
     namespace_prefix: Optional[str] = Field(
-        default=None, description="Prefix of created namespaces (default 'waldur-')"
+        default=None, description="Prefix of created namespaces (default 'waldur-')",
+        json_schema_extra=SENSITIVE,
     )
     default_role: Optional[str] = Field(
-        default=None, description="Role bound to project members (default 'edit')"
+        default=None, description="Role bound to project members (default 'edit')",
+        json_schema_extra=SENSITIVE,
     )

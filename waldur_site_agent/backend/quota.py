@@ -19,6 +19,10 @@ if TYPE_CHECKING:
 
 _SUPPORTED_PROVIDERS = frozenset({"ceph_xattr", "xfs", "lustre"})
 
+# plugin_schemas.SENSITIVE, which this module cannot import: plugin_schemas
+# imports it. Marks the settings that decide what the agent runs on which path.
+_SENSITIVE = {"sensitive": True}
+
 
 class HomedirQuotaConfig(BaseModel):
     """Configuration for user home directory quotas.
@@ -36,6 +40,7 @@ class HomedirQuotaConfig(BaseModel):
     provider: str = Field(
         ...,
         description="Quota provider type: ceph_xattr, xfs, or lustre",
+        json_schema_extra=_SENSITIVE,
     )
 
     # CephFS xattr options
@@ -52,6 +57,7 @@ class HomedirQuotaConfig(BaseModel):
     mount_point: Optional[str] = Field(
         default=None,
         description="Filesystem mount point (required for xfs and lustre providers)",
+        json_schema_extra=_SENSITIVE,
     )
     block_softlimit: Optional[str] = Field(
         default=None,
