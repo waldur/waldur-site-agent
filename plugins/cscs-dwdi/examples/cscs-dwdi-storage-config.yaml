@@ -23,7 +23,7 @@ offerings:
     backend_components:
       storage_space:
         measured_unit: "GB"
-        unit_factor: 0.000000001   # bytes -> GB
+        unit_factor: 1000000000   # bytes per GB: DWDI bytes / factor = GB
         accounting_type: "usage"
         label: "Storage Space (GB)"
       storage_inodes:

@@ -20,8 +20,3 @@ offerings:
         unit_factor: 1
         accounting_type: "usage"
         label: "Node Hours"
-      cpuHours:
-        measured_unit: "cpu-hours"
-        unit_factor: 1
-        accounting_type: "usage"
-        label: "CPU Hours"
