@@ -117,6 +117,8 @@ Every key the plugin reads. Keys not listed here are ignored.
   enforced.
 - `enforce_offering_partitions` (default: `false`) — Create one association per partition of the
   Waldur offering — see [Partitions](#partitions).
+- `hostname` (deprecated) — Ignored; the agent never reads it. Accepted because older offerings
+  carried it in their plugin options, from where Waldur moved it into `backend_settings`.
 - `qos_default` (default: `normal`) — Account QoS when the resource is neither paused nor
   downscaled.
 - `qos_downscaled` (default: unset) — Account QoS while the resource is downscaled.

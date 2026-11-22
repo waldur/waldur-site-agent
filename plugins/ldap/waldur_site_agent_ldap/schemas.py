@@ -8,7 +8,7 @@ from typing import Optional
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from waldur_site_agent.common.plugin_schemas import SECRET, PluginBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, SENSITIVE, PluginBackendSettingsSchema
 
 
 # All of these derive from `str` on purpose. The backend compares them against
@@ -73,7 +73,11 @@ class AccessGroupConfig(PluginBackendSettingsSchema):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(..., description="LDAP group name (e.g., 'vpnusrgroup', 'plus')")
+    name: str = Field(
+        ...,
+        description="LDAP group name (e.g., 'vpnusrgroup', 'plus')",
+        json_schema_extra=SENSITIVE,
+    )
     attribute: str = Field(
         default="memberUid",
         description="Membership attribute: 'memberUid' (UID-based) or 'member' (DN-based)",
@@ -119,7 +123,11 @@ class ParentGroupConfig(PluginBackendSettingsSchema):
 
     model_config = ConfigDict(extra="forbid")
 
-    dn: str = Field(..., description="Full DN of the entry, e.g. 'cn=alps,ou=clusters,dc=...'")
+    dn: str = Field(
+        ...,
+        description="Full DN of the entry, e.g. 'cn=alps,ou=clusters,dc=...'",
+        json_schema_extra=SENSITIVE,
+    )
     attribute: str = Field(
         default="member",
         description="Attribute that holds the project group DNs ('member', 'uniqueMember')",
@@ -129,6 +137,7 @@ class ParentGroupConfig(PluginBackendSettingsSchema):
         description="Offerings whose projects this entry lists. Unset, only this "
         "agent's offering. Set it when several offerings share one entry, or each "
         "agent would remove the groups the others add.",
+        json_schema_extra=SENSITIVE,
     )
 
     @field_validator("offering_uuids")
@@ -153,6 +162,7 @@ class ProjectGroupsConfig(PluginBackendSettingsSchema):
     ou: str = Field(
         default="ou=projects",
         description="OU, relative to base_dn, the project groups are written under",
+        json_schema_extra=SENSITIVE,
     )
     object_classes: list[str] = Field(
         default_factory=lambda: ["top", "posixGroup"],
@@ -167,12 +177,14 @@ class ProjectGroupsConfig(PluginBackendSettingsSchema):
         default=ProjectGroupMembership.SYNC,
         description="'sync' adds and removes members to match Waldur; 'add_only' "
         "never removes one",
+        json_schema_extra=SENSITIVE,
     )
     on_gid_mismatch: GidMismatchPolicy = Field(
         default=GidMismatchPolicy.REPORT,
         description="An existing group of the same name with another gidNumber: "
         "'report' leaves it alone, 'adopt' renumbers it to Waldur's GID unless "
         "another entry holds that GID",
+        json_schema_extra=SENSITIVE,
     )
     managed_marker: Optional[str] = Field(
         default=None,
@@ -230,27 +242,56 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
     model_config = ConfigDict(extra="allow")
 
     # Connection
-    uri: str = Field(..., description="LDAP server URI (e.g., 'ldap://ldap.example.com')")
-    bind_dn: str = Field(..., description="DN to bind as (e.g., 'cn=admin,dc=example,dc=com')")
+    uri: str = Field(
+        ...,
+        description="LDAP server URI (e.g., 'ldap://ldap.example.com')",
+        json_schema_extra=SENSITIVE,
+    )
+    bind_dn: str = Field(
+        ...,
+        description="DN to bind as (e.g., 'cn=admin,dc=example,dc=com')",
+        json_schema_extra=SENSITIVE,
+    )
     bind_password: str = Field(..., description="Password for bind DN", json_schema_extra=SECRET)
-    base_dn: str = Field(..., description="Base DN for the directory (e.g., 'dc=example,dc=com')")
-    use_starttls: Optional[bool] = Field(default=False, description="Use STARTTLS for connection")
+    base_dn: str = Field(
+        ...,
+        description="Base DN for the directory (e.g., 'dc=example,dc=com')",
+        json_schema_extra=SENSITIVE,
+    )
+    use_starttls: Optional[bool] = Field(
+        default=False, description="Use STARTTLS for connection", json_schema_extra=SENSITIVE
+    )
 
     # Directory structure
-    people_ou: str = Field(default="ou=People", description="OU for user entries")
-    groups_ou: str = Field(default="ou=Groups", description="OU for group entries")
+    people_ou: str = Field(
+        default="ou=People", description="OU for user entries", json_schema_extra=SENSITIVE
+    )
+    groups_ou: str = Field(
+        default="ou=Groups", description="OU for group entries", json_schema_extra=SENSITIVE
+    )
 
     # ID allocation ranges
-    uid_range_start: int = Field(default=10000, description="Start of UID allocation range")
-    uid_range_end: int = Field(default=65000, description="End of UID allocation range")
-    gid_range_start: int = Field(default=10000, description="Start of GID allocation range")
-    gid_range_end: int = Field(default=65000, description="End of GID allocation range")
+    uid_range_start: int = Field(
+        default=10000, description="Start of UID allocation range", json_schema_extra=SENSITIVE
+    )
+    uid_range_end: int = Field(
+        default=65000, description="End of UID allocation range", json_schema_extra=SENSITIVE
+    )
+    gid_range_start: int = Field(
+        default=10000, description="Start of GID allocation range", json_schema_extra=SENSITIVE
+    )
+    gid_range_end: int = Field(
+        default=65000, description="End of GID allocation range", json_schema_extra=SENSITIVE
+    )
 
     # User defaults
     default_login_shell: str = Field(
-        default="/bin/bash", description="Default login shell for users"
+        default="/bin/bash", description="Default login shell for users",
+        json_schema_extra=SENSITIVE,
     )
-    default_home_base: str = Field(default="/home", description="Base path for home directories")
+    default_home_base: str = Field(
+        default="/home", description="Base path for home directories", json_schema_extra=SENSITIVE
+    )
 
     # Identity authority
     account_source: AccountSource = Field(
@@ -259,6 +300,7 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         "loginShell. 'ldap' (default) keeps the historical behaviour: the agent "
         "derives usernames and allocates ids from the ranges below. 'waldur' takes "
         "all five from the offering user and writes them into the directory.",
+        json_schema_extra=SENSITIVE,
     )
     on_missing_posix_ids: MissingPosixIdsPolicy = Field(
         default=MissingPosixIdsPolicy.ERROR,
@@ -269,6 +311,7 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         default=PosixMismatchPolicy.REPORT,
         description="What to do when an existing entry's uidNumber/gidNumber "
         "disagree with Waldur's. Only consulted when account_source is 'waldur'.",
+        json_schema_extra=SENSITIVE,
     )
 
     # Username generation
@@ -291,6 +334,7 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         "account_source: off under 'ldap' (the entry is kept, as it always was), on "
         "under 'waldur' (Waldur owns the identity and keeps the ids, so the entry "
         "is reproducible and a departed user must not keep a resolvable login).",
+        json_schema_extra=SENSITIVE,
     )
     on_departure: Optional[DeparturePolicy] = Field(
         default=None,
@@ -299,6 +343,7 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         "come back on return) or 'delete' removes it. Unset, this follows "
         "account_source: 'disable' under 'waldur', 'delete' under 'ldap' (the "
         "historical meaning of remove_user_on_deactivate there).",
+        json_schema_extra=SENSITIVE,
     )
     generate_vpn_password: Optional[bool] = Field(
         default=False,
@@ -392,14 +437,18 @@ class WelcomeEmailSchema(PluginBackendSettingsSchema):
     model_config = ConfigDict(extra="forbid")
 
     # SMTP connection
-    smtp_host: str = Field(..., description="SMTP server hostname")
-    smtp_port: int = Field(default=587, description="SMTP server port")
+    smtp_host: str = Field(..., description="SMTP server hostname", json_schema_extra=SENSITIVE)
+    smtp_port: int = Field(default=587, description="SMTP server port", json_schema_extra=SENSITIVE)
     smtp_username: Optional[str] = Field(default=None, description="SMTP auth username")
     smtp_password: Optional[str] = Field(
         default=None, description="SMTP auth password", json_schema_extra=SECRET
     )
-    use_tls: bool = Field(default=True, description="Use STARTTLS (port 587)")
-    use_ssl: bool = Field(default=False, description="Use implicit SSL (port 465)")
+    use_tls: bool = Field(
+        default=True, description="Use STARTTLS (port 587)", json_schema_extra=SENSITIVE
+    )
+    use_ssl: bool = Field(
+        default=False, description="Use implicit SSL (port 465)", json_schema_extra=SENSITIVE
+    )
     timeout: int = Field(default=30, description="SMTP connection timeout in seconds")
 
     # Sender
@@ -410,10 +459,12 @@ class WelcomeEmailSchema(PluginBackendSettingsSchema):
     subject: str = Field(
         default="Your new account has been created",
         description="Email subject line (supports Jinja2 template variables)",
+        json_schema_extra=SENSITIVE,
     )
     template_path: str = Field(
         ...,
         description="Path to Jinja2 email body template file (absolute or relative to CWD)",
+        json_schema_extra=SENSITIVE,
     )
 
 

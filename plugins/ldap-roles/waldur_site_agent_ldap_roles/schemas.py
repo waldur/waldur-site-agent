@@ -6,7 +6,12 @@ from typing import Optional
 
 from pydantic import ConfigDict, Field, field_validator
 
-from waldur_site_agent.common.plugin_schemas import SECRET, PluginBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
+    SENSITIVE,
+    CommonBackendSettingsSchema,
+    PluginBackendSettingsSchema,
+)
 
 
 class LdapConnectionSchema(PluginBackendSettingsSchema):
@@ -20,13 +25,23 @@ class LdapConnectionSchema(PluginBackendSettingsSchema):
 
     model_config = ConfigDict(extra="allow")
 
-    uri: str = Field(..., description="LDAP server URI (e.g. ldaps://ldap.example.com)")
-    bind_dn: str = Field(..., description="DN to bind as")
+    uri: str = Field(
+        ...,
+        description="LDAP server URI (e.g. ldaps://ldap.example.com)",
+        json_schema_extra=SENSITIVE,
+    )
+    bind_dn: str = Field(..., description="DN to bind as", json_schema_extra=SENSITIVE)
     bind_password: str = Field(..., description="Password for bind DN", json_schema_extra=SECRET)
-    base_dn: str = Field(..., description="Base DN for the directory")
-    people_ou: str = Field(default="ou=People", description="OU for user entries")
-    groups_ou: str = Field(default="ou=Groups", description="OU for group entries")
-    use_starttls: Optional[bool] = Field(default=False, description="Use STARTTLS")
+    base_dn: str = Field(..., description="Base DN for the directory", json_schema_extra=SENSITIVE)
+    people_ou: str = Field(
+        default="ou=People", description="OU for user entries", json_schema_extra=SENSITIVE
+    )
+    groups_ou: str = Field(
+        default="ou=Groups", description="OU for group entries", json_schema_extra=SENSITIVE
+    )
+    use_starttls: Optional[bool] = Field(
+        default=False, description="Use STARTTLS", json_schema_extra=SENSITIVE
+    )
     project_group_object_classes: Optional[list[str]] = Field(
         default=None,
         description=(
@@ -41,10 +56,11 @@ class LdapConnectionSchema(PluginBackendSettingsSchema):
             "Stand-in member that keeps a groupOfNames valid when no user holds its "
             "role (default cn=nobody,<base_dn>); must not be a uid= DN"
         ),
+        json_schema_extra=SENSITIVE,
     )
 
 
-class LdapRolesBackendSettingsSchema(PluginBackendSettingsSchema):
+class LdapRolesBackendSettingsSchema(CommonBackendSettingsSchema):
     """Top-level backend_settings schema for the ldap-roles backend."""
 
     model_config = ConfigDict(extra="allow")
@@ -54,9 +70,12 @@ class LdapRolesBackendSettingsSchema(PluginBackendSettingsSchema):
     waldur_api_url: str = Field(
         ...,
         description="Waldur API base URL (e.g. https://waldur.example.com/api/)",
+        json_schema_extra=SENSITIVE,
     )
     waldur_api_token: str = Field(..., description="Waldur API token", json_schema_extra=SECRET)
-    waldur_verify_ssl: Optional[bool] = Field(default=True, description="Verify TLS for Waldur API")
+    waldur_verify_ssl: Optional[bool] = Field(
+        default=True, description="Verify TLS for Waldur API", json_schema_extra=SENSITIVE
+    )
 
     # Group naming -- string.Template syntax, same variables as
     # rancher-kc-crd: ${resource_slug}, ${rp_uuid}, ${rp_uuid_short},
@@ -64,10 +83,12 @@ class LdapRolesBackendSettingsSchema(PluginBackendSettingsSchema):
     resource_group_template: str = Field(
         default="${resource_slug}_${role_name}",
         description="Group name template for Resource-scope roles",
+        json_schema_extra=SENSITIVE,
     )
     resource_project_group_template: str = Field(
         default="${resource_slug}_${rp_uuid_short}_${role_name}",
         description="Group name template for ResourceProject-scope roles",
+        json_schema_extra=SENSITIVE,
     )
 
     # Role mappings -- only roles present in the maps are emitted as
@@ -76,10 +97,12 @@ class LdapRolesBackendSettingsSchema(PluginBackendSettingsSchema):
     resource_role_map: dict[str, str] = Field(
         default_factory=dict,
         description="Map of Waldur role name -> output role token for Resource-scope roles",
+        json_schema_extra=SENSITIVE,
     )
     resource_project_role_map: dict[str, str] = Field(
         default_factory=dict,
         description="Map of Waldur role name -> output role token for ResourceProject-scope roles",
+        json_schema_extra=SENSITIVE,
     )
 
     # LDAP membership type -- POSIX vs DN-based.
@@ -106,6 +129,7 @@ class LdapRolesBackendSettingsSchema(PluginBackendSettingsSchema):
     lookup_by_user_uuid: Optional[bool] = Field(
         default=False,
         description="Look up LDAP users by Waldur UUID instead of username",
+        json_schema_extra=SENSITIVE,
     )
 
     ldap: LdapConnectionSchema = Field(..., description="LDAP connection settings")

@@ -5,13 +5,15 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import Field
-
 from waldur_site_agent.common.plugin_schemas import (
     SECRET,
+    SENSITIVE,
+    CommonBackendSettingsSchema,
     PluginBackendSettingsSchema,
     PluginComponentSchema,
     TargetComponentConfig,
 )
+
 from waldur_site_agent_waldur.enums import EndDateSyncDirection, LimitSyncDirection
 
 
@@ -29,24 +31,27 @@ class WaldurComponentSchema(PluginComponentSchema):
     )
 
 
-class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
+class WaldurBackendSettingsSchema(CommonBackendSettingsSchema):
     """Schema for Waldur federation plugin backend settings."""
 
     target_api_url: str = Field(
-        ..., description="Base URL for the target Waldur B API endpoint"
+        ..., description="Base URL for the target Waldur B API endpoint",
+        json_schema_extra=SENSITIVE,
     )
     target_api_token: str = Field(
         ..., description="Authentication token for Waldur B API", json_schema_extra=SECRET
     )
     target_offering_uuid: str = Field(
-        ..., description="UUID of the offering on Waldur B"
+        ..., description="UUID of the offering on Waldur B", json_schema_extra=SENSITIVE
     )
     target_customer_uuid: str = Field(
-        ..., description="UUID of the customer/organization on Waldur B"
+        ..., description="UUID of the customer/organization on Waldur B",
+        json_schema_extra=SENSITIVE,
     )
     user_match_field: Literal["cuid", "email", "username"] = Field(
         default="cuid",
         description="Field used to match users between Waldur A and Waldur B",
+        json_schema_extra=SENSITIVE,
     )
     order_poll_timeout: int = Field(
         default=300,
@@ -65,6 +70,7 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
             "'remote_eduteams': POST /api/remote-eduteams/ (requires eduTEAMS OIDC on server). "
             "'identity_bridge': POST /api/identity-bridge/ (idempotent, uses identity_bridge_source). "
             "'user_field': GET /api/users/?{user_match_field}={value}.",
+            json_schema_extra=SENSITIVE,
         )
     )
     user_not_found_action: Literal["warn", "fail"] = Field(
@@ -87,6 +93,7 @@ class WaldurBackendSettingsSchema(PluginBackendSettingsSchema):
         description="Map source role names to target role names "
         "(e.g. PROJECT.ADMIN: PROJECT.MANAGER). "
         "Empty = passthrough (roles forwarded unchanged).",
+        json_schema_extra=SENSITIVE,
     )
     end_date_sync_direction: EndDateSyncDirection = Field(
         default=EndDateSyncDirection.BIDIRECTIONAL,
@@ -118,7 +125,9 @@ class WaldurIdentityBridgeSettingsSchema(PluginBackendSettingsSchema):
     ``target_api_token`` is a secret when this backend is chosen.
     """
 
-    target_api_url: str = Field(..., description="Base URL of Waldur B's API")
+    target_api_url: str = Field(
+        ..., description="Base URL of Waldur B's API", json_schema_extra=SENSITIVE
+    )
     target_api_token: str = Field(
         ..., description="Token for Waldur B's API", json_schema_extra=SECRET
     )

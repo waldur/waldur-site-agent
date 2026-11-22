@@ -6,7 +6,7 @@ from typing import Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from waldur_site_agent.common.plugin_schemas import SECRET
+from waldur_site_agent.common.plugin_schemas import SECRET, SENSITIVE, NonEmptyStr
 
 
 class KeycloakSettingsSchema(BaseModel):
@@ -18,13 +18,16 @@ class KeycloakSettingsSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     keycloak_url: Optional[str] = Field(
-        default=None, description="Keycloak base URL (default https://localhost/auth/)"
+        default=None, description="Keycloak base URL (default https://localhost/auth/)",
+        json_schema_extra=SENSITIVE,
     )
     keycloak_realm: Optional[str] = Field(
-        default=None, description="Realm groups are managed in (default 'waldur')"
+        default=None, description="Realm groups are managed in (default 'waldur')",
+        json_schema_extra=SENSITIVE,
     )
     keycloak_user_realm: Optional[str] = Field(
-        default=None, description="Realm the admin user authenticates against (default 'master')"
+        default=None, description="Realm the admin user authenticates against (default 'master')",
+        json_schema_extra=SENSITIVE,
     )
     client_id: Optional[str] = Field(
         default=None, description="Client used for the admin login (default 'admin-cli')"
@@ -33,7 +36,8 @@ class KeycloakSettingsSchema(BaseModel):
     keycloak_password: Optional[str] = Field(
         default=None, description="Admin password", json_schema_extra=SECRET
     )
-    keycloak_ssl_verify: Optional[Union[bool, str]] = Field(
+    keycloak_ssl_verify: Optional[Union[bool, NonEmptyStr]] = Field(
         default=None,
         description="Verify Keycloak's TLS: true/false, or a CA bundle path (default true)",
+        json_schema_extra=SENSITIVE,
     )

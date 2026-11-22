@@ -191,6 +191,36 @@ connects:
   `passwd`, `token`, `credentials` or `key` and that is not marked. A field that only looks like
   one (a token URL, a path to a token file, the *name* of a Kubernetes Secret) goes in its
   `NOT_SECRET` list with the reason.
+- **Which settings are sensitive.** Mark with the `SENSITIVE` marker every non-secret field that
+  decides
+  - where the agent connects, and so where its credentials go: URLs, URIs, hosts, ports,
+    endpoints, proxies, TLS verification and STARTTLS switches, kubeconfig files and contexts,
+    namespaces and realms;
+  - what it reads, writes, runs or installs, on its own host — file and directory paths, binary
+    paths such as `slurm_bin_path`, `execution_mode`, the owner, mode and ACLs it sets as root,
+    templates it renders — or on customers' machines: cloud-init user data, SSH keys, firewall
+    rules, VM templates;
+  - what access it grants: roles and role maps, groups and group name templates, the DNs and OUs
+    it writes under, UID/GID ranges, how it matches users, partitions and QoS.
+
+  The marker appears in the JSON Schema as `"sensitive": true`. Waldur stores these settings but
+  limits who may change them. A secret is marked `SECRET` only, never both. A setting where `""`
+  would mean something else than unset takes `NonEmptyStr`.
+
+  ```python
+  from waldur_site_agent.common.plugin_schemas import SECRET, SENSITIVE, CommonBackendSettingsSchema
+
+  class MyBackendSettingsSchema(CommonBackendSettingsSchema):
+      api_url: str = Field(..., description="API base URL", json_schema_extra=SENSITIVE)
+      api_token: str = Field(..., description="Admin API token", json_schema_extra=SECRET)
+  ```
+
+  `tests/test_plugin_catalogue.py` fails for a field of a settings or component schema, nested
+  ones included, whose name (split at underscores and camelCase humps) has a word such as `url`,
+  `host`, `port`, `path`, `file`, `mode`, `template`, `owner`, `role`, `group`, `dn` or `ssh`, and
+  that is neither marked nor listed with a reason in its `NOT_SENSITIVE` list. Declare every key
+  the backend reads: an undeclared key of an open schema is invisible to the catalogue, and
+  Waldur treats a change to it as sensitive.
 - **Which roles a backend can fill.** `BaseBackend.supported_roles` defaults to order processing,
   membership sync and reporting. A backend that only reports usage narrows it:
 
@@ -200,7 +230,9 @@ connects:
 
 `waldur_site_export_plugin_catalogue [-o FILE]` writes the catalogue of the installed plugins as
 JSON: for each entry point its package, version, roles, settings and component JSON Schemas, and
-the dotted paths of its secret settings (`keycloak.keycloak_password` for a nested model). CI
+the dotted paths of its secret settings (`keycloak.keycloak_password` for a nested model), of
+its sensitive ones (`keycloak.keycloak_url`) and of its sensitive component fields
+(`sensitive_component_settings`). CI
 publishes it as the `plugin-catalogue.json` artifact of the `Export plugin catalogue` job on
 `main` and on tags, which is where Waldur takes it from.
 

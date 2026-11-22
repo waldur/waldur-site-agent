@@ -12,7 +12,10 @@ from typing import Literal, Optional
 from pydantic import ConfigDict, Field, model_validator
 
 from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
+    SENSITIVE,
     HomedirSettingsSchema,
+    NonEmptyStr,
     PluginBackendSettingsSchema,
     PluginComponentSchema,
 )
@@ -99,9 +102,11 @@ class PeriodicLimitsConfig(PluginBackendSettingsSchema):
     enabled: bool = Field(default=False, description="Enable periodic limits functionality")
 
     emulator_mode: Optional[bool] = Field(
-        default=False, description="Use SLURM emulator for testing"
+        default=False, description="Use SLURM emulator for testing", json_schema_extra=SENSITIVE
     )
-    emulator_base_url: Optional[str] = Field(default=None, description="SLURM emulator API URL")
+    emulator_base_url: Optional[str] = Field(
+        default=None, description="SLURM emulator API URL", json_schema_extra=SENSITIVE
+    )
 
     limit_type: Optional[SlurmLimitType] = Field(
         default=SlurmLimitType.GRP_TRES_MINS,
@@ -136,6 +141,7 @@ class QosManagementConfig(PluginBackendSettingsSchema):
     additional_qos: Optional[list[str]] = Field(
         default=None,
         description="Additional QoS names to attach to accounts (e.g., ['2cpu-single-host'])",
+        json_schema_extra=SENSITIVE,
     )
     skip_qos_swap: bool = Field(
         default=False,
@@ -165,7 +171,9 @@ class LustreQuotaConfig(PluginBackendSettingsSchema):
     # silently leaving project IDs on the raw GID. The backend reads no other keys.
     model_config = ConfigDict(extra="forbid")
 
-    mount_point: str = Field(default="/valhalla", description="Lustre mount point")
+    mount_point: str = Field(
+        default="/valhalla", description="Lustre mount point", json_schema_extra=SENSITIVE
+    )
     block_softlimit: Optional[int] = Field(
         default=None, description="Block soft limit in kilobytes"
     )
@@ -188,28 +196,133 @@ class LustreQuotaConfig(PluginBackendSettingsSchema):
 
 
 class ProjectDirectoryConfig(PluginBackendSettingsSchema):
-    """Project directory creation and quota configuration."""
+    """Project directory creation and quota configuration.
 
-    model_config = ConfigDict(extra="allow")
+    Strict: every key the backend reads is declared, and they decide what the
+    agent creates, chowns and chmods as root.
+    """
 
-    enabled: bool = Field(default=False, description="Enable project directory creation")
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=False, description="Enable project directory creation", json_schema_extra=SENSITIVE
+    )
     base_path: str = Field(
         default="/valhalla/projects",
         description="Base path for project directories",
+        json_schema_extra=SENSITIVE,
     )
-    owner: str = Field(default="nobody", description="Owner of the project directory")
-    permissions: str = Field(default="770", description="Directory permissions (octal)")
-    set_gid: bool = Field(default=True, description="Set the setgid bit on the directory")
-    set_acl: bool = Field(default=True, description="Set POSIX ACLs for the project group")
+    owner: str = Field(
+        default="nobody", description="Owner of the project directory", json_schema_extra=SENSITIVE
+    )
+    permissions: str = Field(
+        default="770", description="Directory permissions (octal)", json_schema_extra=SENSITIVE
+    )
+    set_gid: bool = Field(
+        default=True, description="Set the setgid bit on the directory", json_schema_extra=SENSITIVE
+    )
+    set_acl: bool = Field(
+        default=True,
+        description="Set POSIX ACLs for the project group",
+        json_schema_extra=SENSITIVE,
+    )
+    group_owner_source: str = Field(
+        default="project_id",
+        description=(
+            "Group the directory is given to: 'project_id' (the resource's backend id) or "
+            "anything else to use group_name"
+        ),
+        json_schema_extra=SENSITIVE,
+    )
+    group_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Group the directory is given to when group_owner_source is not "
+            "'project_id' (default: the resource's backend id)"
+        ),
+        json_schema_extra=SENSITIVE,
+    )
     lustre_quota: Optional[LustreQuotaConfig] = Field(
         default=None, description="Lustre quota settings"
     )
 
 
-class SlurmRestApiConfig(PluginBackendSettingsSchema):
-    """slurmrestd connection settings (used when ``execution_mode`` is ``rest``)."""
+class SlurmLdapSettings(PluginBackendSettingsSchema):
+    """The ``ldap`` block the SLURM backend hands to ``LdapClient``.
+
+    Declared so the catalogue marks its endpoint and secret; the keys are those
+    ``waldur_site_agent_ldap_client.LdapClient`` reads. Open, as the client is
+    shared with the ldap plugins, which take further keys.
+    """
 
     model_config = ConfigDict(extra="allow")
+
+    uri: str = Field(
+        ...,
+        description="LDAP server URI (e.g. 'ldap://ldap.example.com')",
+        json_schema_extra=SENSITIVE,
+    )
+    bind_dn: str = Field(..., description="DN to bind as", json_schema_extra=SENSITIVE)
+    bind_password: str = Field(..., description="Password for bind_dn", json_schema_extra=SECRET)
+    base_dn: str = Field(..., description="Base DN of the directory", json_schema_extra=SENSITIVE)
+    use_starttls: Optional[bool] = Field(
+        default=False, description="Use STARTTLS", json_schema_extra=SENSITIVE
+    )
+    people_ou: str = Field(
+        default="ou=People", description="OU of user entries", json_schema_extra=SENSITIVE
+    )
+    groups_ou: str = Field(
+        default="ou=Groups", description="OU of group entries", json_schema_extra=SENSITIVE
+    )
+    uid_range_start: int = Field(
+        default=10000, description="First UID to allocate", json_schema_extra=SENSITIVE
+    )
+    uid_range_end: int = Field(
+        default=65000, description="Last UID to allocate", json_schema_extra=SENSITIVE
+    )
+    gid_range_start: int = Field(
+        default=10000, description="First GID to allocate", json_schema_extra=SENSITIVE
+    )
+    gid_range_end: int = Field(
+        default=65000, description="Last GID to allocate", json_schema_extra=SENSITIVE
+    )
+    default_login_shell: str = Field(
+        default="/bin/bash", description="Login shell of new users", json_schema_extra=SENSITIVE
+    )
+    default_home_base: str = Field(
+        default="/home",
+        description="Base of new users' home directories",
+        json_schema_extra=SENSITIVE,
+    )
+    user_object_classes: Optional[list[str]] = Field(
+        default=None, description="Object classes of user entries"
+    )
+    user_group_object_classes: Optional[list[str]] = Field(
+        default=None, description="Object classes of personal group entries"
+    )
+    project_group_object_classes: Optional[list[str]] = Field(
+        default=None, description="Object classes of project group entries"
+    )
+    personal_groups: Optional[bool] = Field(
+        default=True, description="Create a personal group per user"
+    )
+    waldur_username_attribute: Optional[str] = Field(
+        default=None, description="Attribute holding the Waldur username"
+    )
+    empty_group_member_dn: Optional[str] = Field(
+        default=None,
+        description="Placeholder member of empty groups (default cn=nobody,<base_dn>)",
+        json_schema_extra=SENSITIVE,
+    )
+
+
+class SlurmRestApiConfig(PluginBackendSettingsSchema):
+    """slurmrestd connection settings (used when ``execution_mode`` is ``rest``).
+
+    Strict: every key the REST client reads is declared.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     url: str = Field(
         ...,
@@ -217,6 +330,7 @@ class SlurmRestApiConfig(PluginBackendSettingsSchema):
             "slurmrestd endpoint: 'http(s)://host:port' or 'unix:///path/to/socket'. "
             "slurmrestd speaks plain HTTP — use https only via a TLS-terminating proxy."
         ),
+        json_schema_extra=SENSITIVE,
     )
     api_version: str = Field(
         default="v0.0.43",
@@ -225,6 +339,7 @@ class SlurmRestApiConfig(PluginBackendSettingsSchema):
     username: str = Field(
         ...,
         description="User the agent authenticates as (sent in X-SLURM-USER-NAME)",
+        json_schema_extra=SENSITIVE,
     )
     token_file: Optional[str] = Field(
         default=None,
@@ -233,14 +348,17 @@ class SlurmRestApiConfig(PluginBackendSettingsSchema):
             "external rotator (e.g. cron running 'scontrol token') keeps the "
             "agent working without restarts."
         ),
+        json_schema_extra=SENSITIVE,
     )
     token_env: Optional[str] = Field(
         default=None,
         description="Name of an environment variable holding the JWT token",
+        json_schema_extra=SENSITIVE,
     )
     verify_ssl: bool = Field(
         default=True,
         description="Verify TLS certificates (for https endpoints behind a proxy)",
+        json_schema_extra=SENSITIVE,
     )
     timeout: int = Field(default=30, description="HTTP request timeout in seconds")
 
@@ -310,6 +428,16 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
             "'rest' (slurmrestd REST API, including usage reporting; only RawUsage "
             "resets still run sacctmgr — see docs/slurm-rest-api-design.md)"
         ),
+        json_schema_extra=SENSITIVE,
+    )
+    slurm_bin_path: Optional[NonEmptyStr] = Field(
+        default="/usr/bin",
+        description=(
+            "Directory the SLURM binaries (sacctmgr, sacct, scontrol, ...) are run from; "
+            "in 'rest' mode, the RawUsage resets that still run sacctmgr. "
+            "null runs them from $PATH"
+        ),
+        json_schema_extra=SENSITIVE,
     )
     rest_api: Optional[SlurmRestApiConfig] = Field(
         default=None,
@@ -326,14 +454,46 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
         ),
     )
 
+    hostname: Optional[str] = Field(
+        default=None,
+        description=(
+            "Deprecated and ignored: the agent never reads it. Accepted so that "
+            "configurations moved from an offering's plugin options validate"
+        ),
+    )
+    root_account: Optional[str] = Field(
+        default=None,
+        description=(
+            "Account the top tier of the default hierarchy is created under "
+            "(default: default_account, then 'root')"
+        ),
+    )
+    enforce_offering_partitions: bool = Field(
+        default=False,
+        description=(
+            "Thread the offering's partitions into user associations; when false "
+            "they are informational only"
+        ),
+    )
+    ldap: Optional[SlurmLdapSettings] = Field(
+        default=None,
+        description=(
+            "LDAP directory for project groups and their GIDs (needs the "
+            "waldur-site-agent-slurm[ldap] extra)"
+        ),
+    )
+
     # Optional: default partition for user associations
     default_partition: Optional[str] = Field(
         default=None,
         description="Partition to assign to user-account associations (e.g., 'cn', 'common')",
+        json_schema_extra=SENSITIVE,
     )
 
     # QoS management (used by backend.py)
-    qos_default: Optional[str] = Field(default="normal", description="Default QoS for accounts")
+    qos_default: Optional[str] = Field(
+        default="normal", description="Default QoS for accounts", json_schema_extra=SENSITIVE
+    )
     qos_downscaled: Optional[str] = Field(default=None, description="QoS for downscaled accounts")
     qos_paused: Optional[str] = Field(default=None, description="QoS for paused accounts")
 

@@ -6,30 +6,36 @@ from typing import Optional
 
 from pydantic import Field
 
-from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import SECRET, SENSITIVE, CommonBackendSettingsSchema
 
 
 class CSCSDWDIBackendSettingsSchema(CommonBackendSettingsSchema):
     """Settings for the compute and inference reporting backends."""
 
-    cscs_dwdi_api_url: str = Field(..., description="CSCS-DWDI API base URL")
+    cscs_dwdi_api_url: str = Field(
+        ..., description="CSCS-DWDI API base URL", json_schema_extra=SENSITIVE
+    )
     cscs_dwdi_client_id: str = Field(..., description="OIDC client id")
     cscs_dwdi_client_secret: str = Field(
         ..., description="OIDC client secret", json_schema_extra=SECRET
     )
-    cscs_dwdi_oidc_token_url: str = Field(..., description="OIDC token endpoint")
+    cscs_dwdi_oidc_token_url: str = Field(
+        ..., description="OIDC token endpoint", json_schema_extra=SENSITIVE
+    )
     cscs_dwdi_oidc_scope: Optional[str] = Field(default=None, description="OIDC scope")
     cscs_dwdi_cluster: Optional[str] = Field(
         default=None, description="Cluster to filter usage by when the resource names none"
     )
     socks_proxy: Optional[str] = Field(
-        default=None, description="Proxy for the API, e.g. socks5://localhost:12345"
+        default=None, description="Proxy for the API, e.g. socks5://localhost:12345",
+        json_schema_extra=SENSITIVE,
     )
     storage_filesystem: Optional[str] = Field(default=None, description="Storage filesystem")
     storage_data_type: Optional[str] = Field(default=None, description="Storage data type")
     storage_tenant: Optional[str] = Field(default=None, description="Storage tenant")
     storage_path_mapping: Optional[dict[str, str]] = Field(
-        default=None, description="Map of resource backend id to storage path"
+        default=None, description="Map of resource backend id to storage path",
+        json_schema_extra=SENSITIVE,
     )
 
 

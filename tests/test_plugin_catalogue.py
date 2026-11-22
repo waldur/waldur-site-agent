@@ -1,8 +1,10 @@
-"""The plugin catalogue tells Waldur which backends fill which role and which settings are secret."""
+"""The plugin catalogue tells Waldur which backends fill which role and which settings are secret
+or sensitive."""
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 import typing
 from typing import Any, Optional
@@ -12,7 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from waldur_site_agent.backend.backends import BackendRole, BaseBackend
 from waldur_site_agent.common import plugin_catalogue, plugin_schemas, structures
-from waldur_site_agent.common.plugin_schemas import SECRET
+from waldur_site_agent.common.plugin_schemas import SECRET, SENSITIVE
 
 if sys.version_info >= (3, 10):
     from importlib.metadata import version
@@ -72,6 +74,212 @@ NOT_SECRET = {
     ),
     "waldur_site_agent_ldap.schemas.LdapSettingsSchema.generate_vpn_password": "flag",
 }
+
+
+# Words that make a settings field look like it decides where the agent connects
+# (and so where its credentials go), what it reads, writes, runs or installs on
+# its host or on customers' machines, or what access it grants. Matched against
+# the words of its name, split at underscores and camelCase humps.
+SENSITIVE_WORDS = {
+    # where it connects
+    "url",
+    "urls",
+    "uri",
+    "uris",
+    "host",
+    "hosts",
+    "hostname",
+    "server",
+    "address",
+    "port",
+    "endpoint",
+    "endpoints",
+    "proxy",
+    "socket",
+    "kubeconfig",
+    "context",
+    "namespace",
+    "realm",
+    "verify",
+    "ssl",
+    "tls",
+    "starttls",
+    "insecure",
+    "cert",
+    "cacert",
+    # what it reads, writes, runs or installs
+    "path",
+    "paths",
+    "file",
+    "files",
+    "dir",
+    "dirs",
+    "directory",
+    "mount",
+    "home",
+    "shell",
+    "mode",
+    "env",
+    "provider",
+    "secret",
+    "subject",
+    "template",
+    "umask",
+    "owner",
+    "permission",
+    "permissions",
+    "ssh",
+    "dns",
+    "security",
+    # what access it grants
+    "role",
+    "roles",
+    "group",
+    "groups",
+    "dn",
+    "ou",
+    "uid",
+    "gid",
+    "partition",
+}
+# Word sequences that do the same, matched against the joined words.
+SENSITIVE_PHRASES = ("user_data",)
+
+# Fields whose names look sensitive but are not, keyed by <model>.<field> as the
+# settings JSON Schema names them (its title, or its $defs key). Each needs a
+# reason; adding a real endpoint, path or access setting here lets anyone who may
+# edit the offering point the agent elsewhere or widen what it grants.
+NOT_SENSITIVE = {
+    "WelcomeEmailSchema.from_address": "sender address written into the mail, not a server",
+    "HomedirQuotaConfig.max_files": "a count of files (the CephFS inode quota), not a path",
+    "SlurmBackendSettingsSchema.hostname": (
+        "deprecated and never read by the agent; declared so moved legacy configurations validate"
+    ),
+    # Blocks: the fields inside them that qualify are marked one by one.
+    "SlurmBackendSettingsSchema.project_directory": "a block; its fields are marked",
+    "LdapSettingsSchema.access_groups": "a list of blocks; each group's name is marked",
+    "LdapSettingsSchema.project_groups": "a block; its fields that qualify are marked",
+    # Object classes and personal groups shape the entries the agent creates;
+    # who is put in which group is decided by the marked fields.
+    "LdapSettingsSchema.user_group_object_classes": "object classes of new entries",
+    "LdapSettingsSchema.project_group_object_classes": "object classes of new entries",
+    "LdapConnectionSchema.project_group_object_classes": "object classes of new entries",
+    "SlurmLdapSettings.user_group_object_classes": "object classes of new entries",
+    "SlurmLdapSettings.project_group_object_classes": "object classes of new entries",
+    "LdapSettingsSchema.personal_groups": "whether an account gets a group of its own only",
+    "SlurmLdapSettings.personal_groups": "whether an account gets a group of its own only",
+}
+
+
+def _settings_fields(schema: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
+    """Every (model, field, property) a settings JSON Schema declares, nested ones too.
+
+    Walking the exported schema rather than the pydantic models reaches what the
+    catalogue publishes, including models named by a forward reference.
+    """
+    models = [(schema.get("title", ""), schema)]
+    models.extend(schema.get("$defs", {}).items())
+    return [
+        (model, name, prop)
+        for model, node in models
+        for name, prop in (node.get("properties") or {}).items()
+        if isinstance(prop, dict)
+    ]
+
+
+def _words(name: str) -> list[str]:
+    snake = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    return [word for word in snake.lower().split("_") if word]
+
+
+def _looks_sensitive(name: str) -> bool:
+    words = _words(name)
+    joined = "_".join(words)
+    return bool(SENSITIVE_WORDS & set(words)) or any(
+        phrase in joined for phrase in SENSITIVE_PHRASES
+    )
+
+
+def _unmarked_sensitive_looking(schemas: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        {
+            f"{model}.{name}"
+            for schema in schemas
+            for model, name, prop in _settings_fields(schema)
+            if _looks_sensitive(name)
+            and f"{model}.{name}" not in NOT_SENSITIVE
+            and prop.get("sensitive") is not True
+            and prop.get("secret") is not True
+        }
+    )
+
+
+def _installed_settings_schemas() -> list[dict[str, Any]]:
+    """The settings and component JSON Schemas of every installed plugin."""
+    settings_schemas = plugin_schemas.get_plugin_backend_settings_schemas()
+    if not settings_schemas:
+        pytest.skip("no plugins installed")
+    schema_classes: list[type[BaseModel]] = [
+        *settings_schemas.values(),
+        *plugin_schemas.get_plugin_component_schemas().values(),
+    ]
+    return [schema_class.model_json_schema() for schema_class in schema_classes]
+
+
+def test_every_endpoint_or_path_setting_is_marked_sensitive() -> None:
+    unmarked = _unmarked_sensitive_looking(_installed_settings_schemas())
+
+    assert not unmarked, (
+        "Mark these with json_schema_extra=SENSITIVE, or list them in NOT_SENSITIVE "
+        f"with a reason: {unmarked}"
+    )
+
+
+def test_an_unmarked_endpoint_or_path_setting_is_caught() -> None:
+    class _Settings(plugin_schemas.PluginBackendSettingsSchema):
+        backup_dir: str
+        target_api_url: str = Field(..., json_schema_extra=SENSITIVE)
+        socks_proxy: str
+        exempt_path: str
+        name_prefix: str
+        apiUrl: str  # noqa: N815
+        cloud_user_data: str
+        admin_role_map: dict[str, str]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(NOT_SENSITIVE, "_Settings.exempt_path", "test")
+        unmarked = _unmarked_sensitive_looking([_Settings.model_json_schema()])
+
+    assert unmarked == [
+        "_Settings.admin_role_map",
+        "_Settings.apiUrl",
+        "_Settings.backup_dir",
+        "_Settings.cloud_user_data",
+        "_Settings.socks_proxy",
+    ]
+
+
+def test_every_sensitive_exemption_names_a_real_field() -> None:
+    fields = {
+        f"{model}.{name}"
+        for schema in _installed_settings_schemas()
+        for model, name, _prop in _settings_fields(schema)
+    }
+
+    assert not sorted(set(NOT_SENSITIVE) - fields)
+
+
+def test_no_setting_is_marked_both_secret_and_sensitive() -> None:
+    both = sorted(
+        {
+            f"{model}.{name}"
+            for schema in _installed_settings_schemas()
+            for model, name, prop in _settings_fields(schema)
+            if prop.get("secret") is True and prop.get("sensitive") is True
+        }
+    )
+
+    assert not both, f"A secret stays in secret_settings only; unmark SENSITIVE: {both}"
 
 
 def _nested_models(annotation: Any) -> list[type[BaseModel]]:
@@ -163,6 +371,41 @@ def test_secret_paths_follow_nested_models() -> None:
     ]
 
 
+def test_sensitive_marker_does_not_change_parsing() -> None:
+    class _Settings(plugin_schemas.PluginBackendSettingsSchema):
+        api_url: str = Field(..., json_schema_extra=SENSITIVE)
+
+    assert _Settings(api_url="https://example.org").api_url == "https://example.org"
+    assert _Settings.model_json_schema()["properties"]["api_url"]["sensitive"] is True
+    assert plugin_schemas.is_sensitive_field(_Settings.model_fields["api_url"])
+    assert not plugin_schemas.is_secret_field(_Settings.model_fields["api_url"])
+
+
+def test_sensitive_paths_follow_nested_models_and_leave_out_secrets() -> None:
+    class _Inner(BaseModel):
+        uri: str = Field(..., json_schema_extra=SENSITIVE)
+        password: str = Field(..., json_schema_extra=SECRET)
+
+    class _Outer(BaseModel):
+        api_url: Optional[str] = Field(default=None, json_schema_extra=SENSITIVE)
+        token_file: str = Field(..., json_schema_extra={**SECRET, **SENSITIVE})
+        inner: _Inner
+        optional_inner: Optional[_Inner] = None
+        by_name: dict[str, _Inner] = {}
+        listed: list[_Inner] = []
+
+    schema = _Outer.model_json_schema()
+
+    assert plugin_catalogue.sensitive_paths(schema) == [
+        "api_url",
+        "by_name.*.uri",
+        "inner.uri",
+        "listed[].uri",
+        "optional_inner.uri",
+    ]
+    assert "token_file" in plugin_catalogue.secret_paths(schema)
+
+
 def test_base_backend_supports_every_role() -> None:
     assert set(BaseBackend.supported_roles) == set(BackendRole)
 
@@ -190,6 +433,30 @@ def test_catalogue_describes_roles_and_secrets() -> None:
     ldap = _plugin(catalogue, "ldap")
     assert ldap["roles"] == ["username_management"]
     assert "ldap.bind_password" in ldap["secret_settings"]
+
+
+def test_catalogue_lists_sensitive_settings_apart_from_secrets() -> None:
+    catalogue = plugin_catalogue.build_catalogue()
+
+    for plugin in catalogue["plugins"]:
+        assert "sensitive_settings" in plugin, plugin["name"]
+        assert not set(plugin["sensitive_settings"]) & set(plugin["secret_settings"]), plugin[
+            "name"
+        ]
+
+    slurm = _plugin(catalogue, "slurm")
+    for path in ("rest_api.token_file", "rest_api.url", "execution_mode", "slurm_bin_path"):
+        assert path in slurm["sensitive_settings"]
+    assert slurm["settings_schema"]["properties"]["slurm_bin_path"]["default"] == "/usr/bin"
+
+    assert "saml_mapping_file" in _plugin(catalogue, "opennebula")["sensitive_settings"]
+    for name in ("cscs-dwdi-compute", "cscs-dwdi-inference", "cscs-dwdi-storage"):
+        dwdi = _plugin(catalogue, name)
+        assert "storage_path_mapping" in dwdi["sensitive_settings"]
+        assert "cscs_dwdi_oidc_token_url" in dwdi["sensitive_settings"]
+        assert "cscs_dwdi_client_secret" not in dwdi["sensitive_settings"]
+
+    assert "ldap.uri" in _plugin(catalogue, "ldap")["sensitive_settings"]
 
 
 def test_catalogue_is_stamped_with_versions() -> None:

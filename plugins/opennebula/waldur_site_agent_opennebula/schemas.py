@@ -5,9 +5,12 @@ from __future__ import annotations
 from typing import Any, Literal, Optional, Union
 
 from pydantic import Field
+from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
+    SENSITIVE,
+    CommonBackendSettingsSchema,
+)
 from waldur_site_agent_keycloak_client.schemas import KeycloakSettingsSchema
-
-from waldur_site_agent.common.plugin_schemas import SECRET, CommonBackendSettingsSchema
 
 
 class OpenNebulaBackendSettingsSchema(CommonBackendSettingsSchema):
@@ -17,7 +20,9 @@ class OpenNebulaBackendSettingsSchema(CommonBackendSettingsSchema):
     offering plugin options wins over the one here.
     """
 
-    api_url: str = Field(..., description="OpenNebula XML-RPC endpoint")
+    api_url: str = Field(
+        ..., description="OpenNebula XML-RPC endpoint", json_schema_extra=SENSITIVE
+    )
     credentials: str = Field(..., description="'username:password'", json_schema_extra=SECRET)
     resource_type: Optional[Literal["vdc", "vm"]] = Field(
         default=None, description="What a resource is: 'vdc' (default) or 'vm'"
@@ -36,30 +41,41 @@ class OpenNebulaBackendSettingsSchema(CommonBackendSettingsSchema):
     saml_mapping_file: Optional[str] = Field(
         default=None,
         description="SAML group mapping file (default /var/lib/one/keycloak_groups.yaml)",
+        json_schema_extra=SENSITIVE,
     )
     default_user_role: Optional[str] = Field(
-        default=None, description="VDC role for members without a mapping (default 'user')"
+        default=None, description="VDC role for members without a mapping (default 'user')",
+        json_schema_extra=SENSITIVE,
     )
     vdc_roles: Optional[list[dict[str, Any]]] = Field(
-        default=None, description="VDC role definitions; see the plugin README for the default"
+        default=None, description="VDC role definitions; see the plugin README for the default",
+        json_schema_extra=SENSITIVE,
     )
     # Network fallbacks (VDC)
-    external_network_id: Optional[int] = Field(default=None, description="External network id")
+    external_network_id: Optional[int] = Field(
+        default=None, description="External network id", json_schema_extra=SENSITIVE
+    )
     virtual_router_template_id: Optional[int] = Field(
-        default=None, description="Virtual router template id"
+        default=None, description="Virtual router template id", json_schema_extra=SENSITIVE
     )
     vn_mad: Optional[str] = Field(default=None, description="Network driver (default 'vxlan')")
     vxlan_phydev: Optional[str] = Field(default=None, description="Physical device for VXLAN")
-    default_dns: Optional[str] = Field(default=None, description="DNS server for new networks")
+    default_dns: Optional[str] = Field(
+        default=None, description="DNS server for new networks", json_schema_extra=SENSITIVE
+    )
     internal_network_base: Optional[str] = Field(default=None, description="Internal network base")
     internal_network_prefix: Optional[int] = Field(
         default=None, description="Prefix length of the subnet pool (default 8)"
     )
     subnet_prefix_length: Optional[int] = Field(default=None, description="Subnet prefix length")
     security_group_defaults: Optional[list[dict[str, Any]]] = Field(
-        default=None, description="Default inbound rules for new VDCs"
+        default=None, description="Default inbound rules for new VDCs", json_schema_extra=SENSITIVE
     )
     sched_requirements: Optional[str] = Field(default=None, description="Scheduler requirements")
     # VM fallbacks
-    parent_vdc_backend_id: Optional[str] = Field(default=None, description="VDC a VM is created in")
-    template_id: Optional[Union[int, str]] = Field(default=None, description="VM template id")
+    parent_vdc_backend_id: Optional[str] = Field(
+        default=None, description="VDC a VM is created in", json_schema_extra=SENSITIVE
+    )
+    template_id: Optional[Union[int, str]] = Field(
+        default=None, description="VM template id", json_schema_extra=SENSITIVE
+    )
