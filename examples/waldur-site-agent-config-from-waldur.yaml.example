@@ -22,7 +22,8 @@ offerings:
     configuration_source: waldur
 
     waldur_api_url: "https://waldur.example.com/api/"
-    # Needs permission to update the offering's integration (OFFERING.MANAGER).
+    # A token made from Waldur's site_agent template (OFFERING.MANAGE_AGENT), or
+    # the API token of the offering's manager (OFFERING.MANAGER).
     waldur_api_token: "<YOUR_API_TOKEN_HERE>"
     waldur_offering_uuid: "<OFFERING_UUID>"
     verify_ssl: true

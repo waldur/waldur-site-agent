@@ -1,7 +1,8 @@
 """The processor names the problem when the token cannot see the service provider.
 
-A personal access token bound to the offering alone cannot list the offering's
-service provider, and the processor used to fail with a bare IndexError.
+On a Waldur older than waldur/waldur-mastermind#1276, a personal access token
+bound to the offering alone cannot list the offering's service provider, and the
+processor used to fail with a bare IndexError.
 """
 
 import uuid

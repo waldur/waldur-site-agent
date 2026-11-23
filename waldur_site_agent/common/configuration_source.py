@@ -132,7 +132,10 @@ def fetch_configuration(
         hint = {
             400: " (is it a site agent offering?)",
             401: " (check the offering's credentials)",
-            403: " (the token needs permission to update the offering's integration)",
+            403: (
+                " (the token needs OFFERING.MANAGE_AGENT on the offering, "
+                "or permission to update its integration)"
+            ),
             404: " (unknown offering, or a Waldur without this endpoint)",
         }.get(response.status_code, "")
         msg = (
