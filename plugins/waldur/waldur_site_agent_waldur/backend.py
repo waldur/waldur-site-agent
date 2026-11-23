@@ -39,6 +39,11 @@ from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent_waldur.client import DEFAULT_PROJECT_ROLE_NAME, WaldurClient
 from waldur_site_agent_waldur.component_mapping import ComponentMapper
 from waldur_site_agent_waldur.enums import EndDateSyncDirection, LimitSyncDirection
+from waldur_site_agent_waldur.privileged_accounts import (
+    IdentityBridgePrivilegedAccountError,
+    note_privileged_account,
+    privileged_accounts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -909,6 +914,7 @@ class WaldurBackend(backends.BaseBackend):
             return self._user_uuid_cache[local_username]
 
         remote_uuid: Optional[UUID] = None
+        privileged = False
 
         if self.user_resolve_method == "identity_bridge":
             if not self.identity_bridge_source:
@@ -916,11 +922,19 @@ class WaldurBackend(backends.BaseBackend):
                     "identity_bridge_source is required when "
                     "user_resolve_method=identity_bridge"
                 )
+            elif privileged_accounts.is_known(self.client.base_url, local_username):
+                # Already refused this cycle (possibly by the profile push):
+                # don't ask the bridge again, and don't log again.
+                privileged = True
             else:
-                remote_uuid = self.client.resolve_user_via_identity_bridge(
-                    local_username, self.identity_bridge_source,
-                    attributes=attributes,
-                )
+                try:
+                    remote_uuid = self.client.resolve_user_via_identity_bridge(
+                        local_username, self.identity_bridge_source,
+                        attributes=attributes,
+                    )
+                except IdentityBridgePrivilegedAccountError:
+                    privileged = True
+                    note_privileged_account(self.client.base_url, local_username)
         elif self.user_resolve_method == "user_field":
             field = self.user_match_field if self.user_match_field in ("email", "username") else "username"
             remote_uuid = self.client.resolve_user_by_field(local_username, field)
@@ -940,6 +954,16 @@ class WaldurBackend(backends.BaseBackend):
             self._user_uuid_cache[local_username] = remote_uuid
 
         if remote_uuid is None:
+            if privileged:
+                # The WARNING was logged when the refusal was first seen.
+                if self.user_not_found_action == "fail":
+                    msg = (
+                        f"User {local_username} is a staff, support or identity "
+                        "manager account on Waldur B, which the Identity Bridge "
+                        "only lets a staff caller push"
+                    )
+                    raise BackendError(msg)
+                return None
             if self.user_not_found_action == "fail":
                 msg = (
                     f"User {local_username} not found on Waldur B "

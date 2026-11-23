@@ -740,6 +740,10 @@ When a user cannot be resolved on Waldur B:
 
 Resolved user UUIDs are cached for the lifetime of the backend instance to minimize API calls.
 
+With `identity_bridge`, staff, support and identity-manager accounts on Waldur B
+cannot be resolved by a non-staff agent, so their project roles are not synced. See
+[Privileged Accounts on Waldur B](#privileged-accounts-on-waldur-b).
+
 ### Choosing the Right Combination
 
 | Scenario | `user_resolve_method` | `user_match_field` | Notes |
@@ -820,6 +824,41 @@ This ensures users exist on Waldur B before the agent tries to resolve and add t
 2. For each offering user on Waldur A, it sends `POST /api/identity-bridge/` to Waldur B
 3. Identity Bridge creates the user if they don't exist, or updates attributes if they do
 4. Users that disappear from the offering are deactivated via `POST /api/identity-bridge/remove/`
+
+### Privileged Accounts on Waldur B
+
+Since Waldur 8.1.4, the Identity Bridge only lets a **staff** caller push or remove an
+existing account that is **staff, support or an identity manager** on Waldur B. Anyone
+else gets `403 Only staff may push or remove staff, support or identity manager
+accounts.` This stops an ISD from claiming a privileged account, overwriting its
+attributes and then deactivating it.
+
+The agent normally runs as an identity manager, so for such users:
+
+- their profile is not pushed and their project roles on Waldur B are **not synced**
+  (not added, changed or removed);
+- the agent logs one `WARNING` per user per sync cycle, naming the user, with no
+  traceback. Other Identity Bridge failures are still logged as errors;
+- within a cycle, the agent asks the bridge about each such user at most once.
+  The answer is kept until shortly before the next membership sync
+  (`WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES`), so an account that loses its
+  privileges is picked up again on the next cycle;
+- with `user_not_found_action: fail`, resolving them raises a `BackendError`.
+
+Looking these users up in the user list does not work either: a non-staff caller
+never sees staff users on Waldur B.
+
+To handle them, either:
+
+- **Manage their project roles on Waldur B by hand.** Staff can reach every
+  project anyway; support and identity-manager users need explicit roles.
+- **Run the agent with a staff token on Waldur B.** If it is a personal access token,
+  it needs the `STAFF.ACCESS` scope (see
+  [Using a personal access token](../../docs/configuration.md#using-a-personal-access-token)).
+  This removes the limit, but the agent then has full control of Waldur B: a leaked
+  token, or a compromised Waldur A pushing bad data, can change or deactivate any
+  account there, privileged ones included. Prefer the manual option unless you accept
+  that risk.
 
 ### Identity Bridge Configuration
 
