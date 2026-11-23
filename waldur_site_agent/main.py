@@ -1,7 +1,7 @@
 """Main application module."""
 
 from waldur_site_agent.backend import logger
-from waldur_site_agent.common import utils
+from waldur_site_agent.common import configuration_source, utils
 from waldur_site_agent.common.structures import AgentMode
 from waldur_site_agent.event_processing import main as event_processing_main
 from waldur_site_agent.polling_processing import (
@@ -16,6 +16,7 @@ def main() -> None:
     configuration = utils.init_configuration()
     logger.info("Waldur site agent version: %s", configuration.waldur_site_agent_version)
     utils.log_versions(configuration)
+    configuration_source.warn_on_configuration_drift(configuration)
 
     logger.info("Running agent in %s mode", configuration.waldur_site_agent_mode)
     if AgentMode.ORDER_PROCESS.value == configuration.waldur_site_agent_mode:

@@ -28,11 +28,12 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, List, Optional
+from unittest import mock
 
 import pytest
 import yaml
 
-from waldur_site_agent.common import structures
+from waldur_site_agent.common import configuration_source, structures
 
 if sys.version_info >= (3, 10):
     from importlib.metadata import entry_points
@@ -130,6 +131,37 @@ def _unknown_keys(raw: dict, model: type, where: str, anchors: bool = False) -> 
     ]
 
 
+def _served_stub(offering: structures.Offering, *_args: Any, **_kwargs: Any) -> configuration_source.ServedConfiguration:
+    """What a Waldur would serve for an example offering with ``configuration_source: waldur``.
+
+    The examples cannot reach a Waldur; a complete SLURM offering with LDAP stands in
+    for it, which still checks what the example controls: its bootstrap keys and
+    local secrets.
+    """
+    return configuration_source.ServedConfiguration(
+        url=f"{offering.waldur_api_url}marketplace-provider-offerings/{offering.waldur_offering_uuid}/site_agent_config/",
+        offering={
+            "name": "Served by Waldur",
+            "backend_type": "slurm",
+            "order_processing_backend": "slurm",
+            "membership_sync_backend": "slurm",
+            "reporting_backend": "slurm",
+            "backend_settings": {
+                "default_account": "root",
+                "customer_prefix": "c_",
+                "project_prefix": "p_",
+                "allocation_prefix": "a_",
+                "ldap": {"uri": "ldap://ldap.example.com", "bind_dn": "cn=agent", "base_dn": "dc=example"},
+            },
+            "backend_components": {
+                "cpu": {"measured_unit": "Hours", "unit_factor": 60, "accounting_type": "usage", "label": "CPU"}
+            },
+        },
+        secrets=[],
+        version="docs-check",
+    )
+
+
 class _SchemaWarnings(logging.Handler):
     """Collect the plugin settings-schema warnings the loader logs."""
 
@@ -169,6 +201,8 @@ def config_problems(text: str) -> Optional[List[str]]:
         problems += _unknown_keys(offering, structures.Offering, f"offering {name!r}")
         if not offering.get("waldur_api_token") and not offering.get("oidc_token_url"):
             offering["waldur_api_token"] = DUMMY_TOKEN  # docs show placeholders for secrets
+        if offering.get("configuration_source") == configuration_source.SOURCE_WALDUR:
+            continue  # backends and roles come from Waldur; the loader checks the rest
         backend_type = offering.get("backend_type")
         if backend_type and backend_type not in BACKENDS:
             problems.append(f"offering {name!r}: backend_type {backend_type!r} is not a registered backend")
@@ -189,7 +223,8 @@ def config_problems(text: str) -> Optional[List[str]]:
     root_logger = logging.getLogger()
     root_logger.addHandler(warnings)
     try:
-        structures.RootConfiguration(**raw).to_agent_configuration()
+        with mock.patch.object(configuration_source, "fetch_configuration", _served_stub):
+            structures.RootConfiguration(**raw).to_agent_configuration()
     except Exception as exc:  # noqa: BLE001 - every loader failure is a finding here
         problems.append(f"does not load: {' '.join(str(exc).split())}")
     finally:
@@ -257,6 +292,26 @@ def test_checker_reports_an_unknown_key() -> None:
 def test_checker_reports_an_unregistered_backend() -> None:
     problems = config_problems(VALID.replace("order_processing_backend: slurm", "order_processing_backend: cscs-dwdi"))
     assert problems and any("'cscs-dwdi' is not a registered backend" in p for p in problems)
+
+
+FROM_WALDUR = """
+offerings:
+  - name: Example
+    configuration_source: waldur
+    waldur_api_url: https://waldur.example.com/api/
+    waldur_offering_uuid: "00000000000000000000000000000000"
+    backend_settings:
+      ldap: {bind_password: secret}
+"""
+
+
+def test_checker_accepts_a_bootstrap_only_example_without_network() -> None:
+    assert config_problems(FROM_WALDUR) == []
+
+
+def test_checker_reports_a_local_key_of_a_waldur_sourced_offering() -> None:
+    problems = config_problems(FROM_WALDUR.replace("    backend_settings:", "    backend_type: slurm\n    backend_settings:"))
+    assert problems and any("does not load" in p and "backend_type" in p for p in problems)
 
 
 def test_checker_reports_offerings_as_a_mapping() -> None:

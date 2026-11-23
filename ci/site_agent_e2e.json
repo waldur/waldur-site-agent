@@ -15,7 +15,8 @@
       "Policy grace ratio and carryover behaviour",
       "Policy raw usage reset across period types (month, quarter, total)",
       "Membership-sync stale users: departed, rejoined, restricted and hand-added backend users, and service/course accounts",
-      "LDAP group memberships from Resource and ResourceProject roles (ldap-roles)"
+      "LDAP group memberships from Resource and ResourceProject roles (ldap-roles)",
+      "Agent configuration read from Waldur (configuration_source: waldur) with a non-unit component factor"
     ]
   },
   "users": [
@@ -472,6 +473,20 @@
         "enable_resource_projects": true,
         "enable_membership_sync_status": true
       }
+    },
+    {
+      "uuid": "e2ef0000000000000000000000000009",
+      "name": "E2E SLURM Config from Waldur",
+      "type": "Marketplace.SiteAgent",
+      "state": 2,
+      "shared": true,
+      "billable": true,
+      "category_uuid": "e2ed0000000000000000000000000002",
+      "customer_uuid": "e2ec0000000000000000000000000001",
+      "description": "SLURM offering whose agent configuration is read from Waldur (configuration_source: waldur). The test writes its agent configuration and the cpu component's unit_factor and limit through the API.",
+      "plugin_options": {
+        "service_provider_can_create_offering_user": true
+      }
     }
   ],
   "offering_components": [
@@ -719,6 +734,16 @@
       "description": "CPU time in k-Hours",
       "billing_type": "limit",
       "measured_unit": "k-Hours"
+    },
+    {
+      "uuid": "e2e10000000000000000000000000091",
+      "offering_uuid": "e2ef0000000000000000000000000009",
+      "type": "cpu",
+      "name": "CPU",
+      "description": "CPU time in Hours, billed by usage",
+      "billing_type": "usage",
+      "measured_unit": "Hours",
+      "limit_amount": 100
     }
   ],
   "plans": [
@@ -836,6 +861,13 @@
       "offering_uuid": "e2ef0000000000000000000000000008",
       "unit": "month",
       "description": "Standard plan for the ldap-roles offering"
+    },
+    {
+      "uuid": "e2e00000000000000000000000000019",
+      "name": "E2E Config from Waldur Standard",
+      "offering_uuid": "e2ef0000000000000000000000000009",
+      "unit": "month",
+      "description": "Standard plan for the offering configured in Waldur"
     }
   ],
   "plan_components": [
@@ -1017,6 +1049,13 @@
     {
       "plan_uuid": "e2e00000000000000000000000000018",
       "component_uuid": "e2e10000000000000000000000000081",
+      "component_type": "cpu",
+      "price": "0.00",
+      "amount": 0
+    },
+    {
+      "plan_uuid": "e2e00000000000000000000000000019",
+      "component_uuid": "e2e10000000000000000000000000091",
       "component_type": "cpu",
       "price": "0.00",
       "amount": 0

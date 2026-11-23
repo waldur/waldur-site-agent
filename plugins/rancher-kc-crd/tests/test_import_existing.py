@@ -644,6 +644,61 @@ class TestLoadOffering:
         with pytest.raises(SystemExit):
             ie.load_offering(str(config), "slurm")
 
+    def _waldur_sourced(self, tmp_path, served_offering, status=200):
+        import respx  # noqa: PLC0415
+
+        uuid = "00000000000000000000000000000009"
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            json.dumps(
+                {
+                    "offerings": [
+                        {"name": "slurm", "backend_type": "slurm", "waldur_offering_uuid": "1"},
+                        {
+                            "configuration_source": "waldur",
+                            "waldur_api_url": "https://waldur.example.com/api/",
+                            "waldur_api_token": "agent-token",
+                            "waldur_offering_uuid": uuid,
+                        },
+                    ]
+                }
+            )
+        )
+        url = (
+            "https://waldur.example.com/api/marketplace-provider-offerings/"
+            f"{uuid}/site_agent_config/"
+        )
+        with respx.mock() as router:
+            router.get(url).mock(
+                return_value=httpx.Response(
+                    status, json={"offering": served_offering, "secrets": [], "version": "v1"}
+                )
+            )
+            return ie.load_offering(str(config), None)
+
+    def test_waldur_sourced_offering_is_read_from_waldur(self, tmp_path):
+        offering = self._waldur_sourced(
+            tmp_path,
+            {
+                "name": "rancher from Waldur",
+                "backend_type": "rancher-kc-crd",
+                "membership_sync_backend": "rancher-kc-crd",
+                "backend_settings": {"keycloak_realm": "waldur"},
+            },
+        )
+        assert offering["name"] == "rancher from Waldur"
+        assert offering["configuration_source"] == "waldur"
+        assert offering["waldur_api_token"] == "agent-token"
+        assert offering["backend_settings"]["keycloak_realm"] == "waldur"
+
+    def test_waldur_sourced_offering_of_another_backend_is_not_picked(self, tmp_path):
+        with pytest.raises(SystemExit, match="0 rancher-kc-crd offerings"):
+            self._waldur_sourced(tmp_path, {"name": "x", "backend_type": "slurm"})
+
+    def test_waldur_failure_exits_with_the_loader_message(self, tmp_path):
+        with pytest.raises(SystemExit, match="HTTP 403"):
+            self._waldur_sourced(tmp_path, {}, status=403)
+
 
 # ---------------------------------------------------------------------
 # CLI end to end, over mocked HTTP

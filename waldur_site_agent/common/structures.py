@@ -16,7 +16,7 @@ import logging
 import zoneinfo
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -167,6 +167,11 @@ class Offering(BaseModel):
     """
 
     name: str = Field(..., description="Human-readable name for the offering")
+    configuration_source: Literal["local", "waldur"] = Field(
+        default="local",
+        description="Where the offering's configuration comes from: this file (local) or "
+        "Waldur (waldur), in which case the file holds only how to reach Waldur and secrets",
+    )
     waldur_api_url: str = Field(..., description="Base URL for the Waldur API endpoint")
     # Credentials carry the same {"secret": True} marker as plugin settings
     # (plugin_schemas.SECRET, not imported here: the two modules import each other lazily).
@@ -248,15 +253,28 @@ class Offering(BaseModel):
         ),
     )
 
+    policy_settings: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Periodic usage policy of the offering as Waldur describes it; "
+        "informational, the agent does not apply it",
+    )
+
     # Copied from the root-level global_proxy by the config loader, so every client
     # built from an offering -- including in event mode, where handlers only see the
     # offering -- goes through the configured proxy. Not an offering-level setting.
     _global_proxy: str = PrivateAttr(default="")
+    # Version of the configuration Waldur served, for configuration_source: waldur.
+    _configuration_version: str = PrivateAttr(default="")
 
     @property
     def global_proxy(self) -> str:
         """Proxy URL for Waldur API connections, from the root-level global_proxy."""
         return self._global_proxy
+
+    @property
+    def configuration_version(self) -> str:
+        """Version of the configuration Waldur served; empty for a local configuration."""
+        return self._configuration_version
 
     @model_validator(mode="after")
     def validate_auth_config(self) -> Offering:
@@ -517,6 +535,33 @@ class WaldurAgentConfiguration(BaseModel):
         return v
 
 
+def parse_offering(offering_data: dict[str, Any]) -> Offering:
+    """Validate one offering's raw configuration, with its plugins' schemas.
+
+    Components become ``BackendComponent`` instances. Plugin schemas check the
+    components and backend settings of every backend the offering uses; their
+    problems are logged, never raised.
+    """
+    from waldur_site_agent.common import plugin_schemas  # noqa: PLC0415
+
+    backend_names = plugin_schemas.offering_backend_names(offering_data)
+    if "backend_components" in offering_data:
+        components = {}
+        for name, component_data in offering_data["backend_components"].items():
+            validated_data = plugin_schemas.validate_component_for_backends(
+                backend_names, name, component_data
+            )
+            components[name] = BackendComponent(**validated_data)
+        offering_data["backend_components"] = components
+
+    if "backend_settings" in offering_data:
+        offering_data["backend_settings"] = plugin_schemas.validate_backend_settings_for_backends(
+            backend_names, offering_data["backend_settings"]
+        )
+
+    return Offering(**offering_data)
+
+
 class RootConfiguration(BaseModel):
     """Root configuration model for parsing YAML configuration files.
 
@@ -637,37 +682,31 @@ class RootConfiguration(BaseModel):
             raise ValueError(msg)
         return v_upper
 
-    def to_agent_configuration(self) -> WaldurAgentConfiguration:
-        """Convert raw configuration to typed agent configuration."""
-        # Parse backend_components for each offering
+    def to_agent_configuration(self, user_agent: Optional[str] = None) -> WaldurAgentConfiguration:
+        """Convert raw configuration to typed agent configuration.
+
+        An offering with ``configuration_source: waldur`` is read from Waldur here,
+        with its local secrets merged in, and then validated like a local one.
+
+        Args:
+            user_agent: User-Agent for the requests that read configurations from Waldur
+        """
+        from waldur_site_agent.common import configuration_source  # noqa: PLC0415
+
         parsed_offerings = []
         for offering_data in self.offerings:
-            # Convert backend_components dict to BackendComponent instances
-            if "backend_components" in offering_data:
-                components = {}
-                from waldur_site_agent.common import plugin_schemas  # noqa: PLC0415
-
-                backend_names = plugin_schemas.offering_backend_names(offering_data)
-
-                for name, component_data in offering_data["backend_components"].items():
-                    # Apply the schemas of every backend the offering uses
-                    validated_data = plugin_schemas.validate_component_for_backends(
-                        backend_names, name, component_data
-                    )
-                    components[name] = BackendComponent(**validated_data)
-                offering_data["backend_components"] = components
-
-            # Apply plugin-specific backend settings validation if available
-            if "backend_settings" in offering_data:
-                from waldur_site_agent.common import plugin_schemas  # noqa: PLC0415
-
-                validated_settings = plugin_schemas.validate_backend_settings_for_backends(
-                    plugin_schemas.offering_backend_names(offering_data),
-                    offering_data["backend_settings"],
+            if offering_data.get("configuration_source") == configuration_source.SOURCE_WALDUR:
+                merged_data, served = configuration_source.load_offering_data(
+                    offering_data, self.global_proxy, user_agent
                 )
-                offering_data["backend_settings"] = validated_settings
-
-            offering = Offering(**offering_data)
+                offering = configuration_source.build_offering(merged_data, served)
+            else:
+                offering = parse_offering(offering_data)
+                logger.info(
+                    "Offering %s (%s): configuration source local",
+                    offering.name,
+                    offering.waldur_offering_uuid,
+                )
             offering._global_proxy = self.global_proxy
             parsed_offerings.append(offering)
 

@@ -118,6 +118,7 @@ from waldur_site_agent.backend.backends import (
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common import (
     WALDUR_SITE_AGENT_VERSION,
+    configuration_source,
     static_token_prefix,
     structures,
 )
@@ -521,10 +522,12 @@ def load_configuration(
     with Path(config_file_path).open(encoding="UTF-8") as stream:
         raw_config = yaml.safe_load(stream)
 
+    user_agent = f"waldur-site-agent-{user_agent_suffix}/{WALDUR_SITE_AGENT_VERSION}"
     try:
-        # Parse and validate the configuration using Pydantic
+        # Parse and validate the configuration using Pydantic; offerings with
+        # configuration_source: waldur are read from Waldur here.
         root_config = structures.RootConfiguration(**raw_config)
-        configuration = root_config.to_agent_configuration()
+        configuration = root_config.to_agent_configuration(user_agent=user_agent)
 
         # Handle Sentry configuration - initialize if DSN is provided
         if configuration.sentry_dsn:
@@ -565,9 +568,7 @@ def load_configuration(
 
     # Set version and user agent for all configurations
     configuration.waldur_site_agent_version = WALDUR_SITE_AGENT_VERSION
-    configuration.waldur_user_agent = (
-        f"waldur-site-agent-{user_agent_suffix}/{WALDUR_SITE_AGENT_VERSION}"
-    )
+    configuration.waldur_user_agent = user_agent
     configuration.config_file_path = config_file_path
 
     # Configure logger with the specified log level
@@ -626,7 +627,13 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
     logger.info("Using %s as a config source", config_file_path)
 
     # Load base configuration with mode-specific user agent
-    configuration = load_configuration(config_file_path, user_agent_suffix=agent_mode)
+    try:
+        configuration = load_configuration(config_file_path, user_agent_suffix=agent_mode)
+    except configuration_source.ConfigurationSourceError as exc:
+        # Expected operator errors (Waldur unreachable, a forbidden local key, a
+        # missing secret): one readable line and a non-zero exit, not a traceback.
+        logger.error("Cannot load the configuration from %s: %s", config_file_path, exc)
+        raise SystemExit(1) from exc
 
     # Add CLI-specific configuration
     configuration.waldur_site_agent_mode = agent_mode
@@ -784,7 +791,19 @@ def load_offering_components() -> None:
     Used during initial setup or when component definitions change.
     """
     configuration = init_configuration()
+    logger.warning(
+        "waldur_site_load_components is deprecated and will be removed: configure the "
+        "offering's components in Waldur and set configuration_source: waldur on the "
+        "offering so the agent reads them from there (see docs/configuration.md)"
+    )
     for offering in configuration.waldur_offerings:
+        if offering.configuration_source == configuration_source.SOURCE_WALDUR:
+            logger.info(
+                "Skipping %s offering: its configuration comes from Waldur, "
+                "which already has its components",
+                offering.name,
+            )
+            continue
         logger.info("Processing %s offering", offering.name)
         waldur_rest_client = get_client_for_offering(
             offering, configuration.waldur_user_agent, configuration.global_proxy

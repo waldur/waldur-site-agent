@@ -56,6 +56,7 @@ Config: the `WALDUR_E2E_*_CONFIG` variable the file reads (`CONFIG` =
 | File | Config | Job | What it validates |
 |------|--------|-----|-------------------|
 | `test_e2e_api_optimizations.py` | CONFIG | REST | Order lifecycle, membership sync, reporting |
+| `test_e2e_config_from_waldur.py` | CONFIG ⁴ | REST | `configuration_source: waldur` |
 | `test_e2e_benchmark.py` | CONFIG | REST | API call counts and response sizes; scales to N resources |
 | `test_e2e_default_account_policy.py` | CONFIG | REST | `default_account_policy` sets the DefaultAccount |
 | `test_e2e_membership_stale.py` | MEMBERSHIP | REST | Which backend users membership sync removes or keeps |
@@ -78,6 +79,9 @@ Config: the `WALDUR_E2E_*_CONFIG` variable the file reads (`CONFIG` =
 `sacct` on the same state); no agent config.
 ³ `WALDUR_E2E_LDAP_CONFIG`, `WALDUR_E2E_LDAP_INVERTED_CONFIG` and
 `WALDUR_E2E_LDAP_PROJECT_GROUPS_CONFIG`.
+⁴ Only the Waldur URL and token come from the config; the test writes the agent configuration of
+its own offering (`E2E SLURM Config from Waldur`) and loads it from Waldur. It needs a Waldur with
+`GET marketplace-provider-offerings/{uuid}/site_agent_config/` (waldur/waldur-mastermind#1287).
 
 ### ldap-roles (`plugins/ldap-roles/tests/e2e/`)
 

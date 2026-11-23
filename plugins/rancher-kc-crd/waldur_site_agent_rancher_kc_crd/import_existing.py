@@ -50,7 +50,7 @@ from typing import Any, Optional
 import httpx
 import yaml
 
-from waldur_site_agent.common import static_token_prefix
+from waldur_site_agent.common import WALDUR_SITE_AGENT_VERSION, static_token_prefix, structures
 
 from .translator import IdentitySettings, mask_civil_code, resolve_identity_settings
 
@@ -934,23 +934,54 @@ class Importer:
 # ---------------------------------------------------------------------
 
 
+def _matches(entry: dict, offering: Optional[str]) -> bool:
+    if not offering:
+        return True
+    return offering in (entry.get("name"), entry.get("waldur_offering_uuid")) or normalize_uuid(
+        offering
+    ) == normalize_uuid(entry.get("waldur_offering_uuid") or "")
+
+
+def _from_waldur(entry: dict, config: dict) -> dict:
+    """An offering with ``configuration_source: waldur``, read from Waldur by the agent's loader.
+
+    The file holds only how to reach Waldur and secrets; roles and settings come
+    from Waldur, as they do for the agent itself.
+    """
+    root = structures.RootConfiguration(
+        offerings=[entry], global_proxy=config.get("global_proxy") or ""
+    )
+    try:
+        loaded = root.to_agent_configuration(
+            user_agent=f"waldur-site-agent-rancher-kc-crd-import/{WALDUR_SITE_AGENT_VERSION}"
+        )
+    except ValueError as exc:  # ConfigurationSourceError, or the offering does not validate
+        raise SystemExit(str(exc)) from exc
+    return loaded.offerings[0].model_dump(mode="json")
+
+
 def load_offering(config_path: str, offering: Optional[str]) -> dict:
-    """The agent config's offering entry, by name or UUID (or the only one)."""
+    """The agent config's offering entry, by name or UUID (or the only one).
+
+    A local offering is used as written. One with ``configuration_source: waldur``
+    is read from Waldur first, so its backends are known.
+    """
     with Path(config_path).open() as f:
         config = yaml.safe_load(f) or {}
+    entries = []
+    for entry in config.get("offerings") or []:
+        if entry.get("configuration_source") == "waldur":
+            if not _matches(entry, offering) and entry.get("name"):
+                continue  # named locally, and not the one asked for: no need to ask Waldur
+            entry = _from_waldur(entry, config)
+        entries.append(entry)
     offerings = [
         o
-        for o in config.get("offerings") or []
+        for o in entries
         if (o.get("backend_type") == "rancher-kc-crd")
         or (o.get("membership_sync_backend") == "rancher-kc-crd")
     ]
-    if offering:
-        offerings = [
-            o
-            for o in offerings
-            if offering in (o.get("name"), o.get("waldur_offering_uuid"))
-            or normalize_uuid(offering) == normalize_uuid(o.get("waldur_offering_uuid") or "")
-        ]
+    offerings = [o for o in offerings if _matches(o, offering)]
     if len(offerings) != 1:
         msg = (
             f"{len(offerings)} rancher-kc-crd offerings match in {config_path}; "

@@ -1,0 +1,34 @@
+# Bootstrap configuration for an offering whose configuration comes from Waldur.
+#
+# With `configuration_source: waldur` the agent reads the offering's roles, event
+# settings, agent settings, backend_settings, backend_components and policy
+# settings from Waldur when it starts
+# (GET marketplace-provider-offerings/<uuid>/site_agent_config/). This file keeps
+# only what the agent needs to reach Waldur and the secrets Waldur never stores.
+# Any other key in the offering fails the load. If Waldur cannot be reached or
+# refuses the request, the agent stops at startup with an error naming the
+# offering; changes made in Waldur apply when the agent restarts.
+#
+# See docs/configuration.md, "Configuration from Waldur".
+
+# Root-level settings stay in the file: they belong to the agent process, not
+# to an offering.
+timezone: "UTC"
+log_level: "INFO"
+
+offerings:
+  - # Optional; Waldur's offering name is used when it is left out.
+    name: "HPC cluster"
+    configuration_source: waldur
+
+    waldur_api_url: "https://waldur.example.com/api/"
+    # Needs permission to update the offering's integration (OFFERING.MANAGER).
+    waldur_api_token: "<YOUR_API_TOKEN_HERE>"
+    waldur_offering_uuid: "<OFFERING_UUID>"
+    verify_ssl: true
+
+    # Secrets only, at the paths Waldur lists for the offering. Here: the LDAP
+    # bind password of a SLURM offering with LDAP account management.
+    backend_settings:
+      ldap:
+        bind_password: "<LDAP_BIND_PASSWORD>"
