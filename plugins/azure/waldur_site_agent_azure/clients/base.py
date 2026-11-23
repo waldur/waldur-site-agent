@@ -8,8 +8,9 @@ the deployments that use Azure.
 from __future__ import annotations
 
 import functools
+from collections.abc import Callable
 from http import HTTPStatus
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, TypeVar
 
 from azure.core.exceptions import AzureError
 from azure.core.polling import LROPoller
@@ -26,7 +27,7 @@ class AzureClientError(Exception):
     not lead to the same decision.
     """
 
-    def __init__(self, message: str, status_code: Optional[int] = None) -> None:
+    def __init__(self, message: str, status_code: int | None = None) -> None:
         """Record the message and, when Azure gave one, the HTTP status."""
         super().__init__(message)
         self.status_code = status_code

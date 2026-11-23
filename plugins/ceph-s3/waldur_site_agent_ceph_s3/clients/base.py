@@ -12,10 +12,8 @@ import json
 import logging
 import re
 import time
-from typing import Optional
 
 import httpx
-
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.structures import Association, ClientResource
 from waldur_site_agent.common.sentry import scrub_secret_query_params
@@ -61,11 +59,11 @@ class BaseS3AdminClient(BaseClient):
         self.session: httpx.Client
 
     @abc.abstractmethod
-    def _build_url(self, endpoint: str, params: Optional[dict] = None) -> str:
+    def _build_url(self, endpoint: str, params: dict | None = None) -> str:
         """Return the absolute URL for one operation, query string included."""
 
     @abc.abstractmethod
-    def _auth_headers(self, method: str, url: str, body: Optional[bytes]) -> dict:
+    def _auth_headers(self, method: str, url: str, body: bytes | None) -> dict:
         """Return the headers that authenticate one request."""
 
     @abc.abstractmethod
@@ -90,7 +88,7 @@ class BaseS3AdminClient(BaseClient):
 
     @abc.abstractmethod
     def create_user(
-        self, uid: str, name: str, email: Optional[str] = None, **kwargs: object
+        self, uid: str, name: str, email: str | None = None, **kwargs: object
     ) -> dict:
         """Create an S3 user holding only the key pair Waldur issued."""
 
@@ -150,7 +148,7 @@ class BaseS3AdminClient(BaseClient):
         # against radosgw's list of strings it would have raised AttributeError.
         return [ClientResource(name=uid) for uid in self.list_users()]
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get the resource's info - maps to get_user_info for S3."""
         try:
             user_info = self.get_user_info(resource_id)
@@ -163,7 +161,7 @@ class BaseS3AdminClient(BaseClient):
         name: str,
         description: str,
         organization: str,
-        parent_name: Optional[str] = None,
+        parent_name: str | None = None,
     ) -> str:
         """Create a resource in the cluster - maps to create_user for S3."""
         self.create_user(name, description)
@@ -176,7 +174,7 @@ class BaseS3AdminClient(BaseClient):
 
     def set_resource_limits(
         self, resource_id: str, limits_dict: dict[str, int]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Set account limits - not applicable for S3."""
         return None
 
@@ -194,12 +192,12 @@ class BaseS3AdminClient(BaseClient):
         """Set resource limits for a specific user - not applicable for S3."""
         return ""
 
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Get association between the user and the resource - not applicable for S3."""
         return None
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Create association between the user and the resource - not applicable for S3."""
         return ""
@@ -208,7 +206,7 @@ class BaseS3AdminClient(BaseClient):
         """Delete association between the user and the resource - not applicable for S3."""
         return ""
 
-    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: str | None = None) -> list:
         """Get usage report for resources - not applicable for S3."""
         return []
 
@@ -272,8 +270,8 @@ class BaseS3AdminClient(BaseClient):
         self,
         method: str,
         url: str,
-        headers: Optional[dict] = None,
-        content: Optional[bytes] = None,
+        headers: dict | None = None,
+        content: bytes | None = None,
     ) -> httpx.Response:
         """Send request, retrying transient 5xx responses with exponential backoff."""
         response = self.session.request(method=method, url=url, headers=headers, content=content)
@@ -290,8 +288,8 @@ class BaseS3AdminClient(BaseClient):
         self,
         method: str,
         endpoint: str,
-        json_data: Optional[dict] = None,
-        params: Optional[dict] = None,
+        json_data: dict | None = None,
+        params: dict | None = None,
     ) -> httpx.Response:
         """Make an authenticated request and raise on any error status.
 

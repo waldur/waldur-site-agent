@@ -8,7 +8,6 @@ Requires slurm-emulator package (dev dependency).
 """
 
 import datetime
-from typing import Optional
 from unittest import mock
 from unittest.mock import patch
 
@@ -24,9 +23,7 @@ except ImportError:
     EMULATOR_AVAILABLE = False
 
 from waldur_api_client.types import UNSET
-
 from waldur_site_agent_slurm.backend import SlurmBackend
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -90,7 +87,7 @@ _MISSING = object()
 
 
 def _make_waldur_resource(
-    limits: Optional[dict] = None,
+    limits: dict | None = None,
     created: object = _MISSING,
     end_date: object = _MISSING,
     backend_id: str = "",
@@ -124,7 +121,7 @@ class TestPrepaidEmulatorScenarios:
     """
 
     def _make_backend(
-        self, components: dict, settings: Optional[dict] = None,
+        self, components: dict, settings: dict | None = None,
     ) -> SlurmBackend:
         """Create a SlurmBackend with emulator-patched client."""
         from unittest import mock as _mock  # noqa: PLC0415

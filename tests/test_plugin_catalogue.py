@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 import typing
-from typing import Any, Optional
+from importlib.metadata import version
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field, ValidationError
@@ -15,11 +15,6 @@ from pydantic import BaseModel, Field, ValidationError
 from waldur_site_agent.backend.backends import BackendRole, BaseBackend
 from waldur_site_agent.common import plugin_catalogue, plugin_schemas, structures
 from waldur_site_agent.common.plugin_schemas import SECRET, SENSITIVE
-
-if sys.version_info >= (3, 10):
-    from importlib.metadata import version
-else:
-    from importlib_metadata import version
 
 # Words that make a settings field look like a credential, matched against the
 # underscore-separated parts of its name.
@@ -356,9 +351,9 @@ def test_secret_paths_follow_nested_models() -> None:
         host: str
 
     class _Outer(BaseModel):
-        token: Optional[str] = Field(default=None, json_schema_extra=SECRET)
+        token: str | None = Field(default=None, json_schema_extra=SECRET)
         inner: _Inner
-        optional_inner: Optional[_Inner] = None
+        optional_inner: _Inner | None = None
         by_name: dict[str, _Inner] = {}
         listed: list[_Inner] = []
 
@@ -387,10 +382,10 @@ def test_sensitive_paths_follow_nested_models_and_leave_out_secrets() -> None:
         password: str = Field(..., json_schema_extra=SECRET)
 
     class _Outer(BaseModel):
-        api_url: Optional[str] = Field(default=None, json_schema_extra=SENSITIVE)
+        api_url: str | None = Field(default=None, json_schema_extra=SENSITIVE)
         token_file: str = Field(..., json_schema_extra={**SECRET, **SENSITIVE})
         inner: _Inner
-        optional_inner: Optional[_Inner] = None
+        optional_inner: _Inner | None = None
         by_name: dict[str, _Inner] = {}
         listed: list[_Inner] = []
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from pydantic import ValidationError
@@ -104,7 +104,7 @@ def _endpoint_url(offering: structures.Offering) -> str:
 
 def fetch_configuration(
     offering: structures.Offering,
-    user_agent: Optional[str] = None,
+    user_agent: str | None = None,
     timeout: float = LOAD_TIMEOUT,
 ) -> ServedConfiguration:
     """Read an offering's configuration from Waldur with the offering's credentials.
@@ -207,7 +207,7 @@ def _validation_problems(exc: ValidationError) -> str:
 def load_offering_data(
     offering_data: dict[str, Any],
     global_proxy: str = "",
-    user_agent: Optional[str] = None,
+    user_agent: str | None = None,
 ) -> tuple[dict[str, Any], ServedConfiguration]:
     """Build a Waldur-sourced offering's configuration: Waldur's, plus the local secrets.
 
@@ -273,7 +273,7 @@ def _leaves(settings: dict[str, Any], prefix: str = "") -> Iterator[str]:
 def _path_matches(path: str, pattern: str) -> bool:
     parts, pattern_parts = path.split("."), pattern.split(".")
     return len(parts) == len(pattern_parts) and all(
-        expected in ("*", actual) for actual, expected in zip(parts, pattern_parts)
+        expected in ("*", actual) for actual, expected in zip(parts, pattern_parts, strict=True)
     )
 
 
@@ -470,7 +470,7 @@ def _same(local: Any, waldur: Any) -> bool:  # noqa: ANN401
     return bool(local == waldur)
 
 
-def _component_values(component: dict[str, Any]) -> Optional[dict[str, Any]]:
+def _component_values(component: dict[str, Any]) -> dict[str, Any] | None:
     try:
         model = structures.BackendComponent(**component)
     except ValidationError:

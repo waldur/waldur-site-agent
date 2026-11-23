@@ -7,7 +7,7 @@ Waldur SDK and the LdapClient.
 from __future__ import annotations
 
 from string import Template
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 
 class DesiredGroup(NamedTuple):
@@ -34,7 +34,7 @@ class Grant(NamedTuple):
     """
 
     scope_type: str  # "resource" or "resource_project"
-    resource_project_uuid: Optional[str]
+    resource_project_uuid: str | None
     role_name: str
     member: str
     group: str
@@ -237,7 +237,7 @@ def _scope_grants(
     role_map: dict[str, str],
     lookup_by_user_uuid: bool,
     scope_type: str,
-    resource_project_uuid: Optional[str],
+    resource_project_uuid: str | None,
     names: dict[str, str],
 ) -> list[Grant]:
     grants = []
@@ -281,7 +281,7 @@ def diff_members(
 
 
 def cluster_user_roles_dicts(  # pragma: no cover - trivial passthrough
-    raw: Optional[list[dict]],
+    raw: list[dict] | None,
 ) -> list[dict]:
     """Defensive coercion: list[dict] | None -> list[dict].
 

@@ -23,22 +23,18 @@ from __future__ import annotations
 
 import logging
 import re
-import sys
 import textwrap
+from collections.abc import Iterator
 from dataclasses import dataclass
+from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Any, Iterator, List, Optional
+from typing import Any
 from unittest import mock
 
 import pytest
 import yaml
 
 from waldur_site_agent.common import configuration_source, structures
-
-if sys.version_info >= (3, 10):
-    from importlib.metadata import entry_points
-else:  # pragma: no cover - Python 3.9 CI job
-    from importlib_metadata import entry_points
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -72,7 +68,7 @@ class Example:
 
     location: str
     text: str
-    skip_reason: Optional[str] = None
+    skip_reason: str | None = None
 
 
 def _skip_marked(text_before_fence: str) -> bool:
@@ -105,9 +101,9 @@ def file_examples(path: Path, root: Path) -> Iterator[Example]:
         yield Example(f"{path.relative_to(root)}{suffix}", document)
 
 
-def collect_examples(root: Path) -> List[Example]:
+def collect_examples(root: Path) -> list[Example]:
     """All config examples under ``root``, in a stable order."""
-    examples: List[Example] = []
+    examples: list[Example] = []
     markdown = sorted({p for pattern in MARKDOWN_GLOBS for p in root.glob(pattern)})
     for path in markdown:
         examples.extend(markdown_examples(path, root))
@@ -117,7 +113,7 @@ def collect_examples(root: Path) -> List[Example]:
     return examples
 
 
-def _unknown_keys(raw: dict, model: type, where: str, anchors: bool = False) -> List[str]:
+def _unknown_keys(raw: dict, model: type, where: str, anchors: bool = False) -> list[str]:
     """Keys the model does not define; pydantic would ignore them without a word.
 
     At the top level a key starting with ``.`` is allowed as a YAML anchor holder
@@ -167,7 +163,7 @@ class _SchemaWarnings(logging.Handler):
 
     def __init__(self) -> None:
         super().__init__(logging.WARNING)
-        self.messages: List[str] = []
+        self.messages: list[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         # The agent logs through structlog, which hands the stdlib record a dict.
@@ -176,7 +172,7 @@ class _SchemaWarnings(logging.Handler):
             self.messages.append(" ".join(message.split())[:400])
 
 
-def config_problems(text: str) -> Optional[List[str]]:
+def config_problems(text: str) -> list[str] | None:
     """Problems with one config example; ``None`` when it is not an agent config.
 
     An example without a top-level ``offerings`` key (a Kubernetes manifest in an
@@ -185,7 +181,7 @@ def config_problems(text: str) -> Optional[List[str]]:
     raw: Any = yaml.safe_load(text)
     if not isinstance(raw, dict) or "offerings" not in raw:
         return None
-    problems: List[str] = []
+    problems: list[str] = []
     offerings = raw["offerings"]
     if not isinstance(offerings, list):
         return ["`offerings` must be a list of offerings"]

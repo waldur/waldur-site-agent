@@ -123,7 +123,7 @@ class CustomUsernameBackend(AbstractUsernameManagementBackend):
         # Custom logic here
         return generated_username
 
-    def get_username(self, offering_user: OfferingUser) -> Optional[str]:
+    def get_username(self, offering_user: OfferingUser) -> str | None:
         """Retrieve existing username from local identity provider."""
         # Custom lookup logic here
         return existing_username

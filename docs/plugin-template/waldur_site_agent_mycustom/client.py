@@ -4,7 +4,6 @@ This module implements the BaseClient interface for communicating
 with the custom backend system (CLI commands or API calls).
 """
 
-from typing import Optional
 
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.structures import Association, ClientResource
@@ -36,7 +35,7 @@ class MyCustomClient(BaseClient):
         # Example for API: response = httpx.get(f"{self.api_url}/resources")
         return []
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get a single resource by its backend ID.
 
         Must return None if the resource does not exist (do not raise).
@@ -48,7 +47,7 @@ class MyCustomClient(BaseClient):
         return None
 
     def create_resource(
-        self, name: str, description: str, organization: str, parent_name: Optional[str] = None
+        self, name: str, description: str, organization: str, parent_name: str | None = None
     ) -> str:
         """Create a new resource on the backend.
 
@@ -66,7 +65,7 @@ class MyCustomClient(BaseClient):
         # TODO: Implement
         return name
 
-    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> str | None:
         """Set resource limits on the backend.
 
         limits_dict values are in backend-native units (already multiplied by unit_factor).
@@ -106,7 +105,7 @@ class MyCustomClient(BaseClient):
         del resource_id, username, limits_dict
         return ""
 
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Check if a user-resource association exists.
 
         Must return None if no association exists (do not raise).
@@ -118,7 +117,7 @@ class MyCustomClient(BaseClient):
         return None
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Create an association between a user and a resource.
 

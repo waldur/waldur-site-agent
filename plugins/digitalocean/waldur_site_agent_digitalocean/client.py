@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import functools
 import logging
-from typing import Callable, Optional, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 import digitalocean
 
@@ -89,7 +90,7 @@ class DigitalOceanClient(BaseClient):
             for droplet in droplets
         ]
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get droplet info as client resource."""
         try:
             droplet = self.manager.get_droplet(resource_id)
@@ -107,7 +108,7 @@ class DigitalOceanClient(BaseClient):
 
     @digitalocean_error_handler
     def create_resource(
-        self, name: str, description: str, organization: str, parent_name: Optional[str] = None
+        self, name: str, description: str, organization: str, parent_name: str | None = None
     ) -> str:
         """Create droplet placeholder resource."""
         del description, organization, parent_name
@@ -122,7 +123,7 @@ class DigitalOceanClient(BaseClient):
         droplet.destroy()
         return name
 
-    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> str | None:
         """No-op for DigitalOcean."""
         del resource_id, limits_dict
         return None
@@ -144,13 +145,13 @@ class DigitalOceanClient(BaseClient):
         del resource_id, username, limits_dict
         return ""
 
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """No-op for associations."""
         del user, resource_id
         return None
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """No-op association create."""
         del resource_id, default_account
@@ -180,9 +181,9 @@ class DigitalOceanClient(BaseClient):
         region: str,
         image: str | int,
         size_slug: str,
-        user_data: Optional[str] = None,
-        ssh_key_ids: Optional[list[int]] = None,
-        tags: Optional[list[str]] = None,
+        user_data: str | None = None,
+        ssh_key_ids: list[int] | None = None,
+        tags: list[str] | None = None,
     ) -> digitalocean.Droplet:
         """Create a DigitalOcean droplet."""
         droplet = digitalocean.Droplet(
@@ -203,7 +204,7 @@ class DigitalOceanClient(BaseClient):
         """Return all droplets carrying ``tag``."""
         return self.manager.get_all_droplets(tag_name=tag)
 
-    def get_droplet(self, droplet_id: str) -> Optional[digitalocean.Droplet]:
+    def get_droplet(self, droplet_id: str) -> digitalocean.Droplet | None:
         """Fetch droplet by ID."""
         try:
             return self.manager.get_droplet(droplet_id)
@@ -214,21 +215,21 @@ class DigitalOceanClient(BaseClient):
             raise mapped_error from e
 
     @digitalocean_error_handler
-    def shutdown_droplet(self, droplet_id: str) -> Optional[int]:
+    def shutdown_droplet(self, droplet_id: str) -> int | None:
         """Shutdown droplet and return action ID."""
         droplet = self.manager.get_droplet(droplet_id)
         action = droplet.shutdown()
         return action.get("action", {}).get("id")
 
     @digitalocean_error_handler
-    def power_on_droplet(self, droplet_id: str) -> Optional[int]:
+    def power_on_droplet(self, droplet_id: str) -> int | None:
         """Power on droplet and return action ID."""
         droplet = self.manager.get_droplet(droplet_id)
         action = droplet.power_on()
         return action.get("action", {}).get("id")
 
     @digitalocean_error_handler
-    def reboot_droplet(self, droplet_id: str) -> Optional[int]:
+    def reboot_droplet(self, droplet_id: str) -> int | None:
         """Reboot droplet and return action ID."""
         droplet = self.manager.get_droplet(droplet_id)
         action = droplet.reboot()
@@ -244,9 +245,9 @@ class DigitalOceanClient(BaseClient):
     @digitalocean_error_handler
     def load_ssh_key(
         self,
-        ssh_key_id: Optional[int] = None,
-        ssh_key_fingerprint: Optional[str] = None,
-        ssh_key_name: Optional[str] = None,
+        ssh_key_id: int | None = None,
+        ssh_key_fingerprint: str | None = None,
+        ssh_key_name: str | None = None,
     ) -> digitalocean.SSHKey:
         """Load existing SSH key from DigitalOcean."""
         ssh_key = digitalocean.SSHKey(
@@ -267,11 +268,11 @@ class DigitalOceanClient(BaseClient):
 
     def resolve_ssh_key(
         self,
-        ssh_key_id: Optional[int] = None,
-        ssh_key_fingerprint: Optional[str] = None,
-        ssh_key_public_key: Optional[str] = None,
-        ssh_key_name: Optional[str] = None,
-    ) -> Optional[digitalocean.SSHKey]:
+        ssh_key_id: int | None = None,
+        ssh_key_fingerprint: str | None = None,
+        ssh_key_public_key: str | None = None,
+        ssh_key_name: str | None = None,
+    ) -> digitalocean.SSHKey | None:
         """Resolve or create an SSH key for droplet provisioning."""
         if ssh_key_id or ssh_key_fingerprint:
             try:

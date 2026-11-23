@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import Field
 
 from waldur_site_agent.common.plugin_schemas import SECRET, SENSITIVE, CommonBackendSettingsSchema
@@ -22,18 +20,18 @@ class CSCSDWDIBackendSettingsSchema(CommonBackendSettingsSchema):
     cscs_dwdi_oidc_token_url: str = Field(
         ..., description="OIDC token endpoint", json_schema_extra=SENSITIVE
     )
-    cscs_dwdi_oidc_scope: Optional[str] = Field(default=None, description="OIDC scope")
-    cscs_dwdi_cluster: Optional[str] = Field(
+    cscs_dwdi_oidc_scope: str | None = Field(default=None, description="OIDC scope")
+    cscs_dwdi_cluster: str | None = Field(
         default=None, description="Cluster to filter usage by when the resource names none"
     )
-    socks_proxy: Optional[str] = Field(
+    socks_proxy: str | None = Field(
         default=None, description="Proxy for the API, e.g. socks5://localhost:12345",
         json_schema_extra=SENSITIVE,
     )
-    storage_filesystem: Optional[str] = Field(default=None, description="Storage filesystem")
-    storage_data_type: Optional[str] = Field(default=None, description="Storage data type")
-    storage_tenant: Optional[str] = Field(default=None, description="Storage tenant")
-    storage_path_mapping: Optional[dict[str, str]] = Field(
+    storage_filesystem: str | None = Field(default=None, description="Storage filesystem")
+    storage_data_type: str | None = Field(default=None, description="Storage data type")
+    storage_tenant: str | None = Field(default=None, description="Storage tenant")
+    storage_path_mapping: dict[str, str] | None = Field(
         default=None, description="Map of resource backend id to storage path",
         json_schema_extra=SENSITIVE,
     )

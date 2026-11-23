@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from collections.abc import Iterator
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
@@ -54,7 +54,7 @@ USAGE_COMPONENTS = USAGE_METRICS
 _SLOT_SUFFIX = re.compile(r"-\d+$")
 
 
-def served_on_minted_key(alias: Optional[str]) -> bool:
+def served_on_minted_key(alias: str | None) -> bool:
     """Whether a usage row was served on a key this plugin minted, read off its alias.
 
     Every alias the plugin mints is ``<resource backend id>-<slot>``. A key with no slot
@@ -175,7 +175,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         ttl = backend_settings.get("usage_cache_ttl")
         self._usage_cache_ttl = DEFAULT_USAGE_CACHE_TTL if ttl is None else float(ttl)
         self._rows_cache: dict = {}
-        self._user_map_cache: Optional[tuple] = None
+        self._user_map_cache: tuple | None = None
 
         if not backend_settings.get("api_url"):
             msg = "LiteLLM usage backend requires 'api_url' in backend_settings"
@@ -270,7 +270,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         """
         return _SLOT_SUFFIX.sub("", key_alias)
 
-    def _is_minted(self, alias: Optional[str]) -> bool:
+    def _is_minted(self, alias: str | None) -> bool:
         """Whether a key alias is one this plugin minted, and so bills by alias.
 
         Read off the alias shape alone, because this backend never learns the
@@ -455,7 +455,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
             yield owner, row
 
     @staticmethod
-    def _owner_of(periods: list, row: dict) -> Optional[str]:
+    def _owner_of(periods: list, row: dict) -> str | None:
         """The resource that owned the row's address on the row's day.
 
         A row with no day -- the proxy always sends one, so only a malformed response --
@@ -614,7 +614,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         resource_backend_ids: list,
         year: int,
         month: int,
-        waldur_resource: Optional[WaldurResource] = None,
+        waldur_resource: WaldurResource | None = None,
     ) -> dict:
         """Usage for a specific billing month (used by the historical-usage loader)."""
         del waldur_resource
@@ -641,7 +641,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
 
     def pull_resource(
         self, waldur_resource: WaldurResource
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Build resource info from usage alone.
 
         Report-only: unlike the base implementation this does not call
@@ -662,8 +662,8 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
             return None
 
     def _pull_backend_resource(
-        self, resource_backend_id: str, waldur_resource: Optional[WaldurResource] = None
-    ) -> Optional[structures.BackendResourceInfo]:
+        self, resource_backend_id: str, waldur_resource: WaldurResource | None = None
+    ) -> structures.BackendResourceInfo | None:
         """Return the resource's usage as a BackendResourceInfo (zeros if none yet)."""
         del waldur_resource
         logger.info("Pulling resource %s", resource_backend_id)
@@ -681,7 +681,7 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
     # --- report-only: not implemented ------------------------------------------
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self, waldur_resource: WaldurResource, user_context: dict | None = None
     ) -> None:
         raise NotImplementedError(_REPORT_ONLY)
 

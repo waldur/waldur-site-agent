@@ -1,7 +1,6 @@
 """OKD/OpenShift backend implementation for Waldur Site Agent."""
 
 import pprint
-from typing import Optional
 
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -106,7 +105,7 @@ class OkdBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Validate and prepare for resource creation."""
         if not waldur_resource.customer_slug or not waldur_resource.project_slug:
@@ -135,7 +134,7 @@ class OkdBackend(backends.BaseBackend):
         resource_backend_id: str,
         resource_name: str,
         resource_organization: str,
-        resource_parent_name: Optional[str] = None,
+        resource_parent_name: str | None = None,
     ) -> bool:
         """Create a project/namespace in OKD cluster."""
         try:
@@ -163,7 +162,7 @@ class OkdBackend(backends.BaseBackend):
     def create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> BackendResourceInfo:
         """Create OKD project for the Waldur resource."""
         self._pre_create_resource(waldur_resource, user_context)

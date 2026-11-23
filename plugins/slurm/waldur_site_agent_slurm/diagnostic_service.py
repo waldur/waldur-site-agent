@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from waldur_api_client.api.marketplace_provider_resources import (
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _as_plain_dict(value: object) -> Optional[dict[str, Any]]:
+def _as_plain_dict(value: object) -> dict[str, Any] | None:
     """An SDK attrs model (or a dict) as a plain dict; None when unset.
 
     The Waldur client returns models such as ``ResourceLimits`` here, which the
@@ -327,7 +327,7 @@ class SlurmAccountDiagnosticService:
         self,
         waldur_info: WaldurResourceInfo,
         policy_info: PolicyInfo,
-    ) -> Optional[ExpectedSettings]:
+    ) -> ExpectedSettings | None:
         """Calculate expected SLURM settings based on policy and resource.
 
         Args:

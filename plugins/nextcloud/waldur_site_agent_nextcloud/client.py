@@ -7,7 +7,7 @@ per-folder quota without touching per-user quotas.
 
 import contextlib
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from waldur_site_agent.backend.clients import BaseClient
@@ -446,7 +446,7 @@ class NextcloudClient(BaseClient):
             for folder in folders
         ]
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Return a ClientResource for the group folder identified by *resource_id*."""
         try:
             folder = self.get_group_folder(int(resource_id))
@@ -463,7 +463,7 @@ class NextcloudClient(BaseClient):
         name: str,
         description: str,
         organization: str,
-        parent_name: Optional[str] = None,
+        parent_name: str | None = None,
     ) -> str:
         """Create a group and a group folder with matching name.
 
@@ -502,21 +502,21 @@ class NextcloudClient(BaseClient):
 
     def set_resource_limits(
         self, resource_id: str, limits: dict[str, int]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Update the storage quota for the folder."""
         storage_gb = limits.get("storage", 0)
         self.set_folder_quota(int(resource_id), _gib_to_bytes(storage_gb))
         return None
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """User membership is managed at the backend level via group operations."""
         return ""
 
     def get_association(
         self, username: str, resource_id: str
-    ) -> Optional[Association]:
+    ) -> Association | None:
         """Not used — user sync is group-based."""
         return None
 
@@ -537,7 +537,7 @@ class NextcloudClient(BaseClient):
         return ""
 
     def get_usage_report(
-        self, resource_ids: list[str], timezone: Optional[str] = None
+        self, resource_ids: list[str], timezone: str | None = None
     ) -> list:
         """Return usage records for the given folder IDs."""
         records = []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
@@ -97,7 +97,7 @@ class MockBackend(BaseBackend):
         if backend_id in self._created_resources:
             self._created_resources[backend_id].limits.update(limits)
 
-    def pull_resource(self, waldur_resource: WaldurResource) -> Optional[BackendResourceInfo]:
+    def pull_resource(self, waldur_resource: WaldurResource) -> BackendResourceInfo | None:
         """Retrieve resource information from the mock backend."""
         backend_id = waldur_resource.backend_id
         self._log_operation("pull_resource", backend_id=backend_id)

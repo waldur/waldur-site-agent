@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Sequence
-from typing import Optional
 
 from waldur_site_agent.backend import clients
 
@@ -25,7 +24,7 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
     """
 
     slurm_tres: dict
-    cluster_name: Optional[str]
+    cluster_name: str | None
     executed_commands: list[str]
 
     def clear_executed_commands(self) -> None:
@@ -49,7 +48,7 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
         """Return a list of cluster names known to SLURM."""
 
     @abc.abstractmethod
-    def get_account_parent(self, account: str) -> Optional[str]:
+    def get_account_parent(self, account: str) -> str | None:
         """Return the parent account name for the account, or None if not found."""
 
     @abc.abstractmethod
@@ -75,7 +74,7 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
         """Accounts the user holds an association with, lower-cased and sorted."""
         raise NotImplementedError(type(self).__name__)
 
-    def get_user_default_account(self, username: str) -> Optional[str]:
+    def get_user_default_account(self, username: str) -> str | None:
         """The user's DefaultAccount, lower-cased, or None when the user is unknown."""
         raise NotImplementedError(type(self).__name__)
 
@@ -99,12 +98,12 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
     def create_qos(
         self,
         name: str,
-        flags: Optional[str] = None,
-        grp_tres: Optional[str] = None,
-        max_jobs: Optional[int] = None,
-        max_submit: Optional[int] = None,
-        max_wall: Optional[str] = None,
-        min_tres_per_job: Optional[str] = None,
+        flags: str | None = None,
+        grp_tres: str | None = None,
+        max_jobs: int | None = None,
+        max_submit: int | None = None,
+        max_wall: str | None = None,
+        min_tres_per_job: str | None = None,
     ) -> None:
         """Create a QoS with the specified parameters."""
 
@@ -113,7 +112,7 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
         """Delete a QoS from the SLURM cluster."""
 
     @abc.abstractmethod
-    def set_account_qos(self, account: str, qos: str, default_qos: Optional[str] = None) -> None:
+    def set_account_qos(self, account: str, qos: str, default_qos: str | None = None) -> None:
         """Set the specified QoS for the account, optionally moving its DefaultQOS too."""
 
     @abc.abstractmethod
@@ -156,7 +155,7 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
         username: str,
         resource_id: str,
         partition: str,
-        default_account: Optional[str] = "",
+        default_account: str | None = "",
     ) -> str:
         """Create a user-account association with a specific partition."""
 
@@ -166,7 +165,7 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
         username: str,
         resource_id: str,
         partitions: Sequence[str],
-        default_account: Optional[str] = "",
+        default_account: str | None = "",
     ) -> str:
         """Create a user-account association restricted to the given partitions."""
 
@@ -176,9 +175,9 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
         username: str,
         resource_id: str,
         qos_list: Sequence[str],
-        default_qos: Optional[str] = None,
-        partitions: Optional[Sequence[str]] = None,
-        default_account: Optional[str] = None,
+        default_qos: str | None = None,
+        partitions: Sequence[str] | None = None,
+        default_account: str | None = None,
     ) -> str:
         """Create a user-account association granting a QoS set.
 
@@ -198,7 +197,7 @@ class SlurmClientInterface(clients.BaseClient, abc.ABC):
     # ===== JOB CONTROL =====
 
     @abc.abstractmethod
-    def cancel_active_user_jobs(self, account: str, user: Optional[str] = None) -> None:
+    def cancel_active_user_jobs(self, account: str, user: str | None = None) -> None:
         """Cancel jobs for the account (and user, when given)."""
 
     @abc.abstractmethod

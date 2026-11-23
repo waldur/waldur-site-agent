@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import functools
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from azure.mgmt.resource import ResourceManagementClient, SubscriptionClient
 
@@ -40,7 +41,7 @@ class ResourceClient(BaseAzureClient):
         return self.subscription_client.subscriptions.list_locations(self.subscription_id)
 
     @wrap_azure_errors
-    def get_resource_group_locations(self) -> Optional[list[str]]:
+    def get_resource_group_locations(self) -> list[str] | None:
         """Return the regions that accept resource groups.
 
         Resource Manager itself is available everywhere, but a subscription may

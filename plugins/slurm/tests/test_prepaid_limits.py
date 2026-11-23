@@ -5,19 +5,16 @@ multiplied by subscription duration (limit * months * unit_factor).
 """
 
 import datetime
-from typing import Optional
 from unittest import mock
 
 from waldur_api_client.types import UNSET
-
 from waldur_site_agent_slurm.backend import SlurmBackend
-
 
 _MISSING = object()  # sentinel distinct from None and UNSET
 
 
 def _make_waldur_resource(
-    limits: Optional[dict] = None,
+    limits: dict | None = None,
     created: object = _MISSING,
     end_date: object = _MISSING,
     backend_id: str = "test-alloc-01",
@@ -42,8 +39,8 @@ def _make_waldur_resource(
 
 def _make_backend(
     components: dict,
-    settings: Optional[dict] = None,
-    slurm_tres: Optional[dict] = None,
+    settings: dict | None = None,
+    slurm_tres: dict | None = None,
 ) -> SlurmBackend:
     """Create a SlurmBackend with mocked client.
 

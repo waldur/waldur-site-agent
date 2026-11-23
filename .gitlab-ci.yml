@@ -94,16 +94,16 @@ Lint helm chart:
 # Unit tests
 #
 # Interpreter matrix: merge requests run only the supported floor and ceiling
-# (3.9, 3.13); the three interpreters in between run on main, tags and
-# scheduled pipelines via the "(3.10-3.12)" companion jobs. Suites are split into
+# (3.10, 3.13); the two interpreters in between run on main, tags and
+# scheduled pipelines via the "(3.11-3.12)" companion jobs. Suites are split into
 # three jobs -- core, slurm (the two long ones) and one job that loops over every
 # other plugin -- because the per-job overhead (runner prep + uv sync, ~30s) used
 # to exceed the pytest time of most plugin suites, and half a dozen plugins with
 # tests had no CI job at all.
 # ---------------------------------------------------------------------------
 
-.mr_python_versions: &mr_python_versions ["3.9", "3.13"]
-.extra_python_versions: &extra_python_versions ["3.10", "3.11", "3.12"]
+.mr_python_versions: &mr_python_versions ["3.10", "3.13"]
+.extra_python_versions: &extra_python_versions ["3.11", "3.12"]
 
 .Run tests base:
   stage: test
@@ -137,7 +137,7 @@ Lint helm chart:
         coverage_format: cobertura
         path: coverage.xml
 
-# Rules shared by the "(3.10-3.12)" companion jobs: on merge requests only when
+# Rules shared by the "(3.11-3.12)" companion jobs: on merge requests only when
 # the pipeline definition itself changes, so a CI edit that breaks them cannot
 # reach main unexercised.
 .full_matrix_rules: &full_matrix_rules
@@ -173,7 +173,7 @@ Run core tests:
         - uv.lock
         - .gitlab-ci.yml
 
-Run core tests (3.10-3.12):
+Run core tests (3.11-3.12):
   extends: .Core tests
   parallel:
     matrix:
@@ -202,7 +202,7 @@ Run slurm tests:
         - uv.lock
         - .gitlab-ci.yml
 
-Run slurm tests (3.10-3.12):
+Run slurm tests (3.11-3.12):
   extends: .Slurm tests
   parallel:
     matrix:
@@ -263,7 +263,7 @@ Run plugin tests:
         - uv.lock
         - .gitlab-ci.yml
 
-Run plugin tests (3.10-3.12):
+Run plugin tests (3.11-3.12):
   extends: .Plugin tests
   parallel:
     matrix:
@@ -351,10 +351,10 @@ Run linters:
   variables:
     PYTHON_VERSION: "3.13"
 
-Run mypy (3.9):
+Run mypy (3.10):
   extends: .Linters base
   variables:
-    PYTHON_VERSION: "3.9"
+    PYTHON_VERSION: "3.10"
     PREK_RUN_ARGS: mypy
 
 # E2E integration tests: boot a minimal Waldur stack (PostgreSQL + RabbitMQ +

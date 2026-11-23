@@ -14,13 +14,13 @@ automatically detected and loaded via Python entry points.
 """
 
 import argparse
-import sys
 import threading
 import time
 import traceback
 from http import HTTPStatus
+from importlib.metadata import entry_points, version
 from pathlib import Path
-from typing import Optional, Union, cast
+from typing import cast
 from uuid import UUID
 
 import httpx
@@ -124,13 +124,6 @@ from waldur_site_agent.common import (
 )
 from waldur_site_agent.common.log_shipper import LogShipper
 
-# Handle different Python versions
-if sys.version_info >= (3, 10):
-    from importlib.metadata import entry_points, version
-else:
-    from importlib_metadata import entry_points, version
-
-
 BACKENDS: dict[str, tuple[type[BaseBackend], str, str]] = {
     entry_point.name: (
         entry_point.load(),
@@ -227,12 +220,12 @@ DEFAULT_OIDC_TIMEOUT = 30
 def get_client(
     api_url: str,
     access_token: str,
-    agent_header: Optional[str] = None,
+    agent_header: str | None = None,
     verify_ssl: bool = True,
-    proxy: Optional[str] = None,
-    token_prefix: Optional[str] = None,
+    proxy: str | None = None,
+    token_prefix: str | None = None,
     timeout: float = DEFAULT_CLIENT_TIMEOUT,
-    auth: Optional[httpx.Auth] = None,
+    auth: httpx.Auth | None = None,
 ) -> AuthenticatedClient:
     """Create an authenticated Waldur API client.
 
@@ -293,7 +286,7 @@ def fetch_oidc_token(
     client_id: str,
     client_secret: str,
     verify_ssl: bool = True,
-    proxy: Optional[str] = None,
+    proxy: str | None = None,
     timeout: float = DEFAULT_OIDC_TIMEOUT,
 ) -> str:
     """Fetch (and cache) a JWT access token via the OIDC client_credentials grant.
@@ -365,7 +358,7 @@ class OfferingAuth(httpx.Auth):
     def __init__(
         self,
         offering: structures.Offering,
-        proxy: Optional[str] = None,
+        proxy: str | None = None,
         timeout: float = DEFAULT_OIDC_TIMEOUT,
     ) -> None:
         """Remember the offering whose credentials authorize requests."""
@@ -396,9 +389,9 @@ class OfferingAuth(httpx.Auth):
 
 def get_client_for_offering(
     offering: structures.Offering,
-    agent_header: Optional[str] = None,
-    proxy: Optional[str] = None,
-    timeout: Optional[float] = None,
+    agent_header: str | None = None,
+    proxy: str | None = None,
+    timeout: float | None = None,
 ) -> AuthenticatedClient:
     """Create an authenticated Waldur API client from an Offering configuration.
 
@@ -420,7 +413,7 @@ def get_client_for_offering(
     """
     # httpx rejects proxy="" outright, so an unset proxy must become None.
     proxy = proxy or offering.global_proxy or None
-    auth: Optional[OfferingAuth] = None
+    auth: OfferingAuth | None = None
     if offering.waldur_api_token:
         token = offering.waldur_api_token
         token_prefix = static_token_prefix(token)
@@ -716,7 +709,7 @@ def get_backend_for_offering(
 
 def get_backend_class_for_offering(
     offering: structures.Offering, backend_type_key: str = "order_processing_backend"
-) -> Optional[type[BaseBackend]]:
+) -> type[BaseBackend] | None:
     """Resolve the backend class for an offering without instantiating it.
 
     Class-level capability flags can be read from the class alone. Constructing
@@ -855,7 +848,7 @@ def extend_backend_components(
         logger.info("Loading %s", missing_component_type)
         remote_component_info = remote_components[missing_component_type]
         # Handle potential Unset values from remote component info
-        limit: Union[float, None] = (
+        limit: float | None = (
             float(cast("int", remote_component_info.limit_amount))
             if (
                 remote_component_info.limit_amount is not UNSET
@@ -934,8 +927,8 @@ def _build_component_kwargs(component_info: dict) -> dict:
 
 
 def _get_limit_period_enum(
-    value: Union[BlankEnum, LimitPeriodEnum, None, Unset],
-) -> Optional[LimitPeriodEnum]:
+    value: BlankEnum | LimitPeriodEnum | None | Unset,
+) -> LimitPeriodEnum | None:
     """Convert API/client limit period values to LimitPeriodEnum when set."""
     if value is UNSET or value is None:
         return None
@@ -1370,7 +1363,7 @@ RELEASE_OFFERING_USER_FIELDS: list[OfferingUserFieldEnum] = [
 
 def get_release_capable_username_backend(
     offering: structures.Offering,
-) -> Optional[AbstractUsernameManagementBackend]:
+) -> AbstractUsernameManagementBackend | None:
     """The offering's username backend, if it implements ``release_users``.
 
     The default on the abstract base is a no-op, so for a backend that leaves it
@@ -2033,7 +2026,7 @@ def provision_resource_api_keys(
     resource_uuid: str,
     resource_backend_id: str,
     backend,  # noqa: ANN001 - BaseBackend would be a circular import
-    count: Optional[int] = None,
+    count: int | None = None,
 ) -> None:
     """Generate keys in the backend and report each to Waldur (encrypted).
 
@@ -2080,7 +2073,7 @@ def provision_resource_api_keys(
 
 def _known_client_ids(
     waldur_rest_client: AuthenticatedClient, resource_uuid: str
-) -> Optional[list[str]]:
+) -> list[str] | None:
     """List every client_id Waldur holds for a resource, or None if it cannot.
 
     Feeds the backend's orphan pruning. None means "unknown", which the backends
@@ -2113,7 +2106,7 @@ def _known_client_ids(
     return client_ids or None
 
 
-def _set_key_body(result: Union[str, dict]) -> ResourceApiKeySetKeyRequest:
+def _set_key_body(result: str | dict) -> ResourceApiKeySetKeyRequest:
     """Build the report body from whichever shape the backend returned.
 
     A backend whose public identifier rotates with the secret (an S3 access key)
@@ -2144,9 +2137,9 @@ def rotate_resource_api_key(
     client_id: str,
     backend,  # noqa: ANN001
     resource_backend_id: str,
-    resource_uuid: Optional[str] = None,
+    resource_uuid: str | None = None,
     expose_backend_error_details: bool = True,
-    key_settings: Optional[dict] = None,
+    key_settings: dict | None = None,
 ) -> bool:
     """Rotate one key in the backend, then report the new value to Waldur.
 

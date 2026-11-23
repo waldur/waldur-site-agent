@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from waldur_site_agent.backend import clients, exceptions, logger
 from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.structures import Association, ClientResource
@@ -28,7 +26,7 @@ class MoabClient(clients.BaseClient):
         parts = line.split("|")
         return ClientResource(name=parts[0], description=parts[1], organization=parts[2])
 
-    def _get_fund_id(self, account: str) -> Optional[int]:
+    def _get_fund_id(self, account: str) -> int | None:
         command_fund = f"mam-list-funds --raw --quiet -a {account} --show Id"
         fund_output = self.execute_command(command_fund.split())
         fund_data = fund_output.splitlines()
@@ -54,7 +52,7 @@ class MoabClient(clients.BaseClient):
         return self._parse_account(lines[0])
 
     def create_resource(
-        self, name: str, description: str, organization: str, parent_name: Optional[str] = None
+        self, name: str, description: str, organization: str, parent_name: str | None = None
     ) -> str:
         """Create account in MOAB."""
         del parent_name
@@ -130,7 +128,7 @@ class MoabClient(clients.BaseClient):
             account=resource_id, user=user, value=int(float(lines[0].split("|")[-1]))
         )
 
-    def create_association(self, username: str, resource_id: str, _: Optional[str] = None) -> str:
+    def create_association(self, username: str, resource_id: str, _: str | None = None) -> str:
         """Create association between user and account in MOAB."""
         command = f"mam-modify-account --add-user +{username} -a {resource_id}"
         return self.execute_command(command.split())
@@ -140,7 +138,7 @@ class MoabClient(clients.BaseClient):
         command = f"mam-modify-account --del-user {username} -a {resource_id}"
         return self.execute_command(command.split())
 
-    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: str | None = None) -> list:
         """Get usages records from MOAB."""
         template = (
             "mam-list-usagerecords --raw --quiet --show "

@@ -13,10 +13,9 @@ from __future__ import annotations
 import logging
 import secrets
 import string
-from typing import Any, Optional
+from typing import Any
 
 from waldur_api_client.models.resource import Resource as WaldurResource
-
 from waldur_site_agent.backend import BackendType, backends, structures
 from waldur_site_agent.backend.exceptions import BackendError
 
@@ -150,7 +149,7 @@ class AzureBackend(backends.BaseBackend):
 
     def _pull_backend_resource(
         self, resource_backend_id: str
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Pull the resource without substituting zero for an unread shape.
 
         The base fills every component with 0 when the usage report omits a
@@ -169,7 +168,7 @@ class AzureBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Set up no prerequisites: the whole chain runs in ``create_resource``."""
         del waldur_resource, user_context
@@ -185,7 +184,7 @@ class AzureBackend(backends.BaseBackend):
     def create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> structures.BackendResourceInfo:
         """Create a virtual machine and everything it needs to be reachable."""
         attributes = self._attributes(waldur_resource)
@@ -277,7 +276,7 @@ class AzureBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> structures.BackendResourceInfo:
         """Create the resource, ignoring the backend id the core suggested.
 
@@ -400,7 +399,7 @@ class AzureBackend(backends.BaseBackend):
         self._delete_if_present(network.delete_subnet, group, names.network, names.subnet)
         self._delete_if_present(network.delete_network, group, names.network)
 
-    def _open_ssh(self, location: str, names: VirtualMachineNames) -> Optional[Any]:
+    def _open_ssh(self, location: str, names: VirtualMachineNames) -> Any | None:
         """Create the security group that lets SSH in, when any range may use it.
 
         A public address of the Standard SKU — which is what these machines get —
@@ -476,7 +475,7 @@ class AzureBackend(backends.BaseBackend):
         return dict(attributes)
 
     @staticmethod
-    def _require(value: Optional[object], what: str) -> str:
+    def _require(value: object | None, what: str) -> str:
         if value in (None, ""):
             msg = f"Azure {what} is set neither on the order nor in backend_settings"
             raise BackendError(msg)
@@ -500,7 +499,7 @@ class AzureBackend(backends.BaseBackend):
         return dict(zip(fields, parts))
 
     def _require_ssh_key(
-        self, attributes: dict[str, Any], user_context: Optional[dict], name: str
+        self, attributes: dict[str, Any], user_context: dict | None, name: str
     ) -> str:
         """Return the SSH key the machine will be reachable by, or refuse.
 
@@ -521,8 +520,8 @@ class AzureBackend(backends.BaseBackend):
 
     @staticmethod
     def _ssh_public_key(
-        attributes: dict[str, Any], user_context: Optional[dict]
-    ) -> Optional[str]:
+        attributes: dict[str, Any], user_context: dict | None
+    ) -> str | None:
         """Resolve the SSH key, given either literally or as a Waldur key UUID."""
         literal = attributes.get("ssh_public_key")
         if literal:
@@ -558,7 +557,7 @@ class AzureBackend(backends.BaseBackend):
         }
 
     @staticmethod
-    def _power_state(virtual_machine: Any) -> Optional[str]:
+    def _power_state(virtual_machine: Any) -> str | None:
         """Read the power state out of the instance view, when it was expanded.
 
         Azure reports it as a status code such as ``PowerState/running``. The

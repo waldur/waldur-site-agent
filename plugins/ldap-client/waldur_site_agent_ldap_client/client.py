@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import secrets
 import string
-from typing import Optional, Union
 
 from ldap3 import (
     ALL,
@@ -50,7 +49,7 @@ def _result_description(conn: Connection) -> str:
     return str((conn.result or {}).get("description", ""))
 
 
-def _first(value: Union[list, tuple, str, int, None]) -> Union[str, int, None]:
+def _first(value: list | tuple | str | int | None) -> str | int | None:
     """First element of an ldap3 attribute value, which may be a list or a scalar.
 
     ``entry_attributes_as_dict`` returns a list for every attribute, but a
@@ -243,7 +242,7 @@ class LdapClient:
 
     # ---- Search operations ----
 
-    def search_user(self, username: str) -> Optional[dict]:
+    def search_user(self, username: str) -> dict | None:
         """Search for a user by uid."""
         conn = self._connect()
         try:
@@ -262,7 +261,7 @@ class LdapClient:
         finally:
             conn.unbind()
 
-    def search_user_by_email(self, email: str) -> Optional[dict]:
+    def search_user_by_email(self, email: str) -> dict | None:
         """Search for a user by email address."""
         conn = self._connect()
         try:
@@ -324,7 +323,7 @@ class LdapClient:
         finally:
             conn.unbind()
 
-    def search_user_by_uid_number(self, uid_number: int) -> Optional[dict]:
+    def search_user_by_uid_number(self, uid_number: int) -> dict | None:
         """Find the entry holding a given uidNumber, if any.
 
         Used to detect a UID already taken by an unrelated account before
@@ -362,7 +361,7 @@ class LdapClient:
         finally:
             conn.unbind()
 
-    def get_group_gid(self, group_name: str) -> Optional[int]:
+    def get_group_gid(self, group_name: str) -> int | None:
         """Get the gidNumber of a group."""
         conn = self._connect()
         try:
@@ -426,8 +425,8 @@ class LdapClient:
         first_name: str,
         last_name: str,
         email: str,
-        password: Optional[str] = None,
-        extra_attributes: Optional[dict[str, str]] = None,
+        password: str | None = None,
+        extra_attributes: dict[str, str] | None = None,
     ) -> int:
         """Create a POSIX user and their personal group in LDAP.
 
@@ -502,8 +501,8 @@ class LdapClient:
         gid_number: int,
         home_directory: str,
         login_shell: str,
-        password: Optional[str] = None,
-        extra_attributes: Optional[dict] = None,
+        password: str | None = None,
+        extra_attributes: dict | None = None,
     ) -> None:
         """Create a POSIX user from externally-supplied ids.
 
@@ -601,10 +600,10 @@ class LdapClient:
     def set_user_posix_attributes(
         self,
         username: str,
-        uid_number: Optional[int] = None,
-        gid_number: Optional[int] = None,
-        home_directory: Optional[str] = None,
-        login_shell: Optional[str] = None,
+        uid_number: int | None = None,
+        gid_number: int | None = None,
+        home_directory: str | None = None,
+        login_shell: str | None = None,
     ) -> None:
         """Replace whichever POSIX attributes are supplied on an existing entry."""
         attributes: dict = {}
@@ -757,7 +756,7 @@ class LdapClient:
             conn.unbind()
 
     @staticmethod
-    def is_disabled_by_agent(entry: Optional[dict]) -> bool:
+    def is_disabled_by_agent(entry: dict | None) -> bool:
         """Whether a user entry (as returned by search_user/list_users) was parked by the agent."""
         if not entry:
             return False
@@ -838,10 +837,10 @@ class LdapClient:
     def _create_group_entry(
         self,
         group_name: str,
-        gid_number: Optional[int],
+        gid_number: int | None,
         object_classes: list[str],
-        extra_attributes: Optional[dict] = None,
-        member_dn: Optional[str] = None,
+        extra_attributes: dict | None = None,
+        member_dn: str | None = None,
     ) -> None:
         """Create a group entry; ``gid_number`` is None for a group without posixGroup."""
         conn = self._connect()
@@ -875,8 +874,8 @@ class LdapClient:
         group_name: str,
         gid_number: int,
         object_classes: list,
-        extra_attributes: Optional[dict] = None,
-        member_dn: Optional[str] = None,
+        extra_attributes: dict | None = None,
+        member_dn: str | None = None,
     ) -> str:
         """Create the group if absent; report what was found if it is already there.
 
@@ -921,8 +920,8 @@ class LdapClient:
             conn.unbind()
 
     def create_project_group(
-        self, group_name: str, extra_attributes: Optional[dict] = None
-    ) -> Optional[int]:
+        self, group_name: str, extra_attributes: dict | None = None
+    ) -> int | None:
         """Create a project group with ``project_group_object_classes``.
 
         Returns the GID, or None when the classes carry no gidNumber (a plain
@@ -972,7 +971,7 @@ class LdapClient:
         """The DN of ``<rdn_attribute>=<rdn_value>`` in ``ou`` under the base DN."""
         return f"{rdn_attribute}={escape_rdn(rdn_value)},{ou},{self.base_dn}"
 
-    def read_entry(self, dn: str, attributes: list[str]) -> Optional[dict]:
+    def read_entry(self, dn: str, attributes: list[str]) -> dict | None:
         """One entry's attributes, or None when it does not exist."""
         conn = self._connect()
         try:
@@ -1220,7 +1219,7 @@ class LdapClient:
     # list record which groups are theirs in ``description`` so they never strip
     # the members of a group someone else created.
 
-    def get_group_descriptions(self, group_name: str) -> Optional[list[str]]:
+    def get_group_descriptions(self, group_name: str) -> list[str] | None:
         """Return a group's description values, or None if the group does not exist."""
         conn = self._connect()
         try:

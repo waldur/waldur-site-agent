@@ -2,7 +2,6 @@
 
 import sys
 import time
-from typing import Optional
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.common import (
@@ -31,8 +30,8 @@ RESOURCE_STATUS_RECONCILIATION_INTERVAL = (
 def _maybe_reconcile_resource_statuses(
     configuration: common_structures.WaldurAgentConfiguration,
     now: float,
-    last_run: Optional[float],
-) -> Optional[float]:
+    last_run: float | None,
+) -> float | None:
     """Run the resource status pass when its interval elapsed; return its last run time.
 
     The first tick only starts the timer: initial offering processing has just
@@ -95,12 +94,12 @@ def start(configuration: common_structures.WaldurAgentConfiguration) -> None:
 
 def _run_without_username_reconciliation(
     configuration: common_structures.WaldurAgentConfiguration,
-    watchdog: Optional[StompWatchdog] = None,
+    watchdog: StompWatchdog | None = None,
 ) -> None:
     """Tick-based main loop: health checks, order and offering user reconciliation."""
     last_health_check = 0.0
     last_reconciliation = 0.0
-    last_status_reconciliation: Optional[float] = None
+    last_status_reconciliation: float | None = None
 
     while True:
         now = time.time()
@@ -140,12 +139,12 @@ def _run_without_username_reconciliation(
 
 def _run_with_reconciliation(
     configuration: common_structures.WaldurAgentConfiguration,
-    watchdog: Optional[StompWatchdog] = None,
+    watchdog: StompWatchdog | None = None,
 ) -> None:
     """Tick-based main loop: health checks + periodic username and order reconciliation."""
     last_health_check = 0.0
     last_reconciliation = 0.0
-    last_status_reconciliation: Optional[float] = None
+    last_status_reconciliation: float | None = None
 
     while True:
         now = time.time()

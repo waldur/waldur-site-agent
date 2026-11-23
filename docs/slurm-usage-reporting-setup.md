@@ -15,7 +15,7 @@ the current billing period and reporting it at regular intervals.
 ### System Requirements
 
 - Linux system with access to SLURM cluster head node
-- Python 3.9.2 or higher
+- Python 3.10 or higher
 - `uv` package manager installed
 - An OS account that can read every user's job records (root, `SlurmUser`, or
   a user with `AdminLevel=Operator` or higher when `PrivateData` hides jobs)

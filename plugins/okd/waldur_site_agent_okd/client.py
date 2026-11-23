@@ -1,6 +1,6 @@
 """OKD/OpenShift client for interacting with the cluster API."""
 
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from kubernetes import client as k8s_client
@@ -60,7 +60,7 @@ class OkdClient(TokenRefreshMixin, BaseClient):
 
         logger.info(f"Initialized OKD client for {self.api_url}")
 
-    def _make_request(self, method: str, endpoint: str, data: Optional[dict] = None) -> dict:
+    def _make_request(self, method: str, endpoint: str, data: dict | None = None) -> dict:
         """Make HTTP request to OKD API with automatic token refresh."""
         # Use authenticated request if token manager is available
         if hasattr(self, "token_manager") and self.token_manager:
@@ -69,7 +69,7 @@ class OkdClient(TokenRefreshMixin, BaseClient):
         # Fallback to basic request
         return self._make_basic_request(method, endpoint, data)
 
-    def _make_basic_request(self, method: str, endpoint: str, data: Optional[dict] = None) -> dict:
+    def _make_basic_request(self, method: str, endpoint: str, data: dict | None = None) -> dict:
         """Make basic HTTP request to OKD API (fallback method)."""
         url = f"{self.api_url}{endpoint}"
 
@@ -140,7 +140,7 @@ class OkdClient(TokenRefreshMixin, BaseClient):
             logger.error(f"Failed to list OKD projects: {e}")
             raise BackendError(f"Failed to list OKD projects: {e}") from e
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get information about a specific project."""
         try:
             endpoint = f"/apis/project.openshift.io/v1/projects/{resource_id}"
@@ -165,7 +165,7 @@ class OkdClient(TokenRefreshMixin, BaseClient):
             return None
 
     def create_resource(
-        self, name: str, description: str, organization: str, parent_name: Optional[str] = None
+        self, name: str, description: str, organization: str, parent_name: str | None = None
     ) -> str:
         """Create a new OpenShift project."""
         try:
@@ -209,7 +209,7 @@ class OkdClient(TokenRefreshMixin, BaseClient):
             logger.error(f"Failed to delete project {name}: {e}")
             raise BackendError(f"Failed to delete project {name}: {e}") from e
 
-    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> str | None:
         """Set resource quotas for the project."""
         try:
             # Create or update ResourceQuota
@@ -296,7 +296,7 @@ class OkdClient(TokenRefreshMixin, BaseClient):
         logger.info(f"Per-user limits not supported in OKD, ignoring for {username}")
         return "Per-user limits not supported"
 
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Get user's role binding in the project."""
         try:
             # Check RoleBindings in the namespace
@@ -319,7 +319,7 @@ class OkdClient(TokenRefreshMixin, BaseClient):
             return None
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Grant user access to the project."""
         try:
@@ -369,7 +369,7 @@ class OkdClient(TokenRefreshMixin, BaseClient):
             logger.error(f"Failed to remove association for {username} from {resource_id}: {e}")
             raise BackendError(f"Failed to remove association: {e}") from e
 
-    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: str | None = None) -> list:
         """Get resource usage metrics for projects."""
         del timezone
         usage_reports = []

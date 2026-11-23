@@ -4,7 +4,6 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Tuple, Union
 
 import pytest
 
@@ -23,7 +22,7 @@ class MockResource:
 class MockWaldurMastermindPolicy:
     """Complete mock of Waldur Mastermind policy behavior."""
 
-    def __init__(self, config: Union[dict, None] = None):
+    def __init__(self, config: dict | None = None):
         """Initialize mock policy with configuration."""
         self.config = config or {
             "fairshare_decay_half_life": 15,
@@ -34,7 +33,7 @@ class MockWaldurMastermindPolicy:
         }
 
         # Mock historical usage data
-        self.usage_history: Dict[str, Dict[str, float]] = {}
+        self.usage_history: dict[str, dict[str, float]] = {}
 
     def add_historical_usage(self, resource_uuid: str, period: str, usage: float):
         """Add mock historical usage data."""
@@ -100,7 +99,7 @@ class MockWaldurMastermindPolicy:
 
     def _calculate_carryover(
         self, base_allocation: float, previous_usage: float
-    ) -> Tuple[float, dict]:
+    ) -> tuple[float, dict]:
         """Calculate carryover with decay."""
         days_elapsed = 30  # Use shorter decay period for more realistic testing
         half_life = self.config["fairshare_decay_half_life"]

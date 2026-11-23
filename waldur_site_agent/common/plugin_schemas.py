@@ -6,20 +6,14 @@ Pydantic models for validating plugin-specific configuration fields.
 
 from __future__ import annotations
 
-import sys
-from typing import Annotated, Any, Optional
+from importlib.metadata import entry_points
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.fields import FieldInfo
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.quota import HomedirQuotaConfig
-
-if sys.version_info >= (3, 10):
-    from importlib.metadata import entry_points
-else:
-    from importlib_metadata import entry_points
-
 
 # Pass as ``json_schema_extra`` on every settings field that holds a credential:
 # ``Field(..., description="...", json_schema_extra=SECRET)``. Parsing is unchanged;
@@ -105,33 +99,33 @@ class CommonBackendSettingsSchema(PluginBackendSettingsSchema):
     being reported as unknown keys.
     """
 
-    customer_prefix: Optional[str] = Field(
+    customer_prefix: str | None = Field(
         default=None, description="Prefix for customer-level backend ids"
     )
-    project_prefix: Optional[str] = Field(
+    project_prefix: str | None = Field(
         default=None, description="Prefix for project-level backend ids"
     )
-    allocation_prefix: Optional[str] = Field(
+    allocation_prefix: str | None = Field(
         default=None, description="Prefix for resource (allocation) backend ids"
     )
-    default_account: Optional[str] = Field(
+    default_account: str | None = Field(
         default=None, description="Account new user associations are created under"
     )
-    soft_delete: Optional[bool] = Field(
+    soft_delete: bool | None = Field(
         default=None,
         description="On termination, keep the backend resource and only remove its users",
     )
-    check_backend_id_uniqueness: Optional[bool] = Field(
+    check_backend_id_uniqueness: bool | None = Field(
         default=None, description="Check a new backend id against the offering's history"
     )
-    check_all_offerings: Optional[bool] = Field(
+    check_all_offerings: bool | None = Field(
         default=None,
         description="Check backend id uniqueness against every offering, not only this one",
     )
-    backend_id_max_retries: Optional[int] = Field(
+    backend_id_max_retries: int | None = Field(
         default=None, ge=1, description="Attempts to find a unique backend id (default 50)"
     )
-    periodic_limits: Optional[dict[str, Any]] = Field(
+    periodic_limits: dict[str, Any] | None = Field(
         default=None, description="Periodic limits subscription (event mode)"
     )
 
@@ -147,14 +141,14 @@ class HomedirSettingsSchema(CommonBackendSettingsSchema):
     backend reads the core settings every backend does.
     """
 
-    enable_user_homedir_account_creation: Optional[bool] = Field(
+    enable_user_homedir_account_creation: bool | None = Field(
         default=True, description="Create home directories for users", json_schema_extra=SENSITIVE
     )
-    default_homedir_umask: Optional[str] = Field(
+    default_homedir_umask: str | None = Field(
         default="0077", description="Umask for created home directories",
         json_schema_extra=SENSITIVE,
     )
-    homedir_base_path: Optional[str] = Field(
+    homedir_base_path: str | None = Field(
         default=None,
         description=(
             "Base path for user home directories (e.g. '/cephfs/home'). "
@@ -163,14 +157,14 @@ class HomedirSettingsSchema(CommonBackendSettingsSchema):
         ),
         json_schema_extra=SENSITIVE,
     )
-    homedir_quota: Optional[HomedirQuotaConfig] = Field(
+    homedir_quota: HomedirQuotaConfig | None = Field(
         default=None,
         description="Filesystem quota settings for user home directories",
     )
 
     @field_validator("default_homedir_umask")
     @classmethod
-    def validate_umask(cls, v: Optional[str]) -> Optional[str]:
+    def validate_umask(cls, v: str | None) -> str | None:
         """Validate that umask is a valid octal permission."""
 
         def _raise_umask_error(value: str) -> None:

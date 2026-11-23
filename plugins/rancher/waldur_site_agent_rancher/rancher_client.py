@@ -1,6 +1,5 @@
 """Rancher client for managing projects and resources."""
 
-from typing import Optional
 
 import httpx
 import yaml
@@ -79,7 +78,7 @@ class RancherClient(BaseClient):
                 logger.error(f"Response content: {e.response.text}")
             raise BackendError(f"Rancher login failed: {e}") from e
 
-    def _make_request(self, method: str, endpoint: str, data: Optional[dict] = None) -> dict:
+    def _make_request(self, method: str, endpoint: str, data: dict | None = None) -> dict:
         """Make HTTP request to Rancher API."""
         # Ensure endpoint doesn't start with / to avoid urljoin issues
         endpoint = endpoint.lstrip("/")
@@ -144,7 +143,7 @@ class RancherClient(BaseClient):
             logger.error(f"Failed to list Rancher projects: {e}")
             raise BackendError(f"Failed to list Rancher projects: {e}") from e
 
-    def get_project(self, project_id: str) -> Optional[ClientResource]:
+    def get_project(self, project_id: str) -> ClientResource | None:
         """Get information about a specific project."""
         try:
             endpoint = f"projects/{project_id}"
@@ -206,7 +205,7 @@ class RancherClient(BaseClient):
         self,
         project_id: str,
         namespace: str,
-        extra_labels: Optional[dict[str, str]] = None,
+        extra_labels: dict[str, str] | None = None,
     ) -> None:
         """Create a namespace in a Rancher project.
 
@@ -315,7 +314,7 @@ class RancherClient(BaseClient):
     def get_namespace_quota_usage(
         self,
         namespace: str,
-        reverse_k8s_mapping: Optional[dict[str, str]] = None,
+        reverse_k8s_mapping: dict[str, str] | None = None,
     ) -> dict[str, float]:
         """Get used resources from ResourceQuotas in a namespace.
 
@@ -488,7 +487,7 @@ class RancherClient(BaseClient):
             raise BackendError(f"Failed to delete group role binding: {e}") from e
 
     # Backend interface methods for membership sync
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get resource (project) information for membership sync."""
         try:
             project = self.get_project(resource_id)
@@ -545,7 +544,7 @@ class RancherClient(BaseClient):
         self,
         namespace: str,
         waldur_limits: dict[str, int],
-        component_k8s_mapping: Optional[dict[str, str]] = None,
+        component_k8s_mapping: dict[str, str] | None = None,
     ) -> None:
         """Set resource quotas for a specific namespace.
 

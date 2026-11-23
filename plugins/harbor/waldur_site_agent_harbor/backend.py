@@ -11,17 +11,16 @@ Mapping:
 """
 
 import logging
-from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
-
 from waldur_site_agent.backend import backends, structures
 from waldur_site_agent.backend.exceptions import BackendError, DuplicateResourceError
+
 from waldur_site_agent_harbor.client import HarborClient
 from waldur_site_agent_harbor.exceptions import (
     HarborError,
-    HarborProjectError,
     HarborOIDCError,
+    HarborProjectError,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,7 +168,7 @@ class HarborBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Prepare for resource creation by setting up OIDC group.
 
@@ -202,7 +201,7 @@ class HarborBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> structures.BackendResourceInfo:
         """Create a Harbor project named ``resource_backend_id``.
 
@@ -377,7 +376,7 @@ class HarborBackend(backends.BaseBackend):
 
     def _pull_backend_resource(
         self, resource_backend_id: str
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Pull resource data from Harbor.
 
         Args:

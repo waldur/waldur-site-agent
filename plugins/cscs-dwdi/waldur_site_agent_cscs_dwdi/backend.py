@@ -3,8 +3,9 @@
 import calendar
 import logging
 import math
+from collections.abc import Callable
 from datetime import date
-from typing import Any, Callable, ClassVar, Optional
+from typing import Any, ClassVar
 
 from pydantic import BaseModel
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -25,7 +26,7 @@ STORAGE_FIELDS = ("spaceUsed", "inodesUsed")
 INFERENCE_FIELDS = ("totalCost",)
 
 
-def _reporting_factor(component: dict[str, Any]) -> Optional[float]:
+def _reporting_factor(component: dict[str, Any]) -> float | None:
     """The factor that turns a DWDI amount into Waldur units, or None if unusable.
 
     DWDI reports in backend units; Waldur gets ``amount / factor``, the direction
@@ -52,7 +53,7 @@ def _map_components(
     backend_type: str,
     components: dict[str, dict[str, Any]],
     fields: tuple[str, ...],
-    default_field: Callable[[str], Optional[str]],
+    default_field: Callable[[str], str | None],
 ) -> dict[str, tuple[str, float]]:
     """Map each component this backend can fill to its DWDI field and factor.
 
@@ -98,13 +99,13 @@ def _map_components(
     return mapping
 
 
-def _compute_default_field(name: str) -> Optional[str]:
+def _compute_default_field(name: str) -> str | None:
     # Any component whose name mentions nodes counts node hours, as before
     # (case-sensitive, so a "Nodes" limit is not billed node hours).
     return "nodeHours" if "node" in name else None
 
 
-def _storage_default_field(name: str) -> Optional[str]:
+def _storage_default_field(name: str) -> str | None:
     lowered = name.lower()
     if lowered == "storage" or "space" in lowered:
         return "spaceUsed"
@@ -113,7 +114,7 @@ def _storage_default_field(name: str) -> Optional[str]:
     return None
 
 
-def _inference_default_field(name: str) -> Optional[str]:
+def _inference_default_field(name: str) -> str | None:
     return "totalCost" if name.lower() == "token_cost" else None
 
 
@@ -131,7 +132,7 @@ def _required_amount(entry: dict[str, Any], key: str, where: str) -> float:
     return raw_value
 
 
-def _user_amount(entry: dict[str, Any], key: str, factor: float, where: str) -> Optional[float]:
+def _user_amount(entry: dict[str, Any], key: str, factor: float, where: str) -> float | None:
     """A user's ``entry[key] / factor``, or None with a warning when DWDI left it out."""
     raw_value = entry.get(key)
     if raw_value is None:
@@ -212,7 +213,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
     def pull_resource(
         self, waldur_resource: WaldurResource
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Pull resource from backend with cluster filtering support."""
         try:
             backend_id = waldur_resource.backend_id
@@ -245,7 +246,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
         resource_backend_ids: list[str],
         from_date: date,
         to_date: date,
-        clusters: Optional[list[str]] = None,
+        clusters: list[str] | None = None,
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Shared helper to query compute usage for a date range.
 
@@ -295,7 +296,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
             raise
 
     def _get_usage_report(
-        self, resource_backend_ids: list[str], clusters: Optional[list[str]] = None
+        self, resource_backend_ids: list[str], clusters: list[str] | None = None
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Get usage report for the current month.
 
@@ -312,7 +313,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
 
     def get_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int,
-        waldur_resource: Optional[WaldurResource] = None,
+        waldur_resource: WaldurResource | None = None,
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Get usage report for a specific billing period.
 
@@ -336,8 +337,8 @@ class CSCSDWDIComputeBackend(BaseBackend):
         )
 
     def _resolve_clusters(
-        self, waldur_resource: Optional[WaldurResource] = None,
-    ) -> Optional[list[str]]:
+        self, waldur_resource: WaldurResource | None = None,
+    ) -> list[str] | None:
         """Resolve cluster filter from waldur_resource or fallback to config.
 
         Uses offering_backend_id from the Waldur resource (same as pull_resource),
@@ -457,8 +458,8 @@ class CSCSDWDIComputeBackend(BaseBackend):
         return usage
 
     def _pull_backend_resource(
-        self, resource_backend_id: str, waldur_resource: Optional[WaldurResource] = None
-    ) -> Optional[structures.BackendResourceInfo]:
+        self, resource_backend_id: str, waldur_resource: WaldurResource | None = None
+    ) -> structures.BackendResourceInfo | None:
         """Pull resource data from the DWDI backend for usage reporting.
 
         For DWDI, we treat the resource_backend_id as an account name
@@ -531,7 +532,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
             return None
 
     # Methods not implemented for reporting-only backend
-    def get_account(self, account_name: str) -> Optional[dict[str, Any]]:
+    def get_account(self, account_name: str) -> dict[str, Any] | None:
         """Not implemented for reporting-only backend."""
         msg = "CSCS-DWDI backend is reporting-only and does not support account management"
         raise NotImplementedError(msg)
@@ -617,7 +618,7 @@ class CSCSDWDIComputeBackend(BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Not implemented for reporting-only backend."""
         msg = "CSCS-DWDI backend is reporting-only and does not support resource creation"
@@ -820,7 +821,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
 
     def get_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int,
-        waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
+        waldur_resource: WaldurResource | None = None,  # noqa: ARG002
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Get storage usage report for a specific billing period."""
         if not resource_backend_ids:
@@ -830,7 +831,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
 
     def _pull_backend_resource(
         self, resource_backend_id: str
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Pull resource data from the backend."""
         logger.info("Pulling resource %s", resource_backend_id)
 
@@ -853,7 +854,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
         )
 
     # Methods not implemented for reporting-only backend
-    def get_account(self, account_name: str) -> Optional[dict[str, Any]]:
+    def get_account(self, account_name: str) -> dict[str, Any] | None:
         """Not implemented for reporting-only backend."""
         msg = "CSCS-DWDI storage backend is reporting-only and does not support account management"
         raise NotImplementedError(msg)
@@ -942,7 +943,7 @@ class CSCSDWDIStorageBackend(BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Not implemented for reporting-only backend."""
         msg = "CSCS-DWDI storage backend is reporting-only and does not support resource creation"
@@ -1129,7 +1130,7 @@ class CSCSDWDIInferenceBackend(BaseBackend):
 
     def get_usage_report_for_period(
         self, resource_uuids: list[str], year: int, month: int,
-        waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
+        waldur_resource: WaldurResource | None = None,  # noqa: ARG002
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Get storage usage report for a specific billing period."""
         if not resource_uuids:
@@ -1140,7 +1141,7 @@ class CSCSDWDIInferenceBackend(BaseBackend):
 
     def _pull_backend_resource(
         self, resource_uuid: str
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Pull resource data from the backend."""
         logger.info("Pulling resource %s", resource_uuid)
 
@@ -1162,7 +1163,7 @@ class CSCSDWDIInferenceBackend(BaseBackend):
         )
 
 
-    def get_account(self, account_name: str) -> Optional[dict[str, Any]]:
+    def get_account(self, account_name: str) -> dict[str, Any] | None:
         """Not implemented for reporting-only backend."""
         msg = "CSCS-DWDI storage backend is reporting-only and does not support account management"
         raise NotImplementedError(msg)
@@ -1261,7 +1262,7 @@ class CSCSDWDIInferenceBackend(BaseBackend):
     def _pre_create_resource(
             self,
             waldur_resource: WaldurResource,
-            user_context: Optional[dict] = None,
+            user_context: dict | None = None,
     ) -> None:
         """Not implemented for reporting-only backend."""
         msg = "CSCS-DWDI storage backend is reporting-only and does not support resource creation"

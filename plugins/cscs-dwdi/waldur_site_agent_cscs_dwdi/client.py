@@ -2,7 +2,7 @@
 
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -22,9 +22,9 @@ class CSCSDWDIClient:
         api_url: str,
         client_id: str,
         client_secret: str,
-        oidc_token_url: Optional[str] = None,
-        oidc_scope: Optional[str] = None,
-        socks_proxy: Optional[str] = None,
+        oidc_token_url: str | None = None,
+        oidc_scope: str | None = None,
+        socks_proxy: str | None = None,
     ) -> None:
         """Initialize CSCS-DWDI client.
 
@@ -42,8 +42,8 @@ class CSCSDWDIClient:
         self.oidc_token_url = oidc_token_url
         self.oidc_scope = oidc_scope or "openid"
         self.socks_proxy = socks_proxy
-        self._token: Optional[str] = None
-        self._token_expires_at: Optional[datetime] = None
+        self._token: str | None = None
+        self._token_expires_at: datetime | None = None
 
     def _get_auth_token(self) -> str:
         """Get or refresh OIDC authentication token.
@@ -132,7 +132,7 @@ class CSCSDWDIClient:
         accounts: list[str],
         from_date: date,
         to_date: date,
-        clusters: Optional[list[str]] = None,
+        clusters: list[str] | None = None,
     ) -> dict[str, Any]:
         """Get usage data for multiple accounts for a month range.
 
@@ -194,7 +194,7 @@ class CSCSDWDIClient:
         accounts: list[str],
         from_date: date,
         to_date: date,
-        clusters: Optional[list[str]] = None,
+        clusters: list[str] | None = None,
     ) -> dict[str, Any]:
         """Get usage data for multiple accounts for a day range.
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime
 import logging
 import time
-from typing import Any, Optional, Union
+from typing import Any
 from uuid import UUID
 
 from waldur_api_client.api.marketplace_orders import marketplace_orders_list
@@ -31,28 +31,33 @@ from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.component_usage import ComponentUsage
 from waldur_api_client.models.component_user_usage import ComponentUserUsage
 from waldur_api_client.models.generic_order_attributes import GenericOrderAttributes
-from waldur_api_client.models.order_create_request import OrderCreateRequest
-from waldur_api_client.models.order_create_request_limits import OrderCreateRequestLimits
-from waldur_api_client.models.order_details import OrderDetails
-from waldur_api_client.models.patched_project_request import PatchedProjectRequest
 from waldur_api_client.models.oecd_fos_2007_code_enum import OecdFos2007CodeEnum
+from waldur_api_client.models.order_create_request import OrderCreateRequest
+from waldur_api_client.models.order_create_request_limits import (
+    OrderCreateRequestLimits,
+)
+from waldur_api_client.models.order_details import OrderDetails
 from waldur_api_client.models.order_state import OrderState
+from waldur_api_client.models.patched_project_request import PatchedProjectRequest
 from waldur_api_client.models.project import Project
 from waldur_api_client.models.project_field_enum import ProjectFieldEnum
 from waldur_api_client.models.project_request import ProjectRequest
-from waldur_api_client.models.remote_eduteams_request_request import RemoteEduteamsRequestRequest
+from waldur_api_client.models.remote_eduteams_request_request import (
+    RemoteEduteamsRequestRequest,
+)
 from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.models.resource import Resource
-from waldur_api_client.models.resource_terminate_request import ResourceTerminateRequest
-from waldur_api_client.models.resource_update_limits_request import ResourceUpdateLimitsRequest
 from waldur_api_client.models.resource_end_date_request import ResourceEndDateRequest
+from waldur_api_client.models.resource_terminate_request import ResourceTerminateRequest
+from waldur_api_client.models.resource_update_limits_request import (
+    ResourceUpdateLimitsRequest,
+)
 from waldur_api_client.models.resource_update_limits_request_limits import (
     ResourceUpdateLimitsRequestLimits,
 )
 from waldur_api_client.models.user_role_create_request import UserRoleCreateRequest
 from waldur_api_client.models.user_role_delete_request import UserRoleDeleteRequest
 from waldur_api_client.types import UNSET, Unset
-
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import Association, ClientResource
@@ -108,7 +113,7 @@ class WaldurClient(BaseClient):
         self._role_uuid_cache: dict[str, str] = {}
         # Per-cycle cache of the Waldur B project keyed by backend_id, to avoid
         # re-fetching the same project for resources that share it.
-        self._project_cache: dict[str, Optional[Project]] = {}
+        self._project_cache: dict[str, Project | None] = {}
 
     def _get_role_uuid(self, role_name: str = DEFAULT_PROJECT_ROLE_NAME) -> str:
         """Look up a role UUID by name on Waldur B, with caching."""
@@ -125,7 +130,7 @@ class WaldurClient(BaseClient):
 
     # --- Marketplace Order Operations ---
 
-    def _get_offering_plan_url(self) -> Optional[str]:
+    def _get_offering_plan_url(self) -> str | None:
         """Get the URL of the first plan for the configured offering.
 
         The plan URL for order creation uses the format:
@@ -145,7 +150,7 @@ class WaldurClient(BaseClient):
             if response.status_code == 200:
                 plans = response.json()
                 if plans:
-                    self._cached_plan_url: Optional[str] = plans[0].get("url")
+                    self._cached_plan_url: str | None = plans[0].get("url")
                     return self._cached_plan_url
         except Exception:
             logger.debug("Failed to fetch plans for offering %s", self.offering_uuid)
@@ -158,7 +163,7 @@ class WaldurClient(BaseClient):
         project_url: str,
         offering_url: str,
         limits: dict[str, int],
-        attributes: Optional[dict] = None,
+        attributes: dict | None = None,
     ) -> OrderDetails:
         """Create a marketplace order on Waldur B.
 
@@ -237,7 +242,7 @@ class WaldurClient(BaseClient):
 
     def get_in_flight_order(
         self, resource_uuid: UUID, type_: RequestTypes
-    ) -> Optional[OrderDetails]:
+    ) -> OrderDetails | None:
         """Return a non-terminal order of the given type for a resource on Waldur B."""
         orders = marketplace_orders_list.sync_all(
             client=self._api_client,
@@ -269,9 +274,9 @@ class WaldurClient(BaseClient):
 
     def list_marketplace_orders(
         self,
-        offering_uuid: Optional[UUID] = None,
-        page_size: Optional[int] = None,
-        state: Optional[list[OrderState]] = None,
+        offering_uuid: UUID | None = None,
+        page_size: int | None = None,
+        state: list[OrderState] | None = None,
     ) -> list[OrderDetails]:
         """List marketplace orders on Waldur B, optionally filtered by offering."""
         kwargs: dict[str, Any] = {}
@@ -332,7 +337,7 @@ class WaldurClient(BaseClient):
     def get_marketplace_resource(
         self,
         resource_uuid: UUID,
-        field: Optional[list] = None,
+        field: list | None = None,
     ) -> Resource:
         """Retrieve a marketplace resource by UUID from Waldur B.
 
@@ -353,7 +358,7 @@ class WaldurClient(BaseClient):
 
     def list_marketplace_resources(
         self,
-        offering_uuid: Optional[UUID] = None,
+        offering_uuid: UUID | None = None,
     ) -> list[Resource]:
         """List marketplace resources, optionally filtered by offering."""
         kwargs = {}
@@ -366,7 +371,7 @@ class WaldurClient(BaseClient):
         )
 
     def set_resource_end_date(
-        self, resource_uuid: UUID, end_date: Optional[datetime.date]
+        self, resource_uuid: UUID, end_date: datetime.date | None
     ) -> None:
         """Set end_date on a resource on Waldur B via the consumer set_end_date endpoint."""
         marketplace_resources_set_end_date.sync_detailed(
@@ -392,7 +397,7 @@ class WaldurClient(BaseClient):
         """
         self._project_cache.clear()
 
-    def _fetch_b_project(self, backend_id: str) -> Optional[Project]:
+    def _fetch_b_project(self, backend_id: str) -> Project | None:
         """Fetch the Waldur B project by backend_id, cached for the cycle."""
         if backend_id in self._project_cache:
             return self._project_cache[backend_id]
@@ -415,7 +420,7 @@ class WaldurClient(BaseClient):
         self._project_cache[backend_id] = result
         return result
 
-    def find_project_by_backend_id(self, backend_id: str) -> Optional[dict]:
+    def find_project_by_backend_id(self, backend_id: str) -> dict | None:
         """Find a project on Waldur B by its backend_id.
 
         Returns:
@@ -439,7 +444,7 @@ class WaldurClient(BaseClient):
             "science_sub_domain_code": project.science_sub_domain_code or None,
         }
 
-    def find_science_sub_domain_by_code(self, code: str) -> Optional[UUID]:
+    def find_science_sub_domain_by_code(self, code: str) -> UUID | None:
         """Find a science sub-domain on Waldur B by its code (e.g. ``"1.1"``).
 
         Science sub-domains are defined per-instance, so they are matched by
@@ -465,7 +470,7 @@ class WaldurClient(BaseClient):
         name: str,
         backend_id: str,
         description: str = "",
-        end_date: Optional[datetime.date] = None,
+        end_date: datetime.date | None = None,
     ) -> dict:
         """Create a project on Waldur B.
 
@@ -497,10 +502,10 @@ class WaldurClient(BaseClient):
     def update_project(
         self,
         project_uuid: str,
-        description: Union[str, Unset] = UNSET,
-        oecd_fos_2007_code: Union[OecdFos2007CodeEnum, None, Unset] = UNSET,
-        is_industry: Union[bool, Unset] = UNSET,
-        science_sub_domain: Union[UUID, None, Unset] = UNSET,
+        description: str | Unset = UNSET,
+        oecd_fos_2007_code: OecdFos2007CodeEnum | None | Unset = UNSET,
+        is_industry: bool | Unset = UNSET,
+        science_sub_domain: UUID | None | Unset = UNSET,
     ) -> dict:
         """Update project metadata on Waldur B.
 
@@ -537,7 +542,7 @@ class WaldurClient(BaseClient):
         name: str,
         backend_id: str,
         description: str = "",
-        end_date: Optional[datetime.date] = None,
+        end_date: datetime.date | None = None,
     ) -> dict:
         """Find a project by backend_id, or create one if not found.
 
@@ -563,7 +568,7 @@ class WaldurClient(BaseClient):
         logger.info("Creating new project %s with backend_id=%s", name, backend_id)
         return self.create_project(customer_url, name, backend_id, description, end_date)
 
-    def get_project_by_backend_id(self, backend_id: str) -> Optional[Project]:
+    def get_project_by_backend_id(self, backend_id: str) -> Project | None:
         """Find a project on Waldur B by backend_id, including end_date fields.
 
         Returns the typed ``Project`` (with ``end_date`` and
@@ -572,7 +577,7 @@ class WaldurClient(BaseClient):
         return self._fetch_b_project(backend_id)
 
     def set_project_end_date(
-        self, project_uuid: UUID, end_date: Optional[datetime.date]
+        self, project_uuid: UUID, end_date: datetime.date | None
     ) -> None:
         """Set end_date on a project on Waldur B via partial update.
         """
@@ -629,7 +634,9 @@ class WaldurClient(BaseClient):
 
     def list_project_users(self, project_uuid: UUID) -> list:
         """List users of a project on Waldur B."""
-        from waldur_api_client.api.projects import projects_list_users_list  # noqa: PLC0415
+        from waldur_api_client.api.projects import (
+            projects_list_users_list,  # noqa: PLC0415
+        )
 
         return projects_list_users_list.sync(
             uuid=project_uuid,
@@ -666,13 +673,15 @@ class WaldurClient(BaseClient):
 
         return marketplace_offering_users_list.sync_all(**kwargs)
 
-    def resolve_user_by_cuid(self, cuid: str) -> Optional[UUID]:
+    def resolve_user_by_cuid(self, cuid: str) -> UUID | None:
         """Resolve a user on Waldur B by eduTeams CUID.
 
         Returns:
             User UUID on Waldur B, or None if not found.
         """
-        from waldur_api_client.api.remote_eduteams import remote_eduteams  # noqa: PLC0415
+        from waldur_api_client.api.remote_eduteams import (
+            remote_eduteams,  # noqa: PLC0415
+        )
 
         try:
             result = remote_eduteams.sync(
@@ -685,8 +694,8 @@ class WaldurClient(BaseClient):
             return None
 
     def resolve_user_via_identity_bridge(
-        self, username: str, source: str, attributes: Optional[dict] = None,
-    ) -> Optional[UUID]:
+        self, username: str, source: str, attributes: dict | None = None,
+    ) -> UUID | None:
         """Resolve (or create) a user on Waldur B via the Identity Bridge API.
 
         POST /api/identity-bridge/ is idempotent: it creates the user if absent
@@ -741,7 +750,7 @@ class WaldurClient(BaseClient):
 
     def resolve_user_by_field(
         self, value: str, field: str = "email"
-    ) -> Optional[UUID]:
+    ) -> UUID | None:
         """Resolve a user on Waldur B by email or username.
 
         Args:
@@ -772,7 +781,7 @@ class WaldurClient(BaseClient):
     def get_component_usages(
         self,
         resource_uuid: UUID,
-        billing_period: Optional[datetime.date] = None,
+        billing_period: datetime.date | None = None,
     ) -> list[ComponentUsage]:
         """Get component usages for a resource on Waldur B.
 
@@ -794,7 +803,7 @@ class WaldurClient(BaseClient):
     def get_component_user_usages(
         self,
         resource_uuid: UUID,
-        billing_period: Optional[datetime.date] = None,
+        billing_period: datetime.date | None = None,
     ) -> list[ComponentUserUsage]:
         """Get per-user component usages for a resource on Waldur B.
 
@@ -831,7 +840,7 @@ class WaldurClient(BaseClient):
             for r in resources
         ]
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get a resource by its UUID on Waldur B."""
         try:
             resource = self.get_marketplace_resource(UUID(resource_id))
@@ -851,7 +860,7 @@ class WaldurClient(BaseClient):
         name: str,
         description: str,
         organization: str,
-        parent_name: Optional[str] = None,
+        parent_name: str | None = None,
     ) -> str:
         """Create resource — handled by backend via marketplace orders."""
         del description, organization, parent_name
@@ -863,7 +872,7 @@ class WaldurClient(BaseClient):
 
     def set_resource_limits(
         self, resource_id: str, limits_dict: dict[str, int]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Set resource limits — handled by backend via update limits orders."""
         del resource_id, limits_dict
         return None
@@ -891,7 +900,7 @@ class WaldurClient(BaseClient):
         del resource_id, limits_dict
         return f"User limits not supported for {username}"
 
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Check if user is associated with resource on Waldur B.
 
         The 'user' here is a user UUID (string) on Waldur B,
@@ -913,7 +922,7 @@ class WaldurClient(BaseClient):
         return None
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Create association — handled by backend user management."""
         del default_account
@@ -924,7 +933,7 @@ class WaldurClient(BaseClient):
         return f"Association deleted for {username} from {resource_id}"
 
     def get_usage_report(
-        self, resource_ids: list[str], timezone: Optional[str] = None
+        self, resource_ids: list[str], timezone: str | None = None
     ) -> list:
         """Get raw usage data from Waldur B. Processing done by backend."""
         del timezone

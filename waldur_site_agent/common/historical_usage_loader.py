@@ -9,7 +9,6 @@ to align with Waldur's billing model.
 import argparse
 import datetime
 import sys
-from typing import Optional
 
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_component_usages import (
@@ -117,7 +116,7 @@ def parse_date_range(start_date_str: str, end_date_str: str) -> tuple[datetime.d
     return start_date, end_date
 
 
-def find_offering_by_uuid(offerings: list[Offering], target_uuid: str) -> Optional[Offering]:
+def find_offering_by_uuid(offerings: list[Offering], target_uuid: str) -> Offering | None:
     """Find offering by UUID.
 
     Args:
@@ -141,7 +140,7 @@ def load_historical_usage_for_month(
     skip_user_usage: bool = False,
     dry_run: bool = False,
     reconcile_stale: bool = False,
-    resource_backend_ids: Optional[list[str]] = None,
+    resource_backend_ids: list[str] | None = None,
     timezone: str = "",
 ) -> None:
     """Load historical usage data for a specific month.

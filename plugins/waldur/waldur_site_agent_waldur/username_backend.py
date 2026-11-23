@@ -7,7 +7,7 @@ Pushes user profiles from Waldur A to Waldur B via the Identity Bridge API
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from waldur_api_client import AuthenticatedClient, errors
 from waldur_api_client.api.identity_bridge import (
@@ -23,7 +23,6 @@ from waldur_api_client.models.identity_bridge_request_request import (
 )
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.types import UNSET
-
 from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
 from waldur_site_agent.common import static_token_prefix
 from waldur_site_agent_waldur.privileged_accounts import (
@@ -98,7 +97,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
     def __init__(
         self,
         backend_settings: dict | None = None,
-        offering: Optional[Offering] = None,
+        offering: Offering | None = None,
     ) -> None:
         super().__init__(backend_settings, offering)
         target_api_url = (self.backend_settings.get("target_api_url") or "").rstrip("/")
@@ -113,7 +112,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
             prefix=static_token_prefix(target_api_token),
         )
         self._previous_offering_usernames: set[str] | None = None
-        self._allowed_fields_cache: Optional[set[str]] = None
+        self._allowed_fields_cache: set[str] | None = None
         self._log_attribute_config()
 
     def _log_attribute_config(self) -> None:
@@ -161,7 +160,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
         except Exception:
             logger.exception("Failed to fetch attribute config from Waldur A")
 
-    def _fetch_allowed_fields(self) -> Optional[set[str]]:
+    def _fetch_allowed_fields(self) -> set[str] | None:
         """Fetch allowed fields from Waldur B identity bridge.
 
         Calls GET /api/identity-bridge/allowed-fields/ to discover which
@@ -217,7 +216,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
             {"username": username, "source": self.identity_bridge_source, **attributes}
         )
 
-    def get_username(self, offering_user: OfferingUser) -> Optional[str]:
+    def get_username(self, offering_user: OfferingUser) -> str | None:
         """Identity bridge does not own username assignment.
 
         Usernames are assigned by Waldur B's service provider and pulled

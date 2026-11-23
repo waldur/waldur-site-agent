@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
 from unittest import mock
 
 from waldur_site_agent_litellm.client import META_KEY, META_RESOURCE
@@ -22,7 +21,7 @@ RID = "abc123"
 SHARED = "openwebui-shared"
 
 
-def _make_backend(settings: Optional[dict] = None) -> LiteLLMUsageReportingBackend:
+def _make_backend(settings: dict | None = None) -> LiteLLMUsageReportingBackend:
     with (
         mock.patch("waldur_site_agent_litellm.reporting.LiteLLMUsageClient"),
         mock.patch("waldur_site_agent_litellm.reporting.LiteLLMClient"),
@@ -37,15 +36,15 @@ def _make_backend(settings: Optional[dict] = None) -> LiteLLMUsageReportingBacke
     return backend
 
 
-def _key_row(alias: Optional[str], prompt: int, completion: int, cost: float) -> dict:
+def _key_row(alias: str | None, prompt: int, completion: int, cost: float) -> dict:
     return {"key_alias": alias, "input_tokens": prompt, "output_tokens": completion, "token_cost": cost}
 
 
-def _user_row(email: str, alias: Optional[str], prompt: int, completion: int, cost: float) -> dict:
+def _user_row(email: str, alias: str | None, prompt: int, completion: int, cost: float) -> dict:
     return {"user_id": email, **_key_row(alias, prompt, completion, cost)}
 
 
-def _user(email: str, *, key: Optional[str] = None, resource: str = RID) -> dict:
+def _user(email: str, *, key: str | None = None, resource: str = RID) -> dict:
     metadata: dict = {META_RESOURCE: resource}
     if key is not None:
         metadata[META_KEY] = key

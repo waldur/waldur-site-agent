@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Optional
 
 # Azure allows up to 64 characters for a Linux virtual machine name. The derived
 # names add a prefix of at most 7 characters ("subnet"), and the resource group
@@ -57,7 +56,7 @@ def is_dedicated_resource_group(resource_group: str, resource_name: str) -> bool
     return resource_group[match.end() :] == resource_name
 
 
-def _group_infix(unique_suffix: Optional[str]) -> str:
+def _group_infix(unique_suffix: str | None) -> str:
     """Return the four characters that keep two same-named groups apart.
 
     Taken from the resource's uuid so that a retried order derives the same
@@ -73,7 +72,7 @@ def _group_infix(unique_suffix: Optional[str]) -> str:
     )
 
 
-def sanitize_name(name: str, suffix: Optional[str] = None) -> str:
+def sanitize_name(name: str, suffix: str | None = None) -> str:
     """Reduce a Waldur resource name to something Azure accepts.
 
     Azure rejects a name outright rather than trimming it, and the failure
@@ -108,8 +107,8 @@ class VirtualMachineNames:
     def build(
         cls,
         name: str,
-        resource_group: Optional[str] = None,
-        unique_suffix: Optional[str] = None,
+        resource_group: str | None = None,
+        unique_suffix: str | None = None,
     ) -> VirtualMachineNames:
         """Derive the names from a resource name.
 

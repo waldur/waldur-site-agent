@@ -11,7 +11,7 @@ ignores volatile identifiers.
 """
 
 import re
-from typing import Any, Optional
+from typing import Any
 
 from .structlog_message import normalize_for_fingerprint, parse_structlog_message
 
@@ -45,7 +45,7 @@ def scrub_secret_query_params(text: str) -> str:
     return _SECRET_QUERY_RE.sub(r"\1=[REDACTED]", text)
 
 
-def before_breadcrumb(crumb: dict, hint: dict) -> Optional[dict]:
+def before_breadcrumb(crumb: dict, hint: dict) -> dict | None:
     """Strip secret query parameters from a breadcrumb before it leaves the process.
 
     sentry-sdk's logging integration turns every INFO record into a breadcrumb, so

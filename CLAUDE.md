@@ -73,11 +73,13 @@ so manual tagging still works.
   slurm).
 - **Workspace sources**: Each plugin uses `[tool.uv.sources]`
   to map internal deps to the workspace during development.
-- **Python compatibility**: 3.9 through 3.13. Merge requests
-  test on 3.9 and 3.13; `main`, tags and schedules run all five
-  (plus mypy on 3.9). Do **not** use
-  `X | Y` union syntax or other 3.10+ features — use
-  `Optional[X]` and `Union[X, Y]` from `typing` instead.
+- **Python compatibility**: 3.10 through 3.13. Merge requests
+  test on 3.10 and 3.13; `main`, tags and schedules run all four
+  (plus mypy on 3.10). Use PEP 604 unions (`X | None`,
+  `X | Y`) and builtin generics (`list[str]`), not
+  `Optional`/`Union`/`List` from `typing`. The ruff pre-commit
+  hook enforces this outside `tests/` and `scripts/`, which it
+  skips; follow the same style there.
 - **Structured logging**: JSON format via structlog to stdout.
 - **Test config**: CI copies
   `examples/waldur-site-agent-config.yaml.example` to
@@ -92,9 +94,9 @@ so manual tagging still works.
 - Tag pushes trigger: PyPI publish (all packages), Helm chart
   publish (GitHub Pages), Docker image publish, SBOM generation.
 - Merge requests trigger (by changed paths): linters on 3.13 +
-  mypy on 3.9, `Run core tests`, `Run slurm tests` and one
+  mypy on 3.10, `Run core tests`, `Run slurm tests` and one
   `Run plugin tests` job that loops over every other
-  `plugins/*/tests` (each on 3.9 and 3.13), Helm lint,
+  `plugins/*/tests` (each on 3.10 and 3.13), Helm lint,
   Dockerfile lint, and the E2E jobs when slurm/ldap/core/ci
   files change. Pushing a feature branch **without** an open MR
   starts no pipeline (use `-o ci.variable=RUN_E2E=true` or the

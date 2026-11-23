@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 import httpx
 from ldap3 import MODIFY_ADD, MODIFY_DELETE, MODIFY_REPLACE
@@ -43,7 +42,7 @@ def fetch_provider_project_groups(
     """
     http = waldur_rest_client.get_httpx_client()
     url = PROJECT_GROUPS_PATH
-    params: Optional[dict] = {
+    params: dict | None = {
         "provider_offering_uuid": offering_uuid,
         "page_size": PAGE_SIZE,
         # Oldest first: a group created mid-fetch lands on the last page
@@ -112,7 +111,7 @@ class ProjectGroup:
     """The part of a Waldur project group the directory needs."""
 
     name: str
-    gid: Optional[int]
+    gid: int | None
     members: list[str]
     offering_uuids: set[str]
     customer_slug: str = ""
@@ -204,7 +203,7 @@ _WARNED_BARE_TEMPLATES: set[str] = set()
 _WARNED_MANAGED_MARKER: set[bool] = set()
 
 
-def _template_pattern(template: str) -> Optional[re.Pattern]:
+def _template_pattern(template: str) -> re.Pattern | None:
     """A pattern matching any value rendered from ``template``; None if it cannot.
 
     A template that is nothing but ``{slug}`` matches every value, so values
@@ -252,7 +251,7 @@ class ProjectGroupReconciler:
         offering_uuid: str,
         require_user_entries: bool = False,
         key_attribute: str = "",
-        excluded_members: Optional[set[str]] = None,
+        excluded_members: set[str] | None = None,
     ) -> None:
         """Read the ``project_groups`` settings block as a raw dict.
 
@@ -331,7 +330,7 @@ class ProjectGroupReconciler:
                 continue
             for cn in _values(attrs, "cn"):
                 name_holders.setdefault(cn.lower(), []).append(dn)
-        user_names: Optional[set[str]] = None
+        user_names: set[str] | None = None
         if self.member_attribute == "member" or self.require_user_entries:
             user_names = {
                 uid
@@ -546,7 +545,7 @@ class ProjectGroupReconciler:
         )
         return True
 
-    def _member_values(self, group: ProjectGroup, user_names: Optional[set[str]]) -> list[str]:
+    def _member_values(self, group: ProjectGroup, user_names: set[str] | None) -> list[str]:
         # A member must name an entry: an account Waldur lists before this agent
         # has written it (still being created, or held back by a conflict)
         # joins on a later cycle.
@@ -561,7 +560,7 @@ class ProjectGroupReconciler:
             return present
         return [self.client.user_dn(username) for username in present]
 
-    def _new_group_attributes(self, group: ProjectGroup, user_names: Optional[set[str]]) -> dict:
+    def _new_group_attributes(self, group: ProjectGroup, user_names: set[str] | None) -> dict:
         attributes: dict = {
             "objectClass": self.object_classes,
             "cn": group.name,
@@ -579,7 +578,7 @@ class ProjectGroupReconciler:
         return attributes
 
     def _sync_members(
-        self, dn: str, attrs: dict, group: ProjectGroup, user_names: Optional[set[str]]
+        self, dn: str, attrs: dict, group: ProjectGroup, user_names: set[str] | None
     ) -> bool:
         """Make the group's members match Waldur's; True when something was written."""
         attribute = self.member_attribute
@@ -702,7 +701,7 @@ class ProjectGroupReconciler:
 class _GroupContext:
     """What the bulk reads say about one group's name and GID."""
 
-    entry: Optional[tuple[str, dict]]
+    entry: tuple[str, dict] | None
     holders: dict[int, set[str]]
     same_name: list[str]
-    user_names: Optional[set[str]]
+    user_names: set[str] | None

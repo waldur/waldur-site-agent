@@ -5,12 +5,10 @@ from __future__ import annotations
 import datetime
 import uuid
 from types import SimpleNamespace
-from typing import Optional
 from unittest import mock
 
 import pytest
 from waldur_api_client.models.resource import Resource
-
 from waldur_site_agent_litellm import ownership
 from waldur_site_agent_litellm.backend import (
     META_HOLDER_CHAT,
@@ -48,7 +46,7 @@ FUTURE = "2999-01-01T00:00:00Z"
 PAST = "2000-01-01T00:00:00Z"
 
 
-def _make_backend(settings: Optional[dict] = None) -> LiteLLMBackend:
+def _make_backend(settings: dict | None = None) -> LiteLLMBackend:
     with (
         mock.patch("waldur_site_agent_litellm.backend.LiteLLMClient"),
         mock.patch("waldur_site_agent_litellm.backend.OpenWebUIClient"),
@@ -69,7 +67,7 @@ def _make_backend(settings: Optional[dict] = None) -> LiteLLMBackend:
     return backend
 
 
-def _key(alias: str, *, windows: Optional[list] = None, **meta) -> dict:
+def _key(alias: str, *, windows: list | None = None, **meta) -> dict:
     record: dict = {"key_alias": alias, "token": f"h-{alias}", "blocked": False}
     if windows is not None:
         record["budget_limits"] = windows
@@ -631,7 +629,7 @@ def test_chat_spend_is_kept_per_day() -> None:
 # --- usage per day -------------------------------------------------------------------
 
 
-def _usage_backend(settings: Optional[dict] = None) -> LiteLLMUsageReportingBackend:
+def _usage_backend(settings: dict | None = None) -> LiteLLMUsageReportingBackend:
     with (
         mock.patch("waldur_site_agent_litellm.reporting.LiteLLMUsageClient"),
         mock.patch("waldur_site_agent_litellm.reporting.LiteLLMClient"),
@@ -645,7 +643,7 @@ def _usage_backend(settings: Optional[dict] = None) -> LiteLLMUsageReportingBack
     return backend
 
 
-def _row(alias: Optional[str], date: str, tokens: int, cost: float, user: str = "") -> dict:
+def _row(alias: str | None, date: str, tokens: int, cost: float, user: str = "") -> dict:
     row = {"date": date, "key_alias": alias, "input_tokens": tokens, "output_tokens": 0}
     row["token_cost"] = cost
     if user:

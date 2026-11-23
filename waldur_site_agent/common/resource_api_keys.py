@@ -22,8 +22,9 @@ commands need ``supports_resource_api_key_lifecycle`` as well.
 from __future__ import annotations
 
 import datetime
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any
 
 import httpx
 from waldur_api_client import AuthenticatedClient, errors
@@ -128,11 +129,11 @@ class ApiKeyCommand:
     resource_uuid: str
     resource_backend_id: str
     client_id: str = ""
-    limits: Optional[dict] = None
-    allowed_models: Optional[list] = field(default=None)
+    limits: dict | None = None
+    allowed_models: list | None = field(default=None)
     # Per period, ``{component: {period: amount}}``; None from a Waldur whose keys
     # have only the month limits in ``limits``, or for a key with no limits.
-    spending_limits: Optional[dict] = None
+    spending_limits: dict | None = None
 
     @classmethod
     def from_message(cls, message: dict) -> ApiKeyCommand:
@@ -181,7 +182,7 @@ def _value(field: Any) -> Any:  # noqa: ANN401 - any optional field of a generat
     return None if isinstance(field, Unset) else field
 
 
-def _effective_models(row: ResourceApiKeyStatus) -> Optional[list]:
+def _effective_models(row: ResourceApiKeyStatus) -> list | None:
     """The model list a command for this key would have carried.
 
     Waldur stores a key's own list as ``allowed_models`` and sends the one its
@@ -281,7 +282,7 @@ def _read_resource(waldur_rest_client: AuthenticatedClient, command: ApiKeyComma
         raise _NotYet(str(exc)) from exc
 
 
-def _resource_limits(resource: object) -> Optional[dict]:
+def _resource_limits(resource: object) -> dict | None:
     """The resource's limits as Waldur holds them; None when the read carried none."""
     limits = _value(getattr(resource, "limits", None))
     if limits is None:
@@ -359,7 +360,7 @@ def _withdraw(backend, client_id: str, command: ApiKeyCommand, why: str) -> None
 
 def _set_key_landed(
     waldur_rest_client: AuthenticatedClient, command: ApiKeyCommand, client_id: str
-) -> Optional[bool]:
+) -> bool | None:
     """Whether Waldur holds ``client_id`` for the key; None when it cannot be told."""
     try:
         key = marketplace_resource_api_keys_retrieve.sync(
@@ -504,7 +505,7 @@ def _rotation_settings(
     waldur_rest_client: AuthenticatedClient,
     backend,  # noqa: ANN001
     command: ApiKeyCommand,
-) -> Optional[dict]:
+) -> dict | None:
     """The key's own limits and model list, applied to the rotated key.
 
     Waldur rotates a key that changes hands, possibly with new settings, and a
@@ -617,7 +618,7 @@ def execute_api_key_command(
 def find_pending_api_key_commands(
     waldur_rest_client: AuthenticatedClient,
     offering_uuid: str,
-    cutoff: Optional[datetime.datetime],
+    cutoff: datetime.datetime | None,
     lifecycle: bool,
 ) -> list[ApiKeyCommand]:
     """Return the command each key in a transitional state awaits.
@@ -656,7 +657,7 @@ def process_pending_api_key_commands(
     waldur_rest_client: AuthenticatedClient,
     backend,  # noqa: ANN001
     offering: structures.Offering,
-    cutoff: Optional[datetime.datetime] = None,
+    cutoff: datetime.datetime | None = None,
     expose_backend_error_details: bool = True,
 ) -> None:
     """Carry out the commands the offering's keys are waiting on.
@@ -725,7 +726,7 @@ def _current_period() -> datetime.date:
     return datetime.datetime.now(tz=datetime.timezone.utc).date().replace(day=1)
 
 
-def _previous_month(period: datetime.date, final_report_days: int) -> Optional[datetime.date]:
+def _previous_month(period: datetime.date, final_report_days: int) -> datetime.date | None:
     """The month before ``period`` while its final report is due, else None.
 
     Due in the first ``final_report_days`` UTC days of ``period``.
@@ -779,7 +780,7 @@ def _uuid_hex(value: object) -> str:
 
 def key_assignments(
     keys: list[ResourceApiKeyStatus], offering_users: list
-) -> dict[str, Optional[str]]:
+) -> dict[str, str | None]:
     """Map the client_id of every key not deleted to its assignee's offering username.
 
     The listing carries the assignee's user uuid; the offering users carry the uuid
@@ -797,7 +798,7 @@ def key_assignments(
         username = _value(getattr(offering_user, "username", None))
         if user and isinstance(username, str) and username:
             usernames[user] = username
-    assignments: dict[str, Optional[str]] = {}
+    assignments: dict[str, str | None] = {}
     for key in keys:
         client_id = _value(key.client_id)
         if not client_id or key.state == ResourceApiKeyState.DELETED:
@@ -890,7 +891,7 @@ def _report_previous_month(
     the new month); that key is then left alone for the month, with no effect on the
     current month's report.
     """
-    daily: Optional[dict] = None
+    daily: dict | None = None
     if getattr(backend, "supports_daily_usage", False) is True:
         result = backend.get_resource_key_daily_usage_report_for_period(
             [resource_backend_id], month.year, month.month
@@ -1046,7 +1047,7 @@ def report_api_key_usages(
                 f"{previous:%Y-%m}",
                 exc_info=True,
             )
-    daily: Optional[dict] = None
+    daily: dict | None = None
     if getattr(backend, "supports_daily_usage", False) is True:
         # The month figures are the sum of the days, so one collection gives both.
         daily = backend.get_resource_key_daily_usage_report([resource_backend_id]).get(

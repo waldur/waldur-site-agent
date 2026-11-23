@@ -6,7 +6,6 @@ import re
 import threading
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Optional
 
 from pydantic import ValidationError as PydanticValidationError
 from waldur_api_client.api.marketplace_offering_users import marketplace_offering_users_list
@@ -132,7 +131,7 @@ def _pending_token(old_username: str) -> str:
     return f"{PENDING_RENAME_PREFIX}{old_username}"
 
 
-def _pending_old_name(value: str) -> Optional[str]:
+def _pending_old_name(value: str) -> str | None:
     if value.startswith(PENDING_RENAME_PREFIX):
         return value[len(PENDING_RENAME_PREFIX) :] or None
     return None
@@ -169,7 +168,7 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
     def __init__(
         self,
         backend_settings: dict | None = None,
-        offering: Optional[Offering] = None,
+        offering: Offering | None = None,
     ) -> None:
         """Initialize LDAP username backend from backend_settings."""
         super().__init__(backend_settings, offering)
@@ -278,7 +277,7 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
             self.client.gid_range_end,
         )
 
-    def get_username(self, offering_user: OfferingUser) -> Optional[str]:
+    def get_username(self, offering_user: OfferingUser) -> str | None:
         """Check if a user already exists in LDAP.
 
         Searches by email first, then by Waldur username.
@@ -711,7 +710,7 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
             current_keys=state.current_keys,
         )
 
-    def _is_this_account(self, entry: Optional[dict], desired: reconcile.DesiredEntry) -> bool:
+    def _is_this_account(self, entry: dict | None, desired: reconcile.DesiredEntry) -> bool:
         """Whether an entry read live is this account: its uidNumber and its key."""
         if not entry:
             return False
@@ -1249,7 +1248,7 @@ class LdapUsernameBackend(AbstractUsernameManagementBackend):
 
     def _live_account_elsewhere(
         self, offering_user: OfferingUser, waldur_rest_client: AuthenticatedClient
-    ) -> Optional[OfferingUser]:
+    ) -> OfferingUser | None:
         """The offering user that still keeps this person's entry alive, if any.
 
         Every offering of one provider that shares the directory reads the same

@@ -33,7 +33,6 @@ import ssl
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Union
 from urllib.parse import urlsplit
 
 import httpx
@@ -235,7 +234,7 @@ class PrometheusPeriodClosedError(PrometheusError):
     """The period ended longer ago than ``closed_period_hours``."""
 
 
-def verify_ssl_setting(settings: dict) -> Union[bool, ssl.SSLContext]:
+def verify_ssl_setting(settings: dict) -> bool | ssl.SSLContext:
     """Read ``ssl_verify``: on by default, off only when explicitly false, or a CA bundle.
 
     ``.get("ssl_verify", True)`` only covers an absent key: a bare ``ssl_verify:`` in
@@ -269,7 +268,7 @@ def timeout_setting(settings: dict) -> float:
     return DEFAULT_TIMEOUT if timeout is None else float(timeout)
 
 
-def duration_seconds(value: Union[str, float, None], setting: str = "step") -> float:
+def duration_seconds(value: str | float | None, setting: str = "step") -> float:
     """Read a PromQL duration (``1h30m``) or a plain number of seconds.
 
     Args:
@@ -358,7 +357,7 @@ def namespace_pattern(namespaces: Sequence[str]) -> str:
     return "".join(_PROMQL_STRING_ESCAPES.get(c, c) for c in regex)
 
 
-def _series_value(raw: object) -> Optional[float]:
+def _series_value(raw: object) -> float | None:
     """Read one series' value, or None when it says nothing billable.
 
     ``NaN`` (a counter Prometheus could not evaluate) and infinities are dropped, so
@@ -446,7 +445,7 @@ class PrometheusClient:
     """
 
     def __init__(
-        self, settings: Optional[dict], transport: Optional[httpx.BaseTransport] = None
+        self, settings: dict | None, transport: httpx.BaseTransport | None = None
     ) -> None:
         """Initialize the client from the offering's ``prometheus`` settings block.
 
@@ -482,7 +481,7 @@ class PrometheusClient:
         retention = settings.get("retention")
         # None: read it from Prometheus. Set: trusted as is, for a store whose own
         # status does not describe the data it serves (Thanos, Mimir).
-        self.retention_seconds: Optional[float] = (
+        self.retention_seconds: float | None = (
             None if retention in (None, "") else duration_seconds(retention, "retention")
         )
         closed_hours = settings.get("closed_period_hours")
@@ -504,7 +503,7 @@ class PrometheusClient:
             # so the credential that wins would not be the one an operator expects.
             msg = "Give Prometheus either 'bearer_token' or 'username'/'password', not both"
             raise PrometheusError(msg)
-        self.auth: Optional[httpx.Auth] = None
+        self.auth: httpx.Auth | None = None
         if username or password:
             if not (username and password):
                 msg = (
@@ -531,7 +530,7 @@ class PrometheusClient:
         self._consecutive_timeouts = 0
 
     @staticmethod
-    def _selectors(configured: Optional[dict]) -> dict[str, str]:
+    def _selectors(configured: dict | None) -> dict[str, str]:
         selectors = dict(DEFAULT_SELECTORS)
         for name, selector in (configured or {}).items():
             name = str(name)
@@ -545,7 +544,7 @@ class PrometheusClient:
             selectors[name] = selector or MATCH_ANY
         return selectors
 
-    def _queries(self, configured: Optional[dict]) -> dict[str, str]:
+    def _queries(self, configured: dict | None) -> dict[str, str]:
         """Merge the overrides over the built-in queries and check every template.
 
         A template without ``{namespaces}`` would answer for every namespace on the
@@ -650,7 +649,7 @@ class PrometheusClient:
         session: httpx.Client,
         method: str,
         path: str,
-        data: Optional[dict[str, str]] = None,
+        data: dict[str, str] | None = None,
     ) -> dict:
         """Send one request and return its decoded JSON object.
 
@@ -719,7 +718,7 @@ class PrometheusClient:
 
     # ── What Prometheus holds ─────────────────────────────────────────────────
 
-    def server_retention_seconds(self) -> Optional[float]:
+    def server_retention_seconds(self) -> float | None:
         """The time-based retention Prometheus reports, or None when it has none.
 
         Read once from ``/api/v1/status/runtimeinfo`` and cached. A size-only
@@ -749,7 +748,7 @@ class PrometheusClient:
             self._server_retention = min(durations) if durations else None
         return self._server_retention  # type: ignore[return-value]
 
-    def lowest_timestamp(self) -> Optional[float]:
+    def lowest_timestamp(self) -> float | None:
         """The Unix time of the oldest sample Prometheus holds, or None when unknown.
 
         Catches what the time-based retention cannot: a size-based retention that
@@ -763,7 +762,7 @@ class PrometheusClient:
         its reporting, which is why the selector should name Prometheus's own job.
         """
         if self._lowest_timestamp is _UNSET:
-            lowest: Optional[float] = None
+            lowest: float | None = None
             with self.connect() as session:
                 try:
                     blocks = self._call(session, "GET", "/api/v1/status/tsdb/blocks")
@@ -799,7 +798,7 @@ class PrometheusClient:
             self._lowest_timestamp = lowest
         return self._lowest_timestamp  # type: ignore[return-value]
 
-    def covered_since(self, now: datetime.datetime) -> tuple[Optional[float], str]:
+    def covered_since(self, now: datetime.datetime) -> tuple[float | None, str]:
         """The earliest instant Prometheus is taken to hold in full, and why.
 
         Returns ``(unix_time, explanation)``; the time is None when nothing limits
@@ -809,7 +808,7 @@ class PrometheusClient:
         Raises:
             PrometheusUnavailableError: if Prometheus cannot be asked.
         """
-        floor: Optional[float] = None
+        floor: float | None = None
         if self.retention_seconds is not None:
             floor = now.timestamp() - self.retention_seconds
             return floor, f"the configured retention of {format_duration(self.retention_seconds)}"

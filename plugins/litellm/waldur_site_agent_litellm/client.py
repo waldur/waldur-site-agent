@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -155,8 +155,8 @@ class LiteLLMClient:
         method: str,
         path: str,
         *,
-        params: Optional[dict] = None,
-        json_body: Optional[dict] = None,
+        params: dict | None = None,
+        json_body: dict | None = None,
         none_on_404: bool = False,
         none_on_missing_entity: bool = False,
     ) -> Any:  # noqa: ANN401 - the proxy returns both dicts and lists
@@ -268,14 +268,14 @@ class LiteLLMClient:
         self,
         key_alias: str,
         *,
-        models: Optional[list] = None,
+        models: list | None = None,
         blocked: bool = False,
-        max_budget: Optional[float] = None,
-        budget_duration: Optional[str] = None,
-        budget_limits: Optional[list] = None,
-        tpm_limit: Optional[int] = None,
-        rpm_limit: Optional[int] = None,
-        metadata: Optional[dict] = None,
+        max_budget: float | None = None,
+        budget_duration: str | None = None,
+        budget_limits: list | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        metadata: dict | None = None,
     ) -> dict:
         """Mint a key and return the proxy's response.
 
@@ -370,7 +370,7 @@ class LiteLLMClient:
             page += 1
         return keys
 
-    def get_key(self, token: str) -> Optional[dict]:
+    def get_key(self, token: str) -> dict | None:
         """Return one key's record by hash, or None when the proxy has no such key."""
         payload = self._request(
             "GET", "/key/info", params={"key": token}, none_on_404=True
@@ -435,14 +435,14 @@ class LiteLLMClient:
         user_id: str,
         *,
         user_email: str,
-        user_alias: Optional[str] = None,
-        models: Optional[list] = None,
-        max_budget: Optional[float] = None,
-        budget_duration: Optional[str] = None,
-        tpm_limit: Optional[int] = None,
-        rpm_limit: Optional[int] = None,
-        max_parallel_requests: Optional[int] = None,
-        metadata: Optional[dict] = None,
+        user_alias: str | None = None,
+        models: list | None = None,
+        max_budget: float | None = None,
+        budget_duration: str | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+        metadata: dict | None = None,
     ) -> dict:
         """Create one member with the :data:`MEMBER_ROLE` and return the proxy's response.
 
@@ -485,7 +485,7 @@ class LiteLLMClient:
             raise LiteLLMBackendError(msg)
         return payload
 
-    def get_user(self, user_id: str) -> Optional[dict]:
+    def get_user(self, user_id: str) -> dict | None:
         """Return one user's record, or None when the proxy has no such user.
 
         ``/user/info`` wraps the row in ``user_info`` on some versions and returns it

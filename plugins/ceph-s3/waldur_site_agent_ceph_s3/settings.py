@@ -6,7 +6,6 @@ They share no credentials and almost no settings, so a configuration that mixes
 them is a mistake rather than a merge.
 """
 
-from typing import Tuple
 
 CROIT = "croit"
 RADOSGW = "radosgw"
@@ -16,10 +15,10 @@ FLAVOURS = (CROIT, RADOSGW)
 # operator read a half-migrated offering as configured when it is not: the agent
 # would run, authenticate somewhere else entirely, and only the provisioning
 # failure would say so.
-_CROIT_ONLY: Tuple[str, ...] = ("api_url", "username", "password", "token")
+_CROIT_ONLY: tuple[str, ...] = ("api_url", "username", "password", "token")
 # rgw_accounts is radosgw-only too: croit's API has no account endpoints, so the
 # mode exists only where the agent talks Admin Ops itself.
-_RADOSGW_ONLY: Tuple[str, ...] = (
+_RADOSGW_ONLY: tuple[str, ...] = (
     "admin_access_key",
     "admin_secret_key",
     "admin_path",
@@ -31,7 +30,7 @@ _RADOSGW_ONLY: Tuple[str, ...] = (
 # same reason as the foreign settings above: a dropped setting reads as
 # configured. (Tenants are supported on both flavours: tenanted uids are
 # "tenant$uid", validated half by half in clients.base.)
-_UNIMPLEMENTED_ON_RADOSGW: Tuple[str, ...] = ("default_storage_class",)
+_UNIMPLEMENTED_ON_RADOSGW: tuple[str, ...] = ("default_storage_class",)
 
 
 def resolve_flavour(backend_settings: dict) -> str:
@@ -50,7 +49,7 @@ def resolve_flavour(backend_settings: dict) -> str:
 
 
 def _reject_foreign_settings(
-    backend_settings: dict, foreign: Tuple[str, ...], flavour: str
+    backend_settings: dict, foreign: tuple[str, ...], flavour: str
 ) -> None:
     present = [name for name in foreign if backend_settings.get(name)]
     if present:

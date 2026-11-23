@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import httpx
 
@@ -22,7 +21,7 @@ class EnvoyUsageClient:
     """Reads per-client_id token usage from the usage warehouse."""
 
     def __init__(
-        self, api_url: str, api_token: Optional[str] = None, timeout: float = DEFAULT_TIMEOUT
+        self, api_url: str, api_token: str | None = None, timeout: float = DEFAULT_TIMEOUT
     ) -> None:
         """Initialize the client.
 

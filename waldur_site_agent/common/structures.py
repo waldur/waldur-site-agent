@@ -16,7 +16,7 @@ import logging
 import zoneinfo
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -75,43 +75,43 @@ class BackendComponent(BaseModel):
     # Core fields (required by all backends)
     measured_unit: str = Field(..., description="Unit of measurement (e.g., 'Hours', 'GB')")
     unit_factor: float = Field(default=1.0, description="Factor for conversion to backend units")
-    unit_factor_reporting: Optional[float] = Field(
+    unit_factor_reporting: float | None = Field(
         default=None,
         description="Factor for unit conversion in reporting mode. "
         "Falls back to unit_factor if not set.",
     )
     accounting_type: AccountingType = Field(..., description="Component accounting type")
     label: str = Field(..., description="Human-readable label for display")
-    limit: Optional[float] = Field(default=None, description="Component limit value")
+    limit: float | None = Field(default=None, description="Component limit value")
 
     # Optional Waldur offering component fields (passed through to OfferingComponentRequest)
-    description: Optional[str] = Field(default=None, description="Description of the component")
-    min_value: Optional[int] = Field(default=None, description="Minimum allowed value")
-    max_value: Optional[int] = Field(default=None, description="Maximum allowed value")
-    max_available_limit: Optional[int] = Field(default=None, description="Maximum available limit")
-    default_limit: Optional[int] = Field(default=None, description="Default limit value")
-    limit_period: Optional[str] = Field(
+    description: str | None = Field(default=None, description="Description of the component")
+    min_value: int | None = Field(default=None, description="Minimum allowed value")
+    max_value: int | None = Field(default=None, description="Maximum allowed value")
+    max_available_limit: int | None = Field(default=None, description="Maximum available limit")
+    default_limit: int | None = Field(default=None, description="Default limit value")
+    limit_period: str | None = Field(
         default=None, description="Limit period: annual, month, quarterly, total"
     )
-    article_code: Optional[str] = Field(default=None, description="Article code for billing")
-    is_boolean: Optional[bool] = Field(default=None, description="Whether the component is boolean")
-    is_prepaid: Optional[bool] = Field(default=None, description="Whether the component is prepaid")
-    min_prepaid_duration: Optional[int] = Field(
+    article_code: str | None = Field(default=None, description="Article code for billing")
+    is_boolean: bool | None = Field(default=None, description="Whether the component is boolean")
+    is_prepaid: bool | None = Field(default=None, description="Whether the component is prepaid")
+    min_prepaid_duration: int | None = Field(
         default=None, description="Minimum prepaid duration in months"
     )
-    max_prepaid_duration: Optional[int] = Field(
+    max_prepaid_duration: int | None = Field(
         default=None, description="Maximum prepaid duration in months"
     )
-    prepaid_duration_step: Optional[int] = Field(
+    prepaid_duration_step: int | None = Field(
         default=None, description="Step size in months for initial prepaid duration"
     )
-    min_renewal_duration: Optional[int] = Field(
+    min_renewal_duration: int | None = Field(
         default=None, description="Minimum renewal duration in months"
     )
-    max_renewal_duration: Optional[int] = Field(
+    max_renewal_duration: int | None = Field(
         default=None, description="Maximum renewal duration in months"
     )
-    renewal_duration_step: Optional[int] = Field(
+    renewal_duration_step: int | None = Field(
         default=None, description="Step size in months for renewal duration"
     )
 
@@ -183,11 +183,11 @@ class Offering(BaseModel):
     waldur_offering_uuid: str = Field(..., description="UUID of the offering in Waldur")
 
     # OIDC authentication (used when waldur_api_token is blank)
-    oidc_token_url: Optional[str] = Field(default=None, description="OIDC token endpoint URL")
-    oidc_client_id: Optional[str] = Field(
+    oidc_token_url: str | None = Field(default=None, description="OIDC token endpoint URL")
+    oidc_client_id: str | None = Field(
         default=None, description="OIDC client ID for token requests"
     )
-    oidc_client_secret: Optional[str] = Field(
+    oidc_client_secret: str | None = Field(
         default=None,
         description="OIDC client secret for obtaining access tokens",
         json_schema_extra={"secret": True},
@@ -205,23 +205,23 @@ class Offering(BaseModel):
     # Event processing
     websocket_use_tls: bool = Field(default=True, description="Use TLS for websocket connections")
     stomp_enabled: bool = Field(default=False, description="Enable STOMP event processing")
-    stomp_membership_sync_enabled: Optional[bool] = Field(
+    stomp_membership_sync_enabled: bool | None = Field(
         default=None,
         description="Use STOMP for membership sync; defaults to stomp_enabled. "
         "Set to false to keep HTTP polling for membership sync even when stomp_enabled=true.",
     )
-    stomp_ws_host: Optional[str] = Field(default=None, description="STOMP WebSocket host")
-    stomp_ws_port: Optional[int] = Field(default=None, description="STOMP WebSocket port")
-    stomp_ws_path: Optional[str] = Field(default=None, description="STOMP WebSocket path")
+    stomp_ws_host: str | None = Field(default=None, description="STOMP WebSocket host")
+    stomp_ws_port: int | None = Field(default=None, description="STOMP WebSocket port")
+    stomp_ws_path: str | None = Field(default=None, description="STOMP WebSocket path")
 
     # Backend selection for different operations
-    order_processing_backend: Optional[str] = Field(
+    order_processing_backend: str | None = Field(
         default="", description="Backend for order processing"
     )
-    membership_sync_backend: Optional[str] = Field(
+    membership_sync_backend: str | None = Field(
         default="", description="Backend for membership sync"
     )
-    reporting_backend: Optional[str] = Field(default="", description="Backend for usage reporting")
+    reporting_backend: str | None = Field(default="", description="Backend for usage reporting")
     username_management_backend: str = Field(
         default="base", description="Backend for username management"
     )
@@ -253,7 +253,7 @@ class Offering(BaseModel):
         ),
     )
 
-    policy_settings: Optional[dict[str, Any]] = Field(
+    policy_settings: dict[str, Any] | None = Field(
         default=None,
         description="Periodic usage policy of the offering as Waldur describes it; "
         "informational, the agent does not apply it",
@@ -349,7 +349,7 @@ class Offering(BaseModel):
 
     @field_validator("oidc_token_url")
     @classmethod
-    def validate_oidc_token_url(cls, v: Optional[str]) -> Optional[str]:
+    def validate_oidc_token_url(cls, v: str | None) -> str | None:
         """Validate that oidc_token_url is a valid HTTP/HTTPS URL when set."""
         if v is not None and not v.startswith(("http://", "https://")):
             msg = "oidc_token_url must start with http:// or https://"
@@ -426,10 +426,10 @@ class WaldurAgentConfiguration(BaseModel):
     offerings: list[Offering] = Field(
         default_factory=list, description="List of configured offerings"
     )
-    sentry_dsn: Optional[str] = Field(
+    sentry_dsn: str | None = Field(
         default=None, description="Sentry DSN for error reporting (URL)"
     )
-    elastic_apm_server_url: Optional[str] = Field(
+    elastic_apm_server_url: str | None = Field(
         default=None, description="Elastic APM server URL (enables APM when set)"
     )
     timezone: str = Field(default="UTC", description="Timezone for billing calculations")
@@ -475,7 +475,7 @@ class WaldurAgentConfiguration(BaseModel):
 
     @field_validator("sentry_dsn")
     @classmethod
-    def validate_sentry_dsn(cls, v: Optional[str]) -> Optional[str]:
+    def validate_sentry_dsn(cls, v: str | None) -> str | None:
         """Validate that sentry_dsn is a valid URL when provided."""
         if v is None or v == "":
             return None
@@ -489,7 +489,7 @@ class WaldurAgentConfiguration(BaseModel):
 
     @field_validator("elastic_apm_server_url")
     @classmethod
-    def validate_elastic_apm_server_url(cls, v: Optional[str]) -> Optional[str]:
+    def validate_elastic_apm_server_url(cls, v: str | None) -> str | None:
         """Validate that elastic_apm_server_url is a valid URL when provided."""
         if v is None or v == "":
             return None
@@ -574,10 +574,10 @@ class RootConfiguration(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     offerings: list[dict[str, Any]] = Field(..., description="Raw offering configurations")
-    sentry_dsn: Optional[str] = Field(
+    sentry_dsn: str | None = Field(
         default=None, description="Sentry DSN for error reporting (URL)"
     )
-    elastic_apm_server_url: Optional[str] = Field(
+    elastic_apm_server_url: str | None = Field(
         default=None, description="Elastic APM server URL (enables APM when set)"
     )
     timezone: str = Field(default="UTC", description="Timezone for billing calculations")
@@ -646,7 +646,7 @@ class RootConfiguration(BaseModel):
 
     @field_validator("sentry_dsn")
     @classmethod
-    def validate_sentry_dsn(cls, v: Optional[str]) -> Optional[str]:
+    def validate_sentry_dsn(cls, v: str | None) -> str | None:
         """Validate that sentry_dsn is a valid URL when provided."""
         if v is None or v == "":
             return None
@@ -660,7 +660,7 @@ class RootConfiguration(BaseModel):
 
     @field_validator("elastic_apm_server_url")
     @classmethod
-    def validate_elastic_apm_server_url(cls, v: Optional[str]) -> Optional[str]:
+    def validate_elastic_apm_server_url(cls, v: str | None) -> str | None:
         """Validate that elastic_apm_server_url is a valid URL when provided."""
         if v is None or v == "":
             return None
@@ -682,7 +682,7 @@ class RootConfiguration(BaseModel):
             raise ValueError(msg)
         return v_upper
 
-    def to_agent_configuration(self, user_agent: Optional[str] = None) -> WaldurAgentConfiguration:
+    def to_agent_configuration(self, user_agent: str | None = None) -> WaldurAgentConfiguration:
         """Convert raw configuration to typed agent configuration.
 
         An offering with ``configuration_source: waldur`` is read from Waldur here,

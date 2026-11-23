@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import threading
 from types import ModuleType
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 import stomp
@@ -47,7 +47,7 @@ def redacted_proxy(proxy_url: str) -> str:
     return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
 
 
-def websocket_proxy_options(proxy_url: Optional[str]) -> dict[str, Any]:
+def websocket_proxy_options(proxy_url: str | None) -> dict[str, Any]:
     """Translate a proxy URL into websocket-client ``create_connection`` options.
 
     An empty value means no explicit proxy. websocket-client cannot speak TLS to
@@ -116,7 +116,7 @@ class ProxiedWSTransport(stomp_ws.WSTransport):
     def __init__(
         self,
         *args: Any,  # noqa: ANN401
-        proxy_options: Optional[dict[str, Any]] = None,
+        proxy_options: dict[str, Any] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         """Create the transport; ``proxy_options`` go to ``create_connection``."""
@@ -149,7 +149,7 @@ class ProxiedWSStompConnection(stomp.WSStompConnection):
 
     def __init__(
         self,
-        proxy_options: Optional[dict[str, Any]] = None,
+        proxy_options: dict[str, Any] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         """Create the connection; ``kwargs`` are ``WSStompConnection`` arguments."""
@@ -161,7 +161,7 @@ class ProxiedWSStompConnection(stomp.WSStompConnection):
         Protocol12.__init__(self, transport, **protocol_kwargs)
 
 
-def ws_stomp_connection(proxy_url: Optional[str] = None, **kwargs: Any) -> stomp.WSStompConnection:  # noqa: ANN401
+def ws_stomp_connection(proxy_url: str | None = None, **kwargs: Any) -> stomp.WSStompConnection:  # noqa: ANN401
     """Build the agent's STOMP WebSocket connection, through ``proxy_url`` if set.
 
     Takes ``WSStompConnection`` keyword arguments. Without a usable proxy (none, or

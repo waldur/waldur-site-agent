@@ -30,9 +30,10 @@ import argparse
 import ast
 import re
 import sys
-from pathlib import Path
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable, get_origin
+from pathlib import Path
+from typing import Any, get_origin
 
 from pydantic import BaseModel
 
@@ -109,7 +110,7 @@ COVERED_BY = {
 
 def _type_name(annotation: Any) -> str:  # noqa: ANN401
     """Readable type: ``str``, ``int | None`` shown as ``int``, models by class name."""
-    # On Python 3.9 a generic such as dict[str, Any] also passes isinstance(..., type).
+    # A generic such as dict[str, Any] can also pass isinstance(..., type).
     is_class = isinstance(annotation, type) and get_origin(annotation) is None
     if is_class and issubclass(annotation, Enum):
         return " | ".join(str(member.value) for member in annotation)
@@ -373,10 +374,7 @@ def check_console_scripts() -> list[str]:
 
 
 def check_plugin_settings() -> list[str]:
-    if sys.version_info >= (3, 10):
-        from importlib.metadata import entry_points  # noqa: PLC0415
-    else:
-        from importlib_metadata import entry_points  # noqa: PLC0415
+    from importlib.metadata import entry_points  # noqa: PLC0415
 
     from waldur_site_agent.common.plugin_schemas import (  # noqa: PLC0415
         CommonBackendSettingsSchema,

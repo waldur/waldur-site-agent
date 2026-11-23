@@ -1,6 +1,5 @@
 """Moab-specific backend classes and functions."""
 
-from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
@@ -69,7 +68,7 @@ class MoabBackend(BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Override parent method to validate slug fields."""
         if not waldur_resource.project_slug:

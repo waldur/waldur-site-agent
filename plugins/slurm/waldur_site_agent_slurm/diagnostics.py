@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class DiagnosticStatus(Enum):
@@ -21,16 +21,16 @@ class SlurmAccountInfo:
 
     exists: bool
     name: str
-    description: Optional[str] = None
-    organization: Optional[str] = None
-    parent_account: Optional[str] = None
-    fairshare: Optional[int] = None
-    qos: Optional[str] = None
-    grp_tres_mins: Optional[dict[str, str]] = None
-    max_tres_mins: Optional[dict[str, str]] = None
-    grp_tres: Optional[dict[str, str]] = None
-    users: Optional[list[str]] = None
-    error: Optional[str] = None
+    description: str | None = None
+    organization: str | None = None
+    parent_account: str | None = None
+    fairshare: int | None = None
+    qos: str | None = None
+    grp_tres_mins: dict[str, str] | None = None
+    max_tres_mins: dict[str, str] | None = None
+    grp_tres: dict[str, str] | None = None
+    users: list[str] | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -38,20 +38,20 @@ class WaldurResourceInfo:
     """Information retrieved from Waldur Mastermind."""
 
     exists: bool
-    uuid: Optional[str] = None
-    name: Optional[str] = None
-    state: Optional[str] = None
-    offering_uuid: Optional[str] = None
-    offering_name: Optional[str] = None
-    project_uuid: Optional[str] = None
-    project_name: Optional[str] = None
-    customer_uuid: Optional[str] = None
-    customer_name: Optional[str] = None
-    limits: Optional[dict[str, Any]] = None
-    backend_id: Optional[str] = None
-    downscaled: Optional[bool] = None
-    paused: Optional[bool] = None
-    error: Optional[str] = None
+    uuid: str | None = None
+    name: str | None = None
+    state: str | None = None
+    offering_uuid: str | None = None
+    offering_name: str | None = None
+    project_uuid: str | None = None
+    project_name: str | None = None
+    customer_uuid: str | None = None
+    customer_name: str | None = None
+    limits: dict[str, Any] | None = None
+    backend_id: str | None = None
+    downscaled: bool | None = None
+    paused: bool | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -59,19 +59,19 @@ class PolicyInfo:
     """SLURM Periodic Usage Policy information from Waldur."""
 
     exists: bool
-    uuid: Optional[str] = None
-    period: Optional[str] = None
-    period_name: Optional[str] = None
-    limit_type: Optional[str] = None
-    tres_billing_enabled: Optional[bool] = None
-    tres_billing_weights: Optional[dict[str, float]] = None
-    grace_ratio: Optional[float] = None
-    carryover_factor: Optional[int] = None
-    carryover_enabled: Optional[bool] = None
-    raw_usage_reset: Optional[bool] = None
-    qos_strategy: Optional[str] = None
-    component_limits: Optional[list[dict[str, Any]]] = None
-    error: Optional[str] = None
+    uuid: str | None = None
+    period: str | None = None
+    period_name: str | None = None
+    limit_type: str | None = None
+    tres_billing_enabled: bool | None = None
+    tres_billing_weights: dict[str, float] | None = None
+    grace_ratio: float | None = None
+    carryover_factor: int | None = None
+    carryover_enabled: bool | None = None
+    raw_usage_reset: bool | None = None
+    qos_strategy: str | None = None
+    component_limits: list[dict[str, Any]] | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -80,21 +80,21 @@ class ComponentUnitInfo:
 
     component_type: str
     waldur_unit: str
-    waldur_value: Optional[float] = None
+    waldur_value: float | None = None
     slurm_unit: str = "minutes"  # SLURM typically uses minutes for TRES
-    slurm_value: Optional[int] = None
+    slurm_value: int | None = None
     unit_factor: float = 1.0
-    conversion_note: Optional[str] = None
+    conversion_note: str | None = None
 
 
 @dataclass
 class ExpectedSettings:
     """Expected SLURM settings calculated from policy and resource."""
 
-    fairshare: Optional[int] = None
-    qos: Optional[str] = None
-    limits: Optional[dict[str, int]] = None
-    limit_type: Optional[str] = None
+    fairshare: int | None = None
+    qos: str | None = None
+    limits: dict[str, int] | None = None
+    limit_type: str | None = None
     reasoning: dict[str, str] = field(default_factory=dict)
     unit_info: dict[str, ComponentUnitInfo] = field(default_factory=dict)
 
@@ -107,13 +107,13 @@ class ComparisonResult:
     actual: Any
     expected: Any
     status: DiagnosticStatus
-    reason: Optional[str] = None
-    fix_command: Optional[str] = None
+    reason: str | None = None
+    fix_command: str | None = None
     # Unit conversion details
-    waldur_value: Optional[float] = None
-    waldur_unit: Optional[str] = None
-    slurm_unit: Optional[str] = None
-    unit_factor: Optional[float] = None
+    waldur_value: float | None = None
+    waldur_unit: str | None = None
+    slurm_unit: str | None = None
+    unit_factor: float | None = None
 
 
 @dataclass
@@ -124,7 +124,7 @@ class AccountDiagnostic:
     slurm_info: SlurmAccountInfo
     waldur_info: WaldurResourceInfo
     policy_info: PolicyInfo
-    expected_settings: Optional[ExpectedSettings] = None
+    expected_settings: ExpectedSettings | None = None
     comparisons: list[ComparisonResult] = field(default_factory=list)
     fix_commands: list[str] = field(default_factory=list)
     overall_status: DiagnosticStatus = DiagnosticStatus.UNKNOWN

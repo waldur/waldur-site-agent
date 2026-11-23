@@ -5,18 +5,13 @@ exposes no stored-bytes series. GB-day reporting therefore lives in its own
 backend, wired through ``reporting_backend``.
 """
 
-import sys
+from importlib.metadata import entry_points
 from unittest.mock import Mock, patch
 
 import pytest
 
 from waldur_site_agent_ceph_s3.backend import CephS3Backend
 from waldur_site_agent_ceph_s3.reporting import CroitUsageBackend
-
-if sys.version_info >= (3, 10):
-    from importlib.metadata import entry_points
-else:
-    from importlib_metadata import entry_points
 
 CROIT_SETTINGS = {
     "api_url": "https://croit.example.org",

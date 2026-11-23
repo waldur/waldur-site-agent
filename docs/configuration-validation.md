@@ -236,7 +236,8 @@ its sensitive ones (`keycloak.keycloak_url`) and of its sensitive component fiel
 publishes it as the `plugin-catalogue.json` artifact of the `Export plugin catalogue` job on
 `main` and on tags, which is where Waldur takes it from.
 
-### Python 3.9 compatibility
+### Python 3.10 compatibility
 
-Plugins must run on Python 3.9. Set `model_config = ConfigDict(...)` rather than a
-`ClassVar` dict, and use `Optional[X]` / `Union[X, Y]` instead of `X | Y` in field annotations.
+Plugins must run on Python 3.10. Set `model_config = ConfigDict(...)` rather than a
+`ClassVar` dict, and write `X | None` / `X | Y` rather than `Optional[X]` / `Union[X, Y]` in
+field annotations.

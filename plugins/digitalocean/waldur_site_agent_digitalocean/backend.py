@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
@@ -84,7 +83,7 @@ class DigitalOceanBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         del waldur_resource, user_context
 
@@ -115,14 +114,14 @@ class DigitalOceanBackend(backends.BaseBackend):
         options = self._as_dict(getattr(resource, "options", None))
         return {**options, **attributes}
 
-    def _resolve_attribute(self, attrs: dict[str, object], *keys: str) -> Optional[object]:
+    def _resolve_attribute(self, attrs: dict[str, object], *keys: str) -> object | None:
         for key in keys:
             value = attrs.get(key)
             if value not in (None, ""):
                 return value
         return None
 
-    def _coerce_int(self, value: object) -> Optional[int]:
+    def _coerce_int(self, value: object) -> int | None:
         if isinstance(value, bool):
             return None
         if isinstance(value, int):
@@ -134,14 +133,14 @@ class DigitalOceanBackend(backends.BaseBackend):
                 return None
         return None
 
-    def _coerce_str(self, value: object) -> Optional[str]:
+    def _coerce_str(self, value: object) -> str | None:
         if value is None:
             return None
         if isinstance(value, str):
             return value
         return str(value)
 
-    def _select_size_slug_from_limits(self, limits: dict[str, int]) -> Optional[str]:
+    def _select_size_slug_from_limits(self, limits: dict[str, int]) -> str | None:
         if not isinstance(self.size_mapping, dict):
             return None
         for size_slug, size_limits in self.size_mapping.items():
@@ -153,7 +152,7 @@ class DigitalOceanBackend(backends.BaseBackend):
 
     def _resolve_size_slug(
         self, attrs: dict[str, object], waldur_resource: WaldurResource
-    ) -> Optional[str]:
+    ) -> str | None:
         size_slug = self._resolve_attribute(attrs, "backend_size_id", "size", "size_slug")
         if size_slug:
             return str(size_slug)
@@ -196,7 +195,7 @@ class DigitalOceanBackend(backends.BaseBackend):
     def create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> BackendResourceInfo:
         """Provision a droplet for the given Waldur resource.
 
@@ -319,7 +318,7 @@ class DigitalOceanBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> BackendResourceInfo:
         """Create the droplet, ignoring the backend id the core suggested.
 

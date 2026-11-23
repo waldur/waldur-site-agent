@@ -9,7 +9,6 @@ namespace, because nothing recomputes it.
 
 import re
 import string
-from typing import Optional
 from uuid import UUID
 
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -23,7 +22,7 @@ _TENANT_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 TENANT_SEPARATOR = "$"
 
 
-def _uuid_value(value: object) -> Optional[str]:
+def _uuid_value(value: object) -> str | None:
     # Hex without hyphens: the hyphenated form is not a valid tenant name.
     if isinstance(value, UUID):
         return value.hex
@@ -32,7 +31,7 @@ def _uuid_value(value: object) -> Optional[str]:
     return None
 
 
-def _slug_value(value: object) -> Optional[str]:
+def _slug_value(value: object) -> str | None:
     if isinstance(value, str) and value:
         return value.lower().replace("-", "_")
     return None
@@ -144,7 +143,7 @@ def validate_fixed_tenant(tenant: str) -> None:
         )
 
 
-def qualify(tenant: Optional[str], uid: str) -> str:
+def qualify(tenant: str | None, uid: str) -> str:
     """The id RGW knows a user by: ``tenant$uid``, or the bare uid when untenanted."""
     return f"{tenant}{TENANT_SEPARATOR}{uid}" if tenant else uid
 

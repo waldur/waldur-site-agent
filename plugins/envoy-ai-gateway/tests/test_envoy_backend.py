@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import uuid
 from types import SimpleNamespace
-from typing import Optional
 from unittest import mock
 
 import pytest
@@ -42,7 +41,7 @@ def _make_backend() -> EnvoyAIGatewayBackend:
     return backend
 
 
-def _make_resource(limits: Optional[dict] = None, backend_id: str = "") -> SimpleNamespace:
+def _make_resource(limits: dict | None = None, backend_id: str = "") -> SimpleNamespace:
     return SimpleNamespace(
         uuid=uuid.uuid4(),
         name="Test key",

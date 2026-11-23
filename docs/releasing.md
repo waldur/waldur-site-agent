@@ -26,7 +26,7 @@ committing, and tagging. CI takes care of publishing.
   `main` is behind or has diverged.
 - The [Claude CLI][claude-cli] is installed (used for
   changelog generation).
-- Python 3.9+ and [uv](https://docs.astral.sh/uv/) are available.
+- Python 3.10+ and [uv](https://docs.astral.sh/uv/) are available.
 
 [claude-cli]: https://docs.anthropic.com/en/docs/claude-code
 

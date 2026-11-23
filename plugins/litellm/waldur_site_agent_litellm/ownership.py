@@ -27,7 +27,6 @@ left.
 from __future__ import annotations
 
 import datetime
-from typing import Optional
 
 from .client import META_OWNERSHIP, META_RESOURCE, META_USERNAME
 
@@ -74,7 +73,7 @@ def periods_of(metadata: dict) -> list:
     return []
 
 
-def current_owner(periods: list) -> Optional[str]:
+def current_owner(periods: list) -> str | None:
     """The resource holding the open period, or None when the address is released."""
     for period in periods:
         if period[PERIOD_TO] is None:
@@ -82,7 +81,7 @@ def current_owner(periods: list) -> Optional[str]:
     return None
 
 
-def owner_on(periods: list, day: str) -> Optional[str]:
+def owner_on(periods: list, day: str) -> str | None:
     """The resource that owned the address on ``day`` (``YYYY-MM-DD``).
 
     The first period covering the day wins, so on the day of a move -- covered by both
@@ -150,7 +149,7 @@ def expired(periods: list, cutoff: str) -> bool:
     return bool(periods) and not trim(periods, cutoff)
 
 
-def stamp(metadata: dict, periods: list, username: Optional[str] = None) -> dict:
+def stamp(metadata: dict, periods: list, username: str | None = None) -> dict:
     """The metadata to write back: the record's own keys, with ownership replaced.
 
     ``/user/update`` replaces ``metadata`` wholesale rather than merging it, so the keys

@@ -19,7 +19,6 @@ import re
 import threading
 import time
 from collections.abc import Iterator
-from typing import Optional
 
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -247,7 +246,7 @@ class LiteLLMBackend(backends.BaseBackend):
         # read in ``_provision`` are parked here for it. Same process, same order, a
         # few calls apart; anything that misses this window is repaired by
         # ``sync_resource_limits`` on the next cycle.
-        self._pending_limits: Optional[tuple[str, dict]] = None
+        self._pending_limits: tuple[str, dict] | None = None
 
         # Resources this instance last paused or downscaled, until it restores them.
         # The proxy has no object for a resource, so a resource with no keys has
@@ -311,13 +310,13 @@ class LiteLLMBackend(backends.BaseBackend):
             LiteLLMUsageClient(backend_settings) if self.openwebui_client is not None else None
         )
         # ``(fetched at, (start, end), {email: spend})``, cached like the user listing.
-        self._chat_spend_cache: Optional[tuple[float, tuple, dict]] = None
+        self._chat_spend_cache: tuple[float, tuple, dict] | None = None
 
         # ``/user/list`` results, cached for part of a pass -- see _USER_CACHE_TTL.
-        self._users_cache: Optional[tuple[float, dict]] = None
+        self._users_cache: tuple[float, dict] | None = None
         # ``{model: group id}`` of the chat model groups, and the ids of every group
         # under the plugin's prefix, retired models' included; cached like the users.
-        self._model_groups_cache: Optional[tuple[float, dict, frozenset]] = None
+        self._model_groups_cache: tuple[float, dict, frozenset] | None = None
 
     # --- health / introspection -------------------------------------------------
 
@@ -389,7 +388,7 @@ class LiteLLMBackend(backends.BaseBackend):
         return found
 
     @staticmethod
-    def _token(record: dict) -> Optional[str]:
+    def _token(record: dict) -> str | None:
         """Return the sha256 handle LiteLLM addresses a key by."""
         return record.get("token") or record.get("token_id")
 
@@ -435,7 +434,7 @@ class LiteLLMBackend(backends.BaseBackend):
         return bool(cls._key_metadata(record).get(META_KEY_PAUSED))
 
     def _mapped_limits(
-        self, limits: Optional[dict], spending_limits: Optional[dict] = None
+        self, limits: dict | None, spending_limits: dict | None = None
     ) -> dict:
         """The limits the proxy has a field for, by Waldur component name (``_BUDGET_NAMES``).
 
@@ -459,7 +458,7 @@ class LiteLLMBackend(backends.BaseBackend):
                     mapped[name] = amount if name not in mapped else min(mapped[name], amount)
         return mapped
 
-    def _key_own_limits(self, limits: Optional[dict], spending_limits: Optional[dict]) -> dict:
+    def _key_own_limits(self, limits: dict | None, spending_limits: dict | None) -> dict:
         """A key's own limits from its command: per period where Waldur sends them.
 
         A Waldur with per-period key limits sends them as ``spending_limits`` and the
@@ -476,7 +475,7 @@ class LiteLLMBackend(backends.BaseBackend):
         return self._mapped_limits(monthly, spending_limits)
 
     def _resource_budget_limits(
-        self, records: dict, limits: Optional[dict], spending_limits: Optional[dict]
+        self, records: dict, limits: dict | None, spending_limits: dict | None
     ) -> dict:
         """The resource's limits for its keys, keeping its spending limits when not given.
 
@@ -517,7 +516,7 @@ class LiteLLMBackend(backends.BaseBackend):
     # --- provisioning -----------------------------------------------------------
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self, waldur_resource: WaldurResource, user_context: dict | None = None
     ) -> None:
         del waldur_resource, user_context  # no prerequisite setup
 
@@ -561,7 +560,7 @@ class LiteLLMBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> BackendResourceInfo:
         """Register the resource under the agent-supplied backend id.
 
@@ -589,13 +588,13 @@ class LiteLLMBackend(backends.BaseBackend):
         return self._provision(backend_id, waldur_resource)
 
     def create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self, waldur_resource: WaldurResource, user_context: dict | None = None
     ) -> BackendResourceInfo:
         """Register the resource with backend_id = resource UUID (direct calls/tests)."""
         del user_context
         return self._provision(self._client_id(waldur_resource), waldur_resource)
 
-    def pull_resource(self, waldur_resource: WaldurResource) -> Optional[BackendResourceInfo]:
+    def pull_resource(self, waldur_resource: WaldurResource) -> BackendResourceInfo | None:
         """Report a resource whose keys are managed one by one as existing, keys or not.
 
         On such an offering a resource starts with no keys and a manager can delete
@@ -626,7 +625,7 @@ class LiteLLMBackend(backends.BaseBackend):
             logger.exception("Error while pulling resource [%s]", backend_id)
             return None
 
-    def _pull_backend_resource(self, resource_backend_id: str) -> Optional[BackendResourceInfo]:
+    def _pull_backend_resource(self, resource_backend_id: str) -> BackendResourceInfo | None:
         """Report the resource as existing when it owns at least one key.
 
         The order processor calls ``pull_resource`` before (re)creating a resource that
@@ -894,8 +893,8 @@ class LiteLLMBackend(backends.BaseBackend):
     def _waldur_or_stamped_limits(
         self,
         records: dict,
-        resource_limits: Optional[dict],
-        resource_spending_limits: Optional[dict] = None,
+        resource_limits: dict | None,
+        resource_spending_limits: dict | None = None,
     ) -> dict:
         """The resource's limits for a key being minted or rotated.
 
@@ -1000,7 +999,7 @@ class LiteLLMBackend(backends.BaseBackend):
         return recorded
 
     @classmethod
-    def _chat_deduction(cls, alias: str, chat_spend: Optional[dict], metadata: dict) -> dict:
+    def _chat_deduction(cls, alias: str, chat_spend: dict | None, metadata: dict) -> dict:
         """What to take off the key's budgets: its holder's chat, or the last amounts taken.
 
         ``chat_spend`` is ``None`` when it could not be read. Falling back to no deduction
@@ -1025,7 +1024,7 @@ class LiteLLMBackend(backends.BaseBackend):
         else:
             metadata.pop(META_HOLDER_CHAT_WINDOWS, None)
 
-    def _holder_chat_spend(self, resource_backend_id: str) -> Optional[dict]:
+    def _holder_chat_spend(self, resource_backend_id: str) -> dict | None:
         """``{alias: {period: spend}}``: each key's holder's chat, ``None`` if unreadable.
 
         Per period: the month, and the day and week the key's windows cover. The holder
@@ -1103,7 +1102,7 @@ class LiteLLMBackend(backends.BaseBackend):
         self._chat_spend_cache = (now, period, spend)
         return spend
 
-    def _key_models(self, allowed_models: Optional[list]) -> list:
+    def _key_models(self, allowed_models: list | None) -> list:
         """The ``models`` to write on a key for the list Waldur sent.
 
         The proxy reads an empty ``models`` as every model, so the empty list Waldur
@@ -1139,13 +1138,13 @@ class LiteLLMBackend(backends.BaseBackend):
         return names
 
     @staticmethod
-    def _models_stamp(allowed_models: Optional[list]) -> list:
+    def _models_stamp(allowed_models: list | None) -> list:
         """The key's model list as Waldur sent it, for ``META_KEY_MODELS``."""
         if allowed_models is None:
             return [ALL_MODELS]
         return [str(model) for model in allowed_models]
 
-    def _reconciled_models(self, record: dict) -> Optional[list]:
+    def _reconciled_models(self, record: dict) -> list | None:
         """The ``models`` a key should carry now, or None when it already does.
 
         A key's list was resolved against the offering's ``models`` when it was last
@@ -1191,9 +1190,9 @@ class LiteLLMBackend(backends.BaseBackend):
         alias: str,
         *,
         blocked: bool,
-        limits: Optional[dict] = None,
-        models: Optional[list] = None,
-        metadata: Optional[dict] = None,
+        limits: dict | None = None,
+        models: list | None = None,
+        metadata: dict | None = None,
     ) -> dict:
         """Mint one key with a model allowlist and the rate backstops applied.
 
@@ -1219,12 +1218,12 @@ class LiteLLMBackend(backends.BaseBackend):
         self,
         client_id: str,
         resource_backend_id: str,
-        known_client_ids: Optional[list] = None,
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list] = None,
-        resource_limits: Optional[dict] = None,
-        spending_limits: Optional[dict] = None,
-        resource_spending_limits: Optional[dict] = None,
+        known_client_ids: list | None = None,
+        limits: dict | None = None,
+        allowed_models: list | None = None,
+        resource_limits: dict | None = None,
+        spending_limits: dict | None = None,
+        resource_spending_limits: dict | None = None,
     ) -> str:
         """Replace one key's material, keeping its alias, and return the new plaintext.
 
@@ -1281,7 +1280,7 @@ class LiteLLMBackend(backends.BaseBackend):
         # look unpaused and get a live replacement.
         blocked = self._resource_is_paused(resource_backend_id, records)
         self_paused = self._is_self_paused(record)
-        key_limits: Optional[dict] = None
+        key_limits: dict | None = None
         if has_settings:
             own_limits = self._key_own_limits(limits, spending_limits)
             key_resource_limits = self._waldur_or_stamped_limits(
@@ -1370,7 +1369,7 @@ class LiteLLMBackend(backends.BaseBackend):
         return new_key
 
     def _follow_key_chat(
-        self, resource_backend_id: str, client_id: str, models: Optional[list]
+        self, resource_backend_id: str, client_id: str, models: list | None
     ) -> None:
         """Bring the chat of the key's holders in line with its models, or close it.
 
@@ -1392,10 +1391,10 @@ class LiteLLMBackend(backends.BaseBackend):
         client_id: str,
         resource_backend_id: str,
         records: dict,
-        limits: Optional[dict],
-        allowed_models: Optional[list],
+        limits: dict | None,
+        allowed_models: list | None,
         resource_limits: dict,
-        spending_limits: Optional[dict] = None,
+        spending_limits: dict | None = None,
     ) -> str:
         """Mint a slot the proxy lost back, as restricted as the key Waldur shows.
 
@@ -1487,11 +1486,11 @@ class LiteLLMBackend(backends.BaseBackend):
         self,
         resource_backend_id: str,
         reserved_client_ids: list,
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list] = None,
-        resource_limits: Optional[dict] = None,
-        spending_limits: Optional[dict] = None,
-        resource_spending_limits: Optional[dict] = None,
+        limits: dict | None = None,
+        allowed_models: list | None = None,
+        resource_limits: dict | None = None,
+        spending_limits: dict | None = None,
+        resource_spending_limits: dict | None = None,
     ) -> dict:
         """Add one key to the resource, as its next free ``<backend_id>-<n>`` slot.
 
@@ -1566,9 +1565,9 @@ class LiteLLMBackend(backends.BaseBackend):
         self,
         client_id: str,
         resource_backend_id: str,
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list] = None,
-        spending_limits: Optional[dict] = None,
+        limits: dict | None = None,
+        allowed_models: list | None = None,
+        spending_limits: dict | None = None,
     ) -> None:
         """Lift a key's own pause and apply its settings; a paused resource still holds it."""
         self._configure_key(
@@ -1580,9 +1579,9 @@ class LiteLLMBackend(backends.BaseBackend):
         self,
         client_id: str,
         resource_backend_id: str,
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list] = None,
-        spending_limits: Optional[dict] = None,
+        limits: dict | None = None,
+        allowed_models: list | None = None,
+        spending_limits: dict | None = None,
     ) -> None:
         """Apply a key's own limits and model list."""
         self._configure_key(
@@ -1594,9 +1593,9 @@ class LiteLLMBackend(backends.BaseBackend):
         self,
         client_id: str,
         resource_backend_id: str,
-        limits: Optional[dict],
-        allowed_models: Optional[list],
-        spending_limits: Optional[dict] = None,
+        limits: dict | None,
+        allowed_models: list | None,
+        spending_limits: dict | None = None,
     ) -> None:
         """Write a key's own settings and lift its own pause, in one ``/key/update``.
 
@@ -1932,7 +1931,7 @@ class LiteLLMBackend(backends.BaseBackend):
         )
 
     def _write_key_budgets(
-        self, resource_backend_id: str, records: dict, resource_limits: Optional[dict]
+        self, resource_backend_id: str, records: dict, resource_limits: dict | None
     ) -> None:
         """Write each key's backstop fields, net of its holder's chat, where they changed.
 
@@ -2230,7 +2229,7 @@ class LiteLLMBackend(backends.BaseBackend):
         """
         cutoff = ownership.retention_cutoff(ownership.today(), self.ownership_retention_months)
 
-        def is_expired(record: Optional[dict]) -> bool:
+        def is_expired(record: dict | None) -> bool:
             if record is None:
                 return False
             return ownership.expired(ownership.periods_of(self._user_metadata(record)), cutoff)
@@ -2463,7 +2462,7 @@ class LiteLLMBackend(backends.BaseBackend):
     def _ensure_chat_account(
         self,
         email: str,
-        full_name: Optional[str] = None,
+        full_name: str | None = None,
         *,
         create_missing: bool = True,
         new_role: str = ROLE_ACTIVE,
@@ -2631,7 +2630,7 @@ class LiteLLMBackend(backends.BaseBackend):
         logger.info("Disabled the Open WebUI account of %s", email)
 
     def _set_chat_access_for_resource(
-        self, resource_backend_id: str, *, enabled: bool, key_records: Optional[dict] = None
+        self, resource_backend_id: str, *, enabled: bool, key_records: dict | None = None
     ) -> bool:
         """Enable or disable the chat surface for every member of one resource.
 
@@ -2819,7 +2818,7 @@ class LiteLLMBackend(backends.BaseBackend):
         }
 
     def _apply_key_chat(
-        self, email: str, key: Optional[dict], *, full_name: Optional[str] = None
+        self, email: str, key: dict | None, *, full_name: str | None = None
     ) -> None:
         """Open the person's chat with the key's models, or close it when ``key`` is None.
 

@@ -17,13 +17,11 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 import pytest
 from waldur_api_client.api.marketplace_orders import marketplace_orders_create
 from waldur_api_client.models.generic_order_attributes import GenericOrderAttributes
 from waldur_api_client.models.order_create_request import OrderCreateRequest
-
 from waldur_site_agent.common.processors import OfferingOrderProcessor
 from waldur_site_agent.common.utils import get_client, load_configuration
 
@@ -84,9 +82,9 @@ def make_backend(azure, monkeypatch):
     passed component objects where the agent passes dictionaries, and the
     difference only surfaced as an AttributeError deep in metering.
     """
-    from waldur_site_agent_azure import backend as backend_module
-
     from waldur_site_agent.common.utils import get_backend_for_offering
+
+    from waldur_site_agent_azure import backend as backend_module
 
     def factory(offering):
         monkeypatch.setattr(backend_module, "AzureClient", lambda **kwargs: azure)
@@ -123,7 +121,7 @@ def create_order(
     client,
     offering_uuid: str,
     name: str,
-    attributes: Optional[dict] = None,
+    attributes: dict | None = None,
 ) -> str:
     """Place a CREATE order and return its UUID.
 

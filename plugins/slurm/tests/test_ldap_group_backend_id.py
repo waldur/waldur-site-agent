@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import datetime
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -36,7 +36,7 @@ _CPU_COMPONENTS = {
 }
 
 
-def _backend(extra: Optional[dict[str, Any]] = None) -> SlurmBackend:
+def _backend(extra: dict[str, Any] | None = None) -> SlurmBackend:
     settings: dict[str, Any] = {
         "default_account": "root",
         "customer_prefix": "c-",
@@ -70,7 +70,7 @@ def _waldur_resource(slug: str = "alloc1", backend_id: str = "") -> MagicMock:
     return resource
 
 
-def _ldap_client(backend: SlurmBackend, groups: Optional[set[str]] = None) -> MagicMock:
+def _ldap_client(backend: SlurmBackend, groups: set[str] | None = None) -> MagicMock:
     """An LDAP client mock whose group_exists answers from ``groups``."""
     existing = groups if groups is not None else set()
     ldap = MagicMock()

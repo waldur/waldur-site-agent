@@ -17,7 +17,6 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from typing import Optional
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
@@ -64,7 +63,7 @@ class EnvoyAIGatewayClient:
     def __init__(
         self,
         backend_settings: dict,
-        core_api: Optional[k8s_client.CoreV1Api] = None,
+        core_api: k8s_client.CoreV1Api | None = None,
     ) -> None:
         """Initialize the client.
 
@@ -124,7 +123,7 @@ class EnvoyAIGatewayClient:
             raise EnvoyAIGatewayBackendError(msg) from exc
         return secret.data or {}
 
-    def _read_value(self, secret_name: str, client_id: str) -> Optional[str]:
+    def _read_value(self, secret_name: str, client_id: str) -> str | None:
         raw = self._read_data(secret_name).get(client_id)
         return base64.b64decode(raw).decode() if raw else None
 

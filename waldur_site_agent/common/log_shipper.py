@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional, Union
 
 import httpx
 
@@ -44,7 +43,7 @@ class LogShipper:
         batch_size: int = 100,
         max_retries: int = 3,
         retry_delay: int = 5,
-        auth: Optional[httpx.Auth] = None,
+        auth: httpx.Auth | None = None,
     ) -> None:
         """Initialize the log shipper.
 
@@ -72,9 +71,9 @@ class LogShipper:
         self.auth = auth
 
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._client: Optional[httpx.Client] = None
-        self._stats: dict[str, Union[int, float, None]] = {
+        self._thread: threading.Thread | None = None
+        self._client: httpx.Client | None = None
+        self._stats: dict[str, int | float | None] = {
             "logs_shipped": 0,
             "batches_sent": 0,
             "failed_shipments": 0,

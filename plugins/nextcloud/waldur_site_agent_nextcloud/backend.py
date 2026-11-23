@@ -13,7 +13,6 @@ Mapping:
 
 import logging
 import re
-from typing import Optional
 
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -103,7 +102,7 @@ class NextcloudBackend(backends.BaseBackend):
         sanitized = re.sub(r"-{2,}", "-", sanitized)
         return sanitized.strip("-. ") or "unnamed"
 
-    def _find_orphaned_folder(self, mount_point: str, group_id: str) -> Optional[int]:
+    def _find_orphaned_folder(self, mount_point: str, group_id: str) -> int | None:
         """Return the ID of a folder with *mount_point* that lacks *group_id*.
 
         Used by create_resource to recover when the folder was created in a
@@ -164,7 +163,7 @@ class NextcloudBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> structures.BackendResourceInfo:
         """Override to bypass the base-class flow.
 
@@ -204,14 +203,14 @@ class NextcloudBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """No-op — group and folder creation happens in create_resource."""
 
     def create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> structures.BackendResourceInfo:
         """Create a Nextcloud group and a shared Group Folder.
 
@@ -321,7 +320,7 @@ class NextcloudBackend(backends.BaseBackend):
 
     def _pull_backend_resource(
         self, resource_backend_id: str
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Pull current state of a group folder from Nextcloud."""
         logger.info("Pulling Nextcloud folder %s", resource_backend_id)
 
@@ -357,7 +356,7 @@ class NextcloudBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         **kwargs: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Delete the group folder and associated Nextcloud group.
 
         Overrides the base class directly (rather than delegating to
@@ -517,7 +516,7 @@ class NextcloudBackend(backends.BaseBackend):
 
     def set_resource_limits(
         self, resource_backend_id: str, limits: dict[str, int]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Update the Group Folder's storage quota."""
         if not isinstance(self.client, NextcloudClient):
             return None

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import uuid as uuid_lib
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar
 
 from waldur_api_client.api.marketplace_provider_resource_projects import (
     marketplace_provider_resource_projects_list,
@@ -112,7 +112,7 @@ class LdapRolesBackend(backends.BaseBackend):
 
         api_url = backend_settings.get("waldur_api_url")
         api_token = backend_settings.get("waldur_api_token")
-        self.waldur_client: Optional[AuthenticatedClient] = None
+        self.waldur_client: AuthenticatedClient | None = None
         if api_url and api_token:
             # SDK paths already start with "/api/"; base_url is the
             # host root without "/api". Mirrors rancher-kc-crd's
@@ -192,7 +192,7 @@ class LdapRolesBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """No-op: groups are created lazily inside pull_resource."""
 
@@ -225,7 +225,7 @@ class LdapRolesBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> BackendResourceInfo:
         """Register the resource under ``resource_backend_id``; no LDAP writes yet.
 
@@ -240,7 +240,7 @@ class LdapRolesBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         **kwargs: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Empty every group the resource owns.
 
         Groups are emptied rather than deleted, for the GID-reuse reason in
@@ -260,7 +260,7 @@ class LdapRolesBackend(backends.BaseBackend):
     def pull_resource(
         self,
         waldur_resource: WaldurResource,
-    ) -> Optional[BackendResourceInfo]:
+    ) -> BackendResourceInfo | None:
         """Reconcile LDAP groups for one Resource and its ResourceProjects.
 
         Returns ``None`` if no Waldur client is configured (no source
@@ -322,7 +322,7 @@ class LdapRolesBackend(backends.BaseBackend):
         }
         return BackendResourceInfo(users=sorted(synced_users), usage={})
 
-    def get_membership_sync_report(self, waldur_resource: WaldurResource) -> Optional[list[dict]]:
+    def get_membership_sync_report(self, waldur_resource: WaldurResource) -> list[dict] | None:
         """Return the per-grant states derived during the last pull_resource."""
         return self._membership_sync_reports.get(waldur_resource.uuid.hex)
 

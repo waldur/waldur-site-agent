@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, TypedDict
+from typing import TypedDict
 
 import stomp
 
@@ -146,8 +146,8 @@ class ApiKeyCommandMessage(TypedDict, total=False):
     resource_backend_id: str
     api_key_uuid: str
     client_id: str
-    limits: Optional[dict]
-    allowed_models: Optional[list]
+    limits: dict | None
+    allowed_models: list | None
 
 
 class ProjectGroupMessage(TypedDict, total=False):
@@ -171,9 +171,9 @@ class ProjectGroupMessage(TypedDict, total=False):
     service_provider_uuid: str
     customer_uuid: str
     project_group_uuid: str
-    project_uuid: Optional[str]
+    project_uuid: str | None
     name: str
-    gid: Optional[int]
+    gid: int | None
     changed_fields: list[str]
     project_groups_enabled: bool
 

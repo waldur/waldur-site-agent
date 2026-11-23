@@ -10,14 +10,7 @@ and provide default values that can be overridden via environment variables.
 """
 
 import os
-import sys
-from typing import Optional
-
-# Handle different Python versions
-if sys.version_info >= (3, 10):
-    from importlib.metadata import version
-else:
-    from importlib_metadata import version
+from importlib.metadata import version
 
 # Marketplace offering type constants
 MARKETPLACE_SITE_AGENT_OFFERING_TYPE = "Marketplace.SiteAgent"
@@ -59,7 +52,7 @@ WALDUR_SITE_AGENT_RESOURCE_STATUS_RECONCILIATION_MINUTES = float(
 WALDUR_PAT_PREFIX = "w_"
 
 
-def static_token_prefix(token: Optional[str]) -> str:
+def static_token_prefix(token: str | None) -> str:
     """Return the Authorization scheme Waldur expects for a static API token."""
     return "Bearer" if token and token.startswith(WALDUR_PAT_PREFIX) else "Token"
 

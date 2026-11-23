@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import ConfigDict, Field
 
 from waldur_site_agent.common.plugin_schemas import (
@@ -38,16 +36,16 @@ class EnvoyAIGatewayBackendSettingsSchema(CommonBackendSettingsSchema):
         description="Secret the SecurityPolicy reads keys from (clientID: key)",
         json_schema_extra=SENSITIVE,
     )
-    blocked_secret: Optional[str] = Field(
+    blocked_secret: str | None = Field(
         default=None,
         description="Secret holding blocked keys; defaults to <apikey_secret>-blocked",
         json_schema_extra=SENSITIVE,
     )
-    kubeconfig_path: Optional[str] = Field(
+    kubeconfig_path: str | None = Field(
         default=None, description="Path to kubeconfig; omit to use in-cluster config",
         json_schema_extra=SENSITIVE,
     )
-    kube_context: Optional[str] = Field(
+    kube_context: str | None = Field(
         default=None,
         description="kubeconfig context to target (e.g. docker-desktop); omit for in-cluster",
         json_schema_extra=SENSITIVE,
@@ -70,7 +68,7 @@ class EnvoyUsageBackendSettingsSchema(CommonBackendSettingsSchema):
         description="usage warehouse base URL, e.g. http://usage-warehouse:9000",
         json_schema_extra=SENSITIVE,
     )
-    api_token: Optional[str] = Field(
+    api_token: str | None = Field(
         default=None, description="Optional bearer token for the usage warehouse API",
         json_schema_extra=SECRET
     )

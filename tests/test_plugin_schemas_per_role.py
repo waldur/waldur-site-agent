@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from pydantic import ConfigDict, Field
@@ -18,19 +18,19 @@ from waldur_site_agent.common.structures import RootConfiguration
 
 class _OrderSettings(PluginBackendSettingsSchema):
     api_url: str
-    models: Optional[list] = None
+    models: list | None = None
 
 
 class _UsageSettings(PluginBackendSettingsSchema):
     api_url: str
-    usage_cache_ttl: Optional[float] = None
+    usage_cache_ttl: float | None = None
 
 
 class _OpenUsageSettings(PluginBackendSettingsSchema):
     model_config = ConfigDict(extra="allow")
 
     api_url: str
-    usage_cache_ttl: Optional[float] = None
+    usage_cache_ttl: float | None = None
 
 
 class _UsageComponent(PluginComponentSchema):
@@ -156,13 +156,13 @@ def test_single_backend_behaviour_unchanged(fake_schemas, caplog):
 
 class _TypedSettings(PluginBackendSettingsSchema):
     api_url: str
-    port: Optional[int] = None
-    verify: Optional[bool] = None
+    port: int | None = None
+    verify: bool | None = None
 
 
 class _TypedComponent(PluginComponentSchema):
     metric: str = Field(...)
-    weight: Optional[int] = None
+    weight: int | None = None
 
 
 def test_valid_settings_are_kept_exactly_as_written(fake_schemas, caplog):

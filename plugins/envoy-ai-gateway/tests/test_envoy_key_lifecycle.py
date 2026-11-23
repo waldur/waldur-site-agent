@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import uuid
 from types import SimpleNamespace
-from typing import Optional
 from unittest import mock
 
 import pytest
@@ -43,7 +42,7 @@ KEYS = "waldur_site_agent.common.resource_api_keys"
 class FakeCoreApi:
     """Secrets as plain dicts, patched with strategic-merge semantics."""
 
-    def __init__(self, secrets: Optional[dict[str, dict[str, str]]] = None) -> None:
+    def __init__(self, secrets: dict[str, dict[str, str]] | None = None) -> None:
         self.secrets = {ACTIVE: {}, BLOCKED: {}}
         for name, entries in (secrets or {}).items():
             self.secrets[name] = dict(entries)
@@ -74,7 +73,7 @@ class FakeCoreApi:
 
 
 def _backend(
-    secrets: Optional[dict[str, dict[str, str]]] = None,
+    secrets: dict[str, dict[str, str]] | None = None,
 ) -> tuple[EnvoyAIGatewayBackend, FakeCoreApi]:
     core_api = FakeCoreApi(secrets)
     with mock.patch("waldur_site_agent_envoy_ai_gateway.backend.EnvoyAIGatewayClient"):
@@ -472,7 +471,7 @@ def test_minting_a_key_with_no_models_is_refused() -> None:
 # None is what a Waldur older than ["*"] sends for every model.
 @pytest.mark.parametrize("method", ["update_resource_key", "resume_resource_key"])
 @pytest.mark.parametrize("allowed_models", [None, ["*"]])
-def test_every_model_is_carried_out(method: str, allowed_models: Optional[list]) -> None:
+def test_every_model_is_carried_out(method: str, allowed_models: list | None) -> None:
     backend, api = _backend({BLOCKED: {"res-1-1.paused": "sk-one"}})
 
     getattr(backend, method)("res-1-1", "res-1", allowed_models=allowed_models)

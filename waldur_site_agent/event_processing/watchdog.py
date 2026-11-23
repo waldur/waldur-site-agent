@@ -27,7 +27,6 @@ them and would crash-loop every other offering of the agent:
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import Optional
 
 from waldur_api_client.errors import UnexpectedStatus
 
@@ -216,7 +215,7 @@ class StompWatchdog:
             logger.info("STOMP %s consumer set up for offering %s", role, offering.name)
 
     def _schedule_setup_retry(
-        self, key: object, now: float, delay: Optional[float] = None
+        self, key: object, now: float, delay: float | None = None
     ) -> None:
         if delay is None:
             delay = min(
@@ -304,7 +303,7 @@ class StompWatchdog:
             )
 
     def _healthy(self, now: float) -> bool:
-        oldest: Optional[float] = min(self._down_since.values(), default=None)
+        oldest: float | None = min(self._down_since.values(), default=None)
         if oldest is None or now - oldest < self.unhealthy_after:
             return True
         logger.error(

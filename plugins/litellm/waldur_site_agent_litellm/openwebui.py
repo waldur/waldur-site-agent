@@ -21,7 +21,7 @@ chat access. Only Open WebUI can do that, which is why removal runs here.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -86,8 +86,8 @@ class OpenWebUIClient:
         method: str,
         path: str,
         *,
-        params: Optional[dict] = None,
-        json_body: Optional[dict] = None,
+        params: dict | None = None,
+        json_body: dict | None = None,
         none_on_404: bool = False,
     ) -> Any:  # noqa: ANN401 - the API returns dicts, lists and bare booleans
         """Perform one request, translating every failure into a backend error."""
@@ -124,7 +124,7 @@ class OpenWebUIClient:
         """Open WebUI lowercases every address it stores, so comparisons must too."""
         return email.strip().lower()
 
-    def find_user(self, email: str) -> Optional[dict]:
+    def find_user(self, email: str) -> dict | None:
         """Return the account with this exact address, or None.
 
         There is no get-by-email endpoint. ``GET /api/v1/users/`` takes a free-text

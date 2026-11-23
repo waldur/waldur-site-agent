@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime
 import logging
 import re
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
@@ -124,7 +124,7 @@ class EnvoyUsageReportingBackend(backends.BaseBackend):
 
     def get_resource_key_usage_report(
         self, resource_backend_ids: list[str]
-    ) -> dict[str, Optional[dict[str, dict[str, float]]]]:
+    ) -> dict[str, dict[str, dict[str, float]] | None]:
         """The current month's usage per key, for rows the shipper attributed to a key.
 
         Reads the same rows as the resource total, so the per-key figures sum to it.
@@ -136,14 +136,14 @@ class EnvoyUsageReportingBackend(backends.BaseBackend):
 
     def get_resource_key_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int
-    ) -> dict[str, Optional[dict[str, dict[str, float]]]]:
+    ) -> dict[str, dict[str, dict[str, float]] | None]:
         """A closed month's usage per key, read as ``get_resource_key_usage_report`` reads it."""
         return self._key_usage(resource_backend_ids, f"{year:04d}-{month:02d}")
 
     def _key_usage(
         self, resource_backend_ids: list[str], month: str
-    ) -> dict[str, Optional[dict[str, dict[str, float]]]]:
-        report: dict[str, Optional[dict[str, dict[str, float]]]] = {
+    ) -> dict[str, dict[str, dict[str, float]] | None]:
+        report: dict[str, dict[str, dict[str, float]] | None] = {
             backend_id: {} for backend_id in resource_backend_ids
         }
         if not resource_backend_ids or not self._token_keys:
@@ -178,7 +178,7 @@ class EnvoyUsageReportingBackend(backends.BaseBackend):
         resource_backend_ids: list[str],
         year: int,
         month: int,
-        waldur_resource: Optional[WaldurResource] = None,
+        waldur_resource: WaldurResource | None = None,
     ) -> dict:
         """Usage for a specific billing month."""
         del waldur_resource
@@ -187,7 +187,7 @@ class EnvoyUsageReportingBackend(backends.BaseBackend):
 
     def pull_resource(
         self, waldur_resource: WaldurResource
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Build resource info from usage alone.
 
         Report-only: unlike the base implementation we do NOT call ``client.get_resource``
@@ -208,8 +208,8 @@ class EnvoyUsageReportingBackend(backends.BaseBackend):
             return None
 
     def _pull_backend_resource(
-        self, resource_backend_id: str, waldur_resource: Optional[WaldurResource] = None
-    ) -> Optional[structures.BackendResourceInfo]:
+        self, resource_backend_id: str, waldur_resource: WaldurResource | None = None
+    ) -> structures.BackendResourceInfo | None:
         """Return the client_id's usage as a BackendResourceInfo (zeros if none yet)."""
         del waldur_resource
         logger.info("Pulling resource %s", resource_backend_id)
@@ -223,7 +223,7 @@ class EnvoyUsageReportingBackend(backends.BaseBackend):
     # --- report-only: not implemented ------------------------------------------
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self, waldur_resource: WaldurResource, user_context: dict | None = None
     ) -> None:
         raise NotImplementedError(_REPORT_ONLY)
 

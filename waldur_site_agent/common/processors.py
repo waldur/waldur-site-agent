@@ -19,13 +19,13 @@ import abc
 import datetime
 import math
 import time as _time
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
 from http import HTTPStatus
 from time import sleep
-from typing import Any, Callable, ClassVar, Optional, Union
+from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -307,11 +307,11 @@ class OfferingBaseProcessor(abc.ABC):
         offering: structures.Offering,
         waldur_rest_client: utils.AuthenticatedClient,
         timezone: str = "",
-        resource_backend: Optional[BaseBackend] = None,
-        resource_backend_version: Optional[str] = None,
-        waldur_offering: Optional[ProviderOfferingDetails] = None,
-        service_provider: Optional[ServiceProvider] = None,
-        current_user: Optional[UserMe] = None,
+        resource_backend: BaseBackend | None = None,
+        resource_backend_version: str | None = None,
+        waldur_offering: ProviderOfferingDetails | None = None,
+        service_provider: ServiceProvider | None = None,
+        current_user: UserMe | None = None,
         expose_backend_error_details: bool = True,
     ) -> None:
         """Initialize the offering processor.
@@ -414,7 +414,7 @@ class OfferingBaseProcessor(abc.ABC):
         # Per-cycle cache for offering users (avoids redundant API calls)
         self._offering_users_cache: list[OfferingUser] | None = None
         # Unfiltered username set used when preserve_unmanaged_backend_users is on.
-        self._known_offering_usernames_cache: Optional[set[str]] = None
+        self._known_offering_usernames_cache: set[str] | None = None
         # Set when the unfiltered fetch fails; remaining resources skip the retry.
         self._known_offering_usernames_fetch_failed: bool = False
 
@@ -736,7 +736,7 @@ class OfferingBaseProcessor(abc.ABC):
             self._invalidate_offering_users_cache()
         return result
 
-    def register(self, service: Optional[AgentService]) -> Optional[AgentProcessor]:
+    def register(self, service: AgentService | None) -> AgentProcessor | None:
         """Register this processor in Waldur.
 
         Registration is telemetry only, so a Waldur that has no service to
@@ -813,7 +813,7 @@ class OfferingBaseProcessor(abc.ABC):
         if self.service_provider is None:
             return set()
         project_uuid = waldur_resource.project_uuid.hex
-        accounts: list[Union[ProjectServiceAccount, CourseAccount]] = [
+        accounts: list[ProjectServiceAccount | CourseAccount] = [
             *self._offering_project_service_accounts(),
             *self._offering_course_accounts(),
         ]
@@ -1019,7 +1019,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
             except Exception as e:
                 self.log_order_processing_error(order, e)
 
-    def get_order_info(self, order_uuid: str) -> Optional[OrderDetails]:
+    def get_order_info(self, order_uuid: str) -> OrderDetails | None:
         """Retrieve current order information from Waldur API.
 
         Args:
@@ -1052,7 +1052,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                     order = order_info
                 else:
                     # Re-fetch on retries for freshness
-                    order_fetched: Optional[OrderDetails] = self.get_order_info(order_info.uuid.hex)
+                    order_fetched: OrderDetails | None = self.get_order_info(order_info.uuid.hex)
                     if order_fetched is None:
                         logger.error("Failed to get order %s info", order_info.uuid)
                         return
@@ -1073,7 +1073,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
                 retry_count,
             )
 
-    def _current_order_state(self, order: OrderDetails) -> Optional[OrderState]:
+    def _current_order_state(self, order: OrderDetails) -> OrderState | None:
         """Waldur's current state of the order, or the local one if it cannot be read.
 
         The order object passed to process_order is fetched before provisioning
@@ -1611,7 +1611,7 @@ class OfferingOrderProcessor(OfferingBaseProcessor):
     def _get_order_backend_id(self, order: OrderDetails) -> str:
         return order.backend_id or ""
 
-    def _poll_async_target_order(self, order: OrderDetails) -> Optional[bool]:
+    def _poll_async_target_order(self, order: OrderDetails) -> bool | None:
         """Poll target order on an async backend when order.backend_id is set.
 
         Returns:
@@ -1966,7 +1966,7 @@ def fetch_offering_resources(
     offering: structures.Offering,
     waldur_rest_client: utils.AuthenticatedClient,
     resource_backend: BaseBackend,
-    project_uuid: Optional[str] = None,
+    project_uuid: str | None = None,
 ) -> list[WaldurResource]:
     """Waldur resources of the offering that have a backend id, in the backend's handled states.
 
@@ -2032,9 +2032,9 @@ def teardown_offering_user(
     offering: structures.Offering,
     offering_user: OfferingUser,
     waldur_rest_client: utils.AuthenticatedClient,
-    resource_backend: Optional[BaseBackend],
-    username_backend: Optional[AbstractUsernameManagementBackend],
-    resource_report: Optional[dict[str, tuple[WaldurResource, BackendResourceInfo]]],
+    resource_backend: BaseBackend | None,
+    username_backend: AbstractUsernameManagementBackend | None,
+    resource_report: dict[str, tuple[WaldurResource, BackendResourceInfo]] | None,
 ) -> bool:
     """Carry out Waldur's deletion request for one offering user, in order.
 
@@ -2199,7 +2199,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     # The username backend that can release accounts, resolved lazily and once
     # per processor. Class-level defaults rather than __init__ assignments so a
     # processor built around __init__ (as the unit tests do) still resolves.
-    _release_backend: Optional[AbstractUsernameManagementBackend] = None
+    _release_backend: AbstractUsernameManagementBackend | None = None
     _release_backend_resolved: bool = False
 
     def __init__(
@@ -2207,8 +2207,8 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         offering: structures.Offering,
         waldur_rest_client: utils.AuthenticatedClient,
         timezone: str = "",
-        resource_backend: Optional[BaseBackend] = None,
-        resource_backend_version: Optional[str] = None,
+        resource_backend: BaseBackend | None = None,
+        resource_backend_version: str | None = None,
         expose_backend_error_details: bool = True,
     ) -> None:
         """Initialize the membership processor with per-cycle caches."""
@@ -2223,9 +2223,9 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         # Per-cycle caches to avoid redundant API calls per project
         # (service/course account caches live on the base processor).
         self._team_cache: dict[str, list[ProjectUser]] = {}
-        self._source_project_cache: dict[str, Optional[Project]] = {}
+        self._source_project_cache: dict[str, Project | None] = {}
 
-    def _get_waldur_resources(self, project_uuid: Optional[str] = None) -> list[WaldurResource]:
+    def _get_waldur_resources(self, project_uuid: str | None = None) -> list[WaldurResource]:
         """Fetch Waldur resources for this offering, optionally filtered by project.
 
         Args:
@@ -2330,7 +2330,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         except Exception:
             logger.exception("Offering reconcile failed for %s", self.offering.name)
 
-    def _fetch_source_project(self, waldur_resource: WaldurResource) -> Optional[Project]:
+    def _fetch_source_project(self, waldur_resource: WaldurResource) -> Project | None:
         """Pre-fetch the source project for backends that mirror project metadata.
 
         Keeps Waldur communication in core: plugins receive the project as data
@@ -2591,7 +2591,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 return
             self._release_departed_users({username})
 
-    def _release_capable_username_backend(self) -> Optional[AbstractUsernameManagementBackend]:
+    def _release_capable_username_backend(self) -> AbstractUsernameManagementBackend | None:
         """Resolve the username backend once per processor, if it can release accounts."""
         if self._release_backend_resolved is False:
             self._release_backend = utils.get_release_capable_username_backend(self.offering)
@@ -2643,7 +2643,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     def _confirmed_removals(
         self,
         requested: set[str],
-        returned: Optional[list[str]],
+        returned: list[str] | None,
         waldur_resource: WaldurResource,
     ) -> set[str]:
         """The names the resource backend confirms are no longer associated.
@@ -2736,7 +2736,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
     def process_offering_user_deletion(
         self,
         offering_user: OfferingUser,
-        resource_report: Optional[dict[str, tuple[WaldurResource, BackendResourceInfo]]] = None,
+        resource_report: dict[str, tuple[WaldurResource, BackendResourceInfo]] | None = None,
     ) -> bool:
         """Carry out Waldur's deletion request for one offering user; see teardown_offering_user."""
         if resource_report is None:
@@ -2935,7 +2935,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
         return self._known_offering_usernames_cache
 
     def _get_waldur_resource_team(
-        self, resource: WaldurResource, has_consent: Union[bool, Unset] = UNSET
+        self, resource: WaldurResource, has_consent: bool | Unset = UNSET
     ) -> list[ProjectUser]:
         cache_key = resource.project_uuid.hex
         if cache_key in self._team_cache:
@@ -3011,7 +3011,7 @@ class OfferingMembershipProcessor(OfferingBaseProcessor):
                 own_team_fetched = True
             for member in team:
                 if member.uuid:
-                    key: Optional[str] = member.uuid.hex
+                    key: str | None = member.uuid.hex
                 elif member.username:
                     key = member.username
                 else:
@@ -3950,7 +3950,7 @@ def _month_figure(amounts: list, summed: bool) -> float:
     return sum(amounts) if summed else max(amounts)
 
 
-def _summed_types(waldur_components: Optional[list]) -> Optional[set]:
+def _summed_types(waldur_components: list | None) -> set | None:
     """Component types whose rows sum to the month's figure (see _month_figure).
 
     Usage-billed ones, and those whose billing type is not known here, which are
@@ -3993,7 +3993,7 @@ class _Accrued:
     # The new checkpoint of each accrued component reported.
     descriptions: dict = field(default_factory=dict)
     # The period's usage rows as read, for the submission to reuse.
-    rows: Optional[list] = None
+    rows: list | None = None
     # Accrued components whose checkpoint has to be written this pass.
     forced: set = field(default_factory=set)
     # Accrued components left out on purpose: closed, or not measured.
@@ -4035,8 +4035,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         offering: structures.Offering,
         waldur_rest_client: utils.AuthenticatedClient,
         timezone: str = "",
-        resource_backend: Optional[BaseBackend] = None,
-        resource_backend_version: Optional[str] = None,
+        resource_backend: BaseBackend | None = None,
+        resource_backend_version: str | None = None,
         reporting_periods: int = 1,
         expose_backend_error_details: bool = True,
         api_key_final_report_days: int = resource_api_keys.FINAL_REPORT_DAYS,
@@ -4217,8 +4217,8 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         self,
         component_type: str,
         current_usage: float,
-        existing_usages: Optional[list[ComponentUsage]],
-        summed_types: Optional[Collection[str]] = None,
+        existing_usages: list[ComponentUsage] | None,
+        summed_types: Collection[str] | None = None,
     ) -> bool:
         """Check if the current usage is lower than existing usage."""
         if self.resource_backend.supports_decreasing_usage:
@@ -4260,11 +4260,11 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_resource: WaldurResource,
         total_usage: dict[str, float],
         waldur_components: list[OfferingComponent],
-        report_date: Optional[datetime.datetime] = None,
-        billing_period_start: Optional[datetime.date] = None,
-        daily_usage: Optional[dict[str, dict[str, float]]] = None,
-        descriptions: Optional[dict[str, str]] = None,
-        existing_usages: Optional[list[ComponentUsage]] = None,
+        report_date: datetime.datetime | None = None,
+        billing_period_start: datetime.date | None = None,
+        daily_usage: dict[str, dict[str, float]] | None = None,
+        descriptions: dict[str, str] | None = None,
+        existing_usages: list[ComponentUsage] | None = None,
         must_write: Collection[str] = (),
         left_out: Collection[str] = (),
     ) -> list[str]:
@@ -4522,7 +4522,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         total_usage: dict[str, float],
         existing_usages: list[ComponentUsage],
         component_types: list[str],
-        summed_types: Optional[Collection[str]] = None,
+        summed_types: Collection[str] | None = None,
     ) -> bool:
         """Return True when the reported usage matches what Waldur already has.
 
@@ -4572,7 +4572,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         total_usage: dict[str, float],
         existing_usages: list[ComponentUsage],
         component_types: list[str],
-        summed_types: Optional[Collection[str]] = None,
+        summed_types: Collection[str] | None = None,
     ) -> bool:
         """Return True when every component about to be submitted matches Waldur.
 
@@ -4614,7 +4614,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         self,
         usages: dict[str, dict[str, float]],
         waldur_component_usages: list[ComponentUsage] | None,
-        report_date: Optional[datetime.datetime] = None,
+        report_date: datetime.datetime | None = None,
     ) -> None:
         """Reports per-user usage for all users in bulk, one API call per component.
 
@@ -4870,7 +4870,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_offering: ProviderOfferingDetails,
         year: int,
         month: int,
-    ) -> Optional[dict[str, dict[str, float]]]:
+    ) -> dict[str, dict[str, float]] | None:
         """The period's usage per UTC day where the backend and Waldur both take it; else None.
 
         Day and week spending limits are checked against it. A Waldur without per-day
@@ -4957,7 +4957,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         # gap on top of that lag.
         cap_from_checkpoint = max_gap + max_gap // 2
         # Read on the first component that needs it; None when it could not be read.
-        opening_levels: Optional[dict] = None
+        opening_levels: dict | None = None
         opening_read = False
         # Past-month components whose tail this pass closes.
         closing: set = set()
@@ -4969,7 +4969,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
             amounts = [float(row.usage) for row in rows if not isinstance(row.usage, type(UNSET))]
             stored = sum(amounts) if amounts else None
             checkpoint = usage_accrual.latest_checkpoint([row.description for row in rows])
-            opening_level: Optional[float] = None
+            opening_level: float | None = None
             if is_current:
                 # Without a checkpoint, a resource never reported starts where the
                 # month (or the resource) does. A figure someone else reported is
@@ -5063,7 +5063,7 @@ class OfferingReportProcessor(OfferingBaseProcessor):
         waldur_resource_info: WaldurResource,
         period_start: datetime.datetime,
         accrued: dict[str, int],
-    ) -> Optional[dict[str, float]]:
+    ) -> dict[str, float] | None:
         """The level each accrued component last recorded in the month before.
 
         Read once per resource and month, on the month's first pass. The previous

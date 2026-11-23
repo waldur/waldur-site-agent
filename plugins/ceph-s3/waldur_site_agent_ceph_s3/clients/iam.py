@@ -10,7 +10,7 @@ account's root user and removes them itself.
 from __future__ import annotations
 
 import logging
-from typing import Iterator
+from collections.abc import Iterator
 from urllib.parse import urlencode
 from xml.etree import ElementTree  # nosec B405 - answers from the operator's own RGW
 

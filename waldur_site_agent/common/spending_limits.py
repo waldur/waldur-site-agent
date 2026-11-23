@@ -21,7 +21,7 @@ The fields are read whether or not the generated client knows them: an older
 from __future__ import annotations
 
 import datetime
-from typing import Any, Optional
+from typing import Any
 
 from waldur_api_client.models.billing_type_enum import BillingTypeEnum
 from waldur_api_client.models.resource_field_enum import ResourceFieldEnum
@@ -91,7 +91,7 @@ def resource_fields() -> list:
     return [member if member is not None else _ExtraField("spending_limits")]
 
 
-def resource_spending_limits(waldur_resource: object) -> Optional[dict]:
+def resource_spending_limits(waldur_resource: object) -> dict | None:
     """The resource's spending limits; None when the resource came without the field.
 
     It comes without when it was listed with a ``field`` selection that leaves it out
@@ -102,7 +102,7 @@ def resource_spending_limits(waldur_resource: object) -> Optional[dict]:
     return None if isinstance(value, Unset) else _limits(value)
 
 
-def key_spending_limits(value: object) -> Optional[dict]:
+def key_spending_limits(value: object) -> dict | None:
     """A key's spending limits from a command's ``spending_limits``.
 
     ``None`` when Waldur sent none: a Waldur that predates per-period key limits, whose
@@ -111,7 +111,7 @@ def key_spending_limits(value: object) -> Optional[dict]:
     return None if value is None or isinstance(value, Unset) else _limits(value)
 
 
-def accepts_daily_usage(waldur_components: Optional[list]) -> bool:
+def accepts_daily_usage(waldur_components: list | None) -> bool:
     """Whether the offering's Waldur takes usage per day (``daily_usages``)."""
     return any(
         not isinstance(generated_field(component, "spending_limit_periods"), Unset)
@@ -124,7 +124,7 @@ def key_accepts_daily_usage(key: object) -> bool:
     return not isinstance(generated_field(key, "spending_limits"), Unset)
 
 
-def usage_based_types(waldur_components: Optional[list]) -> set:
+def usage_based_types(waldur_components: list | None) -> set:
     """The component types Waldur bills by usage: the only ones it takes per day."""
     return {
         component.type_

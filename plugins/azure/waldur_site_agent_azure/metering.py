@@ -15,7 +15,7 @@ straight into Waldur.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from .clients import AzureClient, AzureClientError
 from .naming import parse_virtual_machine_id
@@ -132,7 +132,7 @@ class AllocationMeter:
         return components
 
     @staticmethod
-    def _metric_for(name: str, config: dict) -> Optional[str]:
+    def _metric_for(name: str, config: dict) -> str | None:
         backend_name = config.get("backend_name")
         if backend_name:
             return str(backend_name)

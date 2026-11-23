@@ -3,7 +3,6 @@
 import datetime
 import pprint
 from enum import Enum
-from typing import Optional
 
 import httpx
 from waldur_api_client.client import AuthenticatedClient
@@ -95,7 +94,7 @@ def create_slurm_client(backend_settings: dict, slurm_tres: dict) -> SlurmClient
     same SLURM.
     """
     slurm_bin_path = backend_settings.get("slurm_bin_path", "/usr/bin")
-    cluster_name: Optional[str] = backend_settings.get("cluster_name")
+    cluster_name: str | None = backend_settings.get("cluster_name")
     usage_tres_source = parse_usage_tres_source(backend_settings)
     if parse_execution_mode(backend_settings) is not ExecutionMode.REST:
         return SlurmClient(
@@ -148,7 +147,7 @@ class SlurmBackend(backends.BaseBackend):
         """Init backend data and creates a corresponding client."""
         super().__init__(slurm_settings, slurm_tres)
         self.backend_type = BackendType.SLURM.value
-        self.cluster_name: Optional[str] = self.backend_settings.get("cluster_name")
+        self.cluster_name: str | None = self.backend_settings.get("cluster_name")
         self.execution_mode = parse_execution_mode(self.backend_settings)
         self.client: SlurmClientInterface = create_slurm_client(self.backend_settings, slurm_tres)
 
@@ -206,7 +205,7 @@ class SlurmBackend(backends.BaseBackend):
         # Three-state override applied only once opted in (None/True/False).
         # None respects the per-offering plugin_options.enforce_qos flag, which
         # the processor resolves and pushes onto ``self.offering_enforce_qos``.
-        self._enforce_offering_qos: Optional[bool] = self.backend_settings.get(
+        self._enforce_offering_qos: bool | None = self.backend_settings.get(
             "enforce_offering_qos"
         )
         self.offering_enforce_qos: bool = False
@@ -226,7 +225,7 @@ class SlurmBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Pre-creation setup: the customer and project parent accounts.
 
@@ -363,7 +362,7 @@ class SlurmBackend(backends.BaseBackend):
     def sync_resource_project(
         self,
         waldur_resource: WaldurResource,
-        source_project: Optional[Project] = None,  # noqa: ARG002
+        source_project: Project | None = None,  # noqa: ARG002
     ) -> None:
         """Reparent the SLURM project account when a Waldur project moves to a new customer.
 
@@ -675,7 +674,7 @@ class SlurmBackend(backends.BaseBackend):
         self,
         resource: BackendResourceInfo,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Post-create actions for SLURM resources."""
         del waldur_resource
@@ -840,7 +839,7 @@ class SlurmBackend(backends.BaseBackend):
     @staticmethod
     def _selected_qos(
         waldur_resource: WaldurResource,
-    ) -> tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """Read the QoS and partition the user selected at order time.
 
         Both are recorded on the resource ``attributes`` (attributes.qos /
@@ -878,7 +877,7 @@ class SlurmBackend(backends.BaseBackend):
             try:
                 policy = self._default_account_policy
                 if policy == "individual":
-                    default_account: Optional[str] = resource_backend_id
+                    default_account: str | None = resource_backend_id
                 elif policy == "none":
                     default_account = None
                 else:  # "common"
@@ -892,7 +891,7 @@ class SlurmBackend(backends.BaseBackend):
                     # enforced offering partitions rather than silently dropping
                     # them, otherwise fall back to the default partition.
                     if selected_partition:
-                        qos_partitions: Optional[list[str]] = [selected_partition]
+                        qos_partitions: list[str] | None = [selected_partition]
                     elif self.offering_partitions and self._enforce_offering_partitions:
                         qos_partitions = list(self.offering_partitions)
                     elif self._default_partition:
@@ -1458,7 +1457,7 @@ class SlurmBackend(backends.BaseBackend):
         resource_backend_ids: list[str],
         year: int,
         month: int,
-        waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
+        waldur_resource: WaldurResource | None = None,  # noqa: ARG002
     ) -> dict[str, dict[str, dict[str, int]]]:
         """Generate usage report for a specific billing period.
 
@@ -1683,7 +1682,7 @@ class SlurmBackend(backends.BaseBackend):
         self,
         resource_id: str,
         settings: dict,
-        config: Optional[dict] = None,  # noqa: ARG002
+        config: dict | None = None,  # noqa: ARG002
     ) -> dict:
         """Apply periodic settings calculated by Waldur with emulator support."""
         logger.info("Applying periodic settings for resource %s", resource_id)
@@ -1777,7 +1776,7 @@ class SlurmBackend(backends.BaseBackend):
 
     def _changed_tres_limits(
         self, resource_id: str, limit_type: str, target: dict
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Return only the TRES entries whose value differs from SLURM state.
 
         An empty dict means every requested TRES already matches (nothing to

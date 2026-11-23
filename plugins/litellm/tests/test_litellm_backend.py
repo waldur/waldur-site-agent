@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import uuid
 from types import SimpleNamespace
-from typing import Optional
 from unittest import mock
 
 import pytest
@@ -37,7 +36,7 @@ class _FakeLimits:
         return dict(self._data)
 
 
-def _make_backend(settings: Optional[dict] = None) -> LiteLLMBackend:
+def _make_backend(settings: dict | None = None) -> LiteLLMBackend:
     with mock.patch("waldur_site_agent_litellm.backend.LiteLLMClient"):
         backend = LiteLLMBackend(dict(settings or SETTINGS), dict(COMPONENTS))
     backend.litellm_client = mock.MagicMock()
@@ -45,7 +44,7 @@ def _make_backend(settings: Optional[dict] = None) -> LiteLLMBackend:
 
 
 def _make_resource(
-    limits: Optional[dict] = None, backend_id: str = ""
+    limits: dict | None = None, backend_id: str = ""
 ) -> SimpleNamespace:
     return SimpleNamespace(
         uuid=uuid.uuid4(),

@@ -13,7 +13,6 @@ from such a record, and derive a grouping key that is stable across runs.
 
 import ast
 import re
-from typing import Optional
 
 # Keys that may carry the human-readable message, in order of preference.
 # "event" is structlog's default; celery task failures land under "error".
@@ -34,7 +33,7 @@ _VOLATILE_PATTERNS = (
 )
 
 
-def parse_structlog_message(msg: object) -> Optional[tuple[str, dict]]:
+def parse_structlog_message(msg: object) -> tuple[str, dict] | None:
     """Recover the message and context from a structlog-rendered log record.
 
     Args:

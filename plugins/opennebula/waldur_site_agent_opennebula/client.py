@@ -9,11 +9,10 @@ VXLAN networks, virtual routers, and security groups.
 import ipaddress
 import logging
 import time
-from typing import Any, Optional, Union
+from typing import Any
 
 import pyone
 from pyone import LCM_STATE, VM_STATE
-
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import Association, ClientResource
@@ -37,7 +36,7 @@ class OpenNebulaClient(BaseClient):
         api_url: str,
         credentials: str,
         zone_id: int = 0,
-        cluster_ids: Optional[list[int]] = None,
+        cluster_ids: list[int] | None = None,
     ) -> None:
         """Initialize OpenNebula client.
 
@@ -57,7 +56,7 @@ class OpenNebulaClient(BaseClient):
 
     # ── VDC helpers ──────────────────────────────────────────────────
 
-    def _get_vdc_by_name(self, name: str) -> Optional[object]:
+    def _get_vdc_by_name(self, name: str) -> object | None:
         """Find a VDC by name from the pool.
 
         Returns the pyone VDC object or None if not found.
@@ -164,7 +163,7 @@ class OpenNebulaClient(BaseClient):
 
     # ── Group helpers ────────────────────────────────────────────────
 
-    def _get_group_by_name(self, name: str) -> Optional[object]:
+    def _get_group_by_name(self, name: str) -> object | None:
         """Find a group by name from the pool.
 
         Returns the pyone group object or None if not found.
@@ -298,7 +297,7 @@ class OpenNebulaClient(BaseClient):
         return "\n".join(parts)
 
     @staticmethod
-    def _get_first_vm_quota(group_info: object) -> Optional[object]:
+    def _get_first_vm_quota(group_info: object) -> object | None:
         """Extract the first VM quota entry from group info.
 
         pyone returns VM_QUOTA.VM as a list of quota entries.
@@ -411,7 +410,7 @@ class OpenNebulaClient(BaseClient):
 
     # ── Network / VNet helpers ────────────────────────────────────────
 
-    def _get_vnet_by_name(self, name: str) -> Optional[object]:
+    def _get_vnet_by_name(self, name: str) -> object | None:
         """Find a virtual network by name from the pool.
 
         Returns the pyone VNet object or None if not found.
@@ -445,7 +444,7 @@ class OpenNebulaClient(BaseClient):
         pool_network = ipaddress.ip_network(f"{base}/{prefix}", strict=False)
 
         # Collect used subnets from existing waldur internal networks
-        used_subnets: set[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = set()
+        used_subnets: set[ipaddress.IPv4Network | ipaddress.IPv6Network] = set()
         try:
             vnet_pool = self.one.vnpool.info(-2, -1, -1, -1)
             for vnet in vnet_pool.VNET:
@@ -566,7 +565,7 @@ class OpenNebulaClient(BaseClient):
 
     # ── Virtual Router helpers ────────────────────────────────────────
 
-    def _get_vrouter_by_name(self, name: str) -> Optional[object]:
+    def _get_vrouter_by_name(self, name: str) -> object | None:
         """Find a virtual router by name from the pool.
 
         Returns the pyone VRouter object or None if not found.
@@ -654,7 +653,7 @@ class OpenNebulaClient(BaseClient):
 
     # ── Security Group helpers ────────────────────────────────────────
 
-    def _get_secgroup_by_name(self, name: str) -> Optional[object]:
+    def _get_secgroup_by_name(self, name: str) -> object | None:
         """Find a security group by name from the pool.
 
         Returns the pyone SecGroup object or None if not found.
@@ -968,7 +967,7 @@ class OpenNebulaClient(BaseClient):
             BackendError: If the VM enters a failure state or times out.
         """
         deadline = time.monotonic() + timeout
-        prev_state: Optional[tuple[int, int]] = None
+        prev_state: tuple[int, int] | None = None
 
         while True:
             vm_info = self._get_vm_info(vm_id)
@@ -1006,7 +1005,7 @@ class OpenNebulaClient(BaseClient):
 
             time.sleep(poll_interval)
 
-    def _get_vm_by_name(self, vm_name: str) -> Optional[object]:
+    def _get_vm_by_name(self, vm_name: str) -> object | None:
         """Find a VM by name from the pool.
 
         Returns the pyone VM object or None if not found.
@@ -1108,7 +1107,7 @@ class OpenNebulaClient(BaseClient):
                 "expected READY or USED."
             )
 
-    def _get_image_by_name(self, name: str) -> Optional[int]:
+    def _get_image_by_name(self, name: str) -> int | None:
         """Return the ID of an image matching ``name``, or None if not found."""
         try:
             pool = self.one.imagepool.info(-2, -1, -1)
@@ -1146,11 +1145,11 @@ class OpenNebulaClient(BaseClient):
         vcpu: int = 1,
         ram_mb: int = 512,
         disk_mb: int = 10240,
-        cluster_ids: Optional[list[int]] = None,
+        cluster_ids: list[int] | None = None,
         sched_requirements: str = "",
-        model_image: Optional[object] = None,
-        engine_image_id: Optional[int] = None,
-        vllm_context: Optional[dict[str, str]] = None,
+        model_image: object | None = None,
+        engine_image_id: int | None = None,
+        vllm_context: dict[str, str] | None = None,
     ) -> int:
         """Instantiate a VM from a template within a VDC.
 
@@ -1427,7 +1426,7 @@ class OpenNebulaClient(BaseClient):
             )
 
     @staticmethod
-    def _get_primary_disk_size(vm_info: object) -> Optional[int]:
+    def _get_primary_disk_size(vm_info: object) -> int | None:
         """Get the size of disk 0 from VM info, in MB."""
         try:
             template = vm_info.TEMPLATE
@@ -1441,7 +1440,7 @@ class OpenNebulaClient(BaseClient):
             pass
         return None
 
-    def get_vm(self, vm_id: int) -> Optional[dict[str, Any]]:
+    def get_vm(self, vm_id: int) -> dict[str, Any] | None:
         """Get VM info by numeric ID.
 
         Returns dict with vm_id, name, state, or None if not found.
@@ -1457,7 +1456,7 @@ class OpenNebulaClient(BaseClient):
             "lcm_state": int(vm_info.LCM_STATE),
         }
 
-    def get_vm_usage(self, vm_id: int) -> Optional[dict[str, int]]:
+    def get_vm_usage(self, vm_id: int) -> dict[str, int] | None:
         """Get resource usage for a VM by numeric ID.
 
         Returns dict with vcpu, vm_ram, vm_disk values in native units,
@@ -1494,7 +1493,7 @@ class OpenNebulaClient(BaseClient):
 
         return usage
 
-    def get_vm_ip_address(self, vm_id: int) -> Optional[str]:
+    def get_vm_ip_address(self, vm_id: int) -> str | None:
         """Get the first IP address of a VM by numeric ID.
 
         Returns the IP string or None if VM not found or has no NIC.
@@ -1536,7 +1535,7 @@ class OpenNebulaClient(BaseClient):
 
     # ── User management helpers ────────────────────────────────────────
 
-    def _get_user_by_name(self, username: str) -> Optional[object]:
+    def _get_user_by_name(self, username: str) -> object | None:
         """Find a user by name from the pool.
 
         Returns the pyone user object or None if not found.
@@ -1648,7 +1647,7 @@ class OpenNebulaClient(BaseClient):
                 f"Failed to delete user '{username}' (ID {user.ID}): {e}"
             ) from e
 
-    def get_user_credentials(self, username: str) -> Optional[dict[str, str]]:
+    def get_user_credentials(self, username: str) -> dict[str, str] | None:
         """Read credentials from a user's TEMPLATE.
 
         Returns dict with 'opennebula_username' and 'opennebula_password',
@@ -1727,7 +1726,7 @@ class OpenNebulaClient(BaseClient):
         except pyone.OneException as e:
             raise BackendError(f"Failed to list VDCs: {e}") from e
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get a VDC by name. Returns None if not found."""
         vdc = self._get_vdc_by_name(resource_id)
         if vdc is None:
@@ -1742,8 +1741,8 @@ class OpenNebulaClient(BaseClient):
         name: str,
         description: str,
         organization: str,
-        parent_name: Optional[str] = None,
-        network_config: Optional[dict[str, Any]] = None,
+        parent_name: str | None = None,
+        network_config: dict[str, Any] | None = None,
     ) -> str:
         """Create a VDC with an associated group and optional networking.
 
@@ -1837,7 +1836,7 @@ class OpenNebulaClient(BaseClient):
 
     def set_resource_limits(
         self, resource_id: str, limits_dict: dict[str, int]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Set group quotas for the VDC's associated group."""
         group = self._get_group_by_name(resource_id)
         if group is None:
@@ -1869,13 +1868,13 @@ class OpenNebulaClient(BaseClient):
         del resource_id, username, limits_dict
         return ""
 
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Not supported — Waldur shields users."""
         del user, resource_id
         return None
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Not supported — Waldur shields users."""
         del resource_id, default_account
@@ -1886,7 +1885,7 @@ class OpenNebulaClient(BaseClient):
         del resource_id
         return username
 
-    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list[dict]:
+    def get_usage_report(self, resource_ids: list[str], timezone: str | None = None) -> list[dict]:
         """Get quota usage for VDC-associated groups.
 
         Returns a list of dicts with group quota usage keyed by resource name.

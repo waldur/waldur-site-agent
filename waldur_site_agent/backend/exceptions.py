@@ -1,6 +1,5 @@
 """Generic exceptions and errors for backends."""
 
-from typing import Union
 
 
 class BackendError(Exception):
@@ -23,7 +22,7 @@ class ConfigurationError(Exception):
 class OfferingUserAccountLinkingRequiredError(Exception):
     """Linking a user to the offering user is required."""
 
-    def __init__(self, message: str, comment_url: Union[str, None] = None) -> None:
+    def __init__(self, message: str, comment_url: str | None = None) -> None:
         """Initialize exception with message and optional comment URL.
 
         Args:
@@ -37,7 +36,7 @@ class OfferingUserAccountLinkingRequiredError(Exception):
 class OfferingUserAdditionalValidationRequiredError(Exception):
     """Additional validation for the offering user is required."""
 
-    def __init__(self, message: str, comment_url: Union[str, None] = None) -> None:
+    def __init__(self, message: str, comment_url: str | None = None) -> None:
         """Initialize exception with message and optional comment URL.
 
         Args:

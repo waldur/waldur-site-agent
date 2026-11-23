@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend import utils as backend_utils
@@ -51,7 +50,7 @@ class SlurmClient(SlurmClientInterface):
         self,
         slurm_tres: dict,
         slurm_bin_path: str = "/usr/bin",
-        cluster_name: Optional[str] = None,
+        cluster_name: str | None = None,
         usage_tres_source: UsageTresSource = UsageTresSource.REQUESTED,
     ) -> None:
         """Inits SLURM-related data."""
@@ -139,7 +138,7 @@ class SlurmClient(SlurmClientInterface):
         name: str,
         description: str,
         organization: str,
-        parent_name: Optional[str] = None,
+        parent_name: str | None = None,
     ) -> str:
         """Creates account in the SLURM cluster."""
         parts = [
@@ -153,7 +152,7 @@ class SlurmClient(SlurmClientInterface):
             parts.append(f'parent="{parent_name}"')
         return self._execute_command(parts)
 
-    def get_account_parent(self, account: str) -> Optional[str]:
+    def get_account_parent(self, account: str) -> str | None:
         """Return the current parent account name for the given account, or None if not found.
 
         ParentName is an association-level field — ``sacctmgr show account`` always
@@ -249,7 +248,7 @@ class SlurmClient(SlurmClientInterface):
             ["modify", "user", username, "where", f"account={resource_id}", "set", quota]
         )
 
-    def set_account_qos(self, account: str, qos: str, default_qos: Optional[str] = None) -> None:
+    def set_account_qos(self, account: str, qos: str, default_qos: str | None = None) -> None:
         """Set the specified QoS for the account.
 
         ``default_qos`` is written in the same ``sacctmgr modify`` as the list.
@@ -282,7 +281,7 @@ class SlurmClient(SlurmClientInterface):
         return self._parse_association(lines[0])
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Creates association between the account and the user in SLURM cluster."""
         args = ["add", "user", username, f"account={resource_id}"]
@@ -312,7 +311,7 @@ class SlurmClient(SlurmClientInterface):
                 accounts.add(account.strip().lower())
         return sorted(accounts)
 
-    def get_user_default_account(self, username: str) -> Optional[str]:
+    def get_user_default_account(self, username: str) -> str | None:
         """The user's DefaultAccount, or None when the user is unknown."""
         output = self._execute_command(
             ["show", "user", "where", f"name={username}", "format=user,defaultaccount"]
@@ -372,7 +371,7 @@ class SlurmClient(SlurmClientInterface):
         )
 
     def get_usage_report(
-        self, resource_ids: list[str], timezone: Optional[str] = None
+        self, resource_ids: list[str], timezone: str | None = None
     ) -> list[SlurmReportLine]:
         """Generates per-user usage report for the accounts."""
         month_start, month_end = backend_utils.format_current_month(timezone or "")
@@ -534,7 +533,7 @@ class SlurmClient(SlurmClientInterface):
             return parts[1].strip()
         return ""
 
-    def cancel_active_user_jobs(self, account: str, user: Optional[str] = None) -> None:
+    def cancel_active_user_jobs(self, account: str, user: str | None = None) -> None:
         """Cancel jobs for the account and user.
 
         If user is None, cancel all the jobs for the account.
@@ -689,12 +688,12 @@ class SlurmClient(SlurmClientInterface):
     def create_qos(
         self,
         name: str,
-        flags: Optional[str] = None,
-        grp_tres: Optional[str] = None,
-        max_jobs: Optional[int] = None,
-        max_submit: Optional[int] = None,
-        max_wall: Optional[str] = None,
-        min_tres_per_job: Optional[str] = None,
+        flags: str | None = None,
+        grp_tres: str | None = None,
+        max_jobs: int | None = None,
+        max_submit: int | None = None,
+        max_wall: str | None = None,
+        min_tres_per_job: str | None = None,
     ) -> None:
         """Create a QoS with the specified parameters.
 
@@ -795,7 +794,7 @@ class SlurmClient(SlurmClientInterface):
         username: str,
         resource_id: str,
         partition: str,
-        default_account: Optional[str] = None,
+        default_account: str | None = None,
     ) -> str:
         """Create an association between a user and account with a specific partition."""
         if not _PARTITION_NAME_RE.match(partition):
@@ -812,7 +811,7 @@ class SlurmClient(SlurmClientInterface):
         username: str,
         resource_id: str,
         partitions: Sequence[str],
-        default_account: Optional[str] = None,
+        default_account: str | None = None,
     ) -> str:
         """Create a user→account association restricted to the given partitions.
 
@@ -842,9 +841,9 @@ class SlurmClient(SlurmClientInterface):
         username: str,
         resource_id: str,
         qos_list: Sequence[str],
-        default_qos: Optional[str] = None,
-        partitions: Optional[Sequence[str]] = None,
-        default_account: Optional[str] = None,
+        default_qos: str | None = None,
+        partitions: Sequence[str] | None = None,
+        default_account: str | None = None,
     ) -> str:
         """Create a user→account association granting a specific QoS set.
 
