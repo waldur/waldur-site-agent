@@ -247,6 +247,14 @@ starting with `w_` as `Authorization: Bearer`; this needs a site agent release t
 as `Token` and Waldur answers `401 Invalid token.` STOMP event processing works with a PAT too:
 Waldur uses the PAT as the RabbitMQ password.
 
+**Use the `site_agent` token template** where Waldur offers it (the release that includes
+[waldur-mastermind#1276][mm-1276]): in Homeport, open the offering's Integration → Credentials →
+Actions → **Create agent token**, or use `GET /api/personal-access-tokens/templates/` and
+`template_targets`. The template fills in the scopes below and binds the token to the offering, so
+you do not need to choose them by hand.
+
+[mm-1276]: https://code.opennodecloud.com/waldur/waldur-mastermind/-/issues/1276
+
 A PAT's scopes only narrow what its user may do; they grant nothing on their own. The user still
 needs the **OFFERING.MANAGER** role above, and each scope applies only where that role holds the
 permission. Scopes are checked wherever Waldur checks a permission: on every action that changes
@@ -264,9 +272,12 @@ Scopes for order processing, membership sync and usage reporting:
 | `RESOURCE.SET_BACKEND_METADATA` | Setting backend metadata, endpoints and membership sync status |
 | `RESOURCE.SET_USAGE` | Reporting total and per-user usage |
 | `OFFERING.UPDATE_USER` | Offering user state changes and updates, the user attribute config |
-| `OFFERING.UPDATE` | Agent identity and STOMP registration, `check_backend_id_uniqueness`, agent status |
+| `OFFERING.MANAGE_AGENT` | Agent identity, STOMP registration, `check_backend_id_uniqueness`, `site_agent_config` |
 
-Without `OFFERING.UPDATE` the agent cannot register its identity. In polling mode it still processes
+Waldur releases before [waldur-mastermind#1276][mm-1276] check `OFFERING.UPDATE` instead of
+`OFFERING.MANAGE_AGENT`.
+
+Without `OFFERING.MANAGE_AGENT` the agent cannot register its identity. In polling mode it still processes
 orders, but the offering's agent status in Waldur stops updating. In event mode it opens no STOMP
 connection, so orders and membership changes are picked up only by the periodic reconciliation
 (every 60 minutes by default).
@@ -281,31 +292,34 @@ Scopes for optional features:
 | `OFFERING.UPDATE_INTEGRATION` | The backend reads the offering's `secret_options` or `service_attributes` |
 | `SERVICE_PROVIDER.LIST_PROJECTS` | The backend mirrors source project metadata (see the limits below) |
 | `SERVICE_PROVIDER.LIST_KEYS` | The backend resolves SSH keys from resource attributes (see the limits below) |
-| `OFFERING.CREATE` | The token user owns the provider organization instead of managing the offering |
+| `OFFERING.CREATE` | Before #1276: the token user owns the provider organization instead of managing the offering |
 
 Plugins can call further endpoints (for example the Waldur-to-Waldur and Rancher plugins); check a
 plugin's own documentation for what its token needs.
 
 Without `OFFERING.UPDATE_INTEGRATION` Waldur leaves `secret_options` and `service_attributes` out of
-the offering it returns, without an error. `OFFERING.CREATE` replaces `OFFERING.UPDATE` for agent
-identity and STOMP registration when the token user is an organization owner.
+the offering it returns, without an error. On releases before #1276, `OFFERING.CREATE` replaces
+`OFFERING.UPDATE` for agent identity and STOMP registration when the token user is an organization
+owner; from #1276 on, `OFFERING.MANAGE_AGENT` covers both.
 
 Binding: a binding limits the PAT to the bound entity and what lies below it. Which one works
 depends on where the token user's role is:
 
 - **Leave the PAT unbound** unless you need a binding. This always works: its scopes and the user's
   roles still limit it.
-- **Do not bind it to the offering alone.** At startup the agent looks up the offering's service
-  provider, and an offering-bound PAT cannot list it, so the agent stops before processing
-  anything.
+- **Bind it to the offering** on a Waldur release that includes [waldur-mastermind#1276][mm-1276]; a
+  `site_agent` template token is bound this way. The binding lets the token read the offering's
+  service provider record, which the agent looks up at startup, and an organization owner's role
+  counts for it too. On earlier releases an offering-bound PAT cannot list the service provider, so
+  the agent stops before processing anything: use one of the options below instead.
 - **Offering manager who also manages the service provider**: from the Waldur release that includes
   [waldur-mastermind#907](https://code.opennodecloud.com/waldur/waldur-mastermind/-/issues/907),
   binding the PAT to the service provider works. Creating that binding needs a role on the service
   provider or its organization that holds one of the requested scopes. On earlier releases such a
   binding authorises nothing on the provider's offerings.
-- **Owner of the provider organization**: leave the PAT unbound. Waldur checks the binding on the
-  organization, where the owner's role is, so a binding on the offering or the service provider is
-  refused on provider actions, and a binding on the organization does not cover resources ordered
+- **Owner of the provider organization**, on releases before #1276: leave the PAT unbound. Waldur
+  checks the binding on the organization, where the owner's role is, so a binding on the offering
+  or the service provider is refused on provider actions, and a binding on the organization does not cover resources ordered
   by other organizations
   ([waldur-mastermind#919](https://code.opennodecloud.com/waldur/waldur-mastermind/-/issues/919)).
 - A binding on the provider organization reaches **less** than one on its service provider, even
@@ -424,7 +438,11 @@ secret marked *required with parent* only when its block, such as `ldap`, is con
 validates the result exactly like a local configuration. It logs the offering, the configuration
 `version` Waldur reports and the source.
 
-The token needs permission to update the offering's integration, which **OFFERING.MANAGER** has.
+The token needs **OFFERING.MANAGE_AGENT** on the offering, which a `site_agent` template token
+carries, or permission to update the offering's integration, which **OFFERING.MANAGER** has. Reading
+the configuration with `OFFERING.MANAGE_AGENT` needs a Waldur release that includes
+[waldur-mastermind#1287](https://code.opennodecloud.com/waldur/waldur-mastermind/-/issues/1287)'s
+token fix; with an older Waldur, use the API token of the offering's manager.
 Waldur answers 400 for an offering that is not a site agent offering.
 
 **Failure is loud.** If Waldur is unreachable or answers 400, 401, 403, 404 or any other error, if
@@ -434,8 +452,8 @@ example:
 
 ```text
 Cannot load the configuration from /etc/waldur/waldur-site-agent-config.yaml: Offering 'HPC cluster'
-(<uuid>): Waldur answered HTTP 403 (the token needs permission to update the offering's
-integration) for its configuration at https://waldur.example.com/api/marketplace-provider-offerings/<uuid>/site_agent_config/:
+(<uuid>): Waldur answered HTTP 403 (the token needs OFFERING.MANAGE_AGENT on the offering, or
+permission to update its integration) for its configuration at https://waldur.example.com/api/marketplace-provider-offerings/<uuid>/site_agent_config/:
 {"detail": "You do not have permission to perform this action."}
 ```
 

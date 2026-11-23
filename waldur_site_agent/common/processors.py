@@ -387,13 +387,15 @@ class OfferingBaseProcessor(abc.ABC):
                 field=[ServiceProviderFieldEnum.UUID],
             )
             if not service_providers:
-                # Typically a personal access token bound to the offering only:
-                # Waldur hides the offering's service provider from it.
+                # Typically a personal access token bound to the offering only, on
+                # a Waldur older than waldur/waldur-mastermind#1276, which hides the
+                # offering's service provider from it.
                 raise backend_exceptions.ConfigurationError(
                     f"No service provider of offering {self.offering.name} is visible to "
-                    "the configured Waldur API token. If it is a personal access token, "
-                    "bind it to the service provider or leave it unbound; a binding on "
-                    "the offering alone is not enough."
+                    "the configured Waldur API token. If it is a personal access token "
+                    "bound to the offering, this Waldur does not let such a token see "
+                    "the service provider: bind it to the service provider or leave it "
+                    "unbound."
                 )
             service_provider = service_providers[0]
 
