@@ -581,6 +581,23 @@ def load_configuration(
     return configuration
 
 
+def add_config_file_argument(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``-c`` / ``--config-file`` option.
+
+    The agent and the one-shot commands take the provider settings from the
+    same flag, with the same default path.
+    """
+    parser.add_argument(
+        "--config-file",
+        "-c",
+        help="Path to the config file with provider settings; "
+        "default is waldur-site-agent-config.yaml",
+        dest="config_file_path",
+        default="waldur-site-agent-config.yaml",
+        required=False,
+    )
+
+
 def init_configuration() -> structures.WaldurAgentConfiguration:
     """Initialize agent configuration from CLI arguments and config file.
 
@@ -607,15 +624,7 @@ def init_configuration() -> structures.WaldurAgentConfiguration:
         default="order_process",
     )
 
-    parser.add_argument(
-        "--config-file",
-        "-c",
-        help="Path to the config file with provider settings;"
-        "default is waldur-site-agent-config.yaml",
-        dest="config_file_path",
-        default="waldur-site-agent-config.yaml",
-        required=False,
-    )
+    add_config_file_argument(parser)
 
     cli_args = parser.parse_args()
     config_file_path = cli_args.config_file_path
