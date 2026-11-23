@@ -301,7 +301,9 @@ The Waldur Site Agent is designed to run as **4 separate deployments**, each han
 ### Agent Modes
 
 - **`order-process`**: Polls for orders from Waldur and manages backend resources
-- **`report`**: Reports usage data from backend to Waldur on schedule
+- **`report`**: Reports usage data from backend to Waldur on schedule. For one report
+  on a schedule you control, run `waldur_site_report` from a CronJob you supply and
+  leave this deployment disabled. The chart does not include that CronJob
 - **`membership-sync`**: Synchronizes user memberships between Waldur and backend
 - **`event-process`**: Event-based processing using STOMP (alternative to order-process + membership-sync)
 

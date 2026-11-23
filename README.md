@@ -59,7 +59,7 @@ waldur_site_agent -m <mode> -c <config-file>
 
 ### Command-line tools
 
-<!-- pyml disable-num-lines 12 line-length -->
+<!-- pyml disable-num-lines 13 line-length -->
 | Command | Purpose |
 | ------- | ------- |
 | `waldur_site_agent` | Run the agent in one mode |
@@ -71,11 +71,16 @@ waldur_site_agent -m <mode> -c <config-file>
 | `waldur_sync_resource_limits` | Reconcile resource limits once — by default the backend's limits are written to Waldur |
 | `waldur_site_test_order` | Generate an order from a template and run it through a mock (or, with `--use-real-backend`, the real) backend |
 | `waldur_site_load_historical_usage` | Backfill historical usage into Waldur |
+| `waldur_site_report` | Run one usage report and exit |
 | `waldur_site_export_plugin_catalogue` | Write the catalogue of installed plugins (roles, settings schemas, secret settings) that Waldur vendors; see [Secret settings and roles](docs/configuration-validation.md#secret-settings-and-roles-the-plugin-catalogue) |
 
 The utility commands accept `-c` for the configuration file like the agent does;
 `waldur_site_healthz` spells it `--config-file` (plus `--max-age`, `--heartbeat-path` and
 `--liveness-only`). Run any of them with `--help`.
+
+`waldur_site_report` runs the same usage report as `-m report` and then exits. The exit
+status is non-zero when any offering fails. Schedule it from cron or a systemd timer in
+place of the long-running report agent, not next to it.
 
 ## Logging
 
