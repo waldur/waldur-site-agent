@@ -26,6 +26,12 @@ from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
 from waldur_site_agent.common import static_token_prefix
+from waldur_site_agent_waldur.privileged_accounts import (
+    IdentityBridgePrivilegedAccountError,
+    is_privileged_account_refusal,
+    note_privileged_account,
+    privileged_accounts,
+)
 
 if TYPE_CHECKING:
     from waldur_site_agent.common.structures import Offering
@@ -100,6 +106,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
         self.identity_bridge_source = self.backend_settings.get("identity_bridge_source", "")
         # Strip /api suffix — httpx paths already include /api/ prefix
         base_url = target_api_url.removesuffix("/api")
+        self._target_url = base_url
         self._http_client = AuthenticatedClient(
             base_url=base_url,
             token=target_api_token,
@@ -225,7 +232,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
         Returns empty string because the actual username is assigned by
         Waldur B's service provider and synced back separately.
         """
-        self._push_user_to_identity_bridge(offering_user)
+        self._push_user_profile(offering_user)
         return ""
 
     def sync_user_profiles(self, offering_users: list[OfferingUser]) -> None:
@@ -241,7 +248,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
                 continue
             current_usernames.add(waldur_username)
             try:
-                self._push_user_to_identity_bridge(ou)
+                self._push_user_profile(ou)
             except Exception:
                 logger.exception(
                     "Failed to push user %s to identity bridge", waldur_username
@@ -257,15 +264,49 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
     def deactivate_users(self, usernames: set[str]) -> None:
         """Remove departed users from identity bridge."""
         for username in usernames:
+            if privileged_accounts.is_known(self._target_url, username):
+                logger.debug("Skipping removal of privileged Waldur B account %s", username)
+                continue
             try:
                 self._remove_user_from_identity_bridge(username)
+            except IdentityBridgePrivilegedAccountError:
+                note_privileged_account(self._target_url, username, removal=True)
             except Exception:
                 logger.exception(
                     "Failed to deactivate user %s via identity bridge", username
                 )
 
+    def _push_user_profile(self, offering_user: OfferingUser) -> None:
+        """Push a profile, reporting a privileged account once per cycle.
+
+        A privileged account already refused this cycle is not sent again.
+        A new refusal is logged as one WARNING, without a traceback.
+        """
+        waldur_username = _get_waldur_username(offering_user) or ""
+        if privileged_accounts.is_known(self._target_url, waldur_username):
+            logger.debug("Skipping push of privileged Waldur B account %s", waldur_username)
+            return
+        try:
+            self._push_user_to_identity_bridge(offering_user)
+        except IdentityBridgePrivilegedAccountError:
+            note_privileged_account(self._target_url, waldur_username)
+
+    def _sync_identity_bridge(self, username: str, body: IdentityBridgeRequestRequest) -> None:
+        """POST one profile, turning the privileged-account 403 into its own error."""
+        try:
+            identity_bridge.sync(client=self._http_client, body=body)
+        except errors.UnexpectedStatus as e:
+            if is_privileged_account_refusal(e.status_code, e.content):
+                raise IdentityBridgePrivilegedAccountError(username) from e
+            raise
+
     def _push_user_to_identity_bridge(self, offering_user: OfferingUser) -> None:
-        """POST /api/identity-bridge/ on Waldur B."""
+        """POST /api/identity-bridge/ on Waldur B.
+
+        Raises:
+            IdentityBridgePrivilegedAccountError: the user is a staff, support
+                or identity manager account and the agent is not staff.
+        """
         waldur_username = _get_waldur_username(offering_user) or ""
         attributes = _extract_attributes(offering_user)
 
@@ -277,7 +318,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
         body = self._build_request(waldur_username, filtered)
 
         try:
-            identity_bridge.sync(client=self._http_client, body=body)
+            self._sync_identity_bridge(waldur_username, body)
         except errors.UnexpectedStatus as e:
             if e.status_code != 400:
                 raise
@@ -288,12 +329,22 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
             self._allowed_fields_cache = self._fetch_allowed_fields()
             filtered = self._filter_attributes(attributes)
             body = self._build_request(waldur_username, filtered)
-            identity_bridge.sync(client=self._http_client, body=body)
+            self._sync_identity_bridge(waldur_username, body)
 
     def _remove_user_from_identity_bridge(self, username: str) -> None:
-        """POST /api/identity-bridge/remove/ on Waldur B."""
+        """POST /api/identity-bridge/remove/ on Waldur B.
+
+        Raises:
+            IdentityBridgePrivilegedAccountError: the user is a staff, support
+                or identity manager account and the agent is not staff.
+        """
         body = IdentityBridgeRemoveRequest(
             username=username,
             source=self.identity_bridge_source,
         )
-        identity_bridge_remove.sync(client=self._http_client, body=body)
+        try:
+            identity_bridge_remove.sync(client=self._http_client, body=body)
+        except errors.UnexpectedStatus as e:
+            if is_privileged_account_refusal(e.status_code, e.content):
+                raise IdentityBridgePrivilegedAccountError(username) from e
+            raise

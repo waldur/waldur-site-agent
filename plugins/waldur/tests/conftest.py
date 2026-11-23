@@ -3,6 +3,16 @@
 from waldur_site_agent.testing.pytest_heartbeat import isolated_heartbeat  # noqa: F401
 import pytest
 
+from waldur_site_agent_waldur.privileged_accounts import privileged_accounts
+
+
+@pytest.fixture(autouse=True)
+def _clear_privileged_accounts():
+    """The privileged-account record is process-wide: start each test empty."""
+    privileged_accounts.clear()
+    yield
+    privileged_accounts.clear()
+
 
 @pytest.fixture()
 def backend_components_with_conversion():

@@ -57,6 +57,10 @@ from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import Association, ClientResource
 from waldur_site_agent.common import static_token_prefix
+from waldur_site_agent_waldur.privileged_accounts import (
+    IdentityBridgePrivilegedAccountError,
+    is_privileged_account_refusal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -696,6 +700,12 @@ class WaldurClient(BaseClient):
 
         Returns:
             User UUID on Waldur B, or None on error.
+
+        Raises:
+            IdentityBridgePrivilegedAccountError: Waldur B refused the user
+                because it is a staff, support or identity manager account
+                and the caller is not staff. That is expected, so it is
+                raised for the caller to report, not logged here.
         """
         try:
             payload: dict = {"username": username, "source": source}
@@ -709,6 +719,8 @@ class WaldurClient(BaseClient):
                 "/api/identity-bridge/",
                 json=payload,
             )
+            if is_privileged_account_refusal(response.status_code, response.text):
+                raise IdentityBridgePrivilegedAccountError(username)
             if response.status_code >= 400:
                 logger.error(
                     "Identity bridge error %s: %s (payload: %s)",
@@ -719,6 +731,8 @@ class WaldurClient(BaseClient):
             uuid_str = data.get("uuid")
             if uuid_str:
                 return UUID(str(uuid_str))
+        except IdentityBridgePrivilegedAccountError:
+            raise
         except Exception:
             logger.exception(
                 "Failed to resolve user via identity bridge: %s", username
