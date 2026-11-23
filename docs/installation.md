@@ -112,11 +112,28 @@ For the pip install below, use `/opt/waldur-agent/venv/bin/python` instead.
 
 ### Alternative: a virtual environment with pip
 
-If uv is not an option, use a virtual environment (Python 3.9.2 or newer) and link the
-commands into `/usr/local/bin`:
+If uv is not an option, use a virtual environment (Python 3.10 or newer) and link the
+commands into `/usr/local/bin`. Rocky Linux 9's `python3` is 3.9, which is too old:
+pip would not fail but quietly install the last release that still supported 3.9, so
+create the environment with Python 3.12 there:
+
+=== "Ubuntu 24.04"
+
+    ```bash
+    sudo apt install -y python3-venv
+    sudo python3 -m venv /opt/waldur-agent/venv
+    ```
+
+=== "Rocky Linux 9"
+
+    ```bash
+    sudo dnf install -y python3.12
+    sudo python3.12 -m venv /opt/waldur-agent/venv
+    ```
+
+Then install the agent and its plugins into it:
 
 ```bash
-sudo python3 -m venv /opt/waldur-agent/venv
 sudo /opt/waldur-agent/venv/bin/pip install \
   waldur-site-agent waldur-site-agent-slurm waldur-site-agent-basic-username-management
 sudo ln -sf /opt/waldur-agent/venv/bin/waldur_* /usr/local/bin/

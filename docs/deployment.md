@@ -39,6 +39,38 @@ The agent can run in 4 different modes, deployed as separate systemd services:
 
 **Note**: Only one combination can be active at a time.
 
+## One-shot usage report
+
+`waldur_site_report -c /etc/waldur/waldur-site-agent-config.yaml` runs the same usage report as
+`agent-report` and exits. The exit status is non-zero when any offering fails, so a timer
+or cron job can alert on it. Use it when the report has to run at a fixed time, and leave
+`waldur-agent-report.service` disabled. Running both pushes usage twice.
+
+The command does not write the liveness heartbeat. On a host that also runs a daemon,
+that run must not refresh the daemon's heartbeat file, or a stalled daemon keeps
+looking alive.
+
+Waldur leaves a usage-reporting agent Active between runs. The report service
+does not go idle, and the offering's usage-reporting integration does not go
+disconnected, however long the gap is. The processor's last run and the
+integration row's last request time are the record of the last report. The
+other agent services still go idle after 10 minutes without a processor run,
+and the other integration rows still go disconnected after an hour without a
+request. A failed report is this command's non-zero exit, which the timer or
+cron can alert on.
+
+A systemd timer that starts a oneshot service does not start a second run while the
+first is still active. Cron does not. Wrap the command so a slow run cannot overlap
+the next one:
+
+```bash
+15 6 * * * flock -n /run/waldur-site-report.lock \
+  waldur_site_report -c /etc/waldur/waldur-site-agent-config.yaml
+```
+
+`flock -n` does not start the report when the lock is held, and it exits non-zero.
+An alert on any non-zero status also fires while a run is still going.
+
 ## Systemd Service Setup
 
 ### Download Service Files

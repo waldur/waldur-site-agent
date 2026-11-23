@@ -4,7 +4,6 @@ This module implements the BaseBackend interface for the custom backend.
 See docs/plugin-development-guide.md for full documentation.
 """
 
-from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
@@ -125,7 +124,7 @@ class MyCustomBackend(BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Perform actions before resource creation.
 

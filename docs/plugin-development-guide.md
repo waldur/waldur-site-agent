@@ -415,7 +415,7 @@ config via `username_management_backend`.
 | Method | Purpose |
 |---|---|
 | `generate_username(offering_user) -> str` | Create a new local username. Return `""` if generation is not supported. |
-| `get_username(offering_user) -> Optional[str]` | Look up the existing local username for the user, or `None`. |
+| `get_username(offering_user) -> str \| None` | Look up the existing local username for the user, or `None`. |
 
 `get_or_create_username` is provided by the base class and calls
 `get_username` first, then `generate_username` only if no username is
@@ -1030,7 +1030,7 @@ of them.
 `scripts/generate_reference_docs.py --check` (run by `tests/test_reference_docs.py`)
 fails when a top-level field of your settings schema is not mentioned in the
 plugin README. It does not descend into a nested model: a
-`prometheus: Optional[PrometheusSettingsSchema]` field is checked as the single
+`prometheus: PrometheusSettingsSchema | None` field is checked as the single
 name `prometheus`, and the nested model's own fields are invisible to it.
 Document those by hand in the plugin README, and give the nested model
 `model_config = ConfigDict(extra="forbid")` so a misspelt key is reported against

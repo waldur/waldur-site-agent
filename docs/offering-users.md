@@ -123,7 +123,7 @@ class CustomUsernameBackend(AbstractUsernameManagementBackend):
         # Custom logic here
         return generated_username
 
-    def get_username(self, offering_user: OfferingUser) -> Optional[str]:
+    def get_username(self, offering_user: OfferingUser) -> str | None:
         """Retrieve existing username from local identity provider."""
         # Custom lookup logic here
         return existing_username
@@ -306,11 +306,17 @@ offerings:
 1. **Service Provider Username Generation**: The agent generates usernames only
    when the offering's `username_generation_policy` is `service_provider`. Under
    every other policy Waldur assigns the usernames and this workflow does not run.
-2. **Service provider may create offering users**: under the `service_provider`
-   policy, the offering's plugin option `service_provider_can_create_offering_user`
-   must be `true`. Without it the agent logs an error and skips both username
+2. **Service provider may create offering users**: the offering's plugin option
+   `service_provider_can_create_offering_user` decides whether Waldur creates new
+   offering users, under every username policy — without it a new project member
+   gets none, and membership sync skips that member. Identity-bridge backends, such
+   as Waldur federation on its default `user_resolve_method`, are the exception:
+   they match members by their Waldur identity, so the option does not keep anyone
+   out of them. Under the `service_provider` policy the agent also checks the option
+   itself: when it is not `true` the agent logs an error and skips both username
    generation and membership sync for the offering — no backend associations are
-   created.
+   created. Under the other policies the agent does not check it and logs no error
+   about it.
 3. **Backend Plugin**: Appropriate username management backend must be installed and configured
 4. **Permissions**: API token user must have **OFFERING.MANAGER** role on the offering
    (grants permissions to manage offering users, orders, and agent identities)
