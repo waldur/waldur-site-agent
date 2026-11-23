@@ -1538,8 +1538,9 @@ class SlurmBackend(backends.BaseBackend):
             self.cancel_active_jobs_for_account_user(resource_backend_id, username)
 
     def _pre_delete_resource(self, waldur_resource: WaldurResource) -> None:
-        """Delete all existing associations, cancel jobs, and clean up LDAP/QoS."""
+        """Block submissions, cancel jobs, delete associations, and clean up LDAP/QoS."""
         backend_id = waldur_resource.backend_id
+        self._block_submissions_before_delete(backend_id)
         if self.client.account_has_users(backend_id):
             logger.info("Cancelling all active jobs for account %s", backend_id)
             self.client.cancel_active_user_jobs(backend_id)
@@ -1562,6 +1563,30 @@ class SlurmBackend(backends.BaseBackend):
                 logger.info("Deleted LDAP project group %s", backend_id)
             except BackendError:
                 logger.exception("Failed to delete LDAP project group %s", backend_id)
+
+    def _block_submissions_before_delete(self, backend_id: str) -> None:
+        """Pause the account before it is torn down.
+
+        If the removal that follows fails (slurmdbd answers "Job(s) active,
+        cancel job(s) before remove" while it still counts a job as running),
+        the account would otherwise stay open and its users could keep
+        submitting jobs until a later attempt succeeds. The pause goes through
+        the configured lever (``GrpSubmitJobs=0`` or ``qos_paused``), which
+        ``restore_resource`` undoes if the resource is kept after all. It is
+        best effort: failing to pause must not stop the termination.
+        """
+        try:
+            if not self.pause_resource(backend_id):
+                logger.warning(
+                    "Account %s was not paused before deletion; new submissions stay "
+                    "possible until it is removed",
+                    backend_id,
+                )
+        except BackendError:
+            logger.exception("Failed to pause account %s before deletion", backend_id)
+        # pause_resource caches the QoS it set for get_resource_metadata; this
+        # account is going away, so it must not be reported for the next one.
+        self._last_qos = None
 
     def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
         """Get account (or QoS) limits converted to Waldur-readable values."""

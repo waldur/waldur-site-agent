@@ -747,9 +747,22 @@ sacct --noconvert --truncate --allocations --allusers \
   --starttime=2024-01-01T00:00:00 --endtime=2024-01-31T23:59:59 \
   --accounts=hpc_alloc1 --format=Account,ReqTRES,Elapsed,User
 
-# Termination
+# Termination: pause first (the configured lever), then cancel jobs and remove
+sacctmgr modify account hpc_alloc1 set GrpSubmitJobs=0   # or: set qos=<qos_paused>
 scancel -A hpc_alloc1 -f
+sacctmgr remove user where account=hpc_alloc1
+sacctmgr remove account where name=hpc_alloc1
 ```
+
+Termination pauses the account before it cancels jobs and removes it. slurmdbd
+refuses the removal while it still counts a job as running ("Job(s) active,
+cancel job(s) before remove"); the order then fails and is retried, and the
+pause keeps the account closed to new jobs until then. On offerings with
+`supports_pausing`, Waldur keeps a resource paused from its project's or its own
+end date until it is terminated, so the next status sync does not lift it. With `qos_management.skip_qos_swap: true` or QoS
+enforcement the pause is `GrpSubmitJobs=0`, which leaves the QoS of queued jobs
+alone; otherwise it swaps the account to `qos_paused`, and without either lever
+the account is not paused.
 
 ## Testing
 
