@@ -12,3 +12,7 @@ poetry.lock
 ci/db-cache/
 waldur-site-agent-config.yaml
 ci/sssd-demo/.agent-config.local.yaml
+
+# E2E reports written by the test runs (CI keeps them as job artifacts)
+plugins/slurm/tests/e2e/*-report.md
+plugins/slurm/tests/e2e/*-report.json

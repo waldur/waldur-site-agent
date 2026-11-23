@@ -550,6 +550,7 @@ Run mypy (3.9):
       $E2E_PYTEST --junitxml=e2e-report-rest.xml \
         plugins/slurm/tests/e2e/test_e2e_api_optimizations.py \
         plugins/slurm/tests/e2e/test_e2e_benchmark.py \
+        plugins/slurm/tests/e2e/test_e2e_config_from_waldur.py \
         plugins/slurm/tests/e2e/test_e2e_default_account_policy.py \
         plugins/slurm/tests/e2e/test_e2e_membership_stale.py \
         plugins/slurm/tests/e2e/test_e2e_order_reconciliation.py \
