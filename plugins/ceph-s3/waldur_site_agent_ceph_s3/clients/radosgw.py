@@ -10,14 +10,14 @@ that. ``_ERROR_CODES`` below carries the measured response codes.
 import datetime
 import logging
 import re
-from typing import Any, Iterator, Optional
+from collections.abc import Iterator
+from typing import Any
 from urllib.parse import quote
 
 import httpx
 from botocore.auth import S3SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
-
 from waldur_site_agent.backend.exceptions import BackendError
 
 from ..exceptions import (
@@ -111,7 +111,7 @@ class RadosGWClient(BaseS3AdminClient):
         """
         return {"Admin Ops URL": self.base_url, "Signing region": self._region}
 
-    def _build_url(self, endpoint: str, params: Optional[dict] = None) -> str:
+    def _build_url(self, endpoint: str, params: dict | None = None) -> str:
         """Compose the signed URL.
 
         Values are percent-encoded rather than form-encoded: a "+" standing in
@@ -125,7 +125,7 @@ class RadosGWClient(BaseS3AdminClient):
         )
         return f"{self.base_url}{endpoint}" + (f"?{query}" if query else "")
 
-    def _auth_headers(self, method: str, url: str, body: Optional[bytes]) -> dict:
+    def _auth_headers(self, method: str, url: str, body: bytes | None) -> dict:
         """Sign the request with SigV4.
 
         S3SigV4Auth rather than the generic SigV4Auth: RGW requires
@@ -173,7 +173,7 @@ class RadosGWClient(BaseS3AdminClient):
         return True
 
     def create_user(
-        self, uid: str, name: str, email: Optional[str] = None, **kwargs: object
+        self, uid: str, name: str, email: str | None = None, **kwargs: object
     ) -> dict:
         """Create an S3 user holding only the key pair Waldur issued.
 
@@ -572,7 +572,7 @@ class RadosGWClient(BaseS3AdminClient):
         }
 
     def create_account(
-        self, name: str, email: Optional[str] = None, tenant: str = ""
+        self, name: str, email: str | None = None, tenant: str = ""
     ) -> dict:
         """Create an RGW account; the gateway picks its id.
 
@@ -594,8 +594,8 @@ class RadosGWClient(BaseS3AdminClient):
 
     def get_account(
         self,
-        account_id: Optional[str] = None,
-        name: Optional[str] = None,
+        account_id: str | None = None,
+        name: str | None = None,
         tenant: str = "",
     ) -> dict:
         """Read one account by id or, failing that, by name within its tenant.

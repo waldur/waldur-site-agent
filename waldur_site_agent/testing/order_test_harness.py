@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -23,11 +23,11 @@ class TestResult(BaseModel):
     success: bool
     order_uuid: str
     order_type: str
-    resource_name: Optional[str] = None
+    resource_name: str | None = None
     backend_operations: list[dict[str, Any]] = []
     errors: list[str] = []
     warnings: list[str] = []
-    execution_time_seconds: Optional[float] = None
+    execution_time_seconds: float | None = None
 
 
 class OrderTestHarness:
@@ -36,7 +36,7 @@ class OrderTestHarness:
     def __init__(
         self,
         config_path: str | Path,
-        template_dir: Optional[str | Path] = None,
+        template_dir: str | Path | None = None,
         use_mock_backend: bool = True,
     ) -> None:
         """Initialize the order test harness.
@@ -58,7 +58,7 @@ class OrderTestHarness:
         self.template_engine = OrderTemplateEngine(template_dir)
 
         # Mock backend instance for testing
-        self._mock_backend: Optional[MockBackend] = None
+        self._mock_backend: MockBackend | None = None
 
     def _get_test_backend(self, offering: structures.Offering) -> MockBackend | Any:  # noqa: ANN401
         """Get backend for testing - either mock or real backend.
@@ -123,7 +123,7 @@ class OrderTestHarness:
     def test_order_from_template(
         self,
         template_name: str,
-        offering_uuid: Optional[str] = None,
+        offering_uuid: str | None = None,
         **template_vars: Any,  # noqa: ANN401
     ) -> TestResult:
         """Test order processing from a template.
@@ -178,7 +178,7 @@ class OrderTestHarness:
         return self._test_order(order, offering=offering)
 
     def _test_order(
-        self, order: OrderDetails, offering: Optional[structures.Offering] = None
+        self, order: OrderDetails, offering: structures.Offering | None = None
     ) -> TestResult:
         """Execute order processing test.
 

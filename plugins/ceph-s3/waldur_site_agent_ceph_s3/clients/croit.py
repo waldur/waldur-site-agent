@@ -5,11 +5,10 @@ Endpoint shapes verified against croit 2503 (OpenAPI 3.1).
 
 import logging
 import time
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-
 from waldur_site_agent.backend.exceptions import BackendError
 
 from ..exceptions import (
@@ -58,9 +57,9 @@ class CroitClient(BaseS3AdminClient):
     def __init__(
         self,
         api_url: str,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
-        token: Optional[str] = None,
+        username: str | None = None,
+        password: str | None = None,
+        token: str | None = None,
         verify_ssl: bool = True,
         timeout: int = 30,
     ) -> None:
@@ -79,7 +78,7 @@ class CroitClient(BaseS3AdminClient):
         self.username = username
         self.password = password
         self.token = token
-        self._session_token: Optional[str] = None
+        self._session_token: str | None = None
         self._session_token_expires_at = 0.0
 
         headers = {
@@ -103,7 +102,7 @@ class CroitClient(BaseS3AdminClient):
         """What to show an operator diagnosing this client."""
         return {"API URL": self.api_url, "Username": self.username}
 
-    def _build_url(self, endpoint: str, params: Optional[dict] = None) -> str:
+    def _build_url(self, endpoint: str, params: dict | None = None) -> str:
         """Resolve an endpoint against the /api base, letting httpx encode the query."""
         url = f"{self.api_url}{endpoint}"
         if params:
@@ -119,7 +118,7 @@ class CroitClient(BaseS3AdminClient):
         """
         return f"/s3/users/{cls._validate_uid(uid).replace('$', '%24')}{suffix}"
 
-    def _auth_headers(self, method: str, url: str, body: Optional[bytes]) -> dict:
+    def _auth_headers(self, method: str, url: str, body: bytes | None) -> dict:
         """A session token for username/password auth; an API token rides the session.
 
         croit answers HTTP Basic on its API endpoints with 401: Basic is accepted
@@ -141,8 +140,8 @@ class CroitClient(BaseS3AdminClient):
         self,
         method: str,
         endpoint: str,
-        json_data: Optional[dict] = None,
-        params: Optional[dict] = None,
+        json_data: dict | None = None,
+        params: dict | None = None,
     ) -> httpx.Response:
         """Send one request, logging in again once if croit dropped the session.
 
@@ -253,7 +252,7 @@ class CroitClient(BaseS3AdminClient):
             return False
 
     def create_user(
-        self, uid: str, name: str, email: Optional[str] = None, **kwargs
+        self, uid: str, name: str, email: str | None = None, **kwargs
     ) -> dict:
         """Create new S3 user.
 
@@ -678,7 +677,7 @@ class CroitClient(BaseS3AdminClient):
         graph: str,
         template_key: str,
         name: str,
-        plot_name: Optional[str],
+        plot_name: str | None,
         start_time: int,
         end_time: int,
     ) -> list[dict]:
@@ -736,7 +735,7 @@ class CroitClient(BaseS3AdminClient):
         return points
 
     @staticmethod
-    def _stats_query_name(uid: str) -> Optional[str]:
+    def _stats_query_name(uid: str) -> str | None:
         """The value croit's statistics know a user by, for the graph template.
 
         For an untenanted user that is the uid itself, as measured. croit refuses

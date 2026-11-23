@@ -16,7 +16,8 @@ it, which for Azure means paying for a second machine.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.structures import Association, ClientResource
@@ -41,7 +42,7 @@ class AzureCoreClient(BaseClient):
             for vm in self.azure_client.compute.list_all_virtual_machines()
         ]
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Return the resource with this ARM id, or None when it is gone.
 
         Only a 404 counts as absence. Any other failure is re-raised: reporting
@@ -80,7 +81,7 @@ class AzureCoreClient(BaseClient):
         name: str,
         description: str,
         organization: str,
-        parent_name: Optional[str] = None,
+        parent_name: str | None = None,
     ) -> str:
         """Not supported: creation needs the network objects the backend builds."""
         raise self._unsupported("create resources")
@@ -91,7 +92,7 @@ class AzureCoreClient(BaseClient):
 
     def set_resource_limits(
         self, resource_id: str, limits_dict: dict[str, int]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Not supported: resizing a machine is not implemented yet."""
         raise self._unsupported("set limits on resources")
 
@@ -114,13 +115,13 @@ class AzureCoreClient(BaseClient):
     # core calls these on every order that has offering users, and on every
     # membership sync pass, so raising here would log a failure per resource per
     # pass while changing nothing. Reporting "nothing to do" is the truth.
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Report no association: machine access is the SSH key, not membership."""
         del user, resource_id
         return None
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Do nothing: machine access is the SSH key, not membership."""
         del resource_id, default_account
@@ -132,7 +133,7 @@ class AzureCoreClient(BaseClient):
         return username
 
     def get_usage_report(
-        self, resource_ids: list[str], timezone: Optional[str] = None
+        self, resource_ids: list[str], timezone: str | None = None
     ) -> list:
         """Not supported: metering is not implemented yet."""
         raise self._unsupported("report usage for resources")

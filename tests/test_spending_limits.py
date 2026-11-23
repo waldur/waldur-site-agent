@@ -9,7 +9,7 @@ import datetime
 import unittest
 import uuid
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any
 from unittest import mock
 
 from waldur_api_client.models.billing_type_enum import BillingTypeEnum
@@ -125,7 +125,7 @@ class TestResourceUsagePerDay(unittest.TestCase):
         )
         return processor
 
-    def _submit(self, mock_set: mock.Mock, daily: Optional[dict]) -> dict:
+    def _submit(self, mock_set: mock.Mock, daily: dict | None) -> dict:
         resource = SimpleNamespace(uuid=uuid.uuid4(), backend_id="res-1")
         self._processor()._submit_total_usage_for_resource(
             resource,
@@ -210,7 +210,7 @@ class TestApiKeyDailyUsageWarning(unittest.TestCase):
         self,
         options: dict,
         backend: Any = None,  # noqa: ANN401
-        components: Optional[list] = None,
+        components: list | None = None,
     ) -> None:
         processor = object.__new__(OfferingReportProcessor)
         processor.offering = SimpleNamespace(uuid="offering-uuid")  # type: ignore[assignment]

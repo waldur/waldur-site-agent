@@ -2,7 +2,6 @@
 
 import abc
 import subprocess
-from typing import Optional
 
 from waldur_site_agent.backend import logger
 from waldur_site_agent.backend.exceptions import (
@@ -48,7 +47,7 @@ class BaseClient:
         """
 
     @abc.abstractmethod
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get a single resource by its backend ID.
 
         Args:
@@ -61,7 +60,7 @@ class BaseClient:
 
     @abc.abstractmethod
     def create_resource(
-        self, name: str, description: str, organization: str, parent_name: Optional[str] = None
+        self, name: str, description: str, organization: str, parent_name: str | None = None
     ) -> str:
         """Create a new resource (account/allocation) on the backend.
 
@@ -93,7 +92,7 @@ class BaseClient:
         """
 
     @abc.abstractmethod
-    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> str | None:
         """Set resource limits on the backend.
 
         Args:
@@ -152,7 +151,7 @@ class BaseClient:
         """
 
     @abc.abstractmethod
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Get association between a user and a resource.
 
         Args:
@@ -166,7 +165,7 @@ class BaseClient:
 
     @abc.abstractmethod
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Create an association between a user and a resource.
 
@@ -198,7 +197,7 @@ class BaseClient:
         """
 
     @abc.abstractmethod
-    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: str | None = None) -> list:
         """Get raw usage records from the backend.
 
         This returns raw backend-specific data structures that are then processed
@@ -237,12 +236,12 @@ class UnknownClient(BaseClient):
         """Get accounts list."""
         return []
 
-    def get_resource(self, _: str) -> Optional[ClientResource]:
+    def get_resource(self, _: str) -> ClientResource | None:
         """Get resource info."""
         return None
 
     def create_resource(
-        self, name: str, description: str, organization: str, parent_name: Optional[str] = None
+        self, name: str, description: str, organization: str, parent_name: str | None = None
     ) -> str:
         """Create resource in the cluster."""
         del description, organization, parent_name
@@ -252,7 +251,7 @@ class UnknownClient(BaseClient):
         """Delete resource from the cluster."""
         return name
 
-    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> str | None:
         """Set resource limits."""
         del resource_id, limits_dict
         return ""
@@ -272,13 +271,13 @@ class UnknownClient(BaseClient):
         del resource_id, username, limits_dict
         return ""
 
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Get association between user and account."""
         del user, resource_id
         return None
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Create association between user and account."""
         del resource_id, default_account
@@ -289,7 +288,7 @@ class UnknownClient(BaseClient):
         del resource_id
         return username
 
-    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: str | None = None) -> list:
         """Get usages records."""
         del timezone
         return resource_ids

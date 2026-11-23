@@ -9,7 +9,7 @@ keep the two apart. The same ID must reach both ``lfs setquota -p`` and
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -35,7 +35,7 @@ _CPU_COMPONENTS = {
 _GID = 10136
 
 
-def _backend(lustre_quota: Optional[dict[str, Any]] = None) -> SlurmBackend:
+def _backend(lustre_quota: dict[str, Any] | None = None) -> SlurmBackend:
     quota: dict[str, Any] = {"mount_point": "/nfs", "block_hardlimit": 2147483648}
     if lustre_quota:
         quota.update(lustre_quota)

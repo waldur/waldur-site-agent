@@ -13,12 +13,11 @@ which code paths are taken during create, delete, and usage reporting.
 import logging
 import os
 import secrets
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID
 
 import yaml
 from waldur_api_client.models.resource import Resource as WaldurResource
-
 from waldur_site_agent.backend.backends import BaseBackend
 from waldur_site_agent.backend.exceptions import BackendError, UserNotProvisionedError
 from waldur_site_agent.backend.structures import BackendResourceInfo
@@ -103,13 +102,13 @@ class OpenNebulaBackend(BaseBackend):
         )
 
         # Stores network config between _pre_create_resource and _create_backend_resource
-        self._pending_network_config: Optional[dict[str, Any]] = None
+        self._pending_network_config: dict[str, Any] | None = None
         # Stores network metadata after creation for get_resource_metadata
         self._resource_network_metadata: dict[str, dict[str, Any]] = {}
         # Stores VM creation context between _pre_create_resource and _create_backend_resource
-        self._pending_vm_config: Optional[dict[str, Any]] = None
+        self._pending_vm_config: dict[str, Any] | None = None
         # Stores current waldur_resource for use in _create_vdc_resource
-        self._current_waldur_resource: Optional[WaldurResource] = None
+        self._current_waldur_resource: WaldurResource | None = None
 
         # Initialize Keycloak client if configured
         self.keycloak_client = None
@@ -173,8 +172,8 @@ class OpenNebulaBackend(BaseBackend):
     @staticmethod
     def _build_network_config(
         waldur_resource: WaldurResource,
-        backend_settings: Optional[dict[str, Any]] = None,
-    ) -> Optional[dict[str, Any]]:
+        backend_settings: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """Build network configuration from Waldur resource.
 
         Reads infrastructure config from offering_plugin_options (Waldur side)
@@ -259,7 +258,7 @@ class OpenNebulaBackend(BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Prepare creation context based on resource_type.
 
@@ -341,7 +340,7 @@ class OpenNebulaBackend(BaseBackend):
     def _build_vm_config(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> dict[str, Any]:
         """Extract VM creation parameters from Waldur resource attributes.
 
@@ -513,7 +512,7 @@ class OpenNebulaBackend(BaseBackend):
         resource_backend_id: str,
         resource_name: str,
         resource_organization: str,
-        resource_parent_name: Optional[str] = None,
+        resource_parent_name: str | None = None,
     ) -> bool:
         """Create a VDC resource.
 
@@ -539,7 +538,7 @@ class OpenNebulaBackend(BaseBackend):
         resource_backend_id: str,
         resource_name: str,
         resource_organization: str,
-        resource_parent_name: Optional[str] = None,
+        resource_parent_name: str | None = None,
     ) -> bool:
         """Create a VDC with optional networking and Keycloak SAML integration."""
         if self.client.get_resource(resource_backend_id) is None:
@@ -564,7 +563,7 @@ class OpenNebulaBackend(BaseBackend):
                 try:
                     slug = self._get_resource_slug(self._current_waldur_resource)
                     vdc_resource = self.client._get_vdc_by_name(resource_backend_id)
-                    vdc_id: Optional[int] = (
+                    vdc_id: int | None = (
                         getattr(vdc_resource, "ID", None) if vdc_resource else None
                     )
 
@@ -633,7 +632,7 @@ class OpenNebulaBackend(BaseBackend):
 
     @staticmethod
     def _build_inference_endpoint_metadata(
-        ip_address: Optional[str], vm_config: dict[str, Any]
+        ip_address: str | None, vm_config: dict[str, Any]
     ) -> dict[str, Any]:
         """Build OpenAI-compatible endpoint metadata for an inference VM.
 
@@ -675,7 +674,7 @@ class OpenNebulaBackend(BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> BackendResourceInfo:
         """Override for VM mode: use the numeric VM ID as backend_id."""
         if self.resource_type != "vm":
@@ -708,7 +707,7 @@ class OpenNebulaBackend(BaseBackend):
         self,
         resource: BackendResourceInfo,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Post-creation actions.
 
@@ -1226,7 +1225,7 @@ class OpenNebulaBackend(BaseBackend):
 
     def _find_vdc_role_group(
         self, slug: str, role_name: str
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Find a Keycloak role group under the VDC parent group.
 
         Looks up the parent group ``vdc_{slug}`` and then searches its

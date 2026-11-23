@@ -23,10 +23,8 @@ its buckets and none of it to the account's users.
 import json
 import os
 from decimal import Decimal
-from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
-
 from waldur_site_agent.backend import structures
 from waldur_site_agent.backend.exceptions import BackendError
 
@@ -181,7 +179,7 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
 
     def _apply_usage_policy(
         self, resource_backend_id: str, info: structures.BackendResourceInfo
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Keep measured usage, and drop the resource when there was none.
 
         The base implementation fills every component with 0 when
@@ -210,7 +208,7 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
     def _integrate_gb_days(
         datapoints: list[dict],
         unit_factor: int,
-        period_end: Optional[int] = None,
+        period_end: int | None = None,
     ) -> Decimal:
         """Area under the storage curve, in component units × days.
 
@@ -235,7 +233,7 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
         """
         divisor = Decimal(str(unit_factor)) if unit_factor > 0 else Decimal(1)
         total = Decimal(0)
-        last: Optional[Decimal] = None
+        last: Decimal | None = None
 
         boundaries = [point["t"] for point in datapoints]
         if period_end is not None and len(boundaries) >= 2:
@@ -293,7 +291,7 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
         resource_backend_ids: list[str],
         year: int,
         month: int,
-        waldur_resource: Optional[WaldurResource] = None,
+        waldur_resource: WaldurResource | None = None,
     ) -> dict:
         """Recompute a past month's GB-days with both window ends pinned.
 

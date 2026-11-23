@@ -16,12 +16,12 @@ import logging
 import re
 import secrets
 import string
+from collections.abc import Iterator
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Iterator, Optional
+from typing import Any
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.types import Unset
-
 from waldur_site_agent.backend import (
     DEFAULT_RESOURCE_KEY_COUNT,
     BackendType,
@@ -35,9 +35,9 @@ from .clients.croit import CroitClient
 from .clients.iam import AccountIamClient
 from .clients.radosgw import RadosGWClient
 from .exceptions import (
-    CephS3APIError,
     CephS3AccountExistsError,
     CephS3AccountNotFoundError,
+    CephS3APIError,
     CephS3AuthenticationError,
     CephS3Error,
     CephS3UserExistsError,
@@ -428,7 +428,7 @@ class CephS3Backend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict[Any, Any]] = None,
+        user_context: dict[Any, Any] | None = None,
     ) -> structures.BackendResourceInfo:
         """Create the S3 user under the backend id the order processor generated.
 
@@ -970,7 +970,7 @@ class CephS3Backend(backends.BaseBackend):
         self,
         client_id: str,
         resource_backend_id: str,
-        known_client_ids: Optional[list[str]] = None,
+        known_client_ids: list[str] | None = None,
     ) -> dict:
         """Mint a fresh pair for the S3 user, then drop the old access key.
 
@@ -1264,7 +1264,7 @@ class CephS3Backend(backends.BaseBackend):
 
     def _pull_backend_resource(
         self, resource_backend_id: str
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Pull resource data, without substituting zero for absent usage.
 
         The base fills every component with 0 when ``_get_usage_report`` omits a
@@ -1283,7 +1283,7 @@ class CephS3Backend(backends.BaseBackend):
 
     def _apply_usage_policy(
         self, resource_backend_id: str, info: structures.BackendResourceInfo
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Decide what usage, if any, this pull may carry.
 
         A separate hook so that both the "never zero" rule and the subclass that
@@ -1480,7 +1480,7 @@ class CephS3Backend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Nothing to do before creating an S3 user.
 

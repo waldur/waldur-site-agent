@@ -1,6 +1,5 @@
 """Keycloak client for managing user groups and memberships."""
 
-from typing import Optional
 
 from keycloak import KeycloakAdmin, KeycloakOpenIDConnection
 from keycloak.exceptions import KeycloakError
@@ -54,7 +53,7 @@ class KeycloakClient:
             logger.error(f"Failed to ping Keycloak: {e}")
             return False
 
-    def find_user_by_username(self, username: str) -> Optional[dict]:
+    def find_user_by_username(self, username: str) -> dict | None:
         """Find user by username."""
         try:
             users = self.keycloak_admin.get_users({"username": username, "exact": True})
@@ -63,7 +62,7 @@ class KeycloakClient:
             logger.warning(f"Failed to find user {username}: {e}")
             return None
 
-    def find_user_by_id(self, user_id: str) -> Optional[dict]:
+    def find_user_by_id(self, user_id: str) -> dict | None:
         """Find user by ID."""
         try:
             # In Keycloak, the user ID might be stored as username
@@ -82,14 +81,14 @@ class KeycloakClient:
             logger.warning(f"Failed to find user {user_id}: {e}")
             return None
 
-    def find_user(self, user_identifier: str, use_id: bool = True) -> Optional[dict]:
+    def find_user(self, user_identifier: str, use_id: bool = True) -> dict | None:
         """Find user by ID or username based on configuration."""
         if use_id:
             return self.find_user_by_id(user_identifier)
         return self.find_user_by_username(user_identifier)
 
     def create_group(
-        self, group_name: str, description: str = "", parent_id: Optional[str] = None
+        self, group_name: str, description: str = "", parent_id: str | None = None
     ) -> str:
         """Create a new group."""
         try:
@@ -115,7 +114,7 @@ class KeycloakClient:
             logger.error(f"Failed to create group {group_name}: {e}")
             raise BackendError(f"Failed to create group {group_name}: {e}") from e
 
-    def get_group_by_name(self, group_name: str) -> Optional[dict]:
+    def get_group_by_name(self, group_name: str) -> dict | None:
         """Get group by name."""
         try:
             groups = self.keycloak_admin.get_groups()
@@ -132,7 +131,7 @@ class KeycloakClient:
             logger.warning(f"Failed to find group {group_name}: {e}")
             return None
 
-    def get_group_by_id(self, group_id: str) -> Optional[dict]:
+    def get_group_by_id(self, group_id: str) -> dict | None:
         """Get group by ID."""
         try:
             return self.keycloak_admin.get_group(group_id)

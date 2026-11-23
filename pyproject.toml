@@ -3,7 +3,7 @@ name = "waldur-site-agent"
 version = "1.0.8rc15"
 description = "Agent for integrating service provider's site with Waldur Mastermind."
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
-requires-python = ">=3.9.2, <4.0"
+requires-python = ">=3.10, <4"
 readme = "README.md"
 license = "MIT"
 classifiers = [
@@ -20,7 +20,6 @@ dependencies = [
     "stomp-py>=8.2.0,<9",
     # SOCKS proxies for the STOMP WebSocket (websocket-client uses python-socks).
     "python-socks>=2.4,<3",
-    "importlib-metadata>=8.7.0 ; python_full_version == '3.9.*'",
     "pydantic>=2.0.0",
     "structlog>=25.4.0",
     "waldur-api-client==8.1.3rc23.dev20261010084617",
@@ -86,6 +85,7 @@ markdown.help = "Run markdown checks"
 
 [tool.ruff]
 exclude = ["ci/override.conf.py"]
+target-version = "py310"
 lint.extend-select = ["UP"]
 lint.select = ["ALL"]
 lint.ignore = [
@@ -116,8 +116,7 @@ lint.ignore = [
   "PLR0915",
   "PLR0912",
   "B012",
-  "TRY300",
-  "FA102"
+  "TRY300"
 ] # These rules are ignored
 lint.extend-ignore = [
   "COM812",
@@ -161,9 +160,6 @@ convention = "google"
 
 [tool.ruff.lint.isort]
 known-first-party = []
-
-[tool.ruff.lint.pyupgrade]
-keep-runtime-typing = true
 
 [tool.pytest.ini_options]
 addopts = "--cov=waldur_site_agent/"

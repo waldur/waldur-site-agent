@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from types import SimpleNamespace
-from typing import Optional
 from unittest import mock
 
 import pytest
@@ -43,7 +42,7 @@ def _today():
         yield
 
 
-def _make_backend(settings: Optional[dict] = None) -> LiteLLMBackend:
+def _make_backend(settings: dict | None = None) -> LiteLLMBackend:
     with (
         mock.patch("waldur_site_agent_litellm.backend.LiteLLMClient"),
         mock.patch("waldur_site_agent_litellm.backend.OpenWebUIClient"),
@@ -72,7 +71,7 @@ def _managed_user(email: str = EMAIL, username: str = USERNAME, resource: str = 
     }
 
 
-def _period(resource: str, start: Optional[str], end: Optional[str]) -> dict:
+def _period(resource: str, start: str | None, end: str | None) -> dict:
     return {"resource": resource, "from": start, "to": end}
 
 

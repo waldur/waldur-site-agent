@@ -9,7 +9,7 @@ or Waldur API.
 from __future__ import annotations
 
 import uuid as uuid_lib
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,7 +41,7 @@ def _make_rp(uid_hex: str, name: str = "RP-1") -> MagicMock:
 
 
 def _make_user_role(
-    role: str, username: str, user_uuid_hex: Optional[str] = None
+    role: str, username: str, user_uuid_hex: str | None = None
 ) -> MagicMock:
     u = MagicMock()
     u.role_name = role
@@ -103,7 +103,7 @@ class _FakeLdap:
         return group_name in self.groups
 
     def create_project_group(
-        self, group_name: str, extra_attributes: Optional[dict] = None
+        self, group_name: str, extra_attributes: dict | None = None
     ) -> int:
         self._record("create_project_group", group_name, extra_attributes)
         self.groups.setdefault(group_name, set())
@@ -111,7 +111,7 @@ class _FakeLdap:
         self.descriptions.setdefault(group_name, [description] if description else [])
         return 12345
 
-    def get_group_descriptions(self, group_name: str) -> Optional[list[str]]:
+    def get_group_descriptions(self, group_name: str) -> list[str] | None:
         if group_name not in self.groups:
             return None
         return list(self.descriptions.get(group_name, []))
@@ -126,7 +126,7 @@ class _FakeLdap:
         return sorted(name for name, values in self.descriptions.items() if value in values)
 
     def add_foreign_group(
-        self, group_name: str, members: set[str], descriptions: Optional[list[str]] = None
+        self, group_name: str, members: set[str], descriptions: list[str] | None = None
     ) -> None:
         """Seed a group this backend did not create."""
         self.groups[group_name] = set(members)
@@ -576,7 +576,7 @@ def test_classes_without_the_membership_attribute_are_refused(
 RP_UUID = "abcd1234deadbeef0000000000000000"
 
 
-def _states(report: Optional[list[dict]]) -> dict[tuple, str]:
+def _states(report: list[dict] | None) -> dict[tuple, str]:
     """(user, scope_type, role_name) -> state, for compact assertions."""
     assert report is not None
     return {

@@ -27,10 +27,8 @@ usage log files all of the account's traffic under the account id.
 import datetime
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
-
 from waldur_site_agent.backend import structures
 from waldur_site_agent.backend.exceptions import BackendError
 
@@ -61,7 +59,7 @@ _LOG_CHECK_WINDOW = datetime.timedelta(days=1)
 _LOG_CHECK_EVERY = datetime.timedelta(hours=1)
 
 
-def _aware(moment: object) -> Optional[datetime.datetime]:
+def _aware(moment: object) -> datetime.datetime | None:
     if not isinstance(moment, datetime.datetime):
         return None
     return moment if moment.tzinfo else moment.replace(tzinfo=datetime.timezone.utc)
@@ -100,8 +98,8 @@ class _ClusterCache:
     # traffic from what was logged earlier in the month.
     last_totals: dict = field(default_factory=dict)
     # When the usage log was last seen written, and last checked.
-    log_seen_at: Optional[datetime.datetime] = None
-    log_checked_at: Optional[datetime.datetime] = None
+    log_seen_at: datetime.datetime | None = None
+    log_checked_at: datetime.datetime | None = None
 
 
 _CLUSTER_CACHES: dict = {}
@@ -182,7 +180,7 @@ class RgwUsageBackend(BillingPeriodMixin, CephS3Backend):
 
     def pull_resource(
         self, waldur_resource: WaldurResource
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Note when the resource was created, then pull it as usual.
 
         A uid freed by a deleted resource can come back for a new one, and the
@@ -198,7 +196,7 @@ class RgwUsageBackend(BillingPeriodMixin, CephS3Backend):
 
     def _apply_usage_policy(
         self, resource_backend_id: str, info: structures.BackendResourceInfo
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Keep measured usage, and drop the resource when nothing was measured.
 
         The base pull fills every component with 0 when the report omits the
@@ -213,7 +211,7 @@ class RgwUsageBackend(BillingPeriodMixin, CephS3Backend):
             return None
         return info
 
-    def _usage_owner(self, username: str, created: Optional[datetime.datetime]) -> str:
+    def _usage_owner(self, username: str, created: datetime.datetime | None) -> str:
         """Whom the usage log files a resource's traffic under.
 
         The bucket owner: the account in account mode (whichever of its users
@@ -248,7 +246,7 @@ class RgwUsageBackend(BillingPeriodMixin, CephS3Backend):
 
     @staticmethod
     def _window_start(
-        start: datetime.datetime, created: Optional[datetime.datetime]
+        start: datetime.datetime, created: datetime.datetime | None
     ) -> datetime.datetime:
         """Where a resource's usage-log window starts: the period, or its creation.
 
@@ -432,7 +430,7 @@ class RgwUsageBackend(BillingPeriodMixin, CephS3Backend):
         resource_backend_ids: list[str],
         year: int,
         month: int,
-        waldur_resource: Optional[WaldurResource] = None,
+        waldur_resource: WaldurResource | None = None,
     ) -> dict:
         """A past month's traffic, read again from the usage log.
 

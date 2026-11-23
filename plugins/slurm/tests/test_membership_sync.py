@@ -3,7 +3,7 @@ import unittest
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any
 from unittest import mock
 
 import respx
@@ -48,11 +48,11 @@ def _must_not_fetch_known_usernames() -> set[str]:
 
 def _grouping_processor(
     team: list,
-    backend_users: Optional[list[str]] = None,
+    backend_users: list[str] | None = None,
     *,
-    resource_backend: Optional[SimpleNamespace] = None,
+    resource_backend: SimpleNamespace | None = None,
     preserve_unmanaged: bool = False,
-    known_usernames: Optional[set[str]] = None,
+    known_usernames: set[str] | None = None,
     known_fetch_raises: bool = False,
     known_fetch_failed: bool = False,
 ) -> tuple[OfferingMembershipProcessor, SimpleNamespace, SimpleNamespace]:

@@ -3,7 +3,7 @@
 import datetime
 import re
 from functools import cached_property
-from typing import Optional, TypeVar
+from typing import TypeVar
 
 from waldur_site_agent_slurm.schemas import UsageTresSource
 
@@ -23,8 +23,8 @@ _Tres = TypeVar("_Tres")
 
 
 def pick_usage_tres(
-    source: UsageTresSource, allocated: Optional[_Tres], requested: Optional[_Tres]
-) -> Optional[_Tres]:
+    source: UsageTresSource, allocated: _Tres | None, requested: _Tres | None
+) -> _Tres | None:
     """The TRES a job's usage is billed on, the one rule both clients follow.
 
     The CLI client passes sacct's AllocTRES/ReqTRES strings, the REST client

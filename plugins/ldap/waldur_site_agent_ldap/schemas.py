@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from enum import Enum
-from typing import Optional
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -132,7 +131,7 @@ class ParentGroupConfig(PluginBackendSettingsSchema):
         default="member",
         description="Attribute that holds the project group DNs ('member', 'uniqueMember')",
     )
-    offering_uuids: Optional[list[str]] = Field(
+    offering_uuids: list[str] | None = Field(
         default=None,
         description="Offerings whose projects this entry lists. Unset, only this "
         "agent's offering. Set it when several offerings share one entry, or each "
@@ -142,7 +141,7 @@ class ParentGroupConfig(PluginBackendSettingsSchema):
 
     @field_validator("offering_uuids")
     @classmethod
-    def validate_offering_uuids(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+    def validate_offering_uuids(cls, v: list[str] | None) -> list[str] | None:
         """Each must be a UUID, with or without dashes."""
         for value in v or []:
             try:
@@ -186,7 +185,7 @@ class ProjectGroupsConfig(PluginBackendSettingsSchema):
         "another entry holds that GID",
         json_schema_extra=SENSITIVE,
     )
-    managed_marker: Optional[str] = Field(
+    managed_marker: str | None = Field(
         default=None,
         description="Deprecated and ignored: groups are no longer marked. Accepted so "
         "that existing configurations still load",
@@ -196,7 +195,7 @@ class ProjectGroupsConfig(PluginBackendSettingsSchema):
         description="Entries that list the DN of each project group whose project "
         "has a resource on the offering",
     )
-    organization_description: Optional[str] = Field(
+    organization_description: str | None = Field(
         default=None,
         description="Template of a description value naming the project's "
         "organization, e.g. 'organization={slug}'. Unset, nothing is written. Kept in "
@@ -206,7 +205,7 @@ class ProjectGroupsConfig(PluginBackendSettingsSchema):
 
     @field_validator("organization_description")
     @classmethod
-    def validate_organization_description(cls, v: Optional[str]) -> Optional[str]:
+    def validate_organization_description(cls, v: str | None) -> str | None:
         """Exactly one ``{slug}`` placeholder, so the value can be found again."""
         if v is not None and v.count("{slug}") != 1:
             msg = "organization_description must contain {slug} exactly once"
@@ -258,7 +257,7 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         description="Base DN for the directory (e.g., 'dc=example,dc=com')",
         json_schema_extra=SENSITIVE,
     )
-    use_starttls: Optional[bool] = Field(
+    use_starttls: bool | None = Field(
         default=False, description="Use STARTTLS for connection", json_schema_extra=SENSITIVE
     )
 
@@ -315,19 +314,19 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
     )
 
     # Username generation
-    username_format: Optional[UsernameFormat] = Field(
+    username_format: UsernameFormat | None = Field(
         default=UsernameFormat.FIRST_INITIAL_LASTNAME,
         description="Strategy for generating usernames from user profiles. "
         "Not permitted when account_source is 'waldur' - Waldur names the accounts.",
     )
-    waldur_username_attribute: Optional[str] = Field(
+    waldur_username_attribute: str | None = Field(
         default=None,
         description="LDAP attribute to store the Waldur username (e.g. a CUID) in, "
         "alongside the POSIX login name. Left unset, it is not written.",
     )
 
     # User lifecycle
-    remove_user_on_deactivate: Optional[bool] = Field(
+    remove_user_on_deactivate: bool | None = Field(
         default=None,
         description="Delete the directory entry once the person holds no live account "
         "on any of the provider's offerings that share it. Unset, this follows "
@@ -336,7 +335,7 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         "is reproducible and a departed user must not keep a resolvable login).",
         json_schema_extra=SENSITIVE,
     )
-    on_departure: Optional[DeparturePolicy] = Field(
+    on_departure: DeparturePolicy | None = Field(
         default=None,
         description="What to do with the entry once it is released: 'disable' parks it "
         "(no-login shell, shadowExpire=1, groups dropped, marker set; same DN and uid "
@@ -345,7 +344,7 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         "historical meaning of remove_user_on_deactivate there).",
         json_schema_extra=SENSITIVE,
     )
-    generate_vpn_password: Optional[bool] = Field(
+    generate_vpn_password: bool | None = Field(
         default=False,
         description="Generate a random password for VPN access on user creation",
     )
@@ -358,34 +357,34 @@ class LdapSettingsSchema(PluginBackendSettingsSchema):
         "is written, so groups_ou is only needed for access_groups. Requires "
         "account_source 'waldur': without it there is no primary GID to write.",
     )
-    project_groups: Optional[ProjectGroupsConfig] = Field(
+    project_groups: ProjectGroupsConfig | None = Field(
         default=None,
         description="Write the service provider's project groups from Waldur",
     )
 
     # Access groups
-    access_groups: Optional[list[AccessGroupConfig]] = Field(
+    access_groups: list[AccessGroupConfig] | None = Field(
         default=None,
         description="LDAP groups to add new users to (e.g., VPN access, GPU access)",
     )
 
     # Welcome email
-    welcome_email: Optional[WelcomeEmailSchema] = Field(
+    welcome_email: WelcomeEmailSchema | None = Field(
         default=None,
         description="SMTP settings for sending a welcome email on account creation. "
         "Disabled when not configured.",
     )
 
     # Object classes
-    user_object_classes: Optional[list[str]] = Field(
+    user_object_classes: list[str] | None = Field(
         default=None,
         description="Object classes for user entries",
     )
-    user_group_object_classes: Optional[list[str]] = Field(
+    user_group_object_classes: list[str] | None = Field(
         default=None,
         description="Object classes for personal user groups",
     )
-    project_group_object_classes: Optional[list[str]] = Field(
+    project_group_object_classes: list[str] | None = Field(
         default=None,
         description="Object classes for project groups",
     )
@@ -439,8 +438,8 @@ class WelcomeEmailSchema(PluginBackendSettingsSchema):
     # SMTP connection
     smtp_host: str = Field(..., description="SMTP server hostname", json_schema_extra=SENSITIVE)
     smtp_port: int = Field(default=587, description="SMTP server port", json_schema_extra=SENSITIVE)
-    smtp_username: Optional[str] = Field(default=None, description="SMTP auth username")
-    smtp_password: Optional[str] = Field(
+    smtp_username: str | None = Field(default=None, description="SMTP auth username")
+    smtp_password: str | None = Field(
         default=None, description="SMTP auth password", json_schema_extra=SECRET
     )
     use_tls: bool = Field(
@@ -453,7 +452,7 @@ class WelcomeEmailSchema(PluginBackendSettingsSchema):
 
     # Sender
     from_address: str = Field(..., description="Sender email address")
-    from_name: Optional[str] = Field(default=None, description="Sender display name")
+    from_name: str | None = Field(default=None, description="Sender display name")
 
     # Email content
     subject: str = Field(

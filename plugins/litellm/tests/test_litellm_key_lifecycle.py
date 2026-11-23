@@ -6,7 +6,6 @@ own pause, limits and model list through everything the resource goes through.
 
 from __future__ import annotations
 
-from typing import Optional
 from unittest import mock
 
 import pytest
@@ -35,7 +34,7 @@ SETTINGS = {
 RID = "abc123"
 
 
-def _make_backend(settings: Optional[dict] = None) -> LiteLLMBackend:
+def _make_backend(settings: dict | None = None) -> LiteLLMBackend:
     with mock.patch("waldur_site_agent_litellm.backend.LiteLLMClient"):
         backend = LiteLLMBackend(dict(settings or SETTINGS), dict(COMPONENTS))
     backend.litellm_client = mock.MagicMock()
@@ -48,7 +47,7 @@ def _key(
     token: str,
     *,
     blocked: bool = False,
-    metadata: Optional[dict] = None,
+    metadata: dict | None = None,
     **fields: object,
 ) -> dict:
     record = {"key_alias": alias, "token": token, "blocked": blocked, **fields}
@@ -373,7 +372,7 @@ def test_rotation_lifts_a_stale_own_pause_before_regenerating() -> None:
     }
 
 
-def _rotatable(models: Optional[list] = None, **metadata: object) -> list:
+def _rotatable(models: list | None = None, **metadata: object) -> list:
     """A key with its own wider settings, beside a sibling stamped with the resource's."""
     return [
         _key(

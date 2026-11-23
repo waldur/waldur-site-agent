@@ -46,7 +46,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 from unittest import mock
 from uuid import UUID, uuid4
 
@@ -260,7 +259,7 @@ def _wait_offering_user_state(
     pytest.fail(f"Offering user of {user_uuid} still '{state}', expected one of {states}")
 
 
-def _resource_state(waldur_client, resource_uuid: str) -> Optional[ResourceState]:
+def _resource_state(waldur_client, resource_uuid: str) -> ResourceState | None:
     resource = marketplace_provider_resources_retrieve.sync(
         uuid=UUID(resource_uuid), client=waldur_client
     )

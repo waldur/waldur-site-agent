@@ -25,7 +25,6 @@ import logging
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +46,7 @@ class Checkpoint:
     total: Decimal
     at: datetime.datetime
     # The level measured at that moment; None in a checkpoint written without one.
-    level: Optional[Decimal] = None
+    level: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -65,7 +64,7 @@ def utcnow() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def parse_checkpoint(description: object) -> Optional[Checkpoint]:
+def parse_checkpoint(description: object) -> Checkpoint | None:
     """Read a checkpoint from a usage row's description, or None.
 
     Anything that does not parse -- an empty description, one a person wrote, one
@@ -96,7 +95,7 @@ def format_checkpoint(total: Decimal, at: datetime.datetime, level: float) -> st
     return f"Accrued {exact} to {stamp}, at a level of {float(level)!r} at that moment"
 
 
-def latest_checkpoint(descriptions: list) -> Optional[Checkpoint]:
+def latest_checkpoint(descriptions: list) -> Checkpoint | None:
     """The newest checkpoint among a component's rows for the period.
 
     A plan switch inside the month splits it into one row per plan, and Waldur
@@ -110,12 +109,12 @@ def accrue(
     *,
     level: float,
     unit_seconds: int,
-    stored_total: Optional[float],
-    checkpoint: Optional[Checkpoint],
+    stored_total: float | None,
+    checkpoint: Checkpoint | None,
     start_without_checkpoint: datetime.datetime,
     until: datetime.datetime,
     max_gap_seconds: int,
-    opening_level: Optional[float] = None,
+    opening_level: float | None = None,
 ) -> Accrual:
     """Add the level held over the time since the checkpoint to the period's total.
 

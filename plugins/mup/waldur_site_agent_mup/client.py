@@ -7,11 +7,10 @@ interface for managing projects, allocations, and users.
 
 import base64
 import logging
-from typing import Any, Optional, cast
+from typing import Any, cast
 from urllib.parse import quote, urljoin
 
 import httpx
-
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.structures import Association, ClientResource
 
@@ -179,7 +178,7 @@ class MUPClient(BaseClient):
         response = self._make_request("GET", "/api/projects/list/")
         return cast("list[dict]", self._parse_json_response(response))
 
-    def get_project_by_grant(self, grant_number: str) -> Optional[dict]:
+    def get_project_by_grant(self, grant_number: str) -> dict | None:
         """Get project by grant number."""
         try:
             response = self._make_request("GET", f"/api/projects/by-grant/{grant_number}")
@@ -304,7 +303,7 @@ class MUPClient(BaseClient):
         response = self._make_request("GET", f"/api/user/view/{user_id}")
         return cast("dict", self._parse_json_response(response))
 
-    def get_user_by_email(self, email: str) -> Optional[dict]:
+    def get_user_by_email(self, email: str) -> dict | None:
         """Get user by email address."""
         try:
             response = self._make_request("GET", f"/api/user/by-email/{email}")
@@ -312,7 +311,7 @@ class MUPClient(BaseClient):
         except MUPError:
             return None
 
-    def get_user_by_username(self, username: str) -> Optional[dict]:
+    def get_user_by_username(self, username: str) -> dict | None:
         """Get user by MUP username."""
         try:
             response = self._make_request("GET", f"/api/user/by-username/{username}")
@@ -361,7 +360,7 @@ class MUPClient(BaseClient):
             accounts.append(account)
         return accounts
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get account info - find MUP project by grant number."""
         projects = self.get_projects()
         for project in projects:
@@ -378,7 +377,7 @@ class MUPClient(BaseClient):
         name: str,
         description: str,
         organization: str,
-        parent_name: Optional[str] = None,
+        parent_name: str | None = None,
     ) -> str:
         """Create account in MUP - creates a project."""
         # This is handled by the backend create_resource method
@@ -397,7 +396,7 @@ class MUPClient(BaseClient):
 
     def set_resource_limits(
         self, resource_id: str, limits_dict: dict[str, int]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Set account limits - update allocation size."""
         # Find project and allocation by account name (grant number)
         projects = self.get_projects()
@@ -444,7 +443,7 @@ class MUPClient(BaseClient):
         """Set account limits for specific user - not supported by MUP."""
         return f"User limits not supported for {username}"
 
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Get association between user and account - check project membership."""
         projects = self.get_projects()
         for project in projects:
@@ -464,7 +463,7 @@ class MUPClient(BaseClient):
         return None
 
     def create_association(
-        self, username: str, resource_id: str, _default_account: Optional[str] = None
+        self, username: str, resource_id: str, _default_account: str | None = None
     ) -> str:
         """Create association between user and account - add user to project."""
         # This is handled by the backend's user management methods
@@ -475,7 +474,7 @@ class MUPClient(BaseClient):
         # This is handled by the backend's user management methods
         return f"Association deleted for {username} from {resource_id}"
 
-    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: str | None = None) -> list:
         """Get usage records - get allocation usage from MUP."""
         del timezone
         usage_data = []

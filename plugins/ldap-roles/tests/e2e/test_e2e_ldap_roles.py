@@ -36,7 +36,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from ldap3 import BASE, LEVEL, SUBTREE, Connection, Server
@@ -86,7 +86,7 @@ class Api:
     def __init__(self, client: Any) -> None:  # noqa: ANN401
         self._http = client.get_httpx_client()
 
-    def call(self, method: str, path: str, body: Optional[dict] = None) -> Any:  # noqa: ANN401
+    def call(self, method: str, path: str, body: dict | None = None) -> Any:  # noqa: ANN401
         response = self._http.request(method, path, json=body)
         if response.status_code >= 400:  # noqa: PLR2004
             msg = f"{method} {path} -> {response.status_code}: {response.text}"
@@ -108,15 +108,15 @@ class World:
     roles: dict[str, str] = field(default_factory=dict)  # role name -> uuid
     resource_projects: dict[str, str] = field(default_factory=dict)  # label -> uuid
 
-    def sync(self, offering: Optional[Offering] = None) -> None:
+    def sync(self, offering: Offering | None = None) -> None:
         OfferingMembershipProcessor(offering or self.offering, self.waldur_client).process_offering()
 
-    def group_name(self, role_token: str, rp_label: Optional[str] = None) -> str:
+    def group_name(self, role_token: str, rp_label: str | None = None) -> str:
         if rp_label is None:
             return f"{self.resource_slug}_{role_token}"
         return f"{self.resource_slug}_{self.resource_projects[rp_label][:8]}_{role_token}"
 
-    def group(self, name: str, groups_ou: str = f"ou=Groups,{SUITE_OU}") -> Optional[dict]:
+    def group(self, name: str, groups_ou: str = f"ou=Groups,{SUITE_OU}") -> dict | None:
         self.ldap.search(
             f"cn={name},{groups_ou},{self.base_dn}",
             "(objectClass=*)",
@@ -130,7 +130,7 @@ class World:
             for key, values in self.ldap.entries[0].entry_attributes_as_dict.items()
         }
 
-    def sync_states(self) -> dict[tuple[str, Optional[str], str], tuple[str, str]]:
+    def sync_states(self) -> dict[tuple[str, str | None, str], tuple[str, str]]:
         """Agent-reported grant states as Waldur serves them.
 
         Keyed by (username, ResourceProject UUID or None, role name); the

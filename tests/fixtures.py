@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 from unittest import mock
 from uuid import UUID
 
@@ -14,7 +14,7 @@ from waldur_site_agent.common.structures import Offering
 def user_me_api_response(
     *,
     base_url: str = "https://waldur.example.com",
-    user_uuid: Optional[UUID] = None,
+    user_uuid: UUID | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
     """JSON body for GET /api/users/me/ that satisfies UserMe.from_dict."""

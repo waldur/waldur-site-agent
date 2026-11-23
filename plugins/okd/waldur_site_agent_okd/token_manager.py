@@ -3,7 +3,7 @@
 import logging
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from waldur_site_agent.backend.exceptions import BackendError
 
@@ -24,10 +24,10 @@ class TokenManager:
         """
         self.config = token_config
         self.token_type = token_config.get("token_type", "static")
-        self.current_token: Optional[str] = None
-        self.token_expires_at: Optional[float] = None
+        self.current_token: str | None = None
+        self.token_expires_at: float | None = None
         self.service_account_path: str = ""
-        self.token_file_path: Optional[str] = None
+        self.token_file_path: str | None = None
         self.oauth_config: dict = {}
 
         # Initialize based on token type
@@ -156,10 +156,10 @@ class TokenRefreshMixin:
     def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
         """Initialize the token refresh mixin."""
         super().__init__(*args, **kwargs)
-        self.token_manager: Optional[TokenManager] = None
+        self.token_manager: TokenManager | None = None
         self._setup_token_manager()
 
-    def _make_basic_request(self, method: str, endpoint: str, data: Optional[dict] = None) -> dict:
+    def _make_basic_request(self, method: str, endpoint: str, data: dict | None = None) -> dict:
         """Abstract method - should be implemented by the class using this mixin."""
         msg = "This method should be implemented by the class using this mixin"
         raise NotImplementedError(msg)
@@ -187,7 +187,7 @@ class TokenRefreshMixin:
         return {"Authorization": f"Bearer {token}"} if token else {}
 
     def _make_authenticated_request(
-        self, method: str, endpoint: str, data: Optional[dict] = None, retry_auth: bool = True
+        self, method: str, endpoint: str, data: dict | None = None, retry_auth: bool = True
     ) -> dict:
         """Make HTTP request with automatic token refresh on auth failures."""
         headers = self._get_auth_headers()

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.types import Unset
@@ -75,7 +74,7 @@ class DesiredEntry:
     # The person's Waldur username, written to waldur_username_attribute: the
     # stable key a renamed account's entry is found by. None when the
     # attribute is not configured.
-    waldur_username: Optional[str] = None
+    waldur_username: str | None = None
 
     @property
     def common_name(self) -> str:
@@ -94,14 +93,14 @@ class Decision:
     diff: dict = field(default_factory=dict)
     # uid of the entry already holding the wanted uidNumber, for Outcome.UID_TAKEN
     # and Outcome.RENAME (the old name).
-    uid_taken_by: Optional[str] = None
+    uid_taken_by: str | None = None
     # For Outcome.UID_TAKEN and Outcome.KEY_CONFLICT: why nothing was written.
-    reason: Optional[str] = None
+    reason: str | None = None
     # For an update that rewrites the key: the value it replaces.
-    restamped_from: Optional[str] = None
+    restamped_from: str | None = None
     # uid of another entry carrying the same email. A warning, never a blocker:
     # one person legitimately holds several accounts in a shared directory.
-    duplicate_mail_owner: Optional[str] = None
+    duplicate_mail_owner: str | None = None
 
 
 def _text(value: object) -> str:
@@ -111,7 +110,7 @@ def _text(value: object) -> str:
     return str(value)
 
 
-def _number(value: object) -> Optional[int]:
+def _number(value: object) -> int | None:
     """An OfferingUser integer field as an int, or None when absent."""
     if value is None or isinstance(value, Unset):
         return None
@@ -120,7 +119,7 @@ def _number(value: object) -> Optional[int]:
     return int(str(value))
 
 
-def attr(entry: Optional[dict], name: str) -> Optional[object]:
+def attr(entry: dict | None, name: str) -> object | None:
     """One attribute of an ldap3 ``entry_attributes_as_dict``, unwrapped.
 
     ldap3 hands back a list for every attribute; an attribute that is present but
@@ -134,12 +133,12 @@ def attr(entry: Optional[dict], name: str) -> Optional[object]:
     return value
 
 
-def _attr_text(entry: Optional[dict], name: str) -> str:
+def _attr_text(entry: dict | None, name: str) -> str:
     value = attr(entry, name)
     return "" if value is None else str(value)
 
 
-def _attr_number(entry: Optional[dict], name: str) -> Optional[int]:
+def _attr_number(entry: dict | None, name: str) -> int | None:
     value = attr(entry, name)
     if value is None or value == "":
         return None
@@ -157,7 +156,7 @@ def build_desired(
     default_home_base: str,
     default_login_shell: str,
     waldur_username_attribute: str = "",
-) -> tuple[Optional[DesiredEntry], Optional[SkipReason]]:
+) -> tuple[DesiredEntry | None, SkipReason | None]:
     """Turn an offering user into the entry that should exist, or say why not.
 
     Exactly one of the two return values is set. ``home_directory`` and
@@ -208,9 +207,9 @@ def build_desired(
 
 def rename_refusal(
     desired: DesiredEntry,
-    key_owners: Optional[list[str]],
+    key_owners: list[str] | None,
     directory: dict,
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """Find the entry this account had under another name, by the Waldur-username key.
 
     Returns ``(old_name, None)`` for a rename, or ``(None, reason)`` when there
@@ -244,14 +243,14 @@ def rename_refusal(
 
 def classify(  # noqa: PLR0911
     desired: DesiredEntry,
-    actual: Optional[dict],
+    actual: dict | None,
     *,
-    uid_owner: Optional[str] = None,
-    mail_owner: Optional[str] = None,
+    uid_owner: str | None = None,
+    mail_owner: str | None = None,
     waldur_username_attribute: str = "",
-    key_owners: Optional[list[str]] = None,
-    directory: Optional[dict] = None,
-    current_keys: Optional[set[str]] = None,
+    key_owners: list[str] | None = None,
+    directory: dict | None = None,
+    current_keys: set[str] | None = None,
 ) -> Decision:
     """Compare the wanted entry against the directory and decide what to do.
 

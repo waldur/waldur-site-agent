@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional, Union
 
 from waldur_site_agent.common import WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES
 
@@ -59,7 +58,7 @@ class IdentityBridgePrivilegedAccountError(Exception):
 
 
 def is_privileged_account_refusal(
-    status_code: int, body: Optional[Union[str, bytes]]
+    status_code: int, body: str | bytes | None
 ) -> bool:
     """Whether an Identity Bridge response is the privileged-account 403."""
     if status_code != PRIVILEGED_ACCOUNT_STATUS or not body:

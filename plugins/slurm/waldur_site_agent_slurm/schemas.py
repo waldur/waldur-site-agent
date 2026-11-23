@@ -7,7 +7,7 @@ based on actual SLURM plugin usage patterns and the periodic limits functionalit
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import ConfigDict, Field, model_validator
 
@@ -101,14 +101,14 @@ class PeriodicLimitsConfig(PluginBackendSettingsSchema):
 
     enabled: bool = Field(default=False, description="Enable periodic limits functionality")
 
-    emulator_mode: Optional[bool] = Field(
+    emulator_mode: bool | None = Field(
         default=False, description="Use SLURM emulator for testing", json_schema_extra=SENSITIVE
     )
-    emulator_base_url: Optional[str] = Field(
+    emulator_base_url: str | None = Field(
         default=None, description="SLURM emulator API URL", json_schema_extra=SENSITIVE
     )
 
-    limit_type: Optional[SlurmLimitType] = Field(
+    limit_type: SlurmLimitType | None = Field(
         default=SlurmLimitType.GRP_TRES_MINS,
         description="Fallback SLURM limit type when the STOMP payload omits it",
     )
@@ -120,25 +120,25 @@ class QosManagementConfig(PluginBackendSettingsSchema):
     model_config = ConfigDict(extra="allow")
 
     enabled: bool = Field(default=False, description="Enable per-account QoS creation")
-    flags: Optional[str] = Field(
+    flags: str | None = Field(
         default="DenyOnLimit,NoDecay",
         description="QoS flags (e.g., 'DenyOnLimit,NoDecay')",
     )
-    grp_tres: Optional[str] = Field(
+    grp_tres: str | None = Field(
         default=None,
         description="Group TRES limits for the QoS (e.g., 'cpu=25600,node=100')",
     )
-    max_jobs: Optional[int] = Field(default=None, description="Maximum concurrent jobs per QoS")
-    max_submit: Optional[int] = Field(default=None, description="Maximum submitted jobs per QoS")
-    max_wall: Optional[str] = Field(
+    max_jobs: int | None = Field(default=None, description="Maximum concurrent jobs per QoS")
+    max_submit: int | None = Field(default=None, description="Maximum submitted jobs per QoS")
+    max_wall: str | None = Field(
         default=None,
         description="Maximum wall time (minutes or D-HH:MM:SS)",
     )
-    min_tres_per_job: Optional[str] = Field(
+    min_tres_per_job: str | None = Field(
         default=None,
         description="Minimum TRES per job (e.g., 'gres/gpu=1')",
     )
-    additional_qos: Optional[list[str]] = Field(
+    additional_qos: list[str] | None = Field(
         default=None,
         description="Additional QoS names to attach to accounts (e.g., ['2cpu-single-host'])",
         json_schema_extra=SENSITIVE,
@@ -174,14 +174,14 @@ class LustreQuotaConfig(PluginBackendSettingsSchema):
     mount_point: str = Field(
         default="/valhalla", description="Lustre mount point", json_schema_extra=SENSITIVE
     )
-    block_softlimit: Optional[int] = Field(
+    block_softlimit: int | None = Field(
         default=None, description="Block soft limit in kilobytes"
     )
-    block_hardlimit: Optional[int] = Field(
+    block_hardlimit: int | None = Field(
         default=None, description="Block hard limit in kilobytes"
     )
-    inode_softlimit: Optional[int] = Field(default=None, description="Inode soft limit")
-    inode_hardlimit: Optional[int] = Field(default=None, description="Inode hard limit")
+    inode_softlimit: int | None = Field(default=None, description="Inode soft limit")
+    inode_hardlimit: int | None = Field(default=None, description="Inode hard limit")
     project_id_offset: int = Field(
         default=0,
         ge=0,
@@ -234,7 +234,7 @@ class ProjectDirectoryConfig(PluginBackendSettingsSchema):
         ),
         json_schema_extra=SENSITIVE,
     )
-    group_name: Optional[str] = Field(
+    group_name: str | None = Field(
         default=None,
         description=(
             "Group the directory is given to when group_owner_source is not "
@@ -242,7 +242,7 @@ class ProjectDirectoryConfig(PluginBackendSettingsSchema):
         ),
         json_schema_extra=SENSITIVE,
     )
-    lustre_quota: Optional[LustreQuotaConfig] = Field(
+    lustre_quota: LustreQuotaConfig | None = Field(
         default=None, description="Lustre quota settings"
     )
 
@@ -265,7 +265,7 @@ class SlurmLdapSettings(PluginBackendSettingsSchema):
     bind_dn: str = Field(..., description="DN to bind as", json_schema_extra=SENSITIVE)
     bind_password: str = Field(..., description="Password for bind_dn", json_schema_extra=SECRET)
     base_dn: str = Field(..., description="Base DN of the directory", json_schema_extra=SENSITIVE)
-    use_starttls: Optional[bool] = Field(
+    use_starttls: bool | None = Field(
         default=False, description="Use STARTTLS", json_schema_extra=SENSITIVE
     )
     people_ou: str = Field(
@@ -294,22 +294,22 @@ class SlurmLdapSettings(PluginBackendSettingsSchema):
         description="Base of new users' home directories",
         json_schema_extra=SENSITIVE,
     )
-    user_object_classes: Optional[list[str]] = Field(
+    user_object_classes: list[str] | None = Field(
         default=None, description="Object classes of user entries"
     )
-    user_group_object_classes: Optional[list[str]] = Field(
+    user_group_object_classes: list[str] | None = Field(
         default=None, description="Object classes of personal group entries"
     )
-    project_group_object_classes: Optional[list[str]] = Field(
+    project_group_object_classes: list[str] | None = Field(
         default=None, description="Object classes of project group entries"
     )
-    personal_groups: Optional[bool] = Field(
+    personal_groups: bool | None = Field(
         default=True, description="Create a personal group per user"
     )
-    waldur_username_attribute: Optional[str] = Field(
+    waldur_username_attribute: str | None = Field(
         default=None, description="Attribute holding the Waldur username"
     )
-    empty_group_member_dn: Optional[str] = Field(
+    empty_group_member_dn: str | None = Field(
         default=None,
         description="Placeholder member of empty groups (default cn=nobody,<base_dn>)",
         json_schema_extra=SENSITIVE,
@@ -341,7 +341,7 @@ class SlurmRestApiConfig(PluginBackendSettingsSchema):
         description="User the agent authenticates as (sent in X-SLURM-USER-NAME)",
         json_schema_extra=SENSITIVE,
     )
-    token_file: Optional[str] = Field(
+    token_file: str | None = Field(
         default=None,
         description=(
             "Path to a file with the JWT token. Re-read on HTTP 401, so an "
@@ -350,7 +350,7 @@ class SlurmRestApiConfig(PluginBackendSettingsSchema):
         ),
         json_schema_extra=SENSITIVE,
     )
-    token_env: Optional[str] = Field(
+    token_env: str | None = Field(
         default=None,
         description="Name of an environment variable holding the JWT token",
         json_schema_extra=SENSITIVE,
@@ -402,7 +402,7 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
     allocation_prefix: str = Field(..., description="Prefix for allocation account names")
 
     # Optional: flat hierarchy with a single parent account
-    parent_account: Optional[str] = Field(
+    parent_account: str | None = Field(
         default=None,
         description=(
             "Parent account for new project accounts. "
@@ -412,7 +412,7 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
     )
 
     # Optional: scope sacctmgr/sacct commands and REST payloads to one cluster
-    cluster_name: Optional[str] = Field(
+    cluster_name: str | None = Field(
         default=None,
         description=(
             "SLURM cluster name to scope operations to. "
@@ -430,7 +430,7 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
         ),
         json_schema_extra=SENSITIVE,
     )
-    slurm_bin_path: Optional[NonEmptyStr] = Field(
+    slurm_bin_path: NonEmptyStr | None = Field(
         default="/usr/bin",
         description=(
             "Directory the SLURM binaries (sacctmgr, sacct, scontrol, ...) are run from; "
@@ -439,7 +439,7 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
         ),
         json_schema_extra=SENSITIVE,
     )
-    rest_api: Optional[SlurmRestApiConfig] = Field(
+    rest_api: SlurmRestApiConfig | None = Field(
         default=None,
         description="slurmrestd connection settings, required when execution_mode is 'rest'",
     )
@@ -454,14 +454,14 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
         ),
     )
 
-    hostname: Optional[str] = Field(
+    hostname: str | None = Field(
         default=None,
         description=(
             "Deprecated and ignored: the agent never reads it. Accepted so that "
             "configurations moved from an offering's plugin options validate"
         ),
     )
-    root_account: Optional[str] = Field(
+    root_account: str | None = Field(
         default=None,
         description=(
             "Account the top tier of the default hierarchy is created under "
@@ -475,7 +475,7 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
             "they are informational only"
         ),
     )
-    ldap: Optional[SlurmLdapSettings] = Field(
+    ldap: SlurmLdapSettings | None = Field(
         default=None,
         description=(
             "LDAP directory for project groups and their GIDs (needs the "
@@ -484,18 +484,18 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
     )
 
     # Optional: default partition for user associations
-    default_partition: Optional[str] = Field(
+    default_partition: str | None = Field(
         default=None,
         description="Partition to assign to user-account associations (e.g., 'cn', 'common')",
         json_schema_extra=SENSITIVE,
     )
 
     # QoS management (used by backend.py)
-    qos_default: Optional[str] = Field(
+    qos_default: str | None = Field(
         default="normal", description="Default QoS for accounts", json_schema_extra=SENSITIVE
     )
-    qos_downscaled: Optional[str] = Field(default=None, description="QoS for downscaled accounts")
-    qos_paused: Optional[str] = Field(default=None, description="QoS for paused accounts")
+    qos_downscaled: str | None = Field(default=None, description="QoS for downscaled accounts")
+    qos_paused: str | None = Field(default=None, description="QoS for paused accounts")
 
     # Opt-in gate for QoS enforcement. Off by default: enforcement never
     # activates — regardless of any offering's plugin_options.enforce_qos —
@@ -519,7 +519,7 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
     # When enforcing, the agent grants the selected QoS on the user association
     # (QosLevel/DefaultQOS) and uses an orthogonal pause lever (GrpSubmitJobs)
     # instead of the account-QoS overwrite, so pausing never clobbers the grant.
-    enforce_offering_qos: Optional[bool] = Field(
+    enforce_offering_qos: bool | None = Field(
         default=None,
         description=(
             "Override for per-offering QoS enforcement, applied only when "
@@ -530,17 +530,17 @@ class SlurmBackendSettingsSchema(HomedirSettingsSchema):
     )
 
     # Per-account QoS management (optional, for EFP-style deployments)
-    qos_management: Optional[QosManagementConfig] = Field(
+    qos_management: QosManagementConfig | None = Field(
         default=None, description="Per-account QoS creation and management"
     )
 
     # Project directory management (optional, for sites with shared project storage)
-    project_directory: Optional[ProjectDirectoryConfig] = Field(
+    project_directory: ProjectDirectoryConfig | None = Field(
         default=None, description="Project directory creation and quota settings"
     )
 
     # Periodic limits configuration (nested object)
-    periodic_limits: Optional[PeriodicLimitsConfig] = Field(
+    periodic_limits: PeriodicLimitsConfig | None = Field(
         default=None, description="Periodic limits configuration"
     )
 

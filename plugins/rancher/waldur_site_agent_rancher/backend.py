@@ -1,7 +1,6 @@
 """Rancher backend implementation for Waldur Site Agent."""
 
 import pprint
-from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_site_agent_keycloak_client import KeycloakClient
@@ -171,7 +170,7 @@ class RancherBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Validate and prepare for resource creation."""
         if not waldur_resource.customer_slug or not waldur_resource.project_slug:
@@ -228,7 +227,7 @@ class RancherBackend(backends.BaseBackend):
 
     def _create_keycloak_groups(
         self, waldur_resource: WaldurResource
-    ) -> tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """Create hierarchical Keycloak groups and return (parent_id, child_id)."""
         if not self.keycloak_client:
             logger.debug("Keycloak not configured, skipping group creation")
@@ -354,7 +353,7 @@ class RancherBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> BackendResourceInfo:
         """Create Rancher project and Keycloak groups for the Waldur project."""
         del resource_backend_id
@@ -602,7 +601,7 @@ class RancherBackend(backends.BaseBackend):
 
     def _pull_backend_resource(
         self, resource_backend_id: str, waldur_resource: WaldurResource = None
-    ) -> Optional[BackendResourceInfo]:
+    ) -> BackendResourceInfo | None:
         """Pull resource data including Keycloak group users for membership sync."""
         logger.info("Pulling resource %s", resource_backend_id)
 
@@ -629,7 +628,7 @@ class RancherBackend(backends.BaseBackend):
 
         return BackendResourceInfo(backend_id=resource_backend_id, users=users, usage=usage)
 
-    def pull_resource(self, waldur_resource: WaldurResource) -> Optional[BackendResourceInfo]:
+    def pull_resource(self, waldur_resource: WaldurResource) -> BackendResourceInfo | None:
         """Pull resource with Keycloak group user information."""
         try:
             backend_id = waldur_resource.backend_id

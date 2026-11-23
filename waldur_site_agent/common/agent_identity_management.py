@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime
-from typing import Optional
 
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_site_agent_identities import (
@@ -245,9 +244,9 @@ def ensure_agent_telemetry(
     offering: Offering,
     waldur_rest_client: AuthenticatedClient,
     agent_mode: str,
-    log_shipping: Optional[LogShippingConfig] = None,
-    service_name: Optional[str] = None,
-) -> Optional[AgentService]:
+    log_shipping: LogShippingConfig | None = None,
+    service_name: str | None = None,
+) -> AgentService | None:
     """Register the agent's identity and service and start shipping its logs.
 
     All three are telemetry: they make the agent visible in Waldur (version,

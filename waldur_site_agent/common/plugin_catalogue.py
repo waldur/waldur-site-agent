@@ -19,15 +19,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from importlib.metadata import version
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from waldur_site_agent.common import plugin_schemas, structures, utils
-
-if sys.version_info >= (3, 10):
-    from importlib.metadata import version
-else:
-    from importlib_metadata import version
 
 # Bumped when the shape of the document changes, so Waldur can refuse one it
 # does not understand.
@@ -85,7 +81,7 @@ def _marked_paths(schema: dict[str, Any], marker: str) -> list[str]:
     return sorted(found)
 
 
-def _schema_entry(schema_class: Optional[type]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+def _schema_entry(schema_class: type | None) -> tuple[dict[str, Any] | None, str | None]:
     if schema_class is None:
         return None, None
     try:
@@ -166,7 +162,7 @@ def build_catalogue() -> dict[str, Any]:
     }
 
 
-def main(argv: Optional[list[str]] = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     """Write the plugin catalogue as JSON to a file or stdout."""
     parser = argparse.ArgumentParser(
         description="Export the installed site agent plugins as a catalogue for Waldur"

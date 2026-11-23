@@ -6,19 +6,17 @@ import datetime
 import threading
 import uuid
 from types import SimpleNamespace
-from typing import Optional
 from unittest import mock
 
 import pytest
-
 from waldur_site_agent_litellm import ownership
 from waldur_site_agent_litellm.backend import (
+    _KEY_METADATA_LOCK,
     META_HOLDER_CHAT,
     META_KEY_LIMITS,
     META_KEY_PAUSED,
     META_RESOURCE_LIMITS,
     NO_MODELS,
-    _KEY_METADATA_LOCK,
     LiteLLMBackend,
 )
 from waldur_site_agent_litellm.client import META_KEY, META_RESOURCE, META_USERNAME
@@ -48,7 +46,7 @@ BOB = "bob@example.com"
 GROUPS = {"gpt-4o": "g-4o", "gpt-4o-mini": "g-mini"}
 
 
-def _make_backend(settings: Optional[dict] = None) -> LiteLLMBackend:
+def _make_backend(settings: dict | None = None) -> LiteLLMBackend:
     with (
         mock.patch("waldur_site_agent_litellm.backend.LiteLLMClient"),
         mock.patch("waldur_site_agent_litellm.backend.OpenWebUIClient"),
@@ -91,14 +89,14 @@ def _resource(*, managed: bool = True, paused: bool = False) -> SimpleNamespace:
     )
 
 
-def _member(email: str, key: Optional[str] = "") -> dict:
+def _member(email: str, key: str | None = "") -> dict:
     metadata = {META_RESOURCE: RID, META_USERNAME: email.split("@")[0]}
     if key is not None:
         metadata[META_KEY] = key
     return {"user_id": email, "user_alias": email.split("@")[0].title(), "metadata": metadata}
 
 
-def _key(alias: str, *, blocked: bool = False, models: Optional[list] = None, **meta) -> dict:
+def _key(alias: str, *, blocked: bool = False, models: list | None = None, **meta) -> dict:
     record = {"key_alias": alias, "token": f"h-{alias}", "blocked": blocked}
     if models is not None:
         record["models"] = models
@@ -402,7 +400,7 @@ def test_a_new_account_is_made_closed_and_opened_once_in_its_groups() -> None:
     backend = _make_backend()
     created: dict = {}
 
-    def find_user(email: str) -> Optional[dict]:
+    def find_user(email: str) -> dict | None:
         return created.get(email)
 
     def create_user(email: str, name: str, password: str, role: str) -> dict:
@@ -792,7 +790,7 @@ def test_a_chat_failure_does_not_fail_the_rotation() -> None:
 
 
 def _chat(
-    email: str, spend: float, *, alias: Optional[str] = None, date: Optional[str] = None
+    email: str, spend: float, *, alias: str | None = None, date: str | None = None
 ) -> dict:
     """One per-person usage row, as ``get_user_usage_rows`` returns it: today's by default."""
     return {
@@ -1063,7 +1061,7 @@ def test_an_api_only_offering_reads_no_chat_spend() -> None:
 
 
 @pytest.mark.parametrize("duration", ["1mo", "7d", None])
-def test_chat_is_read_whatever_budget_duration_says(duration: Optional[str]) -> None:
+def test_chat_is_read_whatever_budget_duration_says(duration: str | None) -> None:
     # The backstop always resets on the 1st, so a month of chat always fits it.
     backend = _make_backend({**SETTINGS, "budget_duration": duration})
 

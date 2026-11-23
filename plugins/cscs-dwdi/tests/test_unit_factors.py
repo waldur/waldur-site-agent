@@ -6,17 +6,18 @@ uses; the expected values here are literals, not computed from the configuration
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_cscs_dwdi.backend import (
     CSCSDWDIComputeBackend,
     CSCSDWDIInferenceBackend,
     CSCSDWDIStorageBackend,
 )
+
+from waldur_site_agent.backend.exceptions import BackendError
 
 SETTINGS = {
     "cscs_dwdi_api_url": "https://api.example.com",
@@ -38,7 +39,7 @@ def component(
     accounting_type: str = "usage",
     unit_factor: Any = 1,
     unit_factor_reporting: Any = None,
-    dwdi_field: Optional[str] = None,
+    dwdi_field: str | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "measured_unit": "units",

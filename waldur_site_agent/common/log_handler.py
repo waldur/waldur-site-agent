@@ -5,7 +5,6 @@ to capture log entries and store them in memory for later shipping to Waldur Mas
 """
 
 import logging
-from typing import Optional
 
 from .log_buffer import CircularLogBuffer, LogEntry
 from .structlog_message import parse_structlog_message
@@ -74,8 +73,8 @@ class LogBufferManager:
 
     def __init__(self) -> None:
         """Initialize the log buffer manager."""
-        self.buffer: Optional[CircularLogBuffer] = None
-        self.handler: Optional[BufferedLogHandler] = None
+        self.buffer: CircularLogBuffer | None = None
+        self.handler: BufferedLogHandler | None = None
         self._is_setup = False
 
     def setup(
@@ -110,7 +109,7 @@ class LogBufferManager:
 
         logger.addHandler(self.handler)
 
-    def get_buffer(self) -> Optional[CircularLogBuffer]:
+    def get_buffer(self) -> CircularLogBuffer | None:
         """Get the current log buffer.
 
         Returns:

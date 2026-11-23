@@ -8,7 +8,7 @@ with ``ack="auto"`` every message already written to the socket is lost with it.
 import threading
 import time
 import unittest
-from typing import Callable, Optional
+from collections.abc import Callable
 from unittest import mock
 
 from waldur_site_agent.event_processing import listener as listener_module
@@ -48,7 +48,7 @@ class _ListenerCase(unittest.TestCase):
         self.addCleanup(getattr(listener, "close", lambda: None))
         return listener
 
-    def _recording_callback(self, block: Optional[dict[str, threading.Event]] = None) -> Callable:
+    def _recording_callback(self, block: dict[str, threading.Event] | None = None) -> Callable:
         block = block or {}
 
         def callback(frame, *_args, **_kwargs) -> None:

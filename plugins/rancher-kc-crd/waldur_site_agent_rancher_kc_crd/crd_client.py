@@ -7,7 +7,7 @@ membership-sync model is poll-Waldur, push-CR.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from kubernetes import client as k8s
 from kubernetes import config as k8s_config
@@ -29,8 +29,8 @@ class CrdClient:
     def __init__(
         self,
         namespace: str,
-        kubeconfig_path: Optional[str] = None,
-        context: Optional[str] = None,
+        kubeconfig_path: str | None = None,
+        context: str | None = None,
     ) -> None:
         """Initialize with a namespace and optional kubeconfig path/context.
 
@@ -48,7 +48,7 @@ class CrdClient:
         self.namespace = namespace
         self.api = k8s.CustomObjectsApi()
 
-    def get(self, name: str) -> Optional[dict[str, Any]]:
+    def get(self, name: str) -> dict[str, Any] | None:
         """Fetch a CR by name; return ``None`` if it doesn't exist."""
         try:
             return self.api.get_namespaced_custom_object(

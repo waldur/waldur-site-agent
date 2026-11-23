@@ -6,7 +6,7 @@ membership-sync loop via the ``waldur_site_agent.backends`` entry point.
 
 import logging
 import uuid as uuid_lib
-from typing import Any, ClassVar, Optional, Union
+from typing import Any, ClassVar
 
 from kubernetes import client as k8s
 from waldur_api_client.api.marketplace_provider_resource_projects import (
@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 _MISSING_CIVIL_CODE_MESSAGE = "Civil code not available for this user"
 
 
-def _user_civil_number(u: Any) -> Optional[str]:  # noqa: ANN401
+def _user_civil_number(u: Any) -> str | None:  # noqa: ANN401
     """Read ``user_civil_number`` off a list_users entry, tolerating older SDKs.
 
     Mastermind returns the field only when the offering exposes
@@ -83,8 +83,8 @@ def _derive_grant_states(
     role_map: dict,
     cr_status: dict,
     scope_type: str,
-    resource_project_uuid: Optional[str],
-    identity: Union[IdentitySettings, bool],
+    resource_project_uuid: str | None,
+    identity: IdentitySettings | bool,
 ) -> list[dict]:
     """Map desired grants against operator-confirmed CR status.
 
@@ -244,7 +244,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
         # apply_resource_project) but pull_resource will be a no-op.
         api_url = backend_settings.get("waldur_api_url")
         api_token = backend_settings.get("waldur_api_token")
-        self.waldur_client: Optional[AuthenticatedClient] = None
+        self.waldur_client: AuthenticatedClient | None = None
         if api_url and api_token:
             self.waldur_client = AuthenticatedClient(
                 base_url=api_url.rstrip("/").removesuffix("/api"),
@@ -305,7 +305,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """No-op: cluster is provisioned externally, not by this plugin."""
 
@@ -316,7 +316,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
     def pull_resource(
         self,
         waldur_resource: WaldurResource,
-    ) -> Optional[BackendResourceInfo]:
+    ) -> BackendResourceInfo | None:
         """Reconcile every ResourceProject of this resource into a CR.
 
         Sequence per cycle:
@@ -354,7 +354,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
         # CR; it de-duplicates on the Rancher side via (clusterId,
         # principal, role). Skip the call when no cluster_role_map is
         # configured -- the translator would discard the data anyway.
-        cluster_ur_dicts: Optional[list[dict]] = None
+        cluster_ur_dicts: list[dict] | None = None
         if self.backend_settings.get("cluster_role_map"):
             cluster_user_roles = self._fetch_resource_users(waldur_resource.uuid)
             cluster_ur_dicts = [self._user_role_to_dict(u) for u in cluster_user_roles]
@@ -638,7 +638,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
             "user_civil_number": _user_civil_number(u),
         }
 
-    def get_membership_sync_report(self, waldur_resource: WaldurResource) -> Optional[list[dict]]:
+    def get_membership_sync_report(self, waldur_resource: WaldurResource) -> list[dict] | None:
         """Return the per-grant states derived during the last pull_resource."""
         return self._membership_sync_reports.get(waldur_resource.uuid.hex)
 
@@ -796,7 +796,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
         resource: dict,
         resource_project: dict,
         user_roles: list[dict],
-        cluster_user_roles: Optional[list[dict]] = None,
+        cluster_user_roles: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Translate and apply a single ResourceProject CR.
 

@@ -9,7 +9,7 @@ time (``route_message``) rather than by binding one connection per type.
 
 import json
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import stomp
 import urllib3.util
@@ -87,8 +87,8 @@ class EventSubscriptionManager:
     def __init__(
         self,
         offering: Offering,
-        on_connect_callback: Optional[Callable] = None,
-        on_message_callback: Optional[Callable] = None,
+        on_connect_callback: Callable | None = None,
+        on_message_callback: Callable | None = None,
         user_agent: str = "",
         global_proxy: str = "",
         expose_backend_error_details: bool = True,
@@ -108,10 +108,10 @@ class EventSubscriptionManager:
     def setup_stomp_connection(
         self,
         unified_queue: UnifiedQueue,
-        custom_stomp_ws_host: Optional[str] = None,
-        custom_stomp_ws_port: Optional[int] = None,
-        custom_stomp_ws_path: Optional[str] = None,
-        on_queue_missing: Optional[Callable[[], None]] = None,
+        custom_stomp_ws_host: str | None = None,
+        custom_stomp_ws_port: int | None = None,
+        custom_stomp_ws_path: str | None = None,
+        on_queue_missing: Callable[[], None] | None = None,
     ) -> stomp.WSStompConnection:
         """Create the STOMP connection to the unified consumer queue.
 

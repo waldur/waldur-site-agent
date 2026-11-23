@@ -2,7 +2,6 @@
 
 import json
 import threading
-from typing import Optional
 from uuid import UUID
 
 import stomp
@@ -58,7 +57,7 @@ def register_event_process_service(
     offering: structures.Offering,
     waldur_rest_client: AuthenticatedClient,
     observable_object: ObservableObjectTypeEnum,
-) -> Optional[AgentService]:
+) -> AgentService | None:
     """A shortcut for initialization of the event_process service.
 
     Called at the top of every message handler, before the work the message
@@ -855,7 +854,7 @@ def process_offering_user_deletions(
     if not offering_users:
         return
     resource_backend = None
-    resource_report: Optional[dict] = None
+    resource_report: dict | None = None
     if offering.membership_sync_backend:
         try:
             resource_backend, _ = common_utils.get_backend_for_offering(
@@ -925,7 +924,7 @@ def _resolve_user_cuid(
     waldur_rest_client: AuthenticatedClient,
     user_uuid: str,
     offering_uuid: str,
-) -> Optional[str]:
+) -> str | None:
     """Look up the CUID (user_username) for a user from their offering user record.
 
     The STOMP ``username_set`` message carries the offering_user_username
@@ -956,7 +955,7 @@ def _add_user_to_resources(
     username: str,
     resource_backend_ids: list,
     waldur_rest_client: AuthenticatedClient,
-    user_cuid: Optional[str] = None,
+    user_cuid: str | None = None,
 ) -> None:
     """Add a user to backend resources identified by their backend IDs.
 
@@ -1042,7 +1041,7 @@ def on_project_group_message_stomp(
 def schedule_project_group_reconcile(
     offering: structures.Offering,
     user_agent: str,
-    delay: Optional[float] = None,
+    delay: float | None = None,
 ) -> bool:
     """Schedule one project-group pass for the offering; False if one is pending."""
     key = str(offering.uuid)

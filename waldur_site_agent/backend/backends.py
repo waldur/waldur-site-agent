@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar
 
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.offering_user import OfferingUser
@@ -61,7 +61,7 @@ class AddedUsers(set):
     """
 
     def __init__(
-        self, added: Iterable[str] = (), failed: Optional[Mapping[str, str]] = None
+        self, added: Iterable[str] = (), failed: Mapping[str, str] | None = None
     ) -> None:
         """Hold the added usernames and the cause for each failed one."""
         super().__init__(added)
@@ -78,7 +78,7 @@ class RemovedUsers(list):
     """
 
     def __init__(
-        self, removed: Iterable[str] = (), failed: Optional[Mapping[str, str]] = None
+        self, removed: Iterable[str] = (), failed: Mapping[str, str] | None = None
     ) -> None:
         """Hold the removed usernames and the cause for each failed one."""
         super().__init__(removed)
@@ -370,7 +370,7 @@ class BaseBackend(ABC):
         resource_backend_ids: list[str],  # noqa: ARG002
         year: int,  # noqa: ARG002
         month: int,  # noqa: ARG002
-        waldur_resource: Optional[WaldurResource] = None,  # noqa: ARG002
+        waldur_resource: WaldurResource | None = None,  # noqa: ARG002
     ) -> dict:
         """Collect usage report for a specific historical billing period.
 
@@ -631,7 +631,7 @@ class BaseBackend(ABC):
         self,
         resource_id: str,
         settings: dict,
-        config: Optional[dict] = None,
+        config: dict | None = None,
     ) -> dict:
         """Apply periodic usage-policy settings calculated by Waldur.
 
@@ -753,7 +753,7 @@ class BaseBackend(ABC):
     def get_membership_sync_report(
         self,
         waldur_resource: WaldurResource,  # noqa: ARG002
-    ) -> Optional[list[dict]]:
+    ) -> list[dict] | None:
         """Per-grant sync states for the resource, or None when unsupported.
 
         Backends that can confirm which role grants actually landed on
@@ -795,7 +795,7 @@ class BaseBackend(ABC):
 
     def pull_resource(
         self, waldur_resource: WaldurResource
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Pull resource from backend."""
         try:
             backend_id = waldur_resource.backend_id
@@ -849,7 +849,7 @@ class BaseBackend(ABC):
 
     def _pull_backend_resource(
         self, resource_backend_id: str
-    ) -> Optional[structures.BackendResourceInfo]:
+    ) -> structures.BackendResourceInfo | None:
         """Pull resource data from the backend.
 
         The usage report is skipped while ``pull_resources(..., include_usage=False)``
@@ -900,7 +900,7 @@ class BaseBackend(ABC):
         self,
         waldur_resource: WaldurResource,
         waldur_rest_client: AuthenticatedClient,
-        source_project: Optional[Project] = None,
+        source_project: Project | None = None,
     ) -> None:
         """Sync the project's end_date between source and target systems.
 
@@ -954,7 +954,7 @@ class BaseBackend(ABC):
         self,
         waldur_resource: WaldurResource,
         **kwargs: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Delete resource from the backend.
 
         If ``soft_delete`` is enabled in backend_settings, the resource account
@@ -1040,7 +1040,7 @@ class BaseBackend(ABC):
         resource_backend_id: str,
         resource_name: str,
         resource_organization: str,
-        resource_parent_name: Optional[str] = None,
+        resource_parent_name: str | None = None,
     ) -> bool:
         logger.info(
             "Creating resource %s in %s backend (backend ID = %s)",
@@ -1062,7 +1062,7 @@ class BaseBackend(ABC):
     def create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> structures.BackendResourceInfo:
         """Create resource on the backend.
 
@@ -1084,7 +1084,7 @@ class BaseBackend(ABC):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Perform actions prior to resource creation on the backend.
 
@@ -1108,7 +1108,7 @@ class BaseBackend(ABC):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> structures.BackendResourceInfo:
         """Create resource with a specific backend ID.
 
@@ -1204,7 +1204,7 @@ class BaseBackend(ABC):
         self,
         resource: structures.BackendResourceInfo,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Perform actions after resource creation on the backend.
 
@@ -1436,7 +1436,7 @@ class BaseBackend(ABC):
     def sync_resource_project(
         self,
         waldur_resource: WaldurResource,
-        source_project: Optional[Project] = None,
+        source_project: Project | None = None,
     ) -> None:
         """Sync project metadata (e.g. description) from Waldur to the backend.
 
@@ -1452,7 +1452,7 @@ class BaseBackend(ABC):
         del waldur_resource, source_project
 
     def sync_resource_key_assignees(
-        self, waldur_resource: WaldurResource, assignments: dict[str, Optional[str]]
+        self, waldur_resource: WaldurResource, assignments: dict[str, str | None]
     ) -> None:
         """Apply who each of the resource's API keys is assigned to.
 
@@ -1498,7 +1498,7 @@ class BaseBackend(ABC):
 
     def set_resource_limits(
         self, resource_backend_id: str, limits: dict[str, int]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Set limits for the resource on the backend.
 
         Converts Waldur-unit limits to backend-native units using each
@@ -1601,9 +1601,9 @@ class BaseBackend(ABC):
         self,
         resource_backend_id: str,
         reserved_client_ids: list[str],
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list[str]] = None,
-        resource_limits: Optional[dict] = None,
+        limits: dict | None = None,
+        allowed_models: list[str] | None = None,
+        resource_limits: dict | None = None,
     ) -> dict:
         """Create one more key for the resource and apply it, leaving the others alone.
 
@@ -1635,8 +1635,8 @@ class BaseBackend(ABC):
         self,
         client_id: str,
         resource_backend_id: str,
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list[str]] = None,
+        limits: dict | None = None,
+        allowed_models: list[str] | None = None,
     ) -> None:
         """Lift a key's own pause and apply the settings it carries.
 
@@ -1658,8 +1658,8 @@ class BaseBackend(ABC):
         self,
         client_id: str,
         resource_backend_id: str,
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list[str]] = None,
+        limits: dict | None = None,
+        allowed_models: list[str] | None = None,
     ) -> None:
         """Apply a key's limits and model allowlist."""
         del client_id, resource_backend_id, limits, allowed_models
@@ -1668,7 +1668,7 @@ class BaseBackend(ABC):
 
     def get_resource_key_usage_report(
         self, resource_backend_ids: list[str]
-    ) -> dict[str, Optional[dict[str, dict[str, float]]]]:
+    ) -> dict[str, dict[str, dict[str, float]] | None]:
         """Return the current month's usage per API key (supports_resource_api_key_usage).
 
         Maps a resource backend id to ``{client_id: {component: usage}}``, in Waldur
@@ -1682,7 +1682,7 @@ class BaseBackend(ABC):
 
     def get_resource_key_daily_usage_report(
         self, resource_backend_ids: list[str]
-    ) -> dict[str, Optional[dict[str, dict[str, dict[str, float]]]]]:
+    ) -> dict[str, dict[str, dict[str, dict[str, float]]] | None]:
         """The current month's usage per API key and UTC day (``supports_daily_usage``).
 
         Maps a resource backend id to ``{client_id: {"YYYY-MM-DD": {component: usage}}}``,
@@ -1696,7 +1696,7 @@ class BaseBackend(ABC):
 
     def get_resource_key_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int
-    ) -> dict[str, Optional[dict[str, dict[str, float]]]]:
+    ) -> dict[str, dict[str, dict[str, float]] | None]:
         """A closed month's usage per API key, as ``get_resource_key_usage_report`` gives it.
 
         The agent sends each key's figures for the previous month once more in the
@@ -1710,7 +1710,7 @@ class BaseBackend(ABC):
 
     def get_resource_key_daily_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int
-    ) -> dict[str, Optional[dict[str, dict[str, dict[str, float]]]]]:
+    ) -> dict[str, dict[str, dict[str, dict[str, float]]] | None]:
         """A closed month's usage per API key and UTC day (``supports_daily_usage``).
 
         As ``get_resource_key_daily_usage_report``, for the month given; a resource left
@@ -1761,7 +1761,7 @@ class UnknownBackend(BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Placeholder."""
 
@@ -1796,7 +1796,7 @@ class UnknownBackend(BaseBackend):
         self,
         waldur_resource: WaldurResource,
         **kwargs: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Placeholder."""
         del kwargs, waldur_resource
         return None
@@ -1804,7 +1804,7 @@ class UnknownBackend(BaseBackend):
     def create_resource(
         self,
         _: dict,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> structures.BackendResourceInfo:
         """Placeholder."""
         del user_context
@@ -1836,7 +1836,7 @@ class UnknownBackend(BaseBackend):
         del kwargs, waldur_resource
         return user_ids
 
-    def set_resource_limits(self, _: str, limits: dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, _: str, limits: dict[str, int]) -> str | None:
         """Placeholder."""
         del limits
         return None
@@ -1844,7 +1844,7 @@ class UnknownBackend(BaseBackend):
     def _collect_resource_limits(self, _: WaldurResource) -> tuple[dict[str, int], dict[str, int]]:
         return {"": 0}, {"": 0}
 
-    def _pull_backend_resource(self, _: str) -> Optional[structures.BackendResourceInfo]:
+    def _pull_backend_resource(self, _: str) -> structures.BackendResourceInfo | None:
         return None
 
     def _get_usage_report(self, _: list[str]) -> dict:
@@ -1901,7 +1901,7 @@ class AbstractUsernameManagementBackend(ABC):
     def __init__(
         self,
         backend_settings: dict | None = None,
-        offering: Optional[Offering] = None,
+        offering: Offering | None = None,
     ) -> None:
         """Initialize the username management backend.
 
@@ -1917,7 +1917,7 @@ class AbstractUsernameManagementBackend(ABC):
         """Generate username based on offering user details."""
 
     @abstractmethod
-    def get_username(self, offering_user: OfferingUser) -> Optional[str]:
+    def get_username(self, offering_user: OfferingUser) -> str | None:
         """Get username in local IDP if exists."""
 
     def get_or_create_username(self, offering_user: OfferingUser) -> str:
@@ -2018,7 +2018,7 @@ class UnknownUsernameManagementBackend(AbstractUsernameManagementBackend):
         del offering_user
         return ""
 
-    def get_username(self, offering_user: OfferingUser) -> Optional[str]:
+    def get_username(self, offering_user: OfferingUser) -> str | None:
         """Get username in local IDP if exists."""
         del offering_user
         return None

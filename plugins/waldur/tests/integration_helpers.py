@@ -11,7 +11,6 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
 from uuid import UUID
 
 from waldur_api_client.api.customers import customers_create, customers_destroy

@@ -8,13 +8,12 @@ project, or creates a second project under the next candidate name).
 """
 
 import uuid
-from typing import Optional
 from unittest.mock import patch
 
 import pytest
 from waldur_api_client.models.resource import Resource as WaldurResource
-
 from waldur_site_agent.backend.exceptions import BackendError, DuplicateResourceError
+
 from waldur_site_agent_harbor.backend import HarborBackend
 from waldur_site_agent_harbor.client import HarborClient
 from waldur_site_agent_harbor.exceptions import HarborAPIError, HarborQuotaError
@@ -25,10 +24,10 @@ class FakeHarborClient(HarborClient):
 
     def __init__(  # noqa: D107
         self,
-        label_error: Optional[Exception] = None,
+        label_error: Exception | None = None,
         label_errors_before_success: int = 0,
-        list_error: Optional[Exception] = None,
-        quota_error: Optional[Exception] = None,
+        list_error: Exception | None = None,
+        quota_error: Exception | None = None,
     ) -> None:
         self.label_errors_before_success = label_errors_before_success
         self.list_error = list_error
@@ -40,12 +39,12 @@ class FakeHarborClient(HarborClient):
         self.quotas: dict[str, int] = {}
         self.label_error = label_error
 
-    def add_project(self, name: str, labels: Optional[list[str]] = None) -> None:
+    def add_project(self, name: str, labels: list[str] | None = None) -> None:
         self.projects[name] = {"name": name, "project_id": len(self.projects) + 1}
         self.labels[name] = list(labels or [])
         self.members[name] = set()
 
-    def get_project(self, project_name: str) -> Optional[dict]:
+    def get_project(self, project_name: str) -> dict | None:
         return self.projects.get(project_name)
 
     def create_project(self, project_name: str, storage_quota_gb: int) -> bool:

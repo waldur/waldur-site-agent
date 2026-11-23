@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional, Union
-
 from pydantic import Field
 from waldur_site_agent_keycloak_client.schemas import KeycloakSettingsSchema
 
@@ -18,35 +16,35 @@ from waldur_site_agent.common.plugin_schemas import (
 class RancherBackendSettingsSchema(CommonBackendSettingsSchema):
     """Settings for the ``rancher`` backend."""
 
-    backend_url: Optional[str] = Field(
+    backend_url: str | None = Field(
         default=None, description="Rancher URL (API is <url>/v3)", json_schema_extra=SENSITIVE
     )
-    username: Optional[str] = Field(default=None, description="Rancher API access key")
-    password: Optional[str] = Field(
+    username: str | None = Field(default=None, description="Rancher API access key")
+    password: str | None = Field(
         default=None, description="Rancher API secret key", json_schema_extra=SECRET
     )
-    cluster_id: Optional[str] = Field(
+    cluster_id: str | None = Field(
         default=None, description="Cluster projects are created in", json_schema_extra=SENSITIVE
     )
-    verify_cert: Optional[Union[bool, NonEmptyStr]] = Field(
+    verify_cert: bool | NonEmptyStr | None = Field(
         default=None, description="Verify TLS: true/false, or a CA bundle path (default true)",
         json_schema_extra=SENSITIVE,
     )
-    default_role: Optional[str] = Field(
+    default_role: str | None = Field(
         default=None, description="Project role for members (default 'workloads-manage')",
         json_schema_extra=SENSITIVE,
     )
-    namespace_labels: Optional[dict[str, str]] = Field(
+    namespace_labels: dict[str, str] | None = Field(
         default=None, description="Labels set on created namespaces", json_schema_extra=SENSITIVE
     )
-    keycloak_enabled: Optional[bool] = Field(
+    keycloak_enabled: bool | None = Field(
         default=None, description="Manage members through Keycloak groups (default false)"
     )
-    keycloak_use_user_id: Optional[bool] = Field(
+    keycloak_use_user_id: bool | None = Field(
         default=None,
         description="Look Keycloak users up by id rather than username (default true)",
         json_schema_extra=SENSITIVE,
     )
-    keycloak: Optional[KeycloakSettingsSchema] = Field(
+    keycloak: KeycloakSettingsSchema | None = Field(
         default=None, description="Keycloak connection, see the keycloak-client README"
     )

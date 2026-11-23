@@ -1,7 +1,6 @@
 import unittest
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
 from unittest import mock
 
 import httpx
@@ -11,9 +10,9 @@ from waldur_api_client.models import ResourceState, ServiceProvider
 from waldur_api_client.models.merged_plugin_options import MergedPluginOptions
 from waldur_api_client.models.offering_state import OfferingState
 from waldur_api_client.models.offering_user_state import OfferingUserState
-from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.order_details_attributes import OrderDetailsAttributes
 from waldur_api_client.models.order_details_limits import OrderDetailsLimits
+from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.models.request_types import RequestTypes
 from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_api_client.models.resource_offering_plugin_options import (
@@ -32,9 +31,9 @@ def setup_common_respx_mocks(
     waldur_user: dict,
     waldur_offering: dict,
     waldur_resource: dict,
-    waldur_resource_team: Optional[list] = None,
-    waldur_offering_users: Optional[dict] = None,
-    resource_backend_id: Optional[str] = None,
+    waldur_resource_team: list | None = None,
+    waldur_offering_users: dict | None = None,
+    resource_backend_id: str | None = None,
 ) -> None:
     """Setup common respx mocks for order processing tests."""
     respx.get(f"{base_url}/api/users/me/").respond(200, json=waldur_user)

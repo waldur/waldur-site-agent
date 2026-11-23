@@ -6,10 +6,9 @@ import datetime
 import signal
 import sys
 import types
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from http import HTTPStatus
-from typing import Callable, Optional
 
 from waldur_api_client import AuthenticatedClient
 from waldur_api_client.api.marketplace_offering_users import marketplace_offering_users_list
@@ -226,7 +225,7 @@ def _open_unified_consumer(
     object_types: list[ObservableObjectTypeEnum],
     global_proxy: str = "",
     expose_backend_error_details: bool = True,
-    on_message_callback: Optional[Callable] = None,
+    on_message_callback: Callable | None = None,
     connect_max_retries: int = STARTUP_CONNECT_ATTEMPTS,
 ) -> StompConsumer:
     """Register the unified queue and open its STOMP connection.
@@ -277,7 +276,7 @@ def _setup_unified_stomp_connection(
     object_types: list[ObservableObjectTypeEnum],
     global_proxy: str = "",
     expose_backend_error_details: bool = True,
-    on_message_callback: Optional[Callable] = None,
+    on_message_callback: Callable | None = None,
     connect_max_retries: int = STARTUP_CONNECT_ATTEMPTS,
 ) -> StompConsumer | None:
     """Register the single unified consumer queue and open ONE STOMP connection.
@@ -330,7 +329,7 @@ def open_offering_consumer(
     waldur_user_agent: str,
     global_proxy: str = "",
     expose_backend_error_details: bool = True,
-    object_types: Optional[list[ObservableObjectTypeEnum]] = None,
+    object_types: list[ObservableObjectTypeEnum] | None = None,
     connect_max_retries: int = STARTUP_CONNECT_ATTEMPTS,
 ) -> StompConsumer | None:
     """Set up the offering's own consumer, raising on identity or queue registration errors.

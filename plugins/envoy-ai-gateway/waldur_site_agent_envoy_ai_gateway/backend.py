@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import secrets
 from collections.abc import Iterator
-from typing import Optional
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 
@@ -94,7 +93,7 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
     # --- provisioning -----------------------------------------------------------
 
     def _pre_create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self, waldur_resource: WaldurResource, user_context: dict | None = None
     ) -> None:
         del waldur_resource, user_context  # no prerequisite setup
 
@@ -188,10 +187,10 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         self,
         client_id: str,
         resource_backend_id: str,
-        known_client_ids: Optional[list[str]] = None,
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list[str]] = None,
-        resource_limits: Optional[dict] = None,
+        known_client_ids: list[str] | None = None,
+        limits: dict | None = None,
+        allowed_models: list[str] | None = None,
+        resource_limits: dict | None = None,
     ) -> str:
         """Generate a new value for one key and apply it, revoking the previous one.
 
@@ -233,7 +232,7 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
     # --- per-key lifecycle ------------------------------------------------------
 
     @staticmethod
-    def _refuse_model_allowlist(allowed_models: Optional[list[str]]) -> None:
+    def _refuse_model_allowlist(allowed_models: list[str] | None) -> None:
         """Fail a command that would restrict a key's models.
 
         The gateway authenticates a key but routes every model to it alike; there is
@@ -251,9 +250,9 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         self,
         resource_backend_id: str,
         reserved_client_ids: list[str],
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list[str]] = None,
-        resource_limits: Optional[dict] = None,
+        limits: dict | None = None,
+        allowed_models: list[str] | None = None,
+        resource_limits: dict | None = None,
     ) -> dict:
         """Add one key to the resource, as its next free ``<backend_id>-<n>`` slot.
 
@@ -295,8 +294,8 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         self,
         client_id: str,
         resource_backend_id: str,
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list[str]] = None,
+        limits: dict | None = None,
+        allowed_models: list[str] | None = None,
     ) -> None:
         """Lift a key's own pause; on a paused resource it stays blocked with its siblings."""
         del limits
@@ -332,8 +331,8 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         self,
         client_id: str,
         resource_backend_id: str,
-        limits: Optional[dict] = None,
-        allowed_models: Optional[list[str]] = None,
+        limits: dict | None = None,
+        allowed_models: list[str] | None = None,
     ) -> None:
         """Accept a key's limits; there is nothing to push, since Waldur enforces them.
 
@@ -358,7 +357,7 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> BackendResourceInfo:
         """Provision a key using the agent-supplied backend id as the client_id.
 
@@ -369,13 +368,13 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
         return self._provision(resource_backend_id, waldur_resource)
 
     def create_resource(
-        self, waldur_resource: WaldurResource, user_context: Optional[dict] = None
+        self, waldur_resource: WaldurResource, user_context: dict | None = None
     ) -> BackendResourceInfo:
         """Provision a key with client_id = resource UUID (direct calls / tests)."""
         del user_context
         return self._provision(self._client_id(waldur_resource), waldur_resource)
 
-    def pull_resource(self, waldur_resource: WaldurResource) -> Optional[BackendResourceInfo]:
+    def pull_resource(self, waldur_resource: WaldurResource) -> BackendResourceInfo | None:
         """Report a resource whose keys are managed one by one as existing, keys or not.
 
         On such an offering a resource starts with no keys and a manager can delete
@@ -398,7 +397,7 @@ class EnvoyAIGatewayBackend(backends.BaseBackend):
             return BackendResourceInfo(backend_id=waldur_resource.backend_id)
         return super().pull_resource(waldur_resource)
 
-    def _pull_backend_resource(self, resource_backend_id: str) -> Optional[BackendResourceInfo]:
+    def _pull_backend_resource(self, resource_backend_id: str) -> BackendResourceInfo | None:
         """Report the resource as existing when it owns at least one key.
 
         The order processor calls ``pull_resource`` before (re)creating a resource

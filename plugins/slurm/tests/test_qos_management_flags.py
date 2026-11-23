@@ -7,7 +7,7 @@ create-and-attach, account-level GrpTRESMins, and classic qos= restore/pause.
 from __future__ import annotations
 
 import datetime
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -46,9 +46,9 @@ _PREPAID_COMPONENTS = {
 
 
 def _backend(
-    qos_management: Optional[dict[str, Any]] = None,
-    extra: Optional[dict[str, Any]] = None,
-    components: Optional[dict[str, Any]] = None,
+    qos_management: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
+    components: dict[str, Any] | None = None,
 ) -> SlurmBackend:
     settings = {"default_account": "root"}
     if qos_management is not None:

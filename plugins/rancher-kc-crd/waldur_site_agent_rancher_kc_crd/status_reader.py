@@ -5,7 +5,7 @@ synced into Keycloak, drift signals between Waldur and the operator,
 and a compact ``backend_metadata`` snapshot for the resource detail page.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 PHASE_OK = "Ready"
 PHASE_PROGRESSING = {"Pending", "Creating", "Updating"}
@@ -95,7 +95,7 @@ def build_backend_metadata(status: dict) -> dict[str, Any]:
     return {k: v for k, v in md.items() if v is not None}
 
 
-def is_terminal_failure(status: dict) -> Optional[str]:
+def is_terminal_failure(status: dict) -> str | None:
     """Return a short error string if the CR is in a terminal failure state.
 
     Returns ``None`` if the CR isn't failed. Caller surfaces this back

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,7 +36,7 @@ class OpenWebUISettingsSchema(BaseModel):
     api_token: str = Field(
         ..., description="Admin API token used to manage accounts", json_schema_extra=SECRET
     )
-    url: Optional[str] = Field(
+    url: str | None = Field(
         default=None,
         description=(
             "User-facing chat URL surfaced on the resource in the portal; "
@@ -44,7 +44,7 @@ class OpenWebUISettingsSchema(BaseModel):
         ),
         json_schema_extra=SENSITIVE,
     )
-    account_provisioning: Optional[str] = Field(
+    account_provisioning: str | None = Field(
         default="sso",
         description=(
             "'sso' (default): accounts appear on first login through the identity "
@@ -53,7 +53,7 @@ class OpenWebUISettingsSchema(BaseModel):
         ),
         json_schema_extra=SENSITIVE,
     )
-    initial_password: Optional[str] = Field(
+    initial_password: str | None = Field(
         default=None,
         description=(
             "Temporary password for accounts the agent creates; required when "
@@ -61,7 +61,7 @@ class OpenWebUISettingsSchema(BaseModel):
         ),
         json_schema_extra=SECRET,
     )
-    delete_accounts_on_removal: Optional[bool] = Field(
+    delete_accounts_on_removal: bool | None = Field(
         default=False,
         description=(
             "Delete the Open WebUI account when access is revoked instead of demoting "
@@ -70,11 +70,11 @@ class OpenWebUISettingsSchema(BaseModel):
         ),
         json_schema_extra=SENSITIVE,
     )
-    verify_ssl: Optional[bool] = Field(
+    verify_ssl: bool | None = Field(
         default=None, description="Verify Open WebUI's TLS certificate (default true)",
         json_schema_extra=SENSITIVE,
     )
-    timeout: Optional[float] = Field(
+    timeout: float | None = Field(
         default=None, description="Per-request timeout in seconds (default 30)"
     )
 
@@ -92,30 +92,30 @@ class LiteLLMBackendSettingsSchema(CommonBackendSettingsSchema):
         ..., description="LiteLLM master or admin key used for the management API",
         json_schema_extra=SECRET
     )
-    models: Optional[list] = Field(
+    models: list | None = Field(
         default=None,
         description="Model allowlist pushed onto every key; omit to allow every model",
         json_schema_extra=SENSITIVE,
     )
-    budget_duration: Optional[str] = Field(
+    budget_duration: str | None = Field(
         default=None,
         description=(
             "Ignored: the max_budget backstop always resets on the 1st of the month "
             "('1mo'), the month Waldur counts limits in. Any other value is logged"
         ),
     )
-    tpm_limit: Optional[int] = Field(
+    tpm_limit: int | None = Field(
         default=None, description="Default tokens-per-minute cap applied to each key"
     )
-    rpm_limit: Optional[int] = Field(
+    rpm_limit: int | None = Field(
         default=None, description="Default requests-per-minute cap applied to each key"
     )
-    verify_ssl: Optional[bool] = Field(
+    verify_ssl: bool | None = Field(
         default=None,
         description="Verify the proxy's TLS certificate (default true)",
         json_schema_extra=SENSITIVE,
     )
-    timeout: Optional[float] = Field(
+    timeout: float | None = Field(
         default=None, description="Per-request timeout in seconds (default 30)"
     )
     resource_backend_id_source: Literal["slug", "uuid"] = Field(
@@ -128,7 +128,7 @@ class LiteLLMBackendSettingsSchema(CommonBackendSettingsSchema):
             "resources keep the backend id they were provisioned with"
         ),
     )
-    ownership_retention_months: Optional[int] = Field(
+    ownership_retention_months: int | None = Field(
         default=None,
         ge=1,
         description=(
@@ -138,7 +138,7 @@ class LiteLLMBackendSettingsSchema(CommonBackendSettingsSchema):
             "the same on every agent sharing the proxy"
         ),
     )
-    openwebui: Optional[OpenWebUISettingsSchema] = Field(
+    openwebui: OpenWebUISettingsSchema | None = Field(
         default=None,
         description=(
             "Chat surface. Omit for an API-only offering. When set, membership sync "
@@ -160,7 +160,7 @@ class LiteLLMUsageBackendSettingsSchema(CommonBackendSettingsSchema):
     model_config = ConfigDict(extra="allow")
 
     api_url: str = Field(..., description="LiteLLM proxy base URL", json_schema_extra=SENSITIVE)
-    component_metrics: Optional[dict] = Field(
+    component_metrics: dict | None = Field(
         default=None,
         description=(
             "Extra Waldur component -> usage metric pairs, for components not named "
@@ -174,7 +174,7 @@ class LiteLLMUsageBackendSettingsSchema(CommonBackendSettingsSchema):
             "bills it on a USAGE one: {inference_cost: token_cost}"
         ),
     )
-    usage_cache_ttl: Optional[float] = Field(
+    usage_cache_ttl: float | None = Field(
         default=None,
         description=(
             "Seconds a fetched month of usage rows stays reusable across the resources "
@@ -187,11 +187,11 @@ class LiteLLMUsageBackendSettingsSchema(CommonBackendSettingsSchema):
         ..., description="LiteLLM master or admin key used for the spend API",
         json_schema_extra=SECRET
     )
-    verify_ssl: Optional[bool] = Field(
+    verify_ssl: bool | None = Field(
         default=None,
         description="Verify the proxy's TLS certificate (default true)",
         json_schema_extra=SENSITIVE,
     )
-    timeout: Optional[float] = Field(
+    timeout: float | None = Field(
         default=None, description="Per-request timeout in seconds (default 30)"
     )

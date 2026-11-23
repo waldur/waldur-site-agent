@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import ConfigDict, Field
 from waldur_site_agent.common.plugin_schemas import (
     SECRET,
@@ -18,7 +16,7 @@ class AzureComponentSchema(PluginComponentSchema):
 
     model_config = ConfigDict(extra="allow")
 
-    backend_name: Optional[str] = Field(
+    backend_name: str | None = Field(
         default=None, description="Backend metric name (optional)"
     )
 
@@ -44,18 +42,18 @@ class AzureBackendSettingsSchema(CommonBackendSettingsSchema):
 
     # Defaults for resource creation. Locations and sizes are Azure-wide, so an
     # offering that serves one region names it once here instead of on every order.
-    default_location: Optional[str] = Field(
+    default_location: str | None = Field(
         default=None, description="Default Azure region, e.g. 'westeurope'"
     )
-    default_resource_group: Optional[str] = Field(
+    default_resource_group: str | None = Field(
         default=None,
         description="Resource group to place resources in; created on demand when unset",
         json_schema_extra=SENSITIVE,
     )
-    default_size: Optional[str] = Field(
+    default_size: str | None = Field(
         default=None, description="Default virtual machine size, e.g. 'Standard_B1s'"
     )
-    default_image: Optional[str] = Field(
+    default_image: str | None = Field(
         default=None,
         description="Default image reference as 'publisher:offer:sku:version'",
     )
@@ -63,14 +61,14 @@ class AzureBackendSettingsSchema(CommonBackendSettingsSchema):
     # Every machine gets its own network, so the ranges may repeat across
     # machines; they only need to avoid colliding with what the operator peers
     # the network with.
-    network_cidr: Optional[str] = Field(
+    network_cidr: str | None = Field(
         default=None, description="Address space of the virtual network (default 10.0.0.0/16)"
     )
-    subnet_cidr: Optional[str] = Field(
+    subnet_cidr: str | None = Field(
         default=None, description="Address range of the subnet (default 10.0.0.0/24)"
     )
 
-    allowed_ssh_ranges: Optional[list[str]] = Field(
+    allowed_ssh_ranges: list[str] | None = Field(
         default=None,
         description="Address ranges allowed to reach machines over SSH, as CIDR prefixes. "
         "Without any, a machine accepts no SSH connections.",

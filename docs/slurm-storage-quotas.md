@@ -287,9 +287,9 @@ A complete reference example showing both subsystems is in
 ## Caveats and known inconsistencies
 
 - **`HomedirQuotaConfig.block_softlimit` / `block_hardlimit` are typed as
-  `Optional[str]`** (to allow XFS suffixes like `"900g"`), while
+  `str | None`** (to allow XFS suffixes like `"900g"`), while
   `LustreQuotaConfig.block_softlimit` / `block_hardlimit` are typed as
-  `Optional[int]`. Use integers (kilobytes) for `project_directory.lustre_quota`
+  `int | None`. Use integers (kilobytes) for `project_directory.lustre_quota`
   even if you use string-with-suffix for `homedir_quota` on Lustre.
 - **`group_owner_source` and `group_name`** are accepted by the runtime but
   are not declared fields of `ProjectDirectoryConfig` (they pass through via

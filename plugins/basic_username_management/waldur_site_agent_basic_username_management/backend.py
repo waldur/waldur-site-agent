@@ -1,6 +1,5 @@
 """Abstract classes and functions for username management backends."""
 
-from typing import Optional
 
 from waldur_api_client.models.offering_user import OfferingUser
 
@@ -15,7 +14,7 @@ class BaseUsernameManagementBackend(AbstractUsernameManagementBackend):
         del offering_user
         return ""
 
-    def get_username(self, offering_user: OfferingUser) -> Optional[str]:
+    def get_username(self, offering_user: OfferingUser) -> str | None:
         """Get username in local IDP if exists."""
         del offering_user
         return None

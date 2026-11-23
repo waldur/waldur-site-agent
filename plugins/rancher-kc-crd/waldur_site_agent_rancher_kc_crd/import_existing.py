@@ -45,7 +45,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from string import Template
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 import yaml
@@ -117,7 +117,7 @@ def parse_principal(principal: str) -> tuple[str, str]:
 
 def reverse_identity_template(
     template: str, identifier: str, ignore_case: bool = False
-) -> Optional[str]:
+) -> str | None:
     """Undo ``keycloak_user_identity_template``: ``EE${value}`` + ``ee3800`` -> ``3800``.
 
     Returns ``None`` when ``identifier`` does not have the template's shape.
@@ -131,7 +131,7 @@ def reverse_identity_template(
     return match.group("v") if match else None
 
 
-def keycloak_identifier(kc_user: dict, identity: IdentitySettings) -> tuple[Optional[str], str]:
+def keycloak_identifier(kc_user: dict, identity: IdentitySettings) -> tuple[str | None, str]:
     """What the operator would match this Keycloak user on, or ``(None, reason)``."""
     if identity.lookup == "id":
         return kc_user.get("id") or None, "Keycloak user has no id"
@@ -143,7 +143,7 @@ def keycloak_identifier(kc_user: dict, identity: IdentitySettings) -> tuple[Opti
     return values[0], ""
 
 
-def waldur_identity_value(kc_user: dict, identity: IdentitySettings) -> tuple[Optional[str], str]:
+def waldur_identity_value(kc_user: dict, identity: IdentitySettings) -> tuple[str | None, str]:
     """The Waldur field value (username, UUID or civil code) a Keycloak user maps back to."""
     ident, reason = keycloak_identifier(kc_user, identity)
     if not ident:
@@ -157,7 +157,7 @@ def waldur_identity_value(kc_user: dict, identity: IdentitySettings) -> tuple[Op
     return value, ""
 
 
-def parse_cpu_millicores(value: str) -> Optional[int]:
+def parse_cpu_millicores(value: str) -> int | None:
     """Kubernetes CPU quantity -> millicores: ``8000m`` -> 8000, ``2`` / ``0.5`` -> 2000 / 500."""
     text = str(value).strip()
     try:
@@ -209,7 +209,7 @@ def normalize_uuid(value: str) -> str:
     return value.replace("-", "").lower()
 
 
-def project_matches(project: dict, projects: Optional[list[str]]) -> bool:
+def project_matches(project: dict, projects: list[str] | None) -> bool:
     """Whether a Rancher project passes ``--project``: name, full ID or short ID.
 
     Inventory entries (``rancher_project_id``) and raw Rancher projects
@@ -226,8 +226,8 @@ def resource_matches(
     resource_uuid: str,
     resource_name: str,
     cluster_id: str,
-    clusters: Optional[list[str]],
-    resources: Optional[list[str]],
+    clusters: list[str] | None,
+    resources: list[str] | None,
 ) -> bool:
     """Whether a Waldur resource passes ``--cluster`` and ``--resource`` (UUID or name)."""
     if clusters and cluster_id not in clusters:
@@ -264,8 +264,8 @@ class RancherApi:
 
     def _list(self, path: str, params: dict[str, str]) -> list[dict]:
         items: list[dict] = []
-        url: Optional[str] = path
-        query: Optional[dict[str, str]] = {**params, "limit": "-1"}
+        url: str | None = path
+        query: dict[str, str] | None = {**params, "limit": "-1"}
         while url:
             resp = self.client.get(url, params=query)
             resp.raise_for_status()
@@ -317,7 +317,7 @@ class KeycloakApi:
         self.user_realm = user_realm
         self.client_id = client_id
         self.client = httpx.Client(verify=verify, timeout=60.0)
-        self._token: Optional[str] = None
+        self._token: str | None = None
 
     def _refresh_token(self) -> None:
         resp = self.client.post(
@@ -332,7 +332,7 @@ class KeycloakApi:
         resp.raise_for_status()
         self._token = resp.json()["access_token"]
 
-    def _get(self, path: str, params: Optional[dict[str, str]] = None) -> httpx.Response:
+    def _get(self, path: str, params: dict[str, str] | None = None) -> httpx.Response:
         if not self._token:
             self._refresh_token()
         url = f"{self.url}/admin/realms/{self.realm}{path}"
@@ -346,7 +346,7 @@ class KeycloakApi:
             )
         return resp
 
-    def user(self, user_id: str) -> Optional[dict]:
+    def user(self, user_id: str) -> dict | None:
         """A Keycloak user by ID, or None."""
         resp = self._get(f"/users/{user_id}")
         if resp.status_code == HTTP_NOT_FOUND:
@@ -411,7 +411,7 @@ class WaldurApi:
             timeout=60.0,
         )
 
-    def _list(self, path: str, params: Optional[dict[str, str]] = None) -> list[dict]:
+    def _list(self, path: str, params: dict[str, str] | None = None) -> list[dict]:
         items: list[dict] = []
         page = 1
         while True:
@@ -442,7 +442,7 @@ class WaldurApi:
         """User roles held in a resource or resource project."""
         return self._list(f"/{scope_path}/{scope_uuid}/list_users/")
 
-    def user_by_uuid(self, user_uuid: str) -> Optional[dict]:
+    def user_by_uuid(self, user_uuid: str) -> dict | None:
         """A Waldur user by UUID, or None."""
         resp = self.client.get(f"/users/{normalize_uuid(user_uuid)}/")
         if resp.status_code == HTTP_NOT_FOUND:
@@ -455,7 +455,7 @@ class WaldurApi:
         return self._list("/users/", params)
 
     def create_resource_project(
-        self, resource_uuid: str, name: str, description: str, limits: Optional[dict] = None
+        self, resource_uuid: str, name: str, description: str, limits: dict | None = None
     ) -> dict:
         """Create a ResourceProject."""
         body: dict[str, Any] = {"resource": resource_uuid, "name": name, "description": description}
@@ -577,7 +577,7 @@ class InventoryCollector:
             entry["error"] = "principal is not a Keycloak OIDC user or group"
         return entry
 
-    def cluster(self, resource: dict, projects_filter: Optional[list[str]] = None) -> dict:
+    def cluster(self, resource: dict, projects_filter: list[str] | None = None) -> dict:
         """Inventory entry for the cluster behind a Waldur resource.
 
         With ``projects_filter`` only the matching projects are read, and
@@ -628,8 +628,8 @@ class InventoryCollector:
 
 def select_resources(
     resources: list[dict],
-    clusters: Optional[list[str]] = None,
-    resource_filters: Optional[list[str]] = None,
+    clusters: list[str] | None = None,
+    resource_filters: list[str] | None = None,
 ) -> list[dict]:
     """Resources to import: active, with a cluster ID, one per cluster."""
     selected: list[dict] = []
@@ -693,7 +693,7 @@ class Importer:
         self.project_roles = reverse_role_map(role_map)
         self.cluster_roles = reverse_role_map(cluster_role_map)
         self.role_uuids = self._role_uuids(offering_uuid)
-        self._waldur_users: dict[str, tuple[Optional[dict], str]] = {}
+        self._waldur_users: dict[str, tuple[dict | None, str]] = {}
         self.actions: list[dict] = []
 
     def _role_uuids(self, offering_uuid: str) -> dict[tuple[str, str], str]:
@@ -716,7 +716,7 @@ class Importer:
         name = user.get("keycloak_username") or user.get("keycloak_id") or "?"
         return mask_civil_code(name) if self.identity.source == "civil_number" else name
 
-    def resolve_user(self, value: str) -> tuple[Optional[dict], str]:
+    def resolve_user(self, value: str) -> tuple[dict | None, str]:
         """Find the Waldur user a Keycloak user maps back to."""
         if value in self._waldur_users:
             return self._waldur_users[value]
@@ -745,7 +745,7 @@ class Importer:
         # sharing the identifier must not block the current one.
         active = [u for u in candidates if u.get("is_active", True)]
         if not candidates:
-            result: tuple[Optional[dict], str] = (None, f"no Waldur user with this {source}")
+            result: tuple[dict | None, str] = (None, f"no Waldur user with this {source}")
         elif not active:
             result = (None, "Waldur user is deactivated")
         elif len(active) > 1:
@@ -794,7 +794,7 @@ class Importer:
         self,
         grants: dict[tuple[str, str], dict],
         content_type: str,
-        scope_uuid: Optional[str],
+        scope_uuid: str | None,
     ) -> None:
         scope_path = SCOPE_PATHS[content_type]
         # Compared by role UUID: a Resource's list_users also returns the
@@ -823,7 +823,7 @@ class Importer:
             except httpx.HTTPError as exc:
                 action["error"] = str(exc)
 
-    def import_cluster(self, cluster: dict, projects_filter: Optional[list[str]] = None) -> None:
+    def import_cluster(self, cluster: dict, projects_filter: list[str] | None = None) -> None:
         """Plan (and with execute, apply) one inventory cluster.
 
         With ``projects_filter`` only the matching projects are imported,
@@ -870,7 +870,7 @@ class Importer:
                 )
             if rp:
                 existing_uuid = normalize_uuid(rp["uuid"])
-                rp_uuid: Optional[str] = existing_uuid
+                rp_uuid: str | None = existing_uuid
                 self._record(op="exists", where=where, what="resource project")
                 if limits and not rp.get("limits"):
                     self._record(
@@ -896,7 +896,7 @@ class Importer:
 
     def _create_project(
         self, resource_uuid: str, project: dict, limits: dict, where: str
-    ) -> Optional[str]:
+    ) -> str | None:
         what = "resource project"
         if limits:
             what += " with limits " + ", ".join(f"{k}={v}" for k, v in sorted(limits.items()))
@@ -934,7 +934,7 @@ class Importer:
 # ---------------------------------------------------------------------
 
 
-def _matches(entry: dict, offering: Optional[str]) -> bool:
+def _matches(entry: dict, offering: str | None) -> bool:
     if not offering:
         return True
     return offering in (entry.get("name"), entry.get("waldur_offering_uuid")) or normalize_uuid(
@@ -960,7 +960,7 @@ def _from_waldur(entry: dict, config: dict) -> dict:
     return loaded.offerings[0].model_dump(mode="json")
 
 
-def load_offering(config_path: str, offering: Optional[str]) -> dict:
+def load_offering(config_path: str, offering: str | None) -> dict:
     """The agent config's offering entry, by name or UUID (or the only one).
 
     A local offering is used as written. One with ``configuration_source: waldur``
@@ -1002,7 +1002,7 @@ def _require_env(*names: str) -> dict[str, str]:
     return {n: os.environ[n] for n in names}
 
 
-def _waldur_client(offering: dict, token: Optional[str]) -> WaldurApi:
+def _waldur_client(offering: dict, token: str | None) -> WaldurApi:
     settings = offering.get("backend_settings") or {}
     url = settings.get("waldur_api_url") or offering["waldur_api_url"]
     token = (
@@ -1216,7 +1216,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Entry point for ``waldur-rancher-kc-crd-import``."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = build_parser().parse_args(argv)

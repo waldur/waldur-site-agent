@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import ConfigDict, Field, field_validator
 
 from waldur_site_agent.common.plugin_schemas import (
@@ -39,10 +37,10 @@ class LdapConnectionSchema(PluginBackendSettingsSchema):
     groups_ou: str = Field(
         default="ou=Groups", description="OU for group entries", json_schema_extra=SENSITIVE
     )
-    use_starttls: Optional[bool] = Field(
+    use_starttls: bool | None = Field(
         default=False, description="Use STARTTLS", json_schema_extra=SENSITIVE
     )
-    project_group_object_classes: Optional[list[str]] = Field(
+    project_group_object_classes: list[str] | None = Field(
         default=None,
         description=(
             "Object classes of the groups this backend creates. Defaults to "
@@ -50,7 +48,7 @@ class LdapConnectionSchema(PluginBackendSettingsSchema):
             "carries the membership attribute must be present"
         ),
     )
-    empty_group_member_dn: Optional[str] = Field(
+    empty_group_member_dn: str | None = Field(
         default=None,
         description=(
             "Stand-in member that keeps a groupOfNames valid when no user holds its "
@@ -73,7 +71,7 @@ class LdapRolesBackendSettingsSchema(CommonBackendSettingsSchema):
         json_schema_extra=SENSITIVE,
     )
     waldur_api_token: str = Field(..., description="Waldur API token", json_schema_extra=SECRET)
-    waldur_verify_ssl: Optional[bool] = Field(
+    waldur_verify_ssl: bool | None = Field(
         default=True, description="Verify TLS for Waldur API", json_schema_extra=SENSITIVE
     )
 
@@ -126,7 +124,7 @@ class LdapRolesBackendSettingsSchema(CommonBackendSettingsSchema):
     # If True, look up users by Waldur user_uuid instead of username.
     # Off by default because Waldur usernames are the universal join
     # key with LDAP uid in self-hosted deployments.
-    lookup_by_user_uuid: Optional[bool] = Field(
+    lookup_by_user_uuid: bool | None = Field(
         default=False,
         description="Look up LDAP users by Waldur UUID instead of username",
         json_schema_extra=SENSITIVE,

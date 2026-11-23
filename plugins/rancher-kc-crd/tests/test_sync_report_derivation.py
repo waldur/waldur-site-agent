@@ -9,7 +9,6 @@ civil-number identity whose CR identifier never reaches the report.
 import logging
 import uuid
 from types import SimpleNamespace
-from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -148,7 +147,7 @@ CIVIL_ATTRIBUTE = resolve_identity_settings(
 )
 
 
-def _civil_grant(name: str, civil: Optional[str]) -> dict:
+def _civil_grant(name: str, civil: str | None) -> dict:
     return {
         "role_name": "ingress_manage",
         "user_username": name,

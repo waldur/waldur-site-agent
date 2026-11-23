@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any
 
 from azure.core.exceptions import AzureError
 from azure.mgmt.compute import ComputeManagementClient
@@ -61,7 +62,7 @@ class ComputeClient(BaseAzureClient):
         return zones
 
     def list_virtual_machine_images(
-        self, location: str, selected_provider: Optional[Iterable[str]] = None
+        self, location: str, selected_provider: Iterable[str] | None = None
     ) -> Iterator[AzureImage]:
         """Yield every image version in a region, optionally limited to publishers.
 
@@ -110,7 +111,7 @@ class ComputeClient(BaseAzureClient):
 
     @wrap_azure_errors
     def get_virtual_machine(
-        self, resource_group_name: str, vm_name: str, expand: Optional[str] = None
+        self, resource_group_name: str, vm_name: str, expand: str | None = None
     ) -> Any:
         """Fetch a virtual machine, optionally expanding its instance view."""
         return self.compute_client.virtual_machines.get(
@@ -128,8 +129,8 @@ class ComputeClient(BaseAzureClient):
         image_reference: dict[str, str],
         username: str,
         password: str,
-        custom_data: Optional[str] = None,
-        ssh_key: Optional[str] = None,
+        custom_data: str | None = None,
+        ssh_key: str | None = None,
     ) -> Any:
         """Start creation of a virtual machine and return the poller."""
         os_profile = OSProfile(

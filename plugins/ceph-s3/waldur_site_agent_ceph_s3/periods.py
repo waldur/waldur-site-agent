@@ -3,7 +3,6 @@
 import datetime
 import logging
 import zoneinfo
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ class BillingPeriodMixin:
         local = now.astimezone(self._reporting_tz())
         return local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    def _billing_period_start(self, now: Optional[datetime.datetime] = None) -> int:
+    def _billing_period_start(self, now: datetime.datetime | None = None) -> int:
         """Unix seconds at the start of the current billing period."""
         return int(self._period_start(now or self._now()).timestamp())
 

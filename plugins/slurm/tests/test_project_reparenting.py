@@ -2,8 +2,6 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
-from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,10 +9,10 @@ from waldur_api_client.models import ResourceState
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_limits import ResourceLimits
 from waldur_api_client.types import UNSET
-from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent_slurm.backend import SlurmBackend
 from waldur_site_agent_slurm.client import SlurmClient
 
+from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common import MARKETPLACE_SITE_AGENT_OFFERING_TYPE
 
 _SLURM_SETTINGS = {
@@ -63,7 +61,7 @@ def _make_waldur_resource(
     )
 
 
-def _make_backend(extra_settings: Optional[dict] = None) -> SlurmBackend:
+def _make_backend(extra_settings: dict | None = None) -> SlurmBackend:
     settings = dict(_SLURM_SETTINGS)
     if extra_settings:
         settings.update(extra_settings)

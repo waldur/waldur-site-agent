@@ -5,7 +5,7 @@ Kubernetes client and the Waldur API client.
 """
 
 from string import Template
-from typing import Any, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 CRD_API_VERSION = "waldur.io/v1alpha1"
 CRD_KIND = "ManagedRancherProject"
@@ -70,7 +70,7 @@ class IdentitySettings(NamedTuple):
 
     source: str = "username"
     lookup: str = "username"
-    attribute: Optional[str] = None
+    attribute: str | None = None
     template: str = DEFAULT_IDENTITY_TEMPLATE
     lowercase: bool = True
 
@@ -163,7 +163,7 @@ def resolve_identity_settings(backend_settings: dict) -> IdentitySettings:
     )
 
 
-def member_identifier(user_role: dict, identity: IdentitySettings) -> Optional[str]:
+def member_identifier(user_role: dict, identity: IdentitySettings) -> str | None:
     """Compute a member's ``userIdentifier``: source field -> template -> lowercase.
 
     Returns ``None`` when the user has no value for the source field.
@@ -175,7 +175,7 @@ def member_identifier(user_role: dict, identity: IdentitySettings) -> Optional[s
     return ident.lower() if identity.lowercase else ident
 
 
-def build_member(user_role: dict, identity: IdentitySettings) -> Optional[dict]:
+def build_member(user_role: dict, identity: IdentitySettings) -> dict | None:
     """CR member entry for a user role, or ``None`` when it has no identifier.
 
     ``lookupAttribute`` is emitted only for attribute lookup: operators
@@ -190,7 +190,7 @@ def build_member(user_role: dict, identity: IdentitySettings) -> Optional[dict]:
     return member
 
 
-def mask_civil_code(value: Optional[str]) -> str:
+def mask_civil_code(value: str | None) -> str:
     """Mask a civil code for logs: first 4 and last 2 characters (``ee38…00``)."""
     if not value:
         return ""
@@ -295,7 +295,7 @@ def build_role_bindings(
     group_name_template: str,
     role_map: dict[str, str],
     keycloak_use_user_id: bool = False,
-    identity: Optional[IdentitySettings] = None,
+    identity: IdentitySettings | None = None,
     rp_uuid: str = "",
     rp_uuid_short: str = "",
     project_name: str = "",
@@ -373,8 +373,8 @@ def build_cr_spec(
     resource_project: dict,
     user_roles: list[dict],
     backend_settings: dict,
-    cluster_user_roles: Optional[list[dict]] = None,
-    identity: Optional[IdentitySettings] = None,
+    cluster_user_roles: list[dict] | None = None,
+    identity: IdentitySettings | None = None,
 ) -> dict[str, Any]:
     """Assemble the full CR body (apiVersion + kind + metadata + spec).
 
@@ -547,7 +547,7 @@ def build_cr_spec(
 _WALDUR_QUOTA_KEYS = {"cpu", "memory", "storage", "gpu"}
 
 
-def _build_resource_quotas(limits: dict[str, Any]) -> Optional[dict]:
+def _build_resource_quotas(limits: dict[str, Any]) -> dict | None:
     """Forward Waldur ResourceProject.limits as the operator's resourceQuotas.
 
     Pass-through. The CRD expects a Waldur-domain dict

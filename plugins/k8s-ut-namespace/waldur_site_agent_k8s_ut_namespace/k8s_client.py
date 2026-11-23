@@ -1,6 +1,5 @@
 """Kubernetes client for ManagedNamespace custom resources."""
 
-from typing import Optional
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
@@ -70,7 +69,7 @@ class K8sUtNamespaceClient:
         except ApiException as e:
             raise BackendError(f"Failed to create ManagedNamespace {name}: {e}") from e
 
-    def get_managed_namespace(self, name: str) -> Optional[dict]:
+    def get_managed_namespace(self, name: str) -> dict | None:
         """Get a ManagedNamespace custom resource by name."""
         try:
             return self.custom_api.get_namespaced_custom_object(

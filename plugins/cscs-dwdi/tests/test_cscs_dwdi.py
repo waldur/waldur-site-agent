@@ -1,8 +1,8 @@
 """Tests for CSCS-DWDI backend."""
 
 from datetime import date
-from typing import Any, Optional
-from unittest.mock import MagicMock, call, patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 from freezegun import freeze_time
@@ -869,7 +869,7 @@ class TestCSCSDWDIStorageBackend:
 
     @staticmethod
     def _make_storage_backend(
-        extra_settings: Optional[dict] = None,
+        extra_settings: dict | None = None,
     ) -> CSCSDWDIStorageBackend:
         settings = {
             "cscs_dwdi_api_url": "https://api.example.com",

@@ -66,9 +66,9 @@ import json
 import random
 import threading
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from queue import Empty, Queue
-from typing import Callable, Optional
 
 import stomp.utils
 from stomp.exception import ConnectFailedException, StompException
@@ -115,7 +115,7 @@ def connect_to_stomp_server(
     username: str,
     password: str,
     max_retries: int = 0,
-    connect_timeout: Optional[float] = None,
+    connect_timeout: float | None = None,
 ) -> None:
     """Connects the existing connection to the STOMP server with retry logic.
 
@@ -210,7 +210,7 @@ class WaldurListener(stomp.ConnectionListener):
         offering: structures.Offering,
         user_agent: str,
         expose_backend_error_details: bool = True,
-        on_queue_missing: Optional[Callable[[], None]] = None,
+        on_queue_missing: Callable[[], None] | None = None,
     ) -> None:
         """Constructor method.
 
@@ -230,14 +230,14 @@ class WaldurListener(stomp.ConnectionListener):
         self.on_queue_missing = on_queue_missing
         self._reregister_lock = threading.Lock()
         # Frames waiting for the worker, each tagged with the connection it came on.
-        self._messages: Queue[Optional[tuple[int, stomp.utils.Frame]]] = Queue()
+        self._messages: Queue[tuple[int, stomp.utils.Frame] | None] = Queue()
         self._connection_generation = 0
         self._generation_lock = threading.Lock()
-        self._worker: Optional[threading.Thread] = None
+        self._worker: threading.Thread | None = None
         self._worker_start_lock = threading.Lock()
         self._closed = threading.Event()
         # time.time() when the running handler started; None while idle.
-        self._handler_started_at: Optional[float] = None
+        self._handler_started_at: float | None = None
 
     def on_error(self, frame: stomp.utils.Frame) -> None:
         """Error handler method."""
@@ -313,7 +313,7 @@ class WaldurListener(stomp.ConnectionListener):
                     raise
                 logger.exception("Unexpected error in the worker of queue %s", self.queue)
 
-    def handler_running_since(self) -> Optional[float]:
+    def handler_running_since(self) -> float | None:
         """When the handler now running started (``time.time()``), or None while idle."""
         return self._handler_started_at
 

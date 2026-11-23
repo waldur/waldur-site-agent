@@ -12,7 +12,6 @@ hash, which removes the need for a separate hash-to-alias map.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Union
 
 import httpx
 
@@ -110,7 +109,7 @@ class LiteLLMUsageClient:
         return isinstance(payload, dict) and payload.get("db") == "connected"
 
     def _fetch_page(self, start_date: str, end_date: str, page: int) -> dict:
-        params: dict[str, Union[str, int]] = {
+        params: dict[str, str | int] = {
             "start_date": start_date,
             "end_date": end_date,
             "page": page,
@@ -170,7 +169,7 @@ class LiteLLMUsageClient:
             date = str(result.get("date") or "")[:10]
             breakdown = result.get("breakdown") or {}
             entities = breakdown.get("entities") or {}
-            day_aliases: Optional[list] = None
+            day_aliases: list | None = None
             for user_id, record in entities.items():
                 if not isinstance(record, dict):
                     continue
@@ -206,7 +205,7 @@ class LiteLLMUsageClient:
         return aliases
 
     @staticmethod
-    def _to_user_row(date: str, user_id: str, record: object) -> Optional[dict]:
+    def _to_user_row(date: str, user_id: str, record: object) -> dict | None:
         """Map one entity (or entity-by-key) entry onto a usage row."""
         if not isinstance(record, dict):
             return None
@@ -264,7 +263,7 @@ class LiteLLMUsageClient:
         return rows
 
     @staticmethod
-    def _to_row(record: object) -> Optional[dict]:
+    def _to_row(record: object) -> dict | None:
         """Map one ``api_keys`` breakdown entry onto a usage row.
 
         Keyed by alias rather than by the hash the breakdown is indexed on: a rotation

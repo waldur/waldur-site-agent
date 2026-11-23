@@ -12,19 +12,18 @@ Mapping:
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import pycountry
-
 from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.models.offering_user_state import OfferingUserState
 from waldur_api_client.models.project_user import ProjectUser
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_limits import ResourceLimits
-
 from waldur_site_agent.backend import BackendType, backends
-from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.backend.exceptions import BackendError, BackendNotReadyError
+from waldur_site_agent.backend.structures import BackendResourceInfo
+
 from waldur_site_agent_mup.client import MUPClient, MUPError
 
 logger = logging.getLogger(__name__)
@@ -113,7 +112,7 @@ class MUPBackend(backends.BaseBackend):
         }
 
         # Cache for research fields and user mappings
-        self._research_fields_cache: Optional[list[dict]] = None
+        self._research_fields_cache: list[dict] | None = None
         self._user_cache: dict[str, int] = {}
         self._project_cache: dict[str, dict] = {}
         self._allocation_identifier_cache: dict[str, tuple[int, int]] = {}
@@ -150,20 +149,20 @@ class MUPBackend(backends.BaseBackend):
         msg = "No allocations were created - all components had zero limits or failed"
         raise BackendError(msg)
 
-    def _map_gender(self, gender_code: Optional[int]) -> Optional[str]:
+    def _map_gender(self, gender_code: int | None) -> str | None:
 
         if gender_code is None:
             return None
 
         return GENDER_MAP.get(gender_code, "Other")
 
-    def _map_country(self, country_code: Optional[str]) -> Optional[str]:
+    def _map_country(self, country_code: str | None) -> str | None:
         if not country_code:
             return None
 
         return COUNTRIES_DICT.get(country_code.upper(), country_code)
 
-    def _extract_birth_year(self, birth_date) -> Optional[int]:
+    def _extract_birth_year(self, birth_date) -> int | None:
         if birth_date is None:
             return None
 
@@ -172,7 +171,7 @@ class MUPBackend(backends.BaseBackend):
 
         return None
 
-    def _map_organization_type_to_mup_type(self, org_type: Optional[str]) -> str:
+    def _map_organization_type_to_mup_type(self, org_type: str | None) -> str:
         if not org_type:
             return "Other"
 
@@ -185,7 +184,7 @@ class MUPBackend(backends.BaseBackend):
         org_type = org_type.lower()
         return ORG_TYPE_MAPPING.get(org_type, "Other")
 
-    def _year_from_attr_birth_date(self, val: object) -> Optional[int]:
+    def _year_from_attr_birth_date(self, val: object) -> int | None:
         """Extract birth year from serialized user_attributes birth_date."""
         if val is None:
             return None
@@ -203,7 +202,7 @@ class MUPBackend(backends.BaseBackend):
         username: str,
         attrs: dict[str, Any],
         email: str,
-        cuid: Optional[str] = None,
+        cuid: str | None = None,
     ) -> dict[str, Any]:
         """Build the waldur_user dict for _get_or_create_user from membership kwargs.
 
@@ -217,19 +216,19 @@ class MUPBackend(backends.BaseBackend):
         )
 
         gender_raw = attrs.get("gender")
-        gender_out: Optional[str] = None
+        gender_out: str | None = None
         if isinstance(gender_raw, int):
             gender_out = self._map_gender(gender_raw)
         elif isinstance(gender_raw, str) and gender_raw:
             gender_out = gender_raw
 
         country_raw = attrs.get("country_of_residence")
-        country_out: Optional[str] = None
+        country_out: str | None = None
         if isinstance(country_raw, str) and country_raw:
             country_out = self._map_country(country_raw) or country_raw
 
         org_type_raw = attrs.get("organization_type")
-        inst_out: Optional[str] = None
+        inst_out: str | None = None
         if org_type_raw:
             inst_out = self._map_organization_type_to_mup_type(str(org_type_raw))
 
@@ -287,8 +286,8 @@ class MUPBackend(backends.BaseBackend):
     def _ensure_myaccessid_on_user(
         self,
         mup_user_id: int,
-        myaccessid: Optional[str],
-        user_record: Optional[dict] = None,
+        myaccessid: str | None,
+        user_record: dict | None = None,
     ) -> None:
         if not myaccessid or not str(myaccessid).strip():
             logger.debug(
@@ -323,7 +322,7 @@ class MUPBackend(backends.BaseBackend):
                 e,
             )
 
-    def _parse_backend_id(self, backend_id: str) -> tuple[int, Optional[int]]:
+    def _parse_backend_id(self, backend_id: str) -> tuple[int, int | None]:
         """Parse a backend_id string into (project_id, allocation_id)."""
         if "_" in backend_id:
             parts = backend_id.split("_", 1)
@@ -385,7 +384,7 @@ class MUPBackend(backends.BaseBackend):
         logger.debug("Extracted grant number '%s' from project name '%s'", grant_number, project_name)
         return grant_number
 
-    def _get_or_create_user(self, waldur_user: dict) -> Optional[int]:  # noqa: PLR0911
+    def _get_or_create_user(self, waldur_user: dict) -> int | None:  # noqa: PLR0911
         """Get or create MUP user based on Waldur user information.
 
         Returns MUP user ID or None if creation fails.
@@ -505,7 +504,7 @@ class MUPBackend(backends.BaseBackend):
             logger.exception("Unexpected error creating user %s: %s", email, e)
             return None
 
-    def _find_user_request_by_email(self, email: str) -> Optional[int]:
+    def _find_user_request_by_email(self, email: str) -> int | None:
         """Find a user request by email address.
 
         Returns the user request ID if found, None otherwise.
@@ -531,7 +530,7 @@ class MUPBackend(backends.BaseBackend):
             logger.warning("Error searching for user request by email %s: %s", email, e)
             return None
 
-    def _get_project_by_grant(self, grant_number: str) -> Optional[dict]:
+    def _get_project_by_grant(self, grant_number: str) -> dict | None:
         """Find MUP project by grant number (from Waldur project name)."""
         if grant_number in self._project_cache:
             return self._project_cache[grant_number]
@@ -550,8 +549,8 @@ class MUPBackend(backends.BaseBackend):
         return None
 
     def _create_mup_project(
-        self, project_name: str, grant_number: str, project_uuid: str, pi_user_email: str, description: Optional[str] = None
-    ) -> Optional[dict]:
+        self, project_name: str, grant_number: str, project_uuid: str, pi_user_email: str, description: str | None = None
+    ) -> dict | None:
         """Create MUP project from Waldur project data.
 
         """
@@ -593,8 +592,8 @@ class MUPBackend(backends.BaseBackend):
             return None
 
     def _find_pi_from_context(
-        self, user_context: Optional[dict]
-    ) -> Optional[ProjectUser]:
+        self, user_context: dict | None
+    ) -> ProjectUser | None:
         """Find Principal Investigator (PI) from user context by role.
 
         PI is identified as the user with PROJECT_MANAGER_ROLE in the project team.
@@ -621,8 +620,8 @@ class MUPBackend(backends.BaseBackend):
         return None
 
     def _build_user_data_from_context(
-        self, team_user: ProjectUser, offering_user: Optional[OfferingUser] = None
-    ) -> Optional[dict]:
+        self, team_user: ProjectUser, offering_user: OfferingUser | None = None
+    ) -> dict | None:
         """Build user data dict from team user and offering user.
 
         Args:
@@ -688,8 +687,8 @@ class MUPBackend(backends.BaseBackend):
         return user_data
 
     def _create_mup_user(
-        self, team_user: ProjectUser, offering_user: Optional[OfferingUser] = None
-    ) -> Optional[int]:
+        self, team_user: ProjectUser, offering_user: OfferingUser | None = None
+    ) -> int | None:
         """Create a single user in MUP from team user and optional offering user.
 
         Args:
@@ -853,7 +852,7 @@ class MUPBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Create and activate MUP project (if needed) for Waldur project.
         Uses grant number from project name to map Waldur Project -> MUP Project (1:1).
@@ -957,7 +956,7 @@ class MUPBackend(backends.BaseBackend):
         self,
         backend_resource_info: BackendResourceInfo,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Perform actions after resource creation - create allocations."""
         # Extract grant number from project name
@@ -1389,7 +1388,7 @@ class MUPBackend(backends.BaseBackend):
 
     def _pull_backend_resource(
         self, resource_backend_id: str
-    ) -> Optional[BackendResourceInfo]:
+    ) -> BackendResourceInfo | None:
         """Pull resource data from MUP. Necessary for membership sync."""
         logger.info("Pulling MUP resource %s", resource_backend_id)
         project = self._find_project_by_resource_id(resource_backend_id)
@@ -1419,7 +1418,7 @@ class MUPBackend(backends.BaseBackend):
             usage=usage,
         )
 
-    def _find_project_by_resource_id(self, resource_backend_id: str) -> Optional[dict]:
+    def _find_project_by_resource_id(self, resource_backend_id: str) -> dict | None:
         """Find MUP project by resource backend ID.
 
 

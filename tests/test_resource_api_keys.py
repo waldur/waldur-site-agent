@@ -7,19 +7,19 @@ import json
 import unittest
 import uuid
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any
 from unittest import mock
 
 import httpx
 import stomp.utils
 from waldur_api_client import AuthenticatedClient, errors
 
+from tests.fixtures import api_key_row
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.common import resource_api_keys
 from waldur_site_agent.common import structures as common_structures
 from waldur_site_agent.common.resource_api_keys import ApiKeyCommand
 from waldur_site_agent.event_processing.handlers import on_resource_api_key_command_stomp
-from tests.fixtures import api_key_row
 
 KEYS = "waldur_site_agent.common.resource_api_keys"
 HANDLERS = "waldur_site_agent.event_processing.handlers"
@@ -61,7 +61,7 @@ def _acknowledged(mock_ack: mock.Mock, client: object = mock.sentinel.client) ->
 class TestExecuteApiKeyCommand(unittest.TestCase):
     """Each command runs on the backend first, then its own acknowledgement."""
 
-    def _execute(self, command: ApiKeyCommand, backend: Optional[mock.Mock] = None) -> mock.Mock:
+    def _execute(self, command: ApiKeyCommand, backend: mock.Mock | None = None) -> mock.Mock:
         backend = backend or _backend()
         with mock.patch(f"{KEYS}._read_resource", return_value=SimpleNamespace(paused=False)):
             resource_api_keys.execute_api_key_command(mock.sentinel.client, backend, command)

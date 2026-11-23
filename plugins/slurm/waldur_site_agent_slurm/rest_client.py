@@ -23,7 +23,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 from shutil import which
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import quote, urlencode
 
 import httpx
@@ -141,7 +141,7 @@ class SlurmRestClient(SlurmClientInterface):
         rest_settings: dict,
         cluster_name: str,
         slurm_bin_path: str = "/usr/bin",
-        transport: Optional[httpx.BaseTransport] = None,
+        transport: httpx.BaseTransport | None = None,
         usage_tres_source: UsageTresSource = UsageTresSource.REQUESTED,
     ) -> None:
         """Init REST transport, auth settings and the internal CLI client.
@@ -159,17 +159,17 @@ class SlurmRestClient(SlurmClientInterface):
             msg = "cluster_name is required when SLURM execution_mode is 'rest'"
             raise BackendError(msg)
         self.slurm_tres = slurm_tres
-        self.cluster_name: Optional[str] = cluster_name
+        self.cluster_name: str | None = cluster_name
         self.usage_tres_source = usage_tres_source
         self._executed_commands: list[str] = []
         # TRES is static for the cluster lifetime; cache it to avoid a
         # GET /tres round trip on every per-user limit write.
-        self._tres_keys_cache: Optional[list[str]] = None
+        self._tres_keys_cache: list[str] | None = None
         self.api_version: str = rest_settings.get("api_version", DEFAULT_API_VERSION)
         self.username: str = rest_settings.get("username", "")
-        self._token_file: Optional[str] = rest_settings.get("token_file")
-        self._token_env: Optional[str] = rest_settings.get("token_env")
-        self._token: Optional[str] = None
+        self._token_file: str | None = rest_settings.get("token_file")
+        self._token_env: str | None = rest_settings.get("token_env")
+        self._token: str | None = None
         url: str = rest_settings["url"]
         timeout = rest_settings.get("timeout", 30)
         if transport is None and url.startswith("unix://"):
@@ -245,8 +245,8 @@ class SlurmRestClient(SlurmClientInterface):
         self,
         method: str,
         path: str,
-        query: Optional[dict[str, str]] = None,
-        body: Optional[dict] = None,
+        query: dict[str, str] | None = None,
+        body: dict | None = None,
         allow_errors: bool = False,
     ) -> dict:
         """Send a request to slurmrestd and return the parsed JSON body.
@@ -334,7 +334,7 @@ class SlurmRestClient(SlurmClientInterface):
         return f"{tres_type}/{name}" if name else tres_type
 
     @staticmethod
-    def _tres_count(tres: dict) -> Optional[int]:
+    def _tres_count(tres: dict) -> int | None:
         """Extract a count from a TRES object, tolerating tri-state structs."""
         count = tres.get("count")
         if isinstance(count, dict):
@@ -346,7 +346,7 @@ class SlurmRestClient(SlurmClientInterface):
         return int(count)
 
     @classmethod
-    def _tres_list_to_dict(cls, tres_list: Optional[list[dict]]) -> dict[str, int]:
+    def _tres_list_to_dict(cls, tres_list: list[dict] | None) -> dict[str, int]:
         result = {}
         for tres in tres_list or []:
             count = cls._tres_count(tres)
@@ -384,7 +384,7 @@ class SlurmRestClient(SlurmClientInterface):
     # ===== ASSOCIATION HELPERS =====
 
     def _list_associations(
-        self, account: Optional[str] = None, user: Optional[str] = None
+        self, account: str | None = None, user: str | None = None
     ) -> list[dict]:
         query = {}
         if account is not None:
@@ -396,7 +396,7 @@ class SlurmRestClient(SlurmClientInterface):
         payload = self._request("GET", self._db("associations/"), query=query)
         return payload.get("associations") or []
 
-    def _get_account_association(self, account: str) -> Optional[dict]:
+    def _get_account_association(self, account: str) -> dict | None:
         """Return the account-level association (the one with no user)."""
         for assoc in self._list_associations(account=account):
             if not assoc.get("user"):
@@ -404,8 +404,8 @@ class SlurmRestClient(SlurmClientInterface):
         return None
 
     def _find_association(
-        self, account: str, user: Optional[str] = None, partition: Optional[str] = None
-    ) -> Optional[dict]:
+        self, account: str, user: str | None = None, partition: str | None = None
+    ) -> dict | None:
         """Return the association row the update handler would match, if any."""
         if not user:
             return self._get_account_association(account)
@@ -418,8 +418,8 @@ class SlurmRestClient(SlurmClientInterface):
         self,
         account: str,
         fields: dict,
-        user: Optional[str] = None,
-        partition: Optional[str] = None,
+        user: str | None = None,
+        partition: str | None = None,
     ) -> str:
         """Create/update an association identified by account(+user, partition).
 
@@ -472,7 +472,7 @@ class SlurmRestClient(SlurmClientInterface):
         return dst
 
     @staticmethod
-    def _dig(obj: Optional[dict], *path: str) -> Any:  # noqa: ANN401
+    def _dig(obj: dict | None, *path: str) -> Any:  # noqa: ANN401
         """Walk a nested dict along the path, returning None when absent."""
         current: Any = obj
         for key in path:
@@ -525,7 +525,7 @@ class SlurmRestClient(SlurmClientInterface):
         payload = self._request("GET", self._db("accounts/"))
         return [self._parse_account(account) for account in payload.get("accounts") or []]
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Return the account with the given name, or None when absent."""
         payload = self._request(
             "GET", self._db(f"account/{quote(resource_id)}"), allow_errors=True
@@ -548,7 +548,7 @@ class SlurmRestClient(SlurmClientInterface):
         name: str,
         description: str,
         organization: str,
-        parent_name: Optional[str] = None,
+        parent_name: str | None = None,
     ) -> str:
         """Create an account together with its cluster association.
 
@@ -575,7 +575,7 @@ class SlurmRestClient(SlurmClientInterface):
         self._request("DELETE", self._db(f"account/{quote(name)}"))
         return name
 
-    def get_account_parent(self, account: str) -> Optional[str]:
+    def get_account_parent(self, account: str) -> str | None:
         """Return the parent account name read from the account-level association."""
         assoc = self._get_account_association(account)
         if assoc is None:
@@ -632,7 +632,7 @@ class SlurmRestClient(SlurmClientInterface):
 
     # ===== LIMITS =====
 
-    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> Optional[str]:
+    def set_resource_limits(self, resource_id: str, limits_dict: dict[str, int]) -> str | None:
         """Set GrpTRESMins limits on the account association."""
         tres = self._tres_dict_to_list(limits_dict)
         return self._post_association(
@@ -733,7 +733,7 @@ class SlurmRestClient(SlurmClientInterface):
 
     # ===== ASSOCIATIONS =====
 
-    def get_association(self, user: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, user: str, resource_id: str) -> Association | None:
         """Return the association between the user and the account, if it exists."""
         associations = self._list_associations(account=resource_id, user=user)
         if not associations:
@@ -750,10 +750,10 @@ class SlurmRestClient(SlurmClientInterface):
         self,
         username: str,
         resource_id: str,
-        default_account: Optional[str],
-        partitions: Optional[Sequence[str]] = None,
+        default_account: str | None,
+        partitions: Sequence[str] | None = None,
         use_parent_fairshare: bool = True,
-        association_fields: Optional[dict] = None,
+        association_fields: dict | None = None,
     ) -> str:
         """POST users_association — the REST equivalent of ``sacctmgr add user``.
 
@@ -786,7 +786,7 @@ class SlurmRestClient(SlurmClientInterface):
         return ""
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = ""
+        self, username: str, resource_id: str, default_account: str | None = ""
     ) -> str:
         """Create an association between the account and the user."""
         return self._add_user_associations(username, resource_id, default_account)
@@ -796,7 +796,7 @@ class SlurmRestClient(SlurmClientInterface):
         username: str,
         resource_id: str,
         partition: str,
-        default_account: Optional[str] = "",
+        default_account: str | None = "",
     ) -> str:
         """Create a user-account association with a specific partition."""
         if not _PARTITION_NAME_RE.match(partition):
@@ -815,7 +815,7 @@ class SlurmRestClient(SlurmClientInterface):
         username: str,
         resource_id: str,
         partitions: Sequence[str],
-        default_account: Optional[str] = "",
+        default_account: str | None = "",
     ) -> str:
         """Create a user-account association restricted to the given partitions."""
         if not partitions:
@@ -834,9 +834,9 @@ class SlurmRestClient(SlurmClientInterface):
         username: str,
         resource_id: str,
         qos_list: Sequence[str],
-        default_qos: Optional[str] = None,
-        partitions: Optional[Sequence[str]] = None,
-        default_account: Optional[str] = None,
+        default_qos: str | None = None,
+        partitions: Sequence[str] | None = None,
+        default_account: str | None = None,
     ) -> str:
         """Create a user-account association granting a QoS set.
 
@@ -856,7 +856,7 @@ class SlurmRestClient(SlurmClientInterface):
         if default_qos is not None and not _QOS_NAME_RE.match(default_qos):
             msg = f"Invalid SLURM QoS name: {default_qos!r}"
             raise BackendError(msg)
-        sorted_parts: Optional[list[str]] = None
+        sorted_parts: list[str] | None = None
         if partitions:
             for name in partitions:
                 if not _PARTITION_NAME_RE.match(name):
@@ -894,7 +894,7 @@ class SlurmRestClient(SlurmClientInterface):
             }
         )
 
-    def get_user_default_account(self, username: str) -> Optional[str]:
+    def get_user_default_account(self, username: str) -> str | None:
         """The user's default account from ``GET /slurmdb/{v}/user/{name}``, if known.
 
         slurmdbd derives the default account from the user's default
@@ -982,12 +982,12 @@ class SlurmRestClient(SlurmClientInterface):
     def create_qos(
         self,
         name: str,
-        flags: Optional[str] = None,
-        grp_tres: Optional[str] = None,
-        max_jobs: Optional[int] = None,
-        max_submit: Optional[int] = None,
-        max_wall: Optional[str] = None,
-        min_tres_per_job: Optional[str] = None,
+        flags: str | None = None,
+        grp_tres: str | None = None,
+        max_jobs: int | None = None,
+        max_submit: int | None = None,
+        max_wall: str | None = None,
+        min_tres_per_job: str | None = None,
     ) -> None:
         """Create a QoS with the specified parameters in a single request."""
         qos: dict[str, Any] = {"name": name}
@@ -1021,7 +1021,7 @@ class SlurmRestClient(SlurmClientInterface):
         """Delete a QoS from the SLURM cluster."""
         self._request("DELETE", self._db(f"qos/{quote(name)}"))
 
-    def set_account_qos(self, account: str, qos: str, default_qos: Optional[str] = None) -> None:
+    def set_account_qos(self, account: str, qos: str, default_qos: str | None = None) -> None:
         """Set the QoS list for the account (comma-separated string accepted).
 
         ``default_qos`` goes into the same POST: slurmdbd applies the same
@@ -1187,7 +1187,7 @@ class SlurmRestClient(SlurmClientInterface):
             return set(state)
         return set()
 
-    def _list_active_jobs(self, account: str, user: Optional[str] = None) -> list[dict]:
+    def _list_active_jobs(self, account: str, user: str | None = None) -> list[dict]:
         # Ask slurmrestd to filter server-side so we don't download the whole
         # cluster job table; older controllers ignore or reject these params,
         # so fall back to the full fetch and always re-filter client-side.
@@ -1230,7 +1230,7 @@ class SlurmRestClient(SlurmClientInterface):
         """List active job IDs for the account and user."""
         return [str(job.get("job_id")) for job in self._list_active_jobs(account, user)]
 
-    def cancel_active_user_jobs(self, account: str, user: Optional[str] = None) -> None:
+    def cancel_active_user_jobs(self, account: str, user: str | None = None) -> None:
         """Cancel active jobs for the account (and user, when given)."""
         for job in self._list_active_jobs(account, user):
             job_id = job.get("job_id")
@@ -1249,7 +1249,7 @@ class SlurmRestClient(SlurmClientInterface):
     # ===== USAGE REPORTS (slurmdb job records) =====
 
     def get_usage_report(
-        self, resource_ids: list[str], timezone: Optional[str] = None
+        self, resource_ids: list[str], timezone: str | None = None
     ) -> list[SlurmReportLine]:
         """Per-user usage for the current month, from ``GET /slurmdb/{v}/jobs/``.
 
@@ -1367,7 +1367,7 @@ class SlurmRestClient(SlurmClientInterface):
         return kept
 
     @staticmethod
-    def _time_field(value: object) -> Optional[int]:
+    def _time_field(value: object) -> int | None:
         """A slurmdb time value as int seconds; tolerates the tri-state struct."""
         if isinstance(value, dict):
             value = value.get("number") if value.get("set") and not value.get("infinite") else None
@@ -1376,7 +1376,7 @@ class SlurmRestClient(SlurmClientInterface):
         return value
 
     @classmethod
-    def _truncated_elapsed(cls, job: dict, window: tuple[int, int]) -> Optional[int]:
+    def _truncated_elapsed(cls, job: dict, window: tuple[int, int]) -> int | None:
         """Seconds of the job that fall inside the window -- what sacct --truncate reports.
 
         A job that spans a month boundary is billed to each month only for the
@@ -1410,7 +1410,7 @@ class SlurmRestClient(SlurmClientInterface):
 
     def _job_to_report_line(
         self, job: dict, window: tuple[int, int]
-    ) -> Optional[SlurmReportLine]:
+    ) -> SlurmReportLine | None:
         """Render one slurmdb job record as a sacct ``Account|TRES|Elapsed|User`` line.
 
         ``tres.requested`` is sacct's ReqTRES and ``tres.allocated`` its

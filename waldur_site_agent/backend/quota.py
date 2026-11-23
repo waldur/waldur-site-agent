@@ -7,7 +7,7 @@ for CephFS (xattr), XFS (user quotas), and Lustre filesystems.
 from __future__ import annotations
 
 import pwd
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -44,22 +44,22 @@ class HomedirQuotaConfig(BaseModel):
     )
 
     # CephFS xattr options
-    max_bytes: Optional[str] = Field(
+    max_bytes: str | None = Field(
         default=None,
         description="Maximum bytes for CephFS quota (e.g. '1099511627776' or '1T')",
     )
-    max_files: Optional[int] = Field(
+    max_files: int | None = Field(
         default=None,
         description="Maximum number of files/inodes for CephFS quota",
     )
 
     # XFS / Lustre shared options
-    mount_point: Optional[str] = Field(
+    mount_point: str | None = Field(
         default=None,
         description="Filesystem mount point (required for xfs and lustre providers)",
         json_schema_extra=_SENSITIVE,
     )
-    block_softlimit: Optional[str] = Field(
+    block_softlimit: str | None = Field(
         default=None,
         description=(
             "Block soft limit. "
@@ -67,15 +67,15 @@ class HomedirQuotaConfig(BaseModel):
             "Lustre expects kilobytes."
         ),
     )
-    block_hardlimit: Optional[str] = Field(
+    block_hardlimit: str | None = Field(
         default=None,
         description="Block hard limit (same format as block_softlimit)",
     )
-    inode_softlimit: Optional[int] = Field(
+    inode_softlimit: int | None = Field(
         default=None,
         description="Inode/file soft limit",
     )
-    inode_hardlimit: Optional[int] = Field(
+    inode_hardlimit: int | None = Field(
         default=None,
         description="Inode/file hard limit",
     )
@@ -93,7 +93,7 @@ class HomedirQuotaConfig(BaseModel):
         return v
 
 
-def get_user_homedir(username: str, homedir_base_path: Optional[str] = None) -> str:
+def get_user_homedir(username: str, homedir_base_path: str | None = None) -> str:
     """Resolve the home directory path for a user.
 
     Args:

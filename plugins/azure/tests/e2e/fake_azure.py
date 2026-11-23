@@ -11,7 +11,7 @@ state of the "subscription" rather than on the calls that got there.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 
 class _Poller:
@@ -66,7 +66,7 @@ class FakeAzure:
         self.networks: set[str] = set()
         self.public_ips: dict[str, _Object] = {}
         self.security_groups: dict[str, list[str]] = {}
-        self.interface_security_groups: dict[str, Optional[str]] = {}
+        self.interface_security_groups: dict[str, str | None] = {}
 
         self.resource = _ResourceClient(self)
         self.compute = _ComputeClient(self)
@@ -129,7 +129,7 @@ class _ComputeClient:
         return _Poller(machine)
 
     def get_virtual_machine(
-        self, resource_group_name: str, vm_name: str, expand: Optional[str] = None
+        self, resource_group_name: str, vm_name: str, expand: str | None = None
     ) -> _Object:
         del expand
         machine = self.azure.machines.get(
@@ -222,8 +222,8 @@ class _NetworkClient:
         name: str,
         config_name: str,
         subnet_id: str,
-        public_ip_id: Optional[str] = None,
-        security_group_id: Optional[str] = None,
+        public_ip_id: str | None = None,
+        security_group_id: str | None = None,
     ) -> _Poller:
         del location, config_name, subnet_id, public_ip_id
         self.azure.interface_security_groups[f"{group}/{name}"] = security_group_id

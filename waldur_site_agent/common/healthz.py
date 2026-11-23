@@ -24,7 +24,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 # The package itself is already imported to reach this module, so this costs nothing.
 from waldur_site_agent.common import static_token_prefix
@@ -51,12 +51,12 @@ def heartbeat_path() -> str:
     return os.environ.get(HEARTBEAT_PATH_ENV) or HEARTBEAT_PATH
 
 
-def touch_heartbeat(path: Optional[str] = None) -> None:
+def touch_heartbeat(path: str | None = None) -> None:
     """Update the heartbeat file mtime. Called from main loops."""
     Path(path or heartbeat_path()).write_text(str(time.time()))
 
 
-def check_liveness(max_age: int = DEFAULT_MAX_AGE, path: Optional[str] = None) -> bool:
+def check_liveness(max_age: int = DEFAULT_MAX_AGE, path: str | None = None) -> bool:
     """Return True if heartbeat file exists and was updated within *max_age* seconds."""
     try:
         mtime = Path(path or heartbeat_path()).stat().st_mtime

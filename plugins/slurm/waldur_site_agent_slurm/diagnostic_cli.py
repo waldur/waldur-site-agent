@@ -6,7 +6,6 @@ import argparse
 import json
 import logging
 import sys
-from typing import Optional
 
 from waldur_api_client.client import AuthenticatedClient
 
@@ -89,9 +88,9 @@ Examples:
 
 def find_slurm_offering(
     offerings: list[Offering],
-    offering_uuid: Optional[str] = None,
-    account_name: Optional[str] = None,
-) -> Optional[Offering]:
+    offering_uuid: str | None = None,
+    account_name: str | None = None,
+) -> Offering | None:
     """Find matching SLURM offering from configuration.
 
     Args:
@@ -129,7 +128,7 @@ def find_slurm_offering(
     return slurm_offerings[0]
 
 
-def format_tres_dict(tres_dict: Optional[dict]) -> str:
+def format_tres_dict(tres_dict: dict | None) -> str:
     """Format TRES dictionary as string."""
     if not tres_dict:
         return "(none)"
@@ -305,7 +304,7 @@ def format_json(diagnostic: AccountDiagnostic) -> str:
 
 def _create_clients(
     offering: Offering, global_proxy: str
-) -> Optional[tuple[AuthenticatedClient, SlurmClientInterface]]:
+) -> tuple[AuthenticatedClient, SlurmClientInterface] | None:
     """The Waldur and SLURM clients for the offering, or None when either fails.
 
     The SLURM client is built exactly as the offering's backend builds it

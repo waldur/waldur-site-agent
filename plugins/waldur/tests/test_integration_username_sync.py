@@ -35,13 +35,10 @@ import os
 import threading
 import time
 import uuid as uuid_mod
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 from urllib.parse import urlparse
-from uuid import UUID
 
 import pytest
-
 from waldur_site_agent.common.structures import Offering
 from waldur_site_agent.event_processing.event_subscription_manager import (
     WALDUR_LISTENER_NAME,
@@ -54,6 +51,7 @@ from waldur_site_agent.event_processing.listener import (
 from waldur_site_agent.event_processing.utils import (
     stop_stomp_consumers,
 )
+
 from waldur_site_agent_waldur.backend import WaldurBackend
 
 from .integration_helpers import AutoApproveWaldurClient, WaldurTestSetup
@@ -105,7 +103,7 @@ class UserInfo:
     url: str
     username: str
     email: str
-    token: Optional[str] = None
+    token: str | None = None
 
 
 @dataclass
@@ -549,8 +547,9 @@ def _grant_publisher_vhost_access(vhost_name):
     for the subscription owner. The publisher user (settings.RABBITMQ["USER"])
     needs write permissions on this vhost to deliver events.
     """
-    import httpx as httpx_lib  # noqa: PLC0415
     from urllib.parse import quote  # noqa: PLC0415
+
+    import httpx as httpx_lib  # noqa: PLC0415
 
     try:
         resp = httpx_lib.put(
@@ -1148,13 +1147,13 @@ class TestIdentityManagerEventRouting:
         if not env.user_a.token or not env.user_b.token:
             pytest.skip("Missing tokens")
 
+        from waldur_api_client.models import (  # noqa: PLC0415
+            ObservableObjectTypeEnum,
+        )
         from waldur_site_agent.common.agent_identity_management import (  # noqa: PLC0415
             AgentIdentityManager,
         )
         from waldur_site_agent.common.utils import get_client  # noqa: PLC0415
-        from waldur_api_client.models import (  # noqa: PLC0415
-            ObservableObjectTypeEnum,
-        )
 
         # --- user_a subscription (offering manager on offering B) ---
         _add_offering_role(

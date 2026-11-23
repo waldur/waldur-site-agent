@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import functools
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from azure.mgmt.network import NetworkManagementClient
 from azure.mgmt.network.models import (
@@ -79,8 +80,8 @@ class NetworkClient(BaseAzureClient):
         interface_name: str,
         config_name: str,
         subnet_id: str,
-        public_ip_id: Optional[str] = None,
-        security_group_id: Optional[str] = None,
+        public_ip_id: str | None = None,
+        security_group_id: str | None = None,
     ) -> Any:
         """Start creation of a network interface and return the poller."""
         ip_configuration = NetworkInterfaceIPConfiguration(

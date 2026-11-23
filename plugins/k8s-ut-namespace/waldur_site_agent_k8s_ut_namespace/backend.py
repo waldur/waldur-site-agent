@@ -5,7 +5,6 @@ import json
 import pprint
 import re
 import reprlib
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -103,7 +102,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         self.k8s_client = K8sUtNamespaceClient(backend_settings)
 
         # Initialize Keycloak client if configured
-        self.keycloak_client: Optional[KeycloakClient] = None
+        self.keycloak_client: KeycloakClient | None = None
         if backend_settings.get("keycloak_enabled", False):
             keycloak_settings = backend_settings.get("keycloak", {})
             try:
@@ -119,7 +118,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         # A block that is present but unusable -- empty, or without ``url`` -- raises
         # rather than degrading to no billing: silently reporting nothing is the one
         # failure mode that looks exactly like an idle month.
-        self.prometheus_client: Optional[PrometheusClient] = None
+        self.prometheus_client: PrometheusClient | None = None
         if "prometheus" in backend_settings:
             self.prometheus_client = PrometheusClient(backend_settings["prometheus"])
             logger.info(
@@ -363,7 +362,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             raise BackendError(msg)
         return level
 
-    def _resolve_security_level(self, waldur_resource: WaldurResource) -> Optional[str]:
+    def _resolve_security_level(self, waldur_resource: WaldurResource) -> str | None:
         """The Pod Security level to apply, or None to leave it to the operator.
 
         The offering's ``default_security_level`` applies unless the order's
@@ -383,7 +382,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             BackendError: if a setting is not a valid level, or the order names
                 a level the offering does not allow.
         """
-        default: Optional[str] = None
+        default: str | None = None
         if not _is_blank(self.default_security_level):
             default = self._normalise_security_level(
                 "The 'default_security_level' backend setting",
@@ -435,7 +434,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
 
     @staticmethod
     def _unsupported_spec_fields(
-        created: object, quota_enabled: bool, security_level: Optional[str]
+        created: object, quota_enabled: bool, security_level: str | None
     ) -> list[str]:
         """Fields the API server dropped from the CR the agent just created.
 
@@ -851,7 +850,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         resource_backend_ids: list[str],
         year: int,
         month: int,
-        waldur_resource: Optional[WaldurResource] = None,
+        waldur_resource: WaldurResource | None = None,
     ) -> dict:
         """Measure a closed month again with both window ends pinned.
 
@@ -989,7 +988,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Validate resource before creation."""
         del user_context
@@ -1005,7 +1004,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> BackendResourceInfo:
         """Create ManagedNamespace CR and Keycloak groups."""
         del resource_backend_id  # We generate our own name
@@ -1403,7 +1402,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
 
     def pull_resource(
         self, waldur_resource: WaldurResource
-    ) -> Optional[BackendResourceInfo]:
+    ) -> BackendResourceInfo | None:
         """Pull resource data including users from all 3 Keycloak groups."""
         ns_name = waldur_resource.backend_id
         if not ns_name:
@@ -1536,7 +1535,7 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             logger.error("Failed to pause %s: %s", resource_backend_id, e)
             return False
 
-    def _saved_quota(self, annotations: dict) -> Optional[dict]:
+    def _saved_quota(self, annotations: dict) -> dict | None:
         """The quota a pause or downscale recorded, or None if nothing was recorded.
 
         The legacy annotation recorded only ``enabled``; the quantities from

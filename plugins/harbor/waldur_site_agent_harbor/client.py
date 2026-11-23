@@ -6,19 +6,19 @@ managing projects, quotas, and OIDC groups.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import quote
 
 import httpx
-
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.structures import Association, ClientResource
+
 from waldur_site_agent_harbor.exceptions import (
     HarborAPIError,
     HarborAuthenticationError,
+    HarborOIDCError,
     HarborProjectError,
     HarborQuotaError,
-    HarborOIDCError,
 )
 
 logger = logging.getLogger(__name__)
@@ -186,7 +186,7 @@ class HarborClient(BaseClient):
                 f"Failed to delete project {project_name}: {e}"
             ) from e
 
-    def get_project(self, project_name: str) -> Optional[dict]:
+    def get_project(self, project_name: str) -> dict | None:
         """Get project details by name.
 
         Args:
@@ -334,7 +334,7 @@ class HarborClient(BaseClient):
 
     def create_user_group(
         self, group_name: str, group_type: str = "OIDC"
-    ) -> Optional[int]:
+    ) -> int | None:
         """Create a user group in Harbor.
 
         Args:
@@ -516,7 +516,7 @@ class HarborClient(BaseClient):
             logger.error("Failed to list Harbor projects: %s", e)
             return []
 
-    def get_resource(self, resource_id: str) -> Optional[ClientResource]:
+    def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get a specific project by name."""
         project = self.get_project(resource_id)
         if project:
@@ -532,7 +532,7 @@ class HarborClient(BaseClient):
         name: str,
         description: str,
         organization: str,
-        parent_name: Optional[str] = None,
+        parent_name: str | None = None,
     ) -> str:
         """Create a new project (resource) in Harbor."""
         # Default quota if not specified
@@ -576,21 +576,21 @@ class HarborClient(BaseClient):
 
     def set_resource_limits(
         self, resource_id: str, limits: dict[str, int]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Set storage quota for a project."""
         storage_gb = limits.get("storage", 10)
         self.update_project_quota(resource_id, storage_gb)
         return None
 
     def create_association(
-        self, username: str, resource_id: str, default_account: Optional[str] = None
+        self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Create association between user and project (not directly supported in Harbor)."""
         # User associations are managed through OIDC groups
         # This is a no-op for Harbor
         return ""
 
-    def get_association(self, username: str, resource_id: str) -> Optional[Association]:
+    def get_association(self, username: str, resource_id: str) -> Association | None:
         """Get association between user and project (not directly supported in Harbor)."""
         # User associations are managed through OIDC groups
         # This always returns None for Harbor
@@ -613,7 +613,7 @@ class HarborClient(BaseClient):
         # Harbor doesn't support per-user quotas
         return ""
 
-    def get_usage_report(self, resource_ids: list[str], timezone: Optional[str] = None) -> list:
+    def get_usage_report(self, resource_ids: list[str], timezone: str | None = None) -> list:
         """Get usage records for Harbor projects."""
         usage_records = []
         for resource_id in resource_ids:

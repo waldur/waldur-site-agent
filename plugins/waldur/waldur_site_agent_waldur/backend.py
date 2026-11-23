@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import Optional
 from uuid import UUID
 
 from waldur_api_client.api.marketplace_provider_resources import (
@@ -16,21 +15,24 @@ from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_set_end_date,
 )
 from waldur_api_client.api.projects import projects_partial_update
-from waldur_api_client.models.patched_project_request import PatchedProjectRequest
-from waldur_api_client.models.project import Project
-from waldur_api_client.models.resource_effective_id_request import ResourceEffectiveIDRequest
-from waldur_api_client.models.resource_field_enum import ResourceFieldEnum
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.errors import UnexpectedStatus
-from waldur_api_client.models.observable_object_type_enum import ObservableObjectTypeEnum
+from waldur_api_client.models.observable_object_type_enum import (
+    ObservableObjectTypeEnum,
+)
 from waldur_api_client.models.oecd_fos_2007_code_enum import OecdFos2007CodeEnum
 from waldur_api_client.models.order_state import OrderState
-from waldur_api_client.models.resource import Resource as WaldurResource
-from waldur_api_client.models.resource_end_date_request import ResourceEndDateRequest
+from waldur_api_client.models.patched_project_request import PatchedProjectRequest
+from waldur_api_client.models.project import Project
 from waldur_api_client.models.request_types import RequestTypes
+from waldur_api_client.models.resource import Resource as WaldurResource
+from waldur_api_client.models.resource_effective_id_request import (
+    ResourceEffectiveIDRequest,
+)
+from waldur_api_client.models.resource_end_date_request import ResourceEndDateRequest
+from waldur_api_client.models.resource_field_enum import ResourceFieldEnum
 from waldur_api_client.models.resource_state import ResourceState
 from waldur_api_client.types import UNSET
-
 from waldur_site_agent.backend import backends
 from waldur_site_agent.backend import utils as backend_utils
 from waldur_site_agent.backend.exceptions import BackendError, BackendNotReadyError
@@ -106,7 +108,7 @@ class WaldurBackend(backends.BaseBackend):
         self.component_mapper = ComponentMapper(backend_components)
 
         # Cache for resolved user UUIDs on Waldur B: local_identifier -> remote_uuid
-        self._user_uuid_cache: dict[str, Optional[UUID]] = {}
+        self._user_uuid_cache: dict[str, UUID | None] = {}
 
     # --- Abstract Method Implementations ---
 
@@ -160,7 +162,7 @@ class WaldurBackend(backends.BaseBackend):
     def sync_resource_project(
         self,
         waldur_resource: WaldurResource,
-        source_project: Optional[Project] = None,
+        source_project: Project | None = None,
     ) -> None:
         """Sync project metadata from Waldur A to the corresponding project on Waldur B.
 
@@ -246,7 +248,7 @@ class WaldurBackend(backends.BaseBackend):
     def _pre_create_resource(
         self,
         waldur_resource: WaldurResource,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> None:
         """Find or create the project on Waldur B before creating the resource.
 
@@ -293,7 +295,7 @@ class WaldurBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         resource_backend_id: str,
-        user_context: Optional[dict] = None,
+        user_context: dict | None = None,
     ) -> BackendResourceInfo:
         """Create a resource on Waldur B via a marketplace order (non-blocking).
 
@@ -448,7 +450,7 @@ class WaldurBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         **kwargs: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Terminate resource on Waldur B via a marketplace order (non-blocking).
 
         When the resource is already ``Terminating`` on Waldur B, adopts an
@@ -544,7 +546,7 @@ class WaldurBackend(backends.BaseBackend):
 
     def set_resource_limits(
         self, resource_backend_id: str, limits: dict[str, int]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Update resource limits on Waldur B via an update order (non-blocking).
 
         Returns:
@@ -716,7 +718,7 @@ class WaldurBackend(backends.BaseBackend):
 
     def _pull_backend_resource(
         self, resource_backend_id: str
-    ) -> Optional[BackendResourceInfo]:
+    ) -> BackendResourceInfo | None:
         """Pull resource data from Waldur B, including backend_id for effective_id sync."""
         logger.info("Pulling resource %s from Waldur B", resource_backend_id)
 
@@ -783,7 +785,7 @@ class WaldurBackend(backends.BaseBackend):
     def _get_single_resource_usage(
         self,
         resource_id: str,
-        billing_period: Optional[datetime.date] = None,
+        billing_period: datetime.date | None = None,
     ) -> dict[str, dict[str, float]]:
         """Get usage report for a single resource from Waldur B."""
         resource_uuid = UUID(resource_id)
@@ -899,8 +901,8 @@ class WaldurBackend(backends.BaseBackend):
         return source_role
 
     def _resolve_remote_user(
-        self, local_username: str, attributes: Optional[dict] = None,
-    ) -> Optional[UUID]:
+        self, local_username: str, attributes: dict | None = None,
+    ) -> UUID | None:
         """Resolve a local username to a user UUID on Waldur B.
 
         Uses the configured user_match_field to look up the user.
@@ -913,7 +915,7 @@ class WaldurBackend(backends.BaseBackend):
         if local_username in self._user_uuid_cache:
             return self._user_uuid_cache[local_username]
 
-        remote_uuid: Optional[UUID] = None
+        remote_uuid: UUID | None = None
         privileged = False
 
         if self.user_resolve_method == "identity_bridge":
@@ -1134,7 +1136,7 @@ class WaldurBackend(backends.BaseBackend):
                     continue
 
                 source_role = user_roles.get(username)
-                target_role: Optional[str]
+                target_role: str | None
                 if source_role:
                     target_role = self._map_role(source_role)
                 else:
@@ -1250,7 +1252,7 @@ class WaldurBackend(backends.BaseBackend):
                     username, project_uuid, current_role, expected_role,
                 )
 
-    def _get_resource_project_uuid(self, resource_backend_id: str) -> Optional[UUID]:
+    def _get_resource_project_uuid(self, resource_backend_id: str) -> UUID | None:
         """Get the project UUID for a resource on Waldur B."""
         try:
             resource = self.client.get_marketplace_resource(UUID(resource_backend_id))
@@ -1381,11 +1383,11 @@ class WaldurBackend(backends.BaseBackend):
 
     def _decide_end_date_sync_direction(
         self,
-        a_end_date: Optional[datetime.date],
-        b_end_date: Optional[datetime.date],
-        a_updated_at: Optional[datetime.datetime],
-        b_updated_at: Optional[datetime.datetime],
-    ) -> Optional[bool]:
+        a_end_date: datetime.date | None,
+        b_end_date: datetime.date | None,
+        a_updated_at: datetime.datetime | None,
+        b_updated_at: datetime.datetime | None,
+    ) -> bool | None:
         """Decide which side wins an end_date sync per ``end_date_sync_direction``.
 
         Shared by resource and project end_date sync so both honour the same
@@ -1504,7 +1506,7 @@ class WaldurBackend(backends.BaseBackend):
         self,
         waldur_resource: WaldurResource,
         waldur_rest_client: AuthenticatedClient,
-        source_project: Optional[Project] = None,
+        source_project: Project | None = None,
     ) -> None:
         """Sync the project's end_date between Waldur A and Waldur B.
 
@@ -1622,6 +1624,7 @@ class WaldurBackend(backends.BaseBackend):
             from waldur_site_agent.event_processing.utils import (
                 _setup_unified_stomp_connection,
             )
+
             from waldur_site_agent_waldur.target_event_handler import (
                 make_target_offering_user_handler,
                 make_target_order_handler,
