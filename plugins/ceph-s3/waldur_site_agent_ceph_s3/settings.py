@@ -1,93 +1,80 @@
-"""Which Ceph management API this offering talks to, and what that needs.
+"""How this offering reaches the cluster, and what that needs.
 
-The two flavours reach the same RGW concepts by different routes: croit through
-its management application, radosgw through Admin Ops on the gateway itself.
-They share no credentials and almost no settings, so a configuration that mixes
-them is a mistake rather than a merge.
+Users and accounts are managed through RGW's Admin Ops API on the gateway itself.
+croit's own user management was the other route; it is gone, and croit remains
+only as a statistics source for croit_usage (see ``croit_reporting``). An offering
+still configured for croit is refused with the steps that move it, rather than
+read as something it is not.
 """
 
 
-CROIT = "croit"
 RADOSGW = "radosgw"
-FLAVOURS = (CROIT, RADOSGW)
+FLAVOURS = (RADOSGW,)
 
-# Settings that belong to exactly one flavour. Ignoring a stray key would let an
-# operator read a half-migrated offering as configured when it is not: the agent
-# would run, authenticate somewhere else entirely, and only the provisioning
-# failure would say so.
-_CROIT_ONLY: tuple[str, ...] = ("api_url", "username", "password", "token")
-# rgw_accounts is radosgw-only too: croit's API has no account endpoints, so the
-# mode exists only where the agent talks Admin Ops itself.
-_RADOSGW_ONLY: tuple[str, ...] = (
-    "admin_access_key",
-    "admin_secret_key",
-    "admin_path",
-    "rgw_accounts",
+# Top-level settings of the removed croit flavour. Its credentials now belong
+# under croit_reporting, and only when croit_usage reads croit's statistics.
+_CROIT_MANAGEMENT: tuple[str, ...] = ("api_url", "username", "password", "token")
+
+MIGRATION_STEPS = (
+    "1) create an RGW user with the caps 'users=*;buckets=*' (plus "
+    "'usage=read' for rgw_usage and 'accounts=*' for account mode) and make Admin "
+    "Ops (by default /admin on the S3 endpoint) reachable from the agent; "
+    "2) set admin_access_key and admin_secret_key (and admin_path if renamed); "
+    "3) if the offering reports with croit_usage, move api_url and token (or "
+    "username and password) under croit_reporting, and set "
+    "croit_reporting.bucket_state_file. Existing resources need no change"
 )
-
-# Settings the radosgw flavour has no implementation for. Admin Ops user-create
-# takes a placement but no storage class. Rejected rather than ignored, for the
-# same reason as the foreign settings above: a dropped setting reads as
-# configured. (Tenants are supported on both flavours: tenanted uids are
-# "tenant$uid", validated half by half in clients.base.)
-_UNIMPLEMENTED_ON_RADOSGW: tuple[str, ...] = ("default_storage_class",)
 
 
 def resolve_flavour(backend_settings: dict) -> str:
-    """Read the configured flavour, defaulting to croit.
+    """The flavour: radosgw, the only one.
 
-    The default is croit rather than the newer flavour on purpose: every offering
-    deployed before this setting existed is a croit one, and they carry no
-    ``flavour`` key.
+    ``flavour`` may be left out. ``flavour: croit`` and croit's top-level
+    credentials are an offering that has not been migrated yet, and are refused
+    with the steps that migrate it.
     """
-    flavour = str(backend_settings.get("flavour") or CROIT).lower()
+    flavour = str(backend_settings.get("flavour") or RADOSGW).lower()
+    croit_keys = sorted(name for name in _CROIT_MANAGEMENT if backend_settings.get(name))
+    if flavour == "croit" or croit_keys:
+        found = f"flavour: {flavour}" if flavour == "croit" else ", ".join(croit_keys)
+        raise ValueError(
+            "ceph-s3 no longer manages users through croit; this offering is still "
+            f"configured for it ({found}). Users are managed through RGW Admin Ops "
+            f"now: {MIGRATION_STEPS}"
+        )
     if flavour not in FLAVOURS:
         raise ValueError(
-            f"Unknown ceph-s3 flavour {flavour!r}; expected one of {', '.join(FLAVOURS)}"
+            f"Unknown ceph-s3 flavour {flavour!r}; the only one is {RADOSGW!r}"
         )
     return flavour
 
 
-def _reject_foreign_settings(
-    backend_settings: dict, foreign: tuple[str, ...], flavour: str
-) -> None:
-    present = [name for name in foreign if backend_settings.get(name)]
-    if present:
-        raise ValueError(
-            f"The {flavour} flavour does not use {', '.join(sorted(present))}; "
-            "remove them from backend_settings"
-        )
-
-
-def _require(backend_settings: dict, name: str, flavour: str) -> None:
+def _require(backend_settings: dict, name: str) -> None:
     if not backend_settings.get(name):
-        raise ValueError(
-            f"The {flavour} flavour requires {name!r} in backend_settings"
-        )
+        raise ValueError(f"ceph-s3 requires {name!r} in backend_settings")
 
 
-def validate_settings(backend_settings: dict, flavour: str) -> None:
-    """Fail on an incomplete or mixed configuration, before any request is made.
+def validate_settings(backend_settings: dict, flavour: str = RADOSGW) -> None:
+    """Fail on an incomplete configuration, before any request is made.
 
     Raises:
-        ValueError: naming every setting that is missing or does not belong.
+        ValueError: naming the setting that is missing or cannot work.
     """
-    if flavour == RADOSGW:
-        _reject_foreign_settings(backend_settings, _CROIT_ONLY, RADOSGW)
-        _reject_foreign_settings(backend_settings, _UNIMPLEMENTED_ON_RADOSGW, RADOSGW)
-        # Admin Ops hangs off the gateway, so this is both the tenants' address
-        # and the agent's.
-        _require(backend_settings, "s3_endpoint", RADOSGW)
-        _require(backend_settings, "admin_access_key", RADOSGW)
-        _require(backend_settings, "admin_secret_key", RADOSGW)
-        return
-
-    _reject_foreign_settings(backend_settings, _RADOSGW_ONLY, CROIT)
-    if "token" not in backend_settings and (
-        "username" not in backend_settings or "password" not in backend_settings
+    del flavour
+    # Admin Ops hangs off the gateway, so this is both the tenants' address
+    # and the agent's.
+    _require(backend_settings, "s3_endpoint")
+    _require(backend_settings, "admin_access_key")
+    _require(backend_settings, "admin_secret_key")
+    # Admin Ops applies a default storage class only as part of a placement rule
+    # (rgw_rest_user.cc: default-storage-class is read into the target rule of
+    # default-placement), so on its own it would be dropped without a word.
+    if backend_settings.get("default_storage_class") and not backend_settings.get(
+        "default_placement"
     ):
         raise ValueError(
-            "Either 'token' or both 'username' and 'password' must be provided"
+            "'default_storage_class' needs 'default_placement': RGW applies a "
+            "storage class only as part of a placement rule"
         )
 
 

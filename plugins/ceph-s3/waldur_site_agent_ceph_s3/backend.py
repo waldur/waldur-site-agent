@@ -1,15 +1,13 @@
-"""Croit S3 storage backend for Waldur Site Agent.
+"""Ceph S3 storage backend for Waldur Site Agent.
 
-This module provides integration between Waldur Mastermind and Croit S3 storage
-via RadosGW API. It implements the backend interface for managing S3 users,
-bucket quotas, and usage reporting.
+Manages one RGW tenant per resource through RGW's Admin Ops API: its user (or, in
+account mode, its RGW account), quotas, suspension and access keys. Usage comes
+from the reporting backends that build on this class: croit's statistics
+(``reporting.CroitUsageBackend``) or RGW itself (``rgw_reporting.RgwUsageBackend``).
 
-Key Features:
-- S3 user provisioning with slug-based naming
-- Usage and limit-based accounting support
-- Bucket quota enforcement for limit-based components
-- Comprehensive usage reporting with storage and object metrics
-- S3 credentials managed as resource API keys (encrypted in Waldur, never in metadata)
+- S3 credentials are managed as resource API keys (encrypted in Waldur, never in
+  metadata)
+- Ceilings are applied as user and bucket quotas, or account quotas
 """
 
 import logging
@@ -32,7 +30,6 @@ from waldur_site_agent.backend import (
 from waldur_site_agent.backend.exceptions import DuplicateResourceError
 
 from .clients.base import BaseS3AdminClient
-from .clients.croit import CroitClient
 from .clients.iam import AccountIamClient
 from .clients.radosgw import RadosGWClient
 from .exceptions import (
@@ -45,8 +42,6 @@ from .exceptions import (
     CephS3UserNotFoundError,
 )
 from .settings import (
-    CROIT,
-    RADOSGW,
     resolve_flavour,
     validate_components,
     validate_settings,
@@ -219,8 +214,8 @@ def _first_limit(resource_options: dict, *keys: str) -> int:
 def _generate_key_pair() -> dict:
     """Mint one access/secret pair.
 
-    Croit does not generate keys — PUT /s3/users/{uid}/keys/{accessKey} takes both
-    halves from the caller — so the agent is the source.
+    RGW is told to take both halves from the caller (users are created with
+    generate-key=False), so the agent is the source.
     """
     access_key = "".join(
         secrets.choice(_ACCESS_KEY_ALPHABET) for _ in range(_ACCESS_KEY_LENGTH)
@@ -232,12 +227,7 @@ def _generate_key_pair() -> dict:
 
 
 class CephS3Backend(backends.BaseBackend):
-    """Croit S3 storage backend implementation for Waldur Site Agent.
-
-    This backend manages S3 user lifecycle, bucket quotas, and usage reporting
-    for Croit storage systems. It supports both usage-based and limit-based
-    accounting models.
-    """
+    """Ceph S3 storage backend: RGW tenants, users, accounts, quotas and keys."""
 
     # The agent mints each access/secret pair, applies it to the S3 user, then reports
     # it to Waldur encrypted. client_id holds the access key, which moves on rotation.
@@ -255,58 +245,36 @@ class CephS3Backend(backends.BaseBackend):
         super().__init__(backend_settings, backend_components)
         self.backend_type = BackendType.CEPH_S3.value
 
-        # Which management API this offering talks to. Defaults to croit, so
-        # offerings deployed before the setting existed keep working untouched.
+        # RGW Admin Ops; an offering still configured for croit management is
+        # refused here with the steps that migrate it.
         self.flavour = resolve_flavour(backend_settings)
         validate_settings(backend_settings, self.flavour)
         validate_components(backend_components)
 
-        # The S3 data endpoint is a separate host from the management API — on a real
-        # cluster RadosGW runs on the storage nodes, and croit exposes no VIP or DNS
-        # name to derive it from. Publishing the management URL instead would hand
-        # tenants an address that answers with the web UI, so this is required rather
-        # than defaulted.
+        # The gateway tenants connect to, and the one Admin Ops is reached on.
         s3_endpoint = backend_settings.get("s3_endpoint")
         if not s3_endpoint:
-            raise ValueError(
-                "Ceph S3 backend requires 's3_endpoint' in backend_settings: the "
-                "address tenants use for S3, which is not derivable from 'api_url'"
-            )
+            raise ValueError("Ceph S3 backend requires 's3_endpoint' in backend_settings")
         self.s3_endpoint = str(s3_endpoint).rstrip("/")
 
         # S3 clients refuse to sign a request without a region, so one has to be
-        # published. croit exposes no zonegroup, so this is not something we can read
-        # back: "default" is Ceph's out-of-the-box zonegroup name, correct until an
-        # operator names theirs — at which point they set it here.
+        # published. "default" is Ceph's out-of-the-box zonegroup name, correct until
+        # an operator names theirs -- at which point they set it here.
         self.s3_region = str(backend_settings.get("s3_region") or "default")
 
-        # Initialize the client for the configured flavour. Constructed here
-        # rather than behind a factory so each flavour's settings stay visible
-        # next to the backend that depends on them.
-        self.client: BaseS3AdminClient
-        if self.flavour == RADOSGW:
-            self.client = RadosGWClient(
-                # Admin Ops lives on the gateway itself, not on a separate host.
-                endpoint=self.s3_endpoint,
-                access_key=backend_settings["admin_access_key"],
-                secret_key=backend_settings["admin_secret_key"],
-                # rgw_admin_entry, if the operator renamed it.
-                admin_path=str(backend_settings.get("admin_path") or "admin"),
-                # RGW does not check the region against its zonegroup, but the
-                # signature covers it, so both ends must use the same string.
-                region=self.s3_region,
-                verify_ssl=backend_settings.get("verify_ssl", True),
-                timeout=backend_settings.get("timeout", 30),
-            )
-        else:
-            self.client = CroitClient(
-                api_url=backend_settings["api_url"],
-                username=backend_settings.get("username"),
-                password=backend_settings.get("password"),
-                token=backend_settings.get("token"),
-                verify_ssl=backend_settings.get("verify_ssl", True),
-                timeout=backend_settings.get("timeout", 30),
-            )
+        self.client: BaseS3AdminClient = RadosGWClient(
+            # Admin Ops lives on the gateway itself, not on a separate host.
+            endpoint=self.s3_endpoint,
+            access_key=backend_settings["admin_access_key"],
+            secret_key=backend_settings["admin_secret_key"],
+            # rgw_admin_entry, if the operator renamed it.
+            admin_path=str(backend_settings.get("admin_path") or "admin"),
+            # RGW does not check the region against its zonegroup, but the
+            # signature covers it, so both ends must use the same string.
+            region=self.s3_region,
+            verify_ssl=backend_settings.get("verify_ssl", True),
+            timeout=backend_settings.get("timeout", 30),
+        )
 
         # Backend-specific settings
         # Every resource gets a tenant of its own, rendered from tenant_template
@@ -322,7 +290,6 @@ class CephS3Backend(backends.BaseBackend):
         self.tenant_template = backend_settings.get("tenant_template") or DEFAULT_TENANT_TEMPLATE
         validate_tenant_template(self.tenant_template)
         # One RGW account per resource, with the resource's user as its root.
-        # radosgw-only; settings.validate_settings rejects it for croit.
         self.rgw_accounts = bool(backend_settings.get("rgw_accounts"))
         # Backend id -> RGW uid, for ids whose uid had to be looked up.
         self._uid_cache: dict[str, str] = {}
@@ -367,9 +334,6 @@ class CephS3Backend(backends.BaseBackend):
         """
         try:
             logger.info("=== Ceph S3 Backend Diagnostics (%s) ===", self.flavour)
-            # Asked of the client rather than read off it: api_url and username
-            # are croit's, and reading them here logged an AttributeError for
-            # every radosgw offering instead of the diagnostics.
             for label, value in self.client.connection_summary().items():
                 logger.info("%s: %s", label, value)
             logger.info("SSL Verification: %s", self.client.verify_ssl)
@@ -570,12 +534,9 @@ class CephS3Backend(backends.BaseBackend):
             if self.rgw_accounts
             else ""
         )
-        created = self._create_or_adopt_user(waldur_resource, username, account_id)
-
-        if created:
-            # Only a user this call created can have its keys swept: on an adopted
-            # uid they may be a tenant's live credentials.
-            self._remove_auto_generated_keys(username)
+        # RGW is told not to mint a key of its own (generate-key=False), so a new
+        # user holds no credential Waldur did not issue and there is nothing to sweep.
+        self._create_or_adopt_user(waldur_resource, username, account_id)
 
         # Quotas are idempotent PUTs, so they are re-asserted on the adopt path too.
         # A create that erred after the user existed came back through that path and
@@ -655,9 +616,8 @@ class CephS3Backend(backends.BaseBackend):
         Returns:
             True when this call created the user, False when it adopted an existing one.
         """
-        # Neutral snake_case, not croit's camelCase: this is the shared client
-        # contract, and a name only one flavour recognises is a setting the other
-        # silently drops into **kwargs.
+        # Neutral snake_case: this is the client contract, and the client maps it
+        # onto RGW's hyphenated parameters.
         user_data = {
             "uid": username,
             "name": waldur_resource.name or f"User for {waldur_resource.uuid}",
@@ -693,9 +653,6 @@ class CephS3Backend(backends.BaseBackend):
                     f"{user_data['email']}), so {username} was not created. Remove "
                     "that user, or set its tenant as the resource's backend id"
                 ) from e
-            # croit sometimes reports a duplicate uid as a 500 rather than a 409.
-            if "exists" in str(e):
-                return self._adopt_if_ours(waldur_resource, username, account_id)
             logger.error(
                 "Failed to create S3 user for resource %s: %s", waldur_resource.uuid, e
             )
@@ -925,44 +882,6 @@ class CephS3Backend(backends.BaseBackend):
         if any(removed.values()):
             logger.info("Removed IAM resources of %s: %s", root_uid, removed)
 
-    def _remove_auto_generated_keys(self, username: str) -> None:
-        """Drop the key RadosGW mints for a user it has just created.
-
-        Creating an S3 user auto-generates an access/secret pair whose secret Waldur
-        never sees — a working credential that cannot be revealed or rotated. (The
-        plugin used to publish exactly that pair as the resource's metadata
-        credentials.) It has to go, or provisioning ends with three live credentials
-        and only two under Waldur's control.
-
-        Called only from the branch that just created the user, never from the one
-        that adopted an existing uid: at this point the auto key is the *only* key,
-        so "delete what is here" and "delete the auto key" are the same set, and no
-        consumer holds credentials yet.
-        """
-        if self.flavour != CROIT:
-            # Admin Ops takes generate-key=False on create, so the user never
-            # holds a key Waldur did not issue and there is no window to close.
-            # Listing anyway would be harmless but misleading: it would imply
-            # this flavour has an auto-key problem that it does not have.
-            return
-
-        for key in self.client.list_user_keys(username):
-            access_key = key.get("access_key")
-            if not access_key:
-                logger.error(
-                    "croit returned a key entry for user %s with no access_key field "
-                    "(keys: %s); it cannot be managed",
-                    username,
-                    sorted(key),
-                )
-                continue
-            logger.info(
-                "Removing the auto-generated S3 key %s of new user %s",
-                access_key,
-                username,
-            )
-            self.client.delete_user_key(username, str(access_key))
-
     def generate_resource_keys(
         self, resource_backend_id: str, count: int = _DEFAULT_KEY_COUNT
     ) -> Iterator[dict]:
@@ -972,12 +891,12 @@ class CephS3Backend(backends.BaseBackend):
 
         Yields rather than returns so the caller reports each pair before the next
         is applied. Applying both first meant a failure on the second left the
-        first live on croit with no row in Waldur — and no way back, since every
+        first live on RGW with no row in Waldur — and no way back, since every
         recovery path needs a client_id Waldur holds.
 
-        Purely additive — RadosGW's auto-generated key is already gone by the time
-        this runs (see _remove_auto_generated_keys), so there is nothing here to clean
-        up and no way for this to cut off a credential someone is using.
+        Purely additive -- RGW creates the user without a key of its own, so there
+        is nothing here to clean up and no way for this to cut off a credential
+        someone is using.
 
         Args:
             resource_backend_id: S3 username
@@ -1016,9 +935,8 @@ class CephS3Backend(backends.BaseBackend):
     ) -> None:
         """Clear the keys an adopted uid carried out of an interrupted create.
 
-        RadosGW mints a pair with every user croit creates, and an attempt that died
-        part-way through minting leaves its own applied pairs behind. Both are live
-        and neither has a row in Waldur, so nothing could ever rotate them.
+        An attempt that died part-way through minting leaves its own applied pairs
+        behind, live and without a row in Waldur, so nothing could ever rotate them.
 
         Runs before this provisioning mints anything, so the only keys in scope are
         ones that predate it; ``keep`` is what Waldur holds, which on a retry is the
@@ -1082,7 +1000,7 @@ class CephS3Backend(backends.BaseBackend):
 
         ``known_client_ids`` closes the orphan window. A rotation whose reply to Waldur
         is lost has already replaced the access key at the backend, so re-issuing it
-        rotates from a client_id croit no longer has and would strand the intermediate
+        rotates from a client_id RGW no longer has and would strand the intermediate
         key — live, and unknown to Waldur forever. Given the resource's known set, the
         rotation also drops anything outside it, so the invariant survives a retry: a
         credential that works is a credential Waldur can rotate.
@@ -1099,7 +1017,7 @@ class CephS3Backend(backends.BaseBackend):
         # Read the key set before minting anything. Pruning is then limited to keys
         # that already existed, so a key a concurrent rotation creates during this
         # one is structurally unprunable rather than merely unlikely to be caught —
-        # deleting it would leave Waldur publishing a credential croit does not have.
+        # deleting it would leave Waldur publishing a credential RGW does not have.
         resource_backend_id = self._rgw_uid(resource_backend_id)
         prunable = {
             str(key["access_key"])
@@ -1132,7 +1050,7 @@ class CephS3Backend(backends.BaseBackend):
             access_key = key.get("access_key")
             if not access_key:
                 logger.error(
-                    "croit returned a key entry for user %s with no access_key field "
+                    "RGW returned a key entry for user %s with no access_key field "
                     "(keys: %s); it cannot be managed",
                     username,
                     sorted(key),
@@ -1175,7 +1093,7 @@ class CephS3Backend(backends.BaseBackend):
 
         Raises:
             CephS3Error: when the resource has no backend id, or its user was not
-                provisioned by Waldur, or croit refuses the quota.
+                provisioned by Waldur, or RGW refuses the quota.
         """
         username = waldur_resource.backend_id
         if not username or isinstance(username, Unset):
@@ -1205,7 +1123,7 @@ class CephS3Backend(backends.BaseBackend):
             clear_missing: Send -1 ("no limit") for a dimension the options do not
                 set, instead of leaving it out. An update needs this: RadosGW
                 merges a quota PUT, so a left-out dimension would keep the limit
-                the consumer just removed. croit would clear it either way.
+                the consumer just removed.
 
         Raises:
             CephS3Error: If quota setting fails
@@ -1257,8 +1175,8 @@ class CephS3Backend(backends.BaseBackend):
             logger.debug("Setting object quota: %d objects", object_limit)
 
         if clear_missing:
-            # -1 is "no limit" to both flavours. 0 is not: croit stores it as -1
-            # too, but RadosGW would read it as a ceiling of nothing.
+            # -1 is "no limit". 0 is not: RadosGW would read it as a ceiling of
+            # nothing.
             quota_request.setdefault("max_size_bytes", -1)
             quota_request.setdefault("max_objects", -1)
             if not quota_applied:
@@ -1276,8 +1194,8 @@ class CephS3Backend(backends.BaseBackend):
         if quota_applied:
             logger.info("Applying quotas for user %s: %s", username, quota_request)
             # The ordered ceiling is a per-tenant figure, so the user quota is what
-            # makes it true — a bucket quota caps each bucket, and croit exposes no
-            # way to cap the bucket count, so on its own it bounds nothing. The
+            # makes it true — a bucket quota caps each bucket, and the bucket count
+            # is not capped, so on its own it bounds nothing. The
             # bucket quota is kept alongside it as a per-bucket guard.
             self._write_quotas(username, quota_request)
         else:
@@ -1356,8 +1274,8 @@ class CephS3Backend(backends.BaseBackend):
     ) -> dict[str, dict[str, dict[str, float]]]:
         """No usage from the management backend.
 
-        Metering is croit's alone (see CroitUsageBackend), and this class serves
-        both flavours. Returning empty rather than raising because membership
+        Metering belongs to the reporting backends (CroitUsageBackend,
+        RgwUsageBackend) that build on this class. Returning empty rather than raising because membership
         sync calls this too, on whichever backend is wired as
         membership_sync_backend — raising would break user synchronisation for a
         method that only ever contributed billing figures.

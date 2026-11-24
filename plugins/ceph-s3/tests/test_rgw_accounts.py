@@ -265,17 +265,6 @@ class TestDelete:
         backend.client.delete_account.assert_not_called()
 
 
-def test_croit_flavour_rejects_account_mode():
-    with pytest.raises(ValueError, match="rgw_accounts"):
-        CephS3Backend(
-            {"api_url": "https://croit", "token": "t", "s3_endpoint": "https://s3", "rgw_accounts": True},
-            COMPONENTS,
-        )
-
-
-# -- client ------------------------------------------------------------------
-
-
 def make_client(handler):
     client = RadosGWClient(
         endpoint="https://rgw.example.org",
@@ -490,7 +479,6 @@ class TestTenantedClient:
         assert make_client(handler).list_account_users(ACCOUNT) == ["a"]
 
 
-
 class TestSuspension:
     """Pause must stop every key of the resource; RGW suspends per user. The
     core calls pause or restore on every sync, so the steady state is one read."""
@@ -581,7 +569,6 @@ class TestAccountIamCleanup:
 
         backend.client.delete_user_key.assert_any_call(UID, "OLDKEY")
         assert backend.client.create_user_key.call_count == 2
-
 
 
 class TestClientSuspensionAndAccountDelete:

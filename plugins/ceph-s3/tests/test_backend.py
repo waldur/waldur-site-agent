@@ -13,7 +13,7 @@ from waldur_api_client.models.resource_attributes import ResourceAttributes
 from waldur_api_client.models.resource_limits import ResourceLimits
 
 
-from waldur_site_agent_ceph_s3.backend import _DEFAULT_KEY_COUNT, CephS3Backend
+from waldur_site_agent_ceph_s3.backend import CephS3Backend
 from waldur_site_agent_ceph_s3.reporting import CroitUsageBackend
 from waldur_site_agent_ceph_s3.exceptions import (
     CephS3APIError,
@@ -33,10 +33,11 @@ class TestCephS3Backend:
     def backend_settings(self):
         """Backend settings for testing."""
         return {
-            "api_url": "https://test.croit.io",
-            "s3_endpoint": "https://s3.test.croit.io",
-            "username": "admin",
-            "password": "secret",
+            "flavour": "radosgw",
+            "s3_endpoint": "https://s3.test.example.org",
+            "admin_access_key": "ADMINACCESSKEY000000",
+            "admin_secret_key": "s" * 40,
+            "croit_reporting": {"api_url": "https://croit.example.org", "token": "t"},
             "verify_ssl": False,
         }
 
@@ -119,7 +120,7 @@ class TestCephS3Backend:
 
         return resource
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_backend_initialization(
         self, mock_client_class, backend_settings, backend_components
     ):
@@ -131,15 +132,12 @@ class TestCephS3Backend:
         assert backend.backend_type == "ceph_s3"
         mock_client_class.assert_called_once()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_missing_required_setting(self, mock_client_class, backend_components):
         """Test initialization with missing required setting."""
-        incomplete_settings = {"api_url": "https://test.croit.io"}
+        incomplete_settings = {"s3_endpoint": "https://s3.test.example.org"}
 
-        with pytest.raises(
-            ValueError,
-            match="Either 'token' or both 'username' and 'password' must be provided",
-        ):
+        with pytest.raises(ValueError, match="requires 'admin_access_key'"):
             CephS3Backend(incomplete_settings, backend_components)
 
     def test_uid_is_namespaced_when_no_prefix_is_configured(
@@ -150,7 +148,7 @@ class TestCephS3Backend:
         The uid is the first 10 characters of a consumer-chosen resource name, so
         with an empty prefix an order can name any account the cluster already has.
         """
-        with patch("waldur_site_agent_ceph_s3.backend.CroitClient"):
+        with patch("waldur_site_agent_ceph_s3.backend.RadosGWClient"):
             backend = CephS3Backend(backend_settings, backend_components)
 
             assert backend._get_resource_backend_id("backup") == "waldur-backup"
@@ -160,12 +158,12 @@ class TestCephS3Backend:
     ):
         """A configured namespace is the operator's to choose."""
         backend_settings["allocation_prefix"] = "tenant-"
-        with patch("waldur_site_agent_ceph_s3.backend.CroitClient"):
+        with patch("waldur_site_agent_ceph_s3.backend.RadosGWClient"):
             backend = CephS3Backend(backend_settings, backend_components)
 
             assert backend._get_resource_backend_id("backup") == "tenant-backup"
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_delete_resource(
         self,
         mock_client_class,
@@ -199,7 +197,7 @@ class TestCephS3Backend:
             for offset, gb in pairs
         ]
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_storage_is_reported_as_gb_days(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -215,6 +213,7 @@ class TestCephS3Backend:
         )
         backend = CroitUsageBackend(backend_settings, backend_components)
         backend.client = mock_client
+        backend.croit_client = mock_client
 
         usage = backend._get_usage_report(["waldur-u"])["waldur-u"][
             "TOTAL_ACCOUNT_USAGE"
@@ -225,7 +224,7 @@ class TestCephS3Backend:
         # error budget, and at coarse consolidation it reached 2.13%.
         assert usage["s3_storage"] == 20.83
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_a_gap_in_the_series_holds_the_last_reading(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -240,6 +239,7 @@ class TestCephS3Backend:
         )
         backend = CroitUsageBackend(backend_settings, backend_components)
         backend.client = mock_client
+        backend.croit_client = mock_client
 
         usage = backend._get_usage_report(["waldur-u"])["waldur-u"][
             "TOTAL_ACCOUNT_USAGE"
@@ -249,7 +249,7 @@ class TestCephS3Backend:
         # final reading closes a bucket of its own: 240 * 3/24 = 30 GB-days.
         assert usage["s3_storage"] == 30.0
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_a_failed_series_omits_the_resource_rather_than_reporting_zero(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -265,7 +265,7 @@ class TestCephS3Backend:
 
         assert backend._get_usage_report(["waldur-u"]) == {}
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_an_empty_series_omits_the_resource(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -277,7 +277,7 @@ class TestCephS3Backend:
 
         assert backend._get_usage_report(["waldur-u"]) == {}
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_objects_are_not_reported(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -291,6 +291,7 @@ class TestCephS3Backend:
         )
         backend = CroitUsageBackend(backend_settings, backend_components)
         backend.client = mock_client
+        backend.croit_client = mock_client
 
         usage = backend._get_usage_report(["waldur-u"])["waldur-u"][
             "TOTAL_ACCOUNT_USAGE"
@@ -299,7 +300,7 @@ class TestCephS3Backend:
         assert "s3_objects" not in usage
         mock_client.get_user_buckets.assert_not_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_the_series_is_requested_from_the_start_of_the_billing_period(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -310,6 +311,7 @@ class TestCephS3Backend:
         )
         backend = CroitUsageBackend(backend_settings, backend_components)
         backend.client = mock_client
+        backend.croit_client = mock_client
 
         backend._get_usage_report(["waldur-u"])
 
@@ -320,7 +322,7 @@ class TestCephS3Backend:
         # The window is now closed at both ends so the final bucket can be billed.
         assert end > start
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_an_unreadable_series_is_not_pulled_as_zero(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -337,10 +339,11 @@ class TestCephS3Backend:
         mock_client.list_resource_users.return_value = []
         backend = CroitUsageBackend(backend_settings, backend_components)
         backend.client = mock_client
+        backend.croit_client = mock_client
 
         assert backend._pull_backend_resource("waldur-u") is None
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_a_measured_zero_is_still_pulled(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -351,13 +354,14 @@ class TestCephS3Backend:
         mock_client.list_resource_users.return_value = []
         backend = CroitUsageBackend(backend_settings, backend_components)
         backend.client = mock_client
+        backend.croit_client = mock_client
 
         info = backend._pull_backend_resource("waldur-u")
 
         assert info is not None
         assert info.usage["TOTAL_ACCOUNT_USAGE"]["s3_storage"] == 0.0
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_partial_units_survive_rounding(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -374,6 +378,7 @@ class TestCephS3Backend:
         )
         backend = CroitUsageBackend(backend_settings, backend_components)
         backend.client = mock_client
+        backend.croit_client = mock_client
 
         usage = backend._get_usage_report(["waldur-u"])["waldur-u"][
             "TOTAL_ACCOUNT_USAGE"
@@ -387,7 +392,7 @@ class TestCephS3Backend:
         # == 0.05 is True, so assert the type the reporter actually needs.
         assert not isinstance(usage["s3_storage"], Decimal)
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_usage_rounds_rather_than_truncates(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -400,6 +405,7 @@ class TestCephS3Backend:
         )
         backend = CroitUsageBackend(backend_settings, backend_components)
         backend.client = mock_client
+        backend.croit_client = mock_client
 
         usage = backend._get_usage_report(["waldur-u"])["waldur-u"][
             "TOTAL_ACCOUNT_USAGE"
@@ -407,7 +413,7 @@ class TestCephS3Backend:
 
         assert usage["s3_storage"] == 0.13
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_get_resource_metadata(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -448,7 +454,7 @@ class TestCephS3Backend:
         # Connection info only — credentials are resource API keys, not metadata.
         # Flat keys, so {backend_metadata_s3_endpoint} works in a Getting started
         # template; a nested dict would interpolate as [object Object].
-        assert metadata["s3_endpoint"] == "https://s3.test.croit.io"
+        assert metadata["s3_endpoint"] == "https://s3.test.example.org"
         assert metadata["s3_region"] == "default"
         # The same keys provisioning publishes, so a resource reads identically
         # whether it was just created or last touched by the reporting pass.
@@ -460,7 +466,7 @@ class TestCephS3Backend:
         assert storage["total_size_bytes"] == 1024000
         assert storage["total_objects"] == 50
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_apply_bucket_quotas(
         self,
         mock_client_class,
@@ -484,7 +490,7 @@ class TestCephS3Backend:
         assert quota["enabled"] is True
         assert quota["max_size_bytes"] == 100 * 1000000000  # 100 GB in bytes
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_quota_ceilings_use_the_max_prefixed_keys(
         self,
         mock_client_class,
@@ -511,7 +517,7 @@ class TestCephS3Backend:
         assert quota["max_size_bytes"] == 7 * 1000000000
         assert quota["max_objects"] == 42
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_quotas_still_honour_the_pre_rename_keys(
         self,
         mock_client_class,
@@ -534,7 +540,7 @@ class TestCephS3Backend:
         assert quota["max_size_bytes"] == 5 * 1000000000
         assert quota["max_objects"] == 100
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_the_ceiling_is_applied_as_an_aggregate_user_quota(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -558,7 +564,7 @@ class TestCephS3Backend:
         bucket_quota = mock_client.set_user_bucket_quota.call_args.args[1]
         assert bucket_quota["max_size_bytes"] == 10 * 1000000000
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_an_ordered_ceiling_needs_no_enforce_flag(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -579,7 +585,7 @@ class TestCephS3Backend:
         quota = mock_client.set_user_bucket_quota.call_args.args[1]
         assert quota["max_size_bytes"] == 10 * 1000000000
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_a_missing_ceiling_is_warned_about(
         self, mock_client_class, backend_settings, backend_components, mock_client, caplog
     ):
@@ -597,7 +603,7 @@ class TestCephS3Backend:
         assert "no cap" in caplog.text.lower()
         assert "name" in caplog.text
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_user_options_reach_the_client_under_neutral_names(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -629,7 +635,7 @@ class TestCephS3Backend:
             "default_storage_class": "STANDARD_IA",
         }
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_an_order_with_no_attributes_still_reports_that_nothing_was_capped(
         self, mock_client_class, backend_settings, backend_components, mock_client, caplog
     ):
@@ -654,7 +660,7 @@ class TestCephS3Backend:
         assert "no cap" in caplog.text.lower()
         mock_client.set_user_quota.assert_not_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_object_ceiling_needs_no_component(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -674,7 +680,7 @@ class TestCephS3Backend:
         quota = mock_client.set_user_bucket_quota.call_args.args[1]
         assert quota["max_objects"] == 5000
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_list_components(
         self, mock_client_class, backend_settings, backend_components
     ):
@@ -687,7 +693,7 @@ class TestCephS3Backend:
         assert "s3_storage" in components
         assert "s3_user" in components
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_ping(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -701,7 +707,7 @@ class TestCephS3Backend:
         assert result is True
         mock_client.ping.assert_called_once()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_diagnostics(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -716,7 +722,7 @@ class TestCephS3Backend:
         mock_client.ping.assert_called_once()
         mock_client.list_users.assert_called_once()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_backend_declares_api_key_support(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -726,7 +732,7 @@ class TestCephS3Backend:
 
         assert backend.supports_resource_api_keys is True
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_generate_resource_keys_applies_each_pair(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -751,33 +757,7 @@ class TestCephS3Backend:
         assert keys[0]["client_id"].isalnum()
         assert keys[0]["client_id"].upper() == keys[0]["client_id"]
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
-    def test_creating_a_user_removes_the_auto_generated_key(
-        self,
-        mock_client_class,
-        backend_settings,
-        backend_components,
-        mock_client,
-        waldur_resource,
-    ):
-        """RadosGW's auto-created key must not survive provisioning.
-
-        Its secret never reaches Waldur, so it is a working credential that can be
-        neither revealed nor rotated. It goes at creation, while it is the user's
-        only key and nobody holds credentials yet.
-        """
-        mock_client_class.return_value = mock_client
-        mock_client.list_user_keys.return_value = [
-            {"user": ROOT, "access_key": "AUTOKEY", "secret_key": "auto"}
-        ]
-        backend = CephS3Backend(backend_settings, backend_components)
-        backend.client = mock_client
-
-        backend.create_resource_with_id(waldur_resource, "waldur-u")
-
-        mock_client.delete_user_key.assert_called_once_with(ROOT, "AUTOKEY")
-
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_create_stamps_the_user_with_the_resource_uuid(
         self,
         mock_client_class,
@@ -802,7 +782,7 @@ class TestCephS3Backend:
             == "waldur-12345678123456789abc123456789abc@invalid"
         )
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_an_unstamped_existing_user_is_refused(
         self,
         mock_client_class,
@@ -830,7 +810,7 @@ class TestCephS3Backend:
         mock_client.set_user_bucket_quota.assert_not_called()
         mock_client.create_user_key.assert_not_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_a_user_stamped_for_another_resource_is_refused(
         self,
         mock_client_class,
@@ -858,7 +838,7 @@ class TestCephS3Backend:
 
         mock_client.create_user_key.assert_not_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_a_user_stamped_for_this_resource_is_adopted(
         self,
         mock_client_class,
@@ -886,27 +866,6 @@ class TestCephS3Backend:
         assert info.backend_id == TENANT
         mock_client.set_user_quota.assert_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
-    def test_a_duplicate_reported_as_500_is_verified_too(
-        self,
-        mock_client_class,
-        backend_settings,
-        backend_components,
-        mock_client,
-        waldur_resource,
-    ):
-        """croit reports some duplicates as 500, and that path must not be a way in."""
-        mock_client_class.return_value = mock_client
-        mock_client.create_user.side_effect = CephS3APIError("user already exists")
-        mock_client.get_user_info.return_value = {"uid": "backup", "name": "Backups"}
-        backend = CephS3Backend(backend_settings, backend_components)
-        backend.client = mock_client
-
-        with pytest.raises(CephS3Error, match="not provisioned for resource"):
-            backend.create_resource_with_id(waldur_resource, "backup")
-
-        mock_client.create_user_key.assert_not_called()
-
     def test_the_stamp_is_one_per_resource_and_fits_an_email_local_part(self):
         """Both backends reject a create whose email another user already holds
         (RGW answers ``EmailExists``). One resource has one user, so the stamp names
@@ -920,7 +879,7 @@ class TestCephS3Backend:
         assert _ownership_stamp(UUID(uuid)) == _ownership_stamp(uuid)
         assert len(_ownership_stamp(uuid).split("@")[0]) <= 64
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_a_user_with_the_older_long_stamp_is_still_adopted(
         self,
         mock_client_class,
@@ -943,7 +902,7 @@ class TestCephS3Backend:
 
         assert info.backend_id == TENANT
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_adopting_an_existing_user_never_touches_its_keys(
         self,
         mock_client_class,
@@ -976,42 +935,7 @@ class TestCephS3Backend:
         assert info.backend_id == TENANT
         mock_client.delete_user_key.assert_not_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
-    def test_provisioning_leaves_only_waldur_known_keys(
-        self,
-        mock_client_class,
-        backend_settings,
-        backend_components,
-        mock_client,
-        waldur_resource,
-    ):
-        """The feature's invariant, asserted as an end state.
-
-        Creating the user and minting its keys are separate calls with a test each;
-        only their combination shows what survives provisioning. Every credential
-        still live has to be one Waldur can reveal and rotate.
-        """
-        mock_client_class.return_value = mock_client
-        mock_client.list_user_keys.return_value = [
-            {"user": "waldur-u", "access_key": "AUTOKEY", "secret_key": "auto"}
-        ]
-        backend = CephS3Backend(backend_settings, backend_components)
-        backend.client = mock_client
-
-        backend.create_resource_with_id(waldur_resource, "waldur-u")
-        keys = list(backend.generate_resource_keys("waldur-u"))
-
-        # Both sides of the comparison below collapse to empty if nothing is minted,
-        # so without this the strongest-sounding test in the file passes while the
-        # feature is gutted.
-        assert len(keys) == _DEFAULT_KEY_COUNT
-
-        applied = {call.args[1] for call in mock_client.create_user_key.call_args_list}
-        deleted = {call.args[1] for call in mock_client.delete_user_key.call_args_list}
-        live = ({"AUTOKEY"} | applied) - deleted
-        assert live == {key["client_id"] for key in keys}
-
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_pruning_clears_residue_but_keeps_what_waldur_holds(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1037,7 +961,7 @@ class TestCephS3Backend:
         }
         assert deleted == {"AUTOKEY", "ORPHAN"}
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_minting_is_refused_on_a_user_waldur_did_not_make(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1057,7 +981,7 @@ class TestCephS3Backend:
 
         mock_client.create_user_key.assert_not_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_pruning_is_refused_on_a_user_waldur_did_not_make(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1077,7 +1001,7 @@ class TestCephS3Backend:
 
         mock_client.delete_user_key.assert_not_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_generate_resource_keys_is_purely_additive(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1093,7 +1017,7 @@ class TestCephS3Backend:
 
         mock_client.delete_user_key.assert_not_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_generate_resource_keys_keeps_its_own_new_keys(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1107,7 +1031,7 @@ class TestCephS3Backend:
 
         mock_client.delete_user_key.assert_not_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_generate_resource_keys_is_capped_at_two(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1122,7 +1046,7 @@ class TestCephS3Backend:
         assert len(keys) == 2
         assert mock_client.create_user_key.call_count == 2
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_rotate_applies_the_new_key_before_dropping_the_old(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1146,7 +1070,7 @@ class TestCephS3Backend:
             delete_call
         )
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_rotation_leaves_the_sibling_key_live(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1173,7 +1097,7 @@ class TestCephS3Backend:
         deleted = {call.args[1] for call in mock_client.delete_user_key.call_args_list}
         assert applied - deleted == {rotated["client_id"], second["client_id"]}
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_rotate_drops_a_key_waldur_never_learned_about(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1203,7 +1127,7 @@ class TestCephS3Backend:
         assert "AKIASIBLING" not in deleted
         assert pair["client_id"] not in deleted
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_rotate_prunes_nothing_when_the_known_set_is_unavailable(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1221,7 +1145,7 @@ class TestCephS3Backend:
 
         mock_client.delete_user_key.assert_called_once_with("waldur-u", "AKIAOLD")
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_rotate_failure_leaves_the_old_key_in_place(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1236,7 +1160,7 @@ class TestCephS3Backend:
 
         mock_client.delete_user_key.assert_not_called()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_metadata_carries_no_credentials(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):
@@ -1251,10 +1175,10 @@ class TestCephS3Backend:
         assert "secret_key" not in json.dumps(metadata)
         mock_client.list_user_keys.assert_not_called()
         # Non-secret connection info still reaches the user.
-        assert metadata["s3_endpoint"] == "https://s3.test.croit.io"
+        assert metadata["s3_endpoint"] == "https://s3.test.example.org"
         assert metadata["s3_region"] == "default"
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_create_with_id_names_the_resource_by_its_tenant(
         self,
         mock_client_class,
@@ -1277,10 +1201,10 @@ class TestCephS3Backend:
         assert info.backend_id == TENANT
         assert mock_client.create_user.call_args.kwargs["uid"] == ROOT
         assert info.endpoints == [
-            {"name": "S3 endpoint", "url": "https://s3.test.croit.io"}
+            {"name": "S3 endpoint", "url": "https://s3.test.example.org"}
         ]
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_create_publishes_connection_info_as_metadata(
         self,
         mock_client_class,
@@ -1303,7 +1227,7 @@ class TestCephS3Backend:
         info = backend.create_resource_with_id(waldur_resource, "waldur-u")
 
         assert info.backend_metadata == {
-            "s3_endpoint": "https://s3.test.croit.io",
+            "s3_endpoint": "https://s3.test.example.org",
             "s3_region": "default",
             "s3_user": ROOT,
             "s3_tenant": TENANT,
@@ -1316,7 +1240,7 @@ class TestCephS3Backend:
         # Credentials are resource API keys and must never ride along in metadata.
         assert "secret" not in json.dumps(info.backend_metadata).lower()
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_region_is_configurable(
         self,
         mock_client_class,
@@ -1336,7 +1260,7 @@ class TestCephS3Backend:
 
         assert info.backend_metadata["s3_region"] == "eu-north"
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_create_with_id_applies_bucket_quotas(
         self,
         mock_client_class,
@@ -1372,23 +1296,7 @@ class TestCephS3Backend:
         with pytest.raises(ValueError, match="s3_endpoint"):
             CephS3Backend(backend_settings, backend_components)
 
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
-    def test_endpoint_is_not_derived_from_the_api_url(
-        self, mock_client_class, backend_settings, backend_components, mock_client
-    ):
-        """The management URL must never leak into the published endpoint."""
-        mock_client_class.return_value = mock_client
-        backend_settings["api_url"] = "https://mgmt.croit.io"
-        backend_settings["s3_endpoint"] = "https://s3.croit.io"
-        backend = CephS3Backend(backend_settings, backend_components)
-        backend.client = mock_client
-
-        info = backend._backend_resource_info("waldur-u")
-
-        assert info.endpoints == [{"name": "S3 endpoint", "url": "https://s3.croit.io"}]
-        assert "mgmt.croit.io" not in str(info.endpoints)
-
-    @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+    @patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
     def test_trailing_slash_is_normalised(
         self, mock_client_class, backend_settings, backend_components, mock_client
     ):

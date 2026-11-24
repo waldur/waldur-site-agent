@@ -1,7 +1,7 @@
 [project]
 name = "waldur-site-agent-ceph-s3"
 version = "1.0.8rc16"
-description = "Ceph S3 storage plugin (croit and RadosGW flavours)"
+description = "Ceph S3 storage through RGW Admin Ops; usage from croit or RGW"
 readme = "README.md"
 authors = [{ name = "OpenNode Team", email = "info@opennodecloud.com" }]
 requires-python = ">=3.10, <4"

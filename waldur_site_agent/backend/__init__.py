@@ -122,8 +122,8 @@ def configure_logger(log_level: str = "INFO") -> None:
         root_logger.addHandler(bh)
     root_logger.setLevel(level)
 
-    # httpx logs whole request URLs at INFO, and croit's create-key endpoint takes
-    # the S3 secret as a query parameter — so the transport's own request log is a
+    # httpx logs whole request URLs at INFO, and RGW Admin Ops takes an S3 secret
+    # as a query parameter (secret-key) -- so the transport's own request log is a
     # credential sink at the agent's default level. Nothing downstream can filter it
     # by logger name either: the record reaches the JSON handler with its logger
     # rendered as "None".

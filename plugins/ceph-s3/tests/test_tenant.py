@@ -22,7 +22,7 @@ from waldur_site_agent_ceph_s3.tenant import (
     validate_tenant_template,
 )
 
-from conftest import CROIT_SETTINGS, RADOSGW_SETTINGS
+from conftest import RADOSGW_SETTINGS
 
 RESOURCE_UUID = UUID("12345678-1234-5678-9abc-123456789abc")
 CUSTOMER_UUID = UUID("aaaabbbb-cccc-dddd-eeee-ffff00001111")
@@ -191,8 +191,8 @@ class TestTemplate:
 
 class TestBackend:
     def _backend(self, **settings):
-        with patch("waldur_site_agent_ceph_s3.backend.CroitClient"):
-            backend = CephS3Backend(dict(CROIT_SETTINGS, **settings), COMPONENTS)
+        with patch("waldur_site_agent_ceph_s3.backend.RadosGWClient"):
+            backend = CephS3Backend(dict(RADOSGW_SETTINGS, **settings), COMPONENTS)
         backend.client = Mock()
         backend.client.create_user.return_value = {}
         backend.client.list_user_keys.return_value = []
@@ -212,9 +212,9 @@ class TestBackend:
         # "$" stays out of the ownership stamp's email address.
         assert "$" not in kwargs["email"]
         assert kwargs["email"] == f"waldur-{RESOURCE_UUID.hex}@invalid"
-        # Every follow-up call (key sweep, quotas) addresses the tenant's user.
+        # Any follow-up call addresses the tenant's user, never a bare namesake.
         addressed = {call.args[0] for call in backend.client.mock_calls if call.args}
-        assert addressed == {"acme_corp_12345678$root"}
+        assert addressed <= {"acme_corp_12345678$root"}
 
     def test_offerings_without_a_template_get_the_default(self):
         backend = self._backend()
@@ -401,74 +401,8 @@ class TestBackend:
         assert backend.tenant_template == "{resource_uuid}"
 
 
-class TestCroitClient:
-    def test_create_sends_tenant_beside_the_bare_uid(self, client, gateway):
-        gateway.route("/s3/users", httpx.Response(201, json={}), method="POST")
-
-        client.create_user(uid="acme$waldur-x", name="demo")
-
-        assert gateway.last_body() == {"uid": "waldur-x", "name": "demo", "tenant": "acme"}
-
-    def test_create_still_takes_tenant_as_a_keyword(self, client, gateway):
-        gateway.route("/s3/users", httpx.Response(201, json={}), method="POST")
-
-        client.create_user(uid="waldur-x", name="demo", tenant="acme")
-
-        assert gateway.last_body()["tenant"] == "acme"
-        assert gateway.last_body()["uid"] == "waldur-x"
-
-    def test_create_refuses_two_different_tenants(self, client):
-        with pytest.raises(CephS3APIError, match="tenant"):
-            client.create_user(uid="acme$waldur-x", name="demo", tenant="other")
-
-    def test_tenanted_paths_escape_the_separator(self, client, gateway):
-        gateway.route("/keys", httpx.Response(200, json=[]))
-        gateway.route("/quota", httpx.Response(204), method="PUT")
-
-        client.list_user_keys("acme$waldur-x")
-        client.set_user_quota("acme$waldur-x", {"max_size_bytes": 10})
-
-        paths = [request.url.raw_path for request in gateway.requests]
-        assert paths == [
-            b"/api/s3/users/acme%24waldur-x/keys",
-            b"/api/s3/users/acme%24waldur-x/quota",
-        ]
-
-    @pytest.mark.parametrize(
-        "uid",
-        [
-            "acme$..",
-            "..$waldur-x",
-            "ac/me$waldur-x",
-            "ac-me$waldur-x",
-            "a$b$c",
-            "$waldur-x",
-            "acme$",
-        ],
-    )
-    def test_refuses_a_tenanted_uid_that_could_leave_its_segment(self, client, uid):
-        with pytest.raises(CephS3APIError, match="Refusing"):
-            client.delete_user(uid)
-
-    @pytest.mark.parametrize(
-        "listed",
-        [
-            {"uid": "acme$waldur-x", "name": "x"},
-            {"uid": "waldur-x", "tenant": "acme", "name": "x"},
-        ],
-    )
-    def test_finds_a_tenanted_user_in_either_listed_shape(self, client, gateway, listed):
-        gateway.route("/s3/users", httpx.Response(200, json=[listed]), method="GET")
-        assert client.get_user_info("acme$waldur-x")["name"] == "x"
-
-    def test_the_global_users_namesake_is_not_the_tenanted_user(self, client, gateway):
-        gateway.route(
-            "/s3/users",
-            httpx.Response(200, json=[{"uid": "waldur-x", "name": "global"}]),
-            method="GET",
-        )
-        with pytest.raises(CephS3UserNotFoundError):
-            client.get_user_info("acme$waldur-x")
+class TestCroitStatistics:
+    """croit is read for statistics only; a tenanted user has no per-user series."""
 
     def test_stats_do_not_look_up_an_untenanted_user(self, client, gateway):
         gateway.route("/stats", httpx.Response(200, json={"axis1": {"graphs": []}}))
@@ -507,11 +441,11 @@ class TestSessionLogin:
             "/auth/login-form",
             httpx.Response(200, json={"access_token": "sess", "expires_in": 3600}),
         )
-        gateway.route("/s3/users", httpx.Response(200, json=[]), method="GET")
+        gateway.route("/stats", httpx.Response(200, json={"axis1": {"graphs": []}}))
         croit = self._client(gateway)
 
-        croit.list_users()
-        croit.list_users()
+        croit.get_user_storage_series("waldur-x", -3600)
+        croit.get_user_storage_series("waldur-x", -3600)
 
         login, *calls = gateway.requests
         assert login.url.path == "/api/auth/login-form"
@@ -525,11 +459,11 @@ class TestSessionLogin:
             "/auth/login-form",
             httpx.Response(200, json={"access_token": "sess", "expires_in": 30}),
         )
-        gateway.route("/s3/users", httpx.Response(200, json=[]), method="GET")
+        gateway.route("/stats", httpx.Response(200, json={"axis1": {"graphs": []}}))
         croit = self._client(gateway)
 
-        croit.list_users()
-        croit.list_users()
+        croit.get_user_storage_series("waldur-x", -3600)
+        croit.get_user_storage_series("waldur-x", -3600)
 
         logins = [r for r in gateway.requests if r.url.path.endswith("login-form")]
         assert len(logins) == 2
@@ -541,7 +475,7 @@ class TestSessionLogin:
         croit = self._client(gateway)
 
         with pytest.raises(CephS3AuthenticationError, match="admin"):
-            croit.list_users()
+            croit.get_user_storage_series("waldur-x", -3600)
 
     def test_a_session_croit_dropped_early_is_renewed_and_the_call_retried(self):
         calls = {"login": 0}
@@ -562,7 +496,7 @@ class TestSessionLogin:
         croit.session = httpx.Client(transport=httpx.MockTransport(handler))
         croit._log_in()  # a cached token, as after an earlier call
 
-        assert croit._request("GET", "/s3/users").json() == []
+        assert croit._request("GET", "/stats").json() == []
         assert calls["login"] == 2
 
     def test_a_token_refused_right_after_login_is_not_retried(self):
@@ -583,5 +517,5 @@ class TestSessionLogin:
         croit.session = httpx.Client(transport=httpx.MockTransport(handler))
 
         with pytest.raises(CephS3AuthenticationError):
-            croit._request("GET", "/s3/users")
+            croit._request("GET", "/stats")
         assert calls == {"login": 1, "api": 1}

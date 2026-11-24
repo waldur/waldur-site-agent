@@ -182,10 +182,11 @@ class RadosGWClient(BaseS3AdminClient):
             name: Display name; RGW answers 400 InvalidArgument without one
             email: User email address
             **kwargs: access_key/secret_key to apply, plus optional max_buckets
-                and default_placement. account_id makes the user a member of
-                that RGW account, and account_root its root user. tenant and
-                default_storage_class are rejected for this flavour at
-                configuration time, so they never arrive here.
+                default_placement and default_storage_class (RGW applies the
+                class only within the placement rule; settings refuse one
+                without the other). account_id makes the user a member of that
+                RGW account, and account_root its root user. A tenant arrives
+                inside the uid, as ``tenant$uid``.
 
         Returns:
             The created user object as RGW reports it.
@@ -211,6 +212,7 @@ class RadosGWClient(BaseS3AdminClient):
         for option, param in (
             ("max_buckets", "max-buckets"),
             ("default_placement", "default-placement"),
+            ("default_storage_class", "default-storage-class"),
         ):
             if kwargs.get(option):
                 params[param] = kwargs[option]
@@ -314,8 +316,7 @@ class RadosGWClient(BaseS3AdminClient):
 
         Re-sending a known access key rewrites its secret in place — verified
         end to end: the new secret authenticates and the old one is refused.
-        That is what lets a rotation keep a stable access key here, which croit
-        cannot do.
+        That is what lets a rotation keep a stable access key.
         """
         uid = self._validate_uid(uid)
         access_key = self._validate_access_key(access_key)

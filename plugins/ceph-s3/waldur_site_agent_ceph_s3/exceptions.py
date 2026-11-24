@@ -1,9 +1,8 @@
 """Custom exceptions for the Ceph S3 plugin.
 
-Named for Ceph rather than croit because both flavours raise them: the croit
-management API and RadosGW Admin Ops report the same conditions, only with
-different status codes and payloads. The one exception that stays croit-named is
-the graph error, which is a croit concept with no Ceph equivalent.
+Named for Ceph: RadosGW Admin Ops raises them, and croit's statistics client
+raises the transport ones. The one croit-named exception is the graph error, a
+croit concept with no Ceph equivalent.
 """
 
 

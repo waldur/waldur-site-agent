@@ -1,23 +1,18 @@
 """GB-day storage metering from croit's statistics subsystem.
 
-Split from the management backend because the series this integrates has no
-equivalent in RadosGW Admin Ops: /admin/usage carries bandwidth and operation
-counts, and bucket stats are a point-in-time size. A radosgw-flavoured offering
-can create users, keys and quotas but cannot be metered, so "this flavour cannot
-report" is a fact about which class is wired into ``reporting_backend`` rather
-than a check inside a method.
-
-Wire it up alongside the management backend::
+croit keeps a stored-bytes series per user and per bucket; this integrates it over
+the billing period. Users and buckets are managed and listed through RGW (the
+management backend this class builds on); croit is reached only for statistics,
+with credentials of its own in ``croit_reporting``::
 
     backend_type: ceph_s3
     order_processing_backend: ceph_s3
     membership_sync_backend: ceph_s3
     reporting_backend: croit_usage
 
-On a croit cluster managed natively (``flavour: radosgw``) the series still comes
-from croit, through credentials of its own in ``croit_reporting``. Resources in
-RGW account mode are metered per bucket: croit attributes an account's storage to
-its buckets and none of it to the account's users.
+Tenanted users -- every resource since one tenant per resource -- and RGW account
+resources are metered per bucket: croit's per-user graph cannot name a tenanted
+user, and attributes an account's storage to its buckets, not its users.
 """
 
 import json
@@ -37,7 +32,6 @@ from .backend import (
 )
 from .clients.croit import CroitClient
 from .periods import BillingPeriodMixin
-from .settings import CROIT
 from .tenant import split
 
 # Months whose bucket sets are kept: a year and the current month, so a past
@@ -131,7 +125,7 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
     def __init__(
         self, backend_settings: dict, backend_components: dict[str, dict]
     ) -> None:
-        """Build a management backend and refuse a flavour that cannot meter.
+        """Build a management backend and croit's statistics client.
 
         Failing here rather than at the first reporting pass: a reporting backend
         that silently measures nothing looks exactly like a tenant that stored
@@ -139,38 +133,28 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
         """
         super().__init__(backend_settings, backend_components)
         reporting = backend_settings.get("croit_reporting") or {}
-        self.croit_client: CroitClient
-        if self.flavour == CROIT:
-            if reporting:
-                raise ValueError(
-                    "croit_reporting is for a radosgw-flavour offering on a croit "
-                    "cluster; the croit flavour already reports through api_url"
-                )
-            # The management client is croit's by construction here.
-            self.croit_client = self.client  # type: ignore[assignment]
-        else:
-            if not isinstance(reporting, dict) or not reporting.get("api_url"):
-                raise ValueError(
-                    "croit_usage on the radosgw flavour reads croit's statistics, so "
-                    "it needs croit's address and credentials in croit_reporting "
-                    "(api_url plus token, or username and password). Plain Ceph has "
-                    "no stored-bytes series to integrate"
-                )
-            if not reporting.get("token") and not (
-                reporting.get("username") and reporting.get("password")
-            ):
-                raise ValueError(
-                    "croit_reporting needs either 'token' or both 'username' and "
-                    "'password'"
-                )
-            self.croit_client = CroitClient(
-                api_url=reporting["api_url"],
-                username=reporting.get("username"),
-                password=reporting.get("password"),
-                token=reporting.get("token"),
-                verify_ssl=reporting.get("verify_ssl", True),
-                timeout=reporting.get("timeout", 30),
+        if not isinstance(reporting, dict) or not reporting.get("api_url"):
+            raise ValueError(
+                "croit_usage reads croit's statistics, so it needs croit's address "
+                "and credentials in croit_reporting (api_url plus token, or "
+                "username and password). Plain Ceph has no stored-bytes series to "
+                "integrate; use rgw_usage there"
             )
+        if not reporting.get("token") and not (
+            reporting.get("username") and reporting.get("password")
+        ):
+            raise ValueError(
+                "croit_reporting needs either 'token' or both 'username' and 'password'"
+            )
+        # Statistics only: users and buckets are read through RGW (self.client).
+        self.croit_client = CroitClient(
+            api_url=reporting["api_url"],
+            username=reporting.get("username"),
+            password=reporting.get("password"),
+            token=reporting.get("token"),
+            verify_ssl=reporting.get("verify_ssl", True),
+            timeout=reporting.get("timeout", 30),
+        )
         self._bucket_ledger = _BucketLedger(str(reporting.get("bucket_state_file") or ""))
 
         # Usernames whose usage the last report actually measured. See
