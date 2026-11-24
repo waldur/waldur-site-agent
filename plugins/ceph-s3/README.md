@@ -1,21 +1,22 @@
 # Ceph S3 Storage Plugin for Waldur Site Agent
 
 Integrates Waldur Mastermind with Ceph object storage. Each marketplace resource
-creates one RGW user, with its access keys managed as Waldur resource API keys
-and its ordered ceiling applied as an RGW quota.
+gets an RGW tenant of its own with one user in it, managed through RGW's Admin Ops
+API: its access keys are Waldur resource API keys, and its ordered ceiling is an
+RGW quota.
 
-Two **flavours** reach the same RGW concepts by different routes:
+Usage comes from one of two reporting backends:
 
-| | `croit` (default) | `radosgw` |
+| | `croit_usage` | `rgw_usage` |
 |---|---|---|
-| Talks to | croit's management API | RadosGW Admin Ops on the gateway |
-| Authenticates with | bearer token or basic auth | SigV4, as an RGW user with caps |
-| Users, keys, quotas | yes | yes |
-| GB-day metering | yes, from croit's statistics (`croit_usage`) | yes, accrued from bucket statistics (`rgw_usage`) |
-| Traffic and request metering | no | yes, from the RGW usage log (`rgw_usage`) |
+| Reads | croit's statistics (croit clusters) | RGW itself (any Ceph) |
+| Storage | GB-days integrated from croit's stored-bytes series | GB-days accrued from bucket statistics, pass by pass |
+| Traffic and requests | no | yes, from the RGW usage log |
 
-The flavours differ only inside the client. Everything above it — key lifecycle,
-quota mapping, metadata, Waldur plumbing — is shared.
+croit's own user management is no longer used: on a croit cluster the agent talks
+to RGW directly, and reads croit only for statistics. An offering still configured
+for it is refused at start; see
+[Migrating from the croit flavour](#migrating-from-the-croit-flavour).
 
 ## At a glance
 
@@ -23,7 +24,7 @@ quota mapping, metadata, Waldur plumbing — is shared.
 |---|---|---|
 | `ceph_s3` | `waldur_site_agent.backends` | order processing, membership sync |
 | `croit_usage` | `waldur_site_agent.backends` | reporting from croit's statistics (croit clusters) |
-| `rgw_usage` | `waldur_site_agent.backends` | reporting from RGW's Admin Ops (radosgw flavour, any Ceph) |
+| `rgw_usage` | `waldur_site_agent.backends` | reporting from RGW's Admin Ops (any Ceph) |
 
 **Modes:** `order_process`, `membership_sync`, `event_process`, and `report` with
 `reporting_backend: croit_usage` or `rgw_usage`.
@@ -31,15 +32,18 @@ quota mapping, metadata, Waldur plumbing — is shared.
 | Operation | Behaviour |
 |---|---|
 | Create resource | A tenant of its own with one S3 user, `root`; user and bucket quotas. The tenant is the backend id |
-| Terminate resource | Deletes the S3 user |
+| Terminate resource | Deletes the user (in account mode, the account and its users); refused while it owns buckets |
 | Update limits | Updates the quotas |
 | Add / remove members | **No-op** — returns `True`; one S3 user per resource, no per-member access |
-| Pause / downscale / restore | **No-op** — returns `True` without changing quotas |
+| Pause / restore | Suspends / reinstates every user of the resource |
+| Downscale | **No-op** — returns `True` without changing quotas |
 | Usage reporting | `ceph_s3`: none. `croit_usage`: croit's statistics. `rgw_usage`: RGW's Admin Ops |
 
 ## Features
 
-- **Automatic S3 User Creation**: One S3 user per marketplace resource with slug-based naming
+- **A tenant per resource**: every resource is an RGW tenant with its own bucket
+  namespace, and one user Waldur creates in it (or, in account mode, an RGW account
+  whose IAM the consumer runs)
 - **Usage-Based Billing**: storage billed in GB-days, integrated from croit's
   metrics or accrued from RGW's bucket statistics over the billing period, and,
   with `rgw_usage`, traffic and requests from the RGW usage log. Object counts are
@@ -49,7 +53,6 @@ quota mapping, metadata, Waldur plumbing — is shared.
 - **Credential Management**: two S3 access keys per resource, encrypted in Waldur and
   managed from the portal (reveal / rotate). The count is fixed at provisioning —
   rotation replaces a key's value in place, so there is no add or revoke
-- **Bearer Token Authentication**: Secure API access with configurable SSL verification
 
 ## Installation
 
@@ -80,17 +83,21 @@ offerings:
     backend_type: "ceph_s3"
     order_processing_backend: "ceph_s3"
     membership_sync_backend: "ceph_s3"
-    reporting_backend: "croit_usage"
+    reporting_backend: "rgw_usage"             # or croit_usage on a croit cluster
 
-    # Backend settings for the croit flavour
     backend_settings:
-      flavour: "croit"                         # or "radosgw"; croit is the default
-      api_url: "https://192.168.240.34"        # management API
-      s3_endpoint: "https://s3.example.com"    # what tenants connect to
-      s3_region: "default"                     # RadosGW zonegroup api_name
-      token: "your-bearer-token"
-      verify_ssl: false
+      s3_endpoint: "https://s3.example.com"    # what tenants connect to; Admin Ops too
+      admin_access_key: "ADMINACCESSKEY000000" # an RGW user with admin caps, below
+      admin_secret_key: "..."
+      s3_region: "default"                     # must match what clients sign with
+      admin_path: "admin"                      # only if rgw_admin_entry was renamed
+      verify_ssl: true
       # tenant_template: "{customer_abbreviation:.12}_{project_name:.12}_{resource_name:.20}_{resource_uuid:.8}"
+      # On a croit cluster, with reporting_backend: croit_usage:
+      # croit_reporting:
+      #   api_url: "https://croit.example.com"
+      #   token: "..."                       # or username + password
+      #   bucket_state_file: "/var/lib/waldur-site-agent/ceph-s3-buckets.json"
 
     # Component mapping. label and measured_unit are required by the config
     # validator for every component — the agent refuses to start without them.
@@ -105,38 +112,63 @@ offerings:
         unit_factor: 1000000000  # decimal GB (1000 GB = 1 TB), not GiB
 ```
 
-### The radosgw flavour
+The admin user is an ordinary RGW user with admin caps; it needs no `metadata`
+cap and must not be a `--system` user. `usage=read` is only needed for
+`rgw_usage`, `accounts=*` only for account mode:
 
-Talks Admin Ops directly to the gateway, for a Ceph cluster croit does not manage.
-
-```yaml
-    backend_type: "ceph_s3"
-    order_processing_backend: "ceph_s3"
-    membership_sync_backend: "ceph_s3"
-    reporting_backend: "rgw_usage"             # see Usage Reporting
-
-    backend_settings:
-      flavour: "radosgw"
-      s3_endpoint: "https://s3.example.com"    # Admin Ops hangs off this host
-      admin_access_key: "ADMINACCESSKEY000000"
-      admin_secret_key: "..."
-      s3_region: "us-east-1"                   # must match what clients sign with
-      admin_path: "admin"                      # only if rgw_admin_entry was renamed
-      verify_ssl: true
+```bash
+radosgw-admin user create --uid=waldur-agent --display-name="Waldur site agent"
+radosgw-admin caps add --uid=waldur-agent --caps="users=*;buckets=*;usage=read;accounts=*"
 ```
 
-`api_url`, `token`, `username` and `password` belong to the croit flavour and are
-**rejected** here rather than ignored — an offering carrying both sets is a
-half-finished migration, and silently picking one would authenticate somewhere the
-operator did not intend.
+Admin Ops is served by the gateway itself, under `/admin` by default, so the agent
+must reach `s3_endpoint` with that path open; some load balancers in front of
+public gateways block it.
 
-#### Two behaviours that differ from croit
+`flavour: radosgw` is still accepted, and may be left out.
 
-- **Storage is accrued, not integrated.** Admin Ops exposes no stored-bytes series,
-  only a bucket's size now, so `rgw_usage` accrues GB-days pass by pass (see
-  [Reporting from RGW itself](#reporting-from-rgw-itself-rgw_usage)). On a croit
-  cluster, `croit_usage` can integrate croit's statistics instead (see
-  [Reporting for a radosgw-managed offering](#reporting-for-a-radosgw-managed-offering-on-a-croit-cluster)).
+### Migrating from the croit flavour
+
+Users used to be managed through croit's API (`flavour: croit`, then the default).
+That is gone: an offering still configured for it -- `flavour: croit`, or croit's
+`api_url`, `token`, `username` or `password` at the top of `backend_settings` --
+fails at agent start with these steps:
+
+1. **Create an RGW admin user** with the caps above, and make Admin Ops reachable
+   from the agent.
+2. **Set `admin_access_key` and `admin_secret_key`** (and `admin_path` if
+   `rgw_admin_entry` was renamed). Remove `flavour: croit`.
+3. **If the offering reports with `croit_usage`**, move `api_url` and `token` (or
+   `username` and `password`) under `croit_reporting`, and set
+   `croit_reporting.bucket_state_file` -- the croit flavour could not keep one, so
+   until now a bucket deleted mid-month could drop out of the bill after a restart.
+
+Nothing about existing resources changes. croit managed the same RGW users the
+agent now reaches directly, so their backend ids, tenants and ownership stamps
+stay as they are.
+
+```yaml
+# before                                   # after
+backend_settings:                          backend_settings:
+  flavour: "croit"                           s3_endpoint: "https://s3.example.com"
+  api_url: "https://croit.example.com"       admin_access_key: "..."
+  token: "..."                               admin_secret_key: "..."
+  s3_endpoint: "https://s3.example.com"      croit_reporting:
+                                               api_url: "https://croit.example.com"
+                                               token: "..."
+                                               bucket_state_file: "/var/lib/..."
+```
+
+`default_storage_class` now needs `default_placement` as well: RGW applies a
+storage class only as part of a placement rule.
+
+### Things to know
+
+- **Storage is accrued, not integrated, with `rgw_usage`.** Admin Ops exposes no
+  stored-bytes series, only a bucket's size now, so `rgw_usage` accrues GB-days
+  pass by pass (see [Reporting from RGW itself](#reporting-from-rgw-itself-rgw_usage)).
+  On a croit cluster, `croit_usage` integrates croit's statistics instead (see
+  [Reporting with croit's statistics](#reporting-with-croits-statistics)).
 - **Quota enforcement overshoots.** RGW syncs bucket statistics into the
   user-quota check periodically rather than on every write. Measured on squid: a
   6 MiB ceiling against 5 MiB already stored accepted a further 7 MiB before
@@ -155,7 +187,6 @@ business, not a support request.
 
 ```yaml
     backend_settings:
-      flavour: "radosgw"
       rgw_accounts: true
       s3_endpoint: "https://s3.example.com"
       admin_access_key: "ADMINACCESSKEY000000"
@@ -206,7 +237,7 @@ What changes compared with user mode:
 - **Pause suspends every user of the account.** Pausing a resource in Waldur
   suspends the root user and every IAM user (RGW suspends per user, so the root
   alone would not stop the others); restoring reinstates them all. A plain user,
-  on either flavour, is suspended the same way. Downscaling has no S3 meaning and
+  is suspended the same way. Downscaling has no S3 meaning and
   changes nothing.
 - **Existing offerings.** Resources provisioned before the switch stay plain
   users. Account membership cannot be added without moving a user's buckets.
@@ -229,7 +260,7 @@ Cluster preparation (from a shell with `radosgw-admin`):
    `rgw_s3_auth_use_sts = true` and an `rgw_sts_key` (16 hex characters, the same
    on every RGW in the zone). The agent itself does not use STS.
 
-On croit-managed clusters, accounts and IAM are not shown in the croit UI. They are
+On croit clusters, accounts and IAM are not shown in the croit UI. They are
 standard RGW objects in the cluster and live alongside what croit manages. Mention
 them when raising a croit support ticket about S3.
 
@@ -237,34 +268,32 @@ them when raising a croit support ticket about S3.
 
 #### Backend Settings
 
-Both entry points validate these with
+Every entry point validates these with
 `waldur_site_agent_ceph_s3.schemas.CephS3BackendSettingsSchema`; a misspelt key is logged
-as a warning when the agent loads its configuration. Which keys are required depends on
-the flavour and is checked when the backend starts.
+as a warning when the agent loads its configuration. Required keys are checked when the
+backend starts.
 
-- **`flavour`** (optional, default: `"croit"`): `croit` or `radosgw`
-- **`api_url`** (croit only, required): croit **management** API base URL (/api is appended)
-- **`s3_endpoint`** (required): the S3 data endpoint tenants connect to. This is a
-  *different host* from `api_url` — RadosGW runs on the storage nodes while the
-  management API runs on the croit VM, and croit exposes no VIP or DNS name to derive
-  it from. Point it at a load balancer or DNS name in front of the RGW nodes
+- **`s3_endpoint`** (required): the S3 endpoint tenants connect to, and the one the
+  agent reaches Admin Ops on. Point it at a load balancer or DNS name in front of the
+  RGW nodes
 - **`s3_region`** (optional, default: `"default"`): the region S3 clients sign with.
-  Maps to the RadosGW zonegroup's `api_name`; croit exposes no endpoint to read it back,
-  and `"default"` is Ceph's out-of-the-box zonegroup name. Set it if yours was named
-- **`token`** (croit only): bearer token for API authentication
-- **`username`** (croit only): API username (alternative to token). croit refuses
-  HTTP Basic on its API, so the pair is exchanged at `/auth/login-form` for a session
-  token, which the client renews before it expires
-- **`password`** (croit only): API password (alternative to token)
-- **`admin_access_key`** (radosgw only, required): access key of the RGW user
-  holding `users=*;buckets=read`, plus `usage=read` for traffic metering with
-  `rgw_usage`
-- **`admin_secret_key`** (radosgw only, required): its secret
-- **`admin_path`** (radosgw only, default: `"admin"`): the value of
-  `rgw_admin_entry`, if the operator renamed it
+  Maps to the RadosGW zonegroup's `api_name`; `"default"` is Ceph's out-of-the-box
+  zonegroup name. Set it if yours was named
+- **`admin_access_key`** (required): access key of the RGW user holding
+  `users=*;buckets=*`, plus `usage=read` for `rgw_usage` and `accounts=*` for
+  account mode
+- **`admin_secret_key`** (required): its secret
+- **`admin_path`** (optional, default: `"admin"`): the value of `rgw_admin_entry`,
+  if the operator renamed it
+- **`flavour`** (optional): `radosgw`, the only one. `croit` is refused with the
+  migration steps, as are croit's former `api_url`, `token`, `username` and
+  `password`; see [Migrating from the croit flavour](#migrating-from-the-croit-flavour)
+- **`croit_reporting`** (`croit_usage` only): croit's `api_url`, `token` or
+  `username` and `password`, `verify_ssl`, `timeout` and `bucket_state_file`, for
+  reading its statistics
 - **`verify_ssl`** (optional, default: `true`): Enable/disable SSL certificate verification
 - **`timeout`** (optional, default: `30`): Request timeout in seconds
-- **`tenant_template`** (optional, either flavour): the tenant each new resource
+- **`tenant_template`** (optional): the tenant each new resource
   gets for itself, which becomes its backend id. Must contain `{resource_uuid}` or
   `{resource_slug}`. See [Tenants and backend ids](#tenants-and-backend-ids)
 - **`default_tenant`**: no longer supported. It put every resource into one shared
@@ -272,11 +301,10 @@ the flavour and is checked when the backend starts.
 - **`allocation_prefix`**: not used by new resources. Resources from before one
   tenant per resource have uids built from it (`waldur-<slug>`), and keep them;
   see [Resources from before one tenant per resource](#resources-from-before-one-tenant-per-resource)
-- **`default_placement`** (optional): Default placement rule. Honoured by both
-  flavours
-- **`default_storage_class`** (croit only, optional): Default storage class.
-  Rejected on the radosgw flavour: Admin Ops user-create takes a placement but no
-  storage class
+- **`default_placement`** (optional): Default placement rule for new users
+- **`default_storage_class`** (optional): Default storage class for new users,
+  within `default_placement`, which it requires: RGW applies a storage class only
+  as part of a placement rule
 - **`storage_size`** (`rgw_usage` only, default: `"logical"`): which bucket size is
   billed, `logical` (the bytes stored, RGW's `size`; what croit's statistics bill)
   or `allocated` (RGW's `size_actual`, including allocation overhead)
@@ -384,7 +412,7 @@ That is also the default when the setting is absent.
   no other spelling returns a series), but its per-bucket statistics name a
   tenanted bucket as `tenant_bucket`. A tenanted resource is therefore metered as
   the sum of its buckets, the same way as an account (see
-  [Reporting for a radosgw-managed offering](#reporting-for-a-radosgw-managed-offering-on-a-croit-cluster)).
+  [Reporting with croit's statistics](#reporting-with-croits-statistics)).
 - **Account mode** (radosgw, `rgw_accounts: true`) creates the account in the
   resource's tenant, so the consumer's IAM users and every bucket they create stay
   in that namespace (verified on Ceph 20.2.5: two tenants each own a bucket called
@@ -433,12 +461,10 @@ still recognised.
 Metering needs its own backend, one of two:
 
 - **`croit_usage`** reads croit's statistics subsystem, so it needs a croit
-  cluster. It works for both flavours: a croit-flavoured offering reads croit with
-  its own API settings, and a radosgw-flavoured offering needs croit's address and
-  credentials in `croit_reporting` (see
-  [Reporting for a radosgw-managed offering](#reporting-for-a-radosgw-managed-offering-on-a-croit-cluster)).
-- **`rgw_usage`** reads RGW's own Admin Ops, so it works on any Ceph the radosgw
-  flavour manages, croit or not, and adds traffic and request metering (see
+  cluster, and croit's address and credentials in `croit_reporting` (see
+  [Reporting with croit's statistics](#reporting-with-croits-statistics)).
+- **`rgw_usage`** reads RGW's own Admin Ops, so it works on any Ceph, croit or
+  not, and adds traffic and request metering (see
   [Reporting from RGW itself](#reporting-from-rgw-itself-rgw_usage)).
 
 Leaving `reporting_backend` at `ceph_s3` reports **nothing** — deliberately, not
@@ -454,13 +480,12 @@ cannot change a bill.
 
 ### Reporting from RGW itself (`rgw_usage`)
 
-For the radosgw flavour, plain users and [account mode](#account-mode-an-rgw-account-per-resource)
-alike. No croit, no agent-side state and no volume are needed.
+Plain users and [account mode](#account-mode-an-rgw-account-per-resource) alike.
+No croit, no agent-side state and no volume are needed.
 
 ```yaml
     reporting_backend: "rgw_usage"
     backend_settings:
-      flavour: "radosgw"
       rgw_accounts: true
       s3_endpoint: "https://s3.example.com"
       admin_access_key: "ADMINACCESSKEY000000"   # caps: users=*;buckets=*;accounts=*;usage=read
@@ -577,18 +602,16 @@ reported.
 - IAM API calls in account mode are logged too, with an empty bucket name, and
   count as operations.
 
-### Reporting for a radosgw-managed offering on a croit cluster
+### Reporting with croit's statistics
 
-Management can talk to RGW directly (`flavour: radosgw`, including
-[account mode](#account-mode-an-rgw-account-per-resource)) while usage still comes
-from croit's statistics. `croit_usage` then needs croit's own address and
-credentials in `croit_reporting`. The radosgw flavour keeps refusing croit's
-top-level settings, so the two credential sets stay apart:
+Users are managed through RGW (including
+[account mode](#account-mode-an-rgw-account-per-resource)) while usage comes from
+croit's statistics. `croit_usage` reads croit with its own address and credentials
+in `croit_reporting`, kept apart from the RGW admin credentials:
 
 ```yaml
     reporting_backend: "croit_usage"
     backend_settings:
-      flavour: "radosgw"
       rgw_accounts: true
       s3_endpoint: "https://s3.example.com"
       admin_access_key: "ADMINACCESSKEY000000"
@@ -737,23 +760,21 @@ old one, so the resource's other key keeps working throughout.
 **Every credential that works is one Waldur can rotate.** Two things would otherwise
 break that:
 
-- *RadosGW mints its own key when a user is created*, and Waldur never sees its secret.
-  It is deleted right after the user is created, while it is that user's only key and
-  before anyone holds credentials. This happens only on the branch that actually created
-  the user. An existing uid is adopted with its keys left in place at provisioning time,
-  but they are not in Waldur's known set, so the resource's first rotation prunes them.
+- *A key Waldur never issued.* Users are created with `generate-key=False`, so RGW
+  mints none of its own. An existing uid is adopted with its keys left in place at
+  provisioning time, but they are not in Waldur's known set, so the resource's first
+  rotation prunes them.
 - *A rotation whose reply to Waldur is lost* has already replaced the access key at the
-  backend, so re-issuing it rotates from a client_id croit no longer has and would leave
+  backend, so re-issuing it rotates from a client_id RGW no longer has and would leave
   the intermediate key live and invisible. Each rotation therefore receives the resource's
   known client_ids and drops anything outside that set. If Waldur cannot be listed the set
   is `None` — unknown, so nothing is pruned; treating it as empty would delete every
   credential the resource has.
 
-**Known limitation:** croit's create-key endpoint takes the secret as a query parameter
-(`PUT /s3/users/{uid}/keys/{accessKey}?secretKey=…`), so it appears in croit's access log.
-The bulk alternative (`PUT /s3/users/{uid}/keys`) keeps the secret in the body but replaces
-the user's entire key set asynchronously, which can drop a sibling key when two rotations
-overlap.
+**Known limitation:** Admin Ops takes a key's secret as a query parameter
+(`PUT /admin/user?key&secret-key=…`), so it can appear in the gateway's access log
+and in that of any proxy in front of it. The agent scrubs it from its own logs and
+error messages.
 
 ### Storage Summary
 
@@ -808,11 +829,12 @@ plugin applies the ordered limits as RadosGW quotas:
 
 Both are set from the same ordered ceiling:
 
-- **User quota** (`PUT /s3/users/{uid}/quota`): the aggregate cap across everything
-  the user owns. This is the one that bounds a tenant — croit exposes no way to
-  cap the bucket count, so a per-bucket quota alone bounds nothing
-- **Bucket quota** (`PUT /s3/users/{uid}/bucket-quota`): a per-bucket guard
-- `maxSize` in bytes (`max_storage_limit` × `unit_factor`), `maxObjects` as a count
+- **User quota** (`PUT /admin/user?quota&quota-type=user`): the aggregate cap across
+  everything the user owns. This is the one that bounds a tenant -- the bucket count
+  is not capped, so a per-bucket quota alone bounds nothing
+- **Bucket quota** (`quota-type=bucket`): a per-bucket guard
+- `max-size` in bytes (`max_storage_limit` × `unit_factor`), `max-objects` as a count
+- In account mode both are set on the account instead
 
 ### How Safety Limits Work
 
@@ -886,7 +908,7 @@ def create_ceph_s3_offering():
                     'service_provider_can_create_offering_user': False,
                     'auto_create_admin_user': False,
                     # A ceiling change becomes an UPDATE order the agent applies,
-                    # rather than a value Waldur records and croit never sees.
+                    # rather than a value Waldur records and RGW never sees.
                     'create_orders_on_resource_option_change': True,
                 },
                 'options': {
@@ -1075,8 +1097,8 @@ The order fails with "not a valid RGW tenant name". The rendered tenant must fit
 
 Use standard Python logging configuration or waldur-site-agent logging settings to enable debug output for the plugin modules:
 
-- `waldur_site_agent_ceph_s3.clients.croit` - croit API interactions
 - `waldur_site_agent_ceph_s3.clients.radosgw` - RadosGW admin API interactions
+- `waldur_site_agent_ceph_s3.clients.croit` - croit statistics, for `croit_usage`
 - `waldur_site_agent_ceph_s3.backend` - Backend operations
 
 Set the top-level `log_level: DEBUG` in the agent configuration.
@@ -1088,20 +1110,20 @@ Set the top-level `log_level: DEBUG` in the agent configuration.
    the tenant becomes the backend id
 3. **Quota Application**: ceilings applied as user and bucket quotas
 4. **Key Provisioning**: Two access keys minted, applied, and reported to Waldur encrypted;
-   RadosGW's auto-generated key is removed
+   RGW mints none of its own
 5. **Usage Tracking**: storage integrated into GB-days per billing period
 6. **Ceiling Updates**: editing `max_storage_limit` or `max_object_limit` on the
    resource creates an UPDATE order carrying `new_options`, when the offering has both
    `resource_options` and `plugin_options.create_orders_on_resource_option_change`.
    The agent re-applies both quotas from the order attributes, overlaid by the current
    options, overlaid by the new ones, before Waldur records the change. A ceiling set
-   to `0` is lifted: it is sent as `-1`, never as `0` (croit stores 0 as unlimited,
-   RadosGW as a cap of nothing) and never left out (RadosGW keeps a left-out limit).
+   to `0` is lifted: it is sent as `-1`, never as `0` (RadosGW reads 0 as a cap of
+   nothing) and never left out (RadosGW keeps a left-out limit).
    Waldur refuses `null` for an integer option, so `0` is how a consumer clears one.
    Without `create_orders_on_resource_option_change`, Waldur stores an edit directly
    and the quota is not touched
 7. **Resource Deletion**: the S3 user is removed — but only once it owns no
-   buckets. croit refuses to delete a user that still holds data
-   (`500 Unable to remove user with buckets.`), so termination of a tenant with
-   data fails until the buckets are emptied and removed. The failure reason
+   buckets. RGW refuses to delete a user that still holds data (the agent never
+   purges), and in account mode the agent checks before deleting anyone, so
+   termination of a tenant with data fails until the buckets are emptied and removed. The failure reason
    reaches the portal's order history and resource activity log.

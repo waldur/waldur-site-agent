@@ -34,7 +34,6 @@ from waldur_site_agent.backend.exceptions import BackendError
 
 from .backend import CephS3Backend, _to_usage_units, logger
 from .periods import BillingPeriodMixin
-from .settings import RADOSGW
 
 STORAGE = "storage"
 # backend_name -> the usage log's field.
@@ -111,18 +110,12 @@ class RgwUsageBackend(BillingPeriodMixin, CephS3Backend):
     def __init__(
         self, backend_settings: dict, backend_components: dict[str, dict]
     ) -> None:
-        """Build a management backend and refuse what this one cannot meter.
+        """Build a management backend and refuse a configuration it cannot meter.
 
         Failing at construction, as croit_usage does: a reporting backend that
         quietly measures nothing looks exactly like a tenant that used nothing.
         """
         super().__init__(backend_settings, backend_components)
-        if self.flavour != RADOSGW:
-            raise ValueError(
-                "rgw_usage meters through RGW's Admin Ops, so it needs "
-                "flavour: radosgw; a croit-flavoured offering reports through "
-                "croit_usage"
-            )
         size = str(backend_settings.get("storage_size") or "logical")
         if size not in STORAGE_SIZES:
             raise ValueError(

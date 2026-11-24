@@ -21,7 +21,7 @@ from waldur_site_agent_ceph_s3.exceptions import CephS3AuthenticationError
 from waldur_site_agent_ceph_s3 import rgw_reporting
 from waldur_site_agent_ceph_s3.rgw_reporting import RgwUsageBackend
 
-from conftest import CROIT_SETTINGS, RADOSGW_SETTINGS
+from conftest import RADOSGW_SETTINGS
 
 GB = 1000000000
 UTC = datetime.timezone.utc
@@ -83,9 +83,9 @@ def make_backend(settings=RADOSGW_SETTINGS, components=COMPONENTS):
 
 
 class TestConfiguration:
-    def test_the_croit_flavour_is_refused(self):
-        with pytest.raises(ValueError, match="flavour: radosgw"):
-            make_backend(CROIT_SETTINGS)
+    def test_an_offering_still_on_croit_management_is_refused(self):
+        with pytest.raises(ValueError, match="no longer manages users through croit"):
+            make_backend({**RADOSGW_SETTINGS, "flavour": "croit"})
 
     def test_an_unknown_size_figure_is_refused(self):
         with pytest.raises(ValueError, match="storage_size"):

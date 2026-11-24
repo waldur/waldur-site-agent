@@ -66,15 +66,6 @@ class TestConfiguration:
         with pytest.raises(ValueError, match="token"):
             CroitUsageBackend(settings, COMPONENTS)
 
-    def test_the_croit_flavour_does_not_take_a_second_croit(self):
-        settings = {
-            "api_url": "https://croit", "token": "t", "s3_endpoint": "https://s3",
-            "croit_reporting": CROIT,
-        }
-        with pytest.raises(ValueError, match="already reports through api_url"):
-            CroitUsageBackend(settings, COMPONENTS)
-
-
 class TestAccountUsage:
     def test_an_account_is_the_sum_of_its_buckets(self):
         backend = make_backend()
@@ -291,10 +282,9 @@ class TestTenantedUsers:
     """croit's per-user graph cannot name a tenanted user; its buckets it can."""
 
     def test_a_tenanted_croit_user_is_metered_through_its_buckets(self):
-        with patch("waldur_site_agent_ceph_s3.backend.CroitClient"):
+        with patch("waldur_site_agent_ceph_s3.backend.RadosGWClient"):
             backend = CroitUsageBackend(
-                {"api_url": "https://croit", "token": "t", "s3_endpoint": "https://s3",
-                 "tenant_template": "{resource_slug}"},
+                {**RADOSGW_SETTINGS, "croit_reporting": CROIT, "tenant_template": "{resource_slug}"},
                 COMPONENTS,
             )
         backend.client = Mock()
@@ -312,9 +302,9 @@ class TestTenantedUsers:
 
     def test_a_tenant_backend_id_is_reported_under_itself(self):
         """The core reads usage by backend id; croit is asked about tenant$root."""
-        with patch("waldur_site_agent_ceph_s3.backend.CroitClient"):
+        with patch("waldur_site_agent_ceph_s3.backend.RadosGWClient"):
             backend = CroitUsageBackend(
-                {"api_url": "https://croit", "token": "t", "s3_endpoint": "https://s3"},
+                {**RADOSGW_SETTINGS, "croit_reporting": CROIT},
                 COMPONENTS,
             )
         backend.client = Mock()
@@ -333,9 +323,9 @@ class TestTenantedUsers:
 
     def test_croits_tenant_colon_bucket_listing_is_read_as_the_bare_name(self):
         """croit lists a tenanted bucket as "tenant:bucket" (measured); RGW does not."""
-        with patch("waldur_site_agent_ceph_s3.backend.CroitClient"):
+        with patch("waldur_site_agent_ceph_s3.backend.RadosGWClient"):
             backend = CroitUsageBackend(
-                {"api_url": "https://croit", "token": "t", "s3_endpoint": "https://s3"},
+                {**RADOSGW_SETTINGS, "croit_reporting": CROIT},
                 COMPONENTS,
             )
         backend.client = Mock()

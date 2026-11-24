@@ -1,17 +1,12 @@
-"""Shared fixtures for the flavour-independent contract suite."""
-
-import json
+"""Shared settings, and a scripted gateway for the croit statistics client."""
 
 import httpx
 import pytest
 
 from waldur_site_agent_ceph_s3.clients.croit import CroitClient
 
-CROIT_SETTINGS = {
-    "api_url": "https://croit.example.org",
-    "token": "t",
-    "s3_endpoint": "https://rgw.example.org",
-}
+# croit, as croit_usage reaches it for statistics: under croit_reporting.
+CROIT_REPORTING = {"api_url": "https://croit.example.org", "token": "t"}
 
 RADOSGW_SETTINGS = {
     "flavour": "radosgw",
@@ -43,37 +38,6 @@ class ScriptedGateway:
                 return response
         return httpx.Response(200, json=[])
 
-    # -- case helpers -------------------------------------------------------
-
-    def no_such_user(self, uid):
-        """croit has no get-one-user endpoint; an empty list is how it says 404."""
-        del uid
-        self.route("/s3/users", httpx.Response(200, json=[]))
-
-    def user(self, uid, keys=(), user_quota=None, bucket_quota=None):
-        body = {"uid": uid, "name": uid, "keys": list(keys)}
-        if user_quota is not None:
-            body["userQuota"] = user_quota
-        if bucket_quota is not None:
-            body["bucketQuota"] = bucket_quota
-        self.route("/s3/users", httpx.Response(200, json=[body]), method="GET")
-
-    def absent_key(self, uid, access_key):
-        self.route(
-            f"/s3/users/{uid}/keys/{access_key}",
-            httpx.Response(404, json={"message": "no such key"}),
-        )
-
-    def buckets(self, uid, buckets):
-        self.route(f"/s3/users/{uid}/buckets", httpx.Response(200, json=buckets))
-
-    def accepts_quota(self):
-        self.route("/quota", httpx.Response(204), method="PUT")
-        self.route("/bucket-quota", httpx.Response(204), method="PUT")
-
-    def last_body(self):
-        return json.loads(self.requests[-1].content)
-
 
 @pytest.fixture
 def gateway():
@@ -82,7 +46,7 @@ def gateway():
 
 @pytest.fixture
 def client(gateway):
-    """A croit client wired to the scripted gateway."""
+    """A croit statistics client wired to the scripted gateway."""
     croit = CroitClient(api_url="https://croit.example.org", token="t")
     croit.session = httpx.Client(transport=httpx.MockTransport(gateway.handler))
     return croit

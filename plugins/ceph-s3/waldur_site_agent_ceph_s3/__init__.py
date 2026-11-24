@@ -1,1 +1,1 @@
-"""Croit S3 storage plugin for Waldur Site Agent."""
+"""Ceph S3 (RGW) storage plugin for Waldur Site Agent."""

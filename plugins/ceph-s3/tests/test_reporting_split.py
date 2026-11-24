@@ -1,8 +1,7 @@
-"""Metering is croit-only, and neither backend may ever report a zero.
+"""Metering lives in reporting backends, and neither backend may report a zero.
 
-The management backend serves both flavours and cannot meter, because RadosGW
-exposes no stored-bytes series. GB-day reporting therefore lives in its own
-backend, wired through ``reporting_backend``.
+The management backend cannot meter. GB-day reporting from croit's series lives
+in its own backend, wired through ``reporting_backend``.
 """
 
 from importlib.metadata import entry_points
@@ -13,11 +12,6 @@ import pytest
 from waldur_site_agent_ceph_s3.backend import CephS3Backend
 from waldur_site_agent_ceph_s3.reporting import CroitUsageBackend
 
-CROIT_SETTINGS = {
-    "api_url": "https://croit.example.org",
-    "token": "t",
-    "s3_endpoint": "https://rgw.example.org",
-}
 RADOSGW_SETTINGS = {
     "flavour": "radosgw",
     "s3_endpoint": "https://rgw.example.org",
@@ -34,18 +28,16 @@ COMPONENTS = {
 
 
 @pytest.fixture
-def croit_backend():
-    return CephS3Backend(dict(CROIT_SETTINGS), dict(COMPONENTS))
-
-
-@pytest.fixture
 def radosgw_backend():
     return CephS3Backend(dict(RADOSGW_SETTINGS), dict(COMPONENTS))
 
 
 @pytest.fixture
 def usage_backend():
-    return CroitUsageBackend(dict(CROIT_SETTINGS), dict(COMPONENTS))
+    return CroitUsageBackend(
+        dict(RADOSGW_SETTINGS, croit_reporting={"api_url": "https://croit.example.org", "token": "t"}),
+        dict(COMPONENTS),
+    )
 
 
 class TestTheSplit:
@@ -57,21 +49,18 @@ class TestTheSplit:
         names = {ep.name for ep in entry_points(group="waldur_site_agent.backends")}
         assert "croit_usage" in names
 
-    def test_the_reporting_backend_refuses_the_radosgw_flavour(self):
-        """Nothing to integrate: Admin Ops exposes no stored-bytes series."""
-        with pytest.raises(ValueError, match="croit"):
+    def test_the_reporting_backend_needs_croits_address(self):
+        """Nothing to integrate without croit: Admin Ops has no stored-bytes series."""
+        with pytest.raises(ValueError, match="croit_reporting"):
             CroitUsageBackend(dict(RADOSGW_SETTINGS), dict(COMPONENTS))
 
 
 class TestManagementBackendDoesNotMeter:
-    def test_it_reports_nothing(self, croit_backend):
+    def test_it_reports_nothing(self, radosgw_backend):
         """membership_sync calls this too, so it returns empty rather than raising."""
-        assert croit_backend._get_usage_report(["user-1"]) == {}
-
-    def test_it_reports_nothing_on_radosgw_either(self, radosgw_backend):
         assert radosgw_backend._get_usage_report(["user-1"]) == {}
 
-    def test_it_never_substitutes_a_zero(self, croit_backend):
+    def test_it_never_substitutes_a_zero(self, radosgw_backend):
         """The base fills every component with 0 when a report omits a resource.
 
         This backend never reports usage at all, so without an override every
@@ -83,7 +72,7 @@ class TestManagementBackendDoesNotMeter:
         with patch.object(
             CephS3Backend.__bases__[0], "_pull_backend_resource", return_value=info
         ):
-            pulled = croit_backend._pull_backend_resource("user-1")
+            pulled = radosgw_backend._pull_backend_resource("user-1")
 
         assert pulled is not None, "membership sync still needs the user list"
         assert pulled.usage == {}, "an unmeasured resource must carry no usage"
@@ -97,7 +86,7 @@ class TestReportingBackendStillMeters:
             {"t": 86400, "v": 1_000_000_000},
         ]
         with patch.object(
-            usage_backend.client, "get_user_storage_series", return_value=series
+            usage_backend.croit_client, "get_user_storage_series", return_value=series
         ):
             report = usage_backend._collect_usage(["user-1"], 0, 86400)
 
@@ -105,7 +94,7 @@ class TestReportingBackendStillMeters:
 
     def test_an_unreadable_series_is_absent_rather_than_zero(self, usage_backend):
         with patch.object(
-            usage_backend.client, "get_user_storage_series", return_value=[]
+            usage_backend.croit_client, "get_user_storage_series", return_value=[]
         ):
             report = usage_backend._collect_usage(["user-1"], 0, 86400)
 

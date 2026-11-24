@@ -1,10 +1,11 @@
-"""Transport shared by every Ceph S3 admin client flavour.
+"""HTTP transport shared by the plugin's clients, and the RGW management contract.
 
-Subclasses supply the three things that actually differ between croit's
-management API and RadosGW Admin Ops: how a URL is built, how a request is
-authenticated, and how an error response maps onto an exception. Everything
-else — retries, identifier validation, secret scrubbing — is the same work
-whichever gateway is answering.
+``HttpTransport`` is what RGW Admin Ops and croit's statistics API have in common:
+retries, error formatting and secret scrubbing. Each client supplies how a URL is
+built, how a request is authenticated, and how an error maps onto an exception.
+
+``BaseS3AdminClient`` adds the management contract -- users, keys, quotas,
+buckets -- and the core's generic client surface expressed through it.
 """
 
 import abc
@@ -50,19 +51,14 @@ _SAFE_PATH_SEGMENT_RE = re.compile(r"^(?!\.{1,2}$)[A-Za-z0-9._-]{1,255}$")
 _TENANT_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 
 
-class BaseS3AdminClient(BaseClient):
-    """Retries, identifier validation and error classification."""
+class HttpTransport(abc.ABC):
+    """Retries, error formatting and secret scrubbing, for any of the plugin's APIs."""
 
     def __init__(self, timeout: int = 30, verify_ssl: bool = True) -> None:
-        """Store the transport-level knobs shared by both flavours."""
-        super().__init__()
+        """Store the transport-level knobs."""
         self.timeout = timeout
         self.verify_ssl = verify_ssl
         self.session: httpx.Client
-        # Resource id -> the uid of the user that holds it. A resource is its
-        # tenant, so the core's resource-level calls below cannot pass their id
-        # through as a uid; the backend installs its resolver here.
-        self.resolve_resource_id: Callable[[str], str] = lambda resource_id: resource_id
 
     @abc.abstractmethod
     def _build_url(self, endpoint: str, params: dict | None = None) -> str:
@@ -74,15 +70,142 @@ class BaseS3AdminClient(BaseClient):
 
     @abc.abstractmethod
     def _classify_error(self, response: httpx.Response) -> Exception:
-        """Map a >=400 response onto this flavour's exception type."""
+        """Map a >=400 response onto this API's exception type."""
+
+    @staticmethod
+    def _validate_uid(uid: str) -> str:
+        """Accept a bare uid, or a tenanted one as RGW spells it: ``tenant$uid``.
+
+        Each half is held to its own alphabet, and neither can contain "/" or be a
+        dot-segment, so the tenanted form still cannot address another endpoint.
+        """
+        if isinstance(uid, str):
+            tenant, _, bare = uid.rpartition("$")
+            tenant_ok = _TENANT_RE.match(tenant) if "$" in uid else True
+            if tenant_ok and _SAFE_PATH_SEGMENT_RE.match(bare):
+                return uid
+        raise CephS3APIError(f"Refusing to build a request for the user id {uid!r}")
+
+    @staticmethod
+    def _validate_access_key(access_key: str) -> str:
+        """Reject an access key that would resolve to a different endpoint."""
+        if not isinstance(access_key, str) or not _SAFE_PATH_SEGMENT_RE.match(access_key):
+            raise CephS3APIError(
+                f"Refusing to build a request for the access key {access_key!r}"
+            )
+        return access_key
+
+    @staticmethod
+    def _format_error(response: httpx.Response) -> str:
+        """Extract the gateway's own error message, for the Waldur order to show.
+
+        croit answers ``{"code": 500, "message": "..."}`` and RadosGW answers
+        ``{"Code": "NoSuchUser"}``; either way the payload is the only part an
+        operator can act on. Anything else keeps the status code, which is then
+        the sole diagnostic.
+
+        Scrubbing is not optional here. Both flavours can echo the request back:
+        croit repeats the path in some errors, and RadosGW takes ``secret-key``
+        as a *query parameter*, so an unscrubbed message would put a live S3
+        secret into a Waldur-visible error and into Sentry.
+        """
+        try:
+            payload = json.loads(response.text)
+        except ValueError:
+            payload = None
+
+        if isinstance(payload, dict):
+            for key in ("message", "error", "detail", "Code"):
+                message = payload.get(key)
+                if isinstance(message, str) and message.strip():
+                    return scrub_secret_query_params(message.strip()[:500])
+
+        return scrub_secret_query_params(
+            f"API error {response.status_code}: {response.text[:500]}"
+        )
+
+    def _send_with_status_retries(
+        self,
+        method: str,
+        url: str,
+        headers: dict | None = None,
+        content: bytes | None = None,
+    ) -> httpx.Response:
+        """Send request, retrying transient 5xx responses with exponential backoff."""
+        response = self.session.request(method=method, url=url, headers=headers, content=content)
+        for attempt in range(MAX_STATUS_RETRIES):
+            if response.status_code not in RETRYABLE_STATUS_CODES:
+                break
+            time.sleep(RETRY_BACKOFF_FACTOR * (2**attempt))
+            response = self.session.request(
+                method=method, url=url, headers=headers, content=content
+            )
+        return response
+
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        json_data: dict | None = None,
+        params: dict | None = None,
+    ) -> httpx.Response:
+        """Make an authenticated request and raise on any error status.
+
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE)
+            endpoint: API endpoint path, relative to the flavour's base URL
+            json_data: JSON payload for the request body
+            params: Query parameters
+
+        Returns:
+            The response, guaranteed to carry a status below 400.
+
+        Raises:
+            CephS3AuthenticationError: If authentication fails
+            CephS3UserNotFoundError: If the user or key does not exist
+            CephS3UserExistsError: If the user or key already exists
+            CephS3APIError: For anything else, including transport failures
+        """
+        body = json.dumps(json_data).encode() if json_data is not None else None
+        url = self._build_url(endpoint, params)
+
+        try:
+            response = self._send_with_status_retries(
+                method,
+                url,
+                headers=self._auth_headers(method, url, body),
+                content=body,
+            )
+
+            if response.status_code >= 400:
+                raise self._classify_error(response)
+
+            return response
+
+        except httpx.TimeoutException:
+            raise CephS3APIError(f"Request timeout after {self.timeout}s")
+        except httpx.TransportError as e:
+            raise CephS3APIError(f"Connection error: {e}")
+        except httpx.HTTPError as e:
+            raise CephS3APIError(f"Request failed: {e}")
 
 
-    # -- the management contract every flavour must satisfy -----------------
+class BaseS3AdminClient(HttpTransport, BaseClient):
+    """The management contract, plus identifier validation."""
+
+    def __init__(self, timeout: int = 30, verify_ssl: bool = True) -> None:
+        """Store the transport knobs and the resource-id resolver."""
+        HttpTransport.__init__(self, timeout=timeout, verify_ssl=verify_ssl)
+        BaseClient.__init__(self)
+        # Resource id -> the uid of the user that holds it. A resource is its
+        # tenant, so the core's resource-level calls below cannot pass their id
+        # through as a uid; the backend installs its resolver here.
+        self.resolve_resource_id: Callable[[str], str] = lambda resource_id: resource_id
+
+    # -- the management contract -------------------------------------------
     #
-    # Declared here rather than left to duck typing so that a flavour missing
+    # Declared here rather than left to duck typing so that a client missing
     # one of them fails at import, not at the first order that needs it.
-    # get_user_storage_series is deliberately absent: it is croit-only, which is
-    # why GB-day metering lives in its own reporting backend.
 
     @abc.abstractmethod
     def ping(self, raise_exception: bool = False) -> bool:
@@ -221,120 +344,3 @@ class BaseS3AdminClient(BaseClient):
     def list_resource_users(self, resource_id: str) -> list[str]:
         """List users associated with resource - not applicable for S3."""
         return []
-
-    @staticmethod
-    def _validate_uid(uid: str) -> str:
-        """Accept a bare uid, or a tenanted one as RGW spells it: ``tenant$uid``.
-
-        Each half is held to its own alphabet, and neither can contain "/" or be a
-        dot-segment, so the tenanted form still cannot address another endpoint.
-        """
-        if isinstance(uid, str):
-            tenant, _, bare = uid.rpartition("$")
-            tenant_ok = _TENANT_RE.match(tenant) if "$" in uid else True
-            if tenant_ok and _SAFE_PATH_SEGMENT_RE.match(bare):
-                return uid
-        raise CephS3APIError(f"Refusing to build a request for the user id {uid!r}")
-
-    @staticmethod
-    def _validate_access_key(access_key: str) -> str:
-        """Reject an access key that would resolve to a different endpoint."""
-        if not isinstance(access_key, str) or not _SAFE_PATH_SEGMENT_RE.match(access_key):
-            raise CephS3APIError(
-                f"Refusing to build a request for the access key {access_key!r}"
-            )
-        return access_key
-
-    @staticmethod
-    def _format_error(response: httpx.Response) -> str:
-        """Extract the gateway's own error message, for the Waldur order to show.
-
-        croit answers ``{"code": 500, "message": "..."}`` and RadosGW answers
-        ``{"Code": "NoSuchUser"}``; either way the payload is the only part an
-        operator can act on. Anything else keeps the status code, which is then
-        the sole diagnostic.
-
-        Scrubbing is not optional here. Both flavours can echo the request back:
-        croit repeats the path in some errors, and RadosGW takes ``secret-key``
-        as a *query parameter*, so an unscrubbed message would put a live S3
-        secret into a Waldur-visible error and into Sentry.
-        """
-        try:
-            payload = json.loads(response.text)
-        except ValueError:
-            payload = None
-
-        if isinstance(payload, dict):
-            for key in ("message", "error", "detail", "Code"):
-                message = payload.get(key)
-                if isinstance(message, str) and message.strip():
-                    return scrub_secret_query_params(message.strip()[:500])
-
-        return scrub_secret_query_params(
-            f"API error {response.status_code}: {response.text[:500]}"
-        )
-
-    def _send_with_status_retries(
-        self,
-        method: str,
-        url: str,
-        headers: dict | None = None,
-        content: bytes | None = None,
-    ) -> httpx.Response:
-        """Send request, retrying transient 5xx responses with exponential backoff."""
-        response = self.session.request(method=method, url=url, headers=headers, content=content)
-        for attempt in range(MAX_STATUS_RETRIES):
-            if response.status_code not in RETRYABLE_STATUS_CODES:
-                break
-            time.sleep(RETRY_BACKOFF_FACTOR * (2**attempt))
-            response = self.session.request(
-                method=method, url=url, headers=headers, content=content
-            )
-        return response
-
-    def _request(
-        self,
-        method: str,
-        endpoint: str,
-        json_data: dict | None = None,
-        params: dict | None = None,
-    ) -> httpx.Response:
-        """Make an authenticated request and raise on any error status.
-
-        Args:
-            method: HTTP method (GET, POST, PUT, DELETE)
-            endpoint: API endpoint path, relative to the flavour's base URL
-            json_data: JSON payload for the request body
-            params: Query parameters
-
-        Returns:
-            The response, guaranteed to carry a status below 400.
-
-        Raises:
-            CephS3AuthenticationError: If authentication fails
-            CephS3UserNotFoundError: If the user or key does not exist
-            CephS3UserExistsError: If the user or key already exists
-            CephS3APIError: For anything else, including transport failures
-        """
-        body = json.dumps(json_data).encode() if json_data is not None else None
-        url = self._build_url(endpoint, params)
-
-        try:
-            response = self._send_with_status_retries(
-                method,
-                url,
-                headers=self._auth_headers(method, url, body),
-                content=body,
-            )
-
-            if response.status_code >= 400:
-                raise self._classify_error(response)
-
-            return response
-
-        except httpx.TimeoutException:
-            raise CephS3APIError(f"Request timeout after {self.timeout}s")
-        except httpx.TransportError as e:
-            raise CephS3APIError(f"Connection error: {e}")
-        except httpx.HTTPError as e:
-            raise CephS3APIError(f"Request failed: {e}")

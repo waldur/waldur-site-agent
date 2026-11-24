@@ -15,9 +15,11 @@ from waldur_site_agent_ceph_s3.reporting import CroitUsageBackend
 @pytest.fixture
 def backend_settings():
     return {
-        "api_url": "https://test.croit.io",
-        "s3_endpoint": "https://s3.test.croit.io",
-        "token": "t",
+        "flavour": "radosgw",
+        "s3_endpoint": "https://s3.test.example.org",
+        "admin_access_key": "ADMINACCESSKEY000000",
+        "admin_secret_key": "s" * 40,
+        "croit_reporting": {"api_url": "https://croit.example.org", "token": "t"},
         "verify_ssl": False,
     }
 
@@ -48,7 +50,7 @@ def mock_client():
         ("equal timestamps", [{"t": 0, "v": 100}, {"t": 0, "v": 100}]),
     ],
 )
-@patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+@patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
 def test_an_unmeasurable_series_is_omitted_not_reported_as_zero(
     mock_client_class, backend_settings, backend_components, mock_client, label, datapoints
 ):
@@ -61,6 +63,7 @@ def test_an_unmeasurable_series_is_omitted_not_reported_as_zero(
     mock_client.get_user_storage_series.return_value = datapoints
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
+    backend.croit_client = mock_client
 
     report = backend._get_usage_report(["waldur-u"])
 
@@ -68,7 +71,7 @@ def test_an_unmeasurable_series_is_omitted_not_reported_as_zero(
     assert "waldur-u" not in backend._reported_usernames
 
 
-@patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+@patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
 def test_a_non_finite_reading_is_refused(
     mock_client_class, backend_settings, backend_components, mock_client
 ):
@@ -84,11 +87,12 @@ def test_a_non_finite_reading_is_refused(
     ]
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
+    backend.croit_client = mock_client
 
     assert backend._get_usage_report(["waldur-u"]) == {}
 
 
-@patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+@patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
 def test_a_real_series_is_still_reported(
     mock_client_class, backend_settings, backend_components, mock_client
 ):
@@ -99,6 +103,7 @@ def test_a_real_series_is_still_reported(
     ]
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
+    backend.croit_client = mock_client
 
     report = backend._get_usage_report(["waldur-u"])
 
@@ -124,7 +129,7 @@ def test_the_final_reading_is_held_to_the_window_end():
     assert round(float(with_end)) == 1000
 
 
-@patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+@patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
 def test_a_past_period_is_recomputed_from_the_series(
     mock_client_class, backend_settings, backend_components, mock_client
 ):
@@ -137,6 +142,7 @@ def test_a_past_period_is_recomputed_from_the_series(
     mock_client_class.return_value = mock_client
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
+    backend.croit_client = mock_client
     backend.timezone = "UTC"
     start, end = backend._period_bounds(2026, 6)
     mock_client.get_user_storage_series.return_value = [
@@ -160,7 +166,7 @@ def test_period_bounds_wrap_the_year():
     assert dec_end == jan_start
 
 
-@patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+@patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
 def test_a_bucket_with_no_stats_does_not_erase_the_connection_info(
     mock_client_class, backend_settings, backend_components, mock_client
 ):
@@ -182,29 +188,27 @@ def test_a_bucket_with_no_stats_does_not_erase_the_connection_info(
     mock_client.get_user_quota.return_value = {"bucket_quota": {}, "user_quota": {}}
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
+    backend.croit_client = mock_client
 
     metadata = backend.get_resource_metadata("waldur-u")
 
-    assert metadata["s3_endpoint"] == "https://s3.test.croit.io"
+    assert metadata["s3_endpoint"] == "https://s3.test.example.org"
     assert metadata["storage_summary"]["total_size_bytes"] == 0
 
 
-@patch("waldur_site_agent_ceph_s3.backend.CroitClient")
+@patch("waldur_site_agent_ceph_s3.backend.RadosGWClient")
 def test_a_key_listing_without_access_key_is_loud(
     mock_client_class, backend_settings, backend_components, mock_client, caplog
 ):
-    """Both key sweeps fail open on a field rename, which is the worst direction.
-
-    croit uses camelCase for usageSum/maxObjects/bucketQuota, so `accessKey` is not
-    hypothetical. Skipping silently would leave the auto-generated key live and
-    unknown to Waldur -- the exact credential this feature exists to eliminate.
-    """
+    """The orphan-key sweep fails open on a field rename, which is the worst
+    direction: skipping silently would leave a key live and unknown to Waldur."""
     mock_client_class.return_value = mock_client
-    mock_client.list_user_keys.return_value = [{"accessKey": "AUTOKEY"}]
+    mock_client.list_user_keys.return_value = [{"accessKey": "ORPHANKEY"}]
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
+    backend.croit_client = mock_client
 
-    backend._remove_auto_generated_keys("waldur-u")
+    backend._prune_unknown_keys("waldur-u", set(), {"ORPHANKEY"})
 
     mock_client.delete_user_key.assert_not_called()
     assert "no access_key" in caplog.text

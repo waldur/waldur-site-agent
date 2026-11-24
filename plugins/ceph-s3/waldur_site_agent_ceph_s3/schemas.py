@@ -1,7 +1,8 @@
 """Backend settings schema for the ceph_s3, croit_usage and rgw_usage backends.
 
-Which keys are required depends on ``flavour``; ``settings.validate_settings``
-enforces that at backend construction. The schema lists every key the plugin
+Users are managed through RGW Admin Ops; ``settings.validate_settings`` enforces
+the required keys at backend construction, and refuses croit's former management
+settings with the steps that migrate them. The schema lists every key the plugin
 reads, so a misspelt one is reported.
 """
 
@@ -43,26 +44,14 @@ class CroitReportingSettings(BaseModel):
 class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
     """Settings for the ``ceph_s3`` (management), ``croit_usage`` and ``rgw_usage`` (reporting) backends."""
 
-    flavour: Literal["croit", "radosgw", "CROIT", "RADOSGW"] | None = Field(
-        default=None, description="'croit' (default) or 'radosgw'"
+    flavour: Literal["radosgw", "RADOSGW"] | None = Field(
+        default=None, description="'radosgw', the only one (may be left out)"
     )
     s3_endpoint: str | None = Field(
         default=None, description="S3 endpoint users connect to (required)",
         json_schema_extra=SENSITIVE,
     )
     s3_region: str | None = Field(default=None, description="S3 region (default 'default')")
-    # croit flavour
-    api_url: str | None = Field(
-        default=None, description="croit API URL (croit flavour)", json_schema_extra=SENSITIVE
-    )
-    username: str | None = Field(default=None, description="croit username (croit flavour)")
-    password: str | None = Field(
-        default=None, description="croit password (croit flavour)", json_schema_extra=SECRET
-    )
-    token: str | None = Field(
-        default=None, description="croit API token, instead of username/password",
-        json_schema_extra=SECRET
-    )
     tenant_template: str | None = Field(
         default=None,
         description=(
@@ -84,14 +73,15 @@ class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
         ),
     )
     default_storage_class: str | None = Field(
-        default=None, description="Default storage class for new users"
+        default=None,
+        description="Default storage class for new users; needs default_placement",
     )
-    # radosgw flavour
+    # RGW Admin Ops
     admin_access_key: str | None = Field(
-        default=None, description="RGW admin access key (radosgw flavour)", json_schema_extra=SECRET
+        default=None, description="RGW admin access key (required)", json_schema_extra=SECRET
     )
     admin_secret_key: str | None = Field(
-        default=None, description="RGW admin secret key (radosgw flavour)", json_schema_extra=SECRET
+        default=None, description="RGW admin secret key (required)", json_schema_extra=SECRET
     )
     admin_path: str | None = Field(
         default=None, description="RGW admin API path (default 'admin')",
@@ -100,16 +90,15 @@ class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
     croit_reporting: CroitReportingSettings | None = Field(
         default=None,
         description=(
-            "croit connection for croit_usage reporting when management uses the "
-            "radosgw flavour on a croit cluster"
+            "croit connection for croit_usage reporting: croit is read for its "
+            "statistics only"
         ),
     )
     rgw_accounts: bool | None = Field(
         default=None,
         description=(
             "Provision an RGW account with its own root user per resource, so "
-            "consumers manage IAM users and policies themselves (radosgw flavour, "
-            "Ceph 20.2.2 or later)"
+            "consumers manage IAM users and policies themselves (Ceph 20.2.2 or later)"
         ),
     )
     storage_size: Literal["logical", "allocated"] | None = Field(

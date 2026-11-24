@@ -11,7 +11,7 @@ from waldur_api_client.models.resource_options_type_0 import ResourceOptionsType
 from waldur_site_agent_ceph_s3.backend import CephS3Backend
 from waldur_site_agent_ceph_s3.exceptions import CephS3Error
 
-from conftest import CROIT_SETTINGS, RADOSGW_SETTINGS
+from conftest import RADOSGW_SETTINGS
 
 GB = 1000000000
 RESOURCE_UUID = UUID("12345678-1234-5678-9abc-123456789abc")
@@ -21,9 +21,8 @@ COMPONENTS = {
 STAMP = "waldur-12345678-1234-5678-9abc-123456789abc-acme.waldur-x@invalid"
 
 
-def make_backend(settings=CROIT_SETTINGS):
-    target = "RadosGWClient" if settings is RADOSGW_SETTINGS else "CroitClient"
-    with patch(f"waldur_site_agent_ceph_s3.backend.{target}"):
+def make_backend(settings=RADOSGW_SETTINGS):
+    with patch("waldur_site_agent_ceph_s3.backend.RadosGWClient"):
         backend = CephS3Backend(dict(settings), COMPONENTS)
     backend.client = Mock()
     backend.client.get_user_info.return_value = {"uid": "acme$waldur-x", "email": STAMP}
@@ -75,7 +74,7 @@ class TestUpdateOptions:
     @pytest.mark.parametrize("cleared", [None, 0])
     def test_a_cleared_ceiling_is_sent_as_no_limit(self, cleared):
         """-1, never 0 and never left out: RadosGW merges a quota PUT, so a left-out
-        limit would survive, and croit stores 0 as no limit while RGW caps at it."""
+        limit would survive, and RGW caps at 0 rather than reading it as no limit."""
         backend = make_backend()
         resource = make_resource({"max_storage_limit": 5, "max_object_limit": 100})
 
