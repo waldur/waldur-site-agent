@@ -54,25 +54,26 @@ class _TranslatingPoller:
     object already gone.
     """
 
-    def __init__(self, poller: Any) -> None:
+    def __init__(self, poller: LROPoller[Any]) -> None:
         """Bind to the poller whose waiting is being translated."""
         self._poller = poller
 
-    def result(self, *args: Any, **kwargs: Any) -> Any:
+    # A transparent proxy: it takes and returns whatever LROPoller does.
+    def result(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         """Wait for the operation, restating an SDK failure as ``AzureClientError``."""
         try:
             return self._poller.result(*args, **kwargs)
         except AzureError as exc:
             raise _as_client_error(exc) from exc
 
-    def wait(self, *args: Any, **kwargs: Any) -> Any:
+    def wait(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         """Wait without reading the result, translating the same way."""
         try:
             return self._poller.wait(*args, **kwargs)
         except AzureError as exc:
             raise _as_client_error(exc) from exc
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401
         """Defer everything else — ``status``, ``done`` — to the real poller."""
         return getattr(self._poller, name)
 
@@ -86,7 +87,7 @@ def wrap_azure_errors(func: Callable[..., T]) -> Callable[..., T]:
     """
 
     @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> T:
+    def wrapper(*args: Any, **kwargs: Any) -> T:  # noqa: ANN401 - wraps any client method
         try:
             result = func(*args, **kwargs)
         except AzureError as exc:

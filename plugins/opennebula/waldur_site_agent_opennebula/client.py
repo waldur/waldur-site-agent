@@ -64,7 +64,7 @@ class OpenNebulaClient(BaseClient):
         try:
             pool = self.one.vdcpool.info()
             for vdc in pool.VDC:
-                if vdc.NAME == name:
+                if vdc.NAME == name:  # noqa: SIM300  NAME is a pyone attribute, not a constant
                     return vdc
         except pyone.OneNoExistsException:
             return None
@@ -171,7 +171,7 @@ class OpenNebulaClient(BaseClient):
         try:
             pool = self.one.grouppool.info()
             for group in pool.GROUP:
-                if group.NAME == name:
+                if group.NAME == name:  # noqa: SIM300  NAME is a pyone attribute, not a constant
                     return group
         except pyone.OneNoExistsException:
             return None
@@ -419,7 +419,7 @@ class OpenNebulaClient(BaseClient):
         try:
             pool = self.one.vnpool.info(-2, -1, -1, -1)
             for vnet in pool.VNET:
-                if vnet.NAME == name:
+                if vnet.NAME == name:  # noqa: SIM300  NAME is a pyone attribute, not a constant
                     return vnet
         except pyone.OneNoExistsException:
             return None
@@ -574,7 +574,7 @@ class OpenNebulaClient(BaseClient):
         try:
             pool = self.one.vrouterpool.info(-2, -1, -1)
             for vr in pool.VROUTER:
-                if vr.NAME == name:
+                if vr.NAME == name:  # noqa: SIM300  NAME is a pyone attribute, not a constant
                     return vr
         except pyone.OneNoExistsException:
             return None
@@ -623,7 +623,8 @@ class OpenNebulaClient(BaseClient):
             VM ID of the instantiated VR.
         """
         try:
-            # API: one.vrouter.instantiate(vr_id, n_vms, template_id, name, hold, extra_template)
+            # Positional arguments of one.vrouter.instantiate: VR id, number of VMs,
+            # template id, name, hold, extra template.
             self.one.vrouter.instantiate(
                 vr_id, 1, template_id, name, False, extra_template
             )
@@ -631,10 +632,7 @@ class OpenNebulaClient(BaseClient):
             # Read the VR info to get the actual VM ID.
             vr_info = self.one.vrouter.info(vr_id)
             vm_ids = vr_info.VMS.ID
-            if isinstance(vm_ids, list):
-                vm_id = vm_ids[-1]
-            else:
-                vm_id = vm_ids
+            vm_id = vm_ids[-1] if isinstance(vm_ids, list) else vm_ids
             logger.info(
                 "VR %d instantiated, VM ID: %d", vr_id, vm_id
             )
@@ -662,7 +660,7 @@ class OpenNebulaClient(BaseClient):
         try:
             pool = self.one.secgrouppool.info(-2, -1, -1)
             for sg in pool.SECURITY_GROUP:
-                if sg.NAME == name:
+                if sg.NAME == name:  # noqa: SIM300  NAME is a pyone attribute, not a constant
                     return sg
         except pyone.OneNoExistsException:
             return None
@@ -1014,7 +1012,7 @@ class OpenNebulaClient(BaseClient):
         try:
             pool = self.one.vmpool.info(-2, -1, -1, -1)
             for vm in pool.VM:
-                if vm.NAME == vm_name:
+                if vm.NAME == vm_name:  # noqa: SIM300  NAME is a pyone attribute, not a constant
                     return vm
         except pyone.OneNoExistsException:
             return None
@@ -1144,7 +1142,7 @@ class OpenNebulaClient(BaseClient):
         ssh_key: str = "",
         vcpu: int = 1,
         ram_mb: int = 512,
-        disk_mb: int = 10240,
+        disk_mb: int = 10240,  # noqa: ARG002  accepted but not applied: the VM keeps the template's disk size
         cluster_ids: list[int] | None = None,
         sched_requirements: str = "",
         model_image: object | None = None,
@@ -1168,6 +1166,10 @@ class OpenNebulaClient(BaseClient):
             vcpu: Number of virtual CPUs.
             ram_mb: Memory in MB.
             disk_mb: Disk size in MB.
+            cluster_ids: OpenNebula cluster IDs the VM may be scheduled on; used for
+                SCHED_REQUIREMENTS when ``sched_requirements`` is empty.
+            sched_requirements: Explicit SCHED_REQUIREMENTS expression; overrides
+                ``cluster_ids``.
             model_image: Optional LLM model to attach as an extra disk
                 (inference mode) — an image **name** or numeric ID. When set,
                 the VM boots with the template's base disk(s) plus this model.
@@ -1217,8 +1219,7 @@ class OpenNebulaClient(BaseClient):
                 base_image_ids = [engine_image_id]
             else:
                 base_image_ids = self._get_template_base_disks(template_id)
-            for image_id in base_image_ids:
-                extra_parts.append(f'DISK=[IMAGE_ID="{image_id}"]')
+            extra_parts.extend(f'DISK=[IMAGE_ID="{image_id}"]' for image_id in base_image_ids)
             extra_parts.append(f'DISK=[IMAGE_ID="{model_image_id}"]')
 
         context_parts = ['NETWORK="YES"']
@@ -1543,7 +1544,7 @@ class OpenNebulaClient(BaseClient):
         try:
             pool = self.one.userpool.info()
             for user in pool.USER:
-                if user.NAME == username:
+                if user.NAME == username:  # noqa: SIM300  NAME is a pyone attribute, not a constant
                     return user
         except pyone.OneNoExistsException:
             return None
@@ -1714,15 +1715,7 @@ class OpenNebulaClient(BaseClient):
         """List all VDCs as resources."""
         try:
             pool = self.one.vdcpool.info()
-            resources = []
-            for vdc in pool.VDC:
-                resources.append(
-                    ClientResource(
-                        name=vdc.NAME,
-                        backend_id=vdc.NAME,
-                    )
-                )
-            return resources
+            return [ClientResource(name=vdc.NAME, backend_id=vdc.NAME) for vdc in pool.VDC]
         except pyone.OneException as e:
             raise BackendError(f"Failed to list VDCs: {e}") from e
 

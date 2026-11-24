@@ -7,7 +7,10 @@ pull usage back, and synchronize user memberships between instances.
 from __future__ import annotations
 
 import datetime
+import json
 import logging
+from http import HTTPStatus
+from typing import TYPE_CHECKING, ClassVar
 from uuid import UUID
 
 from waldur_api_client.api.marketplace_provider_resources import (
@@ -47,6 +50,10 @@ from waldur_site_agent_waldur.privileged_accounts import (
     privileged_accounts,
 )
 
+if TYPE_CHECKING:
+    import stomp.utils
+    from waldur_site_agent.common.structures import Offering
+
 logger = logging.getLogger(__name__)
 
 TERMINAL_ERROR_STATES = {OrderState.ERRED, OrderState.CANCELED, OrderState.REJECTED}
@@ -66,16 +73,26 @@ class WaldurBackend(backends.BaseBackend):
     # project (backend_id = "{customer_uuid}_{project_uuid}"), so all resources share
     # one project membership. See BaseBackend.shared_project_membership.
     shared_project_membership = True
-    handled_resource_states = [ResourceState.OK, ResourceState.ERRED, ResourceState.CREATING]
+    handled_resource_states: ClassVar[list] = [
+        ResourceState.OK,
+        ResourceState.ERRED,
+        ResourceState.CREATING,
+    ]
 
     def __init__(
         self, backend_settings: dict, backend_components: dict[str, dict]
     ) -> None:
+        """Read the target Waldur settings and create the Waldur B client."""
         super().__init__(backend_settings, backend_components)
         self.backend_type = "waldur"
 
         # Required settings
-        for key in ("target_api_url", "target_api_token", "target_offering_uuid", "target_customer_uuid"):
+        for key in (
+            "target_api_url",
+            "target_api_token",
+            "target_offering_uuid",
+            "target_customer_uuid",
+        ):
             if key not in backend_settings:
                 msg = f"Missing required backend setting: {key}"
                 raise ValueError(msg)
@@ -89,7 +106,9 @@ class WaldurBackend(backends.BaseBackend):
         self.order_poll_interval = int(backend_settings.get("order_poll_interval", 5))
         self.user_not_found_action = backend_settings.get("user_not_found_action", "warn")
         self.role_mapping: dict[str, str] = backend_settings.get("role_mapping", {})
-        self.fetch_consented_users_only: bool = backend_settings.get("fetch_consented_users_only", False)
+        self.fetch_consented_users_only: bool = backend_settings.get(
+            "fetch_consented_users_only", False
+        )
         self.end_date_sync_direction = EndDateSyncDirection(
             backend_settings.get(
                 "end_date_sync_direction", EndDateSyncDirection.BIDIRECTIONAL
@@ -378,7 +397,7 @@ class WaldurBackend(backends.BaseBackend):
                 attributes=attributes,
             )
         except UnexpectedStatus as e:
-            if e.status_code == 400:
+            if e.status_code == HTTPStatus.BAD_REQUEST:
                 error_detail = e.content.decode(errors="ignore")
                 msg = f"Target Waldur rejected order (HTTP 400): {error_detail}"
                 raise BackendError(msg) from e
@@ -426,7 +445,7 @@ class WaldurBackend(backends.BaseBackend):
         try:
             target_order = self.client.get_order(UUID(order_backend_id))
         except UnexpectedStatus as e:
-            if e.status_code >= 500:
+            if e.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
                 raise BackendNotReadyError(
                     f"Waldur B temporarily unavailable (HTTP {e.status_code}) "
                     f"while checking order {order_backend_id}, will retry"
@@ -581,8 +600,7 @@ class WaldurBackend(backends.BaseBackend):
             raise
 
     def get_resource_limits(self, resource_backend_id: str) -> dict[str, int]:
-        """Get resource limits from Waldur B converted to source component names.
-        """
+        """Get resource limits from Waldur B converted to source component names."""
         target_limits = self.client.get_resource_limits(resource_backend_id)
         if not target_limits:
             return {}
@@ -621,7 +639,9 @@ class WaldurBackend(backends.BaseBackend):
 
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscaling not directly supported via Waldur API."""
-        logger.info("Downscale not supported for Waldur federation resource %s", resource_backend_id)
+        logger.info(
+            "Downscale not supported for Waldur federation resource %s", resource_backend_id
+        )
         return True
 
     def pause_resource(self, resource_backend_id: str) -> bool:
@@ -739,9 +759,7 @@ class WaldurBackend(backends.BaseBackend):
         usage = report.get(resource_backend_id)
 
         if usage is None:
-            empty_usage: dict[str, float] = {
-                comp: 0.0 for comp in self.backend_components
-            }
+            empty_usage: dict[str, float] = dict.fromkeys(self.backend_components, 0.0)
             usage = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         return BackendResourceInfo(
@@ -775,9 +793,7 @@ class WaldurBackend(backends.BaseBackend):
             except Exception:
                 logger.exception("Failed to get usage for resource %s", resource_id)
                 # Return empty usage for this resource
-                empty_usage: dict[str, float] = {
-                    comp: 0.0 for comp in self.backend_components
-                }
+                empty_usage: dict[str, float] = dict.fromkeys(self.backend_components, 0.0)
                 report[resource_id] = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         return report
@@ -854,17 +870,17 @@ class WaldurBackend(backends.BaseBackend):
             resource_report[username] = source_usage
 
         # Round to 2 decimals
-        rounded_resource_report = {
+        return {
             key: {comp: round(value, 2) for comp, value in usage.items()}
             for key, usage in resource_report.items()
         }
-        return rounded_resource_report
 
     def get_usage_report_for_period(
         self, resource_backend_ids: list[str], year: int, month: int,
-        waldur_resource=None,
+        waldur_resource: WaldurResource | None = None,
     ) -> dict[str, dict[str, dict[str, float]]]:
         """Pull usage from Waldur B for a specific billing period."""
+        del waldur_resource
         billing_period = datetime.date(year, month, 1)
         report: dict[str, dict[str, dict[str, float]]] = {}
 
@@ -879,9 +895,7 @@ class WaldurBackend(backends.BaseBackend):
                     "Failed to get usage for resource %s (period %s-%s)",
                     resource_id, year, month,
                 )
-                empty_usage: dict[str, float] = {
-                    comp: 0.0 for comp in self.backend_components
-                }
+                empty_usage: dict[str, float] = dict.fromkeys(self.backend_components, 0.0)
                 report[resource_id] = {"TOTAL_ACCOUNT_USAGE": empty_usage}
 
         return report
@@ -938,7 +952,11 @@ class WaldurBackend(backends.BaseBackend):
                     privileged = True
                     note_privileged_account(self.client.base_url, local_username)
         elif self.user_resolve_method == "user_field":
-            field = self.user_match_field if self.user_match_field in ("email", "username") else "username"
+            field = (
+                self.user_match_field
+                if self.user_match_field in ("email", "username")
+                else "username"
+            )
             remote_uuid = self.client.resolve_user_by_field(local_username, field)
         elif self.user_resolve_method == "remote_eduteams":
             if self.user_match_field == "cuid":
@@ -1246,7 +1264,7 @@ class WaldurBackend(backends.BaseBackend):
                     role_name=expected_role,
                 )
             except BackendError:
-                logger.error(
+                logger.exception(
                     "Half-applied role update for user %s on Waldur B project %s: "
                     "old role %s revoked but new role %s could not be granted",
                     username, project_uuid, current_role, expected_role,
@@ -1381,7 +1399,7 @@ class WaldurBackend(backends.BaseBackend):
 
     # --- End Date Sync ---
 
-    def _decide_end_date_sync_direction(
+    def _decide_end_date_sync_direction(  # noqa: PLR0911  one return per decision branch
         self,
         a_end_date: datetime.date | None,
         b_end_date: datetime.date | None,
@@ -1587,7 +1605,7 @@ class WaldurBackend(backends.BaseBackend):
 
     def setup_target_event_subscriptions(
         self,
-        source_offering,
+        source_offering: Offering,
         user_agent: str = "",
         global_proxy: str = "",
     ) -> list:
@@ -1614,18 +1632,16 @@ class WaldurBackend(backends.BaseBackend):
             # via entry_point.load(), which re-imports this module. Importing
             # anything that transitively touches common.utils at module level
             # causes a circular import when this plugin is loaded first.
-            import json
-
-            from waldur_site_agent.common.agent_identity_management import (
+            from waldur_site_agent.common.agent_identity_management import (  # noqa: PLC0415
                 AgentIdentityManager,
             )
-            from waldur_site_agent.common.structures import Offering
-            from waldur_site_agent.common.utils import get_client
-            from waldur_site_agent.event_processing.utils import (
+            from waldur_site_agent.common.structures import Offering  # noqa: PLC0415
+            from waldur_site_agent.common.utils import get_client  # noqa: PLC0415
+            from waldur_site_agent.event_processing.utils import (  # noqa: PLC0415
                 _setup_unified_stomp_connection,
             )
 
-            from waldur_site_agent_waldur.target_event_handler import (
+            from waldur_site_agent_waldur.target_event_handler import (  # noqa: PLC0415
                 make_target_offering_user_handler,
                 make_target_order_handler,
                 make_target_resource_end_date_handler,
@@ -1689,7 +1705,12 @@ class WaldurBackend(backends.BaseBackend):
                 ),
             }
 
-            def target_router(frame, offering, agent, expose_backend_error_details=True):
+            def target_router(
+                frame: stomp.utils.Frame,
+                offering: Offering,
+                agent: str,
+                expose_backend_error_details: bool = True,
+            ) -> None:
                 try:
                     payload = json.loads(frame.body)
                 except (ValueError, TypeError):

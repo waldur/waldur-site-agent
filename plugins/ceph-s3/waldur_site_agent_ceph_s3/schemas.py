@@ -42,7 +42,10 @@ class CroitReportingSettings(BaseModel):
 
 
 class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
-    """Settings for the ``ceph_s3`` (management), ``croit_usage`` and ``rgw_usage`` (reporting) backends."""
+    """Settings for the ``ceph_s3``, ``croit_usage`` and ``rgw_usage`` backends.
+
+    ``ceph_s3`` is the management backend; the other two are reporting backends.
+    """
 
     flavour: Literal["radosgw", "RADOSGW"] | None = Field(
         default=None, description="'radosgw', the only one (may be left out)"

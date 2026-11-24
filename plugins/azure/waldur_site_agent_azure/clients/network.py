@@ -16,6 +16,9 @@ from azure.mgmt.network.models import (
 
 from .base import BaseAzureClient, wrap_azure_errors
 
+# Methods here return azure-mgmt models, and begin_* methods a poller that
+# wrap_azure_errors swaps for _TranslatingPoller, so their returns stay Any.
+
 # Azure requires a priority on every rule; 1000 is the middle of the allowed
 # range, leaving room for operator rules on either side of it.
 _SSH_RULE_PRIORITY = 1000
@@ -32,7 +35,7 @@ class NetworkClient(BaseAzureClient):
     @wrap_azure_errors
     def create_network(
         self, location: str, resource_group_name: str, network_name: str, cidr: str
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start creation of a virtual network and return the poller."""
         return self.network_client.virtual_networks.begin_create_or_update(
             resource_group_name,
@@ -41,14 +44,14 @@ class NetworkClient(BaseAzureClient):
         )
 
     @wrap_azure_errors
-    def get_network(self, resource_group_name: str, network_name: str) -> Any:
+    def get_network(self, resource_group_name: str, network_name: str) -> Any:  # noqa: ANN401
         """Fetch a virtual network."""
         return self.network_client.virtual_networks.get(resource_group_name, network_name)
 
     @wrap_azure_errors
     def create_subnet(
         self, resource_group_name: str, network_name: str, subnet_name: str, cidr: str
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start creation of a subnet and return the poller."""
         return self.network_client.subnets.begin_create_or_update(
             resource_group_name, network_name, subnet_name, {"address_prefix": cidr}
@@ -57,7 +60,7 @@ class NetworkClient(BaseAzureClient):
     @wrap_azure_errors
     def get_subnet(
         self, resource_group_name: str, network_name: str, subnet_name: str
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Fetch a subnet."""
         return self.network_client.subnets.get(
             resource_group_name, network_name, subnet_name
@@ -66,7 +69,7 @@ class NetworkClient(BaseAzureClient):
     @wrap_azure_errors
     def get_network_interface(
         self, resource_group_name: str, network_interface_name: str
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Fetch a network interface."""
         return self.network_client.network_interfaces.get(
             resource_group_name, network_interface_name
@@ -82,7 +85,7 @@ class NetworkClient(BaseAzureClient):
         subnet_id: str,
         public_ip_id: str | None = None,
         security_group_id: str | None = None,
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start creation of a network interface and return the poller."""
         ip_configuration = NetworkInterfaceIPConfiguration(
             name=config_name, subnet={"id": subnet_id}
@@ -103,7 +106,7 @@ class NetworkClient(BaseAzureClient):
     @wrap_azure_errors
     def delete_network_interface(
         self, resource_group_name: str, network_interface_name: str
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start deletion of a network interface and return the poller.
 
         Needed to clean up after a machine in a shared resource group, where the
@@ -116,14 +119,14 @@ class NetworkClient(BaseAzureClient):
     @wrap_azure_errors
     def delete_subnet(
         self, resource_group_name: str, network_name: str, subnet_name: str
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start deletion of a subnet and return the poller."""
         return self.network_client.subnets.begin_delete(
             resource_group_name, network_name, subnet_name
         )
 
     @wrap_azure_errors
-    def delete_network(self, resource_group_name: str, network_name: str) -> Any:
+    def delete_network(self, resource_group_name: str, network_name: str) -> Any:  # noqa: ANN401
         """Start deletion of a virtual network and return the poller."""
         return self.network_client.virtual_networks.begin_delete(
             resource_group_name, network_name
@@ -136,7 +139,7 @@ class NetworkClient(BaseAzureClient):
         resource_group_name: str,
         network_security_group_name: str,
         source_ranges: list[str],
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start creation of a security group allowing inbound SSH.
 
         ``source_ranges`` are CIDR prefixes, single addresses, or Azure's own
@@ -162,14 +165,14 @@ class NetworkClient(BaseAzureClient):
     @wrap_azure_errors
     def delete_network_security_group(
         self, resource_group_name: str, network_security_group_name: str
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start deletion of a security group and return the poller."""
         return self.network_client.network_security_groups.begin_delete(
             resource_group_name, network_security_group_name
         )
 
     @wrap_azure_errors
-    def get_public_ip(self, resource_group_name: str, public_ip_address_name: str) -> Any:
+    def get_public_ip(self, resource_group_name: str, public_ip_address_name: str) -> Any:  # noqa: ANN401
         """Fetch a public IP address."""
         return self.network_client.public_ip_addresses.get(
             resource_group_name, public_ip_address_name
@@ -183,7 +186,7 @@ class NetworkClient(BaseAzureClient):
     @wrap_azure_errors
     def create_public_ip(
         self, location: str, resource_group_name: str, public_ip_address_name: str
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start creation of a static IPv4 public address and return the poller."""
         return self.network_client.public_ip_addresses.begin_create_or_update(
             resource_group_name,
@@ -199,7 +202,7 @@ class NetworkClient(BaseAzureClient):
     @wrap_azure_errors
     def delete_public_ip(
         self, resource_group_name: str, public_ip_address_name: str
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start deletion of a public IP address and return the poller."""
         return self.network_client.public_ip_addresses.begin_delete(
             resource_group_name, public_ip_address_name

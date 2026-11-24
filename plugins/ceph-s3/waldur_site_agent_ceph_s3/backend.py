@@ -87,9 +87,9 @@ _STAMP_SUFFIX = "@invalid"
 
 
 def _ownership_stamp(resource_uuid: object) -> str:
-    """The stamp a user (and, in account mode, an account) provisioned for this
-    resource carries: ``waldur-<resource uuid hex>@invalid``.
+    """The stamp of a user (or, in account mode, an account) provisioned for a resource.
 
+    It reads ``waldur-<resource uuid hex>@invalid``.
     Short enough for an email local part (39 of 64 characters). One resource has
     one user, so no uid is needed to keep stamps apart -- and since both backends
     refuse an email another user holds, a second user for the same resource (a
@@ -131,6 +131,9 @@ _IAM_USER_NAME_RE = re.compile(r"^[\w+=,.@-]{1,64}$")
 # Two places is what the reporter's "%.2f" formatting preserves on the wire.
 _USAGE_PRECISION = Decimal("0.01")
 
+# A series needs two samples before it covers any time.
+_MIN_SERIES_POINTS = 2
+
 _SECONDS_PER_DAY = Decimal(86400)
 
 
@@ -160,7 +163,7 @@ def _is_measurable(datapoints: list) -> bool:
     zero by the time it reaches the reporter — and a zero overwrites the period's
     accrued total.
     """
-    if len(datapoints) < 2:
+    if len(datapoints) < _MIN_SERIES_POINTS:
         return False
     if datapoints[-1]["t"] <= datapoints[0]["t"]:
         return False
@@ -254,7 +257,8 @@ class CephS3Backend(backends.BaseBackend):
         # The gateway tenants connect to, and the one Admin Ops is reached on.
         s3_endpoint = backend_settings.get("s3_endpoint")
         if not s3_endpoint:
-            raise ValueError("Ceph S3 backend requires 's3_endpoint' in backend_settings")
+            msg = "Ceph S3 backend requires 's3_endpoint' in backend_settings"
+            raise ValueError(msg)
         self.s3_endpoint = str(s3_endpoint).rstrip("/")
 
         # S3 clients refuse to sign a request without a region, so one has to be
@@ -353,12 +357,11 @@ class CephS3Backend(backends.BaseBackend):
 
                 logger.info("=== Diagnostics completed successfully ===")
                 return True
-            else:
-                logger.error("✗ API connectivity failed")
-                return False
+            logger.error("✗ API connectivity failed")
+            return False
 
-        except Exception as e:
-            logger.exception("Diagnostics failed: %s", e)
+        except Exception:
+            logger.exception("Diagnostics failed")
             return False
 
     def list_components(self) -> list[str]:
@@ -653,15 +656,11 @@ class CephS3Backend(backends.BaseBackend):
                     f"{user_data['email']}), so {username} was not created. Remove "
                     "that user, or set its tenant as the resource's backend id"
                 ) from e
-            logger.error(
-                "Failed to create S3 user for resource %s: %s", waldur_resource.uuid, e
-            )
+            logger.exception("Failed to create S3 user for resource %s", waldur_resource.uuid)
             raise
-        except Exception as e:
+        except Exception:
             logger.exception(
-                "Unexpected error creating S3 user for resource %s: %s",
-                waldur_resource.uuid,
-                e,
+                "Unexpected error creating S3 user for resource %s", waldur_resource.uuid
             )
             raise
         return True
@@ -751,13 +750,11 @@ class CephS3Backend(backends.BaseBackend):
             logger.warning(
                 "S3 user %s not found, considering as deleted", resource_backend_id
             )
-        except CephS3Error as e:
-            logger.error("Failed to delete S3 user %s: %s", resource_backend_id, e)
+        except CephS3Error:
+            logger.exception("Failed to delete S3 user %s", resource_backend_id)
             raise
-        except Exception as e:
-            logger.exception(
-                "Unexpected error deleting S3 user %s: %s", resource_backend_id, e
-            )
+        except Exception:
+            logger.exception("Unexpected error deleting S3 user %s", resource_backend_id)
             raise
 
     def _delete_account_resource(self, username: str) -> None:
@@ -836,8 +833,9 @@ class CephS3Backend(backends.BaseBackend):
         logger.info("RGW account %s of user %s deleted", account_id, username)
 
     def _clear_account_iam(self, root_uid: str) -> None:
-        """Remove the IAM roles, groups and OIDC providers of the account whose
-        root user is ``root_uid``, signing as that root with a temporary key.
+        """Remove the IAM roles, groups and OIDC providers of ``root_uid``'s account.
+
+        The calls are signed as that root user with a temporary key.
 
         The temporary key is removed again whatever happens. A root user already
         at its key limit gives up one existing key first: termination removes
@@ -1275,8 +1273,8 @@ class CephS3Backend(backends.BaseBackend):
         """No usage from the management backend.
 
         Metering belongs to the reporting backends (CroitUsageBackend,
-        RgwUsageBackend) that build on this class. Returning empty rather than raising because membership
-        sync calls this too, on whichever backend is wired as
+        RgwUsageBackend) that build on this class. Returning empty rather than
+        raising because membership sync calls this too, on whichever backend is wired as
         membership_sync_backend — raising would break user synchronisation for a
         method that only ever contributed billing figures.
         """
@@ -1384,9 +1382,7 @@ class CephS3Backend(backends.BaseBackend):
             }
 
         except Exception as e:
-            logger.error(
-                "Failed to get metadata for user %s: %s", resource_backend_id, e
-            )
+            logger.exception("Failed to get metadata for user %s", resource_backend_id)
             return {
                 "error": f"Failed to retrieve metadata: {e}",
                 "backend_type": self.backend_type,
@@ -1394,8 +1390,10 @@ class CephS3Backend(backends.BaseBackend):
 
     # Abstract method implementations (minimal/no-op for S3 storage)
     def downscale_resource(self, resource_backend_id: str) -> bool:
-        """Downscale resource - not applicable for S3 storage: S3 has no reduced
-        mode short of rewriting the consumer's own policies."""
+        """Downscale resource - not applicable for S3 storage.
+
+        S3 has no reduced mode short of rewriting the consumer's own policies.
+        """
         logger.info("Downscale not applicable for S3 user: %s", resource_backend_id)
         return True
 
@@ -1456,13 +1454,13 @@ class CephS3Backend(backends.BaseBackend):
 
     def add_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Add user to S3 resource - not applicable for individual S3 users."""
-        del kwargs
+        del username, kwargs
         logger.info("Add user not applicable for S3 storage: %s", waldur_resource.backend_id)
         return True
 
     def remove_user(self, waldur_resource: WaldurResource, username: str, **kwargs: str) -> bool:
         """Remove user from S3 resource - not applicable for individual S3 users."""
-        del kwargs
+        del username, kwargs
         logger.info(
             "Remove user not applicable for S3 storage: %s", waldur_resource.backend_id
         )
@@ -1486,13 +1484,12 @@ class CephS3Backend(backends.BaseBackend):
             return backend_limits, waldur_limits
 
         # Process each component and extract limits
-        for component_name, component_config in self.backend_components.items():
+        for component_name in self.backend_components:
             limit_value = getattr(waldur_resource.limits, component_name, 0)
-            if limit_value > 0:
-                # Only include actual configurable components (not s3_user)
-                if component_name != "s3_user":
-                    backend_limits[component_name] = limit_value
-                    waldur_limits[component_name] = limit_value
+            # Only include actual configurable components (not s3_user)
+            if limit_value > 0 and component_name != "s3_user":
+                backend_limits[component_name] = limit_value
+                waldur_limits[component_name] = limit_value
 
         logger.debug(
             "Collected limits - Backend: %s, Waldur: %s", backend_limits, waldur_limits

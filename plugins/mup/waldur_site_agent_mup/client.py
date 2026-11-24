@@ -42,8 +42,8 @@ class MUPClient(BaseClient):
         )
 
     def _make_request(
-        self, method: str, endpoint: str, **kwargs: Any
-    ) -> httpx.Response:  # noqa: ANN401
+        self, method: str, endpoint: str, **kwargs: Any  # noqa: ANN401  httpx request kwargs, passed through
+    ) -> httpx.Response:
         """Make HTTP request to MUP API with error handling."""
         url = urljoin(self.api_url, endpoint)
 
@@ -380,6 +380,7 @@ class MUPClient(BaseClient):
         parent_name: str | None = None,
     ) -> str:
         """Create account in MUP - creates a project."""
+        del description, organization, parent_name
         # This is handled by the backend create_resource method
         # Return the name to satisfy interface
         return name

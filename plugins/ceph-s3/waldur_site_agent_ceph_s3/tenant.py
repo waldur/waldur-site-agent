@@ -122,7 +122,8 @@ def validate_tenant_template(template: str) -> None:
         ValueError: naming the offending part of the template.
     """
     if not isinstance(template, str) or not template:
-        raise ValueError("'tenant_template' must be a non-empty string")
+        msg = "'tenant_template' must be a non-empty string"
+        raise ValueError(msg)
     try:
         parsed = list(string.Formatter().parse(template))
     except ValueError as e:
@@ -153,10 +154,11 @@ def validate_tenant_template(template: str) -> None:
             unique = True
         elif field == "resource_slug":
             if length is not None:
-                raise ValueError(
+                msg = (
                     "'tenant_template' must not truncate {resource_slug}: a cut slug "
                     "no longer tells resources apart"
                 )
+                raise ValueError(msg)
             unique = True
     # The literal parts end up in the tenant verbatim, so they are held to the
     # same alphabet now rather than failing every order later.
@@ -233,10 +235,12 @@ def is_tenant_name(value: str) -> bool:
 
 
 def backend_id_of(uid: str) -> str:
-    """The backend id of the resource an RGW uid belongs to: the reverse of the
-    lookup a backend id goes through. A tenant's root user is the tenant; any
-    other uid is its own backend id, as resources from before the tenant scheme
-    are."""
+    """The backend id of the resource an RGW uid belongs to.
+
+    This is the reverse of the lookup a backend id goes through. A tenant's root
+    user is the tenant; any other uid is its own backend id, as resources from
+    before the tenant scheme are.
+    """
     tenant, bare = split(uid)
     return tenant if bare == ROOT_UID and is_tenant_name(tenant) else uid
 

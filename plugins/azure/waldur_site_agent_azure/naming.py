@@ -23,7 +23,7 @@ _FALLBACK_VM_NAME = "waldur-vm"
 _INVALID_CHARACTERS = re.compile(r"[^a-z0-9-]+")
 _REPEATED_HYPHENS = re.compile(r"-{2,}")
 
-def _arm_id(provider: str, collection: str) -> "re.Pattern[str]":
+def _arm_id(provider: str, collection: str) -> re.Pattern[str]:
     return re.compile(
         r"^/subscriptions/(?P<subscription_id>[^/]+)"
         r"/resourceGroups/(?P<resource_group>[^/]+)"

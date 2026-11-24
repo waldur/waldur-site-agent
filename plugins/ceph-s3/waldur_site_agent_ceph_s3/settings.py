@@ -72,10 +72,11 @@ def validate_settings(backend_settings: dict, flavour: str = RADOSGW) -> None:
     if backend_settings.get("default_storage_class") and not backend_settings.get(
         "default_placement"
     ):
-        raise ValueError(
+        msg = (
             "'default_storage_class' needs 'default_placement': RGW applies a "
             "storage class only as part of a placement rule"
         )
+        raise ValueError(msg)
 
 
 def validate_components(backend_components: dict) -> None:

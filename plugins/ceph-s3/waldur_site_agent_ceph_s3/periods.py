@@ -6,6 +6,8 @@ import zoneinfo
 
 logger = logging.getLogger(__name__)
 
+_DECEMBER = 12
+
 
 class BillingPeriodMixin:
     """Month boundaries in the agent's reporting timezone.
@@ -57,7 +59,7 @@ class BillingPeriodMixin:
         start = datetime.datetime(year, month, 1, tzinfo=tz)
         end = (
             datetime.datetime(year + 1, 1, 1, tzinfo=tz)
-            if month == 12
+            if month == _DECEMBER
             else datetime.datetime(year, month + 1, 1, tzinfo=tz)
         )
         return int(start.timestamp()), int(end.timestamp())

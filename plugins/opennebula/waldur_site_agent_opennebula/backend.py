@@ -10,9 +10,10 @@ The ``resource_type`` is read from ``backend_settings`` and determines
 which code paths are taken during create, delete, and usage reporting.
 """
 
+import contextlib
 import logging
-import os
 import secrets
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -22,7 +23,7 @@ from waldur_site_agent.backend.backends import BaseBackend
 from waldur_site_agent.backend.exceptions import BackendError, UserNotProvisionedError
 from waldur_site_agent.backend.structures import BackendResourceInfo
 
-from .client import OpenNebulaClient
+from waldur_site_agent_opennebula.client import OpenNebulaClient
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,9 @@ class OpenNebulaBackend(BaseBackend):
         # Initialize Keycloak client if configured
         self.keycloak_client = None
         if backend_settings.get("keycloak_enabled", False):
-            from waldur_site_agent_keycloak_client import KeycloakClient
+            from waldur_site_agent_keycloak_client import (  # noqa: PLC0415  tests patch it at its source module
+                KeycloakClient,
+            )
 
             keycloak_settings = backend_settings.get("keycloak", {})
             try:
@@ -144,7 +147,8 @@ class OpenNebulaBackend(BaseBackend):
             keycloak_ok = self.keycloak_client.ping()
             if not keycloak_ok:
                 if raise_exception:
-                    raise BackendError("Failed to ping Keycloak")
+                    msg = "Failed to ping Keycloak"
+                    raise BackendError(msg)
                 return False
 
         return True
@@ -403,10 +407,11 @@ class OpenNebulaBackend(BaseBackend):
         template_id = int(template_id_raw) if template_id_raw is not None else None
 
         if not plan_quotas:
-            raise BackendError(
+            msg = (
                 "VM creation requires a plan with fixed-component quantities "
                 "(vcpu, vm_ram, vm_disk). No plan quotas found on resource."
             )
+            raise BackendError(msg)
 
         # Plan quotas are expressed in the component's measured unit (e.g. GB for
         # vm_ram/vm_disk); multiply by the component unit_factor to get the
@@ -426,14 +431,14 @@ class OpenNebulaBackend(BaseBackend):
         }
 
         if config["template_id"] is None:
-            raise BackendError(
-                "VM creation requires 'template_id' in resource attributes"
-            )
+            msg = "VM creation requires 'template_id' in resource attributes"
+            raise BackendError(msg)
         if not config["parent_backend_id"]:
-            raise BackendError(
+            msg = (
                 "VM creation requires 'parent_backend_id' in resource attributes "
                 "or 'parent_vdc_backend_id' in offering plugin_options"
             )
+            raise BackendError(msg)
 
         # Inference mode: a model turns this into a vLLM VM that boots the engine
         # template with the chosen model attached as an extra disk. The model may
@@ -596,9 +601,8 @@ class OpenNebulaBackend(BaseBackend):
         Returns the numeric OpenNebula VM ID.
         """
         if self._pending_vm_config is None:
-            raise BackendError(
-                "VM config not set — _pre_create_resource must be called first"
-            )
+            msg = "VM config not set — _pre_create_resource must be called first"
+            raise BackendError(msg)
 
         vm_id = self.client.create_vm(
             template_id=self._pending_vm_config["template_id"],
@@ -1008,13 +1012,11 @@ class OpenNebulaBackend(BaseBackend):
 
             # Fetch existing children of this parent to avoid name collisions
             existing_children: dict[str, str] = {}
-            try:
+            with contextlib.suppress(Exception):
                 children = self.keycloak_client.keycloak_admin.get_group_children(
                     parent_group_id
                 )
                 existing_children = {c["name"]: c["id"] for c in children}
-            except Exception:
-                pass
 
             # Create child groups per role
             role_groups: dict[str, str] = {}
@@ -1042,8 +1044,8 @@ class OpenNebulaBackend(BaseBackend):
 
             return role_groups
 
-        except Exception as e:
-            logger.error("Failed to create Keycloak groups for VDC %s: %s", slug, e)
+        except Exception:
+            logger.exception("Failed to create Keycloak groups for VDC %s", slug)
             return {}
 
     def _create_one_keycloak_groups(
@@ -1113,12 +1115,11 @@ class OpenNebulaBackend(BaseBackend):
                     group_id,
                     kc_group_path,
                 )
-            except BackendError as e:
-                logger.error(
-                    "Failed to create ONE group '%s' for role '%s': %s",
+            except BackendError:
+                logger.exception(
+                    "Failed to create ONE group '%s' for role '%s'",
                     one_group_name,
                     role_name,
-                    e,
                 )
 
         return saml_mappings
@@ -1130,9 +1131,9 @@ class OpenNebulaBackend(BaseBackend):
         Creates the file if it does not exist.
         """
         existing: dict[str, int] = {}
-        if os.path.exists(self.saml_mapping_file):
+        if Path(self.saml_mapping_file).exists():
             try:
-                with open(self.saml_mapping_file) as fh:
+                with Path(self.saml_mapping_file).open() as fh:
                     loaded = yaml.safe_load(fh)
                     if isinstance(loaded, dict):
                         existing = loaded
@@ -1144,25 +1145,25 @@ class OpenNebulaBackend(BaseBackend):
         try:
             # Atomic write via temp file + rename
             tmp_path = self.saml_mapping_file + ".tmp"
-            with open(tmp_path, "w") as fh:
+            with Path(tmp_path).open("w") as fh:
                 yaml.safe_dump(existing, fh, default_flow_style=False)
-            os.replace(tmp_path, self.saml_mapping_file)
+            Path(tmp_path).replace(self.saml_mapping_file)
             logger.info(
                 "Updated SAML mapping file %s with %d entries",
                 self.saml_mapping_file,
                 len(new_mappings),
             )
-        except Exception as e:
-            logger.error("Failed to write SAML mapping file: %s", e)
+        except Exception:
+            logger.exception("Failed to write SAML mapping file")
 
     def _remove_saml_mapping_entries(self, slug: str) -> None:
         """Remove SAML mapping entries for a VDC from the mapping file."""
-        if not os.path.exists(self.saml_mapping_file):
+        if not Path(self.saml_mapping_file).exists():
             return
 
         prefix = f"/vdc_{slug}/"
         try:
-            with open(self.saml_mapping_file) as fh:
+            with Path(self.saml_mapping_file).open() as fh:
                 loaded = yaml.safe_load(fh)
                 if not isinstance(loaded, dict):
                     return
@@ -1172,9 +1173,9 @@ class OpenNebulaBackend(BaseBackend):
                 return  # Nothing to remove
 
             tmp_path = self.saml_mapping_file + ".tmp"
-            with open(tmp_path, "w") as fh:
+            with Path(tmp_path).open("w") as fh:
                 yaml.safe_dump(filtered, fh, default_flow_style=False)
-            os.replace(tmp_path, self.saml_mapping_file)
+            Path(tmp_path).replace(self.saml_mapping_file)
             logger.info("Removed SAML mapping entries for slug '%s'", slug)
         except Exception as e:
             logger.warning("Failed to clean SAML mapping file: %s", e)
@@ -1218,7 +1219,7 @@ class OpenNebulaBackend(BaseBackend):
             try:
                 group = self.client._get_group_by_name(one_group_name)
                 if group:
-                    self.client._delete_group(getattr(group, "ID"))
+                    self.client._delete_group(group.ID)
                     logger.info("Deleted ONE group '%s'", one_group_name)
             except BackendError as e:
                 logger.warning("Failed to delete ONE group '%s': %s", one_group_name, e)
@@ -1273,9 +1274,8 @@ class OpenNebulaBackend(BaseBackend):
             BackendError: If Keycloak is not enabled or user not found.
         """
         if not self.keycloak_client:
-            raise BackendError(
-                "Cannot add user: Keycloak integration is not enabled"
-            )
+            msg = "Cannot add user: Keycloak integration is not enabled"
+            raise BackendError(msg)
 
         role = kwargs.get("role", self.default_user_role)
         slug = self._get_resource_slug(waldur_resource)
@@ -1287,7 +1287,7 @@ class OpenNebulaBackend(BaseBackend):
             keycloak_user = self.keycloak_client.find_user(username)
             if not keycloak_user:
                 # Not signed in yet: retried next pass, not a backend failure.
-                raise UserNotProvisionedError(
+                raise UserNotProvisionedError(  # noqa: TRY301  re-raised by the except BackendError below
                     f"User '{username}' not found in Keycloak (no first sign-in yet)"
                 )
 
@@ -1303,7 +1303,7 @@ class OpenNebulaBackend(BaseBackend):
                 )
                 kc_groups = self._create_keycloak_groups(waldur_resource)
                 if role not in kc_groups:
-                    raise BackendError(
+                    raise BackendError(  # noqa: TRY301  re-raised by the except BackendError below
                         f"Failed to create Keycloak group for role '{role}'"
                     )
                 group = {"id": kc_groups[role]}
@@ -1320,7 +1320,7 @@ class OpenNebulaBackend(BaseBackend):
         except BackendError:
             raise
         except Exception as e:
-            logger.error("Failed to add user %s to VDC %s: %s", username, slug, e)
+            logger.exception("Failed to add user %s to VDC %s", username, slug)
             raise BackendError(f"Failed to add user {username}: {e}") from e
 
     def remove_user(
@@ -1342,9 +1342,8 @@ class OpenNebulaBackend(BaseBackend):
         del kwargs
 
         if not self.keycloak_client:
-            raise BackendError(
-                "Cannot remove user: Keycloak integration is not enabled"
-            )
+            msg = "Cannot remove user: Keycloak integration is not enabled"
+            raise BackendError(msg)
 
         slug = self._get_resource_slug(waldur_resource)
 
@@ -1381,7 +1380,7 @@ class OpenNebulaBackend(BaseBackend):
         except BackendError:
             raise
         except Exception as e:
-            logger.error("Failed to remove user %s from VDC %s: %s", username, slug, e)
+            logger.exception("Failed to remove user %s from VDC %s", username, slug)
             raise BackendError(f"Failed to remove user {username}: {e}") from e
 
     def downscale_resource(self, resource_backend_id: str) -> bool:

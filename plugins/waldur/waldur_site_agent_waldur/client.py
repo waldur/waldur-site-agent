@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime
 import logging
 import time
+from http import HTTPStatus
 from typing import Any
 from uuid import UUID
 
@@ -62,6 +63,7 @@ from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.exceptions import BackendError
 from waldur_site_agent.backend.structures import Association, ClientResource
 from waldur_site_agent.common import static_token_prefix
+
 from waldur_site_agent_waldur.privileged_accounts import (
     IdentityBridgePrivilegedAccountError,
     is_privileged_account_refusal,
@@ -98,6 +100,7 @@ class WaldurClient(BaseClient):
         api_token: str,
         offering_uuid: str,
     ) -> None:
+        """Create the API client for the target Waldur B offering."""
         super().__init__()
         self.api_url = api_url.rstrip("/")
         self.offering_uuid = offering_uuid
@@ -147,7 +150,7 @@ class WaldurClient(BaseClient):
             response = self._api_client.get_httpx_client().get(
                 f"/api/marketplace-public-offerings/{offering_hex}/plans/",
             )
-            if response.status_code == 200:
+            if response.status_code == HTTPStatus.OK:
                 plans = response.json()
                 if plans:
                     self._cached_plan_url: str | None = plans[0].get("url")
@@ -579,8 +582,7 @@ class WaldurClient(BaseClient):
     def set_project_end_date(
         self, project_uuid: UUID, end_date: datetime.date | None
     ) -> None:
-        """Set end_date on a project on Waldur B via partial update.
-        """
+        """Set end_date on a project on Waldur B via partial update."""
         projects_partial_update.sync(
             uuid=project_uuid,
             client=self._api_client,
@@ -634,9 +636,7 @@ class WaldurClient(BaseClient):
 
     def list_project_users(self, project_uuid: UUID) -> list:
         """List users of a project on Waldur B."""
-        from waldur_api_client.api.projects import (
-            projects_list_users_list,  # noqa: PLC0415
-        )
+        from waldur_api_client.api.projects import projects_list_users_list  # noqa: PLC0415
 
         return projects_list_users_list.sync(
             uuid=project_uuid,
@@ -679,9 +679,7 @@ class WaldurClient(BaseClient):
         Returns:
             User UUID on Waldur B, or None if not found.
         """
-        from waldur_api_client.api.remote_eduteams import (
-            remote_eduteams,  # noqa: PLC0415
-        )
+        from waldur_api_client.api.remote_eduteams import remote_eduteams  # noqa: PLC0415
 
         try:
             result = remote_eduteams.sync(
@@ -729,8 +727,9 @@ class WaldurClient(BaseClient):
                 json=payload,
             )
             if is_privileged_account_refusal(response.status_code, response.text):
-                raise IdentityBridgePrivilegedAccountError(username)
-            if response.status_code >= 400:
+                # Re-raised past the generic handler below, which would swallow it.
+                raise IdentityBridgePrivilegedAccountError(username)  # noqa: TRY301
+            if response.status_code >= HTTPStatus.BAD_REQUEST:
                 logger.error(
                     "Identity bridge error %s: %s (payload: %s)",
                     response.status_code, response.text, payload,
@@ -770,8 +769,7 @@ class WaldurClient(BaseClient):
             )
             if users:
                 user = users[0]
-                uuid_val = user.uuid if not isinstance(user.uuid, type(UNSET)) else None
-                return uuid_val
+                return user.uuid if not isinstance(user.uuid, type(UNSET)) else None
         except Exception:
             logger.exception("Failed to resolve user by %s=%s", field, value)
         return None
@@ -835,7 +833,9 @@ class WaldurClient(BaseClient):
             ClientResource(
                 name=str(r.uuid) if not isinstance(r.uuid, type(UNSET)) else "",
                 description=r.name if not isinstance(r.name, type(UNSET)) else "",
-                organization=str(r.project_uuid) if not isinstance(r.project_uuid, type(UNSET)) else "",
+                organization=(
+                    str(r.project_uuid) if not isinstance(r.project_uuid, type(UNSET)) else ""
+                ),
             )
             for r in resources
         ]
@@ -918,7 +918,9 @@ class WaldurClient(BaseClient):
                 if user_uuid and str(user_uuid) == user:
                     return Association(account=resource_id, user=user)
         except Exception:
-            logger.debug("Failed to check association for user %s on resource %s", user, resource_id)
+            logger.debug(
+                "Failed to check association for user %s on resource %s", user, resource_id
+            )
         return None
 
     def create_association(
@@ -974,7 +976,8 @@ class WaldurClient(BaseClient):
 
     def get_offering_url(self) -> str:
         """Get the API URL for the target offering."""
-        return f"{self.base_url}/api/marketplace-public-offerings/{self._normalize_uuid(self.offering_uuid)}/"
+        offering_hex = self._normalize_uuid(self.offering_uuid)
+        return f"{self.base_url}/api/marketplace-public-offerings/{offering_hex}/"
 
     def get_customer_url(self, customer_uuid: str) -> str:
         """Get the API URL for a customer on Waldur B."""

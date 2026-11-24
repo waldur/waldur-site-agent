@@ -10,6 +10,9 @@ from azure.mgmt.resource import ResourceManagementClient, SubscriptionClient
 
 from .base import BaseAzureClient, wrap_azure_errors
 
+# Methods here return azure-mgmt models, and begin_* methods a poller that
+# wrap_azure_errors swaps for _TranslatingPoller, so their returns stay Any.
+
 
 class ResourceClient(BaseAzureClient):
     """Resource Manager calls: locations and resource groups."""
@@ -60,13 +63,13 @@ class ResourceClient(BaseAzureClient):
         return self.resource_client.resource_groups.list()
 
     @wrap_azure_errors
-    def create_resource_group(self, location: str, resource_group_name: str) -> Any:
+    def create_resource_group(self, location: str, resource_group_name: str) -> Any:  # noqa: ANN401
         """Create a resource group, or update its location if it exists."""
         return self.resource_client.resource_groups.create_or_update(
             resource_group_name, {"location": location}
         )
 
     @wrap_azure_errors
-    def delete_resource_group(self, resource_group_name: str) -> Any:
+    def delete_resource_group(self, resource_group_name: str) -> Any:  # noqa: ANN401
         """Start deletion of a resource group and return the poller."""
         return self.resource_client.resource_groups.begin_delete(resource_group_name)
