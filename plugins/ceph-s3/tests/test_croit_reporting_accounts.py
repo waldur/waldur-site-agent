@@ -310,6 +310,27 @@ class TestTenantedUsers:
         backend.croit_client.get_user_storage_series.assert_not_called()
         assert report["acme$waldur-x"]["TOTAL_ACCOUNT_USAGE"]["s3_storage"] == 2.0
 
+    def test_a_tenant_backend_id_is_reported_under_itself(self):
+        """The core reads usage by backend id; croit is asked about tenant$root."""
+        with patch("waldur_site_agent_ceph_s3.backend.CroitClient"):
+            backend = CroitUsageBackend(
+                {"api_url": "https://croit", "token": "t", "s3_endpoint": "https://s3"},
+                COMPONENTS,
+            )
+        backend.client = Mock()
+        backend.croit_client = Mock()
+        backend.client.get_user_buckets.return_value = [{"name": "data"}]
+        backend.croit_client.get_bucket_storage_series.return_value = flat(1)
+
+        report = backend._collect_usage(["acme_12345678"], 0, 2 * DAY)
+
+        backend.client.get_user_buckets.assert_called_once_with("acme_12345678$root")
+        backend.croit_client.get_bucket_storage_series.assert_called_once_with(
+            "data", "acme_12345678", 0, 2 * DAY
+        )
+        assert report["acme_12345678"]["TOTAL_ACCOUNT_USAGE"]["s3_storage"] == 2.0
+        assert "acme_12345678" in backend._reported_usernames
+
     def test_croits_tenant_colon_bucket_listing_is_read_as_the_bare_name(self):
         """croit lists a tenanted bucket as "tenant:bucket" (measured); RGW does not."""
         with patch("waldur_site_agent_ceph_s3.backend.CroitClient"):

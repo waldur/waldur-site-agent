@@ -62,10 +62,10 @@ def test_an_unmeasurable_series_is_omitted_not_reported_as_zero(
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
 
-    report = backend._get_usage_report(["waldur_u"])
+    report = backend._get_usage_report(["waldur-u"])
 
     assert report == {}, f"{label} was reported instead of omitted"
-    assert "waldur_u" not in backend._reported_usernames
+    assert "waldur-u" not in backend._reported_usernames
 
 
 @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
@@ -85,7 +85,7 @@ def test_a_non_finite_reading_is_refused(
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
 
-    assert backend._get_usage_report(["waldur_u"]) == {}
+    assert backend._get_usage_report(["waldur-u"]) == {}
 
 
 @patch("waldur_site_agent_ceph_s3.backend.CroitClient")
@@ -100,9 +100,9 @@ def test_a_real_series_is_still_reported(
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
 
-    report = backend._get_usage_report(["waldur_u"])
+    report = backend._get_usage_report(["waldur-u"])
 
-    assert report["waldur_u"]["TOTAL_ACCOUNT_USAGE"]["s3_storage"] > 0
+    assert report["waldur-u"]["TOTAL_ACCOUNT_USAGE"]["s3_storage"] > 0
 
 
 def test_the_final_reading_is_held_to_the_window_end():
@@ -143,10 +143,10 @@ def test_a_past_period_is_recomputed_from_the_series(
         {"t": t, "v": 100 * 10**9} for t in range(start, end, 86400)
     ]
 
-    report = backend.get_usage_report_for_period(["waldur_u"], 2026, 6)
+    report = backend.get_usage_report_for_period(["waldur-u"], 2026, 6)
 
-    assert "waldur_u" in report
-    mock_client.get_user_storage_series.assert_called_with("waldur_u", start, end)
+    assert "waldur-u" in report
+    mock_client.get_user_storage_series.assert_called_with("waldur-u", start, end)
 
 
 def test_period_bounds_wrap_the_year():
@@ -175,7 +175,7 @@ def test_a_bucket_with_no_stats_does_not_erase_the_connection_info(
     guarded here is that the zero it normalises to still yields full metadata.
     """
     mock_client_class.return_value = mock_client
-    mock_client.get_user_info.return_value = {"uid": "waldur_u"}
+    mock_client.get_user_info.return_value = {"uid": "waldur-u"}
     mock_client.get_user_buckets.return_value = [
         {"name": "fresh", "size_bytes": 0, "num_objects": 0}
     ]
@@ -183,7 +183,7 @@ def test_a_bucket_with_no_stats_does_not_erase_the_connection_info(
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
 
-    metadata = backend.get_resource_metadata("waldur_u")
+    metadata = backend.get_resource_metadata("waldur-u")
 
     assert metadata["s3_endpoint"] == "https://s3.test.croit.io"
     assert metadata["storage_summary"]["total_size_bytes"] == 0
@@ -204,7 +204,7 @@ def test_a_key_listing_without_access_key_is_loud(
     backend = CroitUsageBackend(backend_settings, backend_components)
     backend.client = mock_client
 
-    backend._remove_auto_generated_keys("waldur_u")
+    backend._remove_auto_generated_keys("waldur-u")
 
     mock_client.delete_user_key.assert_not_called()
     assert "no access_key" in caplog.text

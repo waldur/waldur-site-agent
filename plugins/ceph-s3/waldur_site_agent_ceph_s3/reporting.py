@@ -328,8 +328,12 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
 
         storage_components = self._storage_components()
 
-        for username in resource_backend_ids:
+        for backend_id in resource_backend_ids:
+            # Keyed by backend id, which the core looks usage up by; croit is asked
+            # about the user that id names.
+            username = backend_id
             try:
+                username = self._rgw_uid(backend_id)
                 if self.rgw_accounts or split(username)[0]:
                     # Per bucket: an account's storage belongs to the account, not
                     # its users, and croit's per-user graph cannot name a tenanted
@@ -338,8 +342,8 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
                         username, period_start, period_end, storage_components
                     )
                     if usage:
-                        report[username] = {"TOTAL_ACCOUNT_USAGE": usage}
-                        self._reported_usernames.add(username)
+                        report[backend_id] = {"TOTAL_ACCOUNT_USAGE": usage}
+                        self._reported_usernames.add(backend_id)
                         logger.debug("Bucket-summed usage for %s: %s", username, usage)
                     continue
 
@@ -377,8 +381,8 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
                     # without it. There is exactly one S3 user per resource, so the
                     # total is that user's usage; per-user entries would key on
                     # Waldur offering users, which this backend does not manage.
-                    report[username] = {"TOTAL_ACCOUNT_USAGE": usage}
-                    self._reported_usernames.add(username)
+                    report[backend_id] = {"TOTAL_ACCOUNT_USAGE": usage}
+                    self._reported_usernames.add(backend_id)
                     logger.debug("Usage for user %s: %s", username, usage)
 
             except Exception as e:

@@ -150,6 +150,13 @@ class TestCurrentReport:
         backend._get_usage_report(["tenant1$alice"])
         assert backend.client.get_usage.call_args.args[0] == "tenant1$alice"
 
+    def test_a_tenant_backend_id_is_metered_as_its_root_and_reported_as_itself(self):
+        backend = make_backend()
+        report = backend._get_usage_report(["acme_12345678"])
+        backend.client.get_user_buckets.assert_called_once_with("acme_12345678$root")
+        assert backend.client.get_usage.call_args.args[0] == "acme_12345678$root"
+        assert list(report) == ["acme_12345678"]
+
     def test_a_failed_part_is_left_out_not_zeroed(self):
         backend = make_backend()
         backend.client.get_usage.side_effect = CephS3AuthenticationError("AccessDenied")
