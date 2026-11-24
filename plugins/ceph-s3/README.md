@@ -112,20 +112,71 @@ offerings:
         unit_factor: 1000000000  # decimal GB (1000 GB = 1 TB), not GiB
 ```
 
-The admin user is an ordinary RGW user with admin caps; it needs no `metadata`
-cap and must not be a `--system` user. `usage=read` is only needed for
-`rgw_usage`, `accounts=*` only for account mode:
-
-```bash
-radosgw-admin user create --uid=waldur-agent --display-name="Waldur site agent"
-radosgw-admin caps add --uid=waldur-agent --caps="users=*;buckets=*;usage=read;accounts=*"
-```
-
-Admin Ops is served by the gateway itself, under `/admin` by default, so the agent
-must reach `s3_endpoint` with that path open; some load balancers in front of
-public gateways block it.
-
 `flavour: radosgw` is still accepted, and may be left out.
+
+### Preparing the cluster
+
+Run these where `radosgw-admin` works, i.e. on a host with the cluster's admin
+keyring (on croit, a shell on any of its servers).
+
+1. **Create the agent's user.** An ordinary RGW user with admin caps: it needs no
+   `metadata` cap and must not be a `--system` user. `usage=read` is only needed
+   for `rgw_usage`, `accounts=*` only for account mode; granting both does no harm.
+
+   ```bash
+   radosgw-admin user create --uid=waldur-agent --display-name="Waldur site agent"
+   radosgw-admin caps add --uid=waldur-agent --caps="users=*;buckets=*;usage=read;accounts=*"
+   ```
+
+2. **Read its keys** into `admin_access_key` and `admin_secret_key`:
+
+   ```bash
+   radosgw-admin user info --uid=waldur-agent   # keys[0].access_key, keys[0].secret_key
+   ```
+
+3. **Open Admin Ops to the agent.** The gateway serves it itself, under `/admin`
+   (`rgw_admin_entry`), on the same address as S3; some load balancers in front of
+   public gateways block that path. From the agent's host, an unsigned request
+   must reach RGW, which refuses it in its own words:
+
+   ```bash
+   curl -sk https://s3.example.com/admin/user
+   # {"Code":"AccessDenied", ...} from RGW -- reachable.
+   # An HTML page, a 404 or a timeout comes from something in between.
+   ```
+
+4. **For `rgw_usage` traffic and request billing**, turn the usage log on and
+   restart the gateways (Ceph ships with it off; storage billing does not need it):
+
+   ```bash
+   ceph config set client.rgw rgw_enable_usage_log true
+   ```
+
+5. **For account mode**, see the checks under
+   [Account mode](#account-mode-an-rgw-account-per-resource) (Ceph 20.2.2 or later).
+
+6. **Only for `default_storage_class`**: the class must exist in the placement
+   named by `default_placement`. To add one, for example `COLD` on the default
+   placement (single-zone cluster; with a realm, commit with
+   `radosgw-admin period update --commit`):
+
+   ```bash
+   radosgw-admin zonegroup placement add --rgw-zonegroup=default \
+     --placement-id=default-placement --storage-class=COLD
+   radosgw-admin zone placement add --rgw-zone=default \
+     --placement-id=default-placement --storage-class=COLD \
+     --data-pool=default.rgw.cold.data
+   ```
+
+   Then restart the gateways. RGW refuses a class the placement does not have
+   (`InvalidArgument`, which fails the order), and stores `STANDARD` as no class
+   at all, i.e. the placement's default.
+
+**Without a shell on the cluster**, an existing RGW admin with the `users=*` cap
+can create the same user through Admin Ops:
+`PUT /admin/user?uid=waldur-agent&display-name=Waldur+site+agent&user-caps=users=*;buckets=*;usage=read;accounts=*`
+signed with that admin's keys (SigV4, service `s3`); the response carries the new
+keys.
 
 ### Migrating from the croit flavour
 
@@ -134,8 +185,9 @@ That is gone: an offering still configured for it -- `flavour: croit`, or croit'
 `api_url`, `token`, `username` or `password` at the top of `backend_settings` --
 fails at agent start with these steps:
 
-1. **Create an RGW admin user** with the caps above, and make Admin Ops reachable
-   from the agent.
+1. **Create an RGW admin user** and make Admin Ops reachable from the agent, as in
+   [Preparing the cluster](#preparing-the-cluster) (steps 1-3; step 4 too if the
+   offering moves to `rgw_usage`).
 2. **Set `admin_access_key` and `admin_secret_key`** (and `admin_path` if
    `rgw_admin_entry` was renamed). Remove `flavour: croit`.
 3. **If the offering reports with `croit_usage`**, move `api_url` and `token` (or
@@ -236,9 +288,8 @@ What changes compared with user mode:
   removing their IAM user, or terminating the resource.
 - **Pause suspends every user of the account.** Pausing a resource in Waldur
   suspends the root user and every IAM user (RGW suspends per user, so the root
-  alone would not stop the others); restoring reinstates them all. A plain user,
-  is suspended the same way. Downscaling has no S3 meaning and
-  changes nothing.
+  alone would not stop the others); restoring reinstates them all. A plain user
+  is suspended the same way. Downscaling has no S3 meaning and changes nothing.
 - **Existing offerings.** Resources provisioned before the switch stay plain
   users. Account membership cannot be added without moving a user's buckets.
 
@@ -247,14 +298,8 @@ Cluster preparation (from a shell with `radosgw-admin`):
 1. Check `ceph versions` shows 20.2.2 or later on every RGW.
 2. Check the IAM API is enabled: `ceph config get client.rgw rgw_enable_apis`
    must list `iam`, which is the default.
-3. Create the agent's user. It needs no `metadata` cap and must not be a
-   `--system` user:
-
-   ```bash
-   radosgw-admin user create --uid=waldur-agent --display-name="Waldur site agent"
-   radosgw-admin caps add --uid=waldur-agent --caps="users=*;buckets=*;accounts=*"
-   ```
-
+3. Create the agent's user as in [Preparing the cluster](#preparing-the-cluster);
+   it must hold `accounts=*`.
 4. In a multisite setup, point `s3_endpoint` at the metadata master zone.
 5. Optional: to let consumers use IAM roles with `AssumeRole`, enable STS with
    `rgw_s3_auth_use_sts = true` and an `rgw_sts_key` (16 hex characters, the same
@@ -407,13 +452,13 @@ That is also the default when the setting is absent.
 - **Consumers see the tenant.** It is published as the `s3_tenant` metadata key,
   next to `s3_user`, and clients reaching a bucket in another tenant address it as
   `tenant:bucket`; their own buckets need no prefix.
-- **Reporting meters a tenanted user through its buckets.** croit's per-user
+- **`croit_usage` meters a tenanted user through its buckets.** croit's per-user
   statistics cannot name a tenanted user (`tenant$uid` is refused with 400, and
   no other spelling returns a series), but its per-bucket statistics name a
   tenanted bucket as `tenant_bucket`. A tenanted resource is therefore metered as
   the sum of its buckets, the same way as an account (see
   [Reporting with croit's statistics](#reporting-with-croits-statistics)).
-- **Account mode** (radosgw, `rgw_accounts: true`) creates the account in the
+- **Account mode** (`rgw_accounts: true`) creates the account in the
   resource's tenant, so the consumer's IAM users and every bucket they create stay
   in that namespace (verified on Ceph 20.2.5: two tenants each own a bucket called
   `data`, and neither sees the other's).
@@ -623,9 +668,12 @@ in `croit_reporting`, kept apart from the RGW admin credentials:
         bucket_state_file: "/var/lib/waldur-site-agent/ceph-s3-buckets.json"
 ```
 
-**Accounts and tenanted users are metered per bucket, as an interim.**
-- croit's per-user graph has nothing for an RGW account: the account owns the
-  buckets, and its users hold no storage of their own.
+**Every tenanted resource is metered per bucket** -- every resource created with
+a tenant of its own, and every account. Only older untenanted users still read
+croit's per-user graph.
+- croit's per-user graph has nothing for an RGW account (the account owns the
+  buckets, and its users hold no storage of their own), and refuses a tenanted
+  user's name.
 - croit does keep a per-bucket graph (`s3-bucket-data`), which covers account
   buckets. So each pass lists the account's buckets through its root user, which
   includes buckets the consumer's IAM users created, then integrates each
@@ -646,7 +694,8 @@ in `croit_reporting`, kept apart from the RGW admin credentials:
 - Historical loads (`waldur_site_load_historical_usage`) fail, naming the
   resource, when a month cannot be measured, instead of letting it read as zero.
 - Without the file, a restart forgets buckets deleted before it, and their days up
-  to the deletion go unbilled.
+  to the deletion go unbilled. Since every new resource is metered per bucket,
+  set it.
 - An account with no bucket known this period is not reported at all, rather than
   reported as zero, because a zero would overwrite the period's accrued total.
 
@@ -657,7 +706,8 @@ which takes a few minutes after its first write.
 
 `GET /api/stats?graph=s3-user-data&template-s3-user-name=<uid>` returns croit's
 per-user storage series as `{"t": unix seconds, "v": bytes}` datapoints at 180 s
-native resolution.
+native resolution; `graph=s3-bucket-data&template-s3-bucket-name=<tenant>_<bucket>`
+the same per bucket, summed over a resource's buckets.
 
 croit answers at most 10,000 points per request and averages the series beyond
 that, on steps placed relative to the requested window. Read whole, a month would
@@ -710,7 +760,7 @@ period's accrued total.
 
 ```json
 {
-  "cust-0-pro": {
+  "acme_research_backups_1a2b3c4d": {
     "TOTAL_ACCOUNT_USAGE": {
       "s3_storage": 3100.0
     }
@@ -723,7 +773,10 @@ not `{"usage": n}` wrappers.
 
 ## Resource Metadata
 
-Each S3 user resource exposes comprehensive metadata:
+Each resource publishes the connection keys below, plus `user_info` (`uid`,
+display `name`, `suspended`), a storage summary and its quotas. The ownership
+stamp, placement and storage class are left out: they describe the provider, not
+the resource.
 
 ### S3 Connection
 
@@ -736,9 +789,15 @@ connection info, and the S3 endpoint is also published as a resource access endp
 {
   "s3_endpoint": "https://s3.example.com",
   "s3_region": "default",
-  "s3_user": "cust-0-pro"
+  "s3_user": "acme_research_backups_1a2b3c4d$root",
+  "s3_tenant": "acme_research_backups_1a2b3c4d",
+  "s3_account_id": "RGW23034912253664941"
 }
 ```
+
+`s3_account_id` is present in account mode only. A resource from before one tenant
+per resource has its stored uid as `s3_user`, and an empty `s3_tenant` when it was
+untenanted.
 
 These are deliberately **flat** keys. An offering's *Getting started* text is a template
 interpolating `{backend_metadata_<key>}` one level deep, so a nested block would render as
@@ -802,17 +861,19 @@ error messages.
   "quotas": {
     "bucket_quota": {
       "enabled": true,
-      "maxSize": 107374182400,
-      "maxObjects": 10000
+      "max_size_bytes": 100000000000,
+      "max_objects": 10000
     },
     "user_quota": {
       "enabled": true,
-      "maxSize": 107374182400,
-      "maxObjects": 10000
+      "max_size_bytes": 100000000000,
+      "max_objects": 10000
     }
   }
 }
 ```
+
+In account mode `user_quota` is replaced by `account_quota`, the account's.
 
 ## Safety Quota Enforcement
 
@@ -884,8 +945,8 @@ def create_ceph_s3_offering():
 
         # Create service provider
         customer, _ = CustomerFactory._meta.model.objects.get_or_create(
-            name='Croit Storage Provider',
-            defaults={'abbreviation': 'CROIT', 'native_name': 'Croit Storage Provider'}
+            name='Example Storage Provider',
+            defaults={'abbreviation': 'EXAMPLE', 'native_name': 'Example Storage Provider'}
         )
         service_provider, _ = ServiceProvider.objects.get_or_create(
             customer=customer,
@@ -900,7 +961,7 @@ def create_ceph_s3_offering():
                 'category': category,
                 'customer': service_provider.customer,
                 'description': 'S3-compatible object storage with usage-based billing. '
-                               'Each resource provides one S3 user account with configurable safety limits.',
+                               'Each resource is an S3 tenant of its own with configurable safety limits.',
                 'state': OfferingStates.ACTIVE,
                 'billable': True,
                 'plugin_options': {
@@ -961,7 +1022,7 @@ def create_ceph_s3_offering():
                 'description': 'Object storage, billed per GB per day',
                 'billing_type': BillingTypes.USAGE,
                 'measured_unit': 'GB-day',
-                'article_code': 'CROIT_S3_STORAGE',
+                'article_code': 'S3_STORAGE',
             }
         )
 
@@ -1067,6 +1128,8 @@ The plugin includes comprehensive error handling:
 - **`CephS3AuthenticationError`**: API authentication failures
 - **`CephS3UserNotFoundError`**: User doesn't exist
 - **`CephS3UserExistsError`**: User already exists
+- **`CephS3AccountNotFoundError`**, **`CephS3AccountExistsError`**: the same for
+  RGW accounts
 - **`CroitS3GraphNotFoundError`**: the croit statistics graph behind usage reporting is missing
 - **`CephS3APIError`**: General API errors
 - **`CephS3Error`**: Base exception class
@@ -1099,7 +1162,10 @@ Use standard Python logging configuration or waldur-site-agent logging settings 
 
 - `waldur_site_agent_ceph_s3.clients.radosgw` - RadosGW admin API interactions
 - `waldur_site_agent_ceph_s3.clients.croit` - croit statistics, for `croit_usage`
+- `waldur_site_agent_ceph_s3.clients.iam` - account-mode IAM clean-up at termination
 - `waldur_site_agent_ceph_s3.backend` - Backend operations
+- `waldur_site_agent_ceph_s3.reporting` - `croit_usage`
+- `waldur_site_agent_ceph_s3.rgw_reporting` - `rgw_usage`
 
 Set the top-level `log_level: DEBUG` in the agent configuration.
 
@@ -1111,7 +1177,8 @@ Set the top-level `log_level: DEBUG` in the agent configuration.
 3. **Quota Application**: ceilings applied as user and bucket quotas
 4. **Key Provisioning**: Two access keys minted, applied, and reported to Waldur encrypted;
    RGW mints none of its own
-5. **Usage Tracking**: storage integrated into GB-days per billing period
+5. **Usage Tracking**: storage billed in GB-days per billing period, integrated from
+   croit's statistics (`croit_usage`) or accrued from bucket sizes (`rgw_usage`)
 6. **Ceiling Updates**: editing `max_storage_limit` or `max_object_limit` on the
    resource creates an UPDATE order carrying `new_options`, when the offering has both
    `resource_options` and `plugin_options.create_orders_on_resource_option_change`.
@@ -1122,7 +1189,8 @@ Set the top-level `log_level: DEBUG` in the agent configuration.
    Waldur refuses `null` for an integer option, so `0` is how a consumer clears one.
    Without `create_orders_on_resource_option_change`, Waldur stores an edit directly
    and the quota is not touched
-7. **Resource Deletion**: the S3 user is removed — but only once it owns no
+7. **Resource Deletion**: the `root` user (in account mode, the account and all its
+   users) is removed — but only once it owns no
    buckets. RGW refuses to delete a user that still holds data (the agent never
    purges), and in account mode the agent checks before deleting anyone, so
    termination of a tenant with data fails until the buckets are emptied and removed. The failure reason
