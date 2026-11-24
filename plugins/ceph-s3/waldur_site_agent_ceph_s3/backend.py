@@ -19,6 +19,7 @@ import string
 from collections.abc import Iterator
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
+from uuid import UUID
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.types import Unset
@@ -51,10 +52,12 @@ from .settings import (
     validate_settings,
 )
 from .tenant import (
+    DEFAULT_TENANT_TEMPLATE,
+    ROOT_UID,
+    is_tenant_name,
     qualify,
     render_tenant,
     split,
-    validate_fixed_tenant,
     validate_tenant_template,
 )
 
@@ -88,19 +91,29 @@ _STAMP_PREFIX = "waldur-"
 _STAMP_SUFFIX = "@invalid"
 
 
-def _ownership_stamp(resource_uuid: object, uid: str) -> str:
-    """The stamp a user provisioned for this resource, at this uid, must carry.
+def _ownership_stamp(resource_uuid: object) -> str:
+    """The stamp a user (and, in account mode, an account) provisioned for this
+    resource carries: ``waldur-<resource uuid hex>@invalid``.
 
-    The uid is in it for uniqueness, not for the ownership decision — the check
-    reads the user *at* that uid, so it is already known to match. Both backends
-    reject a create whose email another user holds, and without the uid two users
-    of one resource would collide on it: a re-provision under a new id, while the
-    old user lingers, would fail on the address rather than provision. No two users
-    can share a uid, so no two can share a stamp.
+    Short enough for an email local part (39 of 64 characters). One resource has
+    one user, so no uid is needed to keep stamps apart -- and since both backends
+    refuse an email another user holds, a second user for the same resource (a
+    retry rendering a different tenant after a rename) fails loudly instead of
+    leaving the first one orphaned.
     """
+    return f"{_STAMP_PREFIX}{UUID(str(resource_uuid)).hex}{_STAMP_SUFFIX}"
+
+
+def _legacy_stamp(resource_uuid: object, uid: str) -> str:
+    """The stamp users created before the short form carry, uid included."""
     # A tenanted uid carries "$", which has no business in an email address.
     local_uid = uid.replace("$", ".")
     return f"{_STAMP_PREFIX}{resource_uuid}-{local_uid}{_STAMP_SUFFIX}"
+
+
+def _is_stamped_for(email: object, resource_uuid: object, uid: str) -> bool:
+    """Whether a user or account carries this resource's stamp, in either form."""
+    return email in (_ownership_stamp(resource_uuid), _legacy_stamp(resource_uuid, uid))
 
 
 def _is_waldur_stamp(email: object) -> bool:
@@ -296,20 +309,26 @@ class CephS3Backend(backends.BaseBackend):
             )
 
         # Backend-specific settings
-        # tenant_template renders a tenant per resource. default_tenant is the
-        # older, literal form: one fixed tenant, passed through as written, so it
-        # keeps croit's character rule rather than the template's lower-case one.
-        self.tenant_template = backend_settings.get("tenant_template") or ""
-        self.fixed_tenant = (
-            "" if self.tenant_template else backend_settings.get("default_tenant") or ""
-        )
-        if self.tenant_template:
-            validate_tenant_template(self.tenant_template)
-        elif self.fixed_tenant:
-            validate_fixed_tenant(self.fixed_tenant)
+        # Every resource gets a tenant of its own, rendered from tenant_template
+        # (or the default). default_tenant put every resource of an offering into
+        # one shared tenant, so it is refused rather than honoured.
+        if backend_settings.get("default_tenant"):
+            raise ValueError(
+                "'default_tenant' is no longer supported: it puts every resource "
+                "into one shared tenant. Remove it; each resource now gets its own "
+                f"tenant from 'tenant_template' (default {DEFAULT_TENANT_TEMPLATE!r}). "
+                "Existing resources keep theirs"
+            )
+        self.tenant_template = backend_settings.get("tenant_template") or DEFAULT_TENANT_TEMPLATE
+        validate_tenant_template(self.tenant_template)
         # One RGW account per resource, with the resource's user as its root.
         # radosgw-only; settings.validate_settings rejects it for croit.
         self.rgw_accounts = bool(backend_settings.get("rgw_accounts"))
+        # Backend id -> RGW uid, for ids whose uid had to be looked up.
+        self._uid_cache: dict[str, str] = {}
+        # The core addresses the client by resource id (get_resource and friends);
+        # the client asks this backend which user that id names.
+        self.client.resolve_resource_id = self._rgw_uid
         self.default_placement = backend_settings.get("default_placement", "")
         self.default_storage_class = backend_settings.get("default_storage_class", "")
 
@@ -407,7 +426,7 @@ class CephS3Backend(backends.BaseBackend):
         }
 
     def _backend_resource_info(
-        self, username: str, account_id: str = ""
+        self, username: str, account_id: str = "", backend_id: str = ""
     ) -> structures.BackendResourceInfo:
         """Describe a provisioned S3 user for Waldur.
 
@@ -419,7 +438,7 @@ class CephS3Backend(backends.BaseBackend):
         for exactly as long as anyone was likely to read it.
         """
         return structures.BackendResourceInfo(
-            backend_id=username,
+            backend_id=backend_id or username,
             backend_metadata=self._connection_info(username, account_id),
             endpoints=[{"name": "S3 endpoint", "url": self.s3_endpoint}],
         )
@@ -430,51 +449,118 @@ class CephS3Backend(backends.BaseBackend):
         resource_backend_id: str,
         user_context: dict[Any, Any] | None = None,
     ) -> structures.BackendResourceInfo:
-        """Create the S3 user under the backend id the order processor generated.
+        """Create the resource's tenant and its root user.
 
-        This is the method the processor actually calls. Without the override the base
-        implementation would run instead, skipping bucket quotas and the S3 endpoint.
+        This is the method the processor actually calls. Without the override the
+        base implementation would run instead, skipping bucket quotas and the S3
+        endpoint.
+
+        The id the processor generates is not used: the resource is its tenant,
+        rendered from tenant_template, and that is what the backend id becomes.
+        The exception is a re-create of a terminated resource, which passes the
+        resource's stored backend id -- that id is authoritative, and rendering
+        again would move the resource if a name or the template changed since.
 
         Args:
             waldur_resource: Waldur resource object containing limits and metadata
-            resource_backend_id: The backend id the processor generated
+            resource_backend_id: The backend id the processor generated, or the
+                stored one on a re-create
             user_context: Optional user context (not used for S3)
 
         Returns:
-            Backend resource info with created S3 username
+            Backend resource info whose backend id is the tenant
         """
         del user_context
-        return self._create_s3_user(
-            waldur_resource, self._qualified_uid(waldur_resource, resource_backend_id)
-        )
+        stored = waldur_resource.backend_id
+        if isinstance(stored, str) and stored and resource_backend_id == stored:
+            backend_id = stored
+            uid = self._recreated_uid(stored)
+        else:
+            backend_id = self._render_tenant(waldur_resource)
+            uid = self._root_uid(backend_id)
+        self._uid_cache.pop(backend_id, None)
+        try:
+            return self._create_s3_user(waldur_resource, uid, backend_id)
+        except DuplicateResourceError as e:
+            # The processor answers DuplicateResourceError by retrying under a new
+            # generated id -- up to backend_id_max_retries times -- but the tenant
+            # does not come from that id, so every retry would meet the same user.
+            raise CephS3Error(
+                f"Cannot create resource {waldur_resource.uuid} as {uid}: {e}. If "
+                "another resource holds that tenant, change the resource's name or "
+                "the offering's tenant_template"
+            ) from e
 
-    def _qualified_uid(self, waldur_resource: WaldurResource, uid: str) -> str:
-        """The id the user is created and from then on addressed by.
+    def _render_tenant(self, waldur_resource: WaldurResource) -> str:
+        """The new resource's tenant."""
+        return render_tenant(self.tenant_template, waldur_resource)
 
-        RGW knows a tenanted user only as ``tenant$uid``; addressing the bare uid
-        reaches the global tenant's user of that name instead — someone else's, or
-        nobody. The qualified form is what ends up as the backend id, so the
-        tenant is rendered here, once, and never recomputed.
+    @staticmethod
+    def _root_uid(tenant: str) -> str:
+        """The uid of the one user a resource's tenant is created with.
+
+        The same name in every tenant: the tenant already says which resource it
+        is, and a name derived from a setting would move if the setting changed.
         """
-        if split(uid)[0]:
-            # Already qualified: a re-create of a terminated resource passes its
-            # stored backend id. That id is authoritative -- rendering again would
-            # prefix the tenant twice, or move the user if a slug changed since.
-            return uid
-        if self.fixed_tenant:
-            return qualify(self.fixed_tenant, uid)
-        if not self.tenant_template:
-            return uid
-        return qualify(render_tenant(self.tenant_template, waldur_resource), uid)
+        return qualify(tenant, ROOT_UID)
+
+    def _recreated_uid(self, backend_id: str) -> str:
+        """The uid a terminated resource is re-created under, from its stored id.
+
+        Ids from before one tenant per resource name the user itself: ``tenant$uid``
+        or a bare uid with a character no tenant may hold. A stored id shaped like a
+        tenant is re-created as that tenant's root user -- including an old bare uid
+        that happens to look like one, since its user is gone and nothing tells the
+        two apart. The backend id stays as stored either way, and _rgw_uid finds
+        the root user it now names.
+        """
+        if split(backend_id)[0] or not is_tenant_name(backend_id):
+            return backend_id
+        return self._root_uid(backend_id)
+
+    def _rgw_uid(self, backend_id: str) -> str:
+        """The RGW uid a backend id names.
+
+        - ``tenant$uid``, and ids no tenant could be called (``waldur-<slug>`` has a
+          hyphen): a user id from before one tenant per resource, addressed as stored.
+        - an id shaped like a tenant: usually the resource's tenant, whose user is
+          ``tenant$root``. But bare uids from before the ``waldur-`` prefix --
+          ``backup``, or croit-s3's ``waldur_<org>_<project>_<uuid>`` -- look the
+          same. So RGW is asked: the root user if it exists, else the bare uid if
+          that does. A found answer is remembered until the resource is created or
+          deleted; a miss is asked again next time and answers the root user.
+        """
+        if split(backend_id)[0] or not is_tenant_name(backend_id):
+            return backend_id
+        root = self._root_uid(backend_id)
+        cached = self._uid_cache.get(backend_id)
+        if cached is not None:
+            return cached
+        if self._user_exists(root):
+            uid = root
+        elif self._user_exists(backend_id):
+            uid = backend_id
+        else:
+            return root
+        self._uid_cache[backend_id] = uid
+        return uid
+
+    def _user_exists(self, uid: str) -> bool:
+        try:
+            self.client.get_user_info(uid)
+        except CephS3UserNotFoundError:
+            return False
+        return True
 
     def _create_s3_user(
-        self, waldur_resource: WaldurResource, username: str
+        self, waldur_resource: WaldurResource, username: str, backend_id: str
     ) -> structures.BackendResourceInfo:
         """Create one S3 user and apply its safety quotas.
 
         Args:
             waldur_resource: Waldur resource object containing limits and metadata
             username: The S3 uid to create
+            backend_id: The id Waldur will know the resource by
 
         Returns:
             Backend resource info carrying the S3 access endpoint
@@ -502,7 +588,7 @@ class CephS3Backend(backends.BaseBackend):
         self._apply_bucket_quotas(username, _as_attribute_dict(waldur_resource))
 
         logger.info("S3 user %s is provisioned", username)
-        return self._backend_resource_info(username, account_id)
+        return self._backend_resource_info(username, account_id, backend_id)
 
     def _create_or_adopt_account(
         self, waldur_resource: WaldurResource, username: str
@@ -528,7 +614,7 @@ class CephS3Backend(backends.BaseBackend):
                 f"S3 user id {bare!r} cannot name an RGW account user: it must "
                 "be 1-64 characters of letters, digits and _+=,.@-"
             )
-        stamp = _ownership_stamp(waldur_resource.uuid, username)
+        stamp = _ownership_stamp(waldur_resource.uuid)
         try:
             # A tenanted resource gets a tenanted account: its users and buckets
             # then live in the tenant's namespace, apart from every other
@@ -549,7 +635,7 @@ class CephS3Backend(backends.BaseBackend):
                 f"RGW account {username} could not be created or read back, so it "
                 "cannot be confirmed as this resource's"
             ) from e
-        if account.get("email") != stamp:
+        if not _is_stamped_for(account.get("email"), waldur_resource.uuid, username):
             raise DuplicateResourceError(
                 f"RGW account {username} already exists and was not provisioned for "
                 f"resource {waldur_resource.uuid}; refusing to take it over"
@@ -575,7 +661,7 @@ class CephS3Backend(backends.BaseBackend):
         user_data = {
             "uid": username,
             "name": waldur_resource.name or f"User for {waldur_resource.uuid}",
-            "email": _ownership_stamp(waldur_resource.uuid, username),
+            "email": _ownership_stamp(waldur_resource.uuid),
         }
         if self.default_placement:
             user_data["default_placement"] = self.default_placement
@@ -596,6 +682,17 @@ class CephS3Backend(backends.BaseBackend):
         except CephS3UserExistsError:
             return self._adopt_if_ours(waldur_resource, username, account_id)
         except CephS3Error as e:
+            if "email" in str(e).lower():
+                # RGW answers EmailExists: another user already carries this
+                # resource's stamp, so the resource has a user elsewhere -- most
+                # likely an earlier attempt that rendered its tenant from names
+                # changed since.
+                raise CephS3Error(
+                    f"Resource {waldur_resource.uuid} already has an S3 user on this "
+                    f"cluster under another id (one carries its stamp "
+                    f"{user_data['email']}), so {username} was not created. Remove "
+                    "that user, or set its tenant as the resource's backend id"
+                ) from e
             # croit sometimes reports a duplicate uid as a 500 rather than a 409.
             if "exists" in str(e):
                 return self._adopt_if_ours(waldur_resource, username, account_id)
@@ -631,7 +728,6 @@ class CephS3Backend(backends.BaseBackend):
         Raises:
             DuplicateResourceError: when the uid is not this resource's to use.
         """
-        expected = _ownership_stamp(waldur_resource.uuid, username)
         try:
             existing = self.client.get_user_info(username)
         except CephS3Error as e:
@@ -642,7 +738,8 @@ class CephS3Backend(backends.BaseBackend):
                 "it cannot be confirmed as this resource's"
             ) from e
 
-        if existing.get("email") == expected and account_id and (
+        ours = _is_stamped_for(existing.get("email"), waldur_resource.uuid, username)
+        if ours and account_id and (
             existing.get("account_id") != account_id
         ):
             # Ours, but outside the account it should be root of -- provisioned
@@ -652,7 +749,7 @@ class CephS3Backend(backends.BaseBackend):
                 f"S3 user {username} belongs to this resource but not to RGW account "
                 f"{account_id}; it was provisioned before account mode was enabled"
             )
-        if existing.get("email") == expected:
+        if ours:
             logger.info(
                 "Adopting S3 user %s: it carries this resource's stamp, so an "
                 "earlier create was interrupted",
@@ -681,6 +778,8 @@ class CephS3Backend(backends.BaseBackend):
         if not resource_backend_id:
             logger.warning("No backend ID found for resource %s", waldur_resource.uuid)
             return
+        self._uid_cache.pop(resource_backend_id, None)
+        resource_backend_id = self._rgw_uid(resource_backend_id)
 
         if self.rgw_accounts:
             self._delete_account_resource(resource_backend_id)
@@ -896,6 +995,7 @@ class CephS3Backend(backends.BaseBackend):
             )
             count = _MAX_KEY_COUNT
 
+        resource_backend_id = self._rgw_uid(resource_backend_id)
         self._refuse_foreign_user(resource_backend_id)
 
         for index in range(count):
@@ -929,6 +1029,7 @@ class CephS3Backend(backends.BaseBackend):
         # credential; pruning can take away one a consumer is already using, and it
         # runs before minting -- so leaving it unguarded put the destructive step
         # outside the check and the additive step inside it.
+        resource_backend_id = self._rgw_uid(resource_backend_id)
         self._refuse_foreign_user(resource_backend_id)
 
         candidates = {
@@ -999,6 +1100,7 @@ class CephS3Backend(backends.BaseBackend):
         # that already existed, so a key a concurrent rotation creates during this
         # one is structurally unprunable rather than merely unlikely to be caught —
         # deleting it would leave Waldur publishing a credential croit does not have.
+        resource_backend_id = self._rgw_uid(resource_backend_id)
         prunable = {
             str(key["access_key"])
             for key in self.client.list_user_keys(resource_backend_id)
@@ -1081,6 +1183,7 @@ class CephS3Backend(backends.BaseBackend):
                 f"Resource {waldur_resource.uuid} has no backend id, so there is no "
                 "S3 user to apply its options to"
             )
+        username = self._rgw_uid(username)
         self._refuse_foreign_user(username)
         effective = {
             **_as_attribute_dict(waldur_resource),
@@ -1308,6 +1411,7 @@ class CephS3Backend(backends.BaseBackend):
         Returns:
             Metadata dictionary with connection and usage info
         """
+        resource_backend_id = self._rgw_uid(resource_backend_id)
         try:
             # Get user information
             user_info = self.client.get_user_info(resource_backend_id)
@@ -1404,7 +1508,7 @@ class CephS3Backend(backends.BaseBackend):
         Waldur's pause is the source of truth: a user an operator suspended by
         hand on the cluster is reinstated by the next restore.
         """
-        username = resource_backend_id  # each client call validates it
+        username = self._rgw_uid(resource_backend_id)  # each client call validates it
         try:
             info = self.client.get_user_info(username)
         except CephS3UserNotFoundError:

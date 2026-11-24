@@ -13,7 +13,6 @@ import pytest
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_api_client.models.resource_attributes import ResourceAttributes
 
-from waldur_site_agent.backend.exceptions import DuplicateResourceError
 from waldur_site_agent_ceph_s3.backend import CephS3Backend, _ownership_stamp
 from waldur_site_agent_ceph_s3.clients.radosgw import RadosGWClient
 from waldur_site_agent_ceph_s3.exceptions import (
@@ -32,7 +31,7 @@ GB = 1000000000
 ACCOUNT = "RGW12345678901234567"
 UID = "waldur-res"
 RESOURCE_UUID = UUID("12345678-1234-5678-9abc-123456789abc")
-STAMP = _ownership_stamp(RESOURCE_UUID, UID)
+STAMP = _ownership_stamp(RESOURCE_UUID)
 COMPONENTS = {
     "s3_storage": {"accounting_type": "limit", "backend_name": "storage", "unit_factor": GB}
 }
@@ -130,7 +129,7 @@ class TestCreate:
         backend.client.create_account.side_effect = CephS3AccountExistsError("exists")
         other = make_resource(uuid=UUID("00000000-0000-0000-0000-000000000001"))
 
-        with pytest.raises(DuplicateResourceError, match="refusing to take it over"):
+        with pytest.raises(CephS3Error, match="refusing to take it over"):
             backend.create_resource_with_id(other, UID)
         backend.client.create_user.assert_not_called()
 
@@ -139,15 +138,19 @@ class TestCreate:
         backend.client.create_account.side_effect = CephS3AccountExistsError("exists")
         backend.client.get_account.side_effect = CephS3AccountNotFoundError("gone")
 
-        with pytest.raises(DuplicateResourceError, match="cannot be confirmed"):
+        with pytest.raises(CephS3Error, match="cannot be confirmed"):
             backend.create_resource_with_id(make_resource(), UID)
 
     @pytest.mark.parametrize("uid", ["acme$" + "w" * 65, "w" * 65])
     def test_a_uid_iam_cannot_hold_is_refused_before_any_request(self, uid):
+        """Only an id from before one tenant per resource can be this long: a
+        restored resource is re-created under its stored id."""
         backend = make_backend()
+        resource = make_resource()
+        resource.backend_id = uid
 
         with pytest.raises(CephS3Error, match="cannot name an RGW account user"):
-            backend.create_resource_with_id(make_resource(), uid)
+            backend.create_resource_with_id(resource, uid)
         backend.client.create_account.assert_not_called()
 
     def test_an_unapplied_quota_fails_the_order(self):
@@ -370,23 +373,43 @@ class TestTenantedAccounts:
         backend = make_backend({**SETTINGS, "tenant_template": "{resource_slug}"})
         resource = make_resource()
         resource.slug = "res1"
+        resource.backend_id = ""
 
         info = backend.create_resource_with_id(resource, UID)
 
-        assert info.backend_id == self.TENANTED
+        # The resource is its tenant; the account and its root user are "root".
+        assert info.backend_id == "res1"
         backend.client.create_account.assert_called_once_with(
-            name=UID, email=_ownership_stamp(RESOURCE_UUID, self.TENANTED), tenant="res1"
+            name="root", email=_ownership_stamp(RESOURCE_UUID), tenant="res1"
         )
         user = backend.client.create_user.call_args.kwargs
-        assert user["uid"] == self.TENANTED
+        assert user["uid"] == "res1$root"
         # The IAM UserName is the bare uid; "$" is not an IAM character.
-        assert user["name"] == UID
+        assert user["name"] == "root"
+        assert info.backend_metadata["s3_user"] == "res1$root"
         assert info.backend_metadata["s3_tenant"] == "res1"
+
+    def test_a_tenant_backend_id_addresses_its_root_user(self):
+        backend = make_backend()
+        backend.client.get_user_info.return_value = {
+            "uid": "res1$root",
+            "email": _ownership_stamp(RESOURCE_UUID),
+            "account_id": ACCOUNT,
+        }
+        backend.client.list_account_users.return_value = ["res1$root"]
+        resource = make_resource()
+        resource.backend_id = "res1"
+
+        backend.delete_resource(resource)
+
+        backend.client.list_account_users.assert_called_once_with(ACCOUNT, tenant="res1")
+        backend.client.delete_user.assert_called_once_with("res1$root")
+        backend.client.delete_account.assert_called_once_with(ACCOUNT)
 
     def test_teardown_looks_for_members_in_the_tenant(self):
         backend = make_backend({**SETTINGS, "tenant_template": "{resource_slug}"})
         backend.client.get_user_info.return_value = {
-            "uid": self.TENANTED, "email": _ownership_stamp(RESOURCE_UUID, self.TENANTED),
+            "uid": self.TENANTED, "email": _ownership_stamp(RESOURCE_UUID),
             "account_id": ACCOUNT,
         }
         backend.client.list_account_users.return_value = [self.TENANTED]

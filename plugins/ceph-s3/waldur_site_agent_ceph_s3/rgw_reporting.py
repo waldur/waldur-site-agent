@@ -337,19 +337,26 @@ class RgwUsageBackend(BillingPeriodMixin, CephS3Backend):
         storage: dict[str, dict] = {}
         traffic: dict[str, dict] = {}
         grew = False
-        for username in resource_backend_ids:
+        for backend_id in resource_backend_ids:
+            # Keyed by backend id, which the core looks usage up by; RGW is asked
+            # about the user that id names.
+            try:
+                username = self._rgw_uid(backend_id)
+            except Exception as e:
+                logger.error("Failed to find the RGW user of %s: %s", backend_id, e)
+                continue
             if self._accrued:
                 try:
-                    storage[username] = self._storage_level(username)
+                    storage[backend_id] = self._storage_level(username)
                 except Exception as e:
                     logger.error("Failed to read the buckets of %s: %s", username, e)
             if self._traffic:
-                created = self._created.get(username)
+                created = self._created.get(backend_id)
                 try:
                     owner = self._usage_owner(username, created)
                     window = self._window_start(start, created)
                     totals = self._period_to_date(owner, window, now)
-                    traffic[username] = self._in_units(totals)
+                    traffic[backend_id] = self._in_units(totals)
                     previous = self._cluster.last_totals.get(owner)
                     if previous is not None and previous[0] == window:
                         grew = grew or totals.get("ops", 0) > previous[1].get("ops", 0)
@@ -461,7 +468,7 @@ class RgwUsageBackend(BillingPeriodMixin, CephS3Backend):
         unread = []
         for username in resource_backend_ids:
             try:
-                owner = self._usage_owner(username, created)
+                owner = self._usage_owner(self._rgw_uid(username), created)
                 totals = self._finished_month(owner, self._window_start(start, created), end)
                 report[username] = {"TOTAL_ACCOUNT_USAGE": self._in_units(totals)}
             except Exception as e:

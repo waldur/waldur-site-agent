@@ -66,19 +66,24 @@ def croit():
     # Stamped, because these tests are about a user this agent provisioned. The
     # ones about adopting override it with the resource whose retry they describe.
     client.get_user_info.return_value = {
-        "uid": "waldur_u",
-        "email": "waldur-12345678-1234-5678-9abc-123456789abc-waldur_u@invalid",
+        "uid": "waldur-u",
+        "email": "waldur-12345678-1234-5678-9abc-123456789abc-waldur-u@invalid",
     }
     return client
 
 
-def stamped_for(resource, uid="waldur_u"):
+# The tenant the default template renders for the resource below, and its user.
+ROOT = "test_org_test_project_test_s3_storage_12345678$root"
+
+
+def stamped_for(resource, uid=ROOT):
     """The user an interrupted create for this resource left behind.
 
     Adoption is refused unless the uid carries this resource's stamp, so a test
     about a retry has to say which resource the leftover user belongs to.
     """
-    return {"uid": uid, "email": f"waldur-{resource.uuid}-{uid}@invalid"}
+    local_uid = uid.replace("$", ".")
+    return {"uid": uid, "email": f"waldur-{resource.uuid}-{local_uid}@invalid"}
 
 
 @pytest.fixture
@@ -88,6 +93,11 @@ def waldur_resource():
     resource.name = "Test S3 Storage"
     resource.organization = {"slug": "test-org"}
     resource.project = {"slug": "test-project"}
+    resource.slug = "test-s3-st"
+    resource.customer_slug = "test-org"
+    resource.project_slug = "test-proj"
+    resource.project_name = "Test Project"
+    resource.backend_id = ""
     resource.limits = None
     resource.attributes = ResourceAttributes.from_dict({"max_storage_limit": 100})
     return resource
@@ -116,7 +126,7 @@ def test_provisioning_reports_every_key_it_applied(
     ) as report:
         with pytest.raises(CephS3APIError):
             common_utils.provision_resource_api_keys(
-                Mock(), "res-uuid-1", "waldur_u", backend
+                Mock(), "res-uuid-1", "waldur-u", backend
             )
 
     reported = {call.kwargs["body"].client_id for call in report.sync.call_args_list}
@@ -159,7 +169,7 @@ def test_a_key_minted_during_the_rotation_is_never_pruned(
     croit.delete_user_key.side_effect = delete_and_simulate_concurrent_rotation
 
     backend.rotate_resource_key(
-        "AKIAOLD", "waldur_u", known_client_ids=["AKIAOLD", "AKIASIB"]
+        "AKIAOLD", "waldur-u", known_client_ids=["AKIAOLD", "AKIASIB"]
     )
 
     assert "AKIASIBNEW" in croit.live, (
@@ -184,7 +194,7 @@ def test_an_adopted_uid_still_gets_its_ceiling(
     backend = CephS3Backend(backend_settings, backend_components)
     backend.client = croit
 
-    backend.create_resource_with_id(waldur_resource, "waldur_u")
+    backend.create_resource_with_id(waldur_resource, "waldur-u")
 
     croit.set_user_quota.assert_called_once()
     assert croit.set_user_quota.call_args.args[1]["max_size_bytes"] == 100 * 1000000000
@@ -205,9 +215,9 @@ def test_the_500_flavoured_exists_reply_also_gets_its_ceiling(
     backend = CephS3Backend(backend_settings, backend_components)
     backend.client = croit
 
-    info = backend.create_resource_with_id(waldur_resource, "waldur_u")
+    info = backend.create_resource_with_id(waldur_resource, "waldur-u")
 
-    assert info.backend_id == "waldur_u"
+    assert info.backend_id == ROOT.split("$")[0]
     croit.set_user_quota.assert_called_once()
 
 
@@ -223,7 +233,7 @@ def test_an_adopted_uid_keeps_its_existing_keys(
     backend = CephS3Backend(backend_settings, backend_components)
     backend.client = croit
 
-    backend.create_resource_with_id(waldur_resource, "waldur_u")
+    backend.create_resource_with_id(waldur_resource, "waldur-u")
 
     assert "AKIAINUSE" in croit.live
 
@@ -245,7 +255,7 @@ def test_the_quota_finds_the_storage_component_under_any_key(
     )
     backend.client = croit
 
-    backend._apply_bucket_quotas("waldur_u", {"max_storage_limit": 7})
+    backend._apply_bucket_quotas("waldur-u", {"max_storage_limit": 7})
 
     assert croit.set_user_quota.call_args.args[1]["max_size_bytes"] == 7 * 1000000000
 
@@ -264,7 +274,7 @@ def test_a_ceiling_with_no_storage_component_is_warned_about(
     backend = CephS3Backend(backend_settings, {})
     backend.client = croit
 
-    backend._apply_bucket_quotas("waldur_u", {"max_storage_limit": 100})
+    backend._apply_bucket_quotas("waldur-u", {"max_storage_limit": 100})
 
     croit.set_user_quota.assert_not_called()
     assert "storage components []" in caplog.text

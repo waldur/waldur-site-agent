@@ -66,15 +66,22 @@ class CephS3BackendSettingsSchema(CommonBackendSettingsSchema):
     tenant_template: str | None = Field(
         default=None,
         description=(
-            "RGW tenant for new users, rendered per resource (croit flavour), e.g. "
-            "'{customer_slug}_{customer_uuid:.8}'. Fields: resource_slug, "
-            "resource_uuid, customer_slug, customer_uuid, project_slug, "
-            "project_uuid, offering_slug, offering_uuid"
+            "RGW tenant each new resource gets for itself, and its backend id. Must "
+            "contain {resource_uuid} or {resource_slug}; fields can be cut with "
+            "{field:.N}. Default: '{customer_abbreviation:.12}_{project_name:.12}_"
+            "{resource_name:.20}_{resource_uuid:.8}'. Fields: resource_slug, "
+            "resource_uuid, resource_name, customer_slug, customer_uuid, "
+            "customer_name, customer_abbreviation, project_slug, project_uuid, "
+            "project_name, offering_slug, offering_uuid"
         ),
         json_schema_extra=SENSITIVE,
     )
     default_tenant: str | None = Field(
-        default=None, description="Fixed RGW tenant for new users; older form of tenant_template"
+        default=None,
+        description=(
+            "No longer supported: one tenant shared by every resource. The agent "
+            "refuses to start while it is set"
+        ),
     )
     default_storage_class: str | None = Field(
         default=None, description="Default storage class for new users"

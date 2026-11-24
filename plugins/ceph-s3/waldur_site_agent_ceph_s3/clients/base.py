@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 
 import httpx
 from waldur_site_agent.backend.clients import BaseClient
@@ -19,6 +20,7 @@ from waldur_site_agent.backend.structures import Association, ClientResource
 from waldur_site_agent.common.sentry import scrub_secret_query_params
 
 from ..exceptions import CephS3APIError, CephS3UserNotFoundError
+from ..tenant import backend_id_of
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,10 @@ class BaseS3AdminClient(BaseClient):
         self.timeout = timeout
         self.verify_ssl = verify_ssl
         self.session: httpx.Client
+        # Resource id -> the uid of the user that holds it. A resource is its
+        # tenant, so the core's resource-level calls below cannot pass their id
+        # through as a uid; the backend installs its resolver here.
+        self.resolve_resource_id: Callable[[str], str] = lambda resource_id: resource_id
 
     @abc.abstractmethod
     def _build_url(self, endpoint: str, params: dict | None = None) -> str:
@@ -146,13 +152,15 @@ class BaseS3AdminClient(BaseClient):
         # list_users answers ids on both flavours. This used to call .get() on
         # each entry, which worked only because croit returned user objects —
         # against radosgw's list of strings it would have raised AttributeError.
-        return [ClientResource(name=uid) for uid in self.list_users()]
+        # Named by backend id, which is what the core matches against Waldur's
+        # resources: a tenant's root user is listed as the tenant.
+        return [ClientResource(name=backend_id_of(uid)) for uid in self.list_users()]
 
     def get_resource(self, resource_id: str) -> ClientResource | None:
         """Get the resource's info - maps to get_user_info for S3."""
         try:
-            user_info = self.get_user_info(resource_id)
-            return ClientResource(name=user_info.get("uid", ""))
+            user_info = self.get_user_info(self.resolve_resource_id(resource_id))
+            return ClientResource(name=backend_id_of(str(user_info.get("uid") or "")))
         except CephS3UserNotFoundError:
             return None
 
@@ -169,7 +177,7 @@ class BaseS3AdminClient(BaseClient):
 
     def delete_resource(self, name: str) -> str:
         """Delete a resource from the cluster - maps to delete_user for S3."""
-        self.delete_user(name)
+        self.delete_user(self.resolve_resource_id(name))
         return name
 
     def set_resource_limits(

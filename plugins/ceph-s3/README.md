@@ -30,7 +30,7 @@ quota mapping, metadata, Waldur plumbing — is shared.
 
 | Operation | Behaviour |
 |---|---|
-| Create resource | S3 user under `{allocation_prefix}{resource slug}`, user and bucket quotas |
+| Create resource | A tenant of its own with one S3 user, `root`; user and bucket quotas. The tenant is the backend id |
 | Terminate resource | Deletes the S3 user |
 | Update limits | Updates the quotas |
 | Add / remove members | **No-op** — returns `True`; one S3 user per resource, no per-member access |
@@ -90,7 +90,7 @@ offerings:
       s3_region: "default"                     # RadosGW zonegroup api_name
       token: "your-bearer-token"
       verify_ssl: false
-      tenant_template: "{customer_slug}_{customer_uuid:.8}"   # optional
+      # tenant_template: "{customer_abbreviation:.12}_{project_name:.12}_{resource_name:.20}_{resource_uuid:.8}"
 
     # Component mapping. label and measured_unit are required by the config
     # validator for every component — the agent refuses to start without them.
@@ -176,14 +176,14 @@ What changes compared with user mode:
   account, and RGW stores a per-user quota on an account user without enforcing
   it. So the ordered ceiling is the account quota, with the same figure as the
   account's per-bucket quota, and it caps the consumer's IAM users too.
-- **The backend id is still the root user's uid.** The account is named after it
-  and carries the same ownership stamp, so an interrupted create is adopted on
-  retry, and an account of that name that is not this resource's is refused. The
-  account id is published as `s3_account_id`, which is what the consumer's IAM
-  policy ARNs name.
+- **The backend id is the tenant**, as in user mode. The account lives in it, is
+  named `root` after its root user and carries the same ownership stamp, so an
+  interrupted create is adopted on retry, and an account of that name that is not
+  this resource's is refused. The account id is published as `s3_account_id`,
+  which is what the consumer's IAM policy ARNs name.
 - **Display names are uids.** The root user's display name is its IAM
-  `UserName`, held to `[\w+=,.@-]{1,64}`, so the uid is used in place of the
-  resource name.
+  `UserName`, held to `[\w+=,.@-]{1,64}`, so the bare uid (`root`) is used in
+  place of the resource name.
 - **Termination refuses while the account owns any bucket.** In user mode RGW
   enforces this itself. For an account root user it does not: the user deletes
   with `200` while the account still owns buckets. The agent therefore checks
@@ -264,17 +264,14 @@ the flavour and is checked when the backend starts.
   `rgw_admin_entry`, if the operator renamed it
 - **`verify_ssl`** (optional, default: `true`): Enable/disable SSL certificate verification
 - **`timeout`** (optional, default: `30`): Request timeout in seconds
-- **`allocation_prefix`** (optional, default: `"waldur-"`): namespace every uid this
-  agent creates is built under — the only setting that changes a provisioned uid. A
-  core setting, but the core defaults it to `""`, which this plugin overrides: an
-  empty namespace puts a consumer-chosen resource name straight into the cluster's
-  global one. See Username Generation
-- **`tenant_template`** (optional, either flavour): RadosGW tenant for each new
-  user, rendered from the resource at creation. In account mode the account is
-  created in that tenant too. See [Tenants](#tenants)
-- **`default_tenant`** (optional, either flavour): one fixed tenant, the older form
-  of `tenant_template`, taken as written (letters, digits and `_`). Ignored when
-  `tenant_template` is set
+- **`tenant_template`** (optional, either flavour): the tenant each new resource
+  gets for itself, which becomes its backend id. Must contain `{resource_uuid}` or
+  `{resource_slug}`. See [Tenants and backend ids](#tenants-and-backend-ids)
+- **`default_tenant`**: no longer supported. It put every resource into one shared
+  tenant, and the agent refuses to start while it is set
+- **`allocation_prefix`**: not used by new resources. Resources from before one
+  tenant per resource have uids built from it (`waldur-<slug>`), and keep them;
+  see [Resources from before one tenant per resource](#resources-from-before-one-tenant-per-resource)
 - **`default_placement`** (optional): Default placement rule. Honoured by both
   flavours
 - **`default_storage_class`** (croit only, optional): Default storage class.
@@ -331,75 +328,105 @@ early: a GB-denominated threshold is compared against a GB-day amount, and the
 running total includes the row about to be overwritten, so cumulative reporting
 roughly double-counts. Leave it unset unless you want the log noise.
 
-## Username Generation
+## Tenants and backend ids
 
-**Provisioned resources are named when the order is processed.** The plugin's
-`_get_resource_backend_id()` builds `f"{allocation_prefix}{resource_slug}".lower()`,
-with `allocation_prefix` defaulting to `waldur-` (not to the core's empty string), and
-Waldur caps every slug at 10 characters (`SLUG_NAME_LIMIT`), appending `-2`, `-3`, … on
-collision. So a resource named `cust-0-proj-0-ceph-s3-of` becomes the uid
-`waldur-cust-0-pro`.
+**Every resource gets a RadosGW tenant of its own, and the tenant is the resource's
+backend id.** A tenant is a bucket namespace. Resources that share one can squat
+each other's bucket names, learn them from a "bucket already exists" answer, and
+grant each other access in bucket policies without a `tenant:` prefix; a tenant
+per resource leaves none of that. Data, quotas and keys were already per resource.
 
-**Format**: `{allocation_prefix}{resource_slug}` — **Example**: `waldur-cust-0-pro`
+Inside its tenant the resource has one user Waldur creates, always named `root`
+(in account mode, the RGW account is named `root` as well). So a resource whose
+tenant is `acme_research_tea_backups_1a2b3c4d` is the S3 user
+`acme_research_tea_backups_1a2b3c4d$root`, and its backend id is the tenant.
 
-With a [tenant](#tenants) configured, the backend id is `tenant$uid`, e.g.
-`acme_corp_aaaabbbb$waldur-cust-0-pro`.
-
-This is the only naming scheme the plugin has. A second one — `user_prefix`,
-`slug_separator`, `max_username_length` and a `create_resource()` that read them —
-existed alongside it and was never reached, since the order processor calls
-`create_resource_with_id()`. It has been removed; an offering still carrying those
-three keys is unaffected, they are simply ignored.
-
-## Tenants
-
-A RadosGW tenant gives its users their own bucket namespace: two organisations can
-each own a bucket called `data`, where without tenants the first to create it takes
-the name cluster-wide. `tenant_template` (either flavour) puts each new S3 user into
-a tenant rendered from the resource being provisioned:
+The tenant is rendered once, when the order is processed, from `tenant_template`:
 
 ```yaml
-      tenant_template: "{customer_slug}_{customer_uuid:.8}"
+      tenant_template: "{customer_abbreviation:.12}_{project_name:.12}_{resource_name:.20}_{resource_uuid:.8}"
 ```
+
+That is also the default when the setting is absent.
 
 | Field | Rendered as |
 |---|---|
-| `resource_slug`, `customer_slug`, `project_slug`, `offering_slug` | lower-cased, `-` → `_` |
 | `resource_uuid`, `customer_uuid`, `project_uuid`, `offering_uuid` | 32 hex characters, no hyphens |
+| `resource_slug`, `customer_slug`, `project_slug`, `offering_slug` | lower-cased, `-` → `_` |
+| `resource_name`, `project_name`, `customer_name` | accents dropped, lower-cased, other runs → `_`; else the slug |
+| `customer_abbreviation` | the organisation's abbreviation, folded like a name; else the customer slug |
 
-A format spec truncates: `{customer_uuid:.8}` is the first eight hex characters.
-Literal text may use lower-case letters, digits and `_`, the only characters RGW
-allows in a tenant name; the rendered tenant is at most 64 characters.
-
-- **Pick the scope deliberately.** `customer_*` gives one namespace per organisation,
-  `project_*` one per project, `resource_*` one per S3 user (full isolation, but a
-  user then shares its namespace with nobody, so cross-user bucket policies need
-  `tenant:bucket` spelling).
-- **Prefer a UUID, or a slug plus a short UUID.** Slugs can be edited, and `a-b`
-  and `a_b` render to the same tenant; the UUID suffix keeps two organisations
-  from landing in one namespace.
-- **The tenant is rendered once.** RGW addresses a tenanted user only as
-  `tenant$uid`, so that is what the backend id holds, and every later call (keys,
-  quotas, deletion, reporting) uses it as stored. Renaming a slug or editing the
-  template affects new resources only; existing ones stay where they were created.
-- **A field the resource lacks fails the order** rather than falling back to the
-  global namespace. A malformed template fails at agent start.
-- **Reporting meters tenanted users through their buckets.** croit's per-user
+- **The template must name the resource**: `{resource_uuid}` or `{resource_slug}`.
+  A template rendered from the customer, project or offering alone is refused at
+  agent start, because every resource of that scope would share the tenant. So is
+  `default_tenant`, the older setting for one fixed tenant. Remove it; existing
+  resources keep the tenant they were created in.
+- **`{field:.N}` cuts a field to N characters**, dropping an underscore the cut
+  leaves at the end. `{resource_uuid}` may not be cut below 8 characters and
+  `{resource_slug}` not at all: a cut slug no longer tells resources apart. No
+  other format spec is accepted.
+- **Literal text** may use lower-case letters, digits and `_`, the only characters
+  RGW allows in a tenant name. The rendered tenant is at most 64 characters; RGW
+  itself sets no limit, this plugin does. A longer one fails the order, so cut
+  fields of unbounded length.
+- **The tenant is rendered once.** Renaming the organisation, project or resource,
+  moving the resource to another project, or editing the template affects new
+  resources only. Existing ones stay where they were created. The name is a label
+  for people reading RGW listings, not something the agent relies on.
+- **A field the resource lacks fails the order**: nothing is created.
+- **`customer_abbreviation` needs a Waldur that serves it** on marketplace
+  resources. Against an older one the field is absent and the slug is used.
+- **Consumers see the tenant.** It is published as the `s3_tenant` metadata key,
+  next to `s3_user`, and clients reaching a bucket in another tenant address it as
+  `tenant:bucket`; their own buckets need no prefix.
+- **Reporting meters a tenanted user through its buckets.** croit's per-user
   statistics cannot name a tenanted user (`tenant$uid` is refused with 400, and
   no other spelling returns a series), but its per-bucket statistics name a
   tenanted bucket as `tenant_bucket`. A tenanted resource is therefore metered as
   the sum of its buckets, the same way as an account (see
   [Reporting for a radosgw-managed offering](#reporting-for-a-radosgw-managed-offering-on-a-croit-cluster)).
-- **Account mode** (radosgw, `rgw_accounts: true`) creates the resource's RGW
-  account in the same tenant, with its root user as `tenant$uid`. RGW keeps an
-  account's users in the account's tenant, so the consumer's IAM users and every
-  bucket they create stay in that namespace too. `tenant_template:
-  "{resource_uuid}"` gives each resource a namespace of its own (verified on Ceph
-  20.2.5: two tenants each own a bucket called `data`, and neither sees the
-  other's).
-- **Clients** reaching a bucket in another tenant address it as `tenant:bucket`;
-  their own buckets need no change. The tenant is published as the
-  `s3_tenant` metadata key (empty when untenanted), next to `s3_user`.
+- **Account mode** (radosgw, `rgw_accounts: true`) creates the account in the
+  resource's tenant, so the consumer's IAM users and every bucket they create stay
+  in that namespace (verified on Ceph 20.2.5: two tenants each own a bucket called
+  `data`, and neither sees the other's).
+
+### Resources from before one tenant per resource
+
+Their backend ids name the S3 user, not a tenant, and they keep working as they
+are, for every operation including reporting:
+
+- **`tenant$uid`**: a user created in a tenant by an earlier `tenant_template` or
+  `default_tenant`, possibly shared with other resources.
+- **a bare uid**, `{allocation_prefix}{resource_slug}` (e.g. `waldur-cust-0-pro`):
+  a user in RGW's global namespace.
+
+A bare uid with the `waldur-` prefix contains a hyphen, which no tenant name can,
+so it is addressed as stored. Older bare uids may not have one -- `backup` from
+before the `waldur-` default, or croit-s3's `waldur_<org>_<project>_<uuid>` -- and
+look exactly like a tenant. For an id of that shape the agent asks RGW: the
+tenant's `root` user if it exists, otherwise the bare uid if that does. A found
+answer is remembered until the resource is created or deleted again.
+
+Moving an old resource into a tenant of its own means copying its buckets to a new
+user, which is an operator task, not something the agent attempts. A resource
+re-created after termination keeps its stored backend id, in whichever shape. An
+old bare uid that looks like a tenant comes back as that tenant's `root` user,
+since nothing tells the two apart once the user is gone.
+
+Two resources that render the same tenant cannot both have it: the second order
+fails, naming the tenant, without touching the first. The processor's
+`check_backend_id_uniqueness`, `backend_id_max_retries` and
+`account_name_generation_policy` settings do not apply, since the backend id is
+the tenant, not the id the processor generates.
+
+Every user and account Waldur creates carries an ownership stamp in its email
+field, `waldur-<resource uuid>@invalid` (`.invalid` is reserved, so it is never a
+deliverable address). It is how the agent tells its own interrupted create, which
+it finishes, from someone else's user, which it refuses to touch. RGW allows an
+email address only once, so a resource cannot get a second user either: a retry
+that renders a different tenant after a rename fails, naming the stamp already in
+use. Users created before carry the older `waldur-<uuid>-<uid>@invalid`, which is
+still recognised.
 
 ## Usage Reporting
 
@@ -1038,11 +1065,11 @@ backend_settings:
   timeout: 60  # Increase timeout for slow networks
 ```
 
-### Username Length Issues
+### Tenant name too long
 
-The uid is `{allocation_prefix}{resource_slug}`, and Waldur already caps the slug at
-10 characters — so only `allocation_prefix` is yours to shorten. See Username
-Generation.
+The order fails with "not a valid RGW tenant name". The rendered tenant must fit in
+64 characters: cut the unbounded fields in `tenant_template`, e.g.
+`{resource_name:.20}`. See [Tenants and backend ids](#tenants-and-backend-ids).
 
 ### Debug Logging
 
@@ -1057,7 +1084,8 @@ Set the top-level `log_level: DEBUG` in the agent configuration.
 ## Resource Lifecycle
 
 1. **Order Creation**: User submits order with `max_storage_limit` and `max_object_limit`
-2. **User Creation**: Plugin creates the S3 user under the backend id the order processor generated
+2. **User Creation**: Plugin renders the resource's tenant and creates its `root` user there;
+   the tenant becomes the backend id
 3. **Quota Application**: ceilings applied as user and bucket quotas
 4. **Key Provisioning**: Two access keys minted, applied, and reported to Waldur encrypted;
    RadosGW's auto-generated key is removed
