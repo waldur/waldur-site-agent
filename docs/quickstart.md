@@ -82,15 +82,27 @@ are called by their full path.
 ### Option A: generate it from Waldur (SLURM only, recommended)
 
 For SLURM offerings, skip hand-writing YAML entirely. On the same `Integration` → `Credentials`
-page from step 1, open `Actions` → `Generate Site Agent Config`. It builds a config from your
-*actual* offering — `name`, `waldur_api_url`, `waldur_offering_uuid`, all three `*_backend`
-fields, `backend_settings`, and `backend_components` (including your real plan components, not a
-generic example) are filled in for you. Only `waldur_api_token` comes back as a placeholder
-(`<YOUR_API_TOKEN_HERE>`) — swap in the token from step 1. Copy or download the result as
-`waldur-site-agent-config.yaml`.
+page from step 1, open `Actions` → `Generate Site Agent Config`, and pick a **Configuration
+source**:
 
-You need the `GET_SERVICE_PROVIDER_API_SECRET_CODE` permission on the customer to see this
-action — if it's missing from the `Actions` menu, that's usually why.
+- **Read from Waldur** (`configuration_source: waldur`, needs an agent release that supports it):
+  the file holds only `name`, `waldur_api_url`, `waldur_offering_uuid`, the token and the
+  secrets. The agent reads the backends, `backend_settings` and components from Waldur when it
+  starts, so a later change in Waldur needs only a restart.
+- **Everything in the file** (`configuration_source: local`): the whole configuration from your
+  *actual* offering, including all three `*_backend` fields, `backend_settings` and
+  `backend_components` from your real plan components.
+
+Each secret the agent needs, starting with `waldur_api_token`, comes back empty with a
+`# SECRET:` comment (or as `<YOUR_API_TOKEN_HERE>` for an offering with no agent configuration
+in Waldur). Fill in the token from step 1 and any listed backend secret, such as the LDAP
+`bind_password`. Copy or download the result as `waldur-site-agent-config.yaml`.
+
+Generating the file needs the `SERVICE_PROVIDER.GET_API_SECRET_CODE` permission on the
+organization, which by default only its owners and staff have: offering managers see the action,
+but Waldur refuses it. The
+[service provider guide](https://docs.waldur.com/latest/user-guide/service-provider-organization/site-agent-configuration/)
+covers the agent configuration in Waldur and the generator in full.
 
 ### Option B: write it by hand
 
