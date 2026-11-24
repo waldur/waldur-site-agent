@@ -25,6 +25,8 @@ class HarborBackendSettingsSchema(CommonBackendSettingsSchema):
     )
     project_role_id: int | None = Field(
         default=None,
-        description="Harbor role for the group: 1 admin, 2 developer (default), 3 guest, 4 maintainer",
+        description=(
+            "Harbor role for the group: 1 admin, 2 developer (default), 3 guest, 4 maintainer"
+        ),
         json_schema_extra=SENSITIVE,
     )

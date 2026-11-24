@@ -7,18 +7,19 @@ verified against croit 2503 and v2611.1.
 
 import logging
 import time
+from http import HTTPStatus
 from urllib.parse import urlencode
 
 import httpx
 
-from ..exceptions import (
+from waldur_site_agent_ceph_s3.clients.base import HttpTransport
+from waldur_site_agent_ceph_s3.exceptions import (
     CephS3APIError,
     CephS3AuthenticationError,
     CephS3UserNotFoundError,
     CroitS3GraphNotFoundError,
 )
-from ..tenant import split
-from .base import HttpTransport
+from waldur_site_agent_ceph_s3.tenant import split
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,8 @@ class CroitClient(HttpTransport):
         if token:
             headers["Authorization"] = f"Bearer {token}"
         elif not (username and password):
-            raise ValueError("Either token or username/password must be provided")
+            msg = "Either token or username/password must be provided"
+            raise ValueError(msg)
 
         # Transport-level retries cover connection errors;
         # 5xx responses are retried in _request
@@ -168,7 +170,7 @@ class CroitClient(HttpTransport):
             )
         except httpx.HTTPError as e:
             raise CephS3APIError(f"croit login failed: {e}") from e
-        if response.status_code >= 400:
+        if response.status_code >= HTTPStatus.BAD_REQUEST:
             raise self._classify_error(response)
         try:
             payload = response.json()
@@ -190,7 +192,7 @@ class CroitClient(HttpTransport):
         croit is consistent enough to classify on the status alone — unlike
         RadosGW, which puts an absent key and a missing capability both on 403.
         """
-        if response.status_code == 401:
+        if response.status_code == HTTPStatus.UNAUTHORIZED:
             # Names the credential that was rejected rather than a user: under
             # bearer-token auth username is None, and the operator's order read
             # "Authentication failed for user None". Keyed off self.token because
@@ -209,7 +211,7 @@ class CroitClient(HttpTransport):
             )
 
         error_msg = self._format_error(response)
-        if response.status_code == 404:
+        if response.status_code == HTTPStatus.NOT_FOUND:
             return CephS3UserNotFoundError(error_msg)
         return CephS3APIError(error_msg)
 
@@ -278,9 +280,11 @@ class CroitClient(HttpTransport):
 
     @staticmethod
     def _stats_windows(start_time: int, end_time: int) -> list[tuple[int, int]]:
-        """Split [start, end] into consecutive windows of STATS_CHUNK_POINTS
-        native samples, after resolving croit's relative times (negative = that
-        many seconds ago, 0 = now) against one clock reading."""
+        """Split [start, end] into windows of STATS_CHUNK_POINTS native samples.
+
+        Croit's relative times (negative = that many seconds ago, 0 = now) are
+        resolved against one clock reading first.
+        """
         now = int(time.time())
         start = now + start_time if start_time < 0 else start_time
         end = now + end_time if end_time <= 0 else end_time
@@ -301,8 +305,9 @@ class CroitClient(HttpTransport):
         start_time: int,
         end_time: int,
     ) -> list[dict]:
-        """One storage series at croit's native resolution, read window by window
-        and joined. ``plot_name`` picks a plot by name; None takes the first.
+        """One storage series at croit's native resolution, read window by window.
+
+        The windows are joined. ``plot_name`` picks a plot by name; None takes the first.
 
         Raises:
             CroitS3GraphNotFoundError: If the graph name no longer exists
@@ -330,7 +335,7 @@ class CroitClient(HttpTransport):
                 # resource.
                 raise CroitS3GraphNotFoundError(
                     f"Storage graph {graph!r} not found on the croit API: {e}"
-                )
+                ) from e
             plots = response.json().get("axis1", {}).get("graphs", [])
             chosen = (
                 plots[:1]

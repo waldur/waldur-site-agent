@@ -57,7 +57,8 @@ class HarborBackend(backends.BaseBackend):
                 - robot_password: Robot account password
                 - default_storage_quota_gb: Default storage quota in GB
                 - oidc_group_prefix: Prefix for OIDC group names
-                - project_role_id: Role ID for OIDC groups (1=Admin, 2=Developer, 3=Guest, 4=Maintainer)
+                - project_role_id: Role ID for OIDC groups
+                  (1=Admin, 2=Developer, 3=Guest, 4=Maintainer)
             harbor_components: Component definitions (should include 'storage')
         """
         super().__init__(harbor_settings, harbor_components)
@@ -71,13 +72,13 @@ class HarborBackend(backends.BaseBackend):
 
         # Validate components - Harbor only supports storage with limit accounting
         if "storage" not in harbor_components:
-            raise ValueError("Harbor backend requires 'storage' component")
+            msg = "Harbor backend requires 'storage' component"
+            raise ValueError(msg)
 
         storage_component = harbor_components["storage"]
         if storage_component.get("accounting_type") != "limit":
-            raise ValueError(
-                "Harbor backend storage component must have accounting_type='limit'"
-            )
+            msg = "Harbor backend storage component must have accounting_type='limit'"
+            raise ValueError(msg)
 
         # Initialize Harbor client
         self.client = HarborClient(
@@ -119,10 +120,11 @@ class HarborBackend(backends.BaseBackend):
             else:
                 logger.warning("Harbor backend is not responding")
                 if raise_exception:
-                    raise BackendError("Harbor backend is not responding")
+                    msg = "Harbor backend is not responding"
+                    raise BackendError(msg)  # noqa: TRY301  caught below, logged, then re-raised
             return is_alive
-        except Exception as e:
-            logger.error("Failed to ping Harbor backend: %s", e)
+        except Exception:
+            logger.exception("Failed to ping Harbor backend")
             if raise_exception:
                 raise
             return False
@@ -152,8 +154,8 @@ class HarborBackend(backends.BaseBackend):
                     return False
                 resources = self.client.list_resources()
                 logger.info("Number of existing projects: %d", len(resources))
-            except Exception as e:
-                logger.error("Failed to list projects: %s", e)
+            except Exception:
+                logger.exception("Failed to list projects")
 
         return is_accessible
 
@@ -180,12 +182,14 @@ class HarborBackend(backends.BaseBackend):
             waldur_resource: Waldur resource being created
             user_context: Optional user context (not used for Harbor)
         """
+        del user_context
         # Create OIDC group for the Waldur project
         oidc_group_name = f"{self.oidc_group_prefix}{waldur_resource.project_slug}"
 
         try:
             if not isinstance(self.client, HarborClient):
-                raise HarborOIDCError("Client is not a HarborClient")
+                msg = "Client is not a HarborClient"
+                raise HarborOIDCError(msg)  # noqa: TRY301  handled by the except below
             group_id = self.client.create_user_group(oidc_group_name)
             if group_id:
                 logger.info(
@@ -193,8 +197,8 @@ class HarborBackend(backends.BaseBackend):
                     oidc_group_name,
                     waldur_resource.project_slug,
                 )
-        except HarborOIDCError as e:
-            logger.error("Failed to create OIDC group: %s", e)
+        except HarborOIDCError:
+            logger.exception("Failed to create OIDC group")
             # Continue anyway - group might already exist
 
     def create_resource_with_id(
@@ -244,7 +248,8 @@ class HarborBackend(backends.BaseBackend):
         try:
             # Create Harbor project
             if not isinstance(self.client, HarborClient):
-                raise HarborProjectError("Client is not a HarborClient")
+                msg = "Client is not a HarborClient"
+                raise HarborProjectError(msg)
             created = self.client.create_project(harbor_project_name, storage_quota_gb)
             if created:
                 logger.info(
@@ -266,7 +271,8 @@ class HarborBackend(backends.BaseBackend):
             # Assign OIDC group to the project
             oidc_group_name = f"{self.oidc_group_prefix}{waldur_resource.project_slug}"
             if not isinstance(self.client, HarborClient):
-                raise HarborOIDCError("Client is not a HarborClient")
+                msg = "Client is not a HarborClient"
+                raise HarborOIDCError(msg)
             self.client.assign_group_to_project(
                 oidc_group_name,
                 harbor_project_name,
@@ -331,7 +337,8 @@ class HarborBackend(backends.BaseBackend):
         """
         try:
             if not isinstance(self.client, HarborClient):
-                raise HarborProjectError("Client is not a HarborClient")
+                msg = "Client is not a HarborClient"
+                raise HarborProjectError(msg)
             labels = self.client.list_project_label_names(project_name)
         except HarborError as e:
             if _is_forbidden(e):
@@ -365,14 +372,13 @@ class HarborBackend(backends.BaseBackend):
 
         try:
             if not isinstance(self.client, HarborClient):
-                raise HarborProjectError("Client is not a HarborClient")
+                msg = "Client is not a HarborClient"
+                raise HarborProjectError(msg)  # noqa: TRY301  handled by the except below
             deleted = self.client.delete_project(resource_backend_id)
             if deleted:
                 logger.info("Deleted Harbor project %s", resource_backend_id)
-        except HarborProjectError as e:
-            logger.error(
-                "Failed to delete Harbor project %s: %s", resource_backend_id, e
-            )
+        except HarborProjectError:
+            logger.exception("Failed to delete Harbor project %s", resource_backend_id)
 
     def _pull_backend_resource(
         self, resource_backend_id: str
@@ -442,8 +448,8 @@ class HarborBackend(backends.BaseBackend):
                     storage_gb,
                 )
 
-            except Exception as e:
-                logger.error("Failed to get usage for project %s: %s", project_name, e)
+            except Exception:
+                logger.exception("Failed to get usage for project %s", project_name)
                 # Return zero usage on error
                 usage_report[project_name] = {
                     "TOTAL_ACCOUNT_USAGE": {
@@ -501,7 +507,8 @@ class HarborBackend(backends.BaseBackend):
 
         try:
             if not isinstance(self.client, HarborClient):
-                raise HarborError("Client is not a HarborClient")
+                msg = "Client is not a HarborClient"
+                raise HarborError(msg)  # noqa: TRY301  handled by the except below
             self.client.update_project_quota(resource_backend_id, storage_gb)
             logger.info(
                 "Updated quota for project %s to %d GB", resource_backend_id, storage_gb
@@ -538,6 +545,7 @@ class HarborBackend(backends.BaseBackend):
         Returns:
             Empty set (no users added individually)
         """
+        del user_ids, kwargs
         resource_backend_id = waldur_resource.backend_id
         logger.info(
             "User management is handled through OIDC groups for Harbor project %s",
@@ -556,12 +564,14 @@ class HarborBackend(backends.BaseBackend):
         Args:
             waldur_resource: Waldur resource containing project information
             usernames: Set of usernames to remove
+            **kwargs: Additional arguments (not used)
 
         Returns:
             Every requested username. Harbor holds no per-user association, so
             none of them is left attached to the project for the caller to keep
             waiting on.
         """
+        del kwargs
         logger.info(
             "User management is handled through OIDC groups for Harbor project %s",
             waldur_resource.backend_id,
@@ -586,8 +596,8 @@ class HarborBackend(backends.BaseBackend):
                 "Downscaled Harbor project %s to 1GB quota", resource_backend_id
             )
             return True
-        except HarborError as e:
-            logger.error("Failed to downscale project %s: %s", resource_backend_id, e)
+        except HarborError:
+            logger.exception("Failed to downscale project %s", resource_backend_id)
             return False
 
     def pause_resource(self, resource_backend_id: str) -> bool:
@@ -602,6 +612,7 @@ class HarborBackend(backends.BaseBackend):
         Returns:
             False (not implemented)
         """
+        del resource_backend_id
         logger.warning("Pause operation not supported for Harbor projects")
         return False
 
@@ -627,8 +638,8 @@ class HarborBackend(backends.BaseBackend):
                 self.default_storage_quota_gb,
             )
             return True
-        except HarborError as e:
-            logger.error("Failed to restore project %s: %s", resource_backend_id, e)
+        except HarborError:
+            logger.exception("Failed to restore project %s", resource_backend_id)
             return False
 
     def get_resource_metadata(self, resource_backend_id: str) -> dict:
@@ -651,7 +662,10 @@ class HarborBackend(backends.BaseBackend):
         return {
             "harbor_project_id": project.get("project_id"),
             "harbor_project_name": project.get("name"),
-            "harbor_url": f"{self.backend_settings['harbor_url']}/harbor/projects/{project.get('project_id')}",
+            "harbor_url": (
+                f"{self.backend_settings['harbor_url']}/harbor/projects/"
+                f"{project.get('project_id')}"
+            ),
             "repository_count": usage_data.get("repository_count", 0),
             "storage_used_bytes": usage_data.get("storage_bytes", 0),
             "creation_time": project.get("creation_time"),

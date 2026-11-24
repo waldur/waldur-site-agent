@@ -7,6 +7,7 @@ Pushes user profiles from Waldur A to Waldur B via the Identity Bridge API
 from __future__ import annotations
 
 import logging
+from http import HTTPStatus
 from typing import TYPE_CHECKING
 
 from waldur_api_client import AuthenticatedClient, errors
@@ -25,6 +26,7 @@ from waldur_api_client.models.offering_user import OfferingUser
 from waldur_api_client.types import UNSET
 from waldur_site_agent.backend.backends import AbstractUsernameManagementBackend
 from waldur_site_agent.common import static_token_prefix
+
 from waldur_site_agent_waldur.privileged_accounts import (
     IdentityBridgePrivilegedAccountError,
     is_privileged_account_refusal,
@@ -99,6 +101,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
         backend_settings: dict | None = None,
         offering: Offering | None = None,
     ) -> None:
+        """Create the identity-bridge HTTP client from the target Waldur settings."""
         super().__init__(backend_settings, offering)
         target_api_url = (self.backend_settings.get("target_api_url") or "").rstrip("/")
         target_api_token = self.backend_settings.get("target_api_token") or ""
@@ -319,7 +322,7 @@ class WaldurIdentityBridgeUsernameBackend(AbstractUsernameManagementBackend):
         try:
             self._sync_identity_bridge(waldur_username, body)
         except errors.UnexpectedStatus as e:
-            if e.status_code != 400:
+            if e.status_code != HTTPStatus.BAD_REQUEST:
                 raise
             # On 400, invalidate cache and retry once with fresh allowed fields
             logger.warning(

@@ -13,7 +13,8 @@ from __future__ import annotations
 import logging
 import secrets
 import string
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_site_agent.backend import BackendType, backends, structures
@@ -37,6 +38,8 @@ _REQUIRED_SETTINGS = ("subscription_id", "tenant_id", "client_id", "client_secre
 # over from mastermind already use these ranges.
 _DEFAULT_NETWORK_CIDR = "10.0.0.0/16"
 _DEFAULT_SUBNET_CIDR = "10.0.0.0/24"
+
+T = TypeVar("T")
 
 # Azure wants 12-72 characters from three of four character classes. The
 # password is never handed out: an SSH key is what the user logs in with, and
@@ -399,7 +402,9 @@ class AzureBackend(backends.BaseBackend):
         self._delete_if_present(network.delete_subnet, group, names.network, names.subnet)
         self._delete_if_present(network.delete_network, group, names.network)
 
-    def _open_ssh(self, location: str, names: VirtualMachineNames) -> Any | None:
+    def _open_ssh(
+        self, location: str, names: VirtualMachineNames
+    ) -> Any | None:  # noqa: ANN401 - the azure-mgmt security group model
         """Create the security group that lets SSH in, when any range may use it.
 
         A public address of the Standard SKU — which is what these machines get —
@@ -424,7 +429,7 @@ class AzureBackend(backends.BaseBackend):
         ).result()
 
     @staticmethod
-    def _delete_if_present(delete: Any, *args: str) -> None:
+    def _delete_if_present(delete: Callable[..., Any], *args: str) -> None:
         """Delete an object that an older resource may never have had."""
         try:
             delete(*args).result()
@@ -458,7 +463,7 @@ class AzureBackend(backends.BaseBackend):
             raise BackendError(str(exc)) from exc
 
     @staticmethod
-    def _optional(getter: Any, *args: str) -> Any:
+    def _optional(getter: Callable[..., T], *args: str) -> T | None:
         """Fetch an object that may legitimately be gone, but re-raise anything else."""
         try:
             return getter(*args)
@@ -496,7 +501,7 @@ class AzureBackend(backends.BaseBackend):
         if len(parts) != _IMAGE_REFERENCE_PARTS:
             msg = f"Azure image {image!r} is not in publisher:offer:sku:version form"
             raise BackendError(msg)
-        return dict(zip(fields, parts))
+        return dict(zip(fields, parts, strict=True))
 
     def _require_ssh_key(
         self, attributes: dict[str, Any], user_context: dict | None, name: str
@@ -537,7 +542,12 @@ class AzureBackend(backends.BaseBackend):
             return None
         return str(public_key)
 
-    def _describe(self, virtual_machine: Any, public_ip: Any, nic: Any) -> dict[str, Any]:
+    def _describe(
+        self,
+        virtual_machine: object,
+        public_ip: object,
+        nic: Any,  # noqa: ANN401 - azure-mgmt NetworkInterface, indexed below
+    ) -> dict[str, Any]:
         """Flatten what Waldur can show about a machine into backend metadata."""
         hardware_profile = getattr(virtual_machine, "hardware_profile", None)
         private_ip = None
@@ -557,7 +567,7 @@ class AzureBackend(backends.BaseBackend):
         }
 
     @staticmethod
-    def _power_state(virtual_machine: Any) -> str | None:
+    def _power_state(virtual_machine: object) -> str | None:
         """Read the power state out of the instance view, when it was expanded.
 
         Azure reports it as a status code such as ``PowerState/running``. The

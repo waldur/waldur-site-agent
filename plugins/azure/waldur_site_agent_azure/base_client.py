@@ -84,31 +84,37 @@ class AzureCoreClient(BaseClient):
         parent_name: str | None = None,
     ) -> str:
         """Not supported: creation needs the network objects the backend builds."""
-        raise self._unsupported("create resources")
+        del name, description, organization, parent_name
+        raise self._unsupported(action="create resources")
 
     def delete_resource(self, name: str) -> str:
         """Not supported: deletion needs the resource group from the ARM id."""
-        raise self._unsupported("delete resources")
+        del name
+        raise self._unsupported(action="delete resources")
 
     def set_resource_limits(
         self, resource_id: str, limits_dict: dict[str, int]
     ) -> str | None:
         """Not supported: resizing a machine is not implemented yet."""
-        raise self._unsupported("set limits on resources")
+        del resource_id, limits_dict
+        raise self._unsupported(action="set limits on resources")
 
     def get_resource_limits(self, resource_id: str) -> dict[str, int]:
         """Not supported: limits live in the offering, not on the machine."""
-        raise self._unsupported("read limits from resources")
+        del resource_id
+        raise self._unsupported(action="read limits from resources")
 
     def get_resource_user_limits(self, resource_id: str) -> dict[str, dict[str, int]]:
         """Not supported: Azure has no per-user limits on a machine."""
-        raise self._unsupported("read per-user limits from resources")
+        del resource_id
+        raise self._unsupported(action="read per-user limits from resources")
 
     def set_resource_user_limits(
         self, resource_id: str, username: str, limits_dict: dict[str, int]
     ) -> str:
         """Not supported: Azure has no per-user limits on a machine."""
-        raise self._unsupported("set per-user limits on resources")
+        del resource_id, username, limits_dict
+        raise self._unsupported(action="set per-user limits on resources")
 
     # Access to a machine is the SSH key the order carried, granted while the
     # machine was built; there is no membership to add anyone to afterwards. The
@@ -136,7 +142,8 @@ class AzureCoreClient(BaseClient):
         self, resource_ids: list[str], timezone: str | None = None
     ) -> list:
         """Not supported: metering is not implemented yet."""
-        raise self._unsupported("report usage for resources")
+        del resource_ids, timezone
+        raise self._unsupported(action="report usage for resources")
 
     def list_resource_users(self, resource_id: str) -> list[str]:
         """Return no users: a machine carries no membership list on the backend."""

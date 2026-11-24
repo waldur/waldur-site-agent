@@ -16,14 +16,15 @@ user, and attributes an account's storage to its buckets, not its users.
 """
 
 import json
-import os
 from decimal import Decimal
+from pathlib import Path
 
 from waldur_api_client.models.resource import Resource as WaldurResource
 from waldur_site_agent.backend import structures
 from waldur_site_agent.backend.exceptions import BackendError
 
 from .backend import (
+    _MIN_SERIES_POINTS,
     _SECONDS_PER_DAY,
     CephS3Backend,
     _is_measurable,
@@ -70,9 +71,9 @@ class _BucketLedger:
         self.state_file = state_file
         self._seen: dict = {}
         self._dirty = False
-        if state_file and os.path.exists(state_file):
+        if state_file and Path(state_file).exists():
             try:
-                with open(state_file) as handle:
+                with Path(state_file).open() as handle:
                     loaded = json.load(handle)
                 if isinstance(loaded, dict):
                     self._seen = loaded
@@ -112,9 +113,9 @@ class _BucketLedger:
             return
         tmp = self.state_file + ".tmp"
         try:
-            with open(tmp, "w") as handle:
+            with Path(tmp).open("w") as handle:
                 json.dump(self._seen, handle)
-            os.replace(tmp, self.state_file)
+            Path(tmp).replace(self.state_file)
         except OSError as e:
             logger.warning("Could not save bucket ledger %s: %s", self.state_file, e)
 
@@ -134,18 +135,18 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
         super().__init__(backend_settings, backend_components)
         reporting = backend_settings.get("croit_reporting") or {}
         if not isinstance(reporting, dict) or not reporting.get("api_url"):
-            raise ValueError(
+            msg = (
                 "croit_usage reads croit's statistics, so it needs croit's address "
                 "and credentials in croit_reporting (api_url plus token, or "
                 "username and password). Plain Ceph has no stored-bytes series to "
                 "integrate; use rgw_usage there"
             )
+            raise ValueError(msg)
         if not reporting.get("token") and not (
             reporting.get("username") and reporting.get("password")
         ):
-            raise ValueError(
-                "croit_reporting needs either 'token' or both 'username' and 'password'"
-            )
+            msg = "croit_reporting needs either 'token' or both 'username' and 'password'"
+            raise ValueError(msg)
         # Statistics only: users and buckets are read through RGW (self.client).
         self.croit_client = CroitClient(
             api_url=reporting["api_url"],
@@ -194,7 +195,7 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
         unit_factor: int,
         period_end: int | None = None,
     ) -> Decimal:
-        """Area under the storage curve, in component units × days.
+        """Area under the storage curve, in component units times days.
 
         Each datapoint is one rectangle: the reading, held until the next sample.
         Step rather than trapezoid because storage really does hold its value
@@ -220,13 +221,15 @@ class CroitUsageBackend(BillingPeriodMixin, CephS3Backend):
         last: Decimal | None = None
 
         boundaries = [point["t"] for point in datapoints]
-        if period_end is not None and len(boundaries) >= 2:
+        if period_end is not None and len(boundaries) >= _MIN_SERIES_POINTS:
             step = boundaries[-1] - boundaries[-2]
             closing = min(period_end, boundaries[-1] + step)
             if closing > boundaries[-1]:
                 boundaries.append(closing)
 
-        for point, next_t in zip(datapoints, boundaries[1:]):
+        # boundaries[1:] is one shorter than datapoints unless a closing edge was
+        # appended, so the last reading is dropped when there is nothing to close it.
+        for point, next_t in zip(datapoints, boundaries[1:], strict=False):
             raw = point.get("v")
             value = last if raw is None else Decimal(str(raw))
             if value is None:

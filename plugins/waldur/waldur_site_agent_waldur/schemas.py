@@ -56,19 +56,24 @@ class WaldurBackendSettingsSchema(CommonBackendSettingsSchema):
     order_poll_timeout: int = Field(
         default=300,
         gt=0,
-        description="Legacy setting for poll_order_completion(); unused by federation order forwarding",
+        description=(
+            "Legacy setting for poll_order_completion(); unused by federation order forwarding"
+        ),
     )
     order_poll_interval: int = Field(
         default=5,
         gt=0,
-        description="Legacy setting for poll_order_completion(); unused by federation order forwarding",
+        description=(
+            "Legacy setting for poll_order_completion(); unused by federation order forwarding"
+        ),
     )
     user_resolve_method: Literal["remote_eduteams", "identity_bridge", "user_field"] = (
         Field(
             default="identity_bridge",
             description="Method to resolve users on Waldur B during membership sync. "
             "'remote_eduteams': POST /api/remote-eduteams/ (requires eduTEAMS OIDC on server). "
-            "'identity_bridge': POST /api/identity-bridge/ (idempotent, uses identity_bridge_source). "
+            "'identity_bridge': POST /api/identity-bridge/ "
+            "(idempotent, uses identity_bridge_source). "
             "'user_field': GET /api/users/?{user_match_field}={value}.",
             json_schema_extra=SENSITIVE,
         )

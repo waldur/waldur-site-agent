@@ -33,6 +33,9 @@ ceph_s3 = "waldur_site_agent_ceph_s3.schemas:CephS3BackendSettingsSchema"
 croit_usage = "waldur_site_agent_ceph_s3.schemas:CephS3BackendSettingsSchema"
 rgw_usage = "waldur_site_agent_ceph_s3.schemas:CephS3BackendSettingsSchema"
 
+[tool.ruff]
+extend = "../../pyproject.toml"
+
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [
   "S101",   # we can (and MUST!) use 'assert' in test files.

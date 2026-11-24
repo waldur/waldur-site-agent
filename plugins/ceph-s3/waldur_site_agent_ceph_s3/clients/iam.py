@@ -9,17 +9,19 @@ account's root user and removes them itself.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import xml.etree.ElementTree as ET  # nosec B405 - answers from the operator's own RGW
 from collections.abc import Iterator
+from http import HTTPStatus
 from urllib.parse import urlencode
-from xml.etree import ElementTree  # nosec B405 - answers from the operator's own RGW
 
 import httpx
 from botocore.auth import S3SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
-from ..exceptions import CephS3APIError
+from waldur_site_agent_ceph_s3.exceptions import CephS3APIError
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +32,11 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def _texts(root: ElementTree.Element, name: str) -> list[str]:
+def _texts(root: ET.Element, name: str) -> list[str]:
     return [node.text or "" for node in root.iter() if _local(node.tag) == name]
 
 
-def _first(root: ElementTree.Element, name: str) -> str:
+def _first(root: ET.Element, name: str) -> str:
     values = _texts(root, name)
     return values[0] if values else ""
 
@@ -51,15 +53,17 @@ class AccountIamClient:
         verify_ssl: bool = True,
         timeout: int = 30,
     ) -> None:
+        """Sign IAM requests to ``gateway_url`` with one account user's key pair."""
         self.url = gateway_url.rstrip("/") + "/"
         self._credentials = Credentials(access_key, secret_key)
         self._region = region
         self.session = httpx.Client(timeout=timeout, verify=verify_ssl)
 
     def close(self) -> None:
+        """Close the HTTP session."""
         self.session.close()
 
-    def _call(self, action: str, **params: str) -> ElementTree.Element:
+    def _call(self, action: str, **params: str) -> ET.Element:
         body = urlencode({"Action": action, "Version": IAM_VERSION, **params})
         request = AWSRequest(
             method="POST",
@@ -76,16 +80,16 @@ class AccountIamClient:
             )
         except httpx.HTTPError as e:
             raise CephS3APIError(f"IAM {action} failed: {e}") from e
-        if response.status_code >= 300:
+        if response.status_code >= HTTPStatus.MULTIPLE_CHOICES:
             code = ""
-            try:
-                code = _first(ElementTree.fromstring(response.content), "Code")
-            except ElementTree.ParseError:
-                pass
+            with contextlib.suppress(ET.ParseError):
+                # The operator-configured RadosGW endpoint, not end-user input.
+                code = _first(ET.fromstring(response.content), "Code")  # noqa: S314
             raise CephS3APIError(
                 f"IAM {action} answered {response.status_code} {code}".strip()
             )
-        return ElementTree.fromstring(response.content)
+        # The operator-configured RadosGW endpoint, not end-user input.
+        return ET.fromstring(response.content)  # noqa: S314
 
     def _list(self, action: str, name: str, **params: str) -> Iterator[str]:
         """Every ``name`` value of a paginated List* action."""
@@ -98,8 +102,9 @@ class AccountIamClient:
                 return
 
     def clear(self) -> dict[str, int]:
-        """Remove the account's roles, groups and OIDC providers, with the
-        policies attached to them. Users and their keys are left to Admin Ops.
+        """Remove the account's roles, groups and OIDC providers, with their policies.
+
+        Users and their keys are left to Admin Ops.
 
         Returns:
             How many of each were removed.

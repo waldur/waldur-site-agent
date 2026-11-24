@@ -30,6 +30,9 @@ waldur = "waldur_site_agent_waldur.schemas:WaldurComponentSchema"
 waldur = "waldur_site_agent_waldur.schemas:WaldurBackendSettingsSchema"
 waldur-identity-bridge = "waldur_site_agent_waldur.schemas:WaldurIdentityBridgeSettingsSchema"
 
+[tool.ruff]
+extend = "../../pyproject.toml"
+
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [
   "S101",   # we can (and MUST!) use 'assert' in test files.

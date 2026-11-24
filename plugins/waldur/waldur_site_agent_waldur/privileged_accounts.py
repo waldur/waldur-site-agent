@@ -70,10 +70,7 @@ def is_privileged_account_refusal(
 
 def _target_key(target_url: str) -> str:
     """Normalise a Waldur B URL so ``.../api/`` and its base URL match."""
-    url = str(target_url).rstrip("/")
-    if url.endswith("/api"):
-        url = url[: -len("/api")]
-    return url
+    return str(target_url).rstrip("/").removesuffix("/api")
 
 
 class PrivilegedAccountRegistry:

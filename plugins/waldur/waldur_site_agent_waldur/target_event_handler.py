@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 import stomp.utils
@@ -27,9 +28,13 @@ from waldur_api_client.api.marketplace_orders import (
 from waldur_api_client.models.order_error_details_request import OrderErrorDetailsRequest
 from waldur_api_client.models.order_state import OrderState
 from waldur_api_client.types import UNSET
-
 from waldur_site_agent.common.structures import Offering
 from waldur_site_agent.common.utils import get_client_for_offering
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from waldur_site_agent_waldur.backend import WaldurBackend
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +43,7 @@ TERMINAL_STATES = {OrderState.DONE, OrderState.ERRED, OrderState.CANCELED, Order
 
 def make_target_order_handler(
     source_offering: Offering,
-):
+) -> Callable[..., None]:
     """Create a STOMP handler for ORDER events from Waldur B.
 
     Uses closure to capture source_offering for creating a Waldur A client.
@@ -149,8 +154,8 @@ def make_target_order_handler(
 
 def make_target_offering_user_handler(
     source_offering: Offering,
-    backend,  # WaldurBackend — not type-hinted to avoid circular import
-):
+    backend: WaldurBackend,
+) -> Callable[..., None]:
     """Create a STOMP handler for OFFERING_USER events from Waldur B.
 
     When a Waldur B offering user is created or updated with a username,
@@ -222,8 +227,8 @@ def make_target_offering_user_handler(
 
 def make_target_resource_end_date_handler(
     source_offering: Offering,
-    backend,  # WaldurBackend — not type-hinted to avoid circular import
-):
+    backend: WaldurBackend,
+) -> Callable[..., None]:
     """Create a STOMP handler for RESOURCE end_date events from Waldur B.
 
     When a resource's end_date changes on Waldur B, triggers a bidirectional

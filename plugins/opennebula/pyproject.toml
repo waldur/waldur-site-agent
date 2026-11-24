@@ -26,6 +26,9 @@ opennebula = "waldur_site_agent_opennebula.backend:OpenNebulaBackend"
 [project.entry-points."waldur_site_agent.backend_settings_schemas"]
 opennebula = "waldur_site_agent_opennebula.schemas:OpenNebulaBackendSettingsSchema"
 
+[tool.ruff]
+extend = "../../pyproject.toml"
+
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [
   "S101",   # we can (and MUST!) use 'assert' in test files.

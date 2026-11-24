@@ -31,6 +31,9 @@ azure = "waldur_site_agent_azure.schemas:AzureComponentSchema"
 [project.entry-points."waldur_site_agent.backend_settings_schemas"]
 azure = "waldur_site_agent_azure.schemas:AzureBackendSettingsSchema"
 
+[tool.ruff]
+extend = "../../pyproject.toml"
+
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = [
   "S101",   # we can (and MUST!) use 'assert' in test files.

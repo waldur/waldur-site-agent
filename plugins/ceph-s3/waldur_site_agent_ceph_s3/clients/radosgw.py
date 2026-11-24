@@ -20,7 +20,8 @@ from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 from waldur_site_agent.backend.exceptions import BackendError
 
-from ..exceptions import (
+from waldur_site_agent_ceph_s3.clients.base import _TENANT_RE, BaseS3AdminClient
+from waldur_site_agent_ceph_s3.exceptions import (
     CephS3AccountExistsError,
     CephS3AccountNotFoundError,
     CephS3APIError,
@@ -28,7 +29,6 @@ from ..exceptions import (
     CephS3UserExistsError,
     CephS3UserNotFoundError,
 )
-from .base import _TENANT_RE, BaseS3AdminClient
 
 logger = logging.getLogger(__name__)
 
@@ -165,9 +165,9 @@ class RadosGWClient(BaseS3AdminClient):
         try:
             self._request("GET", "/user", params={"list": None, "format": "json"})
         except Exception as e:
-            logger.error("RadosGW admin API connection failed: %s", e)
+            logger.exception("RadosGW admin API connection failed")
             if raise_exception:
-                raise BackendError(f"RadosGW connection failed: {e}")
+                raise BackendError(f"RadosGW connection failed: {e}") from e
             return False
         logger.info("RadosGW admin API connection successful")
         return True
@@ -294,7 +294,7 @@ class RadosGWClient(BaseS3AdminClient):
             raise CephS3APIError(
                 f"Cannot delete S3 user {uid}: it still owns buckets. Empty and "
                 f"remove them first, then retry the termination ({e})"
-            )
+            ) from e
         return True
 
     # -- keys ---------------------------------------------------------------
@@ -333,8 +333,11 @@ class RadosGWClient(BaseS3AdminClient):
         )
 
     def set_user_suspended(self, uid: str, suspended: bool) -> None:
-        """Suspend or reinstate a user: a suspended user's keys are refused
-        (UserSuspended) on every request, IAM users of an account included."""
+        """Suspend or reinstate a user.
+
+        A suspended user's keys are refused (UserSuspended) on every request, IAM
+        users of an account included.
+        """
         self._request(
             "POST",
             "/user",
@@ -486,10 +489,7 @@ class RadosGWClient(BaseS3AdminClient):
             ``{"bytes_sent", "bytes_received", "ops", "successful_ops"}`` summed
             over the window; all zero when the log holds nothing for the owner.
         """
-        if _ACCOUNT_ID_RE.match(uid):
-            owner = uid
-        else:
-            owner = self._validate_uid(uid)
+        owner = uid if _ACCOUNT_ID_RE.match(uid) else self._validate_uid(uid)
         try:
             payload = self._request(
                 "GET",
@@ -612,7 +612,8 @@ class RadosGWClient(BaseS3AdminClient):
             if tenant:
                 params["tenant"] = self._validate_tenant(tenant)
         else:
-            raise CephS3APIError("An account is read by id or by name")
+            msg = "An account is read by id or by name"
+            raise CephS3APIError(msg)
         account = self._request(
             "GET", "/account", params={**params, "format": "json"}
         ).json()

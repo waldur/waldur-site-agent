@@ -6,6 +6,7 @@ managing projects, quotas, and OIDC groups.
 """
 
 import logging
+from http import HTTPStatus
 from typing import Any
 from urllib.parse import quote
 
@@ -45,7 +46,7 @@ class HarborClient(BaseClient):
         }
 
     def _make_request(
-        self, method: str, endpoint: str, **kwargs: Any
+        self, method: str, endpoint: str, **kwargs: Any  # noqa: ANN401  passed through to httpx.request
     ) -> httpx.Response:
         """Make HTTP request to Harbor API with error handling."""
         # For absolute paths, use them directly; otherwise prepend api_base
@@ -70,8 +71,9 @@ class HarborClient(BaseClient):
             response = httpx.request(method, url, **kwargs)
 
             # Check for authentication errors specifically
-            if response.status_code == 401:
-                raise HarborAuthenticationError("Authentication failed with Harbor API")
+            if response.status_code == HTTPStatus.UNAUTHORIZED:
+                msg = "Authentication failed with Harbor API"
+                raise HarborAuthenticationError(msg)
 
             response.raise_for_status()
 
@@ -85,7 +87,10 @@ class HarborClient(BaseClient):
             response_details = ""
             if isinstance(e, httpx.HTTPStatusError):
                 try:
-                    response_details = f" | Status: {e.response.status_code} | Body: {e.response.text[:500]}"
+                    response_details = (
+                        f" | Status: {e.response.status_code}"
+                        f" | Body: {e.response.text[:500]}"
+                    )
                 except Exception:
                     response_details = " | Unable to get response details"
 
@@ -99,9 +104,9 @@ class HarborClient(BaseClient):
 
         return response
 
-    def _parse_json_response(self, response: httpx.Response) -> Any:
+    def _parse_json_response(self, response: httpx.Response) -> Any:  # noqa: ANN401  decoded JSON
         """Safely parse JSON response with proper error handling."""
-        if response.status_code == 204:  # No content
+        if response.status_code == HTTPStatus.NO_CONTENT:
             return {}
 
         if not response.content:
@@ -116,7 +121,7 @@ class HarborClient(BaseClient):
         """Check if Harbor API is accessible."""
         try:
             response = self._make_request("GET", "/api/v2.0/health")
-            return response.status_code == 200
+            return response.status_code == HTTPStatus.OK
         except (HarborAPIError, HarborAuthenticationError):
             return False
 
@@ -280,8 +285,8 @@ class HarborClient(BaseClient):
                 .get("storage", 0),
                 "repository_count": summary.get("repo_count", 0),
             }
-        except HarborAPIError as e:
-            logger.error("Failed to get usage for project %s: %s", project_name, e)
+        except HarborAPIError:
+            logger.exception("Failed to get usage for project %s", project_name)
             return {"storage_bytes": 0, "repository_count": 0}
 
     def update_project_quota(self, project_name: str, new_quota_gb: int) -> bool:
@@ -487,12 +492,9 @@ class HarborClient(BaseClient):
             logger.info("Removed group %s from project %s", group_name, project_name)
             return True
 
-        except HarborAPIError as e:
-            logger.error(
-                "Failed to remove group %s from project %s: %s",
-                group_name,
-                project_name,
-                e,
+        except HarborAPIError:
+            logger.exception(
+                "Failed to remove group %s from project %s", group_name, project_name
             )
             return False
 
@@ -512,8 +514,8 @@ class HarborClient(BaseClient):
                 )
                 for project in projects
             ]
-        except HarborAPIError as e:
-            logger.error("Failed to list Harbor projects: %s", e)
+        except HarborAPIError:
+            logger.exception("Failed to list Harbor projects")
             return []
 
     def get_resource(self, resource_id: str) -> ClientResource | None:
@@ -535,6 +537,7 @@ class HarborClient(BaseClient):
         parent_name: str | None = None,
     ) -> str:
         """Create a new project (resource) in Harbor."""
+        del description, organization, parent_name
         # Default quota if not specified
         default_quota_gb = 10
         self.create_project(name, default_quota_gb)
@@ -547,6 +550,7 @@ class HarborClient(BaseClient):
 
     def list_resource_users(self, resource_id: str) -> list[str]:
         """List users associated with a project."""
+        del resource_id
         # Harbor doesn't directly list users, returns empty list
         # User access is managed through OIDC groups
         return []
@@ -586,35 +590,41 @@ class HarborClient(BaseClient):
         self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Create association between user and project (not directly supported in Harbor)."""
+        del username, resource_id, default_account
         # User associations are managed through OIDC groups
         # This is a no-op for Harbor
         return ""
 
     def get_association(self, username: str, resource_id: str) -> Association | None:
         """Get association between user and project (not directly supported in Harbor)."""
+        del username, resource_id
         # User associations are managed through OIDC groups
         # This always returns None for Harbor
         return None
 
     def delete_association(self, username: str, resource_id: str) -> str:
         """Delete association between user and project (not directly supported in Harbor)."""
+        del username, resource_id
         # User associations are managed through OIDC groups
         # This is a no-op for Harbor
         return ""
 
     def get_resource_user_limits(self, resource_id: str) -> dict[str, dict[str, int]]:
         """Get per-user limits (not supported in Harbor)."""
+        del resource_id
         return {}
 
     def set_resource_user_limits(
         self, resource_id: str, username: str, limits: dict[str, int]
     ) -> str:
         """Set per-user limits (not supported in Harbor)."""
+        del resource_id, username, limits
         # Harbor doesn't support per-user quotas
         return ""
 
     def get_usage_report(self, resource_ids: list[str], timezone: str | None = None) -> list:
         """Get usage records for Harbor projects."""
+        del timezone
         usage_records = []
         for resource_id in resource_ids:
             try:
@@ -627,6 +637,6 @@ class HarborClient(BaseClient):
                         "repository_count": usage_data.get("repository_count", 0),
                     }
                 )
-            except Exception as e:
-                logger.error("Failed to get usage for project %s: %s", resource_id, e)
+            except Exception:
+                logger.exception("Failed to get usage for project %s", resource_id)
         return usage_records

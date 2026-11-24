@@ -14,14 +14,15 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from http import HTTPStatus
 
 import httpx
 from waldur_site_agent.backend.clients import BaseClient
 from waldur_site_agent.backend.structures import Association, ClientResource
 from waldur_site_agent.common.sentry import scrub_secret_query_params
 
-from ..exceptions import CephS3APIError, CephS3UserNotFoundError
-from ..tenant import backend_id_of
+from waldur_site_agent_ceph_s3.exceptions import CephS3APIError, CephS3UserNotFoundError
+from waldur_site_agent_ceph_s3.tenant import backend_id_of
 
 logger = logging.getLogger(__name__)
 
@@ -177,17 +178,17 @@ class HttpTransport(abc.ABC):
                 content=body,
             )
 
-            if response.status_code >= 400:
+            if response.status_code >= HTTPStatus.BAD_REQUEST:
                 raise self._classify_error(response)
 
             return response
 
-        except httpx.TimeoutException:
-            raise CephS3APIError(f"Request timeout after {self.timeout}s")
+        except httpx.TimeoutException as e:
+            raise CephS3APIError(f"Request timeout after {self.timeout}s") from e
         except httpx.TransportError as e:
-            raise CephS3APIError(f"Connection error: {e}")
+            raise CephS3APIError(f"Connection error: {e}") from e
         except httpx.HTTPError as e:
-            raise CephS3APIError(f"Request failed: {e}")
+            raise CephS3APIError(f"Request failed: {e}") from e
 
 
 class BaseS3AdminClient(HttpTransport, BaseClient):
@@ -295,6 +296,7 @@ class BaseS3AdminClient(HttpTransport, BaseClient):
         parent_name: str | None = None,
     ) -> str:
         """Create a resource in the cluster - maps to create_user for S3."""
+        del organization, parent_name
         self.create_user(name, description)
         return name
 
@@ -307,40 +309,49 @@ class BaseS3AdminClient(HttpTransport, BaseClient):
         self, resource_id: str, limits_dict: dict[str, int]
     ) -> str | None:
         """Set account limits - not applicable for S3."""
+        del resource_id, limits_dict
         return None
 
     def get_resource_limits(self, resource_id: str) -> dict[str, int]:
         """Get account limits - not applicable for S3."""
+        del resource_id
         return {}
 
     def get_resource_user_limits(self, resource_id: str) -> dict[str, dict[str, int]]:
         """Get per-user limits for the account - not applicable for S3."""
+        del resource_id
         return {}
 
     def set_resource_user_limits(
         self, resource_id: str, username: str, limits_dict: dict[str, int]
     ) -> str:
         """Set resource limits for a specific user - not applicable for S3."""
+        del resource_id, username, limits_dict
         return ""
 
     def get_association(self, user: str, resource_id: str) -> Association | None:
         """Get association between the user and the resource - not applicable for S3."""
+        del user, resource_id
         return None
 
     def create_association(
         self, username: str, resource_id: str, default_account: str | None = None
     ) -> str:
         """Create association between the user and the resource - not applicable for S3."""
+        del username, resource_id, default_account
         return ""
 
     def delete_association(self, username: str, resource_id: str) -> str:
         """Delete association between the user and the resource - not applicable for S3."""
+        del username, resource_id
         return ""
 
     def get_usage_report(self, resource_ids: list[str], timezone: str | None = None) -> list:
         """Get usage report for resources - not applicable for S3."""
+        del resource_ids, timezone
         return []
 
     def list_resource_users(self, resource_id: str) -> list[str]:
         """List users associated with resource - not applicable for S3."""
+        del resource_id
         return []

@@ -21,6 +21,9 @@ from azure.mgmt.compute.models import (
 
 from .base import AzureClientError, BaseAzureClient, wrap_azure_errors
 
+# Methods here return azure-mgmt models, and begin_* methods a poller that
+# wrap_azure_errors swaps for _TranslatingPoller, so their returns stay Any.
+
 
 @dataclass
 class AzureImage:
@@ -112,7 +115,7 @@ class ComputeClient(BaseAzureClient):
     @wrap_azure_errors
     def get_virtual_machine(
         self, resource_group_name: str, vm_name: str, expand: str | None = None
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Fetch a virtual machine, optionally expanding its instance view."""
         return self.compute_client.virtual_machines.get(
             resource_group_name, vm_name, expand=expand
@@ -131,7 +134,7 @@ class ComputeClient(BaseAzureClient):
         password: str,
         custom_data: str | None = None,
         ssh_key: str | None = None,
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start creation of a virtual machine and return the poller."""
         os_profile = OSProfile(
             computer_name=vm_name,
@@ -172,22 +175,22 @@ class ComputeClient(BaseAzureClient):
         )
 
     @wrap_azure_errors
-    def delete_virtual_machine(self, resource_group_name: str, vm_name: str) -> Any:
+    def delete_virtual_machine(self, resource_group_name: str, vm_name: str) -> Any:  # noqa: ANN401
         """Start deletion of a virtual machine and return the poller."""
         return self.compute_client.virtual_machines.begin_delete(resource_group_name, vm_name)
 
     @wrap_azure_errors
-    def start_virtual_machine(self, resource_group_name: str, vm_name: str) -> Any:
+    def start_virtual_machine(self, resource_group_name: str, vm_name: str) -> Any:  # noqa: ANN401
         """Start a stopped virtual machine."""
         return self.compute_client.virtual_machines.begin_start(resource_group_name, vm_name)
 
     @wrap_azure_errors
-    def restart_virtual_machine(self, resource_group_name: str, vm_name: str) -> Any:
+    def restart_virtual_machine(self, resource_group_name: str, vm_name: str) -> Any:  # noqa: ANN401
         """Restart a virtual machine."""
         return self.compute_client.virtual_machines.begin_restart(resource_group_name, vm_name)
 
     @wrap_azure_errors
-    def deallocate_virtual_machine(self, resource_group_name: str, vm_name: str) -> Any:
+    def deallocate_virtual_machine(self, resource_group_name: str, vm_name: str) -> Any:  # noqa: ANN401
         """Deallocate a virtual machine, releasing the host that bills for it.
 
         Not ``begin_power_off``: a powered-off machine stays allocated on its
@@ -201,7 +204,7 @@ class ComputeClient(BaseAzureClient):
     @wrap_azure_errors
     def create_disk(
         self, location: str, resource_group_name: str, disk_name: str, disk_size_gb: int
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Start creation of an empty managed disk and return the poller."""
         return self.compute_client.disks.begin_create_or_update(
             resource_group_name,
