@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -48,18 +49,42 @@ class OpenWebUISettingsSchema(BaseModel):
         default="sso",
         description=(
             "'sso' (default): accounts appear on first login through the identity "
-            "provider and the agent only ever revokes. 'managed_password': the agent "
-            "creates the account with 'initial_password'"
+            "provider and the agent only ever revokes; any account under a member's "
+            "address is taken as theirs. 'managed_password': the agent creates the "
+            "account with a per-person password derived from 'password_secret'. "
+            "Both require ENABLE_SIGNUP=False on Open WebUI"
         ),
         json_schema_extra=SENSITIVE,
+    )
+    password_secret: str | None = Field(
+        default=None,
+        description=(
+            "Secret each created account's password is derived from (HMAC over the "
+            "address; print one with waldur-litellm-chat-password). Required when "
+            "account_provisioning is 'managed_password'. Use a new random value: "
+            "never the old initial_password, which members were told"
+        ),
+        json_schema_extra=SECRET,
     )
     initial_password: str | None = Field(
         default=None,
         description=(
-            "Temporary password for accounts the agent creates; required when "
-            "account_provisioning is 'managed_password'"
+            "No longer used. It was the password given to every created account; "
+            "see password_secret"
         ),
         json_schema_extra=SECRET,
+    )
+    # A date as well as a string: YAML reads an unquoted ``2026-11-14`` as a date.
+    bind_accounts_created_before: datetime.datetime | datetime.date | str | None = Field(
+        default=None,
+        description=(
+            "ISO date or datetime (UTC). A member's existing Open WebUI account created "
+            "before it is adopted as the agent's own -- the upgrade path for accounts "
+            "made before the agent recorded which ones it created. Unset: only accounts "
+            "the agent creates, or that an identity provider created, are adopted. "
+            "Only read under managed_password: under sso every account is adopted"
+        ),
+        json_schema_extra=SENSITIVE,
     )
     delete_accounts_on_removal: bool | None = Field(
         default=False,

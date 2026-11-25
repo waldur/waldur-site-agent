@@ -27,6 +27,7 @@ import httpx
 
 from waldur_site_agent.backend.exceptions import BackendError
 
+from .chat_accounts import canonical_email
 from .client import timeout_setting, verify_ssl_setting
 
 logger = logging.getLogger(__name__)
@@ -121,8 +122,12 @@ class OpenWebUIClient:
 
     @staticmethod
     def _normalize(email: str) -> str:
-        """Open WebUI lowercases every address it stores, so comparisons must too."""
-        return email.strip().lower()
+        """Open WebUI lowercases every address it stores; compare in the canonical form.
+
+        NFKC plus casefold (``canonical_email``), not just ``lower()``, so an address
+        spelled with compatibility characters cannot pass for a different one.
+        """
+        return canonical_email(email)
 
     def find_user(self, email: str) -> dict | None:
         """Return the account with this exact address, or None.
@@ -132,8 +137,13 @@ class OpenWebUIClient:
         the result is a candidate list that still has to be filtered exactly here —
         matching loosely would let ``ann@x.org`` resolve to ``joann@x.org`` and hand
         one person's account to another.
+
+        Two accounts whose addresses are the same canonical address are refused rather
+        than one picked: whichever came first in the listing would get the person's
+        access, and nothing says that is the right one.
         """
         wanted = self._normalize(email)
+        found: dict | None = None
         page = 1
         while page <= MAX_PAGES:
             payload = self._request("GET", "/api/v1/users/", params={"query": wanted, "page": page})
@@ -154,17 +164,24 @@ class OpenWebUIClient:
             for record in users:
                 if not isinstance(record, dict):
                     continue
-                if self._normalize(str(record.get("email", ""))) == wanted:
-                    return record
+                if self._normalize(str(record.get("email", ""))) != wanted:
+                    continue
+                if found is not None and found.get("id") != record.get("id"):
+                    msg = (
+                        f"Several Open WebUI accounts have the address {wanted}; "
+                        "refusing to pick one"
+                    )
+                    raise OpenWebUIError(msg)
+                found = record
             if not users:
-                return None
+                return found
             # ``total`` counts the whole match, not the page, so it is the only way to
             # know whether another page exists; an empty page above ends the walk
             # regardless, so a wrong count cannot spin this loop.
             if page * len(users) >= int(payload.get("total") or 0):
-                return None
+                return found
             page += 1
-        return None
+        return found
 
     def create_user(self, email: str, name: str, password: str, role: str = ROLE_ACTIVE) -> dict:
         """Create one account and return its record.
@@ -173,6 +190,9 @@ class OpenWebUIClient:
         for an address that already exists — so callers look the account up first. That
         is a lookup-then-create race in principle, but the caller treats a taken email
         as "already provisioned", which is the same end state.
+
+        The record returned carries the new account's ``id``, which the caller records
+        as the account it created.
         """
         payload = self._request(
             "POST",

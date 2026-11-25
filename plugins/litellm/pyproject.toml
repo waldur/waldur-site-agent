@@ -10,6 +10,11 @@ dependencies = [
     "httpx>=0.25.0",
 ]
 
+# Prints the Open WebUI password the plugin gives an account it creates under
+# account_provisioning: managed_password, for the operator to hand out.
+[project.scripts]
+waldur-litellm-chat-password = "waldur_site_agent_litellm.chat_accounts:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

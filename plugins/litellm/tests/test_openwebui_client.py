@@ -100,6 +100,25 @@ def test_find_user_matches_the_address_exactly_not_as_a_substring() -> None:
     assert client.find_user("zoe@x.org") is None
 
 
+def test_two_accounts_with_one_canonical_address_are_refused_not_picked() -> None:
+    # A fullwidth "ａnn" reads as "ann"; handing the person whichever came first would
+    # give their access to an account nothing says is theirs.
+    client = _client()
+    client.session = mock.MagicMock()
+    client.session.request.return_value = _response(
+        json_body={
+            "users": [
+                {"id": "owui-1", "email": "ann@x.org"},
+                {"id": "owui-2", "email": "\uff41nn@x.org"},
+            ],
+            "total": 2,
+        }
+    )
+
+    with pytest.raises(OpenWebUIError, match="Several Open WebUI accounts"):
+        client.find_user("ann@x.org")
+
+
 def test_a_bare_list_from_the_user_endpoint_is_still_searched() -> None:
     # Pre-UserListResponse builds answer with a list rather than an envelope.
     client = _client()

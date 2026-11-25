@@ -31,7 +31,7 @@ CHAT = {
         "api_token": "owui-admin",
         "url": "https://chat.example.com",
         "account_provisioning": "managed_password",
-        "initial_password": "ChangeMe-123",
+        "password_secret": "s3cret-never-shown",
     },
 }
 COMPONENTS = {

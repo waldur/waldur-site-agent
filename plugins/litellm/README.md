@@ -673,10 +673,10 @@ without reading the role, so chat attribution works the same for a viewer.
 `internal_user_viewer` the first time the management backend lists the proxy's users after
 the upgrade (normally the next membership pass), one `/user/update` each, and the member's
 existing UI session loses key creation at once. That covers every record the plugin has
-stamped with ownership, released ones included. A member's record that the agent adopts is
-switched too, if it is an `internal_user`. The agent never changes any other role: an admin
-who is also a project member keeps their role, and so does an `internal_user` an admin made
-by hand that no resource has adopted.
+stamped with ownership, released ones included, and a record claimed on an add is switched
+too, if it is an `internal_user`. The agent never changes any other role: an admin who is
+also a project member keeps their role, and so does an `internal_user` an admin made by
+hand, which the agent refuses rather than adopts.
 
 The switch is **one-way for older agents**: they list only `internal_user`, so to them every
 viewer is gone. An older reporting agent then bills no chat usage, and an older management
@@ -742,9 +742,13 @@ resource can claim the address — the move is then a new period, not a takeover
 
 That makes the offering responsible for enforcing one chat-enabled resource per person
 at order time. The plugin can refuse the second claim; it cannot choose which should win.
-A record with **no** owner stamped on it is adopted instead of refused — it is either a
-user an admin added by hand or one left by an interrupted add, and refusing would leave
-a resource unable to provision its own member.
+A record with **no** ownership stamped on it is refused too. The plugin never wrote it:
+it is a user an operator added by hand, or one the proxy made itself. Adopting it put it
+on the plugin's books, released with the member and deleted once the retention window
+passed. Delete it on the proxy and the next membership sync creates the plugin's own.
+Users the plugin creates carry `waldur_created: true`, and only those are ever deleted
+when they expire. A hand-made user that an older agent already adopted is released but
+kept.
 
 ### What the Waldur offering must have
 
@@ -801,10 +805,11 @@ plugin_options:
 - **`sso` (default)** — the agent creates nothing; the identity provider creates the
   account on first login with the address it asserts. The agent still **re-enables** a
   previously demoted account, because an SSO login into one does not restore it, and
-  still revokes.
-- **`managed_password`** — the agent creates the account through
-  `POST /api/v1/auths/add` with the operator-supplied `initial_password`, mirroring what
-  an admin does by hand today.
+  still revokes. It takes any account under a member's address as theirs, so it
+  **requires `ENABLE_SIGNUP=False`** (see *Which accounts the agent acts on*).
+- **`managed_password`**: the agent creates the account through
+  `POST /api/v1/auths/add`, mirroring what an admin does by hand today. The password is
+  **derived per person** from the operator's `password_secret`, see below.
 
 `sso` is the target state: it removes password minting, transport and storage from
 Waldur entirely, and makes the address match structural rather than coincidental. It has
@@ -812,9 +817,161 @@ been verified end to end against real Keycloak — see [Running behind an identi
 provider](#running-behind-an-identity-provider-sso), which also carries the deployment
 requirements that come with it.
 
-`managed_password` exists because that is where most deployments start — Waldur has no
-encrypted channel to hand a password to an end user, so one initial secret is shared by
-every account it creates and the person is expected to change it on first login.
+`managed_password` exists because that is where most deployments start. Waldur has no
+channel to hand a password to one person, and giving every account the same
+`initial_password` let any member sign in as any other who had not changed it. Open
+WebUI does not force a change on first login. So each account now gets
+`HMAC-SHA256(password_secret, address)`, and a person told their own password cannot
+compute anyone else's. Print it for handout with the CLI the plugin installs:
+
+```bash
+waldur-litellm-chat-password ada@example.org     # prompts for password_secret
+# ada@example.org   <24 characters>.Wa1
+```
+
+It reads the secret from `WALDUR_OPENWEBUI_PASSWORD_SECRET` instead when that is set.
+The prompt keeps the secret out of shell history.
+
+`password_secret` must be a **new random value that has never been shown to anyone**.
+The derivation is public, in this README and in the CLI, so anyone who knows the key can
+compute every password. That is why the old `initial_password` is no longer used:
+every member was told it. An offering that still sets only `initial_password` fails at
+startup until `password_secret` is set.
+
+Accounts that already exist keep the password they have, because the agent never resets
+one. The password ends in `.Wa1` so it passes
+Open WebUI's default `PASSWORD_VALIDATION_REGEX`; the 24 characters before that suffix
+hold the secret part.
+
+**`managed_password` requires `ENABLE_SIGNUP=False`** on Open WebUI. Under it the agent
+never gives access to an account it did not create (see below). With signup on, though,
+anyone can register a member's address before the member is provisioned. That account
+then holds the address, and the member cannot get an account at all.
+
+#### Which accounts the agent acts on
+
+The agent finds an account by email, and an email proves nothing on its own. So it
+records the id of the account it creates (or adopts) on the person's LiteLLM user, as
+`waldur_openwebui_id`. It **promotes, adds to model groups or deletes only that
+account**. An account under the member's address that the agent has no record of is
+adopted as follows.
+
+**Under `sso`, it is always adopted** (any `user` or `pending` account), including the
+new account after an earlier removal deleted the old one. The identity provider makes
+every account there, and accounts from LDAP or trusted-header sign-in carry no field
+that says so, so there is nothing finer to check. This **requires `ENABLE_SIGNUP=False`**
+under `sso` too: with the password form open, anyone could register a member's address
+and be given the member's entitlement.
+
+**Under `managed_password`, it is adopted only when its origin vouches for the address:**
+
+- **the identity provider created it.** Open WebUI made it at an OIDC login or through
+  SCIM (`oauth`, `oauth_sub` or `scim` set on the account). With
+  `OAUTH_MERGE_ACCOUNTS_BY_EMAIL` on, a password account someone registered earlier
+  gains `oauth` at the owner's first OIDC login while its registrant still knows the
+  password, which is one more reason to keep `ENABLE_SIGNUP=False`.
+- **it predates `bind_accounts_created_before`**, and the person held the entitlement
+  before that date too: the upgrade path, see below.
+
+Under `managed_password`, any other account, whether self-registered or made by hand,
+is left alone. The add then fails for that member and is retried on every pass. Each retry claims and then gives
+back their LiteLLM user, and creates and deletes that user if the agent made it, so the
+log shows the attempt on every pass. That way they get chat as soon as the account is
+dealt with: delete it if it is not the member's, or bind it to them (below). An account
+with an elevated role (`admin`) is left alone without failing the add. A record that names an account
+which still exists is kept after its retention window, because nothing else says the
+account is the person's.
+Taking access *away* needs no record: on removal or pause, any `user`/`pending` account
+under the address is demoted, since that ends access the person is no longer entitled
+to and can be reversed. Only deletion (`delete_accounts_on_removal`) is held to the
+record. Under `managed_password`, an unrecorded account is demoted instead of deleted.
+Under `sso` every `user`/`pending` account under the address is adopted, so with
+deletion on, removal deletes whatever account holds the member's address.
+
+Addresses are compared after NFKC normalisation and casefolding, so `ａda@…` (fullwidth)
+and `ada@…` are one address. Two Open WebUI accounts that fold to the same address are
+refused, and neither is picked.
+
+#### Upgrading an offering that already has accounts
+
+Accounts the agent created before this version have no record, so it would not promote
+them on restore or add them to model groups. Under `managed_password`, upgrade like this:
+
+1. **Set `password_secret`** to a new random value, never the old `initial_password`.
+2. **Set `bind_accounts_created_before`** to the moment you upgrade, for example
+   `"2026-11-14T15:00:00Z"`. A bare date means midnight UTC at its start, so accounts
+   the old agent made earlier that day would not count. A member's existing account is
+   then adopted the first time the agent meets it, but only if the account was created
+   before that moment *and* the member was provisioned before it too: by an agent older
+   than this version, or by this one on an earlier day than the cutoff's. That rules out
+   an account registered after the upgrade, and one registered before it for someone
+   provisioned only afterwards. You can leave the setting in place.
+3. **Reset the passwords of existing accounts.** Every account the old agent made still
+   opens with the old shared `initial_password` until its owner changes it, and the
+   agent never resets a password. In Open WebUI's admin panel, set each such account's
+   password to the one `waldur-litellm-chat-password` prints and hand it out, or ask
+   members to change theirs.
+4. **Audit the accounts.** A `pending` account someone registered before the upgrade,
+   under the address of a member provisioned before it too, cannot be told apart from
+   one the old agent made, and is adopted. The old agent would already have promoted
+   it. An account the old agent promoted and put in model groups but the new one
+   does not adopt keeps its role and groups until the member is removed.
+5. **Bind the accounts of members whose record is gone.** Agents from before dated
+   ownership deleted a removed member's LiteLLM user, and a later prune may have done
+   the same, while the chat account was only demoted. So when such a member is
+   re-added there is no record left to show they were provisioned before the cutoff,
+   and their own account looks exactly like one someone else registered. The agent
+   refuses it: the add fails on every pass, or, where chat follows the key, the member
+   is added but has no chat. Bind the account by hand (see below) rather than deleting
+   it, which would lose their conversations.
+
+#### Binding an account by hand
+
+When an account is the member's but the agent cannot tell, record it yourself. The
+`user_id` must be the address exactly as the agent keys it (NFKC, casefolded): the first
+column `waldur-litellm-chat-password <address>` prints. Any other spelling is a
+different LiteLLM user, and the binding would never be read.
+
+**No LiteLLM user for the address yet**: create one with an empty ownership list,
+the offering username and the Open WebUI account id:
+
+```bash
+curl -X POST "$LITELLM/user/new" -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H 'Content-Type: application/json' -d '{
+    "user_id": "ada@example.org", "user_email": "ada@example.org",
+    "user_role": "internal_user", "auto_create_key": false,
+    "metadata": {"waldur_ownership": [], "waldur_username": "<offering username>",
+                 "waldur_openwebui_id": "<Open WebUI account id>"}}'
+```
+
+**A LiteLLM user exists that Waldur never stamped** (its metadata has no
+`waldur_ownership` list, no `waldur_resource` and no `waldur_created`; made by hand):
+the agent refuses it whatever else it carries. Delete it (`POST /user/delete` with
+`{"user_ids": ["<address>"]}`) and use the recipe above. LiteLLM deletes the user's own
+keys with it, so move any personal key it holds first; the plugin's keys belong to no
+user and are not affected.
+
+**A LiteLLM user exists that Waldur stamped**: add `waldur_openwebui_id` to its metadata
+and change nothing else. `/user/update` replaces the metadata wholesale, and the
+ownership periods in it are what bills the member's past chat usage, so overwriting them
+with an empty list takes already-billed usage off the months the agent still reports.
+If the lookup fails or finds no user, `jq` outputs nothing, the update receives an
+empty body, which LiteLLM rejects, and nothing is written:
+
+```bash
+set -o pipefail
+curl -sfG "$LITELLM/user/info" --data-urlencode "user_id=ada@example.org" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  | jq -e '(if has("user_info") then .user_info else . end) | select(. != null and .user_id != null)
+           | {user_id, metadata: ((.metadata // {}) + {waldur_openwebui_id: "<Open WebUI account id>"})}' \
+  | curl -sf -X POST "$LITELLM/user/update" -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+      -H 'Content-Type: application/json' -d @-
+```
+
+A member who is not currently provisioned is claimed by the next membership sync, and
+their account is re-enabled. For a member already held open, promote the account to
+`user` in Open WebUI's admin panel; where chat follows the key, the key-assignee sync
+does it on its next pass.
 
 Removal **demotes** the account to Open WebUI's `pending` role by default rather than
 deleting it: access ends either way, and demotion keeps the person's conversations so a
@@ -913,7 +1070,8 @@ Three things about account creation that are easy to get wrong (all of them in t
 
 - **`ENABLE_OAUTH_SIGNUP` must be on.** It governs OIDC account creation, and the agent
   cannot create SSO accounts itself. `ENABLE_SIGNUP` is a *different* flag covering only
-  the password form; leaving it off is correct and does not restrict SSO.
+  the password form; leaving it off is required (the agent adopts any account under a
+  member's address) and does not restrict SSO.
 - **`DEFAULT_USER_ROLE=pending` is the real gate.** It is the only one that applies to
   every creation path — OIDC, the admin API, the password form. With it set to `user`,
   anyone the identity provider will authenticate has chat access the moment they log in,
@@ -1011,9 +1169,10 @@ ends inclusive and `to: null` for the current owner:
   address too.
 - A record written before this change has only `waldur_resource`. It is read as one open
   period with no start, so a current member's usage is attributed exactly as before.
-- A record with no open period is **deleted** once its last period ended before the
-  retention window — `ownership_retention_months` calendar months, counting the current
-  one (default 12). Keep that at least as large as the agent's `reporting_periods`, or a
+- A record the agent created (`waldur_created`) with no open period is **deleted** once
+  its last period ended before the retention window (`ownership_retention_months`
+  calendar months, counting the current one; default 12), unless the chat account it
+  names still exists or cannot be looked up. Keep that at least as large as the agent's `reporting_periods`, or a
   month the agent still reports loses a removed member's chat usage. Periods older than
   the window are also trimmed from records that stay. Pruning walks every user on the
   proxy, so give every agent sharing one proxy the same setting.
@@ -1112,7 +1271,9 @@ membership sync re-adds) when switching an offering back to chat by membership.
 | `api_token` | yes | — | Admin API token |
 | `url` | no | — | User-facing chat URL surfaced as a resource endpoint in the portal |
 | `account_provisioning` | no | `sso` | `sso` or `managed_password` |
-| `initial_password` | when `managed_password` | — | Temporary password for created accounts |
+| `password_secret` | when `managed_password` | — | New random secret each account's password is derived from |
+| `initial_password` | no | — | No longer used; was the one password given to every account |
+| `bind_accounts_created_before` | no | — | ISO date (UTC); adopt older accounts on upgrade |
 | `delete_accounts_on_removal` | no | `false` | Delete instead of demoting; removal and terminate only, never pause |
 | `shared_keys` | no (recommended) | — | Alias or hash of each key Open WebUI calls the proxy with; see below |
 | `verify_ssl` | no | `true` | Verify Open WebUI's TLS certificate |
@@ -1435,7 +1596,8 @@ offerings:
         api_url: "https://chat.example.com"
         api_token: "owui-admin-token"
         url: "https://chat.example.com"
-        account_provisioning: "sso"          # or "managed_password" + initial_password
+        account_provisioning: "sso"          # needs ENABLE_SIGNUP=False; or "managed_password" + password_secret
+        # bind_accounts_created_before: "2026-11-14"   # upgrade: adopt accounts made before this
         delete_accounts_on_removal: false
         shared_keys: ["openwebui"]           # the alias (or hash) of Open WebUI's key
 
