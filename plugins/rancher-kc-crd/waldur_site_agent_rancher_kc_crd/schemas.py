@@ -6,7 +6,12 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from waldur_site_agent.common.plugin_schemas import SECRET, SENSITIVE, CommonBackendSettingsSchema
+from waldur_site_agent.common.plugin_schemas import (
+    SECRET,
+    SENSITIVE,
+    CommonBackendSettingsSchema,
+    NonEmptyStr,
+)
 
 from .translator import resolve_identity_settings
 
@@ -84,6 +89,15 @@ class RancherKcCrdBackendSettingsSchema(CommonBackendSettingsSchema):
         description=(
             "Lowercase the member identifier (default true for username lookup, false otherwise)"
         ),
+    )
+    keycloak_identity_provider: NonEmptyStr | None = Field(
+        default=None,
+        description=(
+            "Alias of the identity provider Waldur and the Rancher Keycloak share; members "
+            "then carry federatedIdentity, so the operator can pre-create users who have "
+            "not logged in yet (username lookup only)"
+        ),
+        json_schema_extra=SENSITIVE,
     )
     waldur_api_url: str | None = Field(
         default=None,

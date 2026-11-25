@@ -108,6 +108,17 @@ def test_misspelt_key_is_reported(backend, caplog):
             },
             IdentitySettings("civil_number", "username", None, "${value}", False),
         ),
+        (
+            {
+                "keycloak_user_identity_source": "civil_number",
+                "keycloak_identity_provider": "tara",
+            },
+            IdentitySettings("civil_number", "username", None, "${value}", True, "tara"),
+        ),
+        (
+            {"keycloak_identity_provider": "tara"},
+            IdentitySettings("username", "username", None, "${value}", True, "tara"),
+        ),
     ],
 )
 def test_identity_settings_resolve(settings, expected):
@@ -139,6 +150,24 @@ def test_identity_settings_resolve(settings, expected):
         ),
         ({"keycloak_user_identity_template": "EE"}, "must contain"),
         ({"keycloak_user_identity_source": "email"}, "keycloak_user_identity_source"),
+        (
+            {"keycloak_identity_provider": "tara", "keycloak_user_identity_source": "uuid"},
+            "not uuid",
+        ),
+        (
+            {
+                "keycloak_identity_provider": "tara",
+                "keycloak_user_identity_source": "civil_number",
+                "keycloak_user_lookup": "attribute",
+                "keycloak_lookup_attribute": "personalCode",
+            },
+            "username only",
+        ),
+        (
+            {"keycloak_identity_provider": "tara", "keycloak_user_identity_lowercase": False},
+            "lowercased member identifier",
+        ),
+        ({"keycloak_identity_provider": "tara", "keycloak_use_user_id": True}, "username only"),
     ],
 )
 def test_invalid_identity_settings_are_rejected(settings, error):
@@ -146,6 +175,12 @@ def test_invalid_identity_settings_are_rejected(settings, error):
         resolve_identity_settings(settings)
     with pytest.raises(ValueError):  # noqa: PT011
         RancherKcCrdBackendSettingsSchema(**settings)
+
+
+def test_empty_identity_provider_is_rejected():
+    # An empty alias would silently switch the feature off.
+    with pytest.raises(ValueError):  # noqa: PT011
+        RancherKcCrdBackendSettingsSchema(keycloak_identity_provider="")
 
 
 def test_invalid_identity_combination_is_reported_on_load(caplog):
