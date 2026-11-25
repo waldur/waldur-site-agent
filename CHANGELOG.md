@@ -1,49 +1,47 @@
 # Changelog
 
-## 1.0.8-rc.16 - 2026-11-23
+## 1.0.8-rc.17 - 2026-11-25
 
-- **Core**: Drop Python 3.9 support. Python 3.10 through 3.13 are now supported. (#122)
-- **Core**: Load an offering's configuration from Waldur, and document the `site_agent` token template and the `OFFERING.MANAGE_AGENT` permission. (#80, waldur/waldur-mastermind#1276)
+- **Core**: Load an offering's configuration from Waldur, and document the `site_agent` token template and the `OFFERING.MANAGE_AGENT` permission (#80, waldur/waldur-mastermind#1276).
 - **Core**: Add a one-shot usage report command.
-- **Core**: Manage resource API keys one by one: request, assign, cap, pause, resume and delete. Offerings that manage keys individually no longer get default keys, and members keep syncing on resources that have no keys. (#30, #71, #87)
-- **Core**: Mirror per-period spending limits onto backends and report usage per day. All-time limits are left to Waldur's pause. (#85, waldur/waldur-mastermind#841)
-- **Core**: Apply resource option changes from UPDATE orders. (#106)
-- **Core**: Sync resource limits through the provider resource listing. (waldur/waldur-mastermind#1253)
-- **Core**: Process STOMP messages off the receiver thread and acknowledge them only after handling. Dropped consumers now reconnect, and the liveness probe fails while they stay down. (#38, #45)
-- **Core**: Honour `global_proxy` in event mode, including the STOMP WebSocket, and add SOCKS proxy support. The STOMP port now defaults from `websocket_use_tls`. (#44, #57, #61)
-- **Core**: Route every Waldur client through OIDC-aware auth and send personal access tokens as `Bearer`. Fix `get_client` stripping hostname characters instead of the `/api` suffix. (#43, #89)
-- **Core**: Keep polling and event agents working when agent identity registration is refused. (waldur/waldur-mastermind#385, #24, #92)
-- **Core**: Release an offering user's backend account only after its removal is confirmed. (waldur/waldur-mastermind#413)
-- **Core**: Make membership sync safer. Add `preserve_unmanaged_backend_users`, stop removing service and course accounts, handle preserve-mode removals when the unfiltered offering-user fetch fails, and skip unchanged metadata writes.
-- **Core**: Reserve the ERRED state for backend failures and log failed user additions with their cause instead of hiding them. (#46, #58)
-- **Core**: Apply provider project group events straight away. (waldur/waldur-mastermind#626)
-- **Core**: Add settings schemas for every backend, mark secret settings, and export a plugin catalogue for Waldur that lists the connection and runtime settings. (#53, #79, #114)
-- **Core**: Use the `Marketplace.SiteAgent` offering type name. (waldur/waldur-mastermind#403)
-- **Core**: Stop the health probe importing the API client and plugins, build the image on `python:3.13-alpine3.24`, and write the image healthcheck in exec form. (#31, #88, waldur/waldur-mastermind#1255)
-- **Core**: Report a rejected token in diagnostics instead of crashing. (#59)
-- **Ceph S3**: Add a per-resource RGW tenant via `tenant_template` for croit and an RGW account per resource for radosgw. Re-apply quotas on update, suspend on pause, and clear account IAM before termination. (#105, #106, #107, #111)
-- **Ceph S3**: Meter RGW storage, traffic and requests without croit (`rgw_usage`). Report croit usage for radosgw-managed offerings, and read croit statistics at native resolution. (#108, #109, #110)
-- **LiteLLM**: Add Open WebUI integration, per-key API keys and usage, and key-based chat. The holder's chat counts towards the key's budget. (#15, #66, #75)
-- **LiteLLM**: Reset key budgets on the 1st of the month, bill chat usage to the resource that owned the address that day, and report prompt-cache tokens. (#72, #73, #91)
-- **LiteLLM**: Create members as `internal_user_viewer` and mint keys as `llm_api`. Add an option to derive a key's `backend_id` from the resource UUID, plus a deployment checklist. (#22, #99, #104)
-- **Envoy AI Gateway**: Refuse every per-key model list except "all models". (waldur/waldur-mastermind#745)
-- **K8s namespace**: Bill namespaces by consumption measured in Prometheus. Register the backend as `k8s-namespace` and let orders set the Pod Security level or turn off quota enforcement within what the offering allows. (#6, #93, #94, #95)
-- **LDAP**: Take usernames and POSIX IDs from Waldur and write Waldur's project groups, with personal groups now optional. (#17, #41)
-- **LDAP**: Release accounts when a user loses their last offering access, and render welcome email templates in a sandbox. (waldur/waldur-mastermind#413, #119)
-- **LDAP**: Write the organization slug into project group descriptions from a configurable template, drop the waldur-managed marker, and name project groups after the resolved backend ID. (waldur/waldur-mastermind#649, #68, gh-23)
-- **LDAP roles**: Add a new `ldap-roles` backend and extract a shared `ldap-client` package.
-- **SLURM**: Move the account DefaultQOS along with the QoS swap. Report the same usage in CLI and REST mode, and keep limits and associations intact on real slurmrestd. (#16, #76, #77)
-- **SLURM**: Add a configurable offset for Lustre project quota IDs and report unknown quota keys. Account diagnostics now read SDK limits and build their client from the offering's backend settings. (gh-24, #60, #65)
-- **Rancher KC CRD**: Match Keycloak members by civil code, import existing project and cluster access into Waldur, and send the organization and project slugs to the operator. (waldur/waldur-mastermind#702, #70)
-- **Federation**: Report privileged Waldur B accounts that the Identity Bridge refuses once per cycle. (#112)
-- **Azure**: Move the Azure plugin into the agent workspace. (#8)
-- **DigitalOcean / Harbor**: Run the plugin's create logic on the order path and adopt the agent's own droplet or project when an order is retried. (#47, #56)
-- **CSCS DWDI**: Report usage as amount divided by unit factor in every backend. (#116)
-- **OKD**: Pass the CA bundle path to the Kubernetes client as `ssl_ca_cert`. (#62)
-- **Docs**: Validate every config example in CI, generate the configuration reference tables, and correct the install, deployment and plugin docs so every command works. (#48–#54)
-- **Security**: Bump anyio, oauthlib, pyjwt, urllib3, certifi and pyasn1 for published advisories.
+- **Core**: Export a plugin catalogue for Waldur that marks secret settings and lists the settings that control where the agent connects and what it runs (#79, #114).
+- **Core**: Manage resource API keys one by one: request, assign, cap, pause, resume and delete. Offerings that manage keys individually no longer get default keys, and members of resources without keys keep syncing (#30, #71, #87).
+- **Core**: Apply resource option changes from UPDATE orders, and sync resource limits through the provider resource listing (#106, waldur/waldur-mastermind#1253).
+- **Core**: Mirror per-period spending limits onto backends. All-time limits are left to Waldur's pause (#85, waldur/waldur-mastermind#841).
+- **Core**: Make STOMP more reliable. Messages are processed off the receiver thread and acked after handling, dropped consumers reconnect, and the liveness probe fails while they stay down (#38, #45).
+- **Core**: Honour `global_proxy` in event mode, including the STOMP WebSocket, and support SOCKS proxies. The default STOMP port now comes from `websocket_use_tls` (#44, #57, #61).
+- **Core**: Route every Waldur client through OIDC-aware auth, and send personal access tokens as `Bearer` (#43, #89).
+- **Core**: Release offering-user accounts only after their removal is confirmed (waldur/waldur-mastermind#413).
+- **Core**: Reserve ERRED for backend failures, and log failed user additions with their cause (#46, #58).
+- **Core**: Membership sync no longer removes service and course accounts. A new `preserve_unmanaged_backend_users` option keeps users that providers added outside Waldur.
+- **Core**: Keep agents running when agent identity registration is refused or unavailable, and keep the health probe from importing the API client and plugins (#24, #31, waldur/waldur-mastermind#385).
+- **Core**: Fix `get_client` stripping hostname characters instead of the `/api` suffix.
+- **Core**: Use the `Marketplace.SiteAgent` offering type name (waldur/waldur-mastermind#403).
+- **Core**: Drop Python 3.9 support (#122).
+- **Ceph S3**: Manage users through RGW Admin Ops only and keep croit for statistics. Each resource gets its own RGW tenant, which is also its backend ID (#105, #107, #126, #127).
+- **Ceph S3**: Meter RGW storage, traffic and requests without croit (`rgw_usage`), and read croit statistics at native resolution (#108, #109, #110).
+- **Ceph S3**: Suspend on pause, clear account IAM before termination, and re-apply quotas on UPDATE (#106, #111).
+- **SLURM**: Pause an account before terminating it, so a failed removal still leaves it closed to new jobs (gh-109).
+- **SLURM**: Report the same usage in CLI and REST mode, and keep limits and associations intact on real slurmrestd (#76, #77).
+- **SLURM**: Move the account DefaultQOS along with the QoS swap, and add a configurable offset for Lustre project quota IDs (#16, gh-24).
+- **SLURM**: Name LDAP project groups after the resolved backend ID, and fix account diagnostics (gh-23, #59, #60, #65).
+- **LDAP**: Add the `ldap-roles` backend and the shared `ldap-client` package.
+- **LDAP**: Take usernames and POSIX IDs from Waldur, and release accounts when a user loses their last offering access (#17, waldur/waldur-mastermind#413).
+- **LDAP**: Write Waldur's project groups and apply their events immediately. Personal groups are now optional, and group descriptions come from a configurable template (#41, #68, waldur/waldur-mastermind#626, waldur/waldur-mastermind#649).
+- **LDAP**: Render welcome email templates in a sandbox (#119).
+- **LiteLLM**: Add Open WebUI integration, per-key API keys and usage, and key-based chat (#15, #66).
+- **LiteLLM**: Reset key budgets monthly, bill chat usage to the resource that owned the address that day, report prompt-cache tokens, and create members as `internal_user_viewer` with `llm_api` keys (#72, #73, #75, #91, #99).
+- **Envoy AI Gateway**: Refuse key model lists other than "all models" (waldur/waldur-mastermind#745).
+- **Kubernetes namespace**: Register the backend as `k8s-namespace` and bill by Prometheus-measured consumption. Orders can set the Pod Security level and turn off quota enforcement where the offering allows it (#6, #93, #94, #95).
+- **Rancher**: Import existing project and cluster access, match Keycloak members by civil code, and send organization and project slugs to the operator (#70, waldur/waldur-mastermind#702).
+- **Federation**: Report privileged Waldur B accounts refused by the Identity Bridge once per cycle (#112).
+- **Azure**: Move the Azure plugin into the agent (#8).
+- **DigitalOcean / Harbor**: Run the create logic on the order path, and adopt the agent's own droplet or project when an order is retried (#47, #56).
+- **CSCS DWDI**: Report usage as amount divided by the unit factor in every backend (#116).
+- **OKD**: Pass the CA bundle path to the Kubernetes client as `ssl_ca_cert` (#62).
+- **Image**: Build on `python:3.13-alpine3.24` and write the healthcheck in exec form. Dependencies were bumped for security advisories (#88, waldur/waldur-mastermind#1255).
 
-> 130 commits, 479 files changed (+77926/-10789 lines)
+> 137 commits, 485 files changed (+79747/-12987 lines)
 
 ---
 
