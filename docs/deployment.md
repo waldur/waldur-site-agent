@@ -37,7 +37,11 @@ The agent can run in 4 different modes, deployed as separate systemd services:
 - agent-event-process
 - agent-report
 
-**Note**: Only one combination can be active at a time.
+**Note**: Only one combination can be active at a time, with one instance of
+`agent-event-process` or `agent-order-process`; `agent-report` and
+`agent-membership-sync` may run more.
+The Helm chart enforces this for `agent-event-process` and `agent-order-process`,
+including during rollouts; see [High Availability](#high-availability).
 
 ## One-shot usage report
 
@@ -550,7 +554,11 @@ Each backend's plugin must be installed in the agent's environment
 For HA deployment:
 
 - Run one set of services per offering configuration; two agents processing the same offering
-  race each other on orders
+  race each other on orders and API key commands. An API key acknowledgement does not name the
+  command it answers, so a race can leave Waldur storing a rotated-away key value that the
+  backend no longer accepts. The Helm chart refuses both agents together, more
+  than one replica of either, and any rollout strategy other than `Recreate`, which would run
+  the old and new pod together; for systemd and Docker deployments this note is the only guard
 - Restart is automatic (`Restart=on-failure`); use the per-unit liveness check above for
   monitoring
 - Implement cluster-level monitoring

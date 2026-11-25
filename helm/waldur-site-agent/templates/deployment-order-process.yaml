@@ -1,3 +1,4 @@
+{{- include "waldur-site-agent.validateAgents" . }}
 {{- if .Values.agents.orderProcess.enabled }}
 apiVersion: apps/v1
 kind: Deployment
@@ -8,9 +9,9 @@ metadata:
     app.kubernetes.io/component: order-process
 spec:
   replicas: {{ .Values.agents.orderProcess.replicas }}
-  {{- with .Values.strategy }}
+  {{- with include "waldur-site-agent.agentStrategy" (dict "root" . "name" "orderProcess") }}
   strategy:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   selector:
     matchLabels:

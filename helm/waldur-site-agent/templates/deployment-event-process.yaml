@@ -1,3 +1,4 @@
+{{- include "waldur-site-agent.validateAgents" . }}
 {{- if .Values.agents.eventProcess.enabled }}
 apiVersion: apps/v1
 kind: Deployment
@@ -8,9 +9,9 @@ metadata:
     app.kubernetes.io/component: event-process
 spec:
   replicas: {{ .Values.agents.eventProcess.replicas }}
-  {{- with .Values.strategy }}
+  {{- with include "waldur-site-agent.agentStrategy" (dict "root" . "name" "eventProcess") }}
   strategy:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   selector:
     matchLabels:

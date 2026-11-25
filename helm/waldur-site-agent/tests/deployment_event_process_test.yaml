@@ -48,14 +48,13 @@ tests:
           path: spec.selector.matchLabels["app.kubernetes.io/component"]
           value: event-process
 
-  - it: should set replicas from values
+  - it: should refuse more than one replica
     template: templates/deployment-event-process.yaml
     set:
       agents.eventProcess.replicas: 3
     asserts:
-      - equal:
-          path: spec.replicas
-          value: 3
+      - failedTemplate:
+          errorPattern: "agents.eventProcess.replicas is 3"
 
   - it: should default to 1 replica
     template: templates/deployment-event-process.yaml
