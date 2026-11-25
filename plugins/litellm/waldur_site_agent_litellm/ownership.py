@@ -127,6 +127,26 @@ def release(periods: list, resource: str, day: str) -> list:
     return released
 
 
+def unclaim(periods: list, resource: str, day: str) -> list:
+    """Undo a claim made on ``day``: drop ``resource``'s open period if it began then.
+
+    For an add that failed half way. Closing the period instead would leave one more
+    period per retry -- a pass every few minutes for as long as the failure lasts -- and
+    a period that began and ended on the day bills nothing the next claim would not.
+    An open period that began earlier was not this claim's; it is closed as usual.
+    """
+    kept = [
+        period
+        for period in periods
+        if not (
+            period[PERIOD_TO] is None
+            and period[PERIOD_RESOURCE] == resource
+            and period[PERIOD_FROM] == day
+        )
+    ]
+    return release(kept, resource, day)
+
+
 def retention_cutoff(day: str, months: int) -> str:
     """First day of the oldest month still reportable, ``months`` months back including this one."""
     current = datetime.date.fromisoformat(day)

@@ -51,6 +51,12 @@ META_OWNERSHIP = "waldur_ownership"
 # on membership-based chat. The management backend stamps it, the reporting backend
 # puts the person's chat usage on that key.
 META_KEY = "waldur_api_key"
+# Provenance. ``waldur_openwebui_id`` is the id of the Open WebUI account the plugin
+# created or bound for this person: the only account it promotes, puts in model groups
+# or deletes (see ``chat_accounts``). ``waldur_created`` marks a user the plugin created
+# rather than one it found on the proxy: only those are ever deleted by the prune.
+META_CHAT_ACCOUNT = "waldur_openwebui_id"
+META_CREATED = "waldur_created"
 
 # The LiteLLM role every member is created with. ``internal_user_viewer`` can sign in
 # to the admin UI but cannot create, edit or delete keys there. ``internal_user`` --

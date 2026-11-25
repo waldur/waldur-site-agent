@@ -19,7 +19,12 @@ from waldur_site_agent_litellm.backend import (
     NO_MODELS,
     LiteLLMBackend,
 )
-from waldur_site_agent_litellm.client import META_KEY, META_RESOURCE, META_USERNAME
+from waldur_site_agent_litellm.client import (
+    META_CHAT_ACCOUNT,
+    META_KEY,
+    META_RESOURCE,
+    META_USERNAME,
+)
 from waldur_site_agent_litellm.openwebui import ROLE_ACTIVE, ROLE_DISABLED
 
 COMPONENTS = {
@@ -35,7 +40,7 @@ SETTINGS = {
         "api_token": "owui-admin",
         "url": "https://chat.example.com",
         "account_provisioning": "managed_password",
-        "initial_password": "ChangeMe-123",
+        "password_secret": "s3cret-never-shown",
     },
 }
 # A budget that resets on the 1st, the only kind the holder's chat is taken off.
@@ -55,12 +60,19 @@ def _make_backend(settings: dict | None = None) -> LiteLLMBackend:
     backend.litellm_client = mock.MagicMock()
     backend.litellm_client.list_users.return_value = []
     backend.litellm_client.list_keys.return_value = []
+    # /user/info answers from the listing; an address not in it falls back to the
+    # mock's ``return_value``, which a test sets to None for a member not yet created.
+    backend.litellm_client.get_user.side_effect = lambda email: next(
+        (u for u in backend.litellm_client.list_users.return_value if u["user_id"] == email),
+        mock.DEFAULT,
+    )
     if backend.usage_client is not None:
         backend.usage_client = mock.MagicMock()
         backend.usage_client.get_user_usage_rows.return_value = []
     if backend.openwebui_client is not None:
         owui = mock.MagicMock()
         owui.find_user.side_effect = lambda email: _account(email, ROLE_DISABLED)
+        owui.create_user.side_effect = lambda email, name, password, role: _account(email, role)
         owui.list_groups.return_value = [
             {"id": gid, "name": f"waldur-model-{model}"} for model, gid in GROUPS.items()
         ]
@@ -90,7 +102,12 @@ def _resource(*, managed: bool = True, paused: bool = False) -> SimpleNamespace:
 
 
 def _member(email: str, key: str | None = "") -> dict:
-    metadata = {META_RESOURCE: RID, META_USERNAME: email.split("@")[0]}
+    """A provisioned member, bound to the chat account ``_account`` gives their address."""
+    metadata = {
+        META_RESOURCE: RID,
+        META_USERNAME: email.split("@")[0],
+        META_CHAT_ACCOUNT: _account(email, ROLE_DISABLED)["id"],
+    }
     if key is not None:
         metadata[META_KEY] = key
     return {"user_id": email, "user_alias": email.split("@")[0].title(), "metadata": metadata}
@@ -157,16 +174,20 @@ def test_a_new_member_gets_no_chat_until_a_key_is_assigned() -> None:
 
 def test_without_key_management_a_new_member_chats_by_membership_as_before() -> None:
     backend = _make_backend()
-    backend.litellm_client.get_user.return_value = None
+    # Absent before the add; the record the add created when the chat account is bound.
+    created = {"user_id": ADA, "metadata": {META_RESOURCE: RID, META_USERNAME: "ada"}}
+    backend.litellm_client.get_user.side_effect = [None, created]
     backend.openwebui_client.find_user.side_effect = None
     backend.openwebui_client.find_user.return_value = None
 
-    backend.add_users_to_resource(
+    added = backend.add_users_to_resource(
         _resource(managed=False), {"ada"}, user_emails={"ada": ADA}, user_attributes={}
     )
 
+    assert added == {"ada"}
     assert META_KEY not in backend.litellm_client.create_user.call_args.kwargs["metadata"]
     backend.openwebui_client.create_user.assert_called_once()
+    backend.openwebui_client.delete_user.assert_not_called()
 
 
 def test_a_re_add_keeps_the_key_the_person_holds() -> None:
@@ -1338,6 +1359,7 @@ def test_a_key_minted_for_someone_loses_their_chat_once_it_is_stamped() -> None:
     backend = _make_backend(MONTHLY)
     users = [_member(ADA, key="")]
     backend.litellm_client.list_users.side_effect = lambda *args, **kwargs: list(users)
+    backend.litellm_client.get_user.side_effect = lambda email: users[0]
 
     def stamp(email: str, payload: dict) -> None:
         users[0] = {**users[0], "metadata": payload["metadata"]}
@@ -1406,3 +1428,102 @@ def test_chat_with_no_per_key_split_on_a_day_keys_served_is_not_taken_off() -> N
     backend.set_resource_limits(RID, {"token_cost": 10})
 
     assert _budget_writes(backend)[f"h-{RID}-1"][0] == 7.0
+
+
+def test_an_account_waldur_did_not_create_gets_no_model_groups_and_stays_closed() -> None:
+    # Someone registered the holder's address themselves; the key's models are not theirs.
+    backend = _make_backend()
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    backend.openwebui_client.find_user.side_effect = lambda email: {
+        "id": "owui-squat", "email": email, "name": email, "role": ROLE_DISABLED
+    }
+
+    backend.sync_resource_key_assignees(_resource(), {f"{RID}-1": "ada"})
+
+    assert _groups_added(backend) == []
+    assert _roles(backend) == {}
+
+
+def test_stamping_the_key_keeps_a_chat_account_recorded_since_the_listing() -> None:
+    # Another agent process recorded Ada's account after this one listed the users;
+    # /user/update replaces the metadata, so writing the listing back would erase it.
+    backend = _make_backend()
+    listed = _member(ADA, key="")
+    del listed["metadata"][META_CHAT_ACCOUNT]
+    backend.litellm_client.list_users.return_value = [listed]
+    backend.litellm_client.get_user.side_effect = lambda email: _member(ADA, key="")
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+
+    backend.sync_resource_key_assignees(_resource(), {f"{RID}-1": "ada"})
+
+    stamp = next(
+        call.args[1]["metadata"]
+        for call in backend.litellm_client.update_user.call_args_list
+        if call.args[1]["metadata"].get(META_KEY) == f"{RID}-1"
+    )
+    assert stamp[META_CHAT_ACCOUNT] == "owui-ada"
+
+
+def test_deleting_a_key_keeps_its_holders_recorded_chat_account() -> None:
+    backend = _make_backend()
+    listed = _member(ADA, key=f"{RID}-1")
+    del listed["metadata"][META_CHAT_ACCOUNT]
+    backend.litellm_client.list_users.return_value = [listed]
+    backend.litellm_client.get_user.side_effect = lambda email: _member(ADA, key=f"{RID}-1")
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+
+    backend.delete_resource_key(f"{RID}-1", RID)
+
+    _, fields = backend.litellm_client.update_user.call_args.args
+    assert fields["metadata"][META_KEY] == ""
+    assert fields["metadata"][META_CHAT_ACCOUNT] == "owui-ada"
+
+
+def test_deleting_a_key_leaves_a_holder_who_moved_to_another_key_alone() -> None:
+    backend = _make_backend()
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.get_user.side_effect = lambda email: _member(ADA, key=f"{RID}-2")
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+
+    backend.delete_resource_key(f"{RID}-1", RID)
+
+    backend.litellm_client.update_user.assert_not_called()
+
+
+def test_updating_a_key_whose_holder_has_an_account_waldur_did_not_make_still_succeeds() -> None:
+    # Only the add path fails on such an account; a key command must not, or every
+    # resend of a limit change would error and later holders go unreconciled.
+    backend = _make_backend()
+    backend.litellm_client.list_users.return_value = [_member(ADA, key=f"{RID}-1")]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    backend.openwebui_client.find_user.side_effect = lambda email: {
+        "id": "owui-squat", "email": email, "name": email, "role": ROLE_DISABLED
+    }
+
+    backend.update_resource_key(f"{RID}-1", RID, allowed_models=["gpt-4o-mini"])
+
+    assert _groups_added(backend) == []
+    assert _roles(backend) == {}
+
+
+def test_an_admin_holding_a_key_gets_no_model_groups_and_no_recorded_account() -> None:
+    # IdP-backed, so it would be bindable -- but an elevated role's access is set outside
+    # the plugin, which neither grants it groups nor records it as the person's.
+    backend = _make_backend()
+    listed = _member(ADA, key=f"{RID}-1")
+    del listed["metadata"][META_CHAT_ACCOUNT]
+    backend.litellm_client.list_users.return_value = [listed]
+    backend.litellm_client.list_keys.return_value = [_key(f"{RID}-1")]
+    backend.openwebui_client.find_user.side_effect = lambda email: {
+        "id": "owui-admin", "email": email, "name": email, "role": "admin",
+        "oauth": {"oidc": {"sub": "f00"}},
+    }
+
+    backend.sync_resource_key_assignees(_resource(), {f"{RID}-1": "ada"})
+
+    assert _groups_added(backend) == []
+    assert not any(
+        META_CHAT_ACCOUNT in call.args[1].get("metadata", {})
+        for call in backend.litellm_client.update_user.call_args_list
+    )

@@ -29,10 +29,12 @@ from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES
 from waldur_site_agent.common.spending_limits import resource_spending_limits
 
-from . import ownership
+from . import chat_accounts, ownership
 from .client import (
     LEGACY_MEMBER_ROLE,
     MEMBER_ROLE,
+    META_CHAT_ACCOUNT,
+    META_CREATED,
     META_KEY,
     META_OWNERSHIP,
     META_RESOURCE,
@@ -152,13 +154,20 @@ _USER_CACHE_TTL = WALDUR_SITE_AGENT_MEMBERSHIP_SYNC_PERIOD_MINUTES * 60 * 0.5
 # ``sso``: Open WebUI is fronted by an identity provider (the same one as Waldur), so
 # an account materializes on first login with the address the IdP asserts. The agent
 # creates nothing -- there is no password to mint, transport or store -- and only ever
-# revokes. This is the target state and the default.
+# revokes. This is the target state and the default. Any ``user``/``pending`` account
+# under the member's address is taken to be theirs and recorded as such: accounts from
+# LDAP or trusted-header sign-in carry no mark of their origin, so there is nothing
+# finer to go on. Requires ``ENABLE_SIGNUP=False``, so that only the IdP makes accounts.
 #
-# ``managed_password``: the agent creates the account itself with an operator-supplied
-# temporary password, mirroring what an admin does by hand today. It exists because
-# that is where most deployments start, not because it is good: Waldur has no encrypted
-# channel to hand a password to an end user, so the same initial secret is used for
-# every account and the person is expected to change it on first login.
+# ``managed_password``: the agent creates the account itself, mirroring what an admin
+# does by hand today. It exists because that is where most deployments start, not
+# because it is good: Waldur has no channel to hand a password to an end user. So the
+# operator sets a ``password_secret`` and each account gets a password derived from it
+# and the address (``chat_accounts.derived_password``), which the operator hands out.
+# The old shared ``initial_password`` is not used: every member was told it, so a
+# password derived from it would be one any member could compute. Requires
+# ``ENABLE_SIGNUP=False``: the agent never adopts a self-registered account, but with
+# signup on, one can take the address first.
 PROVISIONING_SSO = "sso"
 PROVISIONING_MANAGED_PASSWORD = "managed_password"  # noqa: S105 - a mode name, not a secret
 
@@ -175,6 +184,12 @@ PROVISIONING_MANAGED_PASSWORD = "managed_password"  # noqa: S105 - a mode name, 
 BACKEND_ID_SOURCE_SLUG = "slug"
 BACKEND_ID_SOURCE_UUID = "uuid"
 _BACKEND_ID_SOURCES = (BACKEND_ID_SOURCE_SLUG, BACKEND_ID_SOURCE_UUID)
+
+
+# What ``_ensure_litellm_user`` did with the address's record, when it did not refuse it.
+CLAIM_CREATED = "created"  # made the record
+CLAIM_OPENED = "opened"  # opened this resource's period on a record that existed
+CLAIM_HELD = "held"  # the resource already held it open
 
 
 class LiteLLMBackend(backends.BaseBackend):
@@ -277,18 +292,31 @@ class LiteLLMBackend(backends.BaseBackend):
         self.account_provisioning = str(
             self.openwebui_settings.get("account_provisioning") or PROVISIONING_SSO
         )
-        self.initial_password = self.openwebui_settings.get("initial_password")
+        self.password_secret = self.openwebui_settings.get("password_secret")
         if (
             self.openwebui_client
             and self.account_provisioning == PROVISIONING_MANAGED_PASSWORD
-            and not self.initial_password
+            and not self.password_secret
         ):
+            # ``initial_password`` is not accepted in its place, on purpose: it was the
+            # password every member was told, and the derivation is public, so keying it
+            # with that value would let any member compute everyone's password.
             msg = (
                 "Open WebUI account_provisioning is 'managed_password' but no "
-                "'initial_password' is set; the agent has no other way to give the "
-                "person a credential they can sign in with"
+                "'password_secret' is set. Set it to a new random value that has never "
+                "been shown to anyone -- not the old 'initial_password', which every "
+                "member was told and which is no longer used"
             )
             raise BackendError(msg)
+        # Accounts created before this cutoff are adopted as the plugin's own: those it
+        # made before it recorded which ones it made. See ``chat_accounts``.
+        try:
+            self.bind_accounts_created_before = chat_accounts.parse_cutoff(
+                self.openwebui_settings.get("bind_accounts_created_before")
+            )
+        except ValueError as exc:
+            msg = f"Open WebUI bind_accounts_created_before is not an ISO date: {exc}"
+            raise BackendError(msg) from exc
         # Whether losing access demotes the account or deletes it. Demotion is the
         # default: it ends access just as completely (Open WebUI refuses a 'pending'
         # account) while keeping the person's chat history, so re-adding them later
@@ -362,6 +390,17 @@ class LiteLLMBackend(backends.BaseBackend):
                 "delete" if self.remove_chat_accounts else "disable",
                 self.openwebui_client.ping(),
             )
+            if self.account_provisioning != PROVISIONING_MANAGED_PASSWORD:
+                adopted = "any account under a member's address (sso)"
+            elif self.bind_accounts_created_before is not None:
+                adopted = "Waldur- or IdP-created, or created before " + (
+                    datetime.datetime.fromtimestamp(
+                        self.bind_accounts_created_before, tz=datetime.timezone.utc
+                    ).isoformat()
+                )
+            else:
+                adopted = "only accounts Waldur or the identity provider created"
+            logger.info("Chat accounts adopted: %s", adopted)
             logger.info(
                 "Open WebUI shared keys: %s",
                 sorted(self.shared_keys) if self.shared_keys is not None else "unset",
@@ -1820,11 +1859,16 @@ class LiteLLMBackend(backends.BaseBackend):
             self.litellm_client.delete_keys([self._require_token(client_id, record)])
             logger.info("Deleted LiteLLM key %s", client_id)
         holders = self._key_holders(resource_backend_id, client_id)
-        for email, holder in holders.items():
+        for email in holders:
             self._apply_key_chat(email, None)
-            self.litellm_client.update_user(
-                email, {"metadata": {**self._user_metadata(holder), META_KEY: ""}}
-            )
+            # Read fresh: the listing may predate a write from another agent process
+            # (the chat account recorded on the record), and the update replaces it all.
+            current = self.litellm_client.get_user(email)
+            fresh = self._user_metadata(current) if current else {}
+            if fresh.get(META_KEY) != client_id:
+                # Gone, or moved to another key since the listing: not this key's holder.
+                continue
+            self.litellm_client.update_user(email, {"metadata": {**fresh, META_KEY: ""}})
         if holders:
             self._invalidate_users_cache()
 
@@ -2268,7 +2312,7 @@ class LiteLLMBackend(backends.BaseBackend):
     @staticmethod
     def _email_of(record: dict) -> str:
         """The address a managed user is keyed by, normalized for comparison."""
-        return str(record.get("user_id") or "").strip().lower()
+        return chat_accounts.canonical_email(str(record.get("user_id") or ""))
 
     @staticmethod
     def _user_metadata(record: dict) -> dict:
@@ -2377,7 +2421,10 @@ class LiteLLMBackend(backends.BaseBackend):
         Runs on a fresh listing, so at most once per membership pass. Without it every
         member ever removed would keep a record on the proxy forever. A record is only
         deleted once it is released and its last period ended before the oldest month
-        in the retention window; a hand-made user, which carries no periods, never is.
+        in the retention window, and only if the plugin created it (``META_CREATED``).
+        A user it found on the proxy -- one an operator made by hand and an older agent
+        adopted -- is left in place: the plugin releases it but does not delete it.
+        So is a record created before the marker existed; it costs only the space.
 
         Each candidate is read again just before the delete. The listing can be most of
         a pass old by now, and an address re-claimed in the meantime -- the person
@@ -2393,15 +2440,20 @@ class LiteLLMBackend(backends.BaseBackend):
         def is_expired(record: dict | None) -> bool:
             if record is None:
                 return False
-            return ownership.expired(ownership.periods_of(self._user_metadata(record)), cutoff)
+            metadata = self._user_metadata(record)
+            if metadata.get(META_CREATED) is not True:
+                return False
+            return ownership.expired(ownership.periods_of(metadata), cutoff)
 
         candidates = sorted(email for email, record in users.items() if is_expired(record))
         if not candidates:
             return
         try:
-            expired = [
-                email for email in candidates if is_expired(self.litellm_client.get_user(email))
-            ]
+            expired = []
+            for email in candidates:
+                record = self.litellm_client.get_user(email)
+                if is_expired(record) and not self._holds_live_chat_account(email, record):
+                    expired.append(email)
         except BackendError:
             logger.exception("Unable to re-read expired LiteLLM users; pruning skipped")
             return
@@ -2420,6 +2472,28 @@ class LiteLLMBackend(backends.BaseBackend):
         )
         for email in expired:
             users.pop(email, None)
+
+    def _holds_live_chat_account(self, email: str, record: dict | None) -> bool:
+        """Whether the record names an Open WebUI account that still exists.
+
+        The record is the only place that says which account is the person's. Removal
+        demotes the account rather than deleting it unless the offering asks otherwise,
+        so pruning the record would leave an account the plugin made but no longer
+        recognises: on a re-add it could neither re-enable it nor create another under
+        the taken address. Such a record stays; it costs the space.
+        """
+        if self.openwebui_client is None or record is None:
+            return False
+        account_id = self._user_metadata(record).get(META_CHAT_ACCOUNT)
+        if not account_id:
+            return False
+        try:
+            account = self.openwebui_client.find_user(email)
+        except BackendError:
+            # Cannot tell, so keep it: a record kept is space, one pruned is a lockout.
+            logger.exception("Unable to look up the chat account of %s; keeping its record", email)
+            return True
+        return account is not None and str(account.get("id")) == str(account_id)
 
     def _invalidate_users_cache(self) -> None:
         """Drop the cached listing after a write that changes it.
@@ -2504,7 +2578,7 @@ class LiteLLMBackend(backends.BaseBackend):
             attributes = user_attributes.get(username)
             attributes = attributes if isinstance(attributes, dict) else {}
             raw_email = user_emails.get(username) or attributes.get("email") or ""
-            email = str(raw_email).strip().lower()
+            email = chat_accounts.canonical_email(str(raw_email))
             if not email:
                 logger.error(
                     "Offering user %s has no email address; LiteLLM and Open WebUI are "
@@ -2516,22 +2590,90 @@ class LiteLLMBackend(backends.BaseBackend):
             attributes = user_attributes.get(username)
             attributes = attributes if isinstance(attributes, dict) else {}
             full_name = str(attributes.get("full_name") or username)
+            day = ownership.today()
             try:
-                if not self._ensure_litellm_user(
-                    email, username, full_name, backend_id, chat_follows_key=follows_key
-                ):
+                claim = self._ensure_litellm_user(
+                    email, username, full_name, backend_id, chat_follows_key=follows_key, day=day
+                )
+                if claim is None:
                     continue
-                if not follows_key:
-                    self._ensure_chat_account(email, full_name)
             except BackendError:
                 logger.exception(
                     "Unable to add user %s (%s) to resource %s", username, email, backend_id
                 )
                 continue
+            if not follows_key:
+                try:
+                    self._ensure_chat_account(email, full_name, refuse_unowned=True)
+                except BackendError:
+                    logger.exception(
+                        "Unable to give %s (%s) chat on resource %s", username, email, backend_id
+                    )
+                    if claim != CLAIM_HELD:
+                        # Let go of the claim this add opened, so the member reads as
+                        # absent and the next pass adds them again, chat included.
+                        # Kept, the membership diff would count them as provisioned and
+                        # never retry, leaving them without a chat account for good.
+                        self._release_after_failed_add(
+                            email, backend_id, day, created=claim == CLAIM_CREATED
+                        )
+                    continue
             added.add(username)
         if added:
             self._invalidate_users_cache()
         return added
+
+    @staticmethod
+    def _stamped_by_plugin(metadata: dict) -> bool:
+        """Whether this plugin, of any version, ever wrote ownership onto the record.
+
+        An ownership list counts even when empty: trimming and a failed add's undo can
+        leave a record the plugin has held with no period at all, and reading that as
+        hand-made would refuse the person for good.
+        """
+        return (
+            metadata.get(META_CREATED) is True
+            or isinstance(metadata.get(META_OWNERSHIP), list)
+            or bool(ownership.periods_of(metadata))
+        )
+
+    def _release_after_failed_add(
+        self, email: str, backend_id: str, day: str, *, created: bool
+    ) -> None:
+        """Undo the claim a failed add opened on ``day`` (``ownership.unclaim``).
+
+        A record is deleted only if this add created it and nothing has recorded a chat
+        account on it since -- another pass adding the same person at once may have. Any
+        other record keeps whatever remains, even no period at all: it may be the only
+        thing naming the person's chat account, and ``waldur_created`` lets the next add
+        claim it rather than refuse it as hand-made.
+        """
+        try:
+            existing = self.litellm_client.get_user(email)
+            if existing is None:
+                return
+            metadata = self._user_metadata(existing)
+            periods = ownership.periods_of(metadata)
+            if ownership.current_owner(periods) != backend_id:
+                return
+            periods = ownership.unclaim(periods, backend_id, day)
+            if not periods and created and not metadata.get(META_CHAT_ACCOUNT):
+                self.litellm_client.delete_users([email])
+            else:
+                self.litellm_client.update_user(
+                    email, {"metadata": ownership.stamp(metadata, periods)}
+                )
+        except BackendError:
+            # The period stays open, so the membership diff counts the person as
+            # provisioned and will not add them again: an operator has to step in.
+            logger.exception(
+                "Unable to undo the claim on %s after a failed add; the member stays "
+                "listed on resource %s without chat until removed and re-added",
+                email,
+                backend_id,
+            )
+        finally:
+            self._invalidate_users_cache()
 
     def _ensure_litellm_user(
         self,
@@ -2541,8 +2683,12 @@ class LiteLLMBackend(backends.BaseBackend):
         backend_id: str,
         *,
         chat_follows_key: bool = False,
-    ) -> bool:
-        """Create or adopt the proxy-side user record. False means "not ours to touch".
+        day: str | None = None,
+    ) -> str | None:
+        """Create or claim the proxy-side user record. None means "not ours to touch".
+
+        Otherwise one of ``CLAIM_CREATED``, ``CLAIM_OPENED`` (a record that existed,
+        claimed from released) or ``CLAIM_HELD`` (the resource already held it open).
 
         A LiteLLM user id is global, and here it is an email address, so one person has
         exactly one record on the proxy no matter how many resources they hold. That is
@@ -2552,24 +2698,28 @@ class LiteLLMBackend(backends.BaseBackend):
         the first resource's chat billing onto the second one silently, and the person
         would keep using the chat throughout.
 
-        A record with no owner stamped on it is adopted rather than refused: it is
-        either a user an admin added by hand before Waldur managed this offering, or one
-        left behind by an interrupted add, and in both cases the alternative is a
-        resource that can never provision its own member.
+        A record the plugin never stamped -- no ownership at all -- is **refused** too.
+        It is a user an operator made by hand, or one the proxy made itself, and
+        adopting it put it on the plugin's books: released with the member and, once
+        the retention window passed, deleted. The operator deletes it (the next pass
+        then creates the plugin's own) or keeps it out of Waldur's hands.
 
         "Owned" means an open ownership period. A record whose period on another
         resource has closed -- the person was removed there -- is free to claim: the
         claim opens a new period from today, and the closed one keeps billing the days
-        before it to the resource the person left.
+        before it to the resource the person left. That record carries periods, so the
+        plugin stamped it once: it is the plugin's to claim.
 
         ``chat_follows_key`` stamps an empty ``META_KEY``: chat follows a key here and
         none is assigned yet. An existing stamp is kept -- the metadata is carried over,
         not replaced, so a re-add never loses the key the person holds.
         """
-        day = ownership.today()
+        day = day or ownership.today()
         existing = self.litellm_client.get_user(email)
         if existing is None:
-            initial = {META_KEY: ""} if chat_follows_key else {}
+            initial: dict = {META_CREATED: True}
+            if chat_follows_key:
+                initial[META_KEY] = ""
             self.litellm_client.create_user(
                 email,
                 user_email=email,
@@ -2577,10 +2727,19 @@ class LiteLLMBackend(backends.BaseBackend):
                 metadata=ownership.stamp(initial, ownership.claim([], backend_id, day), username),
             )
             logger.info("Created LiteLLM user %s for resource %s", email, backend_id)
-            return True
+            return CLAIM_CREATED
 
         metadata = self._user_metadata(existing)
         periods = ownership.periods_of(metadata)
+        if not self._stamped_by_plugin(metadata):
+            logger.error(
+                "LiteLLM user %s exists but was not created by Waldur; refusing to adopt "
+                "it for resource %s. Delete it on the proxy to let the agent create its "
+                "own, or leave the person out of Waldur's chat provisioning.",
+                email,
+                backend_id,
+            )
+            return None
         owner = ownership.current_owner(periods)
         if owner and owner != backend_id:
             logger.error(
@@ -2592,13 +2751,14 @@ class LiteLLMBackend(backends.BaseBackend):
                 owner,
                 backend_id,
             )
-            return False
+            return None
 
         # Re-stamped on every add, not only on adoption: the offering username can
         # change (Waldur regenerates it under some policies), and the membership diff
         # is keyed on it, so a stale one would report the member as absent forever.
         # The same write trims periods too old to bill anything, so a person who comes
         # and goes does not grow their record without bound.
+        result = CLAIM_HELD if owner == backend_id else CLAIM_OPENED
         periods = ownership.claim(self._trim_ownership(periods, day), backend_id, day)
         if chat_follows_key and META_KEY not in metadata:
             metadata = {**metadata, META_KEY: ""}
@@ -2607,18 +2767,17 @@ class LiteLLMBackend(backends.BaseBackend):
             "user_alias": full_name,
             "metadata": ownership.stamp(metadata, periods, username),
         }
-        # An existing ``internal_user`` taken on by this add -- created by hand, or by an
-        # agent from before members were viewers -- could mint its own keys. Admin roles
-        # are left alone: the operator gave them on purpose, and demoting one would lock
-        # them out.
+        # An existing ``internal_user`` taken on by this add -- one an agent from before
+        # members were viewers created -- could mint its own keys. Admin roles are left
+        # alone: the operator gave them on purpose, and demoting one would lock them out.
         demoting = existing.get("user_role") == LEGACY_MEMBER_ROLE
         if demoting:
             fields["user_role"] = MEMBER_ROLE
         self.litellm_client.update_user(email, fields)
-        logger.info("Adopted existing LiteLLM user %s for resource %s", email, backend_id)
+        logger.info("Claimed existing LiteLLM user %s for resource %s", email, backend_id)
         if demoting:
             self._warn_about_self_minted_keys(email)
-        return True
+        return result
 
     def _ensure_chat_account(
         self,
@@ -2627,6 +2786,7 @@ class LiteLLMBackend(backends.BaseBackend):
         *,
         create_missing: bool = True,
         new_role: str = ROLE_ACTIVE,
+        refuse_unowned: bool = False,
     ) -> bool:
         """Make sure the person can sign in to the chat surface, if there is one.
 
@@ -2634,11 +2794,18 @@ class LiteLLMBackend(backends.BaseBackend):
         login. What still runs is the *re-enable*, because a previous removal demoted
         the account and an SSO login into a demoted account does not restore it.
 
+        ``refuse_unowned`` raises when an account under the address is not the person's,
+        rather than leaving it be; only the add path asks for it (see there).
+
         ``create_missing=False`` re-enables only. Restore uses it: an account that is
         not there was not paused by this plugin, and restore has no display name to
         create one under -- it knows the offering username, not the person's name.
 
-        A missing account is created with ``new_role``; returns whether one was.
+        A missing account is created with ``new_role`` and the person's derived password,
+        and recorded as theirs; returns whether one was. An existing account is
+        re-enabled only if it is the one recorded (or bindable, see ``_owned_chat_account``):
+        under ``managed_password``, a ``pending`` account someone registered under the
+        address is not the person's.
         """
         if self.openwebui_client is None:
             return False
@@ -2654,16 +2821,174 @@ class LiteLLMBackend(backends.BaseBackend):
                     email,
                 )
                 return False
-            self.openwebui_client.create_user(
-                email, str(full_name or email), str(self.initial_password), role=new_role
-            )
-            logger.info("Created Open WebUI account for %s", email)
+            self._create_chat_account(email, full_name, new_role)
             return True
 
-        if str(account.get("role")) == ROLE_DISABLED:
-            self.openwebui_client.set_role(account, ROLE_ACTIVE)
-            logger.info("Re-enabled the Open WebUI account of %s", email)
+        self._reenable_chat_account(email, account, refuse_unowned=refuse_unowned)
         return False
+
+    def _reenable_chat_account(self, email: str, account: dict, *, refuse_unowned: bool) -> None:
+        """Promote the person's demoted account; leave one that is not theirs alone."""
+        client = self.openwebui_client
+        if client is None:
+            return
+        role = str(account.get("role") or "")
+        if role not in (ROLE_ACTIVE, ROLE_DISABLED):
+            # An admin who is also a project member: access set outside the plugin,
+            # which it neither grants nor takes away (see ``_revoke_chat_access``).
+            logger.info("Open WebUI account of %s has role %s; leaving it untouched", email, role)
+            return
+        owned = self._owned_chat_account(email, account)
+        if owned is None:
+            if refuse_unowned:
+                # The add path. Reporting the member as provisioned here would have the
+                # membership diff never retry them, so once an operator sets the cutoff
+                # or removes the squatter's account, nothing would give them chat. The
+                # caller undoes the claim instead and the next pass tries again.
+                msg = (
+                    f"The Open WebUI account under {email} is not one Waldur created or "
+                    "can adopt; the member gets no chat until it is resolved"
+                )
+                raise OpenWebUIError(msg)
+            return
+        if str(owned.get("role")) == ROLE_DISABLED:
+            client.set_role(owned, ROLE_ACTIVE)
+            logger.info("Re-enabled the Open WebUI account of %s", email)
+
+    def _create_chat_account(self, email: str, full_name: str | None, role: str) -> None:
+        """Create the person's account and record it as the plugin's.
+
+        If the record cannot be written, the account is deleted again and the error
+        raised: an account the plugin made but did not record would read as someone
+        else's from then on, and the person could never be given access. The next pass
+        creates it afresh.
+        """
+        client = self.openwebui_client
+        if client is None:
+            return
+        created = client.create_user(
+            email,
+            str(full_name or email),
+            chat_accounts.derived_password(str(self.password_secret), email),
+            role=role,
+        )
+        account_id = str(created.get("id") or "")
+        if not account_id:
+            # Left unrecorded it could never be given access; read the id back instead.
+            found = client.find_user(email) or {}
+            account_id = str(found.get("id") or "")
+        if not account_id:
+            msg = f"Open WebUI created an account for {email} but returned no id"
+            raise OpenWebUIError(msg)
+        try:
+            if not self._bind_chat_account(email, account_id):
+                msg = f"No LiteLLM user for {email} to record their Open WebUI account on"
+                raise LiteLLMBackendError(msg)
+        except BackendError:
+            logger.exception(
+                "Unable to record the new Open WebUI account of %s; deleting it again", email
+            )
+            try:
+                client.delete_user(account_id)
+            except BackendError:
+                logger.exception(
+                    "Unable to delete the unrecorded account %s of %s; it will read as "
+                    "someone else's from now on -- delete it in Open WebUI so the agent "
+                    "can create the person's account again",
+                    account_id,
+                    email,
+                )
+            raise
+        logger.info("Created Open WebUI account for %s", email)
+
+    def _bind_chat_account(self, email: str, account_id: str) -> bool:
+        """Record ``account_id`` as the person's account on their LiteLLM user.
+
+        Read fresh, not from the listing: ``/user/update`` replaces the whole metadata,
+        and a stale copy would drop an ownership period opened since. False when the
+        person has no LiteLLM user -- they are not provisioned, so nothing is theirs.
+        """
+        record = self.litellm_client.get_user(email)
+        if record is None:
+            return False
+        metadata = self._user_metadata(record)
+        if metadata.get(META_CHAT_ACCOUNT) != account_id:
+            self.litellm_client.update_user(
+                email, {"metadata": {**metadata, META_CHAT_ACCOUNT: account_id}}
+            )
+            self._invalidate_users_cache()
+        return True
+
+    def _provisioned_before_cutoff(self, metadata: dict) -> bool:
+        """Whether the person held an entitlement here before the migration cutoff.
+
+        Only then can an account older than the cutoff be one the plugin made for them.
+        Without this, an account someone registered under the address before the
+        upgrade -- for a person provisioned only after it -- would be adopted by age.
+        A period with no known start predates dated ownership, and so the cutoff.
+        """
+        cutoff = self.bind_accounts_created_before
+        if cutoff is None:
+            return False
+        if self._stamped_by_plugin(metadata) and metadata.get(META_CREATED) is not True:
+            # Stamped, but not by this version: an agent from before the upgrade made
+            # or adopted it, so the person was provisioned before it. Read this way, a
+            # long-gone member's trimmed periods do not hide that.
+            return True
+        cutoff_day = datetime.datetime.fromtimestamp(cutoff, tz=datetime.timezone.utc)
+        return any(
+            period[ownership.PERIOD_FROM] is None
+            or period[ownership.PERIOD_FROM] < cutoff_day.date().isoformat()
+            for period in ownership.periods_of(metadata)
+        )
+
+    def _owned_chat_account(self, email: str, account: dict) -> dict | None:
+        """``account`` if it is the person's -- created or bound by the plugin -- else None.
+
+        The recorded id is read fresh from the proxy, so an account created or bound
+        earlier in the same pass is recognised. An account that is not the recorded one
+        is bound when its origin vouches for the address:
+
+        - under ``sso``, always: the identity provider makes every account, and those
+          from LDAP or trusted-header sign-in carry no ``oauth``/``scim`` to tell them
+          apart, so demanding one would leave such members unable to be re-added or
+          restored. ``ENABLE_SIGNUP=False`` is what keeps anyone else from making one.
+        - under ``managed_password``, only when IdP-backed, or older than the migration
+          cutoff *and* the person was provisioned before it. Anything else -- a
+          self-registered or hand-made account -- is left alone.
+
+        Either way this also rebinds the person's new account after the old one was
+        deleted on an earlier removal.
+        """
+        account_id = str(account.get("id") or "")
+        if not account_id:
+            return None
+        record = self.litellm_client.get_user(email)
+        if record is None:
+            return None
+        metadata = self._user_metadata(record)
+        if metadata.get(META_CHAT_ACCOUNT) == account_id:
+            return account
+        bindable = (
+            self.account_provisioning != PROVISIONING_MANAGED_PASSWORD
+            or chat_accounts.is_identity_backed(account)
+            or (
+                self._provisioned_before_cutoff(metadata)
+                and chat_accounts.created_before(account, self.bind_accounts_created_before)
+            )
+        )
+        if bindable and self._bind_chat_account(email, account_id):
+            logger.info("Bound the existing Open WebUI account of %s", email)
+            return account
+        logger.warning(
+            "The Open WebUI account of %s (%s) was not created by Waldur, nor by the "
+            "identity provider, so it is not given access. If it is the person's, "
+            "set openwebui.bind_accounts_created_before (an account an older agent "
+            "made) or bind it by hand (README: Binding an account by hand).",
+            email,
+            account_id,
+        )
+        return None
 
     def remove_users_from_resource(
         self, waldur_resource: WaldurResource, usernames: set, **kwargs: object
@@ -2779,7 +3104,14 @@ class LiteLLMBackend(backends.BaseBackend):
                 "Open WebUI account of %s has role %s; leaving it untouched", email, role
             )
             return
-        if permanent and self.remove_chat_accounts:
+        # Deleted only if it is the person's. Any other account under the address is
+        # demoted instead: that ends the access as fully, and destroys nothing the
+        # plugin did not make.
+        if (
+            permanent
+            and self.remove_chat_accounts
+            and self._owned_chat_account(email, account) is not None
+        ):
             self.openwebui_client.delete_user(str(account.get("id")))
             logger.info("Deleted the Open WebUI account of %s", email)
             return
@@ -2924,10 +3256,16 @@ class LiteLLMBackend(backends.BaseBackend):
             metadata = self._user_metadata(record)
             try:
                 if metadata.get(META_KEY) != alias:
-                    self.litellm_client.update_user(
-                        email, {"metadata": {**metadata, META_KEY: alias}}
-                    )
-                    stamped = True
+                    # Read fresh before the write: ``/user/update`` replaces the whole
+                    # metadata, and the listing can predate a write made by another
+                    # agent process -- the chat account recorded on the record, which
+                    # this would otherwise drop and lock the person out of chat.
+                    current = self.litellm_client.get_user(email)
+                    if current is not None:
+                        self.litellm_client.update_user(
+                            email, {"metadata": {**self._user_metadata(current), META_KEY: alias}}
+                        )
+                        stamped = True
                 key = records.get(alias) if alias else None
                 # Judged by the key's own pause and Waldur's flag, not by ``blocked``:
                 # the keys of a resource restored this pass are still blocked until the
@@ -3016,12 +3354,22 @@ class LiteLLMBackend(backends.BaseBackend):
         which the person leaves, or the model would stay open to them in chat. Needs the
         offering's ``models`` setting: without it the plugin has no list of models to
         make groups for, and chat model access is left to the operator.
+
+        Adding to a group needs the account to be the person's (``_owned_chat_account``);
+        emptying the groups does not, since it only takes access away.
         """
         if self.openwebui_client is None or not self.models:
             return
         account = self.openwebui_client.find_user(email)
         if account is None or not account.get("id"):
             # Under SSO the account appears at first sign-in; the next pass gets it.
+            return
+        if models and (
+            str(account.get("role") or "") not in (ROLE_ACTIVE, ROLE_DISABLED)
+            or self._owned_chat_account(email, account) is None
+        ):
+            # Groups are granted only to the person's own account, and never to an
+            # elevated one: its access is set outside the plugin.
             return
         user_id = str(account["id"])
         groups = self._chat_model_groups()
