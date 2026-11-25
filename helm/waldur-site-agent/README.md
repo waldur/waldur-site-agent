@@ -104,17 +104,20 @@ Published charts set `image.tag` to the matching agent release; an empty tag fal
 | `agents.eventProcess.replicas` | Number of event-process replicas; more than 1 is refused (see below) | `1` |
 | `agents.eventProcess.strategy` | Strategy for this agent, replaces `strategy`; `Recreate` only (see below) | unset |
 
-The chart refuses to render with `eventProcess` and `orderProcess` both enabled, with
-either of them at more than one replica, or with either of them enabled under a
-strategy other than `Recreate`. An agent's strategy is its own `agents.<name>.strategy`
-when set, which replaces the global `strategy` outright, and the global `strategy`
-otherwise; an unset strategy counts as `RollingUpdate`, as in Kubernetes. `report`
-and `membershipSync` are not checked, so a scaled report agent can roll without
-downtime with `agents.report.strategy.type: RollingUpdate`.
+The chart refuses to render with `eventProcess` or `orderProcess` at more than one
+replica, or with either of them enabled under a strategy other than `Recreate`.
+An agent's strategy is its own `agents.<name>.strategy` when set, which replaces the
+global `strategy` outright, and the global `strategy` otherwise; an unset strategy
+counts as `RollingUpdate`, as in Kubernetes. `report` and `membershipSync` are not
+checked, so a scaled report agent can roll without downtime with
+`agents.report.strategy.type: RollingUpdate`.
 Each pod processes every offering in the configuration, so a second one, including the
 old pod during a rolling update, would race the first on the same orders and API key
 commands. To spread offerings over several agents, give each its own release with its
 own offerings.
+
+`eventProcess` and `orderProcess` may be enabled together: event-process handles the
+offerings with `stomp_enabled: true` and order-process polls the rest.
 
 ### Secret Configuration
 

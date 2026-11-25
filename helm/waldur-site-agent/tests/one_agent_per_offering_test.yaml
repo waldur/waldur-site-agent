@@ -9,15 +9,15 @@ release:
   name: test-release
   namespace: test-ns
 tests:
-  # A failed render is attributed to the first template that fails, which is
-  # order-process; both templates include the same check.
-  - it: refuses event-process and order-process together
+  # order-process skips STOMP offerings and event-process acts only on them,
+  # so the two split the offerings between them.
+  - it: renders event-process and order-process together
     template: templates/deployment-order-process.yaml
     set:
       agents.orderProcess.enabled: true
     asserts:
-      - failedTemplate:
-          errorPattern: "agents.eventProcess and agents.orderProcess are both enabled"
+      - hasDocuments:
+          count: 1
 
   - it: ignores the replicas of a disabled agent
     template: templates/deployment-event-process.yaml
@@ -29,6 +29,8 @@ tests:
           count: 1
 
   # Any strategy but Recreate runs the old and new pod together on rollout.
+  # A failed render is attributed to the first template that fails, which is
+  # order-process; both templates include the same check.
   - it: refuses a rolling update for event-process
     template: templates/deployment-order-process.yaml
     set:

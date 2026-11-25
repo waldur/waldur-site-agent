@@ -772,7 +772,9 @@ def run_periodic_order_reconciliation(
     ``stuck_threshold_minutes`` (default 30). This avoids interfering
     with orders that are being actively processed by STOMP handlers.
 
-    Only runs for offerings that have order_processing_backend configured.
+    Only runs for offerings with STOMP enabled and order_processing_backend
+    configured. A polled offering belongs to order-process, which handles its
+    pending orders every cycle; replaying them here would race it.
     """
     cutoff = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(
         minutes=stuck_threshold_minutes
@@ -780,7 +782,7 @@ def run_periodic_order_reconciliation(
 
     for offering in waldur_offerings:
         touch_heartbeat()
-        if not offering.order_processing_backend:
+        if not offering.stomp_enabled or not offering.order_processing_backend:
             continue
         try:
             waldur_rest_client = get_client_for_offering(offering, user_agent)
@@ -836,8 +838,10 @@ def run_periodic_api_key_reconciliation(
     brings one back.
 
     Only picks up keys older than ``stuck_threshold_minutes`` (default 30) so a
-    command still in flight is left alone, and only for offerings whose backend
-    manages resource API keys.
+    command still in flight is left alone, and only for STOMP offerings whose
+    backend manages resource API keys. A polled offering's key commands belong to
+    order-process; replaying them here would race it, and a key acknowledgement
+    does not name the command it answers.
 
     ``expose_backend_error_details`` is threaded through because this sweep acts on
     the same keys the STOMP handler does. Left on the default, an agent that opted
@@ -849,7 +853,7 @@ def run_periodic_api_key_reconciliation(
 
     for offering in waldur_offerings:
         touch_heartbeat()
-        if not offering.order_processing_backend:
+        if not offering.stomp_enabled or not offering.order_processing_backend:
             continue
         try:
             backend, _ = get_backend_for_offering(offering, "order_processing_backend")

@@ -15,7 +15,6 @@ tests:
   - it: should render when enabled
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
     asserts:
       - isKind:
@@ -27,7 +26,6 @@ tests:
   - it: should set correct component label
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
     asserts:
       - equal:
@@ -40,7 +38,6 @@ tests:
   - it: should pass correct mode argument
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
     asserts:
       - contains:
@@ -56,7 +53,6 @@ tests:
   - it: should set container name
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
     asserts:
       - equal:
@@ -66,7 +62,6 @@ tests:
   - it: should refuse more than one replica
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
       agents.orderProcess.replicas: 2
     asserts:
@@ -76,7 +71,6 @@ tests:
   - it: should use correct selector labels
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
     asserts:
       - equal:
@@ -86,7 +80,6 @@ tests:
   - it: should include health check probes with correct command
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
       healthCheck.enabled: true
     asserts:
@@ -99,7 +92,6 @@ tests:
   - it: should run pods as default service account by default
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
     asserts:
       - equal:
@@ -109,7 +101,6 @@ tests:
   - it: should run pods as custom service account when set
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
       serviceAccount.name: waldur-site-agent
     asserts:
@@ -120,7 +111,6 @@ tests:
   - it: should include a startup probe so cold starts do not count against liveness
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
       healthCheck.enabled: true
     asserts:
@@ -142,7 +132,6 @@ tests:
   - it: should omit the startup probe when disabled
     template: templates/deployment-order-process.yaml
     set:
-      agents.eventProcess.enabled: false
       agents.orderProcess.enabled: true
       healthCheck.enabled: true
       healthCheck.startupProbe.enabled: false

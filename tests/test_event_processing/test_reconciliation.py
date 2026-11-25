@@ -190,6 +190,15 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
             utils.run_periodic_order_reconciliation([offering], "agent")
             mock_get_client.assert_not_called()
 
+    def test_skips_polled_offering(self):
+        """A polled offering's orders belong to order-process; replaying them here races it."""
+        offering = _make_offering(order_processing_backend="slurm", stomp_enabled=False)
+        with mock.patch(
+            "waldur_site_agent.event_processing.utils.get_client_for_offering"
+        ) as mock_get_client:
+            utils.run_periodic_order_reconciliation([offering], "agent")
+            mock_get_client.assert_not_called()
+
     @mock.patch(
         "waldur_site_agent.event_processing.utils.common_processors.OfferingOrderProcessor"
     )
@@ -201,6 +210,7 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
         """Reconciliation fetches stuck orders and processes each one."""
         offering = _make_offering(
             order_processing_backend="slurm",
+            stomp_enabled=True,
         )
         stuck_order = mock.Mock()
         mock_orders_list.sync_all.return_value = [stuck_order]
@@ -227,6 +237,7 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
         """No processing when there are no stuck orders."""
         offering = _make_offering(
             order_processing_backend="slurm",
+            stomp_enabled=True,
         )
         mock_orders_list.sync_all.return_value = []
 
@@ -245,6 +256,7 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
         """Backend exceptions are logged and don't crash the loop."""
         offering = _make_offering(
             order_processing_backend="slurm",
+            stomp_enabled=True,
         )
         mock_orders_list.sync_all.side_effect = RuntimeError("backend down")
 
@@ -269,11 +281,13 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
             name="offering-a",
             waldur_offering_uuid="uuid-a",
             order_processing_backend="slurm",
+            stomp_enabled=True,
         )
         offering_b = _make_offering(
             name="offering-b",
             waldur_offering_uuid="uuid-b",
             order_processing_backend="slurm",
+            stomp_enabled=True,
         )
 
         order_a = mock.Mock()
@@ -302,6 +316,7 @@ class TestRunPeriodicOrderReconciliation(unittest.TestCase):
         with_backend = _make_offering(
             name="with-backend",
             order_processing_backend="slurm",
+            stomp_enabled=True,
         )
         without_backend = _make_offering(
             name="without-backend",
@@ -574,7 +589,7 @@ class TestRunPeriodicApiKeyReconciliation(unittest.TestCase):
     """Tests for run_periodic_api_key_reconciliation function."""
 
     def _sweep(self, mock_get_backend, backend, rows, **kwargs):
-        offering = _make_offering(order_processing_backend="envoy")
+        offering = _make_offering(order_processing_backend="envoy", stomp_enabled=True)
         mock_get_backend.return_value = (backend, "1.0")
         listing = key_listing(rows)
         with mock.patch(f"{KEYS}.marketplace_resource_api_keys_list", listing), mock.patch(
@@ -599,6 +614,13 @@ class TestRunPeriodicApiKeyReconciliation(unittest.TestCase):
         """Key commands are an order-processing capability."""
         offering = _make_offering(stomp_enabled=True)
         utils.run_periodic_api_key_reconciliation([offering], "agent")
+        mock_get_client.assert_not_called()
+
+    def test_skips_polled_offering(self, mock_get_backend, mock_get_client):
+        """A polled offering's key commands belong to order-process; replaying them races it."""
+        offering = _make_offering(order_processing_backend="envoy", stomp_enabled=False)
+        utils.run_periodic_api_key_reconciliation([offering], "agent")
+        mock_get_backend.assert_not_called()
         mock_get_client.assert_not_called()
 
     def test_skips_backend_without_key_support(self, mock_get_backend, mock_get_client):
@@ -751,7 +773,7 @@ class TestRunPeriodicApiKeyReconciliation(unittest.TestCase):
         self, mock_get_backend, mock_get_client
     ):
         """A sweep must not abandon the remaining keys when one command throws."""
-        offering = _make_offering(order_processing_backend="envoy")
+        offering = _make_offering(order_processing_backend="envoy", stomp_enabled=True)
         mock_get_backend.return_value = (_key_backend(), "1.0")
         listing = key_listing([_stuck_row(client_id="cid-1"), _stuck_row(client_id="cid-2")])
         with mock.patch(f"{KEYS}.marketplace_resource_api_keys_list", listing), mock.patch(
@@ -794,7 +816,7 @@ class TestRunPeriodicApiKeyReconciliation(unittest.TestCase):
         self, mock_get_backend, mock_get_client
     ):
         """One broken offering must not stop the tick loop."""
-        offering = _make_offering(order_processing_backend="envoy")
+        offering = _make_offering(order_processing_backend="envoy", stomp_enabled=True)
         mock_get_backend.return_value = (_key_backend(), "1.0")
         listing = mock.Mock()
         listing.sync_all.side_effect = Exception("api down")
