@@ -92,13 +92,29 @@ Published charts set `image.tag` to the matching agent release; an empty tag fal
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `agents.orderProcess.enabled` | Deploy order processing agent | `false` |
-| `agents.orderProcess.replicas` | Number of order-process replicas | `1` |
+| `agents.orderProcess.replicas` | Number of order-process replicas; more than 1 is refused (see below) | `1` |
+| `agents.orderProcess.strategy` | Strategy for this agent, replaces `strategy`; `Recreate` only (see below) | unset |
 | `agents.report.enabled` | Deploy reporting agent | `true` |
 | `agents.report.replicas` | Number of report replicas | `1` |
+| `agents.report.strategy` | Strategy for this agent, replaces `strategy` | unset |
 | `agents.membershipSync.enabled` | Deploy membership sync agent | `false` |
 | `agents.membershipSync.replicas` | Number of membership-sync replicas | `1` |
+| `agents.membershipSync.strategy` | Strategy for this agent, replaces `strategy` | unset |
 | `agents.eventProcess.enabled` | Deploy event processing agent | `true` |
-| `agents.eventProcess.replicas` | Number of event-process replicas | `1` |
+| `agents.eventProcess.replicas` | Number of event-process replicas; more than 1 is refused (see below) | `1` |
+| `agents.eventProcess.strategy` | Strategy for this agent, replaces `strategy`; `Recreate` only (see below) | unset |
+
+The chart refuses to render with `eventProcess` and `orderProcess` both enabled, with
+either of them at more than one replica, or with either of them enabled under a
+strategy other than `Recreate`. An agent's strategy is its own `agents.<name>.strategy`
+when set, which replaces the global `strategy` outright, and the global `strategy`
+otherwise; an unset strategy counts as `RollingUpdate`, as in Kubernetes. `report`
+and `membershipSync` are not checked, so a scaled report agent can roll without
+downtime with `agents.report.strategy.type: RollingUpdate`.
+Each pod processes every offering in the configuration, so a second one, including the
+old pod during a rolling update, would race the first on the same orders and API key
+commands. To spread offerings over several agents, give each its own release with its
+own offerings.
 
 ### Secret Configuration
 
@@ -143,7 +159,7 @@ and bind the required Role to it.
 | `extraVolumes` | Extra volumes for every agent pod (e.g. munge key, `slurm.conf`) | `[]` |
 | `extraVolumeMounts` | Extra volume mounts for every agent container | `[]` |
 | `hostAliases` | `/etc/hosts` entries for every agent pod (e.g. SLURM node hostnames) | `[]` |
-| `strategy.type` | Deployment strategy | `Recreate` |
+| `strategy.type` | Deployment strategy for agents without their own `agents.<name>.strategy` (see above) | `Recreate` |
 
 `Recreate` keeps two pods of the same mode from processing the same offering during a rollout.
 

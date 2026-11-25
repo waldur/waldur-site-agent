@@ -8,9 +8,9 @@ metadata:
     app.kubernetes.io/component: membership-sync
 spec:
   replicas: {{ .Values.agents.membershipSync.replicas }}
-  {{- with .Values.strategy }}
+  {{- with include "waldur-site-agent.agentStrategy" (dict "root" . "name" "membershipSync") }}
   strategy:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   selector:
     matchLabels:

@@ -8,9 +8,9 @@ metadata:
     app.kubernetes.io/component: report
 spec:
   replicas: {{ .Values.agents.report.replicas }}
-  {{- with .Values.strategy }}
+  {{- with include "waldur-site-agent.agentStrategy" (dict "root" . "name" "report") }}
   strategy:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   selector:
     matchLabels:

@@ -1,0 +1,244 @@
+suite: one agent per offering
+templates:
+  - templates/deployment-event-process.yaml
+  - templates/deployment-order-process.yaml
+  - templates/deployment-report.yaml
+  - templates/deployment-membership-sync.yaml
+  - templates/secret.yaml
+release:
+  name: test-release
+  namespace: test-ns
+tests:
+  # A failed render is attributed to the first template that fails, which is
+  # order-process; both templates include the same check.
+  - it: refuses event-process and order-process together
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.orderProcess.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "agents.eventProcess and agents.orderProcess are both enabled"
+
+  - it: ignores the replicas of a disabled agent
+    template: templates/deployment-event-process.yaml
+    set:
+      agents.orderProcess.enabled: false
+      agents.orderProcess.replicas: 3
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  # Any strategy but Recreate runs the old and new pod together on rollout.
+  - it: refuses a rolling update for event-process
+    template: templates/deployment-order-process.yaml
+    set:
+      strategy.type: RollingUpdate
+    asserts:
+      - failedTemplate:
+          errorPattern: "strategy.type is RollingUpdate, but agents.eventProcess is enabled"
+
+  - it: refuses a rolling update for order-process
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      strategy.type: RollingUpdate
+    asserts:
+      - failedTemplate:
+          errorPattern: "strategy.type is RollingUpdate, but agents.orderProcess is enabled"
+
+  # Kubernetes defaults an unset strategy to RollingUpdate.
+  - it: refuses an unset strategy
+    template: templates/deployment-order-process.yaml
+    set:
+      strategy: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "strategy.type is RollingUpdate"
+
+  - it: allows a rolling update when neither agent is enabled
+    template: templates/deployment-report.yaml
+    set:
+      agents.eventProcess.enabled: false
+      strategy.type: RollingUpdate
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders a single event-process by default
+    template: templates/deployment-event-process.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: renders a single order-process in polling mode
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      agents.membershipSync.enabled: true
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  # Only the agents that act on API key commands are limited; reporting and
+  # membership sync may still scale.
+  - it: still scales the report agent
+    template: templates/deployment-report.yaml
+    set:
+      agents.report.replicas: 3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+
+  - it: still scales the membership-sync agent
+    template: templates/deployment-membership-sync.yaml
+    set:
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      agents.membershipSync.enabled: true
+      agents.membershipSync.replicas: 3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+
+  # agents.<name>.strategy replaces the global strategy for that agent; the
+  # guard checks the effective strategy of event-process and order-process.
+  - it: refuses a per-agent rolling update for event-process
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.eventProcess.strategy.type: RollingUpdate
+    asserts:
+      - failedTemplate:
+          errorPattern: "agents.eventProcess.strategy.type is RollingUpdate, but agents.eventProcess is enabled"
+
+  - it: refuses a per-agent rolling update for order-process
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      agents.orderProcess.strategy.type: RollingUpdate
+    asserts:
+      - failedTemplate:
+          errorPattern: "agents.orderProcess.strategy.type is RollingUpdate, but agents.orderProcess is enabled"
+
+  - it: refuses a per-agent strategy without a type for event-process
+    template: templates/deployment-order-process.yaml
+    set:
+      agents.eventProcess.strategy.rollingUpdate.maxSurge: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "agents.eventProcess.strategy.type is RollingUpdate"
+
+  - it: lets a per-agent Recreate override a global rolling update
+    template: templates/deployment-event-process.yaml
+    set:
+      strategy.type: RollingUpdate
+      agents.eventProcess.strategy.type: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy
+          value:
+            type: Recreate
+
+  - it: lets a per-agent Recreate override a global rolling update for order-process
+    template: templates/deployment-order-process.yaml
+    set:
+      strategy.type: RollingUpdate
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      agents.orderProcess.strategy.type: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  # An empty per-agent strategy is unset: the global one applies, and the
+  # refusal names it.
+  - it: treats an empty per-agent strategy as unset
+    template: templates/deployment-order-process.yaml
+    set:
+      strategy.type: RollingUpdate
+      agents.eventProcess.strategy: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "strategy.type is RollingUpdate, but agents.eventProcess is enabled"
+
+  - it: rolls the report agent under the global strategy when event-process overrides it
+    template: templates/deployment-report.yaml
+    set:
+      strategy.type: RollingUpdate
+      agents.eventProcess.strategy.type: Recreate
+      agents.report.replicas: 3
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+
+  - it: rolls the report agent with its own strategy while event-process is enabled
+    template: templates/deployment-report.yaml
+    set:
+      agents.report.replicas: 3
+      agents.report.strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxUnavailable: 1
+    asserts:
+      - equal:
+          path: spec.strategy
+          value:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 1
+
+  - it: keeps event-process on the global Recreate when only report rolls
+    template: templates/deployment-event-process.yaml
+    set:
+      agents.report.strategy.type: RollingUpdate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: rolls the membership-sync agent with its own strategy in polling mode
+    template: templates/deployment-membership-sync.yaml
+    set:
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      agents.membershipSync.enabled: true
+      agents.membershipSync.replicas: 3
+      agents.membershipSync.strategy.type: RollingUpdate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+
+  # Replaced, not merged: rollingUpdate parameters under type Recreate would be
+  # rejected by Kubernetes.
+  - it: replaces the global strategy rather than merging with it
+    template: templates/deployment-event-process.yaml
+    set:
+      strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 1
+      agents.eventProcess.strategy.type: Recreate
+    asserts:
+      - notExists:
+          path: spec.strategy.rollingUpdate
+
+  - it: falls back to the global strategy for every agent
+    template: templates/deployment-membership-sync.yaml
+    set:
+      agents.eventProcess.enabled: false
+      agents.orderProcess.enabled: true
+      agents.membershipSync.enabled: true
+    asserts:
+      - equal:
+          path: spec.strategy
+          value:
+            type: Recreate

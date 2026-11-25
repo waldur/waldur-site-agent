@@ -69,6 +69,11 @@ agents:
   report:
     enabled: true
     replicas: 1
+    # Overrides the global strategy for this agent only. Report and
+    # membership-sync may roll; event-process and order-process must use
+    # Recreate, and the chart refuses anything else for them.
+    # strategy:
+    #   type: RollingUpdate
 
   # Polling-based processing
 
@@ -79,6 +84,8 @@ agents:
   membershipSync:
     enabled: false
     replicas: 1
+    # strategy:
+    #   type: RollingUpdate
 
 
 # Secret configuration (all agent configuration)
@@ -131,7 +138,7 @@ secret:
               accounting_type: "usage"
               label: "RAM"
 
-# Deployment strategy
+# Deployment strategy for every agent that sets no agents.<name>.strategy
 strategy:
   type: Recreate
 
