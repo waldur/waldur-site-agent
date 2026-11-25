@@ -116,7 +116,12 @@ class TestOrderReconciliation:
         report.text("Running `run_periodic_order_reconciliation` ...\n")
         # Use threshold=0 so the freshly-created order is picked up immediately
         # (in production the default 30-min threshold filters out active orders)
-        run_periodic_order_reconciliation([offering], stuck_threshold_minutes=0)
+        # The sweep only covers STOMP offerings (polled ones belong to
+        # order-process), and this suite runs on the REST config.
+        run_periodic_order_reconciliation(
+            [offering.model_copy(update={"stomp_enabled": True})],
+            stuck_threshold_minutes=0,
+        )
 
         # --- Step 4: Assert order is DONE ---
         order = marketplace_orders_retrieve.sync(

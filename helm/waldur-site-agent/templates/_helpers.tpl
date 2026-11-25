@@ -75,25 +75,21 @@ Create the name of the secret to use
 {{- end }}
 
 {{/*
-Refuse a deployment in which two agents would process the same offerings.
-Every pod of event-process or order-process reads the whole configuration and
-carries out every offering's orders and API key commands, so a second pod
-cannot take a share of the work: the two race each other. An API
+Refuse a deployment in which two pods of the same agent would process the same
+offerings. Every pod of event-process or order-process reads the whole
+configuration and carries out every offering's orders and API key commands, so
+a second pod cannot take a share of the work: the two race each other. An API
 key acknowledgement does not name the command it answers, so a race can settle
 a newer rotation with an older key value. A strategy other than Recreate runs
 the old and new pod side by side during every rollout, even at one replica, so
 the effective strategy of each enabled agent (see agentStrategy) must be
 Recreate. Report and membership-sync are not checked and may roll.
 
-event-process and order-process together overlap in event-process's periodic
-order and API key reconciliation, which also replays polled offerings
-(waldur/waldur-site-agent#123).
+The two agents may run together: order-process skips offerings with
+stomp_enabled, and event-process acts only on those.
 */}}
 {{- define "waldur-site-agent.validateAgents" -}}
 {{- $agents := .Values.agents -}}
-{{- if and $agents.eventProcess.enabled $agents.orderProcess.enabled -}}
-{{- fail "agents.eventProcess and agents.orderProcess are both enabled. Their periodic reconciliation overlaps on polled offerings, so the two would race each other: enable one of them." -}}
-{{- end -}}
 {{- range $name := list "eventProcess" "orderProcess" -}}
 {{- $agent := index $agents $name -}}
 {{- if $agent.enabled -}}

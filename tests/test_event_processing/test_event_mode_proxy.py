@@ -94,7 +94,7 @@ class TestGetClientForOfferingProxy:
 
 class TestEventModeUsesProxy:
     def test_periodic_order_reconciliation_uses_global_proxy(self):
-        offering = _configuration().waldur_offerings[0]
+        offering = _configuration(stomp_enabled=True).waldur_offerings[0]
         with mock.patch.object(
             utils, "get_client", side_effect=RuntimeError("stop here")
         ) as get_client:
