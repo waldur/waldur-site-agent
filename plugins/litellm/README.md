@@ -195,9 +195,9 @@ limit, so they are left out. A total has no proxy budget to follow it either:
   with `1mo`: the proxy sets `spend` back to 0 on the 1st, so a key with a month limit keeps no
   lifetime counter to cap.
 - The proxy's `spend` is per key. Rotating a key by deleting it and minting a replacement (the
-  only way without an enterprise licence, where `/key/regenerate` is refused) starts the new key
-  at 0; an enterprise regenerate keeps the old `spend`. Waldur's total runs per resource, or per
-  key across rotations.
+  only way without an enterprise licence, where `/key/regenerate` is refused) would start the new
+  key at 0, so the agent mints it with the old key's `spend` this month; an enterprise regenerate
+  keeps the old `spend`. Waldur's total runs per resource, or per key across rotations.
 
 Waldur reads the total from its own usage records and pauses the resource or the key; the pause
 lifts only when the limit is raised or cleared. Until the next usage report (30 minutes by
@@ -270,18 +270,33 @@ command, or read from Waldur -- whichever way the key is rotated, exactly as an 
 own-limit stamp and tighter-of backstop included. Only when Waldur cannot be read does the key
 keep the settings it has on the proxy.
 
-**A key changes hands by rotation.** Waldur rotates a key whose assignee is set, changed or
-cleared (waldur/waldur-mastermind#772), carrying any limits and models the same edit set. The
-previous holder -- or any project member, while the key was unassigned -- may have revealed the
-old secret; since API usage on the key counts against its limit and its chat follows the new
-holder, the old secret has to stop working. After the rotation the agent hands the resource's
-assignees to the proxy at once, as after a create, so chat moves to the new holder without
-waiting for the next membership pass. A Waldur older than that keeps the secret on
-reassignment: there, rotate a key after reassigning it.
+**A key does not change hands.** Waldur fixes a key's assignee when the key is requested
+(waldur/waldur-mastermind#828): a key moves to someone else by requesting a key for them and
+deleting the old one. The new holder's key is a fresh mint under a new alias and starts at 0;
+the old key's usage stays on its own alias. The one rotation that touches an assignee is
+Waldur's own, when the assignee's account is deleted on an offering without key management:
+the key is rotated so the departed person's copy stops working, comes back unassigned, and
+keeps its budget like any other rotation. After every rotation the agent hands the resource's
+assignees to the proxy at once, as after a create, so chat follows without waiting for the
+next membership pass.
 
-On an open-source proxy a rotation is a delete and a mint under the same alias, so the new key
-starts with no proxy spend: its `max_budget` backstop counts from zero again. Waldur's own
-metering is not affected, since usage is attributed by alias. A key the proxy lost is minted
+On an open-source proxy a rotation is a delete and a mint under the same alias, and the new key
+keeps the old one's budget (waldur/waldur-site-agent#97):
+
+- `max_budget`: the new key is minted with the old key's `spend`, which the proxy counts against
+  it. Not on the 1st before the proxy has reset the old key, whose `spend` is then last month's.
+- Day and week windows: the proxy counts a window per key and drops a `spend` sent with one, so
+  each window is minted with its cap reduced by the slot's spend in it so far, read from
+  `/user/daily/activity` by alias. The amount is noted on the key
+  (`waldur_carried_spend_windows`), and every later budget write takes it off the same window
+  until that window resets. If the spend API cannot be read, the windows are minted as they
+  were and the rotation goes ahead.
+
+A key the proxy lost, minted back by a rotation, has no record to carry from and starts at 0.
+
+The old key's `spend` lags its last requests by the proxy's spend batch interval
+(`proxy_batch_write_at`). Waldur's own metering is not affected, since usage is attributed by
+alias, and the proxy keeps a deleted key's alias for that. A key the proxy lost is minted
 back with its own model list and limits from Waldur; if those cannot be read, it is minted
 paused with no models until an update or a resume from Waldur applies them, rather than with
 the offering's.
@@ -309,6 +324,7 @@ them are kept in the key's `metadata`:
 | `waldur_key_models` | The key's model list as Waldur sent it: `["*"]`, names, or `[]` |
 | `waldur_holder_chat_spend` | The holder's chat this month, taken off the key's `max_budget` (see [Limits](#limits)) |
 | `waldur_holder_chat_spend_windows` | The same for the day and week windows, `{period: spend}` |
+| `waldur_carried_spend_windows` | Window spend a delete-and-mint rotation carried, netted until it resets |
 
 A key's `models` on the proxy is Waldur's list resolved against the offering's `models`
 setting when the key was written, and Waldur sends nothing when that setting changes. So the
@@ -405,14 +421,15 @@ model in it.
 each day of it instead, every day of the month so far, zeros included. API usage lands on the key it was
 served on, whatever address the request carried. On an offering with a chat surface, a
 person's chat usage lands on the key assigned to them (see below). Chat usage from someone with
-no key assigned now -- their key was deleted or reassigned this month, say -- lands on
+no key assigned now -- their key was deleted this month, say -- lands on
 `<backend_id>-unassigned`, which is no key: Waldur holds none by that name, so it counts
 against no key's limit and the agent leaves it out of the per-key report.
 Either way the keys of a resource sum to its total.
 
-A person's chat for the whole month counts against the key stamped on them **now**, so
-reassigning or deleting a key mid-month moves that month's chat with it: the new holder's
-chat lands on the key, the previous holder's leaves it. A key paused at its limit by chat
+A person's chat for the whole month counts against the key stamped on them **now**, so a key
+that loses its holder mid-month -- the key is deleted, or its assignee's account is, which
+leaves it unassigned -- loses that month's chat, and a key requested for the person later in
+the month takes all of it. A key paused at its limit by chat
 can come back under it that way, and Waldur then resumes it. Reported per day, the days that
 chat left are set back to zero, so the key's day and week usage drop at once, but Waldur never
 lowers a key's month figure within the month: a key paused at its month limit stays paused
@@ -1037,7 +1054,7 @@ not by project membership:
 
 Who holds which key comes from Waldur: the membership sync reads the resource's keys and
 their assignees on every pass, and the key's alias is stamped on the person's LiteLLM user
-(`waldur_api_key` in its `metadata`). So a reassignment, a missed command, or an account that
+(`waldur_api_key` in its `metadata`). So a deleted key, a missed command, or an account that
 only appeared at the person's first sign-in all converge on the next membership sync. A newly
 created key's assignee is applied straight away.
 
@@ -1097,11 +1114,21 @@ membership sync re-adds) when switching an offering back to chat by membership.
 | `account_provisioning` | no | `sso` | `sso` or `managed_password` |
 | `initial_password` | when `managed_password` | — | Temporary password for created accounts |
 | `delete_accounts_on_removal` | no | `false` | Delete instead of demoting; removal and terminate only, never pause |
+| `shared_keys` | no (recommended) | — | Alias or hash of each key Open WebUI calls the proxy with; see below |
 | `verify_ssl` | no | `true` | Verify Open WebUI's TLS certificate |
 | `timeout` | no | `30` | Per-request timeout in seconds |
 
 Membership sync must be enabled (`membership_sync_backend: litellm`) — it is the pass
 that provisions and revokes people.
+
+`shared_keys` decides which usage under a person's address is their chat. With it set, only
+requests served on a listed key are billed by address, and taken off their key's budget; the
+same request on any other key is API usage, billed to that key's resource by alias or to no
+one. Without it, chat is told from API usage by the alias shape alone: a key whose alias does
+not end in `-<n>` counts as Open WebUI's. A shared key named like a slot (`openwebui-1`) then
+leaves all chat unbilled, and any other non-plugin key can bill a member's address through the
+`X-OpenWebUI-User-Email` header. Both backends log a warning when it is unset. Name a key with
+no alias by its hash (the `token` in `/key/list`).
 
 [BerriAI/litellm#21927]: https://github.com/BerriAI/litellm/issues/21927
 
@@ -1410,6 +1437,7 @@ offerings:
         url: "https://chat.example.com"
         account_provisioning: "sso"          # or "managed_password" + initial_password
         delete_accounts_on_removal: false
+        shared_keys: ["openwebui"]           # the alias (or hash) of Open WebUI's key
 
     # Per-model pricing, capped by the customer's spending limits on token_cost; see
     # Pricing for what to price each at on the plan.

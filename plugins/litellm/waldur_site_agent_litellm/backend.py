@@ -42,7 +42,7 @@ from .client import (
     LiteLLMEnterpriseFeatureError,
 )
 from .openwebui import ROLE_ACTIVE, ROLE_DISABLED, OpenWebUIClient, OpenWebUIError
-from .reporting import chat_spend_by_user
+from .reporting import chat_spend_by_user, shared_keys_setting, warn_unset_shared_keys
 from .usage_client import LiteLLMUsageClient
 
 logger = logging.getLogger(__name__)
@@ -110,12 +110,17 @@ _BUDGET_NAMES = (*_LIMIT_FIELDS, *_SPEND_LIMITS.values())
 # rather than dropping it, so a failed read never loosens the cap.
 # ``waldur_holder_chat_spend_windows``: the same for the day and week windows,
 # ``{period: spend}``.
+# ``waldur_carried_spend_windows``: the slot's spend in its day and week windows when a
+# delete-and-mint rotation minted this key, ``{period: {"since": YYYY-MM-DD, "spend":
+# x}}``. The proxy counts a window per key hash, so the new key's windows start at 0;
+# every budget written while the window is still the one ``since`` names is net of this.
 META_KEY_PAUSED = "waldur_key_paused"
 META_KEY_LIMITS = "waldur_key_limits"
 META_RESOURCE_LIMITS = "waldur_resource_limits"
 META_KEY_MODELS = "waldur_key_models"
 META_HOLDER_CHAT = "waldur_holder_chat_spend"
 META_HOLDER_CHAT_WINDOWS = "waldur_holder_chat_spend_windows"
+META_CARRIED_WINDOWS = "waldur_carried_spend_windows"
 
 # Held across each read-modify-write of a key's metadata. ``/key/update`` replaces
 # ``metadata`` whole, and in event mode the hourly status pass rewrites budgets on the
@@ -311,6 +316,12 @@ class LiteLLMBackend(backends.BaseBackend):
         )
         # ``(fetched at, (start, end), {email: spend})``, cached like the user listing.
         self._chat_spend_cache: tuple[float, tuple, dict] | None = None
+        # The keys whose per-person rows are chat (``reporting.shared_keys_setting``).
+        self.shared_keys = shared_keys_setting(self.openwebui_settings)
+        warn_unset_shared_keys(self.openwebui_settings)
+        # Reads a slot's window spend for a delete-and-mint rotation; built on first use,
+        # since an API-only offering has no ``usage_client``.
+        self._window_usage_client: LiteLLMUsageClient | None = None
 
         # ``/user/list`` results, cached for part of a pass -- see _USER_CACHE_TTL.
         self._users_cache: tuple[float, dict] | None = None
@@ -350,6 +361,10 @@ class LiteLLMBackend(backends.BaseBackend):
                 self.account_provisioning,
                 "delete" if self.remove_chat_accounts else "disable",
                 self.openwebui_client.ping(),
+            )
+            logger.info(
+                "Open WebUI shared keys: %s",
+                sorted(self.shared_keys) if self.shared_keys is not None else "unset",
             )
         return self.ping(raise_exception=False)
 
@@ -951,7 +966,11 @@ class LiteLLMBackend(backends.BaseBackend):
         return combined
 
     def _key_fields(
-        self, own_limits: dict, resource_limits: dict, chat_spend: dict
+        self,
+        own_limits: dict,
+        resource_limits: dict,
+        chat_spend: dict,
+        carried: dict | None = None,
     ) -> tuple[dict, dict]:
         """The key's backstop fields with its holder's chat taken off, and the amounts taken.
 
@@ -964,6 +983,10 @@ class LiteLLMBackend(backends.BaseBackend):
         Each window is netted the same way, of the chat in its own period:
         ``chat_spend`` is ``{period: spend}`` for ``month`` and the ``BUDGET_WINDOWS``.
         The amounts taken come back the same way, the periods with none left out.
+
+        ``carried`` is the spend a rotation carried into the key's windows
+        (``_carried_windows``), ``{period: spend}``: taken off too, but not returned as
+        chat.
         """
         fields = self._backstop_fields(self._tighter_limits(own_limits, resource_limits))
         taken: dict = {}
@@ -978,7 +1001,87 @@ class LiteLLMBackend(backends.BaseBackend):
             if spend:
                 window["max_budget"] = max(0.0, round(window["max_budget"] - spend, 6))
                 taken[period] = spend
+            spent_before = (carried or {}).get(period)
+            if spent_before:
+                window["max_budget"] = max(0.0, round(window["max_budget"] - spent_before, 6))
         return fields, taken
+
+    @classmethod
+    def _carried_windows(cls, metadata: dict) -> dict:
+        """``{period: spend}`` a rotation carried into the key's windows, still current.
+
+        An entry whose window has since reset is ignored: the new window starts at 0.
+        """
+        carried = metadata.get(META_CARRIED_WINDOWS)
+        if not isinstance(carried, dict):
+            return {}
+        starts = cls._chat_period_starts()
+        current: dict = {}
+        for period, entry in carried.items():
+            if period not in BUDGET_WINDOWS or not isinstance(entry, dict):
+                continue
+            if entry.get("since") != starts[period]:
+                continue
+            try:
+                spend = float(entry.get("spend") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if spend > 0:
+                current[period] = spend
+        return current
+
+    def _slot_window_spend(self, alias: str, starts: dict) -> dict | None:
+        """``{period: spend}`` of the slot's API usage in its current day and week windows.
+
+        Read per alias, which every key of the slot shares and the proxy keeps for a
+        deleted key, so it covers the keys earlier rotations deleted too. ``None`` when
+        the spend API cannot be read.
+        """
+        client = self.usage_client
+        if client is None:
+            if self._window_usage_client is None:
+                self._window_usage_client = LiteLLMUsageClient(self.backend_settings)
+            client = self._window_usage_client
+        periods = {period: starts[period] for period in BUDGET_WINDOWS}
+        try:
+            rows = client.get_usage_rows(min(periods.values()), starts["day"])
+        except BackendError:
+            logger.exception("Unable to read the window spend of key %s", alias)
+            return None
+        spend: dict = {}
+        for row in rows:
+            if row.get("key_alias") != alias:
+                continue
+            day = str(row.get("date") or "")
+            for period, start in periods.items():
+                if day >= start:
+                    spend[period] = round(spend.get(period, 0.0) + row["token_cost"], 6)
+        return {period: amount for period, amount in spend.items() if amount}
+
+    @staticmethod
+    def _month_spend(record: dict) -> float | None:
+        """The key's spend this month, to carry into its replacement; ``None`` if none.
+
+        Only while the key's budget period is current: on the 1st, before the proxy's
+        reset job has run, ``spend`` is still last month's, and the replacement would
+        carry it through the whole new month.
+        """
+        try:
+            spend = float(record.get("spend") or 0.0)
+        except (TypeError, ValueError):
+            return None
+        reset_at = record.get("budget_reset_at")
+        if spend <= 0 or not reset_at:
+            return None
+        try:
+            moment = datetime.datetime.fromisoformat(str(reset_at).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=datetime.timezone.utc)
+        if moment <= datetime.datetime.now(tz=datetime.timezone.utc):
+            return None
+        return spend
 
     @staticmethod
     def _recorded_chat(metadata: dict) -> dict:
@@ -1098,7 +1201,9 @@ class LiteLLMBackend(backends.BaseBackend):
         cached = self._chat_spend_cache
         if cached is not None and cached[1] == period and now - cached[0] < _USER_CACHE_TTL:
             return cached[2]
-        spend = chat_spend_by_user(self.usage_client.get_user_usage_rows(*period))
+        spend = chat_spend_by_user(
+            self.usage_client.get_user_usage_rows(*period), self.shared_keys
+        )
         self._chat_spend_cache = (now, period, spend)
         return spend
 
@@ -1193,15 +1298,20 @@ class LiteLLMBackend(backends.BaseBackend):
         limits: dict | None = None,
         models: list | None = None,
         metadata: dict | None = None,
+        spend: float | None = None,
     ) -> dict:
         """Mint one key with a model allowlist and the rate backstops applied.
 
         The resource's own limits win over the offering-wide defaults: a key minted
         without them would carry no ``max_budget`` at all until the resource's limits
         were next edited, which is exactly the burst the backstop exists to stop.
-        ``models`` defaults to the offering's allowlist.
+        ``models`` defaults to the offering's allowlist. ``spend`` is what a rotation
+        carries over from the key it replaces (``_month_spend``).
         """
         fields = self._backstop_fields(limits or {})
+        # Only a rotation carries spend over; a fresh key starts at the proxy's 0. A key
+        # with no month budget has no reset either, so its spend would never go back.
+        extra = {"spend": spend} if spend and fields["max_budget"] is not None else {}
         return self.litellm_client.generate_key(
             alias,
             models=self.models if models is None else models,
@@ -1212,6 +1322,7 @@ class LiteLLMBackend(backends.BaseBackend):
             tpm_limit=fields["tpm_limit"],
             rpm_limit=fields["rpm_limit"],
             metadata=metadata,
+            **extra,
         )
 
     def rotate_resource_key(
@@ -1297,6 +1408,7 @@ class LiteLLMBackend(backends.BaseBackend):
                     own_limits,
                     key_resource_limits,
                     self._chat_deduction(client_id, chat_spend, metadata),
+                    self._carried_windows(metadata),
                 )
                 metadata[META_KEY_LIMITS] = own_limits
                 metadata[META_RESOURCE_LIMITS] = key_resource_limits
@@ -1357,6 +1469,9 @@ class LiteLLMBackend(backends.BaseBackend):
             key_limits = self._limits_from_records({client_id: record})
             kept = record.get("models")
             models = list(kept) if isinstance(kept, list) else None
+        # The new key's spend and windows start at 0 on the proxy: without these, a
+        # holder who spent the key's budget could rotate it and spend it again.
+        key_limits = self._carry_window_spend(client_id, key_limits or {}, metadata)
         self.litellm_client.delete_keys([token])
         new_key = self._mint(
             client_id,
@@ -1364,9 +1479,48 @@ class LiteLLMBackend(backends.BaseBackend):
             limits=key_limits,
             models=models,
             metadata=metadata,
+            spend=self._month_spend(record),
         )["key"]
         logger.info("Rotated LiteLLM key %s by delete-and-mint (blocked=%s)", client_id, blocked)
         return new_key
+
+    def _carry_window_spend(self, alias: str, limits: dict, metadata: dict) -> dict:
+        """``limits`` with the slot's window spend so far taken off its day and week caps.
+
+        The proxy counts a window per key hash and drops a ``spend`` sent with one, so a
+        replacement minted with the full caps could spend each window again. ``limits``
+        are already net of what an earlier rotation carried (``_carried_windows``), so
+        only the spend since is taken off. The total is noted in ``metadata`` for later
+        budget writes. Spend that cannot be read takes nothing off and keeps the note.
+        """
+        windows = {
+            period: _SPEND_LIMITS[period]
+            for period in BUDGET_WINDOWS
+            if limits.get(_SPEND_LIMITS[period]) is not None
+        }
+        if not windows:
+            metadata.pop(META_CARRIED_WINDOWS, None)
+            return limits
+        starts = self._chat_period_starts()
+        spent = self._slot_window_spend(alias, starts)
+        if spent is None:
+            return limits
+        already = self._carried_windows(metadata)
+        carried: dict = {}
+        limits = dict(limits)
+        for period, name in windows.items():
+            # Never below what was carried before: a read that lost a deleted key's rows
+            # would otherwise hand that spend back at the next budget write.
+            total = max(spent.get(period, 0.0), already.get(period, 0.0))
+            since_last = max(0.0, total - already.get(period, 0.0))
+            limits[name] = max(0.0, round(limits[name] - since_last, 6))
+            if total:
+                carried[period] = {"since": starts[period], "spend": total}
+        if carried:
+            metadata[META_CARRIED_WINDOWS] = carried
+        else:
+            metadata.pop(META_CARRIED_WINDOWS, None)
+        return limits
 
     def _follow_key_chat(
         self, resource_backend_id: str, client_id: str, models: list | None
@@ -1622,7 +1776,10 @@ class LiteLLMBackend(backends.BaseBackend):
         with _KEY_METADATA_LOCK:
             current = self._current_metadata(token, record)
             fields, deduction = self._key_fields(
-                own_limits, resource_limits, self._chat_deduction(client_id, chat_spend, current)
+                own_limits,
+                resource_limits,
+                self._chat_deduction(client_id, chat_spend, current),
+                self._carried_windows(current),
             )
             metadata = {
                 **current,
@@ -1954,7 +2111,10 @@ class LiteLLMBackend(backends.BaseBackend):
                 else resource_limits
             )
             fields, deduction = self._key_fields(
-                own_limits, key_resource_limits, self._chat_deduction(alias, chat_spend, metadata)
+                own_limits,
+                key_resource_limits,
+                self._chat_deduction(alias, chat_spend, metadata),
+                self._carried_windows(metadata),
             )
             if (
                 (metadata.get(META_RESOURCE_LIMITS) or {}) == key_resource_limits
@@ -1978,6 +2138,7 @@ class LiteLLMBackend(backends.BaseBackend):
                         own_limits,
                         key_resource_limits,
                         self._chat_deduction(alias, chat_spend, metadata),
+                        self._carried_windows(metadata),
                     )
                     metadata[META_RESOURCE_LIMITS] = key_resource_limits
                     self._record_chat_deduction(metadata, deduction)

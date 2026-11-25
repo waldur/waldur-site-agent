@@ -139,10 +139,11 @@ class LiteLLMUsageClient:
     def get_user_usage_rows(self, start_date: str, end_date: str) -> list:
         """Return one row per (day, user, key) in the inclusive ``YYYY-MM-DD`` range.
 
-        Each row is ``{"date", "user_id", "key_alias"}`` plus the metrics
-        ``_metric_values`` reads, where ``key_alias`` may be ``None``. A row with no alias also
-        carries ``day_key_aliases``: the aliases of every key served on that day, from
-        the ``api_keys`` breakdown, ``None`` for a key without one.
+        Each row is ``{"date", "user_id", "key_alias", "key_hash"}`` plus the metrics
+        ``_metric_values`` reads, where ``key_alias`` and ``key_hash`` may be ``None``. A
+        row with no per-key split also carries ``day_key_aliases`` and ``day_key_hashes``:
+        the alias and hash of every key served on that day, in the same order, from the
+        ``api_keys`` breakdown, ``None`` for a key without an alias.
 
         ``date`` is the proxy's UTC day (``YYYY-MM-DD``) the row was bucketed under. It
         is what lets the caller bill the day to whoever owned the address on that day,
@@ -170,13 +171,14 @@ class LiteLLMUsageClient:
             breakdown = result.get("breakdown") or {}
             entities = breakdown.get("entities") or {}
             day_aliases: list | None = None
+            day_hashes: list = []
             for user_id, record in entities.items():
                 if not isinstance(record, dict):
                     continue
                 by_key = record.get("api_key_breakdown") or {}
                 if by_key:
-                    for key_record in by_key.values():
-                        row = self._to_user_row(date, str(user_id), key_record)
+                    for key_hash, key_record in by_key.items():
+                        row = self._to_user_row(date, str(user_id), key_record, str(key_hash))
                         if row is not None:
                             rows.append(row)
                     continue
@@ -190,7 +192,9 @@ class LiteLLMUsageClient:
                 if row is not None:
                     if day_aliases is None:
                         day_aliases = self._day_key_aliases(breakdown)
+                        day_hashes = [str(key_hash) for key_hash in breakdown.get("api_keys") or {}]
                     row["day_key_aliases"] = day_aliases
+                    row["day_key_hashes"] = day_hashes
                     rows.append(row)
         return rows
 
@@ -205,8 +209,15 @@ class LiteLLMUsageClient:
         return aliases
 
     @staticmethod
-    def _to_user_row(date: str, user_id: str, record: object) -> dict | None:
-        """Map one entity (or entity-by-key) entry onto a usage row."""
+    def _to_user_row(
+        date: str, user_id: str, record: object, key_hash: str | None = None
+    ) -> dict | None:
+        """Map one entity (or entity-by-key) entry onto a usage row.
+
+        ``key_hash`` is the hash the entity-by-key entry is indexed on, ``None`` for an
+        entity total: it names a key with no alias, such as an Open WebUI shared key
+        configured by hash (``openwebui.shared_keys``).
+        """
         if not isinstance(record, dict):
             return None
         alias = (record.get("metadata") or {}).get("key_alias")
@@ -214,6 +225,7 @@ class LiteLLMUsageClient:
             "date": date,
             "user_id": user_id,
             "key_alias": str(alias) if alias else None,
+            "key_hash": key_hash,
             **_metric_values(record.get("metrics") or {}),
         }
 
@@ -274,8 +286,10 @@ class LiteLLMUsageClient:
             return None
         alias = (record.get("metadata") or {}).get("key_alias")
         if not alias:
-            # A key deleted before the sweep, or one minted outside the agent, has no
-            # alias to attribute usage to. Counting it against nothing is correct.
+            # A key minted outside the agent with no alias, or one the proxy could not
+            # resolve (it keeps a deleted key's alias from its deleted-key table, and
+            # loses it only when that table cannot be read), has no alias to attribute
+            # usage to. Counting it against nothing is correct.
             return None
         return {
             "key_alias": str(alias),

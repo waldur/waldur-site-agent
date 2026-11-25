@@ -64,7 +64,71 @@ def served_on_minted_key(alias: str | None) -> bool:
     return bool(alias) and _SLOT_SUFFIX.search(str(alias)) is not None
 
 
-def chat_spend_by_user(rows: list) -> dict:
+def shared_keys_setting(openwebui_settings: dict) -> frozenset | None:
+    """The Open WebUI shared keys an offering names, by alias or hash; ``None`` if unset.
+
+    ``openwebui.shared_keys`` lists the keys Open WebUI calls the proxy with. A per-person
+    usage row is chat, billed by the address on it, only when it was served on one of
+    them. Unset, chat is told from API usage by the alias shape alone
+    (``served_on_minted_key``), which bills a shared key named like a slot
+    (``openwebui-1``) as nobody's chat, and lets any other key that is not slot-shaped
+    bill a managed address through the ``X-OpenWebUI-User-Email`` header.
+    """
+    value = openwebui_settings.get("shared_keys")
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = [value]
+    return frozenset(str(item).strip() for item in value if str(item).strip())
+
+
+_SHARED_KEYS_WARNED: set = set()
+
+
+def warn_unset_shared_keys(openwebui_settings: dict) -> None:
+    """Log that chat attribution falls back to the alias shape, or is off, when it is.
+
+    Once per process and Open WebUI: the core builds a backend per event and per pass.
+    """
+    if not openwebui_settings:
+        return
+    shared_keys = shared_keys_setting(openwebui_settings)
+    warned = (str(openwebui_settings.get("api_url") or ""), shared_keys)
+    if warned in _SHARED_KEYS_WARNED:
+        return
+    _SHARED_KEYS_WARNED.add(warned)
+    if shared_keys is None:
+        logger.warning(
+            "openwebui.shared_keys is not set: chat usage is told from API usage by the "
+            "key alias shape alone, so a non-plugin key can bill a member's address. "
+            "List Open WebUI's shared key (alias or hash) there"
+        )
+    elif not shared_keys:
+        logger.warning("openwebui.shared_keys is empty: no chat usage is attributed")
+
+
+def served_on_shared_key(row: dict, shared_keys: frozenset) -> bool:
+    """Whether a per-person usage row was served on one of the offering's shared keys.
+
+    A row with no key on it (the proxy gave no per-key split) counts only when every key
+    the day served is a shared one: otherwise it may be API usage on any other key,
+    under whatever address the request's header named.
+    """
+    alias = row.get("key_alias")
+    key_hash = row.get("key_hash")
+    if alias or key_hash:
+        return alias in shared_keys or key_hash in shared_keys
+    day_aliases = row.get("day_key_aliases")
+    if not day_aliases:
+        return False
+    day_hashes = row.get("day_key_hashes") or [None] * len(day_aliases)
+    return all(
+        other in shared_keys or other_hash in shared_keys
+        for other, other_hash in zip(day_aliases, day_hashes, strict=True)
+    )
+
+
+def chat_spend_by_user(rows: list, shared_keys: frozenset | None = None) -> dict:
     """``{email: {day: spend}}`` of the chat in per-person usage rows.
 
     Per day, because the report bills each day to the resource that owned the address
@@ -75,11 +139,17 @@ def chat_spend_by_user(rows: list) -> dict:
     day a minted key was in use, or with no key breakdown to tell from: the usage report
     bills it as nobody's chat (``LiteLLMUsageReportingBackend._billed_by_alias``), and
     the address on it is whatever the request's header named.
+
+    With ``shared_keys`` (``shared_keys_setting``) only the rows served on one of them
+    count, whatever the alias shape of the others.
     """
     spend: dict = {}
     for row in rows:
         alias = row["key_alias"]
-        if alias:
+        if shared_keys is not None:
+            if not served_on_shared_key(row, shared_keys):
+                continue
+        elif alias:
             if served_on_minted_key(alias):
                 continue
         else:
@@ -194,6 +264,10 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         # on a proxy whose master key is scoped to the spend API, one that fails.
         self.chat_enabled = bool(backend_settings.get("openwebui"))
         self.litellm_client = LiteLLMClient(backend_settings) if self.chat_enabled else None
+        openwebui_settings = dict(backend_settings.get("openwebui") or {})
+        # The keys whose per-person rows are chat; ``None`` falls back to the alias shape.
+        self.shared_keys = shared_keys_setting(openwebui_settings)
+        warn_unset_shared_keys(openwebui_settings)
 
     def _resolve_usage_metrics(self, backend_settings: dict) -> dict:
         """Pair each declared component with the usage-row metric that feeds it.
@@ -252,6 +326,11 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         logger.info("Proxy URL: %s", self.usage_client.api_url)
         logger.info("Metered components: %s", self._usage_metrics)
         logger.info("Chat usage attribution: %s", "on" if self.chat_enabled else "off")
+        if self.chat_enabled:
+            logger.info(
+                "Open WebUI shared keys: %s",
+                sorted(self.shared_keys) if self.shared_keys is not None else "unset",
+            )
         return self.ping(raise_exception=False)
 
     def list_components(self) -> list:
@@ -292,6 +371,10 @@ class LiteLLMUsageReportingBackend(backends.BaseBackend):
         usage, but only for such a day on such a proxy; counting it would let anyone
         holding a key bill their API calls to another member.
         """
+        if self.shared_keys is not None:
+            # Only rows served on Open WebUI's shared key are chat, whatever the alias
+            # shape of any other key.
+            return not served_on_shared_key(row, self.shared_keys)
         alias = row.get("key_alias")
         if alias:
             return self._is_minted(alias)

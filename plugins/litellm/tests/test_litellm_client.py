@@ -184,6 +184,19 @@ def test_generate_key_carries_the_metadata_it_is_given(mock_client_cls: mock.Moc
 
 
 @mock.patch("waldur_site_agent_litellm.client.httpx.Client")
+def test_generate_key_carries_the_spend_a_rotation_hands_over(mock_client_cls: mock.Mock) -> None:
+    instance = mock_client_cls.return_value
+    instance.request.return_value = _response(json_body={"key": "sk-new"})
+
+    _client().generate_key("res-1", max_budget=50, spend=30.0)
+    assert instance.request.call_args.kwargs["json"]["spend"] == 30.0
+
+    for nothing in (None, 0):
+        _client().generate_key("res-1", spend=nothing)
+        assert "spend" not in instance.request.call_args.kwargs["json"]
+
+
+@mock.patch("waldur_site_agent_litellm.client.httpx.Client")
 def test_generate_key_rejects_a_response_without_a_key(mock_client_cls: mock.Mock) -> None:
     instance = mock_client_cls.return_value
     instance.request.return_value = _response(json_body={"key_alias": "res-1"})
