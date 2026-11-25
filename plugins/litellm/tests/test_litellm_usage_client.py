@@ -345,6 +345,8 @@ def test_user_rows_carry_the_key_each_was_served_on(mock_client_cls: mock.Mock) 
         ("shared", 1),
     ]
     assert all("day_key_aliases" not in row for row in rows)
+    # The hash names a shared key configured without an alias (``openwebui.shared_keys``).
+    assert [row["key_hash"] for row in rows] == ["h-1", "h-s"]
 
 
 @mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")
@@ -379,6 +381,7 @@ def test_a_user_row_with_no_key_split_carries_the_days_keys(mock_client_cls: moc
     assert row["key_alias"] is None
     assert row["input_tokens"] == 11
     assert row["day_key_aliases"] == ["res-1", None]
+    assert row["day_key_hashes"] == ["h-1", "h-x"]
 
 
 @mock.patch("waldur_site_agent_litellm.usage_client.httpx.Client")

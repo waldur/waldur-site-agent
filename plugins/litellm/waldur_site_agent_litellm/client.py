@@ -276,8 +276,13 @@ class LiteLLMClient:
         tpm_limit: int | None = None,
         rpm_limit: int | None = None,
         metadata: dict | None = None,
+        spend: float | None = None,
     ) -> dict:
         """Mint a key and return the proxy's response.
+
+        ``spend`` starts the key's spend above 0, counted against ``max_budget`` like
+        its own: a delete-and-mint rotation carries the old key's month over with it.
+        Sent only when positive. The proxy does not count it against ``budget_limits``.
 
         ``budget_limits`` are the key's budget windows, ``[{max_budget,
         budget_duration}]``; sent only when there are some, since a proxy that
@@ -312,6 +317,8 @@ class LiteLLMClient:
             body["rpm_limit"] = rpm_limit
         if metadata:
             body["metadata"] = dict(metadata)
+        if spend:
+            body["spend"] = spend
 
         payload = self._request("POST", "/key/generate", json_body=body)
         if not isinstance(payload, dict) or not payload.get("key"):
