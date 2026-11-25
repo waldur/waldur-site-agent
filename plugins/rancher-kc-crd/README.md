@@ -41,7 +41,9 @@ Attribute lookup (`keycloak_user_lookup: attribute`, see
 [Matching users across Keycloaks by civil code](#matching-users-across-keycloaks-by-civil-code))
 needs operator **`0.5.0`+**: older CRDs reject the `lookupAttribute`
 member field, so the plugin emits it only when attribute lookup is
-configured.
+configured. Likewise `keycloak_identity_provider` (see
+[Members who have not logged in to Rancher yet](#members-who-have-not-logged-in-to-rancher-yet))
+needs operator **`0.6.0`+** for the `federatedIdentity` member field.
 
 The operator's helm chart lives in its own repo under
 `helm/rancher-keycloak-operator/`; install instructions are in the
@@ -654,6 +656,74 @@ The value is matched verbatim (no lowercasing unless
 `keycloak_user_identity_lowercase: true`), and `syncedMembers` in the CR
 status echoes it.
 
+### Members who have not logged in to Rancher yet
+
+When Waldur and the Rancher Keycloak sign users in through the **same
+upstream identity provider**, the Rancher Keycloak creates a user only at
+the person's first Rancher login. Until then the operator finds nobody,
+the grant stays `missing_in_idp`, and the first login carries no groups.
+
+Set `keycloak_identity_provider` to the provider's alias in the Rancher
+Keycloak and each member also carries the person's id at that provider:
+
+```yaml
+keycloak_user_identity_source: civil_number      # or username
+keycloak_identity_provider: tara
+# keycloak_user_lookup: username                 (required with this setting)
+```
+
+```yaml
+members:
+  - userIdentifier: ee38001010000          # username, lowercased as before
+    lookupByID: false
+    federatedIdentity:
+      provider: tara
+      userId: EE38001010000                # templated value, case preserved
+    firstName: Mari                        # Waldur first/last name, when known
+    lastName: Maasikas
+```
+
+From operator **`0.6.0`** on, a member carrying `federatedIdentity` is
+added, and kept, only while its Keycloak user holds exactly that link,
+whether or not the operator's `createMissingUsers` is on. Before enabling
+the setting, compare a few existing users' *Identity provider links → User
+ID* with the `userId` the plugin would send: members whose link differs
+lose their groups. With `createMissingUsers` on, a member whose user does
+not exist yet also gets one created and linked to the provider, so their
+first login lands on it with their groups already in place.
+
+- `userId` is the identity source rendered through
+  `keycloak_user_identity_template` but **not lowercased**: Keycloak keeps
+  the provider's id as the provider sent it. It must equal what the
+  Rancher Keycloak shows under a brokered user's *Identity provider links →
+  User ID*, e.g. `EE38001010000` when Waldur's civil code is stored that
+  way.
+- Only username lookup is allowed, with lowercasing on, since the operator
+  creates the user under `userIdentifier` as username. Source `uuid` is
+  rejected: a Waldur UUID is never an id at the upstream provider.
+- So `userIdentifier` is always the lowercased `userId`, and the template
+  shapes both. That matches a Rancher Keycloak whose usernames come from the
+  provider's id (a `${CLAIM.sub}` username template). A realm that names
+  users some other way can't use this setting.
+- The operator only adds a user that holds this exact link, and removes one
+  that doesn't. A user created from a wrong `userId` therefore never shows
+  as synced. Delete it in Keycloak, and the next reconcile recreates it
+  correctly.
+- With source `username`, the Waldur username has to be the id the
+  provider sends.
+- `firstName` and `lastName` are the person's names in Waldur. The operator
+  sets them only on a user it creates, so Keycloak and Rancher admins see
+  who a pre-created user is before the first login. After that login the
+  provider's mappers own the profile. Waldur returns the two fields from
+  `list_users` since the release that added them; with an older Waldur,
+  or a user without a name, they are left out and the user is created
+  without one. Emails are never sent: Keycloak requires them to be unique,
+  and a clash would make the create fail.
+
+The operator side, including the identity provider's mapper and user
+profile settings, is described in the operator's
+`docs/keycloak-setup.md`, section 5.
+
 **The offering must expose the civil code.** Waldur includes
 `user_civil_number` in the `list_users` responses the plugin reads only
 when the offering's user attribute config has `expose_civil_number`
@@ -666,7 +736,8 @@ whose civil code is empty is skipped the same way, individually.
 reports are keyed by `user_uuid` and the plugin maps confirmed members
 back to UUIDs — and agent logs show them masked (`3800…00`). They are,
 however, stored **in plaintext** in each CR's `spec` and `status`
-(`userIdentifier`, `syncedMembers`). Keep `get`/`list`/`watch` on
+(`userIdentifier`, `syncedMembers`), next to the members' names when
+`keycloak_identity_provider` is set. Keep `get`/`list`/`watch` on
 `managedrancherprojects` in the CR namespace restricted to the agent,
 the operator and cluster administrators.
 
@@ -696,6 +767,7 @@ above for why.
 | `keycloak_lookup_attribute` | string | with lookup `attribute` | User attribute to match (operator `0.5.0`+). |
 | `keycloak_user_identity_template` | string | no (default `${value}`) | E.g. `EE${value}`. |
 | `keycloak_user_identity_lowercase` | bool | no | Default `true` for lookup `username`, `false` otherwise. |
+| `keycloak_identity_provider` | string | no | Shared IdP alias: pre-create users (operator `0.6.0`+). |
 | `keycloak_use_user_id` | bool | no | **Deprecated**: `true` = source `uuid` + lookup `id`. |
 
 Defaults: `group_name_template` is `c_${cluster_id}_${rp_uuid}_${role_name}`,

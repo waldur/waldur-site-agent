@@ -63,19 +63,25 @@ logger = logging.getLogger(__name__)
 _MISSING_CIVIL_CODE_MESSAGE = "Civil code not available for this user"
 
 
-def _user_civil_number(u: Any) -> str | None:  # noqa: ANN401
-    """Read ``user_civil_number`` off a list_users entry, tolerating older SDKs.
+def _user_field(u: Any, name: str) -> str | None:  # noqa: ANN401
+    """Read a ``list_users`` field the SDK may not know yet, e.g. ``user_civil_number``.
 
-    Mastermind returns the field only when the offering exposes
-    ``civil_number``. A ``waldur-api-client`` that predates the field
+    Mastermind returns ``user_civil_number`` only when the offering exposes
+    ``civil_number``, and newer fields such as ``user_first_name`` only
+    from newer releases. A ``waldur-api-client`` that predates a field
     keeps it in ``additional_properties``; a newer one sets an attribute
     that is ``UNSET`` (falsy) when absent.
     """
-    value = getattr(u, "user_civil_number", None)
+    value = getattr(u, name, None)
     if not value:
         extra = getattr(u, "additional_properties", None)
-        value = extra.get("user_civil_number") if isinstance(extra, dict) else None
+        value = extra.get(name) if isinstance(extra, dict) else None
     return value if isinstance(value, str) and value else None
+
+
+def _user_civil_number(u: Any) -> str | None:  # noqa: ANN401
+    """Read ``user_civil_number`` off a list_users entry, tolerating older SDKs."""
+    return _user_field(u, "user_civil_number")
 
 
 def _derive_grant_states(
@@ -636,6 +642,8 @@ class RancherKcCrdBackend(backends.BaseBackend):
             "user_uuid": u.user_uuid.hex if getattr(u, "user_uuid", None) else None,
             "user_username": getattr(u, "user_username", None) or None,
             "user_civil_number": _user_civil_number(u),
+            "user_first_name": _user_field(u, "user_first_name"),
+            "user_last_name": _user_field(u, "user_last_name"),
         }
 
     def get_membership_sync_report(self, waldur_resource: WaldurResource) -> list[dict] | None:

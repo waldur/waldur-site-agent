@@ -886,6 +886,82 @@ class TestMemberIdentity:
         ):
             assert all("lookupAttribute" not in m for m in _members([_civil_ur()], **settings))
 
+    def test_identity_provider_adds_case_preserved_federated_identity(self):
+        # Waldur keeps the civil code with its letters capitalised; the
+        # username is lowercased, the provider link keeps the case.
+        members = _members(
+            [_civil_ur(civil="EE38001010000")],
+            keycloak_user_identity_source="civil_number",
+            keycloak_identity_provider="tara",
+        )
+        assert members == [
+            {
+                "userIdentifier": "ee38001010000",
+                "lookupByID": False,
+                "federatedIdentity": {"provider": "tara", "userId": "EE38001010000"},
+            }
+        ]
+
+    def test_identity_provider_link_id_uses_the_template(self):
+        members = _members(
+            [_civil_ur()],
+            keycloak_user_identity_source="civil_number",
+            keycloak_user_identity_template="EE${value}",
+            keycloak_identity_provider="tara",
+        )
+        assert members[0]["userIdentifier"] == "ee38001010000"
+        assert members[0]["federatedIdentity"]["userId"] == "EE38001010000"
+
+    def test_identity_provider_with_username_source(self):
+        members = _members([_civil_ur(username="Alice")], keycloak_identity_provider="tara")
+        assert members[0]["userIdentifier"] == "alice"
+        assert members[0]["federatedIdentity"] == {"provider": "tara", "userId": "Alice"}
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            {"keycloak_user_identity_source": "civil_number"},
+            {"keycloak_user_identity_source": "civil_number", "keycloak_user_identity_lowercase": True},
+            {"keycloak_user_identity_source": "civil_number", "keycloak_user_identity_template": "EE${value}"},
+            {"keycloak_user_identity_source": "username"},
+            {"keycloak_user_lookup": "username", "keycloak_user_identity_template": "x-${value}"},
+        ],
+    )
+    def test_identifier_is_always_the_lowercased_link_id(self, settings):
+        # The operator creates the user under userIdentifier and links it
+        # to federatedIdentity.userId; the two must name the same person.
+        ur = _civil_ur(username="Alice.Example", civil="Ee38001010000")
+        member = _members([ur], keycloak_identity_provider="tara", **settings)[0]
+        assert member["userIdentifier"] == member["federatedIdentity"]["userId"].lower()
+
+    def test_identity_provider_adds_names_for_the_operator_to_create_with(self):
+        ur = dict(_civil_ur(civil="EE38001010000"), user_first_name="Mari", user_last_name="Maasikas")
+        members = _members(
+            [ur], keycloak_user_identity_source="civil_number", keycloak_identity_provider="tara"
+        )
+        assert members[0]["firstName"] == "Mari"
+        assert members[0]["lastName"] == "Maasikas"
+
+    def test_missing_names_are_left_out(self):
+        ur = dict(_civil_ur(), user_first_name="Mari", user_last_name=None)
+        members = _members(
+            [ur], keycloak_user_identity_source="civil_number", keycloak_identity_provider="tara"
+        )
+        assert members[0]["firstName"] == "Mari"
+        assert "lastName" not in members[0]
+
+    def test_names_only_emitted_with_identity_provider(self):
+        # Without a provider link the operator never creates the user, and
+        # older CRDs reject the fields.
+        ur = dict(_civil_ur(), user_first_name="Mari", user_last_name="Maasikas")
+        member = _members([ur], keycloak_user_identity_source="civil_number")[0]
+        assert "firstName" not in member
+        assert "lastName" not in member
+
+    def test_federated_identity_only_emitted_with_identity_provider(self):
+        for settings in ({}, {"keycloak_user_identity_source": "civil_number"}):
+            assert all("federatedIdentity" not in m for m in _members([_civil_ur()], **settings))
+
     def test_member_without_civil_code_is_skipped(self):
         members = _members(
             [_civil_ur(uuid="u1", civil=None), _civil_ur(uuid="u2", civil="49002020000")],

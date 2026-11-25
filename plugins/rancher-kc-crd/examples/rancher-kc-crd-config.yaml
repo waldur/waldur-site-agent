@@ -170,6 +170,12 @@ offerings:
       # keycloak_user_identity_template: "${value}"     # default
       # keycloak_user_identity_lowercase: false         # default for attribute
       #
+      # Waldur and the Rancher Keycloak share an upstream identity provider:
+      # also send each member's id at that provider (case preserved), so an
+      # operator with createMissingUsers (0.6.0+) can pre-create users who
+      # have not logged in to Rancher yet. Username lookup only:
+      # keycloak_identity_provider: tara
+      #
       # Civil codes are stored in plaintext in the CR spec/status: keep
       # `get` on managedrancherprojects in this namespace restricted.
 

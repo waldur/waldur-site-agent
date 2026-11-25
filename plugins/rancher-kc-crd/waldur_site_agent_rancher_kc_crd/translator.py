@@ -73,6 +73,10 @@ class IdentitySettings(NamedTuple):
     attribute: str | None = None
     template: str = DEFAULT_IDENTITY_TEMPLATE
     lowercase: bool = True
+    # Keycloak alias of the identity provider Waldur and the Rancher
+    # Keycloak share; set, members carry ``federatedIdentity`` so the
+    # operator can pre-create users who have never logged in to Rancher.
+    identity_provider: str | None = None
 
     @property
     def report_key(self) -> str:
@@ -102,6 +106,7 @@ def resolve_identity_settings(backend_settings: dict) -> IdentitySettings:
     attribute = backend_settings.get("keycloak_lookup_attribute")
     template = backend_settings.get("keycloak_user_identity_template")
     lowercase = backend_settings.get("keycloak_user_identity_lowercase")
+    identity_provider = backend_settings.get("keycloak_identity_provider")
 
     if use_user_id:
         if source not in (None, "uuid") or lookup not in (None, "id"):
@@ -154,13 +159,47 @@ def resolve_identity_settings(backend_settings: dict) -> IdentitySettings:
         # added and removed on every reconcile.
         lowercase = lookup == "username"
 
+    if identity_provider:
+        # The operator creates the user under userIdentifier as username,
+        # so only username lookup can find that user again, and only a
+        # lowercased one (Keycloak lowercases usernames on create).
+        if lookup != "username":
+            msg = (
+                "keycloak_identity_provider works with keycloak_user_lookup=username only, "
+                f"not {lookup!r}"
+            )
+            raise ValueError(msg)
+        if not lowercase:
+            msg = (
+                "keycloak_identity_provider needs a lowercased member identifier; "
+                "drop keycloak_user_identity_lowercase: false"
+            )
+            raise ValueError(msg)
+        # The provider link holds the person's id at the upstream provider;
+        # a Waldur UUID is never that.
+        if source == "uuid":
+            msg = (
+                "keycloak_identity_provider links members by their id at the identity "
+                "provider; use keycloak_user_identity_source civil_number or username, not uuid"
+            )
+            raise ValueError(msg)
+
     return IdentitySettings(
         source=source,
         lookup=lookup,
         attribute=attribute if lookup == "attribute" else None,
         template=template,
         lowercase=bool(lowercase),
+        identity_provider=identity_provider or None,
     )
+
+
+def _templated_identifier(user_role: dict, identity: IdentitySettings) -> str | None:
+    """Source field rendered through the template, case untouched."""
+    value = user_role.get(_SOURCE_FIELDS[identity.source])
+    if not value:
+        return None
+    return Template(identity.template).safe_substitute(value=value)
 
 
 def member_identifier(user_role: dict, identity: IdentitySettings) -> str | None:
@@ -168,18 +207,20 @@ def member_identifier(user_role: dict, identity: IdentitySettings) -> str | None
 
     Returns ``None`` when the user has no value for the source field.
     """
-    value = user_role.get(_SOURCE_FIELDS[identity.source])
-    if not value:
+    ident = _templated_identifier(user_role, identity)
+    if ident is None:
         return None
-    ident = Template(identity.template).safe_substitute(value=value)
     return ident.lower() if identity.lowercase else ident
 
 
 def build_member(user_role: dict, identity: IdentitySettings) -> dict | None:
     """CR member entry for a user role, or ``None`` when it has no identifier.
 
-    ``lookupAttribute`` is emitted only for attribute lookup: operators
-    and CRDs older than 0.5.0 reject unknown member fields.
+    ``lookupAttribute`` is emitted only for attribute lookup, and
+    ``federatedIdentity`` only with ``keycloak_identity_provider``:
+    operators and CRDs that predate a field reject it. ``firstName`` and
+    ``lastName`` ride along with ``federatedIdentity``: the operator uses
+    them only for a user it creates for that member.
     """
     ident = member_identifier(user_role, identity)
     if not ident:
@@ -187,6 +228,17 @@ def build_member(user_role: dict, identity: IdentitySettings) -> dict | None:
     member: dict[str, Any] = {"userIdentifier": ident, "lookupByID": identity.lookup == "id"}
     if identity.lookup == "attribute":
         member["lookupAttribute"] = identity.attribute
+    if identity.identity_provider:
+        # The provider link is case-sensitive and keeps the id as the
+        # provider sends it (``EE38001010000``), unlike the lowercased
+        # username, so it is taken before lowercasing.
+        member["federatedIdentity"] = {
+            "provider": identity.identity_provider,
+            "userId": _templated_identifier(user_role, identity),
+        }
+        for field, key in (("user_first_name", "firstName"), ("user_last_name", "lastName")):
+            if user_role.get(field):
+                member[key] = user_role[field]
     return member
 
 

@@ -287,6 +287,16 @@ def test_user_role_dict_reads_civil_number_from_attribute_or_legacy_sdk() -> Non
     assert to_dict(_sdk_user("a", None))["user_civil_number"] is None
 
 
+def test_user_role_dict_reads_names_from_attribute_or_legacy_sdk() -> None:
+    to_dict = RancherKcCrdBackend._user_role_to_dict
+    user = _sdk_user("a")
+    user.user_first_name = "Mari"
+    user.additional_properties["user_last_name"] = "Maasikas"  # SDK predating the field
+    assert to_dict(user)["user_first_name"] == "Mari"
+    assert to_dict(user)["user_last_name"] == "Maasikas"
+    assert to_dict(_sdk_user("b"))["user_first_name"] is None
+
+
 def test_pull_resource_in_civil_mode_keeps_civil_codes_out_of_waldur(caplog) -> None:
     backend = _backend(keycloak_user_identity_source="civil_number")
     alice = _sdk_user("alice", "38001010000")
