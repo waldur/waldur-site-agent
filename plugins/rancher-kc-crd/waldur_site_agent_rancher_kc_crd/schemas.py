@@ -100,13 +100,14 @@ class RancherKcCrdBackendSettingsSchema(CommonBackendSettingsSchema):
         ),
         json_schema_extra=SENSITIVE,
     )
-    import_external_members: bool | None = Field(
+    import_external_members: bool | Literal["dry_run"] | None = Field(
         default=None,
         description=(
             "Grant Waldur roles to people a Keycloak admin added to the operator's groups "
             "(reported by an operator with externalMemberPattern set), creating their "
             "Waldur account through the Identity Bridge when needed. Username lookup with "
-            "civil_number or username identity only"
+            "civil_number or username identity only. 'dry_run' logs what would be granted "
+            "and created, and changes nothing in Waldur"
         ),
     )
     identity_bridge_source: NonEmptyStr | None = Field(

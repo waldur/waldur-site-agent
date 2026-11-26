@@ -186,6 +186,9 @@ class FakeWaldur:
         self.grants: list[tuple[str, str]] = []
         # How the user read answers: "ordinary", "staff" or "forbidden".
         self.account = "ordinary"
+        # Accounts the user listing finds, for the dry run.
+        self.users: list = []
+        self.listed: list[dict] = []
 
     def __enter__(self):
         self._patches = [
@@ -196,6 +199,7 @@ class FakeWaldur:
             ),
             patch.object(em.identity_bridge, "sync_detailed", side_effect=self._bridge),
             patch.object(em.users_retrieve, "sync_detailed", side_effect=self._user),
+            patch.object(em.users_list, "sync", side_effect=self._list_users),
             patch.object(
                 em.marketplace_offering_roles_list, "sync", side_effect=self._roles_page
             ),
@@ -225,6 +229,19 @@ class FakeWaldur:
         staff = self.account == "staff"
         user = SimpleNamespace(is_staff=staff, is_support=False, is_identity_manager=False)
         return SimpleNamespace(status_code=200, parsed=user)
+
+    def _list_users(self, client, page_size=None, **filters):
+        # Waldur's username filter is exact; query searches civil numbers
+        # (among other fields) ignoring case.
+        self.listed.append(filters)
+        if "query" in filters:
+            needle = filters["query"].casefold()
+            return [u for u in self.users if needle in (u.civil_number or "").casefold()]
+        return [
+            user
+            for user in self.users
+            if all(getattr(user, key) == value for key, value in filters.items())
+        ]
 
     def _roles_page(self, page=1, page_size=100, **_):
         return self.roles[(page - 1) * page_size : page * page_size]
@@ -381,6 +398,150 @@ class TestImporter:
         with FakeWaldur():
             _importer().import_grants([_grant()])
         assert "ee37004040004" not in caplog.text
+
+
+def _account(civil_number="EE37004040004", username="tara.0123", active=True):
+    return SimpleNamespace(
+        uuid=uuid.uuid4(), username=username, civil_number=civil_number, is_active=active
+    )
+
+
+def _dry_importer(identity=CIVIL) -> ExternalMemberImporter:
+    return ExternalMemberImporter(
+        client=object(),
+        offering_uuid="o" * 32,
+        identity=identity,
+        bridge_source="isd:rancher",
+        dry_run=True,
+    )
+
+
+class TestDryRun:
+    """The same decisions as the import, logged, with nothing written to Waldur."""
+
+    def test_new_person_would_get_an_account_and_the_role(self, caplog):
+        caplog.set_level("INFO")
+        with FakeWaldur() as waldur:
+            assert _dry_importer().import_grants([_grant()]) == 1
+        assert waldur.bridge_bodies == []
+        assert waldur.grants == []
+        assert "dry run: would grant project_member" in caplog.text
+        assert "creating a new account rancher-<random>" in caplog.text
+
+    def test_existing_account_is_found_by_civil_number_ignoring_case(self, caplog):
+        caplog.set_level("INFO")
+        account = _account(civil_number="ee37004040004")
+        with FakeWaldur() as waldur:
+            waldur.users = [account]
+            assert _dry_importer().import_grants([_grant()]) == 1
+        assert waldur.bridge_bodies == []
+        assert waldur.grants == []
+        assert f"existing account {account.uuid.hex} (matched by civil number)" in caplog.text
+
+    @pytest.mark.parametrize(
+        "accounts",
+        [
+            [_account(username="a"), _account(username="b")],
+            [_account(active=False)],
+        ],
+    )
+    def test_ambiguous_or_deactivated_match_is_reported_as_refused(self, accounts, caplog):
+        with FakeWaldur() as waldur:
+            waldur.users = accounts
+            assert _dry_importer().import_grants([_grant()]) == 0
+        assert "dry run: cannot import" in caplog.text
+        assert "Identity Bridge would refuse it" in caplog.text
+
+    def test_privileged_account_would_not_be_granted(self, caplog):
+        with FakeWaldur() as waldur:
+            waldur.users = [_account()]
+            waldur.account = "staff"
+            assert _dry_importer().import_grants([_grant()]) == 0
+        assert "would not be imported" in caplog.text
+
+    def test_username_mode_matches_the_username(self, caplog):
+        caplog.set_level("INFO")
+        account = _account(civil_number=None, username="ee37004040004")
+        with FakeWaldur() as waldur:
+            waldur.users = [account]
+            assert _dry_importer(BY_USERNAME).import_grants([_grant()]) == 1
+        assert waldur.listed == [{"username": "ee37004040004"}]
+        assert f"existing account {account.uuid.hex} (matched by username)" in caplog.text
+
+    def test_nothing_is_previewed_when_the_bridge_drops_civil_numbers(self, caplog):
+        with FakeWaldur(allowed=("first_name",)) as waldur:
+            assert _dry_importer().import_grants([_grant()]) == 0
+        assert waldur.listed == []
+        assert "does not store civil_number" in caplog.text
+
+    def test_unknown_role_is_reported(self, caplog):
+        with FakeWaldur() as waldur:
+            waldur.roles = []
+            assert _dry_importer().import_grants([_grant()]) == 0
+        assert "has no resource_project role" in caplog.text
+
+    def test_one_search_per_person(self):
+        with FakeWaldur() as waldur:
+            waldur.users = [_account()]
+            assert (
+                _dry_importer().import_grants(
+                    [_grant(), _grant(CLUSTER_SCOPE, "cluster_member")]
+                )
+                == 2
+            )
+        assert waldur.listed == [{"query": "EE37004040004"}]
+
+    def test_token_that_cannot_see_account_state_is_reported(self, caplog):
+        # A non-staff token: Waldur leaves is_active out of the user listing.
+        account = _account()
+        account.is_active = UNSET
+        with FakeWaldur() as waldur:
+            waldur.users = [account]
+            assert _dry_importer().import_grants([_grant()]) == 0
+        assert "needs a staff token" in caplog.text
+
+    def test_civil_numbers_are_masked(self, caplog):
+        caplog.set_level("INFO")
+        with FakeWaldur() as waldur:
+            waldur.users = [_account(), _account()]
+            _dry_importer().import_grants([_grant(), _grant(CLUSTER_SCOPE, "cluster_member")])
+        assert "37004040004" not in caplog.text
+
+
+class TestImportMode:
+    @pytest.mark.parametrize(
+        ("value", "mode"),
+        [
+            (True, "on"),
+            ("dry_run", em.DRY_RUN),
+            (False, None),
+            (None, None),
+            # What the settings schema also accepts as booleans.
+            ("true", "on"),
+            (1, "on"),
+            ("false", None),
+        ],
+    )
+    def test_values(self, value, mode):
+        assert em.import_mode(value) == mode
+
+    def test_anything_else_is_refused(self):
+        with pytest.raises(ValueError):
+            em.import_mode("yes please")
+
+    def test_schema_accepts_dry_run(self):
+        from waldur_site_agent_rancher_kc_crd.schemas import RancherKcCrdBackendSettingsSchema
+
+        settings = {
+            "keycloak_user_identity_source": "civil_number",
+            "keycloak_user_lookup": "username",
+            "keycloak_identity_provider": "tara",
+            "identity_bridge_source": "isd:rancher",
+        }
+        schema = RancherKcCrdBackendSettingsSchema(**settings, import_external_members="dry_run")
+        assert schema.import_external_members == "dry_run"
+        with pytest.raises(ValueError):
+            RancherKcCrdBackendSettingsSchema(**settings, import_external_members="maybe")
 
 
 class TestBindingsForImport:
