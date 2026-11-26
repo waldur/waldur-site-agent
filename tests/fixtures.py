@@ -6,6 +6,7 @@ from uuid import UUID
 
 from waldur_api_client.models.resource_api_key_status import ResourceApiKeyStatus
 from waldur_api_client.models.user_me import UserMe
+from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend.backends import BaseBackend
 from waldur_site_agent.common.structures import Offering
@@ -129,12 +130,24 @@ class ConcreteBackend(BaseBackend):
         pass
 
 
+ROW_FIELDS_OF_NEWER_WALDUR = ("spending_limits", "effective_models")
+
+
 def api_key_row(**overrides: Any) -> ResourceApiKeyStatus:
     """A key as the provider listing returns it; ``overrides`` are its JSON fields."""
     payload: dict[str, Any] = {
         "uuid": str(uuid.uuid4()),
         "resource_uuid": str(uuid.uuid4()),
+        "resource_name": "Resource 1",
         "resource_backend_id": "res-1",
+        "offering_uuid": str(uuid.uuid4()),
+        "offering_name": "Offering 1",
+        "customer_uuid": str(uuid.uuid4()),
+        "customer_name": "Customer 1",
+        "project_uuid": str(uuid.uuid4()),
+        "project_name": "Project 1",
+        "resource_plan_uuid": None,
+        "resource_spending_limits": {},
         "client_id": "",
         "state": "OK",
         "pending_action": "",
@@ -143,13 +156,25 @@ def api_key_row(**overrides: Any) -> ResourceApiKeyStatus:
         "user_uuid": None,
         "user_full_name": None,
         "limits": None,
+        "spending_limits": None,
+        "spending_limit_status": None,
         "allowed_models": None,
+        "effective_models": None,
+        "estimated_cost": None,
+        "limit_resumes_at": None,
         "current_usages": None,
         "usage_period": None,
         "paused_by_limit": None,
     }
     payload.update(overrides)
-    return ResourceApiKeyStatus.from_dict(payload)
+    row = ResourceApiKeyStatus.from_dict(payload)
+    # The client requires these, but a Waldur that predates them omits them, and
+    # the agent reads their absence (UNSET) as that older Waldur. Rows stand for
+    # it unless a test passes the field.
+    for name in ROW_FIELDS_OF_NEWER_WALDUR:
+        if name not in overrides:
+            setattr(row, name, UNSET)
+    return row
 
 
 def key_listing(rows: list[ResourceApiKeyStatus]) -> Any:

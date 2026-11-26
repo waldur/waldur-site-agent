@@ -80,6 +80,14 @@ so manual tagging still works.
   `Optional`/`Union`/`List` from `typing`. The ruff pre-commit
   hook enforces this outside `tests/` and `scripts/`, which it
   skips; follow the same style there.
+- **STOMP message types come with `waldur-api-client`.**
+  `waldur_api_client.stomp_messages` is generated in py-client's
+  pipeline from mastermind's AsyncAPI document, from the same commit
+  as the REST client, so bumping the client pin updates both. Bump
+  it in `pyproject.toml` **and** in the mypy hook's
+  `additional_dependencies` (a test checks they match): the hook
+  types the handlers with it, so mypy flags a key the contract does
+  not declare.
 - **Structured logging**: JSON format via structlog to stdout.
 - **Test config**: CI copies
   `examples/waldur-site-agent-config.yaml.example` to

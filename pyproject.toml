@@ -22,7 +22,7 @@ dependencies = [
     "python-socks>=2.4,<3",
     "pydantic>=2.0.0",
     "structlog>=25.4.0",
-    "waldur-api-client==8.1.3rc23.dev20261010084617",
+    "waldur-api-client==8.1.5rc4.dev20261126075526",
 ]
 
 [project.urls]
@@ -56,6 +56,7 @@ dev = [
 
     "jinja2>=3.0.0,<4.0",
     "aiosmtpd>=1.4.6",
+    "tomli>=2.0.0; python_version < '3.11'",
 ]
 
 [tool.hatch.metadata]
@@ -177,3 +178,17 @@ members = [
 [tool.mypy]
 explicit_package_bases = true
 exclude = ["ci/"]
+
+# The mypy hook installs waldur-api-client (same pin as above) for its STOMP
+# message types, which type the event handlers. The REST half of the client is
+# ~2,300 generated modules and stays untyped (skipped), as it was before.
+[[tool.mypy.overrides]]
+module = "waldur_api_client.*"
+follow_imports = "skip"
+
+# A missing module must fail, not silently become Any: that would turn the
+# handlers' contract check off without a single error.
+[[tool.mypy.overrides]]
+module = "waldur_api_client.stomp_messages"
+follow_imports = "normal"
+ignore_missing_imports = false

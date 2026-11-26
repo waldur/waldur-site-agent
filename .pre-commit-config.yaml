@@ -34,6 +34,12 @@ repos:
         additional_dependencies:
           - "types-requests"
           - "types-PyYaml"
+          # Keep httpx within pyproject.toml's bound so mypy does not drift on
+          # waldur-api-client's wider transitive constraint.
+          - "httpx>=0.28.1,<0.29"
+          # For waldur_api_client.stomp_messages. Must equal the pin in
+          # pyproject.toml; tests/test_message_contracts.py checks it does.
+          - "waldur-api-client==8.1.5rc4.dev20261126075526"
 
   - repo: local
     hooks:

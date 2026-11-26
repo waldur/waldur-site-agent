@@ -77,6 +77,7 @@ def _make_service_account(
         created=_NOW,
         modified=_NOW,
         error_message="",
+        error_traceback="",
         state=state,
         token=None,
         expires_at=None,
