@@ -1513,10 +1513,30 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
             }
         self.k8s_client.patch_managed_namespace(resource_backend_id, patch)
 
+    def _reduced_quota(
+        self, base: dict[str, str], minimum_by_type: dict[str, int]
+    ) -> dict[str, str]:
+        """``base`` plus a reduced value for every quota field the offering bills.
+
+        ``base`` covers cpu, memory and storage, which pause and downscale have
+        always set. Every component of the offering is reduced too -- ``gpu``, or
+        any component mapped through ``component_quota_mapping`` -- to its type's
+        value in ``minimum_by_type``, or to 0, so no billed resource keeps its full
+        quota while the namespace is paused or downscaled.
+        """
+        limits = {
+            key: minimum_by_type.get(config.get("type", key), 0)
+            for key, config in self.backend_components.items()
+        }
+        return {**base, **self._waldur_limits_to_quota(limits)}
+
     def downscale_resource(self, resource_backend_id: str) -> bool:
         """Downscale by patching CR quota to minimal values, enforced."""
         try:
-            minimal_quota = {"cpu": "1", "memory": "1Gi", "storage": "1Gi"}
+            minimal_quota = self._reduced_quota(
+                {"cpu": "1", "memory": "1Gi", "storage": "1Gi"},
+                {"cpu": 1, "ram": 1, "storage": 1},
+            )
             self._force_quota(resource_backend_id, minimal_quota)
             logger.info("Downscaled namespace %s", resource_backend_id)
             return True
@@ -1527,7 +1547,9 @@ class K8sUtNamespaceBackend(backends.BaseBackend):
     def pause_resource(self, resource_backend_id: str) -> bool:
         """Pause by patching CR quota to zero, enforced."""
         try:
-            zero_quota = {"cpu": "0", "memory": "0Gi", "storage": "0Gi"}
+            zero_quota = self._reduced_quota(
+                {"cpu": "0", "memory": "0Gi", "storage": "0Gi"}, {}
+            )
             self._force_quota(resource_backend_id, zero_quota)
             logger.info("Paused namespace %s", resource_backend_id)
             return True

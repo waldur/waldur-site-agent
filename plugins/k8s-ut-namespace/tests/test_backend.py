@@ -570,7 +570,13 @@ class TestK8sUtNamespaceBackendStatusOps:
             "waldur-test-ns",
             {
                 "spec": {
-                    "quota": {"cpu": "1", "memory": "1Gi", "storage": "1Gi", "enabled": True}
+                    "quota": {
+                        "cpu": "1",
+                        "memory": "1Gi",
+                        "storage": "1Gi",
+                        "gpu": "0",
+                        "enabled": True,
+                    }
                 },
                 "metadata": {
                     "annotations": {
@@ -589,7 +595,13 @@ class TestK8sUtNamespaceBackendStatusOps:
             "waldur-test-ns",
             {
                 "spec": {
-                    "quota": {"cpu": "0", "memory": "0Gi", "storage": "0Gi", "enabled": True}
+                    "quota": {
+                        "cpu": "0",
+                        "memory": "0Gi",
+                        "storage": "0Gi",
+                        "gpu": "0",
+                        "enabled": True,
+                    }
                 },
                 "metadata": {
                     "annotations": {
@@ -598,6 +610,62 @@ class TestK8sUtNamespaceBackendStatusOps:
                 },
             },
         )
+
+    @pytest.mark.parametrize(
+        ("operation", "quota"),
+        [
+            ("pause_resource", {"cpu": "0", "memory": "0Gi", "storage": "0Gi"}),
+            ("downscale_resource", {"cpu": "1", "memory": "1Gi", "storage": "1Gi"}),
+        ],
+    )
+    def test_offering_without_gpu_keeps_the_same_quota(
+        self, backend_settings, backend_components, operation, quota
+    ):
+        """Only the components an offering bills are reduced: no gpu, no gpu field."""
+        del backend_components["gpu"]
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
+
+        assert getattr(backend, operation)("waldur-test-ns") is True
+        patched = mock_k8s.patch_managed_namespace.call_args.args[1]
+        assert patched["spec"]["quota"] == {**quota, "enabled": True}
+
+    @pytest.mark.parametrize("operation", ["pause_resource", "downscale_resource"])
+    def test_mapped_component_is_reduced_to_zero(
+        self, backend_settings, backend_components, operation
+    ):
+        """A component mapped through component_quota_mapping is reduced too."""
+        backend_settings["component_quota_mapping"] = {"fpga": "fpga"}
+        backend_components["fpga"] = {"type": "fpga", "unit_factor": 1, "accounting_type": "limit"}
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        mock_k8s.get_managed_namespace.return_value = self._cr()
+
+        assert getattr(backend, operation)("waldur-test-ns") is True
+        quota = mock_k8s.patch_managed_namespace.call_args.args[1]["spec"]["quota"]
+        assert quota["fpga"] == "0"
+        assert quota["gpu"] == "0"
+
+    def test_restore_after_pause_puts_gpu_back(self, backend_settings, backend_components):
+        """The pause snapshot holds the whole quota, so restore brings the gpu back."""
+        backend, mock_k8s, _ = _make_backend(backend_settings, backend_components)
+        before = {"cpu": "4", "memory": "8Gi", "storage": "100Gi", "gpu": "2", "enabled": True}
+        mock_k8s.get_managed_namespace.return_value = {
+            "metadata": {"name": "waldur-test-ns", "annotations": {}},
+            "spec": {"quota": dict(before)},
+        }
+        assert backend.pause_resource("waldur-test-ns") is True
+        paused = mock_k8s.patch_managed_namespace.call_args.args[1]
+        assert paused["spec"]["quota"]["gpu"] == "0"
+
+        mock_k8s.reset_mock()
+        mock_k8s.get_managed_namespace.return_value = {
+            "metadata": {"name": "waldur-test-ns", "annotations": paused["metadata"]["annotations"]},
+            "spec": {"quota": paused["spec"]["quota"]},
+        }
+        assert backend.restore_resource("waldur-test-ns") is True
+        restored = mock_k8s.patch_managed_namespace.call_args.args[1]["spec"]["quota"]
+        assert restored["gpu"] == "2"
+        assert {k: restored[k] for k in before} == before
 
     def test_restore(self, backend_settings, backend_components):
         """Nothing was paused: no annotation, nothing to put back."""

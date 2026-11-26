@@ -22,8 +22,8 @@ offering bills by limits (see [Usage reporting](#usage-reporting)).
 | Terminate resource | Deletes the CR and the Keycloak groups |
 | Update limits | Patches the quota quantities; `spec.quota.enabled` and the security level are left as they are |
 | Add / remove members | Keycloak group membership; optionally user lists in the CR (`sync_users_to_cr`) |
-| Downscale | Quota set to cpu=1, memory=1Gi, storage=1Gi, and enforced |
-| Pause | Quota set to zero, and enforced |
+| Downscale | Quota set to cpu=1, memory=1Gi, storage=1Gi, other components (e.g. `gpu`) to 0, and enforced |
+| Pause | Quota of every component of the offering set to zero, and enforced |
 | Restore | Puts back the whole quota (quantities and `enabled`) that pause or downscale recorded |
 | Usage reporting | Consumption per namespace from Prometheus with a `prometheus:` block; **no-op** otherwise |
 
