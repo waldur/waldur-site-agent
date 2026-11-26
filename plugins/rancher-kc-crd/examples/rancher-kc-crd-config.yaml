@@ -230,3 +230,26 @@ offerings:
       #   c_${cluster_id}_${customer_slug}_${resource_slug}_cluster_${role_name}
       # Renders e.g. "c_c-m-glwxdksp_hpc-demo-org_adamas-cluster_cluster_resource_member"
       cluster_group_name_template: "c_${cluster_id}_cluster_${role_name}"
+
+      # ── Optional: import people added in Keycloak by hand ────────
+      #
+      # The operator, with externalMemberPattern set (e.g.
+      # "^[a-z]{2}[0-9]+$"), keeps a group member the CR never named and
+      # lists them in status.*RoleBindings[].externalMembers. With this on,
+      # the agent gives each of them the Waldur role their group maps to
+      # (role_map / cluster_role_map), finding or creating the account
+      # through Waldur's Identity Bridge, and emits a binding for every
+      # mapped role, empty or not, so each role has a group to add people to.
+      #
+      # Needs: keycloak_user_lookup: username, no identity template, a
+      # STAFF waldur_api_token, the Identity Bridge on in Waldur and, for
+      # civil_number, keycloak_identity_provider plus civil_number in
+      # FEDERATED_IDENTITY_SYNC_ALLOWED_ATTRIBUTES and
+      # ENABLED_USER_PROFILE_ATTRIBUTES. Turn it on one cycle before the
+      # operator's pattern. Only the operator may write the CR status.
+      # See "Continuous import of members added in Keycloak" in README.md.
+      #
+      # import_external_members: true   # or dry_run: log what would be
+      #                                 # granted and created, change nothing
+      # identity_bridge_source: "isd:rancher"
+      # external_member_username_prefix: "rancher-"   # default
