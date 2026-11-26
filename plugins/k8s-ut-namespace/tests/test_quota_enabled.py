@@ -363,8 +363,8 @@ class TestPauseForcesEnforcement:
     @pytest.mark.parametrize(
         ("operation", "quota"),
         [
-            ("pause_resource", {"cpu": "0", "memory": "0Gi", "storage": "0Gi"}),
-            ("downscale_resource", {"cpu": "1", "memory": "1Gi", "storage": "1Gi"}),
+            ("pause_resource", {"cpu": "0", "memory": "0Gi", "storage": "0Gi", "gpu": "0"}),
+            ("downscale_resource", {"cpu": "1", "memory": "1Gi", "storage": "1Gi", "gpu": "0"}),
         ],
     )
     def test_quota_is_forced_on_and_snapshotted(
