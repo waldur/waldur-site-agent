@@ -535,7 +535,9 @@ class TestWaldurRequests(unittest.TestCase):
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
-            row = api_key_row(client_id="res-1-1", state="Deleted").to_dict()
+            row = api_key_row(
+                client_id="res-1-1", state="Deleted", spending_limits=None, effective_models=None
+            ).to_dict()
             return httpx.Response(200, json=[row])
 
         rows = resource_api_keys.list_all_api_keys(_client(handler), "res-uuid")
@@ -567,7 +569,8 @@ class TestWaldurRequests(unittest.TestCase):
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
-            return httpx.Response(200, json=api_key_row(state="Paused").to_dict())
+            row = api_key_row(state="Paused", spending_limits=None, effective_models=None)
+            return httpx.Response(200, json=row.to_dict())
 
         resource_api_keys._acknowledge(
             resource_api_keys.marketplace_resource_api_keys_set_paused,

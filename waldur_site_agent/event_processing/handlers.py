@@ -29,6 +29,18 @@ from waldur_api_client.models.agent_service import AgentService
 from waldur_api_client.models.slurm_command_result_request import (
     SlurmCommandResultRequest,
 )
+from waldur_api_client.stomp_messages import (
+    AccountMessage,
+    ApiKeyCommandMessage,
+    BackendResourceRequestMessage,
+    OfferingResourcesSyncMessage,
+    OfferingUserEvent,
+    OrderEvent,
+    PeriodicLimitsMessage,
+    ProjectGroupMessage,
+    ResourceEvent,
+    UserRoleEvent,
+)
 from waldur_api_client.types import UNSET
 
 from waldur_site_agent.backend import logger
@@ -39,18 +51,6 @@ from waldur_site_agent.backend.backends import (
 from waldur_site_agent.common import agent_identity_management, resource_api_keys, structures
 from waldur_site_agent.common import processors as common_processors
 from waldur_site_agent.common import utils as common_utils
-from waldur_site_agent.event_processing.structures import (
-    AccountMessage,
-    ApiKeyCommandMessage,
-    BackendResourceRequestMessage,
-    OfferingResourcesSyncMessage,
-    OfferingUserMessage,
-    OrderMessage,
-    PeriodicLimitsMessage,
-    ProjectGroupMessage,
-    ResourceMessage,
-    UserRoleMessage,
-)
 
 
 def register_event_process_service(
@@ -158,7 +158,7 @@ def on_order_message_stomp(
     expose_backend_error_details: bool = True,
 ) -> None:
     """Order-processing handler for STOMP message event."""
-    message: OrderMessage = json.loads(frame.body)
+    message: OrderEvent = json.loads(frame.body)
     logger.info("Processing order message: %s (offering: %s)", message, offering.name)
     order_uuid = message["order_uuid"]
     order_state = message.get("order_state", "")
@@ -230,7 +230,7 @@ def on_user_role_message_stomp(
     expose_backend_error_details: bool = True,
 ) -> None:
     """Membership sync handler for STOMP message event."""
-    message: UserRoleMessage = json.loads(frame.body)
+    message: UserRoleEvent = json.loads(frame.body)
     logger.info("Received message: %s on topic %s", message, frame.headers.get("destination"))
     user_uuid = message.get("user_uuid")
     # Bound before the try: the except block logs them, and a failure earlier in
@@ -319,7 +319,7 @@ def on_resource_message_stomp(
     expose_backend_error_details: bool = True,
 ) -> None:
     """Resource update handler for STOMP message event."""
-    message: ResourceMessage = json.loads(frame.body)
+    message: ResourceEvent = json.loads(frame.body)
     resource_uuid = message["resource_uuid"]
 
     try:
@@ -484,7 +484,8 @@ def on_account_message_stomp(
     back to the legacy queue-name suffix for any message without object_type.
     """
     message: AccountMessage = json.loads(frame.body)
-    account_type_raw = message.get("object_type")
+    # Widened to str: the legacy fallback below reads it from the queue name.
+    account_type_raw: str | None = message.get("object_type")
     if account_type_raw is None:
         # Legacy per-object-type queue: derive from the queue name suffix.
         # TODO: drop once no Mastermind still serves per-type subscription queues.
@@ -676,13 +677,13 @@ def on_offering_user_message_stomp(
     expose_backend_error_details: bool = True,  # noqa: ARG001
 ) -> None:
     """Offering user event handler for STOMP."""
-    message: OfferingUserMessage = json.loads(frame.body)
+    message: OfferingUserEvent = json.loads(frame.body)
     logger.info("Received offering user message: %s", message)
     _process_offering_user_message(message, offering, user_agent)
 
 
 def _process_offering_user_message(
-    message: OfferingUserMessage,
+    message: OfferingUserEvent,
     offering: structures.Offering,
     user_agent: str,
 ) -> None:

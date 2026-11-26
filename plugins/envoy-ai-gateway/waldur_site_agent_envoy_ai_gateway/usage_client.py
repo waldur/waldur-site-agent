@@ -54,8 +54,12 @@ class EnvoyUsageClient:
 
         Months are ``YYYY-MM``. Each row is ``{client_id, input_tokens, output_tokens, ...}``.
         """
-        params: list[tuple[str, str]] = [("from", from_month), ("to", to_month)]
-        params.extend(("client_id", client_id) for client_id in client_ids)
+        # A tuple, not a list: httpx's list type is invariant in the value type.
+        params = (
+            ("from", from_month),
+            ("to", to_month),
+            *(("client_id", client_id) for client_id in client_ids),
+        )
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.get(

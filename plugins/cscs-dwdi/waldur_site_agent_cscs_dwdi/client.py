@@ -83,7 +83,11 @@ class CSCSDWDIClient:
         Raises:
             httpx.HTTPError: If token acquisition fails
         """
-        logger.debug("Acquiring new OIDC token from %s", self.oidc_token_url)
+        token_url = self.oidc_token_url
+        if not token_url:
+            msg = "OIDC authentication failed: cscs_dwdi_oidc_token_url not configured."
+            raise ValueError(msg)
+        logger.debug("Acquiring new OIDC token from %s", token_url)
 
         token_data = {
             "grant_type": "client_credentials",
@@ -104,7 +108,7 @@ class CSCSDWDIClient:
             logger.debug("Using SOCKS proxy for token acquisition: %s", self.socks_proxy)
 
         with httpx.Client(**client_args) as client:
-            response = client.post(self.oidc_token_url, data=token_data, headers=headers)
+            response = client.post(token_url, data=token_data, headers=headers)
             response.raise_for_status()
             token_response = response.json()
 

@@ -243,6 +243,7 @@ class MembershipSyncTest(unittest.TestCase):
             created=datetime.now(),
             modified=datetime.now(),
             error_message="",
+            error_traceback="",
             token=None,
             expires_at=None,
             project=self.waldur_resource.project_uuid,
