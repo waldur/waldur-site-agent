@@ -192,6 +192,17 @@ sequenceDiagram
 
 ---
 
+**A role's last holder.** A role nobody holds in Waldur has no members to put in the CR. When
+Waldur removes the last holder of a role, the agent keeps that role's binding in the CR with an
+empty member list, so the operator empties the group. Before, the binding was dropped, the
+operator stopped managing the group, and the person kept the access its Rancher binding grants.
+The same applies to a group left behind by a renamed template or a role dropped from `role_map` /
+`cluster_role_map`. A kept binding is let go once the operator reports its group empty.
+
+This does not reach groups whose binding had already disappeared before this version: check the
+groups of roles nobody holds in Waldur and remove leftover members by hand, or turn on
+`import_external_members` (below), which gives every mapped role a binding again.
+
 ## Sequence: orphan-CR pruning
 
 ```mermaid
@@ -538,6 +549,89 @@ new groups. Then delete the old bindings in Rancher; the operator never removes 
 mind that an adopted project is treated like any other: **removing its ResourceProject from
 Waldur deletes the Rancher project**.
 
+### Continuous import of members added in Keycloak
+
+The one-off import covers the access a cluster has on day one. To keep accepting people a
+Keycloak admin adds to the operator's groups later, turn on `import_external_members`:
+
+```yaml
+backend_settings:
+  import_external_members: true
+  identity_bridge_source: "isd:rancher"   # ISD the accounts it creates belong to
+  # external_member_username_prefix: "rancher-"   # start of new accounts' usernames
+```
+
+With the operator's `externalMemberPattern` set (for example `^[a-z]{2}[0-9]+$`), the operator
+keeps a group member the CR never had, if their username matches, and reports them in the
+binding's `status.*.externalMembers`. On every membership sync the agent then:
+
+1. maps the group back to the Waldur role it was built from (`role_map` for project groups,
+   `cluster_role_map` for the cluster groups);
+2. finds or creates the person's Waldur account through the Identity Bridge
+   (`POST /api/identity-bridge/`). In civil-number mode it sends the civil number from the
+   person's link to `keycloak_identity_provider`, so a person who already has a Waldur account
+   under another username is matched to it rather than getting a second one. **A member is
+   imported only when that link names the same civil number as its username** (ignoring case): a
+   Keycloak account named like a civil code proves nothing about whose code it is, and one linked
+   to someone else's identity would get that person the role. A new account gets a neutral username (`external_member_username_prefix`,
+  `rancher-` by default, plus 20 random hex characters; never the civil code),
+   the Keycloak first and last name when set, and never an email;
+3. refuses staff, support and identity manager accounts, and any account it cannot read;
+4. grants the role on the resource project (project groups) or on the resource (cluster groups).
+   A cluster member is reported by every CR on the cluster and granted once.
+
+On the next cycle the person is an ordinary member of the CR. Removing them in Waldur still works:
+the operator remembers who the CR named and takes them out. Someone the import cannot place (no
+link, a grant Waldur refuses such as a second role in one team, or a grant the agent cannot see
+because the person has not accepted the offering's terms) stays in the group only for the
+operator's grace period (15 minutes by default) and is then removed; the agent logs why.
+
+Requirements:
+
+- username lookup (`keycloak_user_lookup: username`) with `keycloak_user_identity_source`
+  `civil_number` or `username`, and no identity template: the Keycloak username has to map back to
+  the Waldur value as is;
+- Identity Bridge on in Waldur (`FEDERATED_IDENTITY_SYNC_ENABLED`), and in civil-number mode
+  `civil_number` in both `FEDERATED_IDENTITY_SYNC_ALLOWED_ATTRIBUTES` and
+  `ENABLED_USER_PROFILE_ATTRIBUTES`. Without it the agent imports nobody and logs why: an account
+  created without the civil number would not be the one the person signs in to;
+- a **staff** token for the agent: the import reads each account before granting it a role, to
+  refuse privileged ones, and only staff can read accounts across organizations;
+- in civil-number mode, `keycloak_identity_provider` (the link that identifies the person);
+- each role the groups map to must exist on the offering (resource-project roles for `role_map`,
+  resource roles for `cluster_role_map`).
+
+With this setting every role in `role_map` and `cluster_role_map` keeps a binding, empty when
+nobody holds it, so each role has a group to add people to: expect a Keycloak group and a Rancher
+binding per mapped role in every project. A Rancher role in the map that Rancher rejects then
+puts every CR into an error state, not only those with members in that role.
+
+In username mode the bridge finds existing accounts by username and records `isd:rancher` in
+their identity sources; names pushed from Keycloak update theirs. **Turn it on before the operator's
+pattern**, and let one cycle pass: members left in a group whose binding had disappeared are then
+removed rather than imported.
+
+What the import trusts, and who can therefore grant Waldur roles through it:
+
+- **Keycloak group admins**: whoever can add people to these groups.
+- **Keycloak user admins**: an admin with `manage-users` can create an account named like a
+  civil code and link it to that identity. The role is then recorded in Waldur against the real
+  person, while the account the admin made holds the Rancher access.
+- **Whoever can write `managedrancherprojects/status`** in the agent's namespace: the agent
+  imports what `externalMembers` lists, for any civil number. This is a hard requirement: only the
+  operator's service account may have `patch`/`update` on `managedrancherprojects/status`. The
+  agent itself needs none:
+
+  ```yaml
+  # Role for the site agent: the CRs, not their status subresource
+  - apiGroups: ["waldur.io"]
+    resources: ["managedrancherprojects"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  ```
+
+Staff, support and identity manager accounts are never given roles this way, whichever way the
+bridge matched them.
+
 ---
 
 ## User identity matching
@@ -828,14 +922,14 @@ group name self-explaining in the Keycloak admin UI.
    access to B, C, … via the shared group's PRTBs.
 2. Slugs (`customer_slug`, `project_slug`, `resource_slug`,
    `project_name`) are **mutable** -- renaming the entity in Waldur
-   creates a new Keycloak group on the next reconcile and orphans the
-   old one (the operator adopts groups by name and never renames adopted
-   groups). Memberships in the old group become stale.
+   creates a new Keycloak group on the next reconcile. The old one keeps
+   its binding with no members until the operator has emptied it (see
+   "A role's last holder"), then is no longer managed; the group itself
+   and its Rancher binding stay.
 3. **Switching the template after deployment** has the same effect as a
    bulk rename: every existing CR re-renders, the operator creates fresh
-   groups, the old groups linger with their stale members. Plan a
-   one-time manual migration if you change the template against an
-   existing deployment.
+   groups and empties the old ones. Plan a one-time migration of the
+   members if you change the template against an existing deployment.
 4. Keycloak's `GROUP.NAME` column is `varchar(255)`. The plugin guards
    this at render time and raises a `ValueError` (with a hint about
    `${rp_uuid_short}`) if the rendered name would exceed 255 chars, so

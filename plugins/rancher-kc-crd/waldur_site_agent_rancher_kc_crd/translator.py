@@ -354,8 +354,15 @@ def build_role_bindings(
     customer_slug: str = "",
     project_slug: str = "",
     resource_slug: str = "",
+    include_empty: bool = False,
+    group_roles: dict[str, str] | None = None,
 ) -> list[dict]:
     """Group UserRoles by role name and emit one roleBinding per group.
+
+    With ``include_empty`` every role in ``role_map`` gets a binding, with
+    no members when nobody holds it, so its group exists for a Keycloak
+    admin to add people to. ``group_roles``, when given, is filled with
+    group name -> Waldur role name for each emitted binding.
 
     ``user_roles`` is a list of dicts shaped like the Waldur
     ``marketplace_provider_resources_team_list`` response — each entry
@@ -393,25 +400,28 @@ def build_role_bindings(
         by_role.setdefault(role, []).append(ur)
 
     bindings: list[dict] = []
-    for role_name in sorted(by_role):
+    for role_name in sorted(set(role_map) if include_empty else by_role):
         members = [
-            member for ur in by_role[role_name] if (member := build_member(ur, identity))
+            member for ur in by_role.get(role_name, []) if (member := build_member(ur, identity))
         ]
-        if not members:
+        if not members and not include_empty:
             continue
+        group_name = render_group_name(
+            group_name_template,
+            cluster_id=cluster_id,
+            role_name=role_name,
+            rp_uuid=rp_uuid,
+            rp_uuid_short=rp_uuid_short,
+            project_name=project_name,
+            customer_slug=customer_slug,
+            project_slug=project_slug,
+            resource_slug=resource_slug,
+        )
+        if group_roles is not None:
+            group_roles[group_name] = role_name
         bindings.append(
             {
-                "groupName": render_group_name(
-                    group_name_template,
-                    cluster_id=cluster_id,
-                    role_name=role_name,
-                    rp_uuid=rp_uuid,
-                    rp_uuid_short=rp_uuid_short,
-                    project_name=project_name,
-                    customer_slug=customer_slug,
-                    project_slug=project_slug,
-                    resource_slug=resource_slug,
-                ),
+                "groupName": group_name,
                 "rancherRole": role_map[role_name],
                 "members": members,
             },
@@ -427,8 +437,14 @@ def build_cr_spec(
     backend_settings: dict,
     cluster_user_roles: list[dict] | None = None,
     identity: IdentitySettings | None = None,
+    include_empty_roles: bool = False,
+    group_roles: dict[str, str] | None = None,
+    cluster_group_roles: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Assemble the full CR body (apiVersion + kind + metadata + spec).
+
+    ``include_empty_roles`` and the two ``*group_roles`` maps are passed to
+    :func:`build_role_bindings` for the project and cluster bindings.
 
     Caller is responsible for setting metadata.namespace from config
     when invoking the K8s API.
@@ -522,6 +538,8 @@ def build_cr_spec(
                 customer_slug=customer_slug,
                 project_slug=project_slug,
                 resource_slug=resource_slug,
+                include_empty=include_empty_roles,
+                group_roles=group_roles,
             ),
         },
     }
@@ -549,6 +567,8 @@ def build_cr_spec(
             customer_slug=customer_slug,
             project_slug=project_slug,
             resource_slug=resource_slug,
+            include_empty=include_empty_roles,
+            group_roles=cluster_group_roles,
         )
         # Always emit the spec.cluster block when cluster_role_map is
         # configured -- even with an empty roleBindings list. The
@@ -615,3 +635,52 @@ def _build_resource_quotas(limits: dict[str, Any]) -> dict | None:
     if not out:
         return None
     return out
+
+
+def keep_emptied_bindings(body: dict, current_cr: dict | None) -> None:
+    """Keep, with no members, the bindings whose last member Waldur removed.
+
+    A role nobody holds has no binding, and the operator manages only the
+    groups its spec names: without this, the last holder of a role stayed
+    in its Keycloak group, and kept the access its Rancher binding grants,
+    after Waldur removed them. The same goes for a group a renamed
+    template or an unmapped role leaves behind.
+
+    A kept binding is let go once the operator reports its group empty
+    (no members, none kept as added in Keycloak); until then it is kept
+    on every cycle, since the current CR carries it.
+    """
+    if not current_cr:
+        return
+    current_spec = current_cr.get("spec") or {}
+    current_status = current_cr.get("status") or {}
+    for path, status_key in (
+        (("keycloak",), "keycloakRoleBindings"),
+        (("cluster", "keycloak"), "clusterKeycloakRoleBindings"),
+    ):
+        current = current_spec
+        new = body["spec"]
+        for key in path:
+            current = (current or {}).get(key) or {}
+            new = (new or {}).get(key)
+        if new is None:
+            continue
+        # Empty, or a group the operator never created (it cannot hold
+        # anyone, and keeping its binding would keep a rejected role's error).
+        emptied = {
+            rb.get("groupName")
+            for rb in current_status.get(status_key) or []
+            if not rb.get("keycloakGroupId")
+            or (not rb.get("memberCount") and not rb.get("externalMembers"))
+        }
+        present = {rb["groupName"] for rb in new.get("roleBindings") or []}
+        for rb in current.get("roleBindings") or []:
+            name = rb.get("groupName")
+            if not name or name in present or not rb.get("rancherRole"):
+                continue
+            if not rb.get("members") and name in emptied:
+                continue
+            new.setdefault("roleBindings", []).append(
+                {"groupName": name, "rancherRole": rb["rancherRole"], "members": []}
+            )
+            present.add(name)

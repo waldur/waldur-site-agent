@@ -13,6 +13,7 @@ from waldur_site_agent.common.plugin_schemas import (
     NonEmptyStr,
 )
 
+from .external_members import validate_external_import, validate_username_prefix
 from .translator import resolve_identity_settings
 
 
@@ -99,6 +100,30 @@ class RancherKcCrdBackendSettingsSchema(CommonBackendSettingsSchema):
         ),
         json_schema_extra=SENSITIVE,
     )
+    import_external_members: bool | None = Field(
+        default=None,
+        description=(
+            "Grant Waldur roles to people a Keycloak admin added to the operator's groups "
+            "(reported by an operator with externalMemberPattern set), creating their "
+            "Waldur account through the Identity Bridge when needed. Username lookup with "
+            "civil_number or username identity only"
+        ),
+    )
+    identity_bridge_source: NonEmptyStr | None = Field(
+        default=None,
+        description=(
+            "Identity Bridge source (ISD) accounts created for external members belong to, "
+            "e.g. isd:rancher; the agent's token must be staff or manage this ISD"
+        ),
+    )
+    external_member_username_prefix: str | None = Field(
+        default=None,
+        description=(
+            "Start of the Waldur username of an account the import creates in civil_number mode "
+            "(followed by 20 random hex characters; default 'rancher-'). The civil number is "
+            "never used as the username"
+        ),
+    )
     waldur_api_url: str | None = Field(
         default=None,
         description=(
@@ -111,12 +136,17 @@ class RancherKcCrdBackendSettingsSchema(CommonBackendSettingsSchema):
         default=None, description="Token for waldur_api_url", json_schema_extra=SECRET
     )
     waldur_verify_ssl: bool | None = Field(
-        default=None, description="Verify TLS for waldur_api_url (default true)",
+        default=None,
+        description="Verify TLS for waldur_api_url (default true)",
         json_schema_extra=SENSITIVE,
     )
 
     @model_validator(mode="after")
     def validate_user_identity(self) -> RancherKcCrdBackendSettingsSchema:
         """Reject member-identity settings the backend would refuse to start with."""
-        resolve_identity_settings(self.model_dump(exclude_none=True))
+        identity = resolve_identity_settings(self.model_dump(exclude_none=True))
+        if self.import_external_members:
+            validate_external_import(identity, self.identity_bridge_source)
+        if self.external_member_username_prefix is not None:
+            validate_username_prefix(self.external_member_username_prefix)
         return self
