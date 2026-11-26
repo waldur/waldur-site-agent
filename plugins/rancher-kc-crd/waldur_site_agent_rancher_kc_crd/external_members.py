@@ -9,6 +9,11 @@ username) or creates it, and the role the group stands for is granted on
 the resource project (project groups) or the resource (cluster groups).
 On the next cycle the person is an ordinary member of the CR.
 
+In dry-run mode (``import_external_members: dry_run``) the same decisions
+are made and logged, and nothing is written to Waldur: accounts are looked
+up by civil number or username instead of pushed through the bridge, and
+no role is granted.
+
 Waldur stays authoritative for removals: someone it removes was synced
 before, so the operator removes them and never reports them here.
 """
@@ -21,6 +26,7 @@ import uuid as uuid_lib
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+from pydantic import TypeAdapter, ValidationError
 from waldur_api_client.api.identity_bridge import (
     identity_bridge,
     identity_bridge_allowed_fields_retrieve,
@@ -32,7 +38,7 @@ from waldur_api_client.api.marketplace_provider_resource_projects import (
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_add_user,
 )
-from waldur_api_client.api.users import users_retrieve
+from waldur_api_client.api.users import users_list, users_retrieve
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.errors import UnexpectedStatus
 from waldur_api_client.models.identity_bridge_request_request import (
@@ -58,6 +64,25 @@ _ROLE_PAGE_SIZE = 100
 # "-", not starting with "-".
 DEFAULT_USERNAME_PREFIX = "rancher-"
 USERNAME_PREFIX_RE = re.compile(r"^([a-zA-Z0-9_.][a-zA-Z0-9_.-]{0,63})?$")
+DRY_RUN = "dry_run"
+
+
+def import_mode(value: object) -> str | None:
+    """``import_external_members`` as ``"on"``, ``DRY_RUN`` or ``None`` (off).
+
+    Anything else is read as a boolean the way the settings schema reads it,
+    so a value the schema accepts (``"true"``, ``1``) works here too.
+    """
+    if value == DRY_RUN:
+        return DRY_RUN
+    if value is None:
+        return None
+    try:
+        enabled = TypeAdapter(bool).validate_python(value)
+    except ValidationError as exc:
+        msg = f"import_external_members must be true, false or {DRY_RUN!r}"
+        raise ValueError(msg) from exc
+    return "on" if enabled else None
 
 
 def validate_username_prefix(prefix: str) -> None:
@@ -94,6 +119,22 @@ def validate_external_import(identity: IdentitySettings, bridge_source: str | No
             "only members linked to that provider are imported"
         )
         raise ValueError(msg)
+
+
+def _require_activity(users) -> None:  # noqa: ANN001
+    """Refuse a preview built on accounts whose state the token cannot see.
+
+    Waldur shows ``is_active`` to staff only; read with another token every
+    match would look deactivated, and accounts outside the token's
+    organizations would not be listed at all.
+    """
+    for user in users:
+        if user.is_active not in (True, False):
+            msg = (
+                "the agent's token cannot see whether accounts are active; the import needs a "
+                "staff token, so this preview would be wrong"
+            )
+            raise RuntimeError(msg)
 
 
 def _call(endpoint, **kwargs):  # noqa: ANN001, ANN003, ANN202
@@ -213,8 +254,10 @@ class ExternalMemberImporter:
         identity: IdentitySettings,
         bridge_source: str,
         username_prefix: str = DEFAULT_USERNAME_PREFIX,
+        dry_run: bool = False,
     ) -> None:
         """Store the Waldur client and the settings the import reads."""
+        self.dry_run = dry_run
         self.client = client
         self.offering_uuid = offering_uuid
         self.identity = identity
@@ -224,12 +267,14 @@ class ExternalMemberImporter:
         # One bridge call per person per cycle, however many grants they get.
         self._user_uuids: dict[str, uuid_lib.UUID] = {}
         self._ordinary: dict[uuid_lib.UUID, bool] = {}
+        self._lookups: dict[str, tuple[uuid_lib.UUID | None, str]] = {}
 
     def import_grants(self, grants: list[ExternalGrant]) -> int:
         """Apply the grants; return how many roles were granted.
 
         A cluster member is reported by every CR on the cluster, so the
-        same grant arrives several times and is applied once.
+        same grant arrives several times and is applied once. In dry-run
+        mode, how many would be.
         """
         unique = list(dict.fromkeys(grants))
         if not unique:
@@ -243,7 +288,8 @@ class ExternalMemberImporter:
                     granted += 1
             except Exception as exc:
                 logger.warning(
-                    "rancher-kc-crd: cannot import external member %s: %s",
+                    "rancher-kc-crd: %scannot import external member %s: %s",
+                    "dry run: " if self.dry_run else "",
                     self._display(grant.username),
                     exc,
                 )
@@ -273,6 +319,8 @@ class ExternalMemberImporter:
                 self._display(grant.username),
             )
             return False
+        if self.dry_run:
+            return self._preview(grant, role_uuid)
         user_uuid = self._resolve_user(grant)
         if not self._is_ordinary(user_uuid):
             logger.warning(
@@ -313,6 +361,76 @@ class ExternalMemberImporter:
             return False
         msg = f"granting {grant.role_name} answered {response.status_code}{self._detail(response)}"
         raise RuntimeError(msg)
+
+    def _preview(self, grant: ExternalGrant, role_uuid: str) -> bool:
+        """Log what ``_import`` would do for the grant, writing nothing."""
+        user_uuid, account = self._lookup_user(grant)
+        if user_uuid is not None and not self._is_ordinary(user_uuid):
+            logger.warning(
+                "rancher-kc-crd: dry run: external member %s would resolve to a staff, support "
+                "or identity manager account, or one the agent cannot read; would not be imported",
+                self._display(grant.username),
+            )
+            return False
+        logger.info(
+            "rancher-kc-crd: dry run: would grant %s (role %s) on %s %s to external member %s, "
+            "%s",
+            grant.role_name,
+            role_uuid,
+            grant.scope_type,
+            grant.scope_uuid,
+            self._display(grant.username),
+            account,
+        )
+        return True
+
+    def _lookup_user(self, grant: ExternalGrant) -> tuple[uuid_lib.UUID | None, str]:
+        """The account the Identity Bridge would land on, read without pushing.
+
+        Mirrors the bridge: the username first (in username mode), the civil
+        number ignoring case (in civil_number mode), one active match or a
+        refusal. Returns the account's UUID, or ``None`` for a new account,
+        and a description for the log.
+        """
+        cached = self._lookups.get(grant.identifier)
+        if cached is None:
+            cached = self._lookups[grant.identifier] = self._find_account(grant)
+        return cached
+
+    def _find_account(self, grant: ExternalGrant) -> tuple[uuid_lib.UUID | None, str]:
+        if self.identity.source == "civil_number":
+            # One search, compared ignoring case as the bridge does. Unlike the
+            # bridge push, it carries the civil number in the URL; see the
+            # README's dry-run section.
+            listed = (
+                users_list.sync(client=self.client, query=grant.identifier, page_size=100) or []
+            )
+            found = {
+                user.uuid: user
+                for user in listed
+                if isinstance(user.uuid, uuid_lib.UUID)
+                and isinstance(user.civil_number, str)
+                and user.civil_number.casefold() == grant.identifier.casefold()
+            }
+            _require_activity(found.values())
+            active = [uuid for uuid, user in found.items() if user.is_active is True]
+            if not found:
+                return None, f"creating a new account {self.username_prefix}<random>"
+            if len(active) != 1:
+                msg = (
+                    f"the Identity Bridge would refuse it: its civil number matches "
+                    f"{len(active)} active and {len(found) - len(active)} deactivated accounts"
+                )
+                raise RuntimeError(msg)
+            account = active[0]
+            return account, f"existing account {account.hex} (matched by civil number)"
+        matches = users_list.sync(client=self.client, username=grant.username) or []
+        for user in matches:
+            if user.username == grant.username and isinstance(user.uuid, uuid_lib.UUID):
+                _require_activity([user])
+                state = "" if user.is_active is True else ", deactivated"
+                return user.uuid, f"existing account {user.uuid.hex} (matched by username{state})"
+        return None, f"creating a new account {grant.username}"
 
     def _resolve_user(self, grant: ExternalGrant) -> uuid_lib.UUID:
         """The Waldur account for the person, through the Identity Bridge."""

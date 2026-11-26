@@ -34,9 +34,11 @@ from waldur_site_agent.common import static_token_prefix
 from .crd_client import CrdClient
 from .external_members import (
     DEFAULT_USERNAME_PREFIX,
+    DRY_RUN,
     ExternalGrant,
     ExternalMemberImporter,
     collect_external_grants,
+    import_mode,
 )
 from .status_reader import (
     build_backend_metadata,
@@ -235,7 +237,11 @@ class RancherKcCrdBackend(backends.BaseBackend):
             )
         # People a Keycloak admin added to the operator's groups get Waldur
         # roles; every mapped role then keeps a binding, so its group exists.
-        self.import_external_members: bool = bool(backend_settings.get("import_external_members"))
+        # A dry run emits the same bindings and only logs the grants, so it
+        # previews everything the real import would see.
+        import_setting = import_mode(backend_settings.get("import_external_members"))
+        self.import_external_members: bool = import_setting is not None
+        self.import_dry_run: bool = import_setting == DRY_RUN
         # Per-resource sync reports built during pull_resource from CR
         # status, served to the membership processor via
         # get_membership_sync_report after the user sync.
@@ -527,6 +533,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
             username_prefix=self.backend_settings.get(
                 "external_member_username_prefix", DEFAULT_USERNAME_PREFIX
             ),
+            dry_run=self.import_dry_run,
         )
         try:
             granted = importer.import_grants(grants)
@@ -535,7 +542,8 @@ class RancherKcCrdBackend(backends.BaseBackend):
             return
         if granted:
             logger.info(
-                "rancher-kc-crd: granted %d Waldur role(s) to external members of %s",
+                "rancher-kc-crd: %s %d Waldur role(s) to external members of %s",
+                "dry run: would grant" if self.import_dry_run else "granted",
                 granted,
                 waldur_resource.uuid,
             )

@@ -556,7 +556,7 @@ Keycloak admin adds to the operator's groups later, turn on `import_external_mem
 
 ```yaml
 backend_settings:
-  import_external_members: true
+  import_external_members: true            # or dry_run: log what it would do, change nothing
   identity_bridge_source: "isd:rancher"   # ISD the accounts it creates belong to
   # external_member_username_prefix: "rancher-"   # start of new accounts' usernames
 ```
@@ -585,6 +585,34 @@ the operator remembers who the CR named and takes them out. Someone the import c
 link, a grant Waldur refuses such as a second role in one team, or a grant the agent cannot see
 because the person has not accepted the offering's terms) stays in the group only for the
 operator's grace period (15 minutes by default) and is then removed; the agent logs why.
+
+#### Dry run
+
+`import_external_members: dry_run` makes every decision above and changes nothing in Waldur: no
+Identity Bridge push, no account, no role. Instead the agent logs, once per membership sync:
+
+```text
+rancher-kc-crd: dry run: would grant project_member (role <uuid>) on resource_project <uuid>
+  to external member ee38…00, existing account <uuid> (matched by civil number)
+rancher-kc-crd: dry run: would grant cluster_member ... creating a new account rancher-<random>
+rancher-kc-crd: dry run: cannot import external member ...: the Identity Bridge would refuse it: ...
+```
+
+along with the warnings of a real run (no link to `keycloak_identity_provider`, a privileged
+account, a role missing on the offering, a bridge that does not store `civil_number`). The account
+is looked up through the user list, the way the bridge would match it: by civil number ignoring
+case, or by username. A grant the person already has is still listed as "would grant".
+
+The lookup needs the same **staff** token as the import: with another token Waldur hides whether
+accounts are active, and accounts outside the token's organizations, so the agent reports the
+preview as wrong instead of showing it. Unlike the import, which sends the civil number in a request
+body, the lookup searches for it in a query parameter (`GET /api/users/?query=…`), once per person
+and cycle, so it can appear in Waldur's access logs.
+
+The CRs are written as with `true`: every mapped role gets a binding, so the preview covers every
+group and the rollout order below stays the same. With the operator's pattern set, the members it
+lists are kept only for its grace period and then removed, as nothing imports them; set
+`externalMemberGraceSeconds` long enough for the preview (at most 30 days), then switch to `true`.
 
 Requirements:
 
