@@ -17,6 +17,7 @@ from waldur_api_client.api.marketplace_provider_resource_projects import (
 )
 from waldur_api_client.api.marketplace_provider_resources import (
     marketplace_provider_resources_list_users_list,
+    marketplace_provider_resources_retrieve,
 )
 from waldur_api_client.client import AuthenticatedClient
 from waldur_api_client.models.resource import Resource as WaldurResource
@@ -31,6 +32,12 @@ from waldur_site_agent.backend.structures import BackendResourceInfo
 from waldur_site_agent.common import static_token_prefix
 
 from .crd_client import CrdClient
+from .external_members import (
+    DEFAULT_USERNAME_PREFIX,
+    ExternalGrant,
+    ExternalMemberImporter,
+    collect_external_grants,
+)
 from .status_reader import (
     build_backend_metadata,
     extract_synced_users,
@@ -42,6 +49,7 @@ from .translator import (
     IdentitySettings,
     build_cr_spec,
     cr_name,
+    keep_emptied_bindings,
     mask_civil_code,
     member_identifier,
     resolve_identity_settings,
@@ -225,6 +233,9 @@ class RancherKcCrdBackend(backends.BaseBackend):
                 "rancher-kc-crd: keycloak_use_user_id is deprecated; set "
                 "keycloak_user_identity_source: uuid and keycloak_user_lookup: id instead"
             )
+        # People a Keycloak admin added to the operator's groups get Waldur
+        # roles; every mapped role then keeps a binding, so its group exists.
+        self.import_external_members: bool = bool(backend_settings.get("import_external_members"))
         # Per-resource sync reports built during pull_resource from CR
         # status, served to the membership processor via
         # get_membership_sync_report after the user sync.
@@ -382,6 +393,7 @@ class RancherKcCrdBackend(backends.BaseBackend):
 
         sync_report: list[dict] = []
         last_cr_status: dict = {}
+        external_grants: list[ExternalGrant] = []
 
         for rp in rps:
             user_roles = self._fetch_resource_project_users(rp.uuid)
@@ -391,6 +403,8 @@ class RancherKcCrdBackend(backends.BaseBackend):
             civil_roles_with_code += self._index_identifiers(ur_dicts, ident_to_uuid)
             self._warn_unmapped_roles(ur_dicts, self.role_map, "role_map", f"{rp.name} ({rp.uuid})")
 
+            group_roles: dict[str, str] = {}
+            cluster_group_roles: dict[str, str] = {}
             body = build_cr_spec(
                 resource=resource_dict,
                 resource_project=rp_dict,
@@ -398,7 +412,12 @@ class RancherKcCrdBackend(backends.BaseBackend):
                 backend_settings=self.backend_settings,
                 cluster_user_roles=cluster_ur_dicts,
                 identity=self.identity,
+                include_empty_roles=self.import_external_members,
+                group_roles=group_roles,
+                cluster_group_roles=cluster_group_roles,
             )
+            current_cr = self.crd.get(body["metadata"]["name"])
+            keep_emptied_bindings(body, current_cr)
             self.crd.apply(body)
             expected_cr_names.add(body["metadata"]["name"])
 
@@ -407,6 +426,17 @@ class RancherKcCrdBackend(backends.BaseBackend):
             synced_users.update(extract_synced_users(cr_status))
             self._sync_rp_state_from_cr(rp, cr_status)
             last_cr_status = cr_status
+            if self.import_external_members:
+                external_grants.extend(
+                    collect_external_grants(
+                        cr_status,
+                        group_roles,
+                        cluster_group_roles,
+                        rp.uuid.hex,
+                        waldur_resource.uuid.hex,
+                        self.identity,
+                    )
+                )
             sync_report.extend(
                 _derive_grant_states(
                     ur_dicts,
@@ -432,6 +462,8 @@ class RancherKcCrdBackend(backends.BaseBackend):
                 )
             )
         self._membership_sync_reports[waldur_resource.uuid.hex] = sync_report
+        if external_grants:
+            self._import_external_members(waldur_resource, external_grants)
         if (
             self.identity.source == "civil_number"
             and civil_roles_seen
@@ -469,6 +501,54 @@ class RancherKcCrdBackend(backends.BaseBackend):
         return BackendResourceInfo(
             users=self._reported_users(synced_users, ident_to_uuid), usage={}
         )
+
+    def _import_external_members(
+        self, waldur_resource: WaldurResource, grants: list[ExternalGrant]
+    ) -> None:
+        """Grant Waldur roles to the members the operator reported as external.
+
+        The grants show up in the CRs on the next cycle; a failure is
+        logged and retried then, without failing this cycle's sync.
+        """
+        if self.waldur_client is None:
+            return
+        try:
+            offering_uuid = self._offering_uuid(waldur_resource)
+        except Exception as exc:
+            logger.warning(
+                "rancher-kc-crd: cannot read the offering of %s: %s", waldur_resource.uuid, exc
+            )
+            return
+        importer = ExternalMemberImporter(
+            client=self.waldur_client,
+            offering_uuid=offering_uuid,
+            identity=self.identity,
+            bridge_source=self.backend_settings.get("identity_bridge_source") or "",
+            username_prefix=self.backend_settings.get(
+                "external_member_username_prefix", DEFAULT_USERNAME_PREFIX
+            ),
+        )
+        try:
+            granted = importer.import_grants(grants)
+        except Exception as exc:
+            logger.warning("rancher-kc-crd: external member import failed: %s", exc)
+            return
+        if granted:
+            logger.info(
+                "rancher-kc-crd: granted %d Waldur role(s) to external members of %s",
+                granted,
+                waldur_resource.uuid,
+            )
+
+    def _offering_uuid(self, waldur_resource: WaldurResource) -> str:
+        """The resource's offering UUID, read from Waldur when the sync left it out."""
+        offering_uuid = getattr(waldur_resource, "offering_uuid", None)
+        if isinstance(offering_uuid, uuid_lib.UUID):
+            return offering_uuid.hex
+        resource = marketplace_provider_resources_retrieve.sync(
+            uuid=waldur_resource.uuid, client=self.waldur_client
+        )
+        return resource.offering_uuid.hex
 
     def _index_identifiers(self, ur_dicts: list[dict], ident_to_uuid: dict[str, str]) -> int:
         """Record CR identifier -> user UUID; return how many roles carry a civil code."""
