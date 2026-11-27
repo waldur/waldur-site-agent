@@ -544,3 +544,225 @@ def test_incomplete_bootstrap_block_is_a_configuration_source_error(endpoint, bl
     assert named in message
     assert "secret-token-value" not in message and "secret-oidc-value" not in message
     assert not endpoint.called
+
+
+# --- A group of offerings selected by backend ID ---------------------------------
+
+SP_UUID = "5e000000000000000000000000000001"
+GROUP_ENDPOINT = f"https://waldur.example.com/api/marketplace-service-providers/{SP_UUID}/site_agent_config/"
+UUID_Q = "0f000000000000000000000000000001"
+UUID_U = "0f000000000000000000000000000002"
+
+
+def group_entry(uuid, name):
+    entry = copy.deepcopy(SERVED)
+    entry["offering"]["name"] = f"{name} as Waldur names it in the offering"
+    return {"offering_uuid": uuid, "offering_name": name, **entry}
+
+
+def group_block(**extra):
+    block = {
+        "name": "Cluster",
+        "configuration_source": "waldur",
+        "waldur_api_url": API_URL,
+        "waldur_api_token": TOKEN,
+        "waldur_service_provider_uuid": SP_UUID,
+        "waldur_offering_backend_id_startswith": "cluster",
+        "backend_settings": {"ldap": {"bind_password": "s3cret"}},
+    }
+    block.update(extra)
+    return block
+
+
+@pytest.fixture
+def group_served():
+    return [group_entry(UUID_Q, "cluster-q"), group_entry(UUID_U, "cluster-u")]
+
+
+@pytest.fixture
+def group_endpoint(group_served):
+    with respx.mock(assert_all_called=False) as router:
+        route = router.get(url__startswith=GROUP_ENDPOINT).mock(
+            side_effect=lambda request: httpx.Response(200, json=group_served)
+        )
+        router.get(ENDPOINT).mock(side_effect=lambda request: httpx.Response(200, json=SERVED))
+        yield route
+
+
+def test_group_block_loads_one_offering_per_matching_offering(group_endpoint, group_served):
+    offerings = load(group_block()).offerings
+
+    assert [(o.waldur_offering_uuid, o.name) for o in offerings] == [(UUID_Q, "cluster-q"), (UUID_U, "cluster-u")]
+    for offering in offerings:
+        assert offering.configuration_source == "waldur"
+        assert offering.configuration_version == SERVED["version"]
+        assert offering.backend_type == "slurm"
+        assert offering.waldur_api_url == API_URL
+        assert offering.waldur_api_token == TOKEN
+        assert offering.backend_settings["ldap"]["bind_password"] == "s3cret"
+        assert not hasattr(offering, "waldur_service_provider_uuid")
+    # Each offering has its own copy of the settings.
+    assert offerings[0].backend_settings is not offerings[1].backend_settings
+
+    request = group_endpoint.calls.last.request
+    assert group_endpoint.call_count == 1
+    assert request.url.params["backend_id_startswith"] == "cluster"
+    assert "backend_id" not in request.url.params
+    assert request.headers["Authorization"] == f"Token {TOKEN}"
+    assert request.headers["User-Agent"] == "waldur-site-agent-test/1"
+
+
+def test_exact_backend_id_is_sent_as_backend_id(group_endpoint, group_served):
+    del group_served[1]
+    block = group_block(waldur_offering_backend_id="cluster-q")
+    del block["waldur_offering_backend_id_startswith"]
+    offerings = load(block).offerings
+    assert [o.waldur_offering_uuid for o in offerings] == [UUID_Q]
+    params = group_endpoint.calls.last.request.url.params
+    assert params["backend_id"] == "cluster-q"
+    assert "backend_id_startswith" not in params
+
+
+def test_group_and_single_offering_blocks_load_together(group_endpoint):
+    offerings = load(bootstrap(), group_block()).offerings
+    assert [o.waldur_offering_uuid for o in offerings] == [UUID, UUID_Q, UUID_U]
+
+
+@pytest.mark.parametrize(
+    ("change", "named"),
+    [
+        ({"waldur_offering_uuid": UUID}, "sets both waldur_offering_uuid and waldur_service_provider_uuid"),
+        ({"waldur_offering_backend_id": "cluster-q"}, "selects a group of offerings incompletely"),
+        ({"waldur_service_provider_uuid": None}, "selects a group of offerings incompletely"),
+        ({"waldur_offering_backend_id_startswith": None}, "selects a group of offerings incompletely"),
+        ({"waldur_offering_backend_id_startswith": ""}, "waldur_offering_backend_id_startswith must be a non-empty"),
+    ],
+)
+def test_malformed_group_block_fails_naming_the_block(group_endpoint, change, named):
+    block = group_block()
+    for key, value in change.items():
+        if value is None:
+            del block[key]
+        else:
+            block[key] = value
+    with pytest.raises(ConfigurationSourceError) as exc_info:
+        load(bootstrap(), block)
+    message = str(exc_info.value)
+    assert message.startswith("Offering block 2 ('Cluster')")
+    assert named in message
+    assert not group_endpoint.called
+
+
+def test_block_naming_no_offering_fails(endpoint):
+    block = bootstrap()
+    del block["waldur_offering_uuid"]
+    with pytest.raises(ConfigurationSourceError, match=r"^Offering block 1 names no offering"):
+        load(block)
+    assert not endpoint.called
+
+
+def test_no_matching_offering_fails_naming_the_block(group_endpoint, group_served):
+    group_served.clear()
+    with pytest.raises(ConfigurationSourceError) as exc_info:
+        load(group_block())
+    message = str(exc_info.value)
+    assert f"Offering group 'Cluster' (service provider {SP_UUID}, backend_id_startswith 'cluster')" in message
+    assert "no offering of the service provider matches" in message
+    assert GROUP_ENDPOINT in message
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 500])
+def test_group_error_status_fails_with_block_url_and_status(status):
+    with respx.mock() as router:
+        router.get(url__startswith=GROUP_ENDPOINT).mock(return_value=httpx.Response(status, json={"detail": "Nope."}))
+        with pytest.raises(ConfigurationSourceError) as exc_info:
+            load(group_block())
+    message = str(exc_info.value)
+    assert "Offering group 'Cluster'" in message
+    assert f"HTTP {status}" in message
+    assert f"{GROUP_ENDPOINT}?backend_id_startswith=cluster" in message
+    assert "Nope." in message
+
+
+def test_group_unreachable_waldur_fails():
+    with respx.mock() as router:
+        router.get(url__startswith=GROUP_ENDPOINT).mock(side_effect=httpx.ConnectError("Connection refused"))
+        with pytest.raises(ConfigurationSourceError, match="Connection refused"):
+            load(group_block())
+
+
+@pytest.mark.parametrize("body", [b"<html>", b'{"offering": {}}', b'[{"offering": {}}]', b'[{"offering_uuid": "x"}]'])
+def test_group_unusable_response_fails(body):
+    with respx.mock() as router:
+        router.get(url__startswith=GROUP_ENDPOINT).mock(return_value=httpx.Response(200, content=body))
+        with pytest.raises(ConfigurationSourceError, match="Offering group 'Cluster'"):
+            load(group_block())
+
+
+def test_offering_listed_on_its_own_and_in_a_group_fails(group_endpoint, group_served):
+    group_served[0]["offering_uuid"] = UUID
+    with pytest.raises(ConfigurationSourceError) as exc_info:
+        load(bootstrap(name="Single"), group_block())
+    message = str(exc_info.value)
+    assert f"Offering {UUID} is configured by more than one block" in message
+    assert f"block 1 (Offering 'Single' ({UUID}))" in message
+    assert "block 2 (Offering group 'Cluster'" in message
+
+
+def test_offering_matched_by_two_group_blocks_fails(group_endpoint):
+    with pytest.raises(ConfigurationSourceError, match=f"Offering {UUID_Q} is configured by more than one block"):
+        load(group_block(), group_block(name="Cluster again"))
+
+
+@pytest.mark.parametrize("value", ["not-a-uuid", f"{SP_UUID}/../../marketplace-provider-offerings/{UUID}"])
+def test_service_provider_must_be_a_uuid(group_endpoint, value):
+    with pytest.raises(ConfigurationSourceError, match="waldur_service_provider_uuid must be a UUID"):
+        load(group_block(waldur_service_provider_uuid=value))
+    assert group_endpoint.call_count == 0
+
+
+def test_duplicate_is_found_whatever_the_uuid_spelling():
+    dashed = "0f000000-0000-0000-0000-000000000001"
+    with pytest.raises(ConfigurationSourceError, match=f"Offering {dashed} is configured by more than one block"):
+        configuration_source.check_duplicate_offerings(
+            [(dashed, "block 1", False), (UUID_Q, "block 2", True)]
+        )
+
+
+def test_group_block_without_configuration_source_waldur_fails_saying_so():
+    block = group_block()
+    del block["configuration_source"]
+    with pytest.raises(ConfigurationSourceError, match="only a block with configuration_source: waldur"):
+        load(block)
+
+
+def test_local_blocks_sharing_a_uuid_load_as_before(endpoint):
+    assert len(load(local_offering(), local_offering(name="Same offering again")).offerings) == 2
+
+
+def test_missing_secret_for_a_matched_offering_fails_naming_block_and_offering(group_endpoint, group_served):
+    group_served[1]["secrets"] = [
+        {"field": "backend_settings.target_api_token", "backend": "waldur", "requirement": "required"}
+    ]
+    with pytest.raises(ConfigurationSourceError) as exc_info:
+        load(group_block())
+    message = str(exc_info.value)
+    assert message.startswith("Offering group 'Cluster'")
+    assert f"Offering 'cluster-u' ({UUID_U})" in message
+    assert "backend_settings.target_api_token (backend waldur)" in message
+
+
+def test_group_block_refuses_non_bootstrap_keys(group_endpoint):
+    with pytest.raises(ConfigurationSourceError, match=r"Offering group 'Cluster'.*Set these in Waldur instead: backend_type$"):
+        load(group_block(backend_type="slurm"))
+    assert not group_endpoint.called
+
+
+def test_invalid_served_configuration_in_a_group_names_block_and_offering(group_endpoint, group_served):
+    group_served[0]["offering"]["stomp_enabled"] = "maybe"
+    with pytest.raises(ConfigurationSourceError) as exc_info:
+        load(group_block())
+    message = str(exc_info.value)
+    assert message.startswith("Offering group 'Cluster'")
+    assert "cluster-q" in message and "stomp_enabled" in message
+    assert "s3cret" not in message
