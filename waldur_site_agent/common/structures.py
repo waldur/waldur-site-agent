@@ -686,7 +686,9 @@ class RootConfiguration(BaseModel):
         """Convert raw configuration to typed agent configuration.
 
         An offering with ``configuration_source: waldur`` is read from Waldur here,
-        with its local secrets merged in, and then validated like a local one.
+        with its local secrets merged in, and then validated like a local one. Such a
+        block may stand for a group of offerings selected by backend ID; it expands
+        into one offering per offering Waldur serves for it.
 
         Args:
             user_agent: User-Agent for the requests that read configurations from Waldur
@@ -694,21 +696,37 @@ class RootConfiguration(BaseModel):
         from waldur_site_agent.common import configuration_source  # noqa: PLC0415
 
         parsed_offerings = []
-        for offering_data in self.offerings:
+        # Per offering: its UUID, the block it came from, and whether that is a group.
+        configured: list[tuple[str, str, bool]] = []
+        for index, offering_data in enumerate(self.offerings):
             if offering_data.get("configuration_source") == configuration_source.SOURCE_WALDUR:
-                merged_data, served = configuration_source.load_offering_data(
-                    offering_data, self.global_proxy, user_agent
+                offerings = configuration_source.load_block(
+                    offering_data, index, self.global_proxy, user_agent
                 )
-                offering = configuration_source.build_offering(merged_data, served)
             else:
+                if configuration_source.is_group_block(offering_data):
+                    msg = (
+                        f"Offering block {index + 1} "
+                        f"({configuration_source.block_label(offering_data)}) selects "
+                        "offerings by backend ID, which only a block with "
+                        "configuration_source: waldur can do: add it, or name one "
+                        "offering with waldur_offering_uuid."
+                    )
+                    raise configuration_source.ConfigurationSourceError(msg)
                 offering = parse_offering(offering_data)
                 logger.info(
                     "Offering %s (%s): configuration source local",
                     offering.name,
                     offering.waldur_offering_uuid,
                 )
-            offering._global_proxy = self.global_proxy
-            parsed_offerings.append(offering)
+                offerings = [offering]
+            label = f"block {index + 1} ({configuration_source.block_label(offering_data)})"
+            from_group = configuration_source.is_group_block(offering_data)
+            for offering in offerings:
+                offering._global_proxy = self.global_proxy
+                parsed_offerings.append(offering)
+                configured.append((offering.waldur_offering_uuid, label, from_group))
+        configuration_source.check_duplicate_offerings(configured)
 
         return WaldurAgentConfiguration(
             offerings=parsed_offerings,

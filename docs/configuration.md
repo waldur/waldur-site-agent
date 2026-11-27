@@ -405,6 +405,9 @@ offerings:
 An offering with `configuration_source: waldur` may hold only these keys in the file:
 
 - `waldur_api_url`, `waldur_offering_uuid`, and `waldur_api_token` or the three `oidc_*` settings;
+- in place of `waldur_offering_uuid`, `waldur_service_provider_uuid` with
+  `waldur_offering_backend_id` or `waldur_offering_backend_id_startswith`, for a block that stands
+  for a group of offerings (see below);
 - `verify_ssl`;
 - `configuration_source`, and optionally `name` (Waldur's offering name otherwise);
 - `backend_settings` holding **secrets only**: the secret settings Waldur lists for the offering,
@@ -429,6 +432,48 @@ offerings:
 ```
 
 `examples/waldur-site-agent-config-from-waldur.yaml.example` is a complete bootstrap file.
+
+**Every offering of a cluster in one block.** A cluster sold as several offerings (one per
+accounting mode, say `cluster-q`, `cluster-u` and `cluster-m`) does not need a block per offering.
+In place of `waldur_offering_uuid`, a block may name the service provider with
+`waldur_service_provider_uuid` and select its offerings by backend ID, with exactly one of:
+
+- `waldur_offering_backend_id`: the offering whose backend ID is exactly this value;
+- `waldur_offering_backend_id_startswith`: every offering whose backend ID starts with this value.
+
+```yaml
+timezone: "UTC"
+offerings:
+  - name: "HPC cluster"   # names the block in errors; each offering keeps its Waldur name
+    configuration_source: waldur
+    waldur_api_url: "https://waldur.example.com/api/"
+    waldur_api_token: "<token>"
+    waldur_service_provider_uuid: "5e0f6a1b2c3d4e5f8a9b0c1d2e3f4a5b"  # the service provider UUID
+    waldur_offering_backend_id_startswith: "cluster"
+    backend_settings:
+      ldap:
+        bind_password: "<secret>"
+```
+
+At startup the agent calls
+`GET marketplace-service-providers/<uuid>/site_agent_config/?backend_id_startswith=<prefix>` (or
+`?backend_id=<backend ID>`) once and loads one offering per offering Waldur returns, each with its
+own `waldur_offering_uuid` and name from Waldur and the block's credentials, `verify_ssl` and
+secrets. Each is then merged and validated exactly like a single offering. The block's secrets
+apply to every matched offering; offerings that need different secrets go in separate blocks.
+
+A block must use one form: `waldur_offering_uuid`, or `waldur_service_provider_uuid` with one
+selector. A block mixing them, or with neither, fails the load. So does a group that matches no
+offering, a matched offering that another block of the file also configures (on its own or through
+another group), and a required secret missing for any matched offering; the error names the block.
+Offerings added to the group in Waldur are picked up at the next restart.
+
+The service provider endpoint needs a Waldur release that includes
+[waldur-mastermind#1360](https://code.opennodecloud.com/waldur/waldur-mastermind/-/issues/1360);
+an older Waldur answers 404. A `site_agent` template token bound to the matched offerings
+(**OFFERING.MANAGE_AGENT**) can load the group: Waldur returns only the offerings the token may
+read, so a token bound to another cluster's offerings does not see them. A service provider
+manager's token works too.
 
 At startup, for each such offering, the agent calls
 `GET marketplace-provider-offerings/<uuid>/site_agent_config/` with the offering's credentials

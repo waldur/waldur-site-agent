@@ -158,6 +158,19 @@ def _served_stub(offering: structures.Offering, *_args: Any, **_kwargs: Any) -> 
     )
 
 
+def _served_group_stub(
+    bootstrap: structures.Offering, service_provider_uuid: str, *_args: Any, **_kwargs: Any
+) -> list[configuration_source.ServedGroupEntry]:
+    """What a Waldur would serve for an example group block: two matching offerings."""
+    served = _served_stub(bootstrap)
+    return [
+        configuration_source.ServedGroupEntry(
+            offering_uuid=f"{index:032x}", offering_name=f"Served offering {index}", served=served
+        )
+        for index in (1, 2)
+    ]
+
+
 class _SchemaWarnings(logging.Handler):
     """Collect the plugin settings-schema warnings the loader logs."""
 
@@ -194,7 +207,13 @@ def config_problems(text: str) -> list[str] | None:
             problems.append("every offering must be a mapping")
             continue
         name = offering.get("name", "<unnamed>")
-        problems += _unknown_keys(offering, structures.Offering, f"offering {name!r}")
+        from_waldur = offering.get("configuration_source") == configuration_source.SOURCE_WALDUR
+        problems += [
+            problem
+            for problem in _unknown_keys(offering, structures.Offering, f"offering {name!r}")
+            # A group block's selector stands in for waldur_offering_uuid; the loader checks it.
+            if not (from_waldur and any(f"{key!r}" in problem for key in configuration_source.GROUP_KEYS))
+        ]
         if not offering.get("waldur_api_token") and not offering.get("oidc_token_url"):
             offering["waldur_api_token"] = DUMMY_TOKEN  # docs show placeholders for secrets
         if offering.get("configuration_source") == configuration_source.SOURCE_WALDUR:
@@ -219,7 +238,9 @@ def config_problems(text: str) -> list[str] | None:
     root_logger = logging.getLogger()
     root_logger.addHandler(warnings)
     try:
-        with mock.patch.object(configuration_source, "fetch_configuration", _served_stub):
+        with mock.patch.object(configuration_source, "fetch_configuration", _served_stub), mock.patch.object(
+            configuration_source, "fetch_group_configuration", _served_group_stub
+        ):
             structures.RootConfiguration(**raw).to_agent_configuration()
     except Exception as exc:  # noqa: BLE001 - every loader failure is a finding here
         problems.append(f"does not load: {' '.join(str(exc).split())}")

@@ -7,6 +7,12 @@ secrets into ``backend_settings``, checks that every secret Waldur lists as requ
 is set, and validates the result like a local configuration. Any failure stops the
 load: there is no cached fallback.
 
+One block may also stand for every offering of a service provider whose backend ID
+matches (``waldur_service_provider_uuid`` with ``waldur_offering_backend_id`` or
+``waldur_offering_backend_id_startswith``). The agent then reads
+``GET marketplace-service-providers/{uuid}/site_agent_config/`` once and loads one
+offering per entry it serves, each merged and validated as a single offering is.
+
 For an offering configured locally, ``warn_on_configuration_drift`` compares the file
 with what Waldur would serve and logs one warning per difference, best effort.
 
@@ -17,9 +23,11 @@ a generated SDK function, so the agent does not wait for a client release.
 from __future__ import annotations
 
 import copy
+import uuid as uuid_lib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from pydantic import ValidationError
@@ -43,7 +51,16 @@ BOOTSTRAP_KEYS = (
     "oidc_client_secret",
     "verify_ssl",
 )
-ALLOWED_LOCAL_KEYS = frozenset((*BOOTSTRAP_KEYS, "backend_settings"))
+# What selects a group of offerings in place of waldur_offering_uuid: the service
+# provider, and the offerings' backend ID, exactly or by prefix.
+SERVICE_PROVIDER_KEY = "waldur_service_provider_uuid"
+BACKEND_ID_KEY = "waldur_offering_backend_id"
+BACKEND_ID_PREFIX_KEY = "waldur_offering_backend_id_startswith"
+SELECTOR_KEYS = (BACKEND_ID_KEY, BACKEND_ID_PREFIX_KEY)
+GROUP_KEYS = (SERVICE_PROVIDER_KEY, *SELECTOR_KEYS)
+# The query parameter of the service provider endpoint for each selector key.
+_SELECTOR_PARAMS = {BACKEND_ID_KEY: "backend_id", BACKEND_ID_PREFIX_KEY: "backend_id_startswith"}
+ALLOWED_LOCAL_KEYS = frozenset((*BOOTSTRAP_KEYS, *GROUP_KEYS, "backend_settings"))
 # What Waldur must never decide for the agent: where it connects, with which
 # credentials and TLS verification, and where the configuration comes from. Waldur's
 # response is stripped of these whether or not the local file sets them. ``name`` is
@@ -96,10 +113,76 @@ def _label(name: Any, uuid: Any) -> str:  # noqa: ANN401
     return f"Offering {name!r} ({uuid})" if name and name != uuid else f"Offering {uuid}"
 
 
-def _endpoint_url(offering: structures.Offering) -> str:
+def service_provider_config_path(service_provider_uuid: str) -> str:
+    """Path of the service provider endpoint, relative to the client's base URL."""
+    return f"/api/marketplace-service-providers/{service_provider_uuid}/site_agent_config/"
+
+
+def _base_url(offering: structures.Offering) -> str:
     # The same base URL get_client derives from waldur_api_url.
-    base = offering.waldur_api_url.rstrip("/").removesuffix("/api")
-    return base + site_agent_config_path(offering.waldur_offering_uuid)
+    return offering.waldur_api_url.rstrip("/").removesuffix("/api")
+
+
+def _endpoint_url(offering: structures.Offering) -> str:
+    return _base_url(offering) + site_agent_config_path(offering.waldur_offering_uuid)
+
+
+def _get_json(
+    offering: structures.Offering,
+    path: str,
+    params: dict[str, str] | None,
+    label: str,
+    url: str,
+    hints: dict[int, str],
+    user_agent: str | None,
+    timeout: float,
+) -> Any:  # noqa: ANN401
+    """GET ``path`` with the offering's credentials and return the decoded JSON.
+
+    Raises:
+        ConfigurationSourceError: Waldur is unreachable, answers with anything but
+            200 or does not return JSON. The message names ``label``, ``url`` and
+            the status.
+    """
+    from waldur_site_agent.common import utils  # noqa: PLC0415
+
+    try:
+        with utils.get_client_for_offering(offering, user_agent, timeout=timeout) as client:
+            response = client.get_httpx_client().get(path, params=params)
+    except (httpx.HTTPError, utils.OIDCAuthError) as exc:
+        msg = f"{label}: cannot read its configuration from Waldur at {url}: {exc}"
+        raise ConfigurationSourceError(msg) from exc
+
+    if response.status_code != httpx.codes.OK:
+        detail = " ".join(response.text.split())[:_MAX_ERROR_DETAIL]
+        hint = hints.get(response.status_code, "")
+        msg = (
+            f"{label}: Waldur answered HTTP {response.status_code}{hint} "
+            f"for its configuration at {url}"
+        )
+        if detail:
+            msg += f": {detail}"
+        raise ConfigurationSourceError(msg)
+
+    try:
+        return response.json()
+    except ValueError as exc:
+        msg = f"{label}: Waldur did not return JSON for its configuration at {url}"
+        raise ConfigurationSourceError(msg) from exc
+
+
+def _served_configuration(payload: Any, url: str) -> ServedConfiguration | None:  # noqa: ANN401
+    """The configuration in one served block, or None when it is not one."""
+    served = payload.get("offering") if isinstance(payload, dict) else None
+    secrets = payload.get("secrets", []) if isinstance(payload, dict) else None
+    if not isinstance(served, dict) or not isinstance(secrets, list):
+        return None
+    return ServedConfiguration(
+        url=url,
+        offering=served,
+        secrets=[entry for entry in secrets if isinstance(entry, dict) and entry.get("field")],
+        version=str(payload.get("version") or ""),
+    )
 
 
 def fetch_configuration(
@@ -114,54 +197,103 @@ def fetch_configuration(
             200, or serves something that is not an agent configuration. The message
             names the offering, the URL and the status.
     """
-    from waldur_site_agent.common import utils  # noqa: PLC0415
-
     label = _label(offering.name, offering.waldur_offering_uuid)
     url = _endpoint_url(offering)
-    try:
-        with utils.get_client_for_offering(offering, user_agent, timeout=timeout) as client:
-            response = client.get_httpx_client().get(
-                site_agent_config_path(offering.waldur_offering_uuid)
-            )
-    except (httpx.HTTPError, utils.OIDCAuthError) as exc:
-        msg = f"{label}: cannot read its configuration from Waldur at {url}: {exc}"
-        raise ConfigurationSourceError(msg) from exc
-
-    if response.status_code != httpx.codes.OK:
-        detail = " ".join(response.text.split())[:_MAX_ERROR_DETAIL]
-        hint = {
-            400: " (is it a site agent offering?)",
-            401: " (check the offering's credentials)",
-            403: (
-                " (the token needs OFFERING.MANAGE_AGENT on the offering, "
-                "or permission to update its integration)"
-            ),
-            404: " (unknown offering, or a Waldur without this endpoint)",
-        }.get(response.status_code, "")
-        msg = (
-            f"{label}: Waldur answered HTTP {response.status_code}{hint} "
-            f"for its configuration at {url}"
-        )
-        if detail:
-            msg += f": {detail}"
-        raise ConfigurationSourceError(msg)
-
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        msg = f"{label}: Waldur did not return JSON for its configuration at {url}"
-        raise ConfigurationSourceError(msg) from exc
-    served = payload.get("offering") if isinstance(payload, dict) else None
-    secrets = payload.get("secrets", []) if isinstance(payload, dict) else None
-    if not isinstance(served, dict) or not isinstance(secrets, list):
+    hints = {
+        400: " (is it a site agent offering?)",
+        401: " (check the offering's credentials)",
+        403: (
+            " (the token needs OFFERING.MANAGE_AGENT on the offering, "
+            "or permission to update its integration)"
+        ),
+        404: " (unknown offering, or a Waldur without this endpoint)",
+    }
+    payload = _get_json(
+        offering,
+        site_agent_config_path(offering.waldur_offering_uuid),
+        None,
+        label,
+        url,
+        hints,
+        user_agent,
+        timeout,
+    )
+    served = _served_configuration(payload, url)
+    if served is None:
         msg = f"{label}: Waldur returned no offering configuration at {url}"
         raise ConfigurationSourceError(msg)
-    return ServedConfiguration(
-        url=url,
-        offering=served,
-        secrets=[entry for entry in secrets if isinstance(entry, dict) and entry.get("field")],
-        version=str(payload.get("version") or ""),
-    )
+    return served
+
+
+@dataclass
+class ServedGroupEntry:
+    """One offering of a group, as the service provider endpoint serves it."""
+
+    offering_uuid: str
+    offering_name: str
+    served: ServedConfiguration
+
+
+def fetch_group_configuration(
+    bootstrap: structures.Offering,
+    service_provider_uuid: str,
+    selector: dict[str, str],
+    label: str,
+    user_agent: str | None = None,
+    timeout: float = LOAD_TIMEOUT,
+) -> list[ServedGroupEntry]:
+    """Read the configuration of every offering a group block selects.
+
+    ``selector`` holds one query parameter of the service provider endpoint
+    (``backend_id`` or ``backend_id_startswith``).
+
+    Raises:
+        ConfigurationSourceError: Waldur is unreachable, answers with anything but
+            200, serves something that is not a list of offering configurations, or
+            serves none. The message names the block, the URL and the status.
+    """
+    path = service_provider_config_path(service_provider_uuid)
+    url = f"{_base_url(bootstrap)}{path}?{urlencode(selector)}"
+    hints = {
+        400: " (check the backend ID selector)",
+        401: " (check the block's credentials)",
+        403: (
+            " (the token needs OFFERING.MANAGE_AGENT on the offerings, "
+            "or permission to update their integration)"
+        ),
+        404: (
+            " (unknown service provider, or a Waldur without this endpoint: "
+            "loading a group of offerings needs a newer Waldur)"
+        ),
+    }
+    payload = _get_json(bootstrap, path, selector, label, url, hints, user_agent, timeout)
+    if not isinstance(payload, list):
+        msg = f"{label}: Waldur returned no list of offering configurations at {url}"
+        raise ConfigurationSourceError(msg)
+    entries = []
+    for item in payload:
+        served = _served_configuration(item, url)
+        offering_uuid = item.get("offering_uuid") if isinstance(item, dict) else None
+        if served is None or not offering_uuid or not isinstance(offering_uuid, str):
+            msg = (
+                f"{label}: Waldur returned an entry that is not an offering configuration "
+                f"at {url}"
+            )
+            raise ConfigurationSourceError(msg)
+        entries.append(
+            ServedGroupEntry(
+                offering_uuid=offering_uuid,
+                offering_name=str(item.get("offering_name") or ""),
+                served=served,
+            )
+        )
+    if not entries:
+        msg = (
+            f"{label}: no offering of the service provider matches at {url} "
+            "(check the backend ID, and that the token may read the offerings)"
+        )
+        raise ConfigurationSourceError(msg)
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -169,15 +301,78 @@ def fetch_configuration(
 # ---------------------------------------------------------------------------
 
 
+def is_group_block(offering_data: dict[str, Any]) -> bool:
+    """Whether a Waldur-sourced block selects a group of offerings by backend ID."""
+    return any(key in offering_data for key in GROUP_KEYS)
+
+
+def block_label(offering_data: dict[str, Any]) -> str:
+    """How errors and logs name a local block: its offering, or the group it selects."""
+    if not is_group_block(offering_data):
+        return _label(offering_data.get("name"), offering_data.get("waldur_offering_uuid"))
+    parts = [f"service provider {offering_data.get(SERVICE_PROVIDER_KEY)}"]
+    parts.extend(
+        f"{_SELECTOR_PARAMS[key]} {offering_data[key]!r}"
+        for key in SELECTOR_KEYS
+        if key in offering_data
+    )
+    name = offering_data.get("name")
+    head = f"Offering group {name!r}" if name else "Offering group"
+    return f"{head} ({', '.join(parts)})"
+
+
+def check_block_form(offering_data: dict[str, Any], index: int) -> None:
+    """Refuse a block that does not name exactly one offering or one group of offerings.
+
+    ``index`` is the block's position in the file's ``offerings``, counted from 0.
+    """
+    name = offering_data.get("name")
+    label = f"Offering block {index + 1}" + (f" ({name!r})" if name else "")
+    forms = (
+        f"give either waldur_offering_uuid for one offering, or {SERVICE_PROVIDER_KEY} "
+        f"with one of {', '.join(SELECTOR_KEYS)} for every offering of the service "
+        "provider whose backend ID matches"
+    )
+    group_keys = [key for key in GROUP_KEYS if key in offering_data]
+    if "waldur_offering_uuid" in offering_data and group_keys:
+        msg = f"{label} sets both waldur_offering_uuid and {', '.join(group_keys)}: {forms}"
+        raise ConfigurationSourceError(msg)
+    if "waldur_offering_uuid" not in offering_data and not group_keys:
+        msg = f"{label} names no offering: {forms}"
+        raise ConfigurationSourceError(msg)
+    if not group_keys:
+        return
+    selectors = [key for key in SELECTOR_KEYS if key in offering_data]
+    if SERVICE_PROVIDER_KEY not in offering_data or len(selectors) != 1:
+        msg = f"{label} selects a group of offerings incompletely: {forms}"
+        raise ConfigurationSourceError(msg)
+    empty = [
+        key
+        for key in (SERVICE_PROVIDER_KEY, *selectors)
+        if not isinstance(offering_data[key], str) or not offering_data[key].strip()
+    ]
+    if empty:
+        msg = f"{label}: {', '.join(empty)} must be a non-empty string"
+        raise ConfigurationSourceError(msg)
+    try:
+        # It goes into the request path: anything but a UUID would reach
+        # another endpoint with the block's credentials.
+        uuid_lib.UUID(offering_data[SERVICE_PROVIDER_KEY])
+    except ValueError:
+        msg = f"{label}: {SERVICE_PROVIDER_KEY} must be a UUID"
+        raise ConfigurationSourceError(msg) from None
+
+
 def check_local_keys(offering_data: dict[str, Any]) -> None:
     """Refuse a local key that Waldur's configuration would silently replace."""
     unknown = sorted(str(key) for key in offering_data if key not in ALLOWED_LOCAL_KEYS)
     if unknown:
-        label = _label(offering_data.get("name"), offering_data.get("waldur_offering_uuid"))
         msg = (
-            f"{label} takes its configuration from Waldur (configuration_source: waldur), "
-            f"so its local block may hold only {', '.join(BOOTSTRAP_KEYS)} and secret "
-            f"backend_settings. Set these in Waldur instead: {', '.join(unknown)}"
+            f"{block_label(offering_data)} takes its configuration from Waldur "
+            f"(configuration_source: waldur), so its local block may hold only "
+            f"{', '.join(BOOTSTRAP_KEYS)} (or {', '.join(GROUP_KEYS)} in place of "
+            "waldur_offering_uuid) and secret backend_settings. "
+            f"Set these in Waldur instead: {', '.join(unknown)}"
         )
         raise ConfigurationSourceError(msg)
 
@@ -185,14 +380,17 @@ def check_local_keys(offering_data: dict[str, Any]) -> None:
 def _bootstrap_offering(offering_data: dict[str, Any], global_proxy: str) -> structures.Offering:
     """An offering holding only what is needed to call Waldur."""
     bootstrap = {key: offering_data[key] for key in BOOTSTRAP_KEYS if key in offering_data}
+    if is_group_block(offering_data):
+        # A group block names no offering: only its credentials are used.
+        bootstrap["waldur_offering_uuid"] = ""
+        bootstrap.setdefault("name", block_label(offering_data))
     bootstrap.setdefault("name", str(offering_data.get("waldur_offering_uuid") or ""))
     try:
         offering = structures.Offering(**bootstrap, backend_type="")
     except ValidationError as exc:
-        label = _label(offering_data.get("name"), offering_data.get("waldur_offering_uuid"))
         msg = (
-            f"{label}: cannot reach Waldur for its configuration, the local block is "
-            f"incomplete: {_validation_problems(exc)}"
+            f"{block_label(offering_data)}: cannot reach Waldur for its configuration, "
+            f"the local block is incomplete: {_validation_problems(exc)}"
         )
         raise ConfigurationSourceError(msg) from exc
     offering._global_proxy = global_proxy
@@ -225,6 +423,110 @@ def load_offering_data(
     bootstrap = _bootstrap_offering(offering_data, global_proxy)
     served = fetch_configuration(bootstrap, user_agent)
     return merge_local_settings(offering_data, served), served
+
+
+def load_group_data(
+    offering_data: dict[str, Any],
+    global_proxy: str = "",
+    user_agent: str | None = None,
+) -> list[tuple[dict[str, Any], ServedConfiguration]]:
+    """Build the configuration of every offering a group block selects.
+
+    Each offering Waldur serves gets its own UUID and name from Waldur, the block's
+    credentials and secrets, and the same merge as a single offering.
+
+    Raises:
+        ConfigurationSourceError: a local key that is not allowed, Waldur failing,
+            no offering matching, or a required secret missing for any of them. The
+            message names the block.
+    """
+    check_local_keys(offering_data)
+    label = block_label(offering_data)
+    bootstrap = _bootstrap_offering(offering_data, global_proxy)
+    selector_key = next(key for key in SELECTOR_KEYS if key in offering_data)
+    entries = fetch_group_configuration(
+        bootstrap,
+        str(offering_data[SERVICE_PROVIDER_KEY]),
+        {_SELECTOR_PARAMS[selector_key]: str(offering_data[selector_key])},
+        label,
+        user_agent,
+    )
+    local = {key: value for key, value in offering_data.items() if key not in GROUP_KEYS}
+    local.pop("name", None)  # the group's name; each offering keeps Waldur's
+    loaded = []
+    for entry in entries:
+        block = {**local, "waldur_offering_uuid": entry.offering_uuid}
+        if entry.offering_name:
+            block["name"] = entry.offering_name
+        try:
+            loaded.append((merge_local_settings(block, entry.served), entry.served))
+        except ConfigurationSourceError as exc:
+            msg = f"{label}: {exc}"
+            raise ConfigurationSourceError(msg) from exc
+    return loaded
+
+
+def load_block(
+    offering_data: dict[str, Any],
+    index: int,
+    global_proxy: str = "",
+    user_agent: str | None = None,
+) -> list[structures.Offering]:
+    """The offerings one Waldur-sourced block of the file stands for.
+
+    A block naming ``waldur_offering_uuid`` gives one offering; a group block, one
+    per offering Waldur serves for its selector.
+
+    Raises:
+        ConfigurationSourceError: the block is malformed, or loading any of its
+            offerings fails.
+    """
+    check_block_form(offering_data, index)
+    if not is_group_block(offering_data):
+        merged_data, served = load_offering_data(offering_data, global_proxy, user_agent)
+        return [build_offering(merged_data, served)]
+    label = block_label(offering_data)
+    offerings = []
+    for merged_data, served in load_group_data(offering_data, global_proxy, user_agent):
+        try:
+            offerings.append(build_offering(merged_data, served))
+        except ConfigurationSourceError as exc:
+            msg = f"{label}: {exc}"
+            raise ConfigurationSourceError(msg) from exc
+    return offerings
+
+
+def _uuid_key(value: str) -> str:
+    """One spelling of a UUID: Waldur serves it without dashes, a file may not."""
+    try:
+        return uuid_lib.UUID(str(value)).hex
+    except ValueError:
+        return str(value).strip().lower()
+
+
+def check_duplicate_offerings(configured: list[tuple[str, str, bool]]) -> None:
+    """Refuse an offering a group block loads that another block also configures.
+
+    ``configured`` holds, per loaded offering, its UUID, the label of the block it
+    came from and whether that block is a group. Only duplicates involving a group
+    are refused, so a file without group blocks loads as before.
+    """
+    blocks: dict[str, list[tuple[str, bool]]] = {}
+    shown: dict[str, str] = {}
+    for uuid, label, from_group in configured:
+        key = _uuid_key(uuid)
+        shown.setdefault(key, uuid)
+        blocks.setdefault(key, []).append((label, from_group))
+    for key, sources in blocks.items():
+        uuid = shown[key]
+        if len(sources) > 1 and any(from_group for _, from_group in sources):
+            labels = "; ".join(label for label, _ in sources)
+            msg = (
+                f"Offering {uuid} is configured by more than one block of the file: "
+                f"{labels}. List it in one block only: narrow the group's backend ID "
+                "selector, or remove the other block."
+            )
+            raise ConfigurationSourceError(msg)
 
 
 def secret_paths_for_backends(backend_names: list[str]) -> set[str]:
